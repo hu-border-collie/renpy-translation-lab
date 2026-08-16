@@ -182,6 +182,14 @@ def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]
         quality_gate = revision_apply_summary.get("quality_gate")
         if isinstance(quality_gate, dict):
             return dict(quality_gate)
+    # Blocked/no-op apply paths persist the full revalidated summary under
+    # ``last_revision_apply_summary``; prefer it over the older preview gate so
+    # GUI shows the quality gate that was actually enforced at apply time.
+    last_revision_apply_summary = manifest.get("last_revision_apply_summary")
+    if isinstance(last_revision_apply_summary, dict):
+        quality_gate = last_revision_apply_summary.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            return dict(quality_gate)
     return {}
 
 
@@ -213,7 +221,10 @@ def filter_quality_items(
     for item in items:
         if selected_reason and item.reason_code != selected_reason:
             continue
-        if selected_file and selected_file not in item.file_rel_path.casefold():
+        if selected_file and not translation_quality.file_matches_filter(
+            item.file_rel_path,
+            selected_file,
+        ):
             continue
         if SEVERITY_ORDER.get(item.severity.lower(), 2) < minimum:
             continue

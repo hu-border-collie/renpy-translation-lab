@@ -1131,6 +1131,30 @@ def validate_findings(
     return errors
 
 
+def file_matches_filter(file_value: Any, candidate: Any) -> bool:
+    """Path-aware file filter for findings and GUI file fragments.
+
+    Exact file names and path prefixes match at component boundaries so
+    ``script.rpy`` does not match ``xscript.rpy``.  Bare extension-less
+    fragments such as ``script`` keep the legacy substring behaviour expected
+    by the GUI file filter.
+    """
+
+    file_text = str(file_value or '').replace('\\', '/').casefold()
+    candidate_text = str(candidate or '').replace('\\', '/').strip().casefold()
+    if not file_text or not candidate_text:
+        return False
+    if file_text == candidate_text:
+        return True
+    if file_text.startswith(candidate_text.rstrip('/') + '/'):
+        return True
+    parts = file_text.split('/')
+    if candidate_text in parts:
+        return True
+    # Bare, extension-less fragments are the GUI file-filter contract.
+    return '/' not in candidate_text and '.' not in candidate_text and candidate_text in file_text
+
+
 def filter_findings(
     findings: Iterable[Mapping[str, Any]],
     *,
@@ -1176,7 +1200,7 @@ def filter_findings(
         if selected_reasons and item.get('reason_code') not in selected_reasons:
             continue
         if selected_files and not any(
-            candidate in str(item.get('file') or '').casefold()
+            file_matches_filter(item.get('file'), candidate)
             for candidate in selected_files
         ):
             continue

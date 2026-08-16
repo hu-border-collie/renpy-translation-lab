@@ -14,6 +14,7 @@ import translator_runtime as runtime
 from gui_qt.quality_findings_report import (
     filter_quality_items,
     normalize_quality_finding,
+    quality_gate_from_manifest,
     reason_label,
     resolve_quality_findings_path,
 )
@@ -130,6 +131,39 @@ class SharedSchemaContractTests(unittest.TestCase):
             ['b'],
         )
 
+    def test_file_filter_does_not_match_across_name_boundaries(self):
+        findings = [
+            {
+                'finding_id': 'f1',
+                'schema_version': 1,
+                'reason_code': quality.REASON_CJK_LATIN_SPACING,
+                'rule_id': 'cjk_latin_spacing',
+                'severity': 'medium',
+                'disposition': 'warning',
+                'item_id': 'i1',
+                'file': 'xscript.rpy',
+                'line': 1,
+                'source': '',
+                'translation': '',
+                'evidence': '',
+                'suggestion': '',
+                'rule_version': 1,
+            },
+        ]
+
+        self.assertEqual(
+            quality.filter_findings(findings, files=['script.rpy']),
+            [],
+        )
+        self.assertEqual(
+            len(quality.filter_findings(findings, files=['script'])),
+            1,
+        )
+        self.assertEqual(
+            len(quality.filter_findings(findings, files=['xscript'])),
+            1,
+        )
+
     def test_load_write_and_digest_round_trip(self):
         findings = quality.check_subject(mechanical_subject())
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,6 +257,27 @@ class SharedSchemaContractTests(unittest.TestCase):
         self.assertEqual(gate["decision"], "needs_review")
         self.assertEqual(gate["warning_count"], 3)
         self.assertEqual(gate["blocker_count"], 1)
+
+    def test_gui_prefers_apply_time_revision_quality_gate(self):
+        manifest = {
+            'revision_apply_summary': {
+                'quality_gate': {'decision': 'needs_review', 'warning_count': 1},
+            },
+        }
+        self.assertEqual(
+            quality_gate_from_manifest(manifest)['warning_count'],
+            1,
+        )
+
+        blocked = {
+            'last_revision_apply_summary': {
+                'quality_gate': {'decision': 'needs_review', 'warning_count': 2},
+            },
+        }
+        self.assertEqual(
+            quality_gate_from_manifest(blocked)['warning_count'],
+            2,
+        )
 
     def test_gui_resolves_quality_paths_across_producers(self):
         sync_manifest = {
