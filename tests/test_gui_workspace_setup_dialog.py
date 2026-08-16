@@ -269,6 +269,24 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
         self.assertEqual(dialog._sdk_stop_pending, "")
         self.assertIsNone(dialog._sdk_worker)
 
+    def test_close_during_pending_reject_upgrades_to_deferred_close(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._on_reject()
+        self.assertEqual(dialog._sdk_stop_pending, "reject")
+
+        event = QCloseEvent()
+        dialog.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(dialog._sdk_stop_pending, "close")
+        self.assertIn("自动关闭", dialog._sdk_status.text())
+
+        with mock.patch.object(dialog, "close") as close_mock:
+            worker.finish()
+        close_mock.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

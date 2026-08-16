@@ -529,6 +529,11 @@ class WorkspaceSetupDialog(QDialog):
         if worker is None:
             return
         if self._sdk_stop_pending:
+            if origin == "close" and self._sdk_stop_pending == "reject":
+                # A window close supersedes the earlier cancel-and-stay flow.
+                self._sdk_stop_pending = "close"
+                self._set_sdk_status(WORKSPACE_SETUP_STOP_COPY["waiting_close"])
+                return
             self._set_sdk_status(
                 WORKSPACE_SETUP_STOP_COPY["still_stopping"],
                 error=True,
