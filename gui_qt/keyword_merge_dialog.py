@@ -60,7 +60,7 @@ class KeywordMergeDialog(QDialog):
 
         hint = QLabel(
             "请勾选要写入 glossary 的候选。默认不勾选疑似 Ren'Py 启动器/UI 噪音项，"
-            "以及与 macro_setting 或现有 glossary 冲突的条目会以红色提示。"
+            "历史译法冲突、保留不译或无证据的条目；与 macro_setting 或现有 glossary 冲突的条目会以红色提示。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -88,7 +88,7 @@ class KeywordMergeDialog(QDialog):
         self.overwrite_check.toggled.connect(self._refresh_preview)
         layout.addLayout(selection_row)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
             [
                 "写入",
@@ -97,6 +97,7 @@ class KeywordMergeDialog(QDialog):
                 "category",
                 "confidence",
                 "分区",
+                "历史首次译法",
                 "提示",
             ]
         )
@@ -108,6 +109,7 @@ class KeywordMergeDialog(QDialog):
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         self._populate_table()
         layout.addWidget(self.table, 1)
 
@@ -161,10 +163,19 @@ class KeywordMergeDialog(QDialog):
             except (TypeError, ValueError):
                 confidence = 0.0
             section = row.action.section or "-"
+            history_text = merge_mod.format_history_evidence_preview(row.candidate)
             warning_text = "；".join(row.warnings)
 
             for column, value in enumerate(
-                (source, target, category, f"{confidence:.2f}", section, warning_text),
+                (
+                    source,
+                    target,
+                    category,
+                    f"{confidence:.2f}",
+                    section,
+                    history_text,
+                    warning_text,
+                ),
                 start=1,
             ):
                 item = QTableWidgetItem(value)

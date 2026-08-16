@@ -36,7 +36,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
     raw = int(candidate_match.group(2))
     message = (
         f"已导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告不修改游戏脚本，完整路径可在诊断与工具复制。"
+        "报告包含历史首次译法与保留不译的人工作提示，不修改游戏脚本；完整路径可在诊断与工具复制。"
     )
     return WorkflowUpdate(
         status="done",
@@ -68,6 +68,9 @@ def summarize_keyword_result_from_manifest(manifest: dict[str, object]) -> Write
         chunk_summary_count = summary.get("chunk_summary_count")
         if isinstance(chunk_summary_count, int):
             facts.append(f"剧情概要：{chunk_summary_count} 条")
+        history_counts = summary.get("history_candidate_status_counts")
+        if isinstance(history_counts, dict):
+            facts.append(f"历史首次译法证据：{history_counts}")
 
     for key, label in (
         ("markdown_path", "候选 Markdown"),
@@ -160,6 +163,7 @@ def _collect_export_facts(output: str) -> list[str]:
         (r"^Markdown:\s*(.+?)\s*$", "候选 Markdown"),
         (r"^Summary JSONL:\s*(.+?)\s*$", "概要 JSONL"),
         (r"^Summary Markdown:\s*(.+?)\s*$", "概要 Markdown"),
+        (r"^Historical evidence:\s*(.+?)\s*$", "历史首次译法证据"),
     ):
         match = re.search(pattern, output, re.MULTILINE)
         if not match:

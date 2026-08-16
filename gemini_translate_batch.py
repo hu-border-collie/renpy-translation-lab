@@ -55,6 +55,7 @@ from engine_adapters.writeback import (
     source_snapshot_fingerprint,
 )
 import keyword_glossary_merge
+import keyword_history
 import model_usage_ledger
 import prompt_context
 import revision_corpus
@@ -7106,6 +7107,140 @@ def markdown_escape_cell(value):
     return compact_text(str(value or '')).replace('|', '\\|').replace('\n', ' ')
 
 
+def _keyword_history_file_paths(manifest):
+    """Resolve the keyword package's recorded source files for history scan."""
+
+    file_paths = []
+    base_dir = str(manifest.get('base_dir') or '').strip()
+    package_dir = str(manifest.get('_package_dir') or '').strip()
+    for rel_path, info in sorted((manifest.get('files') or {}).items()):
+        if not isinstance(info, dict):
+            continue
+        raw_path = str(info.get('path') or '').strip()
+        if not raw_path:
+            continue
+        file_path = raw_path
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(base_dir or package_dir, file_path)
+        file_paths.append((str(rel_path), os.path.abspath(file_path)))
+    return file_paths
+
+
+def collect_keyword_history_corpus(manifest):
+    """Build a read-only revision-corpus projection for keyword evidence.
+
+    The scan reuses ``collect_revision_file_jobs`` and
+    ``revision_corpus.build_corpus_items``.  It is intentionally derived at
+    export time and is never persisted as a second canonical translation
+    store.  Digests are collected before scanning and after corpus construction
+    so a source change during either phase fails closed.  A missing source file
+    fails closed so candidates receive an ``unavailable`` evidence record rather
+    than an apparently safe match.
+    """
+
+    file_paths = _keyword_history_file_paths(manifest)
+    if not file_paths:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': 0,
+            'source_changed_during_scan': False,
+            'diagnostics': ['keyword manifest has no recorded source files'],
+        }
+
+    file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
+    missing = sorted(rel_path for rel_path, file_path in file_paths if not os.path.isfile(file_path))
+    if missing:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': len(file_paths),
+            'source_changed_during_scan': False,
+            'diagnostics': [f'missing source file: {rel_path}' for rel_path in missing],
+        }
+
+    try:
+        digests_before = revision_corpus.collect_file_digests(file_path_map)
+        file_jobs = collect_revision_file_jobs(
+            file_paths=file_paths,
+            include_empty_files=True,
+        )
+        items, diagnostics = revision_corpus.build_corpus_items(file_jobs)
+        digests_after = revision_corpus.collect_file_digests(file_path_map)
+        # The revision scanner also recognizes untranslated comment/source
+        # pairs.  Ordinary changed translations are historical evidence;
+        # unchanged rows are kept as review-only preserve_evidence so
+        # preserve-term candidates are not silently auto-accepted.
+        items = [
+            item for item in items
+            if keyword_history.is_history_evidence_row(item)
+        ]
+    except (OSError, UnicodeError, ValueError) as exc:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': len(file_paths),
+            'source_changed_during_scan': False,
+            'diagnostics': [str(exc)],
+        }
+
+    return {
+        'items': items,
+        'status': 'ready',
+        'reason': '',
+        'file_count': len(file_paths),
+        'source_changed_during_scan': digests_before != digests_after,
+        'diagnostics': diagnostics,
+    }
+
+
+def _keyword_history_summary(candidates, history_scan):
+    status_counts = {
+        keyword_history.STATUS_CONSISTENT: 0,
+        keyword_history.STATUS_CONFLICT: 0,
+        keyword_history.STATUS_AMBIGUOUS: 0,
+        keyword_history.STATUS_PRESERVE_EVIDENCE: 0,
+        keyword_history.STATUS_UNMATCHED: 0,
+        keyword_history.STATUS_UNAVAILABLE: 0,
+    }
+    for candidate in candidates:
+        evidence = candidate.get('history_evidence') or {}
+        status = str(evidence.get('status') or keyword_history.STATUS_UNAVAILABLE)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        'schema_version': keyword_history.HISTORY_EVIDENCE_SCHEMA_VERSION,
+        'scan_status': history_scan.get('status') or 'unavailable',
+        'file_count': int(history_scan.get('file_count') or 0),
+        'occurrence_count': len(history_scan.get('items') or []),
+        'source_changed_during_scan': bool(history_scan.get('source_changed_during_scan')),
+        'diagnostic_count': len(history_scan.get('diagnostics') or []),
+        'candidate_status_counts': status_counts,
+        'diagnostics': list(history_scan.get('diagnostics') or []),
+    }
+
+
+def format_keyword_history_markdown(evidence):
+    """Render one compact history-evidence cell for the Markdown report."""
+
+    evidence = evidence if isinstance(evidence, dict) else {}
+    status = str(evidence.get('status') or keyword_history.STATUS_UNAVAILABLE)
+    first = evidence.get('first_occurrence') or {}
+    if first:
+        location = f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0}"
+        identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
+        translation = str(first.get('current_translation') or '(空)')
+        text = f"{location} [{identity}] → {translation} [{status}]"
+    else:
+        text = f"无首次 occurrence [{status}]"
+    reasons = evidence.get('conflict_reasons') or []
+    if reasons:
+        text += '；' + '；'.join(str(reason) for reason in reasons)
+    return text
+
+
 def write_keyword_markdown(path, candidates, summary):
     lines = [
         '# Keyword Candidates',
@@ -7114,9 +7249,10 @@ def write_keyword_markdown(path, candidates, summary):
         f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
         f"- Missing chunk rows: {summary.get('missing_chunk_rows', 0)}",
         f"- Ambiguous provenance candidates: {summary.get('ambiguous_provenance_candidates', 0)}",
+        f"- Historical evidence: {summary.get('history_candidate_status_counts', {})}",
         '',
-        '| Source | Suggested target | Category | Confidence | Evidence | Files |',
-        '| --- | --- | --- | ---: | --- | --- |',
+        '| Source | Suggested target | Category | Confidence | Evidence | Files | First historical occurrence / current translation |',
+        '| --- | --- | --- | ---: | --- | --- | --- |',
     ]
     for candidate in candidates:
         files = ', '.join(candidate.get('source_files') or [])
@@ -7130,6 +7266,9 @@ def write_keyword_markdown(path, candidates, summary):
                     f"{candidate.get('confidence', 0.0):.2f}",
                     markdown_escape_cell(candidate.get('evidence')),
                     markdown_escape_cell(files),
+                    markdown_escape_cell(
+                        format_keyword_history_markdown(candidate.get('history_evidence'))
+                    ),
                 ]
             )
             + ' |'
@@ -7310,7 +7449,28 @@ def export_keyword_candidates(
         merged_candidates.values(),
         key=lambda item: (-item.get('confidence', 0.0), item.get('category', ''), item.get('source', '').lower()),
     )
+
+    history_scan = collect_keyword_history_corpus(manifest)
+    candidates = keyword_history.attach_keyword_history_evidence(
+        candidates,
+        history_scan.get('items') or [],
+        source_changed_during_scan=bool(history_scan.get('source_changed_during_scan')),
+        unavailable_reason=str(history_scan.get('reason') or ''),
+    )
+    history_summary = _keyword_history_summary(candidates, history_scan)
     summary['candidate_count_deduped'] = len(candidates)
+    summary['history_scan_status'] = history_summary['scan_status']
+    summary['history_occurrence_count'] = history_summary['occurrence_count']
+    summary['history_file_count'] = history_summary['file_count']
+    summary['history_source_changed_during_scan'] = history_summary['source_changed_during_scan']
+    summary['history_candidate_status_counts'] = history_summary['candidate_status_counts']
+    summary['history_diagnostic_count'] = history_summary['diagnostic_count']
+    if history_summary['diagnostics']:
+        summary['history_diagnostics'] = history_summary['diagnostics']
+        bump_counter(summary['reason_counts'], 'history_scan_diagnostic', len(history_summary['diagnostics']))
+    for status, count in history_summary['candidate_status_counts'].items():
+        if status != keyword_history.STATUS_CONSISTENT and count:
+            bump_counter(summary['reason_counts'], f'history_{status}', count)
 
     jsonl_path = resolve_keyword_export_path(manifest, output_jsonl, 'keyword_candidates.jsonl', 'keyword JSONL output')
     markdown_path = resolve_keyword_export_path(manifest, output_markdown, 'keyword_candidates.md', 'keyword Markdown output')
@@ -7349,6 +7509,7 @@ def export_keyword_candidates(
         'summary_jsonl_path': summary_jsonl_path,
         'summary_markdown_path': summary_markdown_path,
         'summary': summary,
+        'history_evidence': history_summary,
     }
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
@@ -7358,6 +7519,11 @@ def export_keyword_candidates(
     print(f'Markdown: {markdown_path}')
     print(f'Summary JSONL: {summary_jsonl_path}')
     print(f'Summary Markdown: {summary_markdown_path}')
+    print(
+        'Historical evidence: '
+        f"{summary['history_occurrence_count']} occurrences, "
+        f"statuses={summary['history_candidate_status_counts']}"
+    )
     if summary.get('reason_counts'):
         print('Warnings:')
         for name in sorted(summary['reason_counts']):
@@ -14254,7 +14420,11 @@ def build_arg_parser():
         '--accept-confidence',
         type=float,
         default=None,
-        help='Auto-accept candidates at or above this confidence without prompting.',
+        help=(
+            'Auto-accept candidates at or above this confidence without prompting; '
+            'history conflicts, missing evidence, or evidence that no longer matches '
+            'the candidate still require review unless --yes is used.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--overwrite',
@@ -14264,7 +14434,10 @@ def build_arg_parser():
     merge_keywords_parser.add_argument(
         '--yes',
         action='store_true',
-        help='Accept all non-skipped candidates without interactive prompts.',
+        help=(
+            'Accept all non-skipped candidates without interactive prompts; explicitly '
+            'override history-evidence review.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--no-backup',
@@ -15074,6 +15247,7 @@ def dispatch_command(parser, args):
             overwrite=args.overwrite,
             interactive=not args.yes and not dry_run,
             backup=not args.no_backup,
+            allow_history_review=bool(args.yes),
         )
         return
 

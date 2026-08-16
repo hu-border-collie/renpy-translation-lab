@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable, Iterable
 
+import keyword_history
+
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
 GLOSSARY_SECTION_NORMALIZE = 'normalize_map'
@@ -104,6 +106,27 @@ def _coerce_confidence(value: object) -> float:
     if confidence > 1.0:
         return 1.0
     return confidence
+
+
+def _history_requires_review(candidate: dict) -> bool:
+    """Return whether historical evidence must stay on the human-review path.
+
+    Candidates exported before historical evidence was added, candidates
+    assembled by hand, and candidates whose source/target changed after export
+    have no trustworthy evidence status.  Treat those records as unavailable
+    so confidence thresholds cannot silently write them into the glossary.
+    """
+
+    history_evidence = candidate.get('history_evidence')
+    return (
+        not keyword_history.is_complete_consistent_history_evidence(
+            history_evidence
+        )
+        or not keyword_history.history_evidence_matches_candidate(
+            history_evidence,
+            candidate,
+        )
+    )
 
 
 def _default_glossary_data() -> dict:
@@ -385,6 +408,7 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
     category = _compact_text(candidate.get('category')) or 'other'
     confidence = _coerce_confidence(candidate.get('confidence'))
     evidence = _compact_text(candidate.get('evidence'))
+    history = candidate.get('history_evidence')
     lines = [
         f'source: {source}',
         f'suggested_target: {suggested_target}',
@@ -392,6 +416,36 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
         f'confidence: {confidence:.2f}',
         f'glossary: {action.section} -> {action.target}',
     ]
+    if isinstance(history, dict):
+        raw_status = _compact_text(history.get('status')) or 'unavailable'
+        status = (
+            'unavailable'
+            if raw_status == keyword_history.STATUS_CONSISTENT
+            and _history_requires_review(candidate)
+            else raw_status
+        )
+        first = history.get('first_occurrence')
+        if isinstance(first, dict) and first:
+            identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
+            lines.append(
+                'history_first: '
+                f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+                f"[{identity}] "
+                f"-> {first.get('current_translation') or '(empty)'} [{status}]"
+            )
+        else:
+            lines.append(f'history_first: none [{status}]')
+        if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
+            lines.append('history_note: 历史证据与当前候选不一致或字段不完整，需重新导出或人工确认')
+        for reason in history.get('conflict_reasons') or []:
+            lines.append(f'history_note: {_compact_text(reason)}')
+    else:
+        lines.extend(
+            [
+                'history_first: none [unavailable]',
+                'history_note: 缺少历史证据，需重新导出或人工确认',
+            ]
+        )
     if evidence:
         lines.append(f'evidence: {evidence}')
     if action.existing_target:
@@ -399,6 +453,41 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
     if action.reason:
         lines.append(f'note: {action.reason}')
     return '\n'.join(lines)
+
+
+def format_history_evidence_preview(candidate: dict) -> str:
+    """Render the first historical occurrence for CLI/GUI merge review."""
+
+    history = candidate.get('history_evidence')
+    if not isinstance(history, dict):
+        return '无历史证据（旧版候选文件）'
+    raw_status = _compact_text(history.get('status')) or 'unavailable'
+    status = (
+        'unavailable'
+        if raw_status == keyword_history.STATUS_CONSISTENT
+        and _history_requires_review(candidate)
+        else raw_status
+    )
+    first = history.get('first_occurrence')
+    if isinstance(first, dict) and first:
+        identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
+        text = (
+            f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+            f"[{identity}] "
+            f"→ {first.get('current_translation') or '(空)'} [{status}]"
+        )
+    else:
+        text = f'无首次 occurrence [{status}]'
+    reasons = [
+        _compact_text(reason)
+        for reason in history.get('conflict_reasons') or []
+        if _compact_text(reason)
+    ]
+    if reasons:
+        text += '；' + '；'.join(reasons)
+    if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
+        text += '；历史证据与当前候选不一致或字段不完整，需重新导出或人工确认'
+    return text
 
 
 def _preview_line_for_action(action: MergeAction) -> str:
@@ -562,6 +651,29 @@ def detect_candidate_warnings(
 ) -> list[str]:
     warnings: list[str] = []
     source = _compact_text(candidate.get('source'))
+
+    history = candidate.get('history_evidence')
+    if not isinstance(history, dict):
+        warnings.append('历史证据缺失（旧版或手工候选），需重新导出或人工确认')
+    else:
+        history_status = _compact_text(history.get('status')) or 'unavailable'
+        if history_status == keyword_history.STATUS_CONSISTENT and _history_requires_review(candidate):
+            warnings.append('历史证据与当前候选不一致、字段不完整或 schema 不兼容，按 unavailable 处理，需重新导出或人工确认')
+        elif history_status != keyword_history.STATUS_CONSISTENT:
+            first = history.get('first_occurrence')
+            if isinstance(first, dict) and first:
+                warnings.append(
+                    '历史首次译法需人工确认：'
+                    f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+                    f"→ {first.get('current_translation') or '(空)'}"
+                )
+            else:
+                warnings.append('没有可自动确认的历史首次译法')
+            warnings.extend(
+                f'历史证据：{_compact_text(reason)}'
+                for reason in history.get('conflict_reasons') or []
+                if _compact_text(reason)
+            )
 
     if action.status == 'skip_duplicate' and 'conflicts' in action.reason:
         warnings.append(f'与现有 glossary 冲突：{action.existing_target or action.reason}')
@@ -737,8 +849,17 @@ def merge_keywords_to_glossary(
     overwrite: bool = False,
     interactive: bool = True,
     backup: bool = True,
+    allow_history_review: bool = False,
     input_func: Callable[[str], str] = input,
 ) -> MergeSummary:
+    """Merge reviewed candidates while keeping uncertain history human-gated.
+
+    ``allow_history_review`` is reserved for an explicit user override such
+    as the CLI ``--yes`` flag.  Interactive prompts and GUI row selection are
+    already explicit review actions; confidence thresholds alone cannot
+    bypass an ambiguous or unavailable historical evidence record.
+    """
+
     if dry_run:
         interactive = False
 
@@ -780,10 +901,22 @@ def merge_keywords_to_glossary(
             summary.preview_lines.append(_preview_line_for_action(action))
             continue
 
+        if (
+            _history_requires_review(candidate)
+            and not interactive
+            and not allow_history_review
+        ):
+            summary.skipped_user += 1
+            summary.preview_lines.append(
+                f'= skip (history_review): {action.source} -> {action.target}'
+            )
+            continue
+
         should_apply = False
         auto_accept = (
             accept_confidence is not None
             and _coerce_confidence(candidate.get('confidence')) >= accept_confidence
+            and not _history_requires_review(candidate)
         )
         if auto_accept:
             should_apply = True

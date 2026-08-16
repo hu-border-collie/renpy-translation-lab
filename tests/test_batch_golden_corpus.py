@@ -1017,6 +1017,8 @@ class KeywordGoldenCorpusTests(unittest.TestCase):
                 )
                 self._write_mock_keyword_results(manifest_path)
                 manifest = self._load_manifest(manifest_path)
+                source_path = tl_dir / 'chapter01' / 'keywords.rpy'
+                source_before_export = source_path.read_text(encoding='utf-8')
 
                 self._assert_or_update_json(
                     'expected/manifest_snapshot.json',
@@ -1028,6 +1030,7 @@ class KeywordGoldenCorpusTests(unittest.TestCase):
                 )
 
                 export = batch_mod.export_keyword_candidates(str(manifest_path))
+                self.assertEqual(source_path.read_text(encoding='utf-8'), source_before_export)
                 export_snapshot = {
                     'summary': export['summary'],
                     'candidate_rows': self._read_jsonl(export['jsonl_path']),
