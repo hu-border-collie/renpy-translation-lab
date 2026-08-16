@@ -19,13 +19,14 @@
     },
     "diagnostic_counts": {},
     "history_scan_status": "ready",
-    "history_occurrence_count": 2,
+    "history_occurrence_count": 4,
     "history_file_count": 1,
     "history_source_changed_during_scan": false,
     "history_candidate_status_counts": {
       "consistent": 2,
       "conflict": 0,
       "ambiguous": 0,
+      "preserve_evidence": 0,
       "unmatched": 1,
       "unavailable": 0
     },

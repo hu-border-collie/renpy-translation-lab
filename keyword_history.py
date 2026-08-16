@@ -23,6 +23,7 @@ MAX_REPORTED_OCCURRENCES = 32
 STATUS_CONSISTENT = "consistent"
 STATUS_CONFLICT = "conflict"
 STATUS_AMBIGUOUS = "ambiguous"
+STATUS_PRESERVE_EVIDENCE = "preserve_evidence"
 STATUS_UNMATCHED = "unmatched"
 STATUS_UNAVAILABLE = "unavailable"
 
@@ -85,6 +86,25 @@ def is_actual_translation_row(row: Mapping[str, Any]) -> bool:
     source = _compact_text(row.get("source") or row.get("source_text"))
     current = _compact_text(row.get("current_translation") or row.get("translation"))
     return bool(source and current and _match_key(source) != _match_key(current))
+
+
+def is_preserve_translation_row(row: Mapping[str, Any]) -> bool:
+    """Return whether a corpus row keeps the source text unchanged.
+
+    These rows are not ordinary translation evidence, but they are useful
+    human-review evidence for preserve-term candidates (``AR -> AR``).
+    They remain explicitly review-required and never become consistent.
+    """
+
+    source = _compact_text(row.get("source") or row.get("source_text"))
+    current = _compact_text(row.get("current_translation") or row.get("translation"))
+    return bool(source and current and _match_key(source) == _match_key(current))
+
+
+def is_history_evidence_row(row: Mapping[str, Any]) -> bool:
+    """Return whether a corpus row contributes to historical keyword evidence."""
+
+    return is_actual_translation_row(row) or is_preserve_translation_row(row)
 
 
 def _coerce_int(value: Any, default: int = 0) -> int:
@@ -316,6 +336,11 @@ def _collect_matches_for_source(
     interpolation_match_ignored = False
     for row in sorted(corpus_items, key=_row_sort_key):
         row_source = _compact_text(row.get("source") or row.get("source_text"))
+        if (
+            is_preserve_translation_row(row)
+            and _match_key(row_source) != _match_key(normalized_source)
+        ):
+            continue
         matches, skipped_interpolation = _matches_for_specs(
             row_source,
             normalized_source,
@@ -382,9 +407,8 @@ def _collect_matches_for_candidates(
 
     specs_by_candidate: list[tuple[str, list[dict[str, Any]]]] = []
     for candidate in candidates:
-        normalized_source, specs = _search_specs_for_term(
-            candidate.get("source")
-        )
+        source = _compact_text(candidate.get("source"))
+        normalized_source, specs = _search_specs_for_term(source)
         specs_by_candidate.append((normalized_source, specs))
 
     probe_groups, fallback_candidates = _candidate_probe_groups(
@@ -397,6 +421,7 @@ def _collect_matches_for_candidates(
     interpolation_match_ignored = [False] * len(candidates)
 
     for row in sorted(corpus_items, key=_row_sort_key):
+        row_is_preserve = is_preserve_translation_row(row)
         row_source = _compact_text(row.get("source") or row.get("source_text"))
         row_tokens = {
             match.group(0).casefold()
@@ -408,6 +433,8 @@ def _collect_matches_for_candidates(
 
         for index in sorted(selected):
             normalized_source, specs = specs_by_candidate[index]
+            if row_is_preserve and _match_key(row_source) != _match_key(normalized_source):
+                continue
             matches, skipped_interpolation = _matches_for_specs(
                 row_source,
                 normalized_source,
@@ -647,6 +674,7 @@ def _reason(code: str) -> str:
         "interpolation_exact": "术语包含 Ren'Py 插值标记，需要人工确认",
         "candidate_target_conflict": "候选译法与可直接对齐的首次历史译法冲突",
         "translation_alignment_unknown": "历史句有证据，但无法安全推断词级现译",
+        "preserve_evidence": "历史出现保留不译（原文=译文），需人工确认是否写入 preserve_terms",
         "history_scan_unavailable": "历史 corpus 扫描不可用",
         "history_source_changed": "历史扫描期间源文件发生变化，应重新导出",
     }.get(code, code)
@@ -681,6 +709,16 @@ def _history_status(
     if len(translations) > 1:
         reasons.append("multiple_historical_translations")
 
+    preserve_evidence = (
+        _match_key(candidate_source) == _match_key(candidate_target)
+        and any(
+            _match_key(item.get("source")) == _match_key(item.get("current_translation"))
+            for item in occurrences
+        )
+    )
+    if preserve_evidence:
+        reasons.append("preserve_evidence")
+
     direct_source = _match_key(candidate_source) in {
         _match_key(occurrences[0].get("source")),
     }
@@ -700,6 +738,8 @@ def _history_status(
         return STATUS_CONFLICT, reasons
     if "multiple_historical_translations" in reasons:
         return STATUS_AMBIGUOUS, reasons
+    if "preserve_evidence" in reasons:
+        return STATUS_PRESERVE_EVIDENCE, reasons
     if reasons:
         return STATUS_AMBIGUOUS, reasons
     return STATUS_CONSISTENT, reasons

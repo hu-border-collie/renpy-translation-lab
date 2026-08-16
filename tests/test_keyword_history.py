@@ -221,12 +221,14 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
                 "Noah’s compass is ready.",
                 "诺亚的罗盘准备好了。",
             ),
+            self._row("id5", "e.rpy", 5, "AR", "AR"),
         ]
         candidates = [
             {"source": "Void Gate", "suggested_target": "虚空门"},
             {"source": "Crystal Key", "suggested_target": "水晶钥匙"},
             {"source": "name", "suggested_target": "名字"},
             {"source": "Noah", "suggested_target": "诺亚"},
+            {"source": "AR", "suggested_target": "AR"},
         ]
 
         enriched = keyword_history.attach_keyword_history_evidence(
@@ -328,6 +330,37 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
         self.assertFalse(
             keyword_history.is_complete_consistent_history_evidence(evidence)
         )
+
+    def test_preserve_row_is_review_evidence_for_preserve_candidate(self):
+        rows = [self._row("id1", "a.rpy", 1, "AR", "AR")]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "AR", "suggested_target": "AR", "category": "term"},
+            rows,
+        )
+
+        self.assertEqual(
+            evidence["status"],
+            keyword_history.STATUS_PRESERVE_EVIDENCE,
+        )
+        self.assertTrue(evidence["review_required"])
+        self.assertIn("preserve_evidence", evidence["conflict_codes"])
+        self.assertIn(
+            "保留不译",
+            evidence["conflict_reasons"][0],
+        )
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+    def test_preserve_row_with_translated_candidate_is_a_conflict(self):
+        rows = [self._row("id1", "a.rpy", 1, "AR", "AR")]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "AR", "suggested_target": "增强现实", "category": "term"},
+            rows,
+        )
+
+        self.assertEqual(evidence["status"], keyword_history.STATUS_CONFLICT)
+        self.assertIn("candidate_target_conflict", evidence["conflict_codes"])
 
     def test_fixture_covers_possessive_and_vocative_forms(self):
         fixture_path = Path(__file__).parent / "fixtures" / "keyword_history_forms.json"

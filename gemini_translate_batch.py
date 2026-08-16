@@ -6802,11 +6802,12 @@ def collect_keyword_history_corpus(manifest):
         items, diagnostics = revision_corpus.build_corpus_items(file_jobs)
         digests_after = revision_corpus.collect_file_digests(file_path_map)
         # The revision scanner also recognizes untranslated comment/source
-        # pairs.  They remain useful in the revision corpus, but are not
-        # historical translation evidence for this feature.
+        # pairs.  Ordinary changed translations are historical evidence;
+        # unchanged rows are kept as review-only preserve_evidence so
+        # preserve-term candidates are not silently auto-accepted.
         items = [
             item for item in items
-            if keyword_history.is_actual_translation_row(item)
+            if keyword_history.is_history_evidence_row(item)
         ]
     except (OSError, UnicodeError, ValueError) as exc:
         return {
@@ -6833,6 +6834,7 @@ def _keyword_history_summary(candidates, history_scan):
         keyword_history.STATUS_CONSISTENT: 0,
         keyword_history.STATUS_CONFLICT: 0,
         keyword_history.STATUS_AMBIGUOUS: 0,
+        keyword_history.STATUS_PRESERVE_EVIDENCE: 0,
         keyword_history.STATUS_UNMATCHED: 0,
         keyword_history.STATUS_UNAVAILABLE: 0,
     }

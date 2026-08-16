@@ -4,7 +4,7 @@
 - Parsed chunks: 2/2
 - Missing chunk rows: 0
 - Ambiguous provenance candidates: 0
-- Historical evidence: {'consistent': 2, 'conflict': 0, 'ambiguous': 0, 'unmatched': 1, 'unavailable': 0}
+- Historical evidence: {'consistent': 2, 'conflict': 0, 'ambiguous': 0, 'preserve_evidence': 0, 'unmatched': 1, 'unavailable': 0}
 
 | Source | Suggested target | Category | Confidence | Evidence | Files | First historical occurrence / current translation |
 | --- | --- | --- | ---: | --- | --- | --- |

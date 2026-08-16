@@ -321,7 +321,7 @@ python gemini_translate_batch.py sync-keywords --limit 3
 
 `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`。候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`。
 
-`export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源，并从现有 revision corpus 扫描投影中附上术语的首次历史 occurrence、文件/行号、现译和冲突原因。该历史证据只做人工作提示；大小写/复数变体、Ren'Py 插值、多个不同现译、无证据和无法对齐的项目不会被自动锁入 glossary。中文译法只有与整句历史现译完全相等时才作为安全对齐，中文子串命中仍需人工确认。
+`export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源，并从现有 revision corpus 扫描投影中附上术语的首次历史 occurrence、文件/行号、现译和冲突原因。该历史证据只做人工作提示；大小写/复数变体、Ren'Py 插值、多个不同现译、保留不译（原文=译文）、无证据和无法对齐的项目不会被自动锁入 glossary。中文译法只有与整句历史现译完全相等时才作为安全对齐，中文子串命中仍需人工确认。
 
 `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告。
 

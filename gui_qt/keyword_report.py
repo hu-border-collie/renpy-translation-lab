@@ -36,7 +36,7 @@ def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpda
     raw = int(candidate_match.group(2))
     message = (
         f"已导出 {deduped} 个去重候选（原始 {raw} 个）。"
-        "报告包含历史首次译法的人工作提示，不修改游戏脚本；完整路径可在诊断与工具复制。"
+        "报告包含历史首次译法与保留不译的人工作提示，不修改游戏脚本；完整路径可在诊断与工具复制。"
     )
     return WorkflowUpdate(
         status="done",

@@ -79,11 +79,12 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 backup=False,
             )
 
-            self.assertEqual(summary.accepted, 2)
+            self.assertEqual(summary.accepted, 1)
             self.assertEqual(summary.skipped_low_confidence, 1)
+            self.assertEqual(summary.skipped_user, 1)
             data = json.loads(glossary_path.read_text(encoding='utf-8'))
             self.assertEqual(data['normalize_map']['Void Gate'], '虚空门')
-            self.assertIn('AR', data['preserve_terms'])
+            self.assertNotIn('AR', data['preserve_terms'])
 
     def test_merge_skips_duplicate_without_overwrite(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -130,6 +131,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 str(glossary_path),
                 overwrite=True,
                 interactive=False,
+                allow_history_review=True,
                 backup=False,
             )
 
@@ -175,11 +177,12 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 backup=False,
             )
 
-            self.assertEqual(summary.accepted, 2)
+            self.assertEqual(summary.accepted, 1)
             self.assertEqual(summary.skipped_low_confidence, 1)
+            self.assertEqual(summary.skipped_user, 1)
             data = json.loads(glossary_path.read_text(encoding='utf-8'))
             self.assertEqual(list(data['normalize_map'].keys()), ['Void Gate'])
-            self.assertIn('AR', data['preserve_terms'])
+            self.assertNotIn('AR', data['preserve_terms'])
 
     def test_resolve_candidates_path_from_manifest(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -276,6 +279,7 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 str(glossary_path),
                 overwrite=True,
                 interactive=False,
+                allow_history_review=True,
                 backup=False,
             )
 
@@ -347,7 +351,8 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             action,
             macro_setting_text='AR 不翻译',
         )
-        self.assertEqual(warnings, [])
+        self.assertTrue(any('保留不译' in warning for warning in warnings))
+        self.assertFalse(any('macro_setting' in warning for warning in warnings))
 
     def test_is_likely_ui_noise_detects_launcher_labels(self):
         self.assertTrue(
@@ -622,6 +627,64 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
 
             self.assertEqual(summary.accepted, 0)
             self.assertEqual(summary.skipped_user, 1)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
+    def test_preserve_evidence_is_not_auto_accepted_by_confidence_threshold(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            evidence = keyword_history.build_keyword_history_evidence(
+                {'source': 'AR', 'suggested_target': 'AR'},
+                [
+                    {
+                        'identity_v2': 'id1',
+                        'occurrence_id': 'id1',
+                        'file_rel_path': 'a.rpy',
+                        'display_line': 1,
+                        'locator': {'line_number': 1, 'start': 0},
+                        'source': 'AR',
+                        'current_translation': 'AR',
+                    }
+                ],
+            )
+            candidate = {
+                'source': 'AR',
+                'suggested_target': 'AR',
+                'category': 'term',
+                'confidence': 0.99,
+                'history_evidence': evidence,
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            rows = merge_mod.build_candidate_merge_rows(
+                [candidate],
+                {'normalize_map': {}},
+            )
+            self.assertFalse(rows[0].default_checked)
+            self.assertIn(
+                '保留不译',
+                merge_mod.format_history_evidence_preview(candidate),
+            )
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertIn(
+                '= skip (history_review): AR -> AR',
+                summary.preview_lines,
+            )
             self.assertEqual(
                 json.loads(glossary_path.read_text(encoding='utf-8')),
                 {'normalize_map': {}},

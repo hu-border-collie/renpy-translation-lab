@@ -60,7 +60,7 @@ class KeywordMergeDialog(QDialog):
 
         hint = QLabel(
             "请勾选要写入 glossary 的候选。默认不勾选疑似 Ren'Py 启动器/UI 噪音项，"
-            "历史译法冲突或无证据的条目；与 macro_setting 或现有 glossary 冲突的条目会以红色提示。"
+            "历史译法冲突、保留不译或无证据的条目；与 macro_setting 或现有 glossary 冲突的条目会以红色提示。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
