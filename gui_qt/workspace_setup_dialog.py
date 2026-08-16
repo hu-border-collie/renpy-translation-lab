@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -37,6 +37,7 @@ from translator_runtime import discover_renpy_sdk_candidates, is_renpy_sdk_dir
 from .games_registry_actions import apply_workspace_setup_action
 from .path_utils import canonical_abs_path
 from .sdk_install_worker import SdkInstallWorker
+from .user_copy import WORKSPACE_SETUP_STOP_COPY
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,9 @@ class WorkspaceSetupDialog(QDialog):
         self._result: WorkspaceSetupDialogResult | None = None
         self._workspace_result: WorkspaceSetupDialogResult | None = None
         self._sdk_worker: SdkInstallWorker | None = None
+        # Non-empty while a reject/close is deferred until the worker's real
+        # ``finished`` signal ("reject" | "close").
+        self._sdk_stop_pending: str = ""
         self._found_sdk: Path | None = None
         # Last SDK attempt message (failure / cancel) for completion summary.
         self._sdk_status_message: str = ""
@@ -507,45 +511,67 @@ class WorkspaceSetupDialog(QDialog):
         self._finish_sdk()
 
     def _sdk_worker_active(self) -> bool:
-        return self._sdk_worker is not None and self._sdk_worker.isRunning()
+        # ``completed`` fires while run() is still wrapping up; dropping the
+        # reference is only safe after the real ``finished`` signal.
+        return self._sdk_worker is not None
 
-    def _stop_sdk_worker(self, *, wait_ms: int = 5000) -> bool:
-        """Cancel and wait for the SDK worker.
-
-        Returns True only when no worker is attached or it has fully stopped.
-        On timeout the reference is **kept** so callers continue to block SDK
-        actions and must not destroy the dialog while the thread runs.
-        """
+    def _request_sdk_worker_stop(self, origin: str) -> None:
+        """Cooperatively cancel without blocking; defer the stop to ``finished``."""
         worker = self._sdk_worker
         if worker is None:
-            return True
-        if worker.isRunning():
-            worker.request_cancel()
-            worker.requestInterruption()
-            worker.wait(wait_ms)
-        if worker.isRunning():
-            return False
-        self._sdk_worker = None
-        return True
-
-    def _on_reject(self) -> None:
-        if self._sdk_worker_active():
-            self._ok_button.setEnabled(False)
-            self._set_sdk_status("正在取消 SDK 下载…")
-            if not self._stop_sdk_worker():
-                self._set_sdk_status(
-                    "SDK 任务仍在结束，请稍候再关闭或重试。",
-                    error=True,
-                )
-                # Keep OK disabled until completed signal clears the worker.
-                return
-            self._sdk_status_message = "SDK 安装已取消。"
-            self._set_sdk_status(self._sdk_status_message)
-            self._sdk_progress.setVisible(False)
-            self._ok_button.setEnabled(True)
-            # Stay on the SDK page so the user can skip or retry.
             return
-        # If workspace already applied, still accept with skip SDK so host can persist root.
+        if self._sdk_stop_pending:
+            if origin == "close" and self._sdk_stop_pending == "reject":
+                # A window close supersedes the earlier cancel-and-stay flow.
+                self._sdk_stop_pending = "close"
+                self._set_sdk_status(WORKSPACE_SETUP_STOP_COPY["waiting_close"])
+                return
+            self._set_sdk_status(
+                WORKSPACE_SETUP_STOP_COPY["still_stopping"],
+                error=True,
+            )
+            return
+        self._sdk_stop_pending = origin
+        self._ok_button.setEnabled(False)
+        self._wire_sdk_worker_terminal(worker)
+        worker.request_cancel()
+        worker.requestInterruption()
+        if not worker.isRunning():
+            # ``finished`` may already have been emitted before the wiring.
+            self._on_sdk_worker_terminal(worker)
+            return
+        if origin == "close":
+            self._set_sdk_status(WORKSPACE_SETUP_STOP_COPY["waiting_close"])
+        else:
+            self._set_sdk_status(WORKSPACE_SETUP_STOP_COPY["cancelling"])
+
+    def _wire_sdk_worker_terminal(self, worker: SdkInstallWorker) -> None:
+        if getattr(worker, "_rtl_terminal_wired", False):
+            return
+        worker._rtl_terminal_wired = True
+        worker.finished.connect(
+            lambda current=worker: self._on_sdk_worker_terminal(current)
+        )
+
+    def _on_sdk_worker_terminal(self, worker: SdkInstallWorker) -> None:
+        """Real ``finished``: release ownership and complete the deferred stop."""
+        if self._sdk_worker is worker:
+            self._sdk_worker = None
+        pending, self._sdk_stop_pending = self._sdk_stop_pending, ""
+        if not pending:
+            return
+        if pending == "close":
+            # Defer so the close/accept decision is not re-entered from this
+            # finished slot or the isRunning()-false branch of a stop request.
+            QTimer.singleShot(0, self._complete_reject)
+            return
+        self._sdk_status_message = WORKSPACE_SETUP_STOP_COPY["cancelled"]
+        self._set_sdk_status(self._sdk_status_message)
+        self._sdk_progress.setVisible(False)
+        self._ok_button.setEnabled(True)
+
+    def _complete_reject(self) -> None:
+        """Terminal cancel decision: keep an applied workspace, else reject."""
         if self._workspace_result is not None and self._stack.currentIndex() == 1:
             self._result = WorkspaceSetupDialogResult(
                 workspace=self._workspace_result.workspace,
@@ -558,13 +584,22 @@ class WorkspaceSetupDialog(QDialog):
             return
         self.reject()
 
+    def reject(self) -> None:
+        # Escape and programmatic reject() bypass the Cancel button; route
+        # them through the deferred stop so the dialog cannot close over a
+        # still-running worker.
+        if self._sdk_worker_active():
+            self._request_sdk_worker_stop("reject")
+            return
+        super().reject()
+
+    def _on_reject(self) -> None:
+        self._complete_reject()
+
     def closeEvent(self, event) -> None:  # noqa: N802
-        if not self._stop_sdk_worker(wait_ms=5000):
+        if self._sdk_worker_active():
             event.ignore()
-            self._set_sdk_status(
-                "SDK 任务仍在结束，请稍候再关闭。",
-                error=True,
-            )
+            self._request_sdk_worker_stop("close")
             return
         super().closeEvent(event)
 
@@ -723,9 +758,14 @@ class WorkspaceSetupDialog(QDialog):
         self._sdk_worker = worker
         worker.progress.connect(self._on_sdk_progress)
         worker.completed.connect(self._on_sdk_completed)
+        worker.finished.connect(worker.deleteLater)
+        self._wire_sdk_worker_terminal(worker)
         worker.start()
 
     def _on_sdk_progress(self, phase: str, current: int, total: int) -> None:
+        if self._sdk_stop_pending:
+            # Queued ticks must not overwrite the stop copy with live numbers.
+            return
         if phase == "download" and total > 0:
             self._sdk_progress.setRange(0, 100)
             self._sdk_progress.setValue(min(100, int(100 * current / total)))
@@ -736,8 +776,10 @@ class WorkspaceSetupDialog(QDialog):
             self._sdk_status.setText(f"解压中… {current}/{total}")
 
     def _on_sdk_completed(self, result: object) -> None:
-        # Thread has finished — safe to drop the reference now.
-        self._sdk_worker = None
+        if self._sdk_stop_pending:
+            # A deferred stop owns the terminal UI update; wait for the real
+            # ``finished`` signal instead of fighting over status and buttons.
+            return
         self._ok_button.setEnabled(True)
         from renpy_sdk_install import SdkInstallResult
 

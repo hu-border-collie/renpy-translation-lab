@@ -10,14 +10,55 @@ from unittest import mock
 import games_registry as registry
 
 try:
+    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QApplication, QDialog
 
-    from gui_qt.workspace_setup_dialog import WorkspaceSetupDialog
+    from gui_qt.workspace_setup_dialog import (
+        WorkspaceSetupDialog,
+        WorkspaceSetupDialogResult,
+    )
 except ImportError as exc:
     WorkspaceSetupDialog = None  # type: ignore[assignment,misc]
+    QObject = None  # type: ignore[assignment,misc]
+    QCloseEvent = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
+
+
+if WorkspaceSetupDialog is not None:
+
+    class _FakeSdkWorker(QObject):
+        """Deterministic SdkInstallWorker stand-in: no thread, no blocking wait."""
+
+        finished = Signal()
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.cancel_requested = False
+            self.interruption_requested = False
+            self._running = True
+
+        def isRunning(self):
+            return self._running
+
+        def request_cancel(self):
+            self.cancel_requested = True
+
+        def requestInterruption(self):
+            self.interruption_requested = True
+
+        def finish(self):
+            """Deliver the real terminal signal a QThread would emit."""
+            self._running = False
+            self.finished.emit()
+
+
+def _process(rounds: int = 5) -> None:
+    app = QApplication.instance()
+    for _ in range(rounds):
+        app.processEvents()
 
 
 @unittest.skipIf(
@@ -149,6 +190,166 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
             assert payload is not None
             self.assertEqual(payload.sdk_dir.resolve(), sdk_dir.resolve())
             self.assertIn("跳过下载", payload.sdk_message)
+
+
+    def test_reject_with_active_sdk_worker_defers_without_blocking(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+
+        dialog._on_reject()
+
+        self.assertTrue(worker.cancel_requested)
+        self.assertTrue(worker.interruption_requested)
+        self.assertEqual(dialog._sdk_stop_pending, "reject")
+        self.assertIs(dialog._sdk_worker, worker)
+        self.assertFalse(dialog._ok_button.isEnabled())
+        self.assertIn("正在取消", dialog._sdk_status.text())
+        self.assertEqual(dialog.result(), 0)
+
+        # A second reject during the deferred stop only refreshes the hint.
+        dialog._on_reject()
+        self.assertEqual(dialog._sdk_stop_pending, "reject")
+        self.assertIn("仍在结束", dialog._sdk_status.text())
+
+    def test_deferred_reject_settles_on_real_finished(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._on_reject()
+
+        worker.finish()
+
+        self.assertIsNone(dialog._sdk_worker)
+        self.assertEqual(dialog._sdk_stop_pending, "")
+        self.assertTrue(dialog._ok_button.isEnabled())
+        self.assertIn("已取消", dialog._sdk_status.text())
+        # Contract: dialog stays open so the user can skip or retry.
+        self.assertEqual(dialog.result(), 0)
+
+    def test_sdk_completed_suppressed_during_deferred_stop(self):
+        from renpy_sdk_install import SdkInstallResult
+
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._on_reject()
+
+        dialog._on_sdk_completed(SdkInstallResult(ok=True, message="成功"))
+
+        self.assertFalse(dialog._ok_button.isEnabled())
+        self.assertIn("正在取消", dialog._sdk_status.text())
+        # Ownership is still held until the real finished signal.
+        self.assertIs(dialog._sdk_worker, worker)
+
+        worker.finish()
+        self.assertIsNone(dialog._sdk_worker)
+
+    def test_worker_reference_held_between_completed_and_finished(self):
+        from renpy_sdk_install import SdkInstallResult
+
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        # Same terminal wiring the real creation path installs.
+        dialog._wire_sdk_worker_terminal(worker)
+
+        dialog._on_sdk_completed(SdkInstallResult(ok=False, message="失败示例"))
+        self.assertIs(dialog._sdk_worker, worker)
+
+        worker.finish()
+        self.assertIsNone(dialog._sdk_worker)
+
+    def test_close_with_active_sdk_worker_waits_for_real_finished(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+
+        event = QCloseEvent()
+        dialog.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(dialog._sdk_stop_pending, "close")
+        self.assertTrue(worker.cancel_requested)
+        self.assertIn("自动关闭", dialog._sdk_status.text())
+
+        worker.finish()
+        _process()
+        # No workspace applied: the deferred close settles as a reject.
+        self.assertEqual(dialog._sdk_stop_pending, "")
+        self.assertIsNone(dialog._sdk_worker)
+        self.assertEqual(dialog.result(), int(QDialog.DialogCode.Rejected))
+
+    def test_close_during_pending_reject_upgrades_to_deferred_close(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._on_reject()
+        self.assertEqual(dialog._sdk_stop_pending, "reject")
+
+        event = QCloseEvent()
+        dialog.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(dialog._sdk_stop_pending, "close")
+        self.assertIn("自动关闭", dialog._sdk_status.text())
+
+        worker.finish()
+        _process()
+        self.assertEqual(dialog._sdk_stop_pending, "")
+        self.assertEqual(dialog.result(), int(QDialog.DialogCode.Rejected))
+
+    def test_escape_reject_with_active_worker_defers_without_closing(self):
+        dialog = WorkspaceSetupDialog(None)
+        dialog.show()
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+
+        dialog.reject()
+
+        self.assertEqual(dialog.result(), 0)
+        self.assertFalse(dialog.isHidden())
+        self.assertTrue(worker.cancel_requested)
+        self.assertEqual(dialog._sdk_stop_pending, "reject")
+
+        # Settle the deferred stop so no live modal leaks to the test guard.
+        worker.finish()
+        dialog.reject()
+        self.assertTrue(dialog.isHidden())
+
+    def test_progress_ticks_do_not_overwrite_stop_copy(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._on_reject()
+
+        dialog._on_sdk_progress("download", 3, 10)
+
+        self.assertIn("正在取消", dialog._sdk_status.text())
+
+    def test_deferred_close_keeps_applied_workspace(self):
+        dialog = WorkspaceSetupDialog(None)
+        worker = _FakeSdkWorker(dialog)
+        dialog._sdk_worker = worker
+        dialog._workspace_result = WorkspaceSetupDialogResult(
+            workspace=Path("X:/ws"),
+            message="已接入",
+            project_count=0,
+            created_registry=True,
+        )
+        dialog._stack.setCurrentIndex(1)
+
+        event = QCloseEvent()
+        dialog.closeEvent(event)
+        self.assertEqual(dialog._sdk_stop_pending, "close")
+
+        worker.finish()
+        _process()
+
+        self.assertEqual(dialog.result(), int(QDialog.DialogCode.Accepted))
+        payload = dialog.result_payload()
+        self.assertIsNotNone(payload)
+        assert payload is not None
+        self.assertIn("跳过", payload.sdk_message)
 
 
 if __name__ == "__main__":

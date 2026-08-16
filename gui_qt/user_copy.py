@@ -60,6 +60,14 @@ APP_SHUTDOWN_COPY = {
     "stalled": "部分后台任务仍在停止；窗口会保持打开，直到线程真实结束。",
 }
 
+# Workspace setup dialog: cooperative stop of the SDK download worker.
+WORKSPACE_SETUP_STOP_COPY = {
+    "cancelling": "正在取消 SDK 下载…任务真正结束后可重试或跳过。",
+    "waiting_close": "正在等待 SDK 任务结束，窗口将在任务完成后自动关闭。",
+    "still_stopping": "SDK 任务仍在结束，请稍候再试。",
+    "cancelled": "SDK 安装已取消。",
+}
+
 MANIFEST_MODE_LABELS = {
     "translation": "普通翻译",
     "revision": "订正",
