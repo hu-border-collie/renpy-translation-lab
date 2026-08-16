@@ -284,6 +284,20 @@ class SharedSchemaContractTests(unittest.TestCase):
         self.assertEqual(gate["warning_count"], 3)
         self.assertEqual(gate["blocker_count"], 1)
 
+    def test_gui_revision_apply_gate_beats_carried_over_summary(self):
+        manifest = {
+            'summary': {
+                'quality_gate': {'decision': 'pass', 'warning_count': 0},
+            },
+            'revision_apply_summary': {
+                'quality_gate': {'decision': 'needs_review', 'warning_count': 4},
+            },
+        }
+        self.assertEqual(
+            quality_gate_from_manifest(manifest)['warning_count'],
+            4,
+        )
+
     def test_gui_prefers_apply_time_revision_quality_gate(self):
         manifest = {
             'last_revision_preview': {
@@ -388,7 +402,14 @@ class SharedSchemaContractTests(unittest.TestCase):
 
 
 class SyncQualityFindingsTests(unittest.TestCase):
-    def _make_preview(self, root: Path, subject=None, *, glossary_file=""):
+    def _make_preview(
+        self,
+        root: Path,
+        subject=None,
+        *,
+        glossary_file="",
+        quality_policy=None,
+    ):
         tl_dir = root / 'game' / 'tl' / 'schinese'
         tl_dir.mkdir(parents=True)
         target = tl_dir / 'a.rpy'
@@ -413,6 +434,7 @@ class SyncQualityFindingsTests(unittest.TestCase):
             tl_dir=tl_dir,
             files=rows,
             glossary_file=glossary_file,
+            quality_policy=quality_policy,
         )
 
     def test_sync_preview_persists_findings_and_quality_gate(self):
@@ -436,6 +458,32 @@ class SyncQualityFindingsTests(unittest.TestCase):
             ))
             self.assertIn('quality_policy_digest', manifest['summary'])
             self.assertIn('quality_rule_schema_version', manifest)
+
+    def test_sync_apply_blocks_quality_blockers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, manifest = self._make_preview(
+                root,
+                quality_policy={
+                    'rules': {'renpy_wait_inside_cjk': 'blocker'}
+                },
+            )
+            self.assertEqual(
+                manifest['summary']['quality_gate']['blocker_count'],
+                1,
+            )
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+
+            with self.assertRaisesRegex(ValueError, 'quality blockers'):
+                preview.apply_sync_preview(
+                    manifest_path,
+                    active_project_root=root,
+                    active_tl_dir=tl_dir,
+                )
+            self.assertEqual(
+                (tl_dir / 'a.rpy').read_text(encoding='utf-8'),
+                '    "Hello"\n',
+            )
 
     def test_sync_apply_stales_when_quality_policy_changes(self):
         with tempfile.TemporaryDirectory() as tmp:

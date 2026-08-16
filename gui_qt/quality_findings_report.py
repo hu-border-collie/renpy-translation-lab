@@ -167,14 +167,10 @@ def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]
         quality_gate = last_summary.get("quality_gate")
         if isinstance(quality_gate, dict):
             return dict(quality_gate)
-    summary = manifest.get("summary")
-    if isinstance(summary, dict):
-        quality_gate = summary.get("quality_gate")
-        if isinstance(quality_gate, dict):
-            return dict(quality_gate)
-    # Apply-time gates are newer than ``last_revision_preview`` and must win
-    # when both exist.  Blocked apply paths only persist the full revalidated
-    # summary under ``last_revision_apply_summary``.
+    # Apply-time gates are newer than both ``last_revision_preview`` and any
+    # top-level build summary carried over from an earlier Batch stage.
+    # Blocked apply paths only persist the full revalidated summary under
+    # ``last_revision_apply_summary``.
     revision_apply_summary = manifest.get("revision_apply_summary")
     if isinstance(revision_apply_summary, dict):
         quality_gate = revision_apply_summary.get("quality_gate")
@@ -188,6 +184,11 @@ def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]
     revision_preview = manifest.get("last_revision_preview")
     if isinstance(revision_preview, dict):
         quality_gate = revision_preview.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            return dict(quality_gate)
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        quality_gate = summary.get("quality_gate")
         if isinstance(quality_gate, dict):
             return dict(quality_gate)
     return {}

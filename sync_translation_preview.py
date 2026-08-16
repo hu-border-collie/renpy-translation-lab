@@ -407,6 +407,14 @@ def prepare_sync_preview_apply(
             "Quality rules changed since sync preview; regenerate the preview."
         )
     summary = manifest.get("summary") or {}
+    quality_gate = summary.get("quality_gate")
+    if isinstance(quality_gate, dict) and int(
+        quality_gate.get("blocker_count") or 0
+    ) > 0:
+        raise ValueError(
+            "Sync preview has quality blockers; resolve them and regenerate "
+            "the preview before applying."
+        )
     if isinstance(active_quality_policy, dict):
         expected_digest = summary.get("quality_policy_digest")
         current_digest = translation_quality.policy_digest(
