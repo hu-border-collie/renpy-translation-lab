@@ -374,6 +374,18 @@ class SharedSchemaContractTests(unittest.TestCase):
                              quality.FINAL_REVIEW_REASON_OMISSION)
             self.assertIn('quality_gate', package['manifest']['summary'])
 
+            stale_manifest = dict(package['manifest'])
+            stale_manifest['summary'] = {
+                **stale_manifest['summary'],
+                'quality_mapping_version': 999,
+            }
+            Path(paths['manifest']).write_text(
+                json.dumps(stale_manifest, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            with self.assertRaisesRegex(fr.FinalReviewSchemaError, 'stale'):
+                fr.load_campaign_package(paths['manifest'])
+
 
 class SyncQualityFindingsTests(unittest.TestCase):
     def _make_preview(self, root: Path, subject=None, *, glossary_file=""):
@@ -456,6 +468,32 @@ class SyncQualityFindingsTests(unittest.TestCase):
                     active_project_root=root,
                     active_tl_dir=tl_dir,
                     active_glossary_file='',
+                )
+
+    def test_sync_apply_stales_when_glossary_content_changes_on_same_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            glossary = root / 'glossary.json'
+            glossary.write_text(
+                json.dumps({'normalize_map': {'Church Knight': '教会骑士'}}),
+                encoding='utf-8',
+            )
+            manifest_path, _manifest = self._make_preview(
+                root,
+                glossary_file='glossary.json',
+            )
+            glossary.write_text(
+                json.dumps({'normalize_map': {'Church Knight': '圣殿骑士'}}),
+                encoding='utf-8',
+            )
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+
+            with self.assertRaisesRegex(ValueError, 'glossary content changed'):
+                preview.apply_sync_preview(
+                    manifest_path,
+                    active_project_root=root,
+                    active_tl_dir=tl_dir,
+                    active_glossary_file='glossary.json',
                 )
 
     def test_sync_apply_stales_when_quality_rule_version_changes(self):

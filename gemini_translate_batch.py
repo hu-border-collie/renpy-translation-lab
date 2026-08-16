@@ -10913,15 +10913,10 @@ def apply_revisions(target=None, force=False):
         quality_report_path
     )
     manifest['last_revision_apply_summary'] = summary
-    quality_gate = summary.get('quality_gate') or {}
-    if int(quality_gate.get('blocker_count') or 0) > 0:
-        append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
-        _mark_revision_apply_blocked(
-            manifest,
-            'quality_blockers_present',
-            'configured quality blocker rules matched revision candidates. No files were written.',
-        )
 
+    # Validate the structural writeback plan before terminating on quality
+    # blockers so both structural and quality diagnostics are persisted in the
+    # blocked apply summary.
     adapter_plan, adapter_snapshot = _validate_adapter_writeback_plan(
         manifest,
         revalidated_replacements_by_file,
@@ -10933,20 +10928,36 @@ def apply_revisions(target=None, force=False):
             if file_key in revalidated_source_documents
         ),
     )
-    if summary.get('adapter_writeback_status') == 'block':
+    structural_block = summary.get('adapter_writeback_status') == 'block'
+    if structural_block:
         summary['pending_files'] = 0
         summary['pending_lines'] = 0
+
+    quality_gate = summary.get('quality_gate') or {}
+    quality_blocker_count = int(quality_gate.get('blocker_count') or 0)
+    if quality_blocker_count > 0 or structural_block:
         summarize_revision_writeback_gate(summary)
         summary['check_status'] = translation_quality.overall_check_status(
             summary['writeback_gate'],
-            summary.get('quality_gate') or {},
+            quality_gate,
         )
         append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
-        _mark_revision_apply_blocked(
-            manifest,
-            'adapter_writeback_block',
-            'the adapter writeback plan is not safe. No files were written.',
-        )
+        if quality_blocker_count > 0 and structural_block:
+            reason = 'quality_and_structural_blockers_present'
+            message = (
+                'configured quality blocker rules matched revision candidates and '
+                'the adapter writeback plan is not safe. No files were written.'
+            )
+        elif quality_blocker_count > 0:
+            reason = 'quality_blockers_present'
+            message = (
+                'configured quality blocker rules matched revision candidates. '
+                'No files were written.'
+            )
+        else:
+            reason = 'adapter_writeback_block'
+            message = 'the adapter writeback plan is not safe. No files were written.'
+        _mark_revision_apply_blocked(manifest, reason, message)
 
     writeback_files = []
     applied_file_keys = set()

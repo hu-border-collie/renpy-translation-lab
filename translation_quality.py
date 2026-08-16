@@ -343,6 +343,24 @@ def policy_digest(policy: Mapping[str, Any] | None) -> str:
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
 
+def glossary_digest(glossary_map: Mapping[str, str] | None) -> str:
+    """Stable digest of the glossary pairs actually consumed by quality rules."""
+
+    entries = [
+        [str(source), str(target)]
+        for source, target in (glossary_map or {}).items()
+        if str(source).strip() or str(target).strip()
+    ]
+    entries.sort(key=lambda pair: (pair[0], pair[1]))
+    serialized = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
 def load_policy_from_config(translator_config: Any) -> dict[str, Any]:
     if not isinstance(translator_config, Mapping):
         return normalize_policy(None)

@@ -1344,6 +1344,19 @@ def load_campaign_package(target: str | os.PathLike[str]) -> dict[str, Any]:
         raise FinalReviewSchemaError(
             f"expected mode={MANIFEST_MODE_FINAL_REVIEW!r}, got {mode!r}"
         )
+    summary = manifest.get("summary")
+    mapping_version = (
+        summary.get("quality_mapping_version")
+        if isinstance(summary, Mapping)
+        else None
+    )
+    if mapping_version is not None and mapping_version != (
+        FINAL_REVIEW_QUALITY_MAPPING_VERSION
+    ):
+        raise FinalReviewSchemaError(
+            "final-review quality mapping version is stale; "
+            "re-run the campaign ingest to regenerate quality_findings.jsonl"
+        )
     snapshot = {}
     if os.path.isfile(paths["snapshot"]):
         loaded = load_json_file(paths["snapshot"])

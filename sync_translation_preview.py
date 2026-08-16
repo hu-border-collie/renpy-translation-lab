@@ -75,6 +75,7 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "quality_policy",
         "quality_policy_digest",
         "quality_glossary_file",
+        "quality_glossary_digest",
         "last_quality_findings_path",
         "quality_findings_sha256",
         "quality_findings_digest",
@@ -271,6 +272,9 @@ def create_sync_preview(
     )
     if not quality_glossary_map and glossary_text:
         quality_glossary_map = translation_quality.load_glossary_map(glossary_text)
+    quality_glossary_digest = translation_quality.glossary_digest(
+        quality_glossary_map
+    )
     quality_findings = translation_quality.check_quality(
         quality_subjects,
         policy=effective_quality_policy,
@@ -326,6 +330,7 @@ def create_sync_preview(
                 quality_findings
             ),
             "quality_glossary_path": glossary_text,
+            "quality_glossary_digest": quality_glossary_digest,
             "quality_glossary_entries": len(quality_glossary_map),
             "quality_glossary_loaded": bool(
                 not glossary_text or quality_glossary_map
@@ -339,6 +344,7 @@ def create_sync_preview(
             effective_quality_policy
         ),
         "quality_glossary_file": glossary_text,
+        "quality_glossary_digest": quality_glossary_digest,
         "last_quality_findings_path": "quality_findings.jsonl",
         "quality_findings_sha256": file_sha256(quality_findings_path),
         "quality_findings_digest": translation_quality.findings_digest(
@@ -419,6 +425,29 @@ def prepare_sync_preview_apply(
         raise ValueError(
             "Quality glossary changed since sync preview; regenerate the preview."
         )
+    if active_glossary_file is not None and "quality_glossary_digest" in manifest:
+        current_glossary_map = translation_quality.load_glossary_map(
+            active_glossary_text,
+            base_dir=os.path.realpath(
+                os.path.abspath(os.fspath(active_project_root))
+            ),
+        )
+        if not current_glossary_map and active_glossary_text:
+            current_glossary_map = translation_quality.load_glossary_map(
+                active_glossary_text
+            )
+        current_glossary_digest = translation_quality.glossary_digest(
+            current_glossary_map
+        )
+        expected_glossary_digest = (
+            manifest.get("quality_glossary_digest")
+            or summary.get("quality_glossary_digest")
+        )
+        if current_glossary_digest != expected_glossary_digest:
+            raise ValueError(
+                "Quality glossary content changed since sync preview; "
+                "regenerate the preview."
+            )
 
     package_dir = Path(manifest["_manifest_path"]).parent
     if manifest.get("last_quality_findings_path"):
