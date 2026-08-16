@@ -546,19 +546,22 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
     ):
         return False
     translation_keys = {_match_key(item) for item in translations}
-    if len(translation_keys) != len(translations):
+    if len(translation_keys) != len(translations) or len(translation_keys) != 1:
         return False
     if len(translations) > occurrence_count:
         return False
+    unique_translation_key = next(iter(translation_keys))
     first_translation = _match_key(first_occurrence.get("current_translation"))
-    if first_translation not in translation_keys:
+    if first_translation != unique_translation_key:
+        return False
+    if _match_key(candidate_target) != unique_translation_key:
         return False
     reported_translation_keys = {
         _match_key(item.get("current_translation"))
         for item in occurrences
         if isinstance(item, Mapping)
     }
-    if not reported_translation_keys <= translation_keys:
+    if reported_translation_keys != {unique_translation_key}:
         return False
 
     # A consistent record must not carry hidden conflict signals.

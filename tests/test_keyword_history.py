@@ -267,6 +267,43 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
             keyword_history.is_complete_consistent_history_evidence(evidence)
         )
 
+    def test_consistent_validator_rejects_multiple_reported_translations(self):
+        rows = [
+            self._row("id1", "a.rpy", 1, "Void Gate", "虚空门"),
+            self._row("id2", "b.rpy", 2, "Void Gate", "星门"),
+        ]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "Void Gate", "suggested_target": "虚空门"},
+            rows,
+        )
+        self.assertEqual(evidence["status"], keyword_history.STATUS_AMBIGUOUS)
+
+        # Hand-edited payload that claims consistent while carrying two
+        # historical translations must fail closed.
+        evidence["status"] = keyword_history.STATUS_CONSISTENT
+        evidence["review_required"] = False
+        evidence["translations"] = ["虚空门", "星门"]
+        evidence["conflict_codes"] = []
+        evidence["conflict_reasons"] = []
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+    def test_consistent_validator_rejects_target_mismatching_unique_translation(self):
+        rows = [self._row("id1", "a.rpy", 1, "Void Gate", "虚空门")]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "Void Gate", "suggested_target": "虚空门"},
+            rows,
+        )
+        self.assertTrue(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+        evidence["candidate_target"] = "星门"
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
     def test_fixture_covers_possessive_and_vocative_forms(self):
         fixture_path = Path(__file__).parent / "fixtures" / "keyword_history_forms.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))

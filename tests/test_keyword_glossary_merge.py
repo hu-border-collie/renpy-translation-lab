@@ -569,6 +569,64 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 {'normalize_map': {}},
             )
 
+    def test_hand_edited_multitranslation_consistent_history_is_not_auto_accepted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            rows = [
+                {
+                    'identity_v2': 'id1',
+                    'occurrence_id': 'id1',
+                    'file_rel_path': 'a.rpy',
+                    'display_line': 1,
+                    'locator': {'line_number': 1, 'start': 0},
+                    'source': 'Void Gate',
+                    'current_translation': '虚空门',
+                },
+                {
+                    'identity_v2': 'id2',
+                    'occurrence_id': 'id2',
+                    'file_rel_path': 'b.rpy',
+                    'display_line': 2,
+                    'locator': {'line_number': 2, 'start': 0},
+                    'source': 'Void Gate',
+                    'current_translation': '星门',
+                },
+            ]
+            evidence = keyword_history.build_keyword_history_evidence(
+                {'source': 'Void Gate', 'suggested_target': '星门'},
+                rows,
+            )
+            evidence['status'] = keyword_history.STATUS_CONSISTENT
+            evidence['review_required'] = False
+            evidence['conflict_codes'] = []
+            evidence['conflict_reasons'] = []
+            candidate = {
+                'source': 'Void Gate',
+                'suggested_target': '星门',
+                'category': 'place',
+                'confidence': 0.99,
+                'history_evidence': evidence,
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
     def test_dry_run_history_preview_matches_real_history_gate(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()
