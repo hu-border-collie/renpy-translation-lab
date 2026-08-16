@@ -1408,15 +1408,17 @@ def load_findings(
                             f'quality findings row {row_number} must be an object'
                         )
                     continue
-                normalized = normalize_finding(value)
                 if strict:
-                    errors = validate_finding(normalized)
+                    # Validate the raw persisted row before normalization so
+                    # invalid enums/numbers cannot be silently coerced into
+                    # defaults and then treated as contract-valid findings.
+                    errors = validate_finding(value)
                     if errors:
                         raise ValueError(
                             f'quality findings row {row_number} is invalid: '
                             + '; '.join(errors)
                         )
-                findings.append(normalized)
+                findings.append(normalize_finding(value))
     except OSError:
         if strict:
             raise

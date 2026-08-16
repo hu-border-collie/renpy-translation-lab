@@ -198,6 +198,24 @@ class SharedSchemaContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'row 2'):
                 quality.load_findings(path, strict=True)
 
+    def test_strict_load_rejects_invalid_enum_values_before_normalizing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'findings.jsonl'
+            invalid = quality.normalize_finding(
+                quality.check_subject(mechanical_subject())[0]
+            )
+            invalid['severity'] = 'catastrophic'
+            invalid['disposition'] = 'sometimes'
+            invalid['line'] = -1
+            invalid['rule_version'] = 'not-an-int'
+            path.write_text(
+                json.dumps(invalid, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+
+            with self.assertRaisesRegex(ValueError, 'severity'):
+                quality.load_findings(path, strict=True)
+
     def test_final_review_adapter_preserves_semantic_fields(self):
         semantic = fr.normalize_finding(
             {
@@ -268,6 +286,9 @@ class SharedSchemaContractTests(unittest.TestCase):
 
     def test_gui_prefers_apply_time_revision_quality_gate(self):
         manifest = {
+            'last_revision_preview': {
+                'quality_gate': {'decision': 'pass', 'warning_count': 0},
+            },
             'revision_apply_summary': {
                 'quality_gate': {'decision': 'needs_review', 'warning_count': 1},
             },
@@ -278,6 +299,9 @@ class SharedSchemaContractTests(unittest.TestCase):
         )
 
         blocked = {
+            'last_revision_preview': {
+                'quality_gate': {'decision': 'pass', 'warning_count': 0},
+            },
             'last_revision_apply_summary': {
                 'quality_gate': {'decision': 'needs_review', 'warning_count': 2},
             },
@@ -581,6 +605,27 @@ class RevisionQualityStalenessTests(unittest.TestCase):
             self._preview(writeback_gate={'decision': quality.GATE_DENY}),
         )
         self.assertEqual(reason, 'revision_writeback_gate_denied')
+
+    def test_revision_blocked_marker_raises_after_persisting_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = {
+                '_manifest_path': str(Path(tmp) / 'manifest.json'),
+                'execution': 'sync',
+            }
+            with mock.patch.object(batch, 'save_manifest') as save:
+                with self.assertRaises(SystemExit):
+                    batch._mark_revision_apply_blocked(
+                        manifest,
+                        'quality_blockers_present',
+                        'configured quality blocker rules matched revision candidates.',
+                    )
+
+            save.assert_called_once()
+            self.assertEqual(manifest['revision_apply_state'], 'blocked')
+            self.assertEqual(
+                manifest['revision_apply_blocked_reason'],
+                'quality_blockers_present',
+            )
 
 
 class RevisionQualityFindingsTests(unittest.TestCase):
