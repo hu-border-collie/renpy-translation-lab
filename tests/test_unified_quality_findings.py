@@ -572,6 +572,8 @@ class SyncRuntimeQualityFindingsTests(unittest.TestCase):
                     quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE,
                 }
             )
+            self.assertTrue(loaded)
+            self.assertTrue(all(finding["line"] == 1 for finding in loaded))
 
 
 class RevisionQualityStalenessTests(unittest.TestCase):

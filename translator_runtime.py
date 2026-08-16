@@ -5960,6 +5960,7 @@ def run_translation(*, prepare=False):
                             "item_id": str(task.get("id") or ""),
                             "file_rel_path": progress_key,
                             "line": int(task.get("line") or 0),
+                            "line_number": int(task.get("line") or 0) + 1,
                             "start": int(task.get("start") or 0),
                             "end": int(task.get("end") or 0),
                             "source": str(
