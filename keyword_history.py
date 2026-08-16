@@ -140,6 +140,63 @@ def _boundary_pattern(term: str) -> str:
     return left + pattern + right
 
 
+_SINGULAR_S_ENDING_EXCEPTIONS = frozenset(
+    {
+        # Common English words that end in "s" but are singular.  For these we
+        # generate the regular "-es" plural instead of blindly stripping the s.
+        "alias",
+        "atlas",
+        "bias",
+        "boss",
+        "bus",
+        "campus",
+        "canvas",
+        "chaos",
+        "class",
+        "cosmos",
+        "cross",
+        "dress",
+        "ethos",
+        "focus",
+        "gas",
+        "glass",
+        "grass",
+        "iris",
+        "kiss",
+        "lens",
+        "logos",
+        "loss",
+        "miss",
+        "news",
+        "oasis",
+        "pathos",
+        "press",
+        "status",
+        "this",
+        "virus",
+        "walrus",
+        "yes",
+    }
+)
+
+
+def _looks_like_regular_plural(word: str) -> bool:
+    """Return whether a word looks like a regular English plural form."""
+
+    lower = word.casefold()
+    if len(lower) <= 2:
+        return False
+    if lower.endswith("ies") and len(lower) > 3:
+        return True
+    if lower.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return True
+    if lower.endswith("s"):
+        return lower not in _SINGULAR_S_ENDING_EXCEPTIONS and not lower.endswith(
+            ("ss", "us", "is")
+        )
+    return False
+
+
 def _plural_variants(term: str) -> list[str]:
     """Return conservative English singular/plural alternatives for a term."""
 
@@ -150,16 +207,27 @@ def _plural_variants(term: str) -> list[str]:
     if len(last) <= 2:
         return []
     prefix = term[:words[-1].start()]
+    lower = last.casefold()
     variants: list[str] = []
-    if last.casefold().endswith("ies") and len(last) > 3:
+
+    # Plural -> singular: keep the existing conservative rules.
+    if lower.endswith("ies") and len(last) > 3:
         variants.append(prefix + last[:-3] + "y")
-    elif last.casefold().endswith(("ses", "xes", "zes", "ches", "shes")):
+    elif lower.endswith(("ses", "xes", "zes", "ches", "shes")):
         variants.append(prefix + last[:-2])
-    elif last.casefold().endswith("s"):
+    elif _looks_like_regular_plural(last):
         variants.append(prefix + last[:-1])
-    else:
-        suffix = "es" if last.casefold().endswith(("s", "x", "z", "ch", "sh")) else "s"
-        variants.append(term + suffix)
+
+    # Singular -> plural: add the missing direction.  Skip when the input
+    # already looks like a plural so we do not produce forms like "storieses".
+    if not _looks_like_regular_plural(last):
+        if lower.endswith("y") and len(last) > 1 and lower[-2] not in "aeiou":
+            variants.append(prefix + last[:-1] + "ies")
+        elif lower.endswith(("s", "x", "z", "ch", "sh")):
+            variants.append(term + "es")
+        else:
+            variants.append(term + "s")
+
     return [variant for variant in variants if _match_key(variant) != _match_key(term)]
 
 
