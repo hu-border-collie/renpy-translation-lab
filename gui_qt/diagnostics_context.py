@@ -236,6 +236,56 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["build_translation_records"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "build-translation-records",
+                    "path/to/base/project_snapshot.json",
+                    "path/to/batch/manifest.json",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["build_reuse_candidates"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "build-reuse-candidates",
+                    "path/to/base/project_snapshot.json",
+                    "path/to/target/project_snapshot.json",
+                    "path/to/reconciliation/reconciliation_report.json",
+                    "path/to/records/translation_records.json",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["import_reuse_decisions"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "import-reuse-decisions",
+                    "path/to/reuse/reuse_report.json",
+                    "path/to/reuse_decisions.jsonl",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["export_reuse_results"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "export-reuse-results",
+                    "path/to/reuse/reuse_report.json",
+                    "path/to/target/batch/manifest.json",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
             label="项目分析状态",
             command=format_cli_command(
                 python_exe,

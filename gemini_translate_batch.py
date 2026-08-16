@@ -48,6 +48,7 @@ from engine_adapters.contracts import (
 )
 from engine_adapters.coverage import export_coverage_package, load_review_record
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
+import engine_adapters.reuse as engine_reuse
 import engine_adapters.versioning as engine_versioning
 from engine_adapters.writeback import (
     WritebackPlanError,
@@ -102,6 +103,8 @@ REPAIR_RUNS_DIR = os.path.join(LOG_DIR, 'repair_runs')
 SYNC_RUNS_DIR = os.path.join(LOG_DIR, 'sync_runs')
 PROJECT_SNAPSHOTS_DIR = os.path.join(LOG_DIR, 'project_snapshots')
 PROJECT_RECONCILIATIONS_DIR = os.path.join(LOG_DIR, 'project_reconciliations')
+PROJECT_TRANSLATION_RECORDS_DIR = os.path.join(LOG_DIR, 'translation_records')
+PROJECT_REUSE_DIR = os.path.join(LOG_DIR, 'translation_reuse')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
 SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
@@ -119,6 +122,10 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
+        'build-translation-records',
+        'build-reuse-candidates',
+        'import-reuse-decisions',
+        'export-reuse-results',
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
@@ -134,6 +141,10 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
+        'build-translation-records',
+        'build-reuse-candidates',
+        'import-reuse-decisions',
+        'export-reuse-results',
         'split',
         'build-retry',
         'merge-retry',
@@ -168,6 +179,8 @@ def ensure_batch_dirs():
     os.makedirs(SYNC_RUNS_DIR, exist_ok=True)
     os.makedirs(PROJECT_SNAPSHOTS_DIR, exist_ok=True)
     os.makedirs(PROJECT_RECONCILIATIONS_DIR, exist_ok=True)
+    os.makedirs(PROJECT_TRANSLATION_RECORDS_DIR, exist_ok=True)
+    os.makedirs(PROJECT_REUSE_DIR, exist_ok=True)
 
 
 def initialize_batch_logging():
@@ -3778,6 +3791,535 @@ def run_project_snapshot_reconciliation(base_path, target_path, *, output_dir=No
         f"deleted: {report.summary.get('deleted', 0)}"
     )
     print(f'Report: {paths.report_path}')
+    return result
+
+
+def run_translation_records_export(
+    snapshot_path,
+    manifest_target,
+    *,
+    origin='model_initial',
+    previous_records_path='',
+    output_dir=None,
+):
+    """Freeze one Batch package's validated translations as P4 records."""
+    snapshot = engine_versioning.load_project_snapshot(snapshot_path)
+    manifest = load_manifest(manifest_target)
+    require_manifest_mode(
+        manifest,
+        MANIFEST_MODE_TRANSLATION,
+        'build-translation-records',
+    )
+    _rows, rows_by_key, result_path = load_result_rows_by_key(
+        manifest,
+        'translation records source',
+    )
+    manifest_identity = {
+        'manifest_path': _canonical_abs_path(manifest['_manifest_path']),
+        'result_path': _canonical_abs_path(result_path),
+        'project_identity': manifest_project_identity(manifest),
+    }
+    previous_records = None
+    if previous_records_path and str(previous_records_path).strip():
+        previous_records = engine_reuse.load_translation_records(
+            str(previous_records_path).strip()
+        )
+        if previous_records.version_id != snapshot.game_version.version_id:
+            raise SystemExit(
+                'Previous translation records version does not match the '
+                'snapshot version.'
+            )
+        if previous_records.snapshot_digest != snapshot.snapshot_digest:
+            raise SystemExit(
+                'Previous translation records do not match this snapshot '
+                'digest; revision history cannot be chained across versions.'
+            )
+    previous_by_unit = {
+        record.unit_id: record
+        for record in (previous_records.records if previous_records else ())
+    }
+    inputs = []
+    for chunk in manifest.get('chunks') or []:
+        chunk_key = str(chunk.get('key') or '')
+        row = rows_by_key.get(chunk_key)
+        if row is None:
+            raise SystemExit(f'Result JSONL is missing chunk: {chunk_key}')
+        chunk_items = chunk.get('items') or []
+        items = result_items_from_row(
+            row,
+            'translation records source',
+            chunk_items,
+        )
+        items_by_id = {str(item.get('id') or ''): item for item in items}
+        for unit in chunk_items:
+            unit_id = str(unit.get('id') or '')
+            item = items_by_id.get(unit_id)
+            if item is None:
+                raise SystemExit(
+                    f'Chunk {chunk_key} result is missing unit: {unit_id}'
+                )
+            translation = str(item.get('translation') or '')
+            if not translation.strip():
+                raise SystemExit(f'Empty translation for unit: {unit_id}')
+            previous_record = previous_by_unit.get(unit_id)
+            revision_history = (
+                engine_reuse.derive_revision_history(
+                    previous_record,
+                    new_translation=translation,
+                    new_origin=origin,
+                )
+                if previous_record is not None
+                else ()
+            )
+            inputs.append(
+                engine_reuse.TranslationInput(
+                    unit_id=unit_id,
+                    translation_text=translation,
+                    source_text=str(unit.get('source', unit.get('text', '')) or ''),
+                    origin=origin,
+                    revision_history=revision_history,
+                    chunk_key=chunk_key,
+                    row_key=str(row.get('key') or chunk_key),
+                    extra={'manifest_identity': manifest_identity},
+                )
+            )
+    record_set = engine_reuse.build_translation_records(snapshot, inputs)
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        version_part = _versioning_artifact_component(
+            snapshot.game_version.version_id
+        )
+        target_dir = _create_versioning_output_dir(
+            PROJECT_TRANSLATION_RECORDS_DIR,
+            f'{stamp}_{guess_project_slug()}_{version_part}',
+        )
+    paths = engine_reuse.export_translation_records(record_set, target_dir)
+    result = {
+        'kind': engine_reuse.TRANSLATION_RECORDS_KIND,
+        'version_id': record_set.version_id,
+        'snapshot_digest': record_set.snapshot_digest,
+        'record_count': len(record_set.records),
+        'record_set_digest': record_set.record_set_digest,
+        'target_language': record_set.target_language,
+        'paths': {
+            'output_dir': paths.package_dir,
+            'manifest': paths.manifest_path,
+            'records': paths.records_path,
+        },
+    }
+    print(f'Exported translation records: {paths.package_dir}')
+    print(f'Game version: {record_set.version_id}')
+    print(f'Records: {len(record_set.records)}')
+    print(f'Record set digest: {record_set.record_set_digest}')
+    print(f'Manifest: {paths.manifest_path}')
+    return result
+
+
+def _load_reuse_live_inputs(
+    *,
+    base_snapshot_path='',
+    target_snapshot_path='',
+    reconciliation_path='',
+    base_records_path='',
+    recorded_paths=None,
+):
+    recorded = dict(recorded_paths or {})
+
+    def _resolve(explicit, key, label):
+        value = str(explicit or '').strip() or str(recorded.get(key) or '')
+        if not value:
+            raise SystemExit(
+                f'Missing {label} path; pass it explicitly or rebuild the '
+                'reuse package with recorded input paths.'
+            )
+        return value
+
+    return {
+        'base_snapshot': engine_versioning.load_project_snapshot(
+            _resolve(base_snapshot_path, 'base_snapshot', 'base snapshot')
+        ),
+        'target_snapshot': engine_versioning.load_project_snapshot(
+            _resolve(target_snapshot_path, 'target_snapshot', 'target snapshot')
+        ),
+        'reconciliation': engine_versioning.load_reconciliation_report(
+            _resolve(reconciliation_path, 'reconciliation', 'reconciliation')
+        ),
+        'base_records': engine_reuse.load_translation_records(
+            _resolve(base_records_path, 'base_records', 'base records')
+        ),
+    }
+
+
+def run_reuse_candidates_build(
+    base_snapshot_path,
+    target_snapshot_path,
+    reconciliation_path,
+    base_records_path,
+    *,
+    output_dir=None,
+):
+    """Derive reviewable P4 reuse candidates from saved P3 artifacts."""
+    base = engine_versioning.load_project_snapshot(base_snapshot_path)
+    target = engine_versioning.load_project_snapshot(target_snapshot_path)
+    reconciliation = engine_versioning.load_reconciliation_report(
+        reconciliation_path
+    )
+    base_records = engine_reuse.load_translation_records(base_records_path)
+    candidate_set = engine_reuse.build_reuse_candidates(
+        reconciliation,
+        base,
+        target,
+        base_records,
+    )
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        base_part = _versioning_artifact_component(base.game_version.version_id)
+        target_part = _versioning_artifact_component(target.game_version.version_id)
+        target_dir = _create_versioning_output_dir(
+            PROJECT_REUSE_DIR,
+            f'{stamp}_{base_part}_to_{target_part}_candidates',
+        )
+    input_paths = {
+        'base_snapshot': os.path.abspath(base_snapshot_path),
+        'target_snapshot': os.path.abspath(target_snapshot_path),
+        'reconciliation': os.path.abspath(reconciliation_path),
+        'base_records': os.path.abspath(base_records_path),
+    }
+    paths = engine_reuse.export_reuse_candidates(
+        candidate_set,
+        target_dir,
+        target_snapshot=target,
+        input_paths=input_paths,
+    )
+    result = {
+        'kind': engine_reuse.REUSE_CANDIDATES_KIND,
+        'status': candidate_set.status,
+        'candidate_count': len(candidate_set.candidates),
+        'candidate_set_digest': candidate_set.candidate_set_digest,
+        'reconciliation_digest': candidate_set.reconciliation_digest,
+        'base_version_id': candidate_set.base_version_id,
+        'target_version_id': candidate_set.target_version_id,
+        'summary': dict(candidate_set.summary),
+        'paths': {
+            'output_dir': paths.package_dir,
+            'report': paths.report_path,
+            'candidates': paths.candidates_path,
+            'review': paths.review_path,
+            'decisions_template': paths.decisions_template_path,
+        },
+    }
+    print(f'Exported reuse candidates: {paths.package_dir}')
+    print(
+        f"Versions: {candidate_set.base_version_id} -> "
+        f"{candidate_set.target_version_id}"
+    )
+    print(
+        'Candidates: '
+        f"{candidate_set.summary.get('class_exact_reuse', 0)} exact, "
+        f"{candidate_set.summary.get('class_moved_reuse', 0)} moved, "
+        f"{candidate_set.summary.get('class_source_modified_reference', 0)} "
+        'source-modified, '
+        f"{candidate_set.summary.get('class_ambiguous', 0)} ambiguous"
+    )
+    print(f'Review sheet: {paths.review_path}')
+    print(f'Decisions template: {paths.decisions_template_path}')
+    return result
+
+
+def run_reuse_decisions_import(
+    reuse_path,
+    decisions_path,
+    *,
+    base_snapshot_path='',
+    target_snapshot_path='',
+    reconciliation_path='',
+    base_records_path='',
+    output_dir=None,
+):
+    """Apply reviewer decisions and export an audited candidate package."""
+    candidate_set = engine_reuse.load_reuse_candidates(reuse_path)
+    decisions = engine_reuse.load_reuse_decisions(decisions_path)
+    recorded_paths = {}
+    reuse_report_path = Path(reuse_path)
+    if reuse_report_path.is_dir():
+        reuse_report_path = reuse_report_path / engine_reuse.DEFAULT_REUSE_REPORT_FILENAME
+    if reuse_report_path.is_file():
+        try:
+            with open(reuse_report_path, 'r', encoding='utf-8') as handle:
+                recorded_paths = dict(
+                    json.loads(handle.read()).get('input_paths') or {}
+                )
+        except (OSError, json.JSONDecodeError):
+            recorded_paths = {}
+    live = _load_reuse_live_inputs(
+        base_snapshot_path=base_snapshot_path,
+        target_snapshot_path=target_snapshot_path,
+        reconciliation_path=reconciliation_path,
+        base_records_path=base_records_path,
+        recorded_paths=recorded_paths,
+    )
+    updated = engine_reuse.apply_reuse_decisions(
+        candidate_set,
+        decisions,
+        reconciliation=live['reconciliation'],
+        base_snapshot=live['base_snapshot'],
+        target_snapshot=live['target_snapshot'],
+        base_records=live['base_records'],
+    )
+    if output_dir and str(output_dir).strip():
+        target_dir = os.path.abspath(str(output_dir).strip())
+    else:
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        base_part = _versioning_artifact_component(updated.base_version_id)
+        target_part = _versioning_artifact_component(updated.target_version_id)
+        target_dir = _create_versioning_output_dir(
+            PROJECT_REUSE_DIR,
+            f'{stamp}_{base_part}_to_{target_part}_decisions',
+        )
+    paths = engine_reuse.export_reuse_candidates(
+        updated,
+        target_dir,
+        target_snapshot=live['target_snapshot'],
+        input_paths=recorded_paths,
+    )
+    result = {
+        'kind': engine_reuse.REUSE_CANDIDATES_KIND,
+        'status': updated.status,
+        'candidate_count': len(updated.candidates),
+        'candidate_set_digest': updated.candidate_set_digest,
+        'decisions_applied': len(decisions),
+        'lineage_decisions': len(updated.lineage_decisions),
+        'summary': dict(updated.summary),
+        'paths': {
+            'output_dir': paths.package_dir,
+            'report': paths.report_path,
+            'candidates': paths.candidates_path,
+            'review': paths.review_path,
+            'decisions_template': paths.decisions_template_path,
+        },
+    }
+    print(f'Applied {len(decisions)} reuse decisions: {paths.package_dir}')
+    print(
+        'Accepted: '
+        f"{updated.summary.get('status_accepted', 0)}, "
+        f"rejected: {updated.summary.get('status_rejected', 0)}, "
+        f"pending: {updated.summary.get('status_pending', 0)}"
+    )
+    print(f'Report: {paths.report_path}')
+    return result
+
+
+def _load_reuse_recorded_paths(reuse_path):
+    report_path = Path(reuse_path)
+    if report_path.is_dir():
+        report_path = report_path / engine_reuse.DEFAULT_REUSE_REPORT_FILENAME
+    if not report_path.is_file():
+        return {}
+    try:
+        with open(report_path, 'r', encoding='utf-8') as handle:
+            payload = json.loads(handle.read())
+        paths = payload.get('input_paths')
+        return dict(paths) if isinstance(paths, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def run_reuse_results_export(
+    reuse_path,
+    manifest_target,
+    *,
+    base_snapshot_path='',
+    target_snapshot_path='',
+    reconciliation_path='',
+    base_records_path='',
+):
+    """Merge accepted, fresh reuse translations into a Batch package.
+
+    The output is a canonical results JSONL plus manifest bookkeeping only;
+    every game-file write still has to pass the existing ``check -> apply``
+    gates, exactly like merged retry results.
+    """
+    candidate_set = engine_reuse.load_reuse_candidates(reuse_path)
+    recorded_paths = _load_reuse_recorded_paths(reuse_path)
+    live = _load_reuse_live_inputs(
+        base_snapshot_path=base_snapshot_path,
+        target_snapshot_path=target_snapshot_path,
+        reconciliation_path=reconciliation_path,
+        base_records_path=base_records_path,
+        recorded_paths=recorded_paths,
+    )
+    prefill = engine_reuse.collect_reuse_prefill(
+        candidate_set,
+        reconciliation=live['reconciliation'],
+        base_snapshot=live['base_snapshot'],
+        target_snapshot=live['target_snapshot'],
+        base_records=live['base_records'],
+    )
+    if not prefill:
+        raise SystemExit(
+            'No accepted direct-reuse translations to export. '
+            'Accept candidates with import-reuse-decisions first.'
+        )
+    prefill_by_unit = {}
+    for entry in prefill:
+        prefill_by_unit[entry.target_unit_id] = entry
+
+    manifest = load_manifest(manifest_target)
+    require_manifest_mode(
+        manifest,
+        MANIFEST_MODE_TRANSLATION,
+        'export-reuse-results',
+    )
+    parent_result_path = resolve_manifest_result_path(manifest)
+    parent_rows_by_key = {}
+    if os.path.isfile(parent_result_path):
+        _rows, parent_rows_by_key, _path = load_result_rows_by_key(
+            manifest,
+            'parent results',
+        )
+
+    rows = []
+    reused_count = 0
+    parent_kept_count = 0
+    used_units = set()
+    missing_units = []
+    for chunk in manifest.get('chunks') or []:
+        chunk_key = str(chunk.get('key') or '')
+        chunk_items = chunk.get('items') or []
+        parent_row = parent_rows_by_key.get(chunk_key)
+        parent_items_by_id = {}
+        if parent_row is not None:
+            parent_items = result_items_from_row(
+                parent_row,
+                'parent results',
+                chunk_items,
+                allow_empty=True,
+            )
+            parent_items_by_id = {
+                str(item.get('id') or ''): item for item in parent_items
+            }
+        row_items = []
+        chunk_entries = []
+        for unit in chunk_items:
+            unit_id = str(unit.get('id') or '')
+            entry = prefill_by_unit.get(unit_id)
+            if entry is not None:
+                unit_source = str(unit.get('source', unit.get('text', '')) or '')
+                if hash_text(unit_source) != hash_text(entry.source_text):
+                    raise SystemExit(
+                        'Batch item source no longer matches the reuse target '
+                        f'snapshot: {unit_id}'
+                    )
+                row_items.append(
+                    {'id': unit_id, 'translation': entry.translation_text}
+                )
+                chunk_entries.append(entry)
+                used_units.add(unit_id)
+                continue
+            parent_item = parent_items_by_id.get(unit_id)
+            if parent_item is not None and str(
+                parent_item.get('translation') or ''
+            ).strip():
+                row_items.append(
+                    {
+                        'id': unit_id,
+                        'translation': str(parent_item.get('translation') or ''),
+                    }
+                )
+                continue
+            missing_units.append(unit_id)
+        if not chunk_entries:
+            if parent_row is not None:
+                rows.append(parent_row)
+            elif missing_units:
+                pass
+            continue
+        reused_count += len(chunk_entries)
+        parent_kept_count += len(row_items) - len(chunk_entries)
+        rows.append(
+            canonical_translation_result_row(
+                {
+                    'key': chunk_key,
+                    'normalized_response': {'translations': row_items},
+                    'reuse_provenance': {
+                        'candidate_ids': [
+                            entry.candidate_id for entry in chunk_entries
+                        ],
+                        'candidate_digests': [
+                            entry.candidate_digest for entry in chunk_entries
+                        ],
+                        'base_version_id': candidate_set.base_version_id,
+                        'target_version_id': candidate_set.target_version_id,
+                    },
+                },
+                chunk,
+            )
+        )
+    if missing_units:
+        preview = ', '.join(missing_units[:5])
+        raise SystemExit(
+            f'Batch package still has {len(missing_units)} uncovered units '
+            f'(first: {preview}). Translate them through the normal flow or '
+            'reject their reuse candidates before exporting.'
+        )
+    unused_prefill = sorted(set(prefill_by_unit) - used_units)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    merged_name = f'results.reuse_{timestamp}.jsonl'
+    merged_path = os.path.join(manifest['_package_dir'], merged_name)
+    write_jsonl_file(merged_path, rows)
+    had_parent_results = os.path.isfile(parent_result_path)
+    manifest['result_jsonl_path'] = merged_name
+    manifest.pop('result_jsonl_sha256', None)
+    manifest['job_state'] = 'RESULTS_MERGED'
+    manifest.setdefault('reuse_export_history', []).append(
+        {
+            'exported_at': datetime.now().isoformat(timespec='seconds'),
+            'reuse_report': _canonical_abs_path(
+                str(Path(reuse_path))
+            ),
+            'candidate_set_digest': candidate_set.candidate_set_digest,
+            'base_version_id': candidate_set.base_version_id,
+            'target_version_id': candidate_set.target_version_id,
+            'previous_result_jsonl_path': (
+                _canonical_abs_path(parent_result_path)
+                if had_parent_results
+                else ''
+            ),
+            'merged_result_jsonl_path': _canonical_abs_path(merged_path),
+            'reused_items': reused_count,
+            'parent_items_kept': parent_kept_count,
+            'chunk_count': len(rows),
+            'unused_prefill_units': len(unused_prefill),
+        }
+    )
+    for key in ('last_check_at', 'last_check_summary', 'last_check_report_path'):
+        manifest.pop(key, None)
+    save_manifest(manifest, update_latest=True)
+
+    result = {
+        'kind': 'translation_reuse_results',
+        'manifest_path': manifest['_manifest_path'],
+        'result_jsonl_path': merged_path,
+        'reused_items': reused_count,
+        'parent_items_kept': parent_kept_count,
+        'chunk_count': len(rows),
+        'unused_prefill_units': len(unused_prefill),
+        'candidate_set_digest': candidate_set.candidate_set_digest,
+    }
+    print(f'Reuse results exported: {merged_path}')
+    print(f'Reused items: {reused_count}, parent items kept: {parent_kept_count}')
+    if unused_prefill:
+        print(
+            f'Accepted reuse items not present in this package: '
+            f'{len(unused_prefill)}'
+        )
+    print(f'Manifest: {manifest["_manifest_path"]}')
+    print('Run check on this manifest before apply.')
     return result
 
 
@@ -13930,6 +14472,163 @@ def build_arg_parser():
     )
     add_machine_output_argument(reconcile_project_snapshots_parser)
 
+    build_translation_records_parser = subparsers.add_parser(
+        'build-translation-records',
+        help=(
+            'Freeze one Batch package\'s validated translations as a '
+            'versioned P4 translation-records artifact.'
+        ),
+    )
+    build_translation_records_parser.add_argument(
+        'snapshot',
+        help='Base snapshot directory or project_snapshot.json path.',
+    )
+    build_translation_records_parser.add_argument(
+        'manifest',
+        help='Batch package manifest (translation mode) with downloaded results.',
+    )
+    build_translation_records_parser.add_argument(
+        '--origin',
+        default='model_initial',
+        choices=sorted(engine_reuse.RECORD_ORIGINS),
+        help='Translation provenance recorded for every exported row.',
+    )
+    build_translation_records_parser.add_argument(
+        '--previous-records',
+        default='',
+        metavar='PATH',
+        help=(
+            'Previous translation-records package for the same snapshot; '
+            'carries record-level revision history into the new export.'
+        ),
+    )
+    build_translation_records_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the records into DIR instead of logs/translation_records/.',
+    )
+    add_machine_output_argument(build_translation_records_parser)
+
+    build_reuse_candidates_parser = subparsers.add_parser(
+        'build-reuse-candidates',
+        help=(
+            'Derive reviewable translation-reuse candidates from saved P3 '
+            'snapshots, a reconciliation report, and base translation records.'
+        ),
+    )
+    build_reuse_candidates_parser.add_argument(
+        'base_snapshot',
+        help='Base (old) snapshot directory or project_snapshot.json path.',
+    )
+    build_reuse_candidates_parser.add_argument(
+        'target_snapshot',
+        help='Target (new) snapshot directory or project_snapshot.json path.',
+    )
+    build_reuse_candidates_parser.add_argument(
+        'reconciliation',
+        help='Reconciliation report directory or reconciliation_report.json path.',
+    )
+    build_reuse_candidates_parser.add_argument(
+        'base_records',
+        help='Base translation-records directory or manifest path.',
+    )
+    build_reuse_candidates_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the package into DIR instead of logs/translation_reuse/.',
+    )
+    add_machine_output_argument(build_reuse_candidates_parser)
+
+    import_reuse_decisions_parser = subparsers.add_parser(
+        'import-reuse-decisions',
+        help=(
+            'Apply human/agent reuse decisions with provenance and export an '
+            'audited candidate package.'
+        ),
+    )
+    import_reuse_decisions_parser.add_argument(
+        'reuse',
+        help='Reuse candidates package directory or reuse_report.json path.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        'decisions',
+        help='Reuse decisions JSONL file.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        '--base-snapshot',
+        default='',
+        metavar='PATH',
+        help='Override the recorded base snapshot path.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        '--target-snapshot',
+        default='',
+        metavar='PATH',
+        help='Override the recorded target snapshot path.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        '--reconciliation',
+        default='',
+        metavar='PATH',
+        help='Override the recorded reconciliation report path.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        '--base-records',
+        default='',
+        metavar='PATH',
+        help='Override the recorded base translation-records path.',
+    )
+    import_reuse_decisions_parser.add_argument(
+        '--output-dir',
+        default='',
+        metavar='DIR',
+        help='Write the updated package into DIR instead of logs/translation_reuse/.',
+    )
+    add_machine_output_argument(import_reuse_decisions_parser)
+
+    export_reuse_results_parser = subparsers.add_parser(
+        'export-reuse-results',
+        help=(
+            'Merge accepted, fresh reuse translations into a Batch package as '
+            'canonical results; game-file writes still require check -> apply.'
+        ),
+    )
+    export_reuse_results_parser.add_argument(
+        'reuse',
+        help='Reuse candidates package directory or reuse_report.json path.',
+    )
+    export_reuse_results_parser.add_argument(
+        'manifest',
+        help='Target-version Batch package manifest (translation mode).',
+    )
+    export_reuse_results_parser.add_argument(
+        '--base-snapshot',
+        default='',
+        metavar='PATH',
+        help='Override the recorded base snapshot path.',
+    )
+    export_reuse_results_parser.add_argument(
+        '--target-snapshot',
+        default='',
+        metavar='PATH',
+        help='Override the recorded target snapshot path.',
+    )
+    export_reuse_results_parser.add_argument(
+        '--reconciliation',
+        default='',
+        metavar='PATH',
+        help='Override the recorded reconciliation report path.',
+    )
+    export_reuse_results_parser.add_argument(
+        '--base-records',
+        default='',
+        metavar='PATH',
+        help='Override the recorded base translation-records path.',
+    )
+    add_machine_output_argument(export_reuse_results_parser)
+
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
@@ -15069,6 +15768,63 @@ def dispatch_command(parser, args):
         except ValueError as exc:
             raise SystemExit(f'Project reconciliation error: {exc}') from exc
 
+    if command == 'build-translation-records':
+        # Offline artifact export from a saved snapshot plus one Batch package.
+        try:
+            return run_translation_records_export(
+                getattr(args, 'snapshot', ''),
+                getattr(args, 'manifest', ''),
+                origin=getattr(args, 'origin', 'model_initial'),
+                previous_records_path=getattr(args, 'previous_records', '') or '',
+                output_dir=getattr(args, 'output_dir', '') or None,
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Translation records error: {exc}') from exc
+
+    if command == 'build-reuse-candidates':
+        # Offline derivation from saved P3/P4 artifacts only.
+        try:
+            return run_reuse_candidates_build(
+                getattr(args, 'base_snapshot', ''),
+                getattr(args, 'target_snapshot', ''),
+                getattr(args, 'reconciliation', ''),
+                getattr(args, 'base_records', ''),
+                output_dir=getattr(args, 'output_dir', '') or None,
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Reuse candidates error: {exc}') from exc
+
+    if command == 'import-reuse-decisions':
+        # Offline decision import; freshness is validated against live inputs.
+        try:
+            return run_reuse_decisions_import(
+                getattr(args, 'reuse', ''),
+                getattr(args, 'decisions', ''),
+                base_snapshot_path=getattr(args, 'base_snapshot', '') or '',
+                target_snapshot_path=getattr(args, 'target_snapshot', '') or '',
+                reconciliation_path=getattr(args, 'reconciliation', '') or '',
+                base_records_path=getattr(args, 'base_records', '') or '',
+                output_dir=getattr(args, 'output_dir', '') or None,
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Reuse decisions error: {exc}') from exc
+
+    if command == 'export-reuse-results':
+        # Writes only the canonical results JSONL plus manifest bookkeeping;
+        # game-file writes still go through check -> apply.
+        initialize_batch_logging()
+        try:
+            return run_reuse_results_export(
+                getattr(args, 'reuse', ''),
+                getattr(args, 'manifest', ''),
+                base_snapshot_path=getattr(args, 'base_snapshot', '') or '',
+                target_snapshot_path=getattr(args, 'target_snapshot', '') or '',
+                reconciliation_path=getattr(args, 'reconciliation', '') or '',
+                base_records_path=getattr(args, 'base_records', '') or '',
+            )
+        except ValueError as exc:
+            raise SystemExit(f'Reuse results error: {exc}') from exc
+
     initialize_batch_logging()
     if command == 'export-revision-corpus':
         # Read-only export: avoid the common load path below, which can
@@ -15506,6 +16262,97 @@ def build_machine_success_envelope(command, value, args):
                 'reconciliation_items': paths.get('items') or '',
             },
         )
+    elif command == 'build-translation-records':
+        records = dict(value or {})
+        paths = dict(records.get('paths') or {})
+        result = {
+            'version_id': records.get('version_id') or '',
+            'snapshot_digest': records.get('snapshot_digest') or '',
+            'record_count': int(records.get('record_count') or 0),
+            'record_set_digest': records.get('record_set_digest') or '',
+            'target_language': records.get('target_language') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts={
+                'translation_records_manifest': paths.get('manifest') or '',
+                'translation_records': paths.get('records') or '',
+            },
+        )
+    elif command == 'build-reuse-candidates':
+        candidates = dict(value or {})
+        paths = dict(candidates.get('paths') or {})
+        result = {
+            'base_version_id': candidates.get('base_version_id') or '',
+            'target_version_id': candidates.get('target_version_id') or '',
+            'candidate_count': int(candidates.get('candidate_count') or 0),
+            'candidate_set_digest': candidates.get('candidate_set_digest') or '',
+            'reconciliation_digest': (
+                candidates.get('reconciliation_digest') or ''
+            ),
+            'summary': dict(candidates.get('summary') or {}),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(candidates.get('status') or 'completed'),
+            result=result,
+            artifacts={
+                'reuse_report': paths.get('report') or '',
+                'reuse_candidates': paths.get('candidates') or '',
+                'reuse_review': paths.get('review') or '',
+                'reuse_decisions_template': (
+                    paths.get('decisions_template') or ''
+                ),
+            },
+        )
+    elif command == 'import-reuse-decisions':
+        decisions = dict(value or {})
+        paths = dict(decisions.get('paths') or {})
+        result = {
+            'candidate_count': int(decisions.get('candidate_count') or 0),
+            'candidate_set_digest': decisions.get('candidate_set_digest') or '',
+            'decisions_applied': int(decisions.get('decisions_applied') or 0),
+            'lineage_decisions': int(decisions.get('lineage_decisions') or 0),
+            'summary': dict(decisions.get('summary') or {}),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(decisions.get('status') or 'completed'),
+            result=result,
+            artifacts={
+                'reuse_report': paths.get('report') or '',
+                'reuse_candidates': paths.get('candidates') or '',
+                'reuse_review': paths.get('review') or '',
+            },
+        )
+    elif command == 'export-reuse-results':
+        reuse_results = dict(value or {})
+        result = {
+            'manifest_path': reuse_results.get('manifest_path') or '',
+            'result_jsonl_path': reuse_results.get('result_jsonl_path') or '',
+            'reused_items': int(reuse_results.get('reused_items') or 0),
+            'parent_items_kept': int(reuse_results.get('parent_items_kept') or 0),
+            'chunk_count': int(reuse_results.get('chunk_count') or 0),
+            'unused_prefill_units': int(
+                reuse_results.get('unused_prefill_units') or 0
+            ),
+            'candidate_set_digest': (
+                reuse_results.get('candidate_set_digest') or ''
+            ),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts={
+                'manifest': reuse_results.get('manifest_path') or '',
+                'reuse_result_jsonl': (
+                    reuse_results.get('result_jsonl_path') or ''
+                ),
+            },
+        )
     elif command == 'export-revision-corpus':
         corpus = dict(value or {})
         paths = dict(corpus.get('paths') or {})
@@ -15889,6 +16736,26 @@ def _collect_output_file_protected_paths(args):
                 output_dir,
                 engine_versioning.DEFAULT_RECONCILIATION_ITEMS_FILENAME,
             )
+        )
+    if output_dir and command == 'build-translation-records':
+        add_path(
+            os.path.join(
+                output_dir,
+                engine_reuse.DEFAULT_RECORDS_MANIFEST_FILENAME,
+            )
+        )
+        add_path(
+            os.path.join(output_dir, engine_reuse.DEFAULT_RECORDS_FILENAME)
+        )
+    if output_dir and command in {'build-reuse-candidates', 'import-reuse-decisions'}:
+        add_path(
+            os.path.join(
+                output_dir,
+                engine_reuse.DEFAULT_REUSE_REPORT_FILENAME,
+            )
+        )
+        add_path(
+            os.path.join(output_dir, engine_reuse.DEFAULT_CANDIDATES_FILENAME)
         )
 
     # merge-keywords-to-glossary falls back to the active glossary file.

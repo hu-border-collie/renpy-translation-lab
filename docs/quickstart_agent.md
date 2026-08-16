@@ -30,11 +30,15 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
-P3 的两个只读版本资产命令也使用同一 envelope：
+P3/P4 的版本资产与译文复用命令也使用同一 envelope：
 
 ```powershell
 python gemini_translate_batch.py export-project-snapshot --version-id <GAME_VERSION> --output json
 python gemini_translate_batch.py reconcile-project-snapshots <base-snapshot> <target-snapshot> --output json
+python gemini_translate_batch.py build-translation-records <snapshot> <manifest> --output json
+python gemini_translate_batch.py build-reuse-candidates <base-snapshot> <target-snapshot> <reconciliation> <records> --output json
+python gemini_translate_batch.py import-reuse-decisions <reuse-report> <decisions> --output json
+python gemini_translate_batch.py export-reuse-results <reuse-report> <manifest> --output json
 ```
 
 JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、prepare 子进程输出和原有文本摘要会实时写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：

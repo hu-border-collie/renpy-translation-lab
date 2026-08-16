@@ -154,8 +154,59 @@ occurrence 扫描，输出：
 dependency digest；任一依赖改变时状态为 `stale`。
 
 P3 是按 #265 分阶段交付的高级 CLI 能力；GUI 当前只在「诊断与运行日志 → 命令参考」
-提供命令模板。快照浏览、版本 diff、歧义处理和复用候选交互属于 P6。P4 之前任何
-reconciliation 结论都不能直接进入 preview/check/apply。
+提供命令模板。快照浏览、版本 diff、歧义处理和复用候选交互属于 P6。P3 报告本身
+没有任何写回入口；跨版本复用必须经过下面的 P4 流程。
+
+## P4 译文复用候选与人工确认
+
+P4 在 P3 只读 reconciliation 之上增加四个离线命令，形成
+「冻结译文 → 生成候选 → 人工决策 → 结果导出」流程：
+
+```powershell
+python gemini_translate_batch.py build-translation-records <base-snapshot> <base-manifest> --output-dir <records-dir>
+python gemini_translate_batch.py build-reuse-candidates <base-snapshot> <target-snapshot> <reconciliation> <base-records> --output-dir <reuse-dir>
+python gemini_translate_batch.py import-reuse-decisions <reuse-report> <decisions-jsonl>
+python gemini_translate_batch.py export-reuse-results <decided-reuse-report> <target-manifest>
+```
+
+- `build-translation-records` 只接受 translation 模式且已下载完成的 Batch 包；
+  每个 unit 的译文经过现有响应合同校验后，连同来源（默认 `model_initial`）、
+  provenance 和快照 occurrence 绑定写入 `translation_records.jsonl`。
+  可选 `--previous-records <PATH>` 指向同一快照的上一份记录产物：译文发生
+  变化的 unit 会确定性追加记录级 revision history（旧译文、旧来源、旧记录
+  ID），重新冻结的历史可累积且不引入时间戳等非确定性输入；跨版本或跨快照
+  的旧记录会被拒绝，不能用这条路径伪造历史。
+- `build-reuse-candidates` 消费保存的 P3 快照、reconciliation 报告和译文记录，
+  生成 `reuse_candidates.jsonl`、机器可读 `reuse_report.json`、人工 / Agent
+  审核表 `reuse_review.md` 与决策模板 `reuse_decisions_template.jsonl`。
+  候选分类固定为 `exact_reuse` / `moved_reuse` / `context_match` /
+  `source_modified_reference` / `ambiguous`；locator 或 lineage 匹配但原文
+  已变化的项一律降级为 reference-only，不会按位置身份直接复用旧译文。
+- `import-reuse-decisions` 导入逐候选决策（accept / reject /
+  override_translation / split_lineage / merge_lineage），必须显式填写
+  `reviewer.type`（human / agent）与 `reviewer.name`；agent 决策不会伪装成人工。
+  歧义候选的 accept 必须由人工（reviewer.type=human）从候选目标中显式选定
+  一个，Agent 决策不能确认歧义；同一目标被两个已接受候选竞争时导入失败。
+  所有决策追加进候选 audit 记录并生成新 package，override 的审计条目同时
+  保留覆盖前后的译文文本。
+- `split_lineage` / `merge_lineage` 按设计只写入候选包的 `lineage_decisions`
+  审计记录，不会自动改写候选匹配或任何快照：跨版本 lineage 是 P3 快照 +
+  reconciliation 的输入属性，人工拆分/合并结论需要导出后更新项目 lineage
+  映射并重新导出快照 / reconciliation，再重建候选才会生效。P4 不提供跳过
+  这条链路的暗道。
+- `export-reuse-results` 是唯一的写回入口，而且只写 Batch 包内的
+  `results.reuse_<time>.jsonl` 与 manifest 簿记：只有「已接受 + 输入 digest 全部
+  fresh + 非 reference-only + 两版原文仍一致」的候选才会进入结果行，未覆盖的
+  unit 会直接报错而不是静默跳过。之后必须照常运行 `check` 再 `apply`；
+  复用结果不提供任何绕过安全层的捷径。
+
+译文记录、候选、决策和报告均有独立 schema/digest 校验。任一输入
+（reconciliation digest、两版 snapshot digest、译文记录 digest 或候选内记录
+digest）变化时，`validate_reuse_freshness()` 会把候选标记为 `stale`，
+决策导入与结果导出都会拒绝继续。高置信匹配同样以 pending 候选开始，没有免审
+通道；reference-only 候选即使接受也只保留旧译文供参考，不会计入可写回的复用。
+
+P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交互属 P6）。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
