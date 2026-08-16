@@ -115,7 +115,9 @@ def classify_error(message: str, *, exception_type: str = "") -> dict[str, Any]:
         "quality rules changed since",
         "quality policy changed since",
         "quality glossary changed since",
+        "quality glossary content changed",
         "quality findings changed since",
+        "quality findings changed after",
     )
     retryable_markers = (
         "429",

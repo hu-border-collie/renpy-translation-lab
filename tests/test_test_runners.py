@@ -99,7 +99,7 @@ class TestDiscoveryRunners(unittest.TestCase):
             mock.patch(
                 "gui_test_support.guarded_gui_test_environment",
                 return_value=manager,
-            ) as guarded,
+            ),
             mock.patch(
                 "gui_test_support.shutdown_gui_test_runtime",
                 return_value=True,

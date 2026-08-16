@@ -937,6 +937,39 @@ def check_quality(
     return findings
 
 
+def make_unmatched_quality_subject_finding(
+    collection_stats: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the collection-diagnostic finding for unmappable actions."""
+
+    evidence = json.dumps(
+        dict(collection_stats),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    finding_id = hashlib.sha256(
+        f'{QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
+    ).hexdigest()[:20]
+    return {
+        'finding_id': finding_id,
+        'schema_version': QUALITY_FINDING_SCHEMA_VERSION,
+        'reason_code': REASON_UNMATCHED_QUALITY_SUBJECT,
+        'rule_id': 'unmatched_subject',
+        'severity': SEVERITY_MEDIUM,
+        'disposition': DISPOSITION_WARNING,
+        'item_id': '',
+        'file': '',
+        'line': 0,
+        'source': '',
+        'translation': '',
+        'evidence': evidence,
+        'suggestion': (
+            'Inspect quality_action_items / quality_unmatched_items and rerun check.'
+        ),
+        'rule_version': QUALITY_RULE_SCHEMA_VERSION,
+    }
+
+
 def _count_disposition(findings: Iterable[Mapping[str, Any]], disposition: str) -> int:
     return sum(
         1

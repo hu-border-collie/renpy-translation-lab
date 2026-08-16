@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+import cli_contract
 import final_review as fr
 import gemini_translate_batch as batch
 import sync_translation_preview as preview
@@ -275,6 +276,18 @@ class SharedSchemaContractTests(unittest.TestCase):
         self.assertEqual(gate["decision"], "needs_review")
         self.assertEqual(gate["warning_count"], 3)
         self.assertEqual(gate["blocker_count"], 1)
+
+    def test_cli_classifies_new_quality_stale_reasons(self):
+        for message in (
+            'Quality glossary content changed since sync preview',
+            'Sync preview quality findings changed after preview generation',
+        ):
+            classification = cli_contract.classify_error(message)
+            self.assertEqual(classification['code'], 'STALE_STATE')
+            self.assertEqual(
+                classification['suggested_action'],
+                'run_check_again',
+            )
 
     def test_gui_extracts_revision_quality_gate_with_parenthesized_counts(self):
         gate = extract_quality_gate(
@@ -761,6 +774,48 @@ class RevisionQualityFindingsTests(unittest.TestCase):
         action = (4, 9, '你{w=0.5}好', '', '"', '你好', 'a.rpy:block:1:hash', 'chunk-1')
         return {'a.rpy': {0: [action]}}
 
+    def test_revision_unmatched_actions_emit_collection_diagnostic(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            manifest = self._manifest(package_dir)
+            summary = {'adapter_writeback_status': 'pass'}
+            replacements = {
+                'a.rpy': {0: [(4, 9, '译文', '', '"', '旧', 'missing', 'chunk-1')]},
+            }
+            findings, _path = batch.run_revision_quality_check(
+                manifest,
+                summary,
+                replacements,
+            )
+
+            self.assertEqual(summary['quality_unmatched_items'], 1)
+            self.assertIn(
+                quality.REASON_UNMATCHED_QUALITY_SUBJECT,
+                {finding['reason_code'] for finding in findings},
+            )
+
+    def test_revision_apply_stage_writes_separate_findings_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp)
+            preview_path = package_dir / 'quality_findings.jsonl'
+            preview_path.write_text('immutable\n', encoding='utf-8')
+            manifest = self._manifest(package_dir)
+            summary = {'adapter_writeback_status': 'pass'}
+            _findings, apply_path = batch.run_revision_quality_check(
+                manifest,
+                summary,
+                self._replacements(),
+                apply_stage=True,
+            )
+
+            self.assertEqual(Path(apply_path).name, 'quality_findings.apply.jsonl')
+            self.assertTrue(Path(apply_path).is_file())
+            self.assertEqual(preview_path.read_text(encoding='utf-8'), 'immutable\n')
+            self.assertEqual(
+                summary['quality_findings_sha256'],
+                batch._sha256_file(apply_path),
+            )
+
     def test_revision_quality_subjects_use_revision_identity(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
@@ -793,20 +848,29 @@ class RevisionQualityFindingsTests(unittest.TestCase):
                              quality.GATE_NEEDS_REVIEW)
             self.assertTrue(summary['writeback_gate']['can_apply'])
 
-            manifest = self._manifest(
-                package_dir,
-                policy={'rules': {'renpy_wait_inside_cjk': 'blocker'}},
-            )
+            manifest = self._manifest(package_dir)
+            manifest.pop('quality_policy', None)
             summary = {'adapter_writeback_status': 'pass'}
-            _findings, path = batch.run_revision_quality_check(
-                manifest,
-                summary,
-                self._replacements(),
-            )
+            with mock.patch.object(
+                batch,
+                'BATCH_QUALITY_POLICY',
+                quality.normalize_policy(
+                    {'rules': {'renpy_wait_inside_cjk': 'blocker'}}
+                ),
+            ):
+                _findings, path = batch.run_revision_quality_check(
+                    manifest,
+                    summary,
+                    self._replacements(),
+                )
             self.assertEqual(summary['quality_gate']['blocker_count'], 1)
             self.assertFalse(summary['writeback_gate']['can_apply'])
             self.assertEqual(summary['writeback_gate']['decision'],
                              quality.GATE_DENY)
+            self.assertEqual(
+                manifest['quality_policy']['rules']['renpy_wait_inside_cjk'],
+                quality.DISPOSITION_BLOCKER,
+            )
 
 
 if __name__ == '__main__':

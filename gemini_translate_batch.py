@@ -4796,6 +4796,9 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(
+            runtime_policy=BATCH_QUALITY_POLICY
+        ),
         'input_jsonl_path': requests_path,
         'result_jsonl_path': results_path,
         'job_name': '',
@@ -9291,10 +9294,7 @@ def _revision_manifest_identity(manifest):
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
-    # ``quality_policy`` deliberately stays outside this fingerprint for
-    # backward compatibility: pre-existing previews already persisted their
-    # identity with the original key set.  Fresh policy mismatches are detected
-    # by ``_revision_quality_staleness`` through the preview policy digest.
+    # Policy drift is enforced by ``_revision_quality_staleness``, not here.
     # Preserve the v1 fingerprint for pre-proposal revision/final-review
     # packages.  Proposal manifests bind their immutable import provenance and
     # eligibility state without adding a null field to every legacy payload.
@@ -10206,12 +10206,19 @@ def collect_revision_quality_subjects(manifest, replacements_by_file, stats=None
     return subjects
 
 
-def run_revision_quality_check(manifest, summary, replacements_by_file):
+def run_revision_quality_check(
+    manifest,
+    summary,
+    replacements_by_file,
+    *,
+    apply_stage=False,
+):
     """Run shared mechanical rules on revision writeback candidates.
 
-    The manifest quality-policy snapshot is authoritative for the findings,
-    while the current runtime policy digest is persisted separately so a
-    configuration change between preview and apply makes the preview stale.
+    Like Batch ``check``, revision consumes the current runtime policy
+    (``BATCH_QUALITY_POLICY``) and then refreshes the manifest snapshot so the
+    persisted policy matches the findings just produced.  A policy change after
+    preview is detected through the separately persisted runtime digest.
     """
 
     collection_stats = {}
@@ -10245,13 +10252,37 @@ def run_revision_quality_check(manifest, summary, replacements_by_file):
     if not quality_glossary_map and glossary_path:
         quality_glossary_map = translation_quality.load_glossary_map(glossary_path)
 
-    policy = translation_quality.effective_policy(manifest)
+    policy = translation_quality.normalize_policy(BATCH_QUALITY_POLICY)
+    manifest['quality_policy'] = policy
     quality_findings = translation_quality.check_quality(
         quality_subjects,
         policy=policy,
         glossary_map=quality_glossary_map,
     )
-    quality_report_path = write_quality_findings(manifest, quality_findings)
+    if int(collection_stats.get('quality_unmatched_items') or 0) > 0:
+        quality_findings.append(
+            translation_quality.make_unmatched_quality_subject_finding(
+                collection_stats
+            )
+        )
+    if apply_stage:
+        quality_report_path = os.path.join(
+            manifest.get('_package_dir', ''),
+            'quality_findings.apply.jsonl',
+        )
+        atomic_write_jsonl(
+            quality_report_path,
+            [
+                translation_quality.normalize_finding(finding)
+                for finding in quality_findings
+            ],
+            ensure_ascii=False,
+        )
+    else:
+        quality_report_path = write_quality_findings(
+            manifest,
+            quality_findings,
+        )
     quality_gate = translation_quality.summarize_quality_gate(
         quality_findings,
         acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
@@ -10273,6 +10304,7 @@ def run_revision_quality_check(manifest, summary, replacements_by_file):
     summary['quality_findings_count'] = len(quality_findings)
     summary['quality_reason_counts'] = quality_reason_counts
     summary['quality_findings_path'] = quality_report_path
+    summary['quality_findings_sha256'] = _sha256_file(quality_report_path)
     summary['quality_findings_digest'] = translation_quality.findings_digest(
         quality_findings
     )
@@ -10615,31 +10647,10 @@ def check_results(target=None):
     )
     summary['quality_coverage_complete'] = quality_coverage_complete
     if not quality_coverage_complete:
-        evidence = json.dumps(
-            dict(quality_collection_stats),
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        finding_id = hashlib.sha256(
-            f'{translation_quality.QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
-        ).hexdigest()[:20]
         quality_findings.append(
-            {
-                'finding_id': finding_id,
-                'schema_version': translation_quality.QUALITY_FINDING_SCHEMA_VERSION,
-                'reason_code': translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT,
-                'rule_id': 'unmatched_subject',
-                'severity': 'medium',
-                'disposition': translation_quality.DISPOSITION_WARNING,
-                'item_id': '',
-                'file': '',
-                'line': 0,
-                'source': '',
-                'translation': '',
-                'evidence': evidence,
-                'suggestion': 'Inspect quality_action_items / quality_unmatched_items and rerun check.',
-                'rule_version': translation_quality.QUALITY_RULE_SCHEMA_VERSION,
-            }
+            translation_quality.make_unmatched_quality_subject_finding(
+                quality_collection_stats
+            )
         )
     quality_report_path = write_quality_findings(manifest, quality_findings)
     quality_reason_counts = {}
@@ -10909,11 +10920,12 @@ def apply_revisions(target=None, force=False):
         manifest,
         summary,
         revalidated_replacements_by_file,
+        apply_stage=True,
     )
-    manifest['last_revision_quality_findings_path'] = quality_report_path
-    manifest['last_revision_quality_findings_sha256'] = _sha256_file(
-        quality_report_path
-    )
+    # The preview-bound quality_findings.jsonl stays immutable; apply-time
+    # findings live in quality_findings.apply.jsonl and are attached only to
+    # the apply summary so a later apply re-check cannot see the preview
+    # artifact as tampered.
     manifest['last_revision_apply_summary'] = summary
 
     # Validate the structural writeback plan before terminating on quality
@@ -11050,7 +11062,8 @@ def apply_revisions(target=None, force=False):
         'quality_gate': summary.get('quality_gate'),
         'writeback_gate': summary.get('writeback_gate'),
         'quality_findings_count': summary.get('quality_findings_count', 0),
-        'quality_findings_path': 'quality_findings.jsonl',
+        'quality_findings_path': 'quality_findings.apply.jsonl',
+        'quality_findings_sha256': summary.get('quality_findings_sha256'),
         'rag': rag_apply_summary,
     }
     manifest['last_revision_apply_summary'] = summary

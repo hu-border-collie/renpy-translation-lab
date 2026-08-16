@@ -257,14 +257,34 @@ def summarize_revision_writeback_from_manifest(
     if isinstance(writeback_gate, dict) and writeback_gate.get(
         "decision"
     ) != "allow":
-        blocker_count = int(writeback_gate.get("blocker_count") or 0)
+        quality_blockers = int(
+            writeback_gate.get("quality_blocker_count") or 0
+        )
+        structural_blockers = int(
+            writeback_gate.get("structural_blocker_count") or 0
+        )
+        if quality_blockers and structural_blockers:
+            heading = "订正写回被质量与结构门禁阻止"
+            message = (
+                f"最近一次订正预览有 {quality_blockers} 个质量 blocker、"
+                f"{structural_blockers} 个结构阻断；处理后重新预览。"
+            )
+        elif structural_blockers:
+            heading = "订正写回被结构校验阻止"
+            message = (
+                "最近一次订正预览未通过结构校验，不能写回；"
+                "请查看失败项后重新预览。"
+            )
+        else:
+            heading = "订正写回被质量门禁阻止"
+            message = (
+                f"最近一次订正预览有 {quality_blockers} 个质量 blocker；"
+                "请处理后重新预览。"
+            )
         return WritebackSummary(
             status="failed",
-            heading="订正写回被质量门禁阻止",
-            message=(
-                f"最近一次订正预览有 {blocker_count} 个阻断项；"
-                "请处理质量 blocker 或结构阻断后重新预览。"
-            ),
+            heading=heading,
+            message=message,
             facts=facts,
             findings=findings,
             can_apply=False,
