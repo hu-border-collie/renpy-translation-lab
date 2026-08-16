@@ -9291,8 +9291,10 @@ def _revision_manifest_identity(manifest):
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
-    if isinstance(manifest.get('quality_policy'), dict):
-        payload['quality_policy'] = manifest['quality_policy']
+    # ``quality_policy`` deliberately stays outside this fingerprint for
+    # backward compatibility: pre-existing previews already persisted their
+    # identity with the original key set.  Fresh policy mismatches are detected
+    # by ``_revision_quality_staleness`` through the preview policy digest.
     # Preserve the v1 fingerprint for pre-proposal revision/final-review
     # packages.  Proposal manifests bind their immutable import provenance and
     # eligibility state without adding a null field to every legacy payload.

@@ -694,6 +694,19 @@ class RevisionQualityStalenessTests(unittest.TestCase):
         )
         self.assertEqual(reason, 'revision_writeback_gate_denied')
 
+    def test_manifest_identity_ignores_quality_policy_for_legacy_compat(self):
+        with_policy = {
+            'mode': 'revision',
+            'quality_policy': quality.normalize_policy(None),
+        }
+        without_policy = dict(with_policy)
+        without_policy.pop('quality_policy', None)
+
+        self.assertEqual(
+            batch._revision_manifest_identity(with_policy),
+            batch._revision_manifest_identity(without_policy),
+        )
+
     def test_revision_blocked_marker_raises_after_persisting_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest = {
