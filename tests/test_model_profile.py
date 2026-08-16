@@ -151,11 +151,11 @@ class ResolveRoutingPlanTests(unittest.TestCase):
         self.assertEqual(plan.primary_profile_id, "primary")
         expected = {
             "translation": ("primary", "sync", "builtin_default"),
-            "keyword": ("primary", "sync", "primary_inherited"),
-            "revision": ("primary", "sync", "primary_inherited"),
-            "project_analysis": ("primary", "sync", "primary_inherited"),
-            "final_review": ("batch", "gemini_batch", "primary_inherited"),
-            "ab_experiment": ("primary", "sync", "primary_inherited"),
+            "keyword": ("primary", "sync", "inherited"),
+            "revision": ("primary", "sync", "inherited"),
+            "project_analysis": ("primary", "sync", "inherited"),
+            "final_review": ("batch", "gemini_batch", "inherited"),
+            "ab_experiment": ("primary", "sync", "inherited"),
         }
         for stage, (profile_id, strategy, source) in expected.items():
             route = plan.routes[stage]
@@ -176,7 +176,7 @@ class ResolveRoutingPlanTests(unittest.TestCase):
         })
         self.assertEqual(
             plan_without_sync_model.routes["translation"].source,
-            mp.ROUTE_SOURCE_PRIMARY_INHERITED,
+            mp.ROUTE_SOURCE_INHERITED,
         )
 
     def test_batch_execution_routes(self) -> None:
@@ -273,6 +273,12 @@ class CapabilityTests(unittest.TestCase):
         self.assertTrue(caps.reasoning_request.supported)
         self.assertTrue(caps.usage_stats.supported)
         self.assertEqual(caps.structured_output.mode, "strict_json_schema")
+        self.assertEqual(
+            caps.structured_output.source, mp.CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+        )
+        self.assertEqual(
+            caps.structured_output.basis, mp.STRUCTURED_OUTPUT_BASIS_BUILTIN,
+        )
         for flag in (
             caps.sync_generation, caps.reasoning_request, caps.remote_batch,
         ):
@@ -292,7 +298,16 @@ class CapabilityTests(unittest.TestCase):
         self.assertFalse(caps.embedding.supported)
         self.assertFalse(caps.reasoning_request.supported)
         self.assertEqual(caps.structured_output.mode, "json_object")
-        self.assertEqual(caps.structured_output.source, "custom_openai_compatible")
+        # Provenance and mode-basis are separate vocabularies: the adapter
+        # table's "custom_openai_compatible" detail lives in basis, while
+        # source shares the capability-source vocabulary.
+        self.assertEqual(
+            caps.structured_output.source, mp.CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+        )
+        self.assertEqual(
+            caps.structured_output.basis,
+            mp.STRUCTURED_OUTPUT_BASIS_CUSTOM_OPENAI_COMPATIBLE,
+        )
 
     def test_capability_overrides_flip_source(self) -> None:
         base = mp.build_profile_registry({})["primary"]
@@ -308,6 +323,10 @@ class CapabilityTests(unittest.TestCase):
         )
         self.assertEqual(
             caps.structured_output.source, mp.CAPABILITY_SOURCE_CONFIG_OVERRIDE,
+        )
+        # An override keeps the basis of the adapter default it replaced.
+        self.assertEqual(
+            caps.structured_output.basis, mp.STRUCTURED_OUTPUT_BASIS_BUILTIN,
         )
         self.assertEqual(caps.context_limit_tokens, 1048576)
         self.assertEqual(
@@ -462,10 +481,85 @@ class ValidateRoutingPlanTests(unittest.TestCase):
         self.assertIsInstance(error, SystemExit)
         self.assertEqual(error.code_name, mp.MODEL_ROUTE_CAPABILITY_MISSING)
         self.assertFalse(error.retryable)
-        self.assertEqual(error.suggested_action, "fix_translator_config")
+        # The next action is mapped per code, not hard-coded: a capability
+        # mismatch asks for a different fix than an invalid profile.
+        self.assertEqual(
+            error.suggested_action, "choose_supported_strategy_or_profile",
+        )
         self.assertEqual(error.details["missing_capabilities"], [
             "gemini_adapter", "remote_batch",
         ])
+
+    def test_suggested_action_per_code(self) -> None:
+        registry = mp.build_profile_registry(
+            {"sync": {"backend": "litellm", "model": "opencode-go/glm-5.3"}},
+            custom_providers=_custom_providers(),
+        )
+        caps = mp.resolve_capabilities(
+            registry["primary"], custom_providers=_custom_providers(),
+        )
+        routes = {
+            "translation": mp.TaskRoute(
+                "translation", "primary", mp.ExecutionStrategy.SYNC,
+                mp.ROUTE_SOURCE_STAGE_CONFIG,
+            ),
+        }
+        for code, expected_action in (
+            (mp.MODEL_PROFILE_INVALID, "fix_translator_config"),
+            (mp.MODEL_PROFILE_CREDENTIAL_REF_MISSING,
+             "inspect_configuration_and_artifacts"),
+        ):
+            if code == mp.MODEL_PROFILE_INVALID:
+                profile = replace(
+                    registry["primary"], capability_overrides={"nope": True},
+                )
+            else:
+                profile = replace(
+                    registry["primary"],
+                    credential_ref=mp.CredentialRef(
+                        mp.CREDENTIAL_KIND_ENV, "DEFINITELY_UNSET_ENV",
+                    ),
+                )
+            plan = mp.ModelRoutingPlan(
+                schema_version=mp.MODEL_PROFILE_SCHEMA_VERSION,
+                primary_profile_id="primary",
+                profiles={"primary": profile},
+                routes=routes,
+                capabilities={"primary": caps},
+            )
+            issues = tuple(
+                issue for issue in mp.validate_routing_plan(plan, environ={})
+                if issue.code == code
+            )
+            self.assertTrue(issues, code)
+            error = mp.routing_validation_error(issues)
+            self.assertEqual(error.code_name, code)
+            self.assertEqual(error.suggested_action, expected_action)
+
+
+class SlotIdNamespaceTests(unittest.TestCase):
+    """Resolver slot ids are reserved; #348 user ids must not collide."""
+
+    def test_reserved_slot_detection(self) -> None:
+        for slot in (
+            "primary", "batch",
+            "project_analysis_model", "final_review_model",
+            "project_analysis_override", "ab_experiment_override",
+        ):
+            self.assertTrue(mp.is_profile_slot_id(slot), slot)
+        for user_id in ("glm-main", "kimi-k3", "gemini33", "ds_v4", "x-y_z"):
+            self.assertFalse(mp.is_profile_slot_id(user_id), user_id)
+
+    def test_user_profile_id_rules(self) -> None:
+        self.assertEqual(mp.user_profile_id_error("glm-main"), "")
+        # Wrong shape.
+        self.assertIn("must match", mp.user_profile_id_error("GLM Main"))
+        self.assertIn("must match", mp.user_profile_id_error(""))
+        # Reserved slots are off-limits for user ids.
+        self.assertIn("reserved", mp.user_profile_id_error("primary"))
+        self.assertIn(
+            "reserved", mp.user_profile_id_error("translation_model"),
+        )
 
 
 class SerializationTests(unittest.TestCase):
@@ -486,6 +580,13 @@ class SerializationTests(unittest.TestCase):
             stage_overrides={"ab_experiment": "gemini-2.5-pro"},
             created_at="2026-08-16T00:00:00Z",
         )
+        plan = replace(plan, config_origins=(
+            mp.ConfigOrigin(
+                kind="translator_config",
+                path="work/translator_config.json",
+                fingerprint="sha256:abc123",
+            ),
+        ))
         restored = mp.ModelRoutingPlan.from_manifest_dict(
             plan.to_manifest_dict(),
         )

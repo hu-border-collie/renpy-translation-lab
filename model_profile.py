@@ -18,10 +18,20 @@ Resolution semantics (approved with issue #345, option B):
 The production entry points (``run_sync_request``, ``call_gemini_sdk``, ...)
 adopt this resolver in follow-up PRs; until then nothing in the runtime
 imports this module besides tests.
+
+Profile ids are **resolver slot ids** (``primary``, ``batch``,
+``<stage>_model``, ``<stage>_override``) — an internal compatibility layer
+over the legacy config keys, not the user-visible profile namespace of the
+productized config (#344/#348). User profile ids must match
+``USER_PROFILE_ID_PATTERN`` and stay clear of the reserved slots (see
+:data:`RESERVED_PROFILE_SLOT_IDS`, :func:`is_profile_slot_id`); in the
+productized config ``primary`` becomes a role pointer
+(``ModelRoutingPlan.primary_profile_id``) rather than a profile's own id.
 """
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -65,17 +75,18 @@ KNOWN_STAGES = frozenset({
 
 # How a route was decided. "stage_config" = the stage's own config key,
 # "explicit" = a caller-supplied override (CLI flag / manifest value),
-# "primary_inherited" = the stage has no own config and inherits the run's
-# base profile, "builtin_default" = nothing configured anywhere; tool
-# default.
+# "inherited" = the stage has no own config and inherits the run's base
+# profile (the primary sync profile for sync runs, the batch profile for
+# gemini_batch runs — ``TaskRoute.profile_id`` says which), "builtin_default"
+# = nothing configured anywhere; tool default.
 ROUTE_SOURCE_STAGE_CONFIG = "stage_config"
 ROUTE_SOURCE_EXPLICIT = "explicit"
-ROUTE_SOURCE_PRIMARY_INHERITED = "primary_inherited"
+ROUTE_SOURCE_INHERITED = "inherited"
 ROUTE_SOURCE_BUILTIN_DEFAULT = "builtin_default"
 KNOWN_ROUTE_SOURCES = frozenset({
     ROUTE_SOURCE_STAGE_CONFIG,
     ROUTE_SOURCE_EXPLICIT,
-    ROUTE_SOURCE_PRIMARY_INHERITED,
+    ROUTE_SOURCE_INHERITED,
     ROUTE_SOURCE_BUILTIN_DEFAULT,
 })
 
@@ -91,6 +102,14 @@ CAPABILITY_SOURCES = frozenset({
     CAPABILITY_SOURCE_CONFIG_OVERRIDE,
 })
 
+# How an adapter's structured-output mode was chosen (``StructuredOutputSpec
+# .basis``). This is deliberately a separate vocabulary from
+# ``CAPABILITY_SOURCES``: basis answers "which adapter table picked this
+# mode", provenance answers "who vouches for this capability value".
+STRUCTURED_OUTPUT_BASIS_BUILTIN = "builtin"
+STRUCTURED_OUTPUT_BASIS_CUSTOM_OPENAI_COMPATIBLE = "custom_openai_compatible"
+STRUCTURED_OUTPUT_BASIS_CONSERVATIVE_DEFAULT = "conservative_default"
+
 # Credential reference kinds. References only; no key material ever enters
 # this module.
 CREDENTIAL_KIND_API_KEYS_JSON = "api_keys_json"
@@ -103,6 +122,53 @@ CREDENTIAL_KIND_NONE = "none"
 MODEL_PROFILE_INVALID = "MODEL_PROFILE_INVALID"
 MODEL_ROUTE_CAPABILITY_MISSING = "MODEL_ROUTE_CAPABILITY_MISSING"
 MODEL_PROFILE_CREDENTIAL_REF_MISSING = "MODEL_PROFILE_CREDENTIAL_REF_MISSING"
+
+# Per-code next actions for the machine refusal contract. Reuses the
+# existing ``inspect_configuration_and_artifacts`` token for credential
+# problems because the config file itself may be perfectly valid — the
+# missing credential lives in the environment or keyring.
+_SUGGESTED_ACTION_BY_CODE = {
+    MODEL_PROFILE_INVALID: "fix_translator_config",
+    MODEL_ROUTE_CAPABILITY_MISSING: "choose_supported_strategy_or_profile",
+    MODEL_PROFILE_CREDENTIAL_REF_MISSING: "inspect_configuration_and_artifacts",
+}
+
+# Resolver slot ids are internal compatibility slots over the legacy
+# ``sync.*`` / ``batch.*`` keys — they are NOT the user-visible profile ids
+# of the productized config (#344/#348). User profile ids must match
+# ``USER_PROFILE_ID_PATTERN`` and must not collide with a reserved slot.
+PROFILE_SLOT_PRIMARY = "primary"
+PROFILE_SLOT_BATCH = "batch"
+RESERVED_PROFILE_SLOT_IDS = frozenset({PROFILE_SLOT_PRIMARY, PROFILE_SLOT_BATCH})
+RESERVED_PROFILE_SLOT_SUFFIXES = ("_model", "_override")
+USER_PROFILE_ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
+
+
+def is_profile_slot_id(profile_id: str) -> bool:
+    """True when *profile_id* belongs to the resolver's reserved slot space."""
+    text = str(profile_id or "")
+    if text in RESERVED_PROFILE_SLOT_IDS:
+        return True
+    return any(
+        text.endswith(suffix) and text[: -len(suffix)] in KNOWN_STAGES
+        for suffix in RESERVED_PROFILE_SLOT_SUFFIXES
+    )
+
+
+def user_profile_id_error(profile_id: str) -> str:
+    """Return why *profile_id* cannot be a user profile id, or "" if valid."""
+    text = str(profile_id or "")
+    if not USER_PROFILE_ID_PATTERN.match(text):
+        return (
+            f"Profile id {text!r} must match ^[a-z0-9_-]+$ "
+            "(same rule as custom provider ids)."
+        )
+    if is_profile_slot_id(text):
+        return (
+            f"Profile id {text!r} collides with a reserved resolver slot "
+            "(primary/batch/<stage>_model/<stage>_override); pick another id."
+        )
+    return ""
 
 # Capability keys accepted in ``ModelProfile.capability_overrides``.
 CAPABILITY_OVERRIDE_KEYS = frozenset({
@@ -170,6 +236,42 @@ class CapabilityFlag:
 
 
 @dataclass(frozen=True)
+class StructuredOutputSpec:
+    """Structured-output capability with provenance separated from basis.
+
+    ``source`` uses the shared :data:`CAPABILITY_SOURCES` vocabulary (who
+    vouches for this value); ``basis`` keeps the adapter-table detail of how
+    the mode was chosen (``builtin`` / ``custom_openai_compatible`` /
+    ``conservative_default``). Keeping them apart lets a #340 probe write
+    ``source=probed`` without erasing which adapter table picked the mode.
+    """
+
+    mode: str
+    source: str = CAPABILITY_SOURCE_ADAPTER_DEFAULT
+    basis: str = ""
+
+    @classmethod
+    def from_capability(cls, cap: StructuredOutputCapability) -> "StructuredOutputSpec":
+        source = (
+            CAPABILITY_SOURCE_CONFIG_OVERRIDE
+            if cap.source == CAPABILITY_SOURCE_CONFIG_OVERRIDE
+            else CAPABILITY_SOURCE_ADAPTER_DEFAULT
+        )
+        return cls(mode=cap.mode, source=source, basis=cap.source)
+
+    def to_manifest_dict(self) -> dict[str, str]:
+        return {"mode": self.mode, "source": self.source, "basis": self.basis}
+
+    @classmethod
+    def from_manifest_dict(cls, payload: Mapping[str, Any]) -> "StructuredOutputSpec":
+        return cls(
+            mode=str(payload.get("mode") or "prompt_only_json"),
+            source=str(payload.get("source") or CAPABILITY_SOURCE_ADAPTER_DEFAULT),
+            basis=str(payload.get("basis") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class ModelCapabilities:
     """What a profile's provider/model actually supports.
 
@@ -177,11 +279,18 @@ class ModelCapabilities:
     branching is not allowed here.  Conservative adapter defaults err on the
     safe side so unsupported combinations fail validation instead of
     producing degraded requests.
+
+    Context numbers v1 convention: ``context_limit_tokens`` and
+    ``context_budget_tokens`` share the single ``context_source`` (both
+    values come from the same origin); mixed provenance is not expressible
+    in v1 and #340 probe results must not be written into these two fields —
+    probes feed per-capability ``source=probed`` flags and ``params``
+    instead. Unknown values are ``None``, never sentinel strings.
     """
 
     sync_generation: CapabilityFlag = CapabilityFlag(False)
-    structured_output: StructuredOutputCapability = StructuredOutputCapability(
-        "prompt_only_json", CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+    structured_output: StructuredOutputSpec = StructuredOutputSpec(
+        "prompt_only_json",
     )
     reasoning_request: CapabilityFlag = CapabilityFlag(False)
     reasoning_response: CapabilityFlag = CapabilityFlag(False)
@@ -195,10 +304,7 @@ class ModelCapabilities:
     def to_manifest_dict(self) -> dict[str, Any]:
         return {
             "sync_generation": self.sync_generation.to_manifest_dict(),
-            "structured_output": {
-                "mode": self.structured_output.mode,
-                "source": self.structured_output.source,
-            },
+            "structured_output": self.structured_output.to_manifest_dict(),
             "reasoning_request": self.reasoning_request.to_manifest_dict(),
             "reasoning_response": self.reasoning_response.to_manifest_dict(),
             "usage_stats": self.usage_stats.to_manifest_dict(),
@@ -218,14 +324,12 @@ class ModelCapabilities:
                 source=str(raw.get("source") or CAPABILITY_SOURCE_ADAPTER_DEFAULT),
             )
 
-        structured = payload.get("structured_output") or {}
         limit = payload.get("context_limit_tokens")
         budget = payload.get("context_budget_tokens")
         return cls(
             sync_generation=flag("sync_generation"),
-            structured_output=StructuredOutputCapability(
-                str(structured.get("mode") or "prompt_only_json"),
-                str(structured.get("source") or CAPABILITY_SOURCE_ADAPTER_DEFAULT),
+            structured_output=StructuredOutputSpec.from_manifest_dict(
+                payload.get("structured_output") or {},
             ),
             reasoning_request=flag("reasoning_request"),
             reasoning_response=flag("reasoning_response"),
@@ -326,13 +430,44 @@ class TaskRoute:
 
 
 @dataclass(frozen=True)
+class ConfigOrigin:
+    """Which config file contributed to a routing plan (path + fingerprint).
+
+    Fingerprints hash non-sensitive content only. Populated by the P2 wiring
+    when a plan is first written into a manifest; plans built purely in
+    memory may carry none.
+    """
+
+    kind: str  # e.g. "translator_config" | "game_config"
+    path: str
+    fingerprint: str = ""
+
+    def to_manifest_dict(self) -> dict[str, str]:
+        return {
+            "kind": self.kind,
+            "path": self.path,
+            "fingerprint": self.fingerprint,
+        }
+
+    @classmethod
+    def from_manifest_dict(cls, payload: Mapping[str, Any]) -> "ConfigOrigin":
+        return cls(
+            kind=str(payload.get("kind") or ""),
+            path=str(payload.get("path") or ""),
+            fingerprint=str(payload.get("fingerprint") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class ModelRoutingPlan:
     """Immutable per-run snapshot of profiles, routes, and capabilities.
 
     Built once at run start; later config changes must not affect a run that
     already holds a plan. The manifest snapshot carries references only, so
     answering "which provider/model/strategy/capabilities did each stage
-    actually use" never leaks credentials.
+    actually use" never leaks credentials. ``primary_profile_id`` is a role
+    pointer (which profile unconfigured stages inherit), not a user-facing
+    profile identity.
     """
 
     schema_version: int
@@ -341,6 +476,7 @@ class ModelRoutingPlan:
     routes: Mapping[str, TaskRoute]
     capabilities: Mapping[str, ModelCapabilities]
     created_at: str = ""
+    config_origins: tuple[ConfigOrigin, ...] = ()
 
     def to_manifest_dict(self) -> dict[str, Any]:
         return {
@@ -359,6 +495,9 @@ class ModelRoutingPlan:
                 profile_id: caps.to_manifest_dict()
                 for profile_id, caps in sorted(self.capabilities.items())
             },
+            "config_origins": [
+                origin.to_manifest_dict() for origin in self.config_origins
+            ],
         }
 
     @classmethod
@@ -379,6 +518,10 @@ class ModelRoutingPlan:
                 for profile_id, caps in (payload.get("capabilities") or {}).items()
             },
             created_at=str(payload.get("created_at") or ""),
+            config_origins=tuple(
+                ConfigOrigin.from_manifest_dict(origin)
+                for origin in payload.get("config_origins") or ()
+            ),
         )
 
 
@@ -410,7 +553,9 @@ def routing_validation_error(
     return MachineContractError(
         primary.message,
         code_name=primary.code,
-        suggested_action="fix_translator_config",
+        suggested_action=_SUGGESTED_ACTION_BY_CODE.get(
+            primary.code, "inspect_configuration_and_artifacts",
+        ),
         semantic_exit_code=EXIT_INVALID_STATE,
         retryable=False,
         details={
@@ -434,7 +579,11 @@ def _gemini_capabilities(overrides: Mapping[str, Any]) -> ModelCapabilities:
     """Adapter defaults for the direct google-genai client."""
     caps = ModelCapabilities(
         sync_generation=CapabilityFlag(True),
-        structured_output=StructuredOutputCapability("strict_json_schema", "builtin"),
+        structured_output=StructuredOutputSpec(
+            mode="strict_json_schema",
+            source=CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+            basis=STRUCTURED_OUTPUT_BASIS_BUILTIN,
+        ),
         reasoning_request=CapabilityFlag(True),
         reasoning_response=CapabilityFlag(True),
         usage_stats=CapabilityFlag(True),
@@ -458,7 +607,9 @@ def _litellm_capabilities(
     """
     caps = ModelCapabilities(
         sync_generation=CapabilityFlag(True),
-        structured_output=structured_output_capability(provider, custom_providers),
+        structured_output=StructuredOutputSpec.from_capability(
+            structured_output_capability(provider, custom_providers),
+        ),
         reasoning_request=CapabilityFlag(False),
         reasoning_response=CapabilityFlag(False),
         usage_stats=CapabilityFlag(True),
@@ -488,9 +639,12 @@ def _apply_capability_overrides(
     }
     for key, value in (overrides or {}).items():
         if key == "structured_output" and isinstance(value, Mapping):
-            data["structured_output"] = StructuredOutputCapability(
-                str(value.get("mode") or caps.structured_output.mode),
-                CAPABILITY_SOURCE_CONFIG_OVERRIDE,
+            data["structured_output"] = StructuredOutputSpec(
+                mode=str(value.get("mode") or caps.structured_output.mode),
+                source=CAPABILITY_SOURCE_CONFIG_OVERRIDE,
+                # Keep the adapter-table basis the override replaced so the
+                # manifest still explains what the default would have been.
+                basis=caps.structured_output.basis,
             )
         elif key in {"context_limit_tokens", "context_budget_tokens"}:
             data[key] = int(value) if value is not None else None
@@ -519,8 +673,10 @@ def resolve_capabilities(
         )
     return _apply_capability_overrides(
         ModelCapabilities(
-            structured_output=StructuredOutputCapability(
-                "prompt_only_json", CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+            structured_output=StructuredOutputSpec(
+                mode="prompt_only_json",
+                source=CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+                basis=STRUCTURED_OUTPUT_BASIS_CONSERVATIVE_DEFAULT,
             ),
         ),
         profile.capability_overrides,
@@ -759,7 +915,7 @@ def resolve_routing_plan(
         if sync_model:
             return ROUTE_SOURCE_STAGE_CONFIG
         if batch_model:
-            return ROUTE_SOURCE_PRIMARY_INHERITED
+            return ROUTE_SOURCE_INHERITED
         return ROUTE_SOURCE_BUILTIN_DEFAULT
 
     routes: dict[str, TaskRoute] = {}
@@ -779,12 +935,12 @@ def resolve_routing_plan(
 
     if strategy is ExecutionStrategy.GEMINI_BATCH:
         route(STAGE_TRANSLATION, "batch", strategy, translation_source())
-        route(STAGE_KEYWORD, "batch", strategy, ROUTE_SOURCE_PRIMARY_INHERITED)
-        route(STAGE_REVISION, "batch", strategy, ROUTE_SOURCE_PRIMARY_INHERITED)
+        route(STAGE_KEYWORD, "batch", strategy, ROUTE_SOURCE_INHERITED)
+        route(STAGE_REVISION, "batch", strategy, ROUTE_SOURCE_INHERITED)
     else:
         route(STAGE_TRANSLATION, "primary", strategy, translation_source())
-        route(STAGE_KEYWORD, "primary", strategy, ROUTE_SOURCE_PRIMARY_INHERITED)
-        route(STAGE_REVISION, "primary", strategy, ROUTE_SOURCE_PRIMARY_INHERITED)
+        route(STAGE_KEYWORD, "primary", strategy, ROUTE_SOURCE_INHERITED)
+        route(STAGE_REVISION, "primary", strategy, ROUTE_SOURCE_INHERITED)
 
     if STAGE_PROJECT_ANALYSIS in overrides:
         route(
@@ -805,7 +961,7 @@ def resolve_routing_plan(
             STAGE_PROJECT_ANALYSIS,
             "primary",
             ExecutionStrategy.SYNC,
-            ROUTE_SOURCE_PRIMARY_INHERITED,
+            ROUTE_SOURCE_INHERITED,
         )
 
     if STAGE_FINAL_REVIEW in overrides:
@@ -827,7 +983,7 @@ def resolve_routing_plan(
             STAGE_FINAL_REVIEW,
             "batch",
             ExecutionStrategy.GEMINI_BATCH,
-            ROUTE_SOURCE_PRIMARY_INHERITED,
+            ROUTE_SOURCE_INHERITED,
         )
 
     if STAGE_AB_EXPERIMENT in overrides:
@@ -842,7 +998,7 @@ def resolve_routing_plan(
             STAGE_AB_EXPERIMENT,
             "primary",
             ExecutionStrategy.SYNC,
-            ROUTE_SOURCE_PRIMARY_INHERITED,
+            ROUTE_SOURCE_INHERITED,
         )
 
     capabilities = {
