@@ -4,7 +4,7 @@ from __future__ import annotations
 from .check_report import WritebackSummary
 from .revision_report import parse_revision_summary
 from .summary_helpers import extend_facts_with_notices
-from .user_copy import format_manifest_path_fact
+from .user_copy import format_manifest_path_fact, format_quality_gate_fact
 
 
 def summarize_revision_writeback_from_preview_output(
@@ -234,6 +234,15 @@ def summarize_revision_writeback_from_manifest(
     if isinstance(markdown_path, str) and markdown_path.strip():
         facts.append(f"预览 Markdown：{markdown_path.strip()}")
 
+    quality_gate = last_preview.get("quality_gate")
+    if not isinstance(quality_gate, dict):
+        quality_gate = summary.get("quality_gate")
+    if isinstance(quality_gate, dict):
+        facts.append(format_quality_gate_fact(quality_gate))
+        quality_findings_path = last_preview.get("quality_findings_path")
+        if isinstance(quality_findings_path, str) and quality_findings_path.strip():
+            facts.append(f"质量检查报告：{quality_findings_path.strip()}")
+
     findings: list[str] = []
     reason_counts = summary.get("reason_counts")
     if isinstance(reason_counts, dict):
@@ -241,6 +250,26 @@ def summarize_revision_writeback_from_manifest(
             count = reason_counts[name]
             if isinstance(count, int):
                 findings.append(f"{name}: {count}")
+
+    writeback_gate = last_preview.get("writeback_gate")
+    if not isinstance(writeback_gate, dict):
+        writeback_gate = summary.get("writeback_gate")
+    if isinstance(writeback_gate, dict) and writeback_gate.get(
+        "decision"
+    ) != "allow":
+        blocker_count = int(writeback_gate.get("blocker_count") or 0)
+        return WritebackSummary(
+            status="failed",
+            heading="订正写回被质量门禁阻止",
+            message=(
+                f"最近一次订正预览有 {blocker_count} 个阻断项；"
+                "请处理质量 blocker 或结构阻断后重新预览。"
+            ),
+            facts=facts,
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     if isinstance(valid_items, int) and valid_items > 0:
         return WritebackSummary(

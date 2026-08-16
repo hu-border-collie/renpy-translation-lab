@@ -69,6 +69,22 @@
     "skipped_items": 0,
     "source_mismatch_items": 0,
     "failure_count": 0,
+    "quality_gate": {
+      "decision": "pass",
+      "warning_count": 0,
+      "blocker_count": 0,
+      "acknowledged_count": 0,
+      "has_warnings": false
+    },
+    "writeback_gate": {
+      "decision": "allow",
+      "can_apply": true,
+      "blocker_count": 0,
+      "structural_blocker_count": 0,
+      "quality_blocker_count": 0
+    },
+    "quality_findings_count": 0,
+    "quality_findings_path": "quality_findings.jsonl",
     "rag": {}
   },
   "last_revision_apply_summary": {

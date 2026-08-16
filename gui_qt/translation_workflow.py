@@ -155,9 +155,13 @@ def extract_quality_gate(output: str) -> dict[str, object]:
                 return dict(gate)
 
     gate: dict[str, object] = {}
-    decision = _extract_line_value(output, "Quality gate:")
+    decision = ""
+    for prefix in ("Quality gate:", "Sync quality gate:", "Sync apply quality gate:"):
+        decision = _extract_line_value(output, prefix)
+        if decision:
+            break
     if decision:
-        gate["decision"] = decision
+        gate["decision"] = decision.split(",", 1)[0].strip()
     for prefix, key in (
         ("Quality warnings:", "warning_count"),
         ("Quality blockers:", "blocker_count"),
@@ -168,6 +172,14 @@ def extract_quality_gate(output: str) -> dict[str, object]:
             gate[key] = int(value)
         except (TypeError, ValueError):
             pass
+    warnings_match = re.search(r"warnings=(\d+)", output)
+    if warnings_match:
+        gate["warning_count"] = int(warnings_match.group(1))
+    blockers_match = re.search(r"blockers=(\d+)", output)
+    if blockers_match:
+        gate["blocker_count"] = int(blockers_match.group(1))
+    if not gate.get("decision") and gate.get("warning_count") is not None:
+        gate["decision"] = "needs_review"
     return gate
 
 

@@ -27,8 +27,19 @@ def _write_findings(package: Mapping[str, Any], findings: Sequence[Mapping[str, 
     manifest = dict(package["manifest"])
     manifest.pop("_manifest_path", None)
     manifest.pop("_package_dir", None)
-    manifest["summary"] = {**dict(manifest.get("summary") or {}), "finding_count": len(findings)}
+    summary = {
+        **dict(manifest.get("summary") or {}),
+        "finding_count": len(findings),
+    }
+    quality_rows = fr.adapt_findings_to_quality_schema(findings)
+    summary["quality_findings_count"] = len(quality_rows)
+    summary["quality_gate"] = fr.summarize_final_review_quality_gate(findings)
+    summary["quality_mapping_version"] = fr.FINAL_REVIEW_QUALITY_MAPPING_VERSION
+    manifest["summary"] = summary
+    manifest.setdefault("quality_findings_path", fr.QUALITY_FINDINGS_FILENAME)
     atomic_write_jsonl(paths["findings"], findings, ensure_ascii=False)
+    if paths.get("quality_findings"):
+        fr.translation_quality.write_findings(paths["quality_findings"], quality_rows)
     atomic_write_json(paths["manifest"], manifest, ensure_ascii=False, indent=2)
     atomic_write_text(paths["report"], fr.format_campaign_report_markdown(
         manifest, package.get("units") or [], findings,

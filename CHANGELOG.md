@@ -14,6 +14,7 @@
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
 - `check` 新增确定性机械质量检查与 `quality_findings.jsonl`：标签插字、未闭合括号、中英文粘连、可疑英文残留、CJK/拉丁间距、半角标点、glossary 未满足、说话人标签与短感叹词漏译、配置错乱词黑名单等。
+- sync 预览、revision 预览/写回与 final review 统一消费同一套 quality finding schema：共享 normalize / validate / load / filter / digest 工具，各路径生成同一 `quality_findings.jsonl` + `quality_gate` 摘要；final review 仅做 LLM 语义字段到公共模型的适配，不冒充机械规则。
 - 同步初译增加局部前后文（`sync.context_before` / `sync.context_after`，默认 30/10，限定同文件与 translate block 边界）、`sync.macro_setting_file` 风格设定注入，以及不依赖 RAG 开关、不受 `top_k_terms` 截断的术语命中（`normalize_map` / 保留词 / 不可翻译词，全部实际命中进入提示词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
 
 ### 变更
@@ -29,6 +30,7 @@
 
 - Batch `apply` 改为要求与当前 manifest/results 匹配的最近一次 `writeback_gate.decision=allow`，并在写回前重读源快照；`--force` 不绕过 stale check、源快照或结构阻断。
 - `check` 结果拆分为 `writeback_gate`（结构写回安全）与 `quality_gate`（质量报警）；质量报警默认不阻止写回，但不会因 `apply` 成功自动清除，项目配置可把规则提升为 blocker，且配置变化会使旧 check stale。
+- revision 预览/写回同样生成质量 findings；warning 不阻止订正写回，配置为 blocker 的机械规则进入 revision 自己的写回门禁。规则或质量策略版本变化会使 sync / revision 旧预览 stale。
 - 订正与最终审校候选必须经过 `preview-revisions -> apply-revisions` 的独立 provenance、项目身份和源快照校验。
 - `writeback_gate.decision=allow` 仅代表结构性可写回；`quality_gate` 负责机械质量报警，正式交付前仍需人工/LLM 语义审校。
 

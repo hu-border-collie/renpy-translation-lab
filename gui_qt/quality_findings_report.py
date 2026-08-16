@@ -12,8 +12,8 @@ import translation_quality
 from .diagnostics_context import join_directory_file, resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
 
-SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2}
-SEVERITY_LABELS = {"low": "低", "medium": "中", "high": "高"}
+SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
+SEVERITY_LABELS = {"info": "提示", "low": "低", "medium": "中", "high": "高"}
 
 REASON_LABELS = {
     translation_quality.REASON_WAIT_TAG_INSIDE_CJK: "等待标签插入中文词内",
@@ -27,6 +27,15 @@ REASON_LABELS = {
     translation_quality.REASON_SPEAKER_LABEL_UNTRANSLATED: "说话人标签未翻译",
     translation_quality.REASON_INTERJECTION_UNTRANSLATED: "短感叹词/拟声词未翻译",
     translation_quality.REASON_KNOWN_GARBLED_PHRASE: "已知错乱词",
+    translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT: "质量采集无法匹配",
+    translation_quality.FINAL_REVIEW_REASON_OMISSION: "最终审校：漏译",
+    translation_quality.FINAL_REVIEW_REASON_MISTRANSLATION: "最终审校：误译",
+    translation_quality.FINAL_REVIEW_REASON_ADDITION: "最终审校：多余内容",
+    translation_quality.FINAL_REVIEW_REASON_FORMAT: "最终审校：格式问题",
+    translation_quality.FINAL_REVIEW_REASON_TERMINOLOGY: "最终审校：术语问题",
+    translation_quality.FINAL_REVIEW_REASON_ADDRESS: "最终审校：称呼问题",
+    translation_quality.FINAL_REVIEW_REASON_STYLE_DRIFT: "最终审校：文风漂移",
+    translation_quality.FINAL_REVIEW_REASON_NEEDS_CONFIRMATION: "最终审校：待确认",
 }
 
 
@@ -92,7 +101,8 @@ def parse_quality_findings_jsonl(text: str) -> list[dict[str, object]]:
 
 
 def normalize_quality_finding(entry: dict[str, object]) -> QualityFindingItem:
-    line_value = entry.get("line")
+    normalized = translation_quality.normalize_finding(entry)
+    line_value = normalized.get("line")
     line_number: int | None
     if isinstance(line_value, int):
         line_number = line_value
@@ -102,17 +112,17 @@ def normalize_quality_finding(entry: dict[str, object]) -> QualityFindingItem:
         line_number = None
 
     return QualityFindingItem(
-        reason_code=str(entry.get("reason_code") or "").strip(),
-        disposition=str(entry.get("disposition") or "warning").strip(),
-        severity=str(entry.get("severity") or "medium").strip(),
-        file_rel_path=str(entry.get("file") or "").strip(),
+        reason_code=str(normalized.get("reason_code") or "").strip(),
+        disposition=str(normalized.get("disposition") or "warning").strip(),
+        severity=str(normalized.get("severity") or "medium").strip(),
+        file_rel_path=str(normalized.get("file") or "").strip(),
         line=line_number,
-        item_id=str(entry.get("item_id") or "").strip(),
-        source=str(entry.get("source") or ""),
-        translation=str(entry.get("translation") or ""),
-        evidence=str(entry.get("evidence") or ""),
-        suggestion=str(entry.get("suggestion") or ""),
-        finding_id=str(entry.get("finding_id") or ""),
+        item_id=str(normalized.get("item_id") or "").strip(),
+        source=str(normalized.get("source") or ""),
+        translation=str(normalized.get("translation") or ""),
+        evidence=str(normalized.get("evidence") or ""),
+        suggestion=str(normalized.get("suggestion") or ""),
+        finding_id=str(normalized.get("finding_id") or ""),
     )
 
 
@@ -121,9 +131,29 @@ def resolve_quality_findings_path(
     *,
     manifest_path: str = "",
 ) -> str:
-    report_path = manifest.get("last_quality_findings_path")
-    if isinstance(report_path, str) and report_path.strip():
-        return report_path.strip()
+    selected = ""
+    for key in (
+        "last_quality_findings_path",
+        "last_revision_quality_findings_path",
+        "quality_findings_path",
+    ):
+        report_path = manifest.get(key)
+        if isinstance(report_path, str) and report_path.strip():
+            selected = report_path.strip()
+            break
+    if not selected:
+        revision_preview = manifest.get("last_revision_preview")
+        if isinstance(revision_preview, dict):
+            report_path = revision_preview.get("quality_findings_path")
+            if isinstance(report_path, str) and report_path.strip():
+                selected = report_path.strip()
+    if selected:
+        if Path(selected).is_absolute():
+            return selected
+        package_dir = resolve_package_dir(manifest_path, manifest)
+        if package_dir:
+            return join_directory_file(package_dir, selected)
+        return selected
 
     package_dir = resolve_package_dir(manifest_path, manifest)
     if package_dir:
@@ -135,6 +165,21 @@ def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]
     last_summary = manifest.get("last_check_summary")
     if isinstance(last_summary, dict):
         quality_gate = last_summary.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            return dict(quality_gate)
+    summary = manifest.get("summary")
+    if isinstance(summary, dict):
+        quality_gate = summary.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            return dict(quality_gate)
+    revision_preview = manifest.get("last_revision_preview")
+    if isinstance(revision_preview, dict):
+        quality_gate = revision_preview.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            return dict(quality_gate)
+    revision_apply_summary = manifest.get("revision_apply_summary")
+    if isinstance(revision_apply_summary, dict):
+        quality_gate = revision_apply_summary.get("quality_gate")
         if isinstance(quality_gate, dict):
             return dict(quality_gate)
     return {}

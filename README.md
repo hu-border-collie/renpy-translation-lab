@@ -25,6 +25,7 @@
 - 构造带 glossary、macro setting、RAG 与可选 Story Memory 的请求。
 - 完整 Batch 异步流程，以及 `check` / `apply` / `repair` 写回闸门（`apply` 默认只接受最近一次 `safe` check）。
 - 订正、关键词候选提取，以及独立关系 / 语义分析工作流。
+- Batch、同步翻译、订正与最终审校共享统一质量 finding schema（`quality_findings.jsonl` + `quality_gate`），机械规则集中维护在 `translation_quality.py`。
 
 ## 快速开始
 

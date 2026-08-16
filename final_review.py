@@ -25,6 +25,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text, file_sha256
 
+import translation_quality
+
 SCHEMA_VERSION = 1
 MANIFEST_MODE_FINAL_REVIEW = "final_review"
 PROMPT_SCHEMA_VERSION = "final-review-v1"
@@ -34,6 +36,8 @@ MANIFEST_FILENAME = "manifest.json"
 SNAPSHOT_FILENAME = "snapshot.json"
 REVIEW_UNITS_FILENAME = "review_units.jsonl"
 FINDINGS_FILENAME = "findings.jsonl"
+QUALITY_FINDINGS_FILENAME = "quality_findings.jsonl"
+FINAL_REVIEW_QUALITY_MAPPING_VERSION = 1
 REPORT_MD_FILENAME = "report.md"
 REQUESTS_JSONL_FILENAME = "requests.jsonl"
 
@@ -926,6 +930,29 @@ def mark_unit_done(
 # ---------------------------------------------------------------------------
 
 
+def adapt_findings_to_quality_schema(
+    findings: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Map normalized final-review findings into the shared quality model.
+
+    The semantic ``findings.jsonl`` remains authoritative for review;
+    ``quality_findings.jsonl`` is a derived shared-consumer artifact so GUI
+    lists, filters, and digest tools do not need a second parser.
+    """
+
+    return translation_quality.adapt_final_review_findings(
+        [normalize_finding(finding) for finding in findings]
+    )
+
+
+def summarize_final_review_quality_gate(
+    findings: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return translation_quality.summarize_quality_gate(
+        adapt_findings_to_quality_schema(findings)
+    )
+
+
 def normalize_finding(
     record: Mapping[str, Any],
     *,
@@ -1199,6 +1226,8 @@ def write_campaign_package(
         unit_rows.append(row)
 
     finding_rows = [normalize_finding(f) for f in (findings or [])]
+    quality_finding_rows = adapt_findings_to_quality_schema(finding_rows)
+    quality_gate = summarize_final_review_quality_gate(finding_rows)
 
     manifest_out = dict(manifest)
     manifest_out["package_dir"] = root
@@ -1211,17 +1240,23 @@ def write_campaign_package(
         "unit_count": len(unit_rows),
         "item_count": sum(int(u.get("item_count") or 0) for u in unit_rows),
         "finding_count": len(finding_rows),
+        "quality_findings_count": len(quality_finding_rows),
+        "quality_gate": quality_gate,
+        "quality_mapping_version": FINAL_REVIEW_QUALITY_MAPPING_VERSION,
         "status_counts": status_counts,
     }
     manifest_out["status"] = derive_campaign_status(status_counts)
+    manifest_out["quality_findings_path"] = QUALITY_FINDINGS_FILENAME
 
     snapshot_path = os.path.join(root, SNAPSHOT_FILENAME)
     units_path = os.path.join(root, REVIEW_UNITS_FILENAME)
     findings_path = os.path.join(root, FINDINGS_FILENAME)
+    quality_findings_path = os.path.join(root, QUALITY_FINDINGS_FILENAME)
 
     atomic_write_json(snapshot_path, dict(snapshot), ensure_ascii=False, indent=2)
     atomic_write_jsonl(units_path, unit_rows, ensure_ascii=False)
     atomic_write_jsonl(findings_path, finding_rows, ensure_ascii=False)
+    translation_quality.write_findings(quality_findings_path, quality_finding_rows)
     atomic_write_json(manifest_path, manifest_out, ensure_ascii=False, indent=2)
 
     paths = {
@@ -1230,6 +1265,7 @@ def write_campaign_package(
         "snapshot": snapshot_path,
         "review_units": units_path,
         "findings": findings_path,
+        "quality_findings": quality_findings_path,
     }
 
     if write_report:
@@ -1293,6 +1329,7 @@ def resolve_campaign_paths(
         "snapshot": os.path.join(package_dir, SNAPSHOT_FILENAME),
         "review_units": os.path.join(package_dir, REVIEW_UNITS_FILENAME),
         "findings": os.path.join(package_dir, FINDINGS_FILENAME),
+        "quality_findings": os.path.join(package_dir, QUALITY_FINDINGS_FILENAME),
         "report": os.path.join(package_dir, REPORT_MD_FILENAME),
     }
 
@@ -1314,6 +1351,11 @@ def load_campaign_package(target: str | os.PathLike[str]) -> dict[str, Any]:
             snapshot = loaded
     units = load_jsonl_file(paths["review_units"])
     findings = load_jsonl_file(paths["findings"])
+    quality_findings = []
+    if os.path.isfile(paths.get("quality_findings", "")):
+        quality_findings = translation_quality.load_findings(
+            paths["quality_findings"]
+        )
     for unit in units:
         assert_failure_not_done(unit)
 
@@ -1326,6 +1368,7 @@ def load_campaign_package(target: str | os.PathLike[str]) -> dict[str, Any]:
         "snapshot": snapshot,
         "units": units,
         "findings": findings,
+        "quality_findings": quality_findings,
     }
 
 

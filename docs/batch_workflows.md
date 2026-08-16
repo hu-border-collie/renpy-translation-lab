@@ -150,7 +150,7 @@ python gemini_translate_batch.py sync-revisions --limit 3
 python gemini_translate_batch.py sync-revisions --apply
 ```
 
-`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并把合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回；`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化或源文件快照变化。
+`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并对将被写回的修订结果运行共享机械质量规则，生成包目录下的 `quality_findings.jsonl`；合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、质量 finding 路径与哈希、质量策略/规则版本、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回，写回前还会在最终候选上重新运行质量规则；质量 warning 不阻止订正写回，配置为 blocker 的规则按 revision 自己的写回门禁拒绝写回。`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化、源文件快照变化、质量规则/策略变化或 blocker。
 
 `apply-revisions` 的终态写在 manifest 的 `revision_apply_state`，固定区分：
 
@@ -165,7 +165,7 @@ python gemini_translate_batch.py sync-revisions --apply
 
 阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）与 `adapter_writeback_block` 以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
 
-当前 `writeback_gate` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；质量 `quality_gate` 默认不阻断写回。订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
+普通 translation manifest 的 `check/apply` 使用 `writeback_gate` 强制闸门；revision 预览/写回使用同一 `quality_findings.jsonl` 与 `quality_gate` 数据模型，warning 默认不阻断写回，`disposition=blocker` 才进入 revision 写回门禁。订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
 
 `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回。
 
@@ -232,8 +232,11 @@ logs/batch_jobs/<ts>_<project>_final_review/
   requests.jsonl         # Batch 请求（build / resume 写入）
   results.jsonl          # download 后的模型结果（resume 会作废上一份）
   findings.jsonl         # 审校发现（执行后填充；build 时为空）
+  quality_findings.jsonl # 映射到公共 quality finding schema 的派生视图（GUI 复用同一数据模型）
   report.md              # 人类可读报告
 ```
+
+`findings.jsonl` 是最终审校的语义事实源，保留 `finding_type` / LLM 证据 / 建议译文等字段；`quality_findings.jsonl` 只是把语义 finding 适配到公共 quality finding schema（`quality.llm.*` reason code、severity / disposition / 定位字段），不把文学性结论伪装成确定性机械规则。
 
 ### 选择、状态与 GUI
 
