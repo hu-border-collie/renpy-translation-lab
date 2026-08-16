@@ -44,11 +44,15 @@ def default_litellm_catalog_cache_path() -> Path:
 
 
 def _can_create_under(directory: Path) -> bool:
-    """Return whether *directory* can be created/written on this system.
+    """Return whether *directory* can actually be written right now.
 
-    This checks the nearest existing ancestor instead of trying an actual
-    write, so it also avoids hanging on sandboxes that block writes outside
-    the allowed workspace.
+    Walks up to the nearest existing ancestor and attempts a tiny real write
+    probe.  ``os.access`` alone is not reliable under sandbox filter
+    drivers: it only simulates the ACL (which can still grant the current
+    user write rights) and may report writable even though an actual write
+    is blocked, leaving later atomic writes hanging.  A real ``os.open``
+    fails fast on read-only filesystems and sandbox-blocked directories
+    alike, and the probe file is removed immediately.
     """
     current = directory
     while not current.exists():
@@ -58,10 +62,17 @@ def _can_create_under(directory: Path) -> bool:
         current = parent
     if not current.is_dir():
         return False
+    probe = current / f".renpy-cache-probe-{os.getpid()}"
     try:
-        return os.access(current, os.W_OK | os.X_OK)
+        fd = os.open(probe, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+        os.close(fd)
     except OSError:
         return False
+    try:
+        os.remove(probe)
+    except OSError:
+        pass
+    return True
 
 
 def _fallback_litellm_cache_path() -> Path | None:
