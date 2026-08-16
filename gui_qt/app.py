@@ -342,6 +342,7 @@ from .widget_helpers import (
 )
 from .user_copy import (
     CUSTOM_LITELLM_PROVIDER_COPY,
+    LITELLM_CACHE_COPY,
     APP_SHUTDOWN_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
@@ -7522,9 +7523,11 @@ class MainWindow(QMainWindow):
         try:
             action()
         except OSError as exc:
-            self._append_log(f"保存 LiteLLM 用户目录缓存失败：{exc}")
+            self._append_log(
+                LITELLM_CACHE_COPY["save_failed_log"].format(error=exc)
+            )
             self.statusBar().showMessage(
-                "LiteLLM 选择已更新，但用户目录缓存写入失败。",
+                LITELLM_CACHE_COPY["save_failed_status"],
                 6000,
             )
         else:
@@ -7532,7 +7535,7 @@ class MainWindow(QMainWindow):
             if fallback_reason:
                 self._append_log(fallback_reason)
                 self.statusBar().showMessage(
-                    "LiteLLM 选择已保存到临时目录；重启后可能不会保留。",
+                    LITELLM_CACHE_COPY["save_status"],
                     6000,
                 )
 

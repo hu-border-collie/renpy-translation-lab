@@ -111,3 +111,7 @@ tempfile._mkstemp_inner
   `%LOCALAPPDATA%\renpy-translation-lab` 加入可写范围；
 - 注意：shell 命令超时**不会杀死残留的 Python 测试进程**，排查时先
   `Get-Process | Where-Object { $_.ProcessName -like '*python*' }` 确认无残留再重跑。
+- 测试隔离提醒：GUI 测试共享用户级 LiteLLM 缓存（默认目录不可写时位于系统临时目录），
+  若缓存中存在历史 provider/model 选择，`test_workspace_action_bar_uses_immediate_save_context`
+  可能偶发判定“有未保存的更改”而失败；清理缓存（如删除 `%TEMP%\renpy-translation-lab`）后
+  全量可稳定通过。该问题在正常 Windows 环境同样存在，属于测试共享状态的既有隔离缺陷。

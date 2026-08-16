@@ -17,6 +17,7 @@ import tempfile
 from typing import Callable, Mapping
 
 from atomic_io import atomic_write_json
+from .user_copy import LITELLM_CACHE_COPY
 
 
 CACHE_SCHEMA_VERSION = 1
@@ -180,8 +181,9 @@ class LiteLLMCatalogCache:
                 if fallback is not None:
                     self.path = fallback
                     self.fallback_reason = (
-                        "默认 LiteLLM 用户目录缓存不可写，已回退到临时目录："
-                        f"{fallback.parent}"
+                        LITELLM_CACHE_COPY["fallback_reason"].format(
+                            directory=fallback.parent
+                        )
                     )
                 else:
                     self.path = default_path
