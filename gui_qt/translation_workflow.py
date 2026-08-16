@@ -161,7 +161,12 @@ def extract_quality_gate(output: str) -> dict[str, object]:
         if decision:
             break
     if decision:
-        gate["decision"] = decision.split(",", 1)[0].strip()
+        decision_match = re.match(r"^[A-Za-z_]{2,}", decision)
+        gate["decision"] = (
+            decision_match.group(0).strip()
+            if decision_match
+            else decision.split(",", 1)[0].strip()
+        )
     for prefix, key in (
         ("Quality warnings:", "warning_count"),
         ("Quality blockers:", "blocker_count"),

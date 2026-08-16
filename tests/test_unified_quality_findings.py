@@ -258,6 +258,14 @@ class SharedSchemaContractTests(unittest.TestCase):
         self.assertEqual(gate["warning_count"], 3)
         self.assertEqual(gate["blocker_count"], 1)
 
+    def test_gui_extracts_revision_quality_gate_with_parenthesized_counts(self):
+        gate = extract_quality_gate(
+            "Quality gate: needs_review (warnings=3, blockers=1)"
+        )
+        self.assertEqual(gate["decision"], "needs_review")
+        self.assertEqual(gate["warning_count"], 3)
+        self.assertEqual(gate["blocker_count"], 1)
+
     def test_gui_prefers_apply_time_revision_quality_gate(self):
         manifest = {
             'revision_apply_summary': {
@@ -344,7 +352,7 @@ class SharedSchemaContractTests(unittest.TestCase):
 
 
 class SyncQualityFindingsTests(unittest.TestCase):
-    def _make_preview(self, root: Path, subject=None):
+    def _make_preview(self, root: Path, subject=None, *, glossary_file=""):
         tl_dir = root / 'game' / 'tl' / 'schinese'
         tl_dir.mkdir(parents=True)
         target = tl_dir / 'a.rpy'
@@ -368,6 +376,7 @@ class SyncQualityFindingsTests(unittest.TestCase):
             project_root=root,
             tl_dir=tl_dir,
             files=rows,
+            glossary_file=glossary_file,
         )
 
     def test_sync_preview_persists_findings_and_quality_gate(self):
@@ -406,6 +415,23 @@ class SyncQualityFindingsTests(unittest.TestCase):
                     active_quality_policy=quality.normalize_policy(
                         {'rules': {'renpy_wait_inside_cjk': 'off'}}
                     ),
+                )
+
+    def test_sync_apply_stales_when_glossary_is_cleared_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_path, _manifest = self._make_preview(
+                root,
+                glossary_file='glossary.json',
+            )
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+
+            with self.assertRaisesRegex(ValueError, 'Quality glossary changed'):
+                preview.apply_sync_preview(
+                    manifest_path,
+                    active_project_root=root,
+                    active_tl_dir=tl_dir,
+                    active_glossary_file='',
                 )
 
     def test_sync_apply_stales_when_quality_rule_version_changes(self):
@@ -484,6 +510,77 @@ class SyncRuntimeQualityFindingsTests(unittest.TestCase):
                     quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE,
                 }
             )
+
+
+class RevisionQualityStalenessTests(unittest.TestCase):
+    def _preview(self, **overrides):
+        preview = {
+            'quality_rule_schema_version': quality.QUALITY_RULE_SCHEMA_VERSION,
+            'quality_policy_runtime_digest': quality.policy_digest(
+                batch.BATCH_QUALITY_POLICY
+            ),
+            'quality_policy_digest': quality.policy_digest(
+                quality.normalize_policy(None)
+            ),
+            'quality_findings_path': '',
+            'writeback_gate': {'decision': quality.GATE_ALLOW},
+        }
+        preview.update(overrides)
+        return preview
+
+    def test_fresh_revision_quality_preview_returns_none(self):
+        manifest = {'quality_policy': quality.normalize_policy(None)}
+        self.assertIsNone(
+            batch._revision_quality_staleness(manifest, self._preview())
+        )
+
+    def test_rule_version_change_makes_revision_preview_stale(self):
+        manifest = {'quality_policy': quality.normalize_policy(None)}
+        reason, _message = batch._revision_quality_staleness(
+            manifest,
+            self._preview(
+                quality_rule_schema_version=(
+                    quality.QUALITY_RULE_SCHEMA_VERSION + 1
+                )
+            ),
+        )
+        self.assertEqual(reason, 'quality_rules_changed')
+
+    def test_runtime_policy_change_makes_revision_preview_stale(self):
+        manifest = {'quality_policy': quality.normalize_policy(None)}
+        changed_policy = quality.normalize_policy(
+            {'rules': {'renpy_wait_inside_cjk': 'off'}}
+        )
+        reason, _message = batch._revision_quality_staleness(
+            manifest,
+            self._preview(
+                quality_policy_runtime_digest=quality.policy_digest(
+                    changed_policy
+                )
+            ),
+        )
+        self.assertEqual(reason, 'quality_policy_changed')
+
+    def test_manifest_policy_change_makes_revision_preview_stale(self):
+        manifest = {'quality_policy': quality.normalize_policy(None)}
+        changed_policy = quality.normalize_policy(
+            {'rules': {'renpy_wait_inside_cjk': 'off'}}
+        )
+        reason, _message = batch._revision_quality_staleness(
+            manifest,
+            self._preview(
+                quality_policy_digest=quality.policy_digest(changed_policy)
+            ),
+        )
+        self.assertEqual(reason, 'quality_policy_changed')
+
+    def test_denied_revision_writeback_gate_is_stale(self):
+        manifest = {'quality_policy': quality.normalize_policy(None)}
+        reason, _message = batch._revision_quality_staleness(
+            manifest,
+            self._preview(writeback_gate={'decision': quality.GATE_DENY}),
+        )
+        self.assertEqual(reason, 'revision_writeback_gate_denied')
 
 
 class RevisionQualityFindingsTests(unittest.TestCase):

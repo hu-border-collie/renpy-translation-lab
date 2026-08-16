@@ -9423,12 +9423,21 @@ def _require_valid_revision_preview(manifest):
             'source files changed since preview; run preview-revisions again.',
         )
 
+    quality_staleness = _revision_quality_staleness(manifest, preview)
+    if quality_staleness is not None:
+        reason, message = quality_staleness
+        _mark_revision_apply_blocked(manifest, reason, message)
+    return preview
+
+
+def _revision_quality_staleness(manifest, preview):
+    """Return ``(reason, message)`` when revision quality evidence is stale."""
+
     expected_rule_version = preview.get('quality_rule_schema_version')
     if expected_rule_version is not None and expected_rule_version != (
         translation_quality.QUALITY_RULE_SCHEMA_VERSION
     ):
-        _mark_revision_apply_blocked(
-            manifest,
+        return (
             'quality_rules_changed',
             'quality rules changed since revision preview; run preview-revisions again.',
         )
@@ -9436,8 +9445,7 @@ def _require_valid_revision_preview(manifest):
     if expected_runtime_policy_digest and expected_runtime_policy_digest != (
         translation_quality.policy_digest(BATCH_QUALITY_POLICY)
     ):
-        _mark_revision_apply_blocked(
-            manifest,
+        return (
             'quality_policy_changed',
             'quality policy changed since revision preview; run preview-revisions again.',
         )
@@ -9447,24 +9455,21 @@ def _require_valid_revision_preview(manifest):
             translation_quality.effective_policy(manifest)
         )
     ):
-        _mark_revision_apply_blocked(
-            manifest,
+        return (
             'quality_policy_changed',
             'manifest quality policy changed since revision preview; run preview-revisions again.',
         )
     quality_findings_path = preview.get('quality_findings_path')
     if quality_findings_path:
         if not os.path.isfile(quality_findings_path):
-            _mark_revision_apply_blocked(
-                manifest,
+            return (
                 'quality_findings_missing',
                 'quality findings report no longer exists; run preview-revisions again.',
             )
         if _sha256_file(quality_findings_path) != preview.get(
             'quality_findings_sha256'
         ):
-            _mark_revision_apply_blocked(
-                manifest,
+            return (
                 'quality_findings_changed',
                 'quality findings changed since revision preview; run preview-revisions again.',
             )
@@ -9472,12 +9477,11 @@ def _require_valid_revision_preview(manifest):
     if isinstance(writeback_gate, dict) and writeback_gate.get(
         'decision'
     ) != translation_quality.GATE_ALLOW:
-        _mark_revision_apply_blocked(
-            manifest,
+        return (
             'revision_writeback_gate_denied',
             'revision preview is not allowed to write back; resolve quality blockers or structural blocks and run preview-revisions again.',
         )
-    return preview
+    return None
 
 
 def write_revision_markdown(path, entries, summary):

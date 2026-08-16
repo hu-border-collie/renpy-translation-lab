@@ -383,7 +383,7 @@ def prepare_sync_preview_apply(
     active_project_root: str | os.PathLike[str],
     active_tl_dir: str | os.PathLike[str],
     active_quality_policy: dict[str, Any] | None = None,
-    active_glossary_file: str | os.PathLike[str] = "",
+    active_glossary_file: str | os.PathLike[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate every source and artifact before the first project write."""
     manifest = load_sync_preview(manifest_path)
@@ -412,7 +412,7 @@ def prepare_sync_preview_apply(
             )
     active_glossary_text = str(active_glossary_file or "").strip()
     if (
-        active_glossary_text
+        active_glossary_file is not None
         and "quality_glossary_file" in manifest
         and active_glossary_text != str(manifest.get("quality_glossary_file") or "")
     ):
@@ -500,7 +500,7 @@ def apply_sync_preview(
     active_tl_dir: str | os.PathLike[str],
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
     active_quality_policy: dict[str, Any] | None = None,
-    active_glossary_file: str | os.PathLike[str] = "",
+    active_glossary_file: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     manifest_file = Path(manifest_path).resolve()
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
