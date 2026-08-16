@@ -36,7 +36,7 @@ def main(
     )
 
     guard = None
-    with guarded_gui_test_environment() as guard:
+    with guarded_gui_test_environment(process_events=shutdown_runtime) as guard:
         exit_code = run_discovered_suite(
             build_suite(),
             quiet=args.quiet,

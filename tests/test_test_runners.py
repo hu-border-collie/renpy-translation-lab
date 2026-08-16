@@ -99,7 +99,7 @@ class TestDiscoveryRunners(unittest.TestCase):
             mock.patch(
                 "gui_test_support.guarded_gui_test_environment",
                 return_value=manager,
-            ),
+            ) as guarded,
             mock.patch(
                 "gui_test_support.shutdown_gui_test_runtime",
                 return_value=True,
@@ -124,7 +124,7 @@ class TestDiscoveryRunners(unittest.TestCase):
             mock.patch(
                 "gui_test_support.guarded_gui_test_environment",
                 return_value=manager,
-            ),
+            ) as guarded,
             mock.patch(
                 "gui_test_support.shutdown_gui_test_runtime",
                 return_value=True,
@@ -146,6 +146,7 @@ class TestDiscoveryRunners(unittest.TestCase):
             )
 
         shutdown.assert_not_called()
+        guarded.assert_called_once_with(process_events=False)
 
     def test_gui_runner_fails_when_qt_pool_does_not_stop(self):
         guard = mock.Mock(rejected_dialogs=())
