@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
@@ -158,6 +159,10 @@ class LiteLLMCatalogCacheTests(unittest.TestCase):
                 mock.patch(
                     "gui_qt.litellm_catalog_cache.default_litellm_catalog_cache_path",
                     return_value=default_path,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_RUNTIME_DIR": ""},
                 ),
                 mock.patch(
                     "gui_qt.litellm_catalog_cache.tempfile.gettempdir",
