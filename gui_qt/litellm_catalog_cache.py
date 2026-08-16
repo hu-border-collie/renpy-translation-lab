@@ -13,9 +13,11 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Callable, Mapping
 
 from atomic_io import atomic_write_json
+from .user_copy import LITELLM_CACHE_COPY
 
 
 CACHE_SCHEMA_VERSION = 1
@@ -40,6 +42,57 @@ def default_litellm_catalog_cache_path() -> Path:
             or (Path.home() / ".local" / "state")
         )
     return root / "renpy-translation-lab" / "litellm_catalog_cache.json"
+
+
+def _can_create_under(directory: Path) -> bool:
+    """Return whether *directory* can actually be written right now.
+
+    Walks up to the nearest existing ancestor and attempts a tiny real write
+    probe.  ``os.access`` alone is not reliable under sandbox filter
+    drivers: it only simulates the ACL (which can still grant the current
+    user write rights) and may report writable even though an actual write
+    is blocked, leaving later atomic writes hanging.  A real ``os.open``
+    fails fast on read-only filesystems and sandbox-blocked directories
+    alike, and the probe file is removed immediately.
+    """
+    current = directory
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+    if not current.is_dir():
+        return False
+    probe = current / f".renpy-cache-probe-{os.getpid()}"
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o600)
+        os.close(fd)
+    except OSError:
+        return False
+    try:
+        os.remove(probe)
+    except OSError:
+        pass
+    return True
+
+
+def _fallback_litellm_cache_path() -> Path | None:
+    """Return a writable fallback for the LiteLLM GUI cache, if available."""
+    candidates: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        candidates.append(
+            Path(runtime_dir) / "renpy-translation-lab" / "litellm_catalog_cache.json"
+        )
+    candidates.append(
+        Path(tempfile.gettempdir())
+        / "renpy-translation-lab"
+        / "litellm_catalog_cache.json"
+    )
+    for candidate in candidates:
+        if _can_create_under(candidate.parent):
+            return candidate
+    return None
 
 
 def _clean_text(value: object, *, limit: int) -> str:
@@ -118,7 +171,24 @@ class LiteLLMCatalogCache:
         *,
         now: Callable[[], datetime] | None = None,
     ) -> None:
-        self.path = Path(path) if path is not None else default_litellm_catalog_cache_path()
+        self.fallback_reason = ""
+        if path is None:
+            default_path = default_litellm_catalog_cache_path()
+            if _can_create_under(default_path.parent):
+                self.path = default_path
+            else:
+                fallback = _fallback_litellm_cache_path()
+                if fallback is not None:
+                    self.path = fallback
+                    self.fallback_reason = (
+                        LITELLM_CACHE_COPY["fallback_reason"].format(
+                            directory=fallback.parent
+                        )
+                    )
+                else:
+                    self.path = default_path
+        else:
+            self.path = Path(path)
         self._now = now or (lambda: datetime.now(timezone.utc))
         self.load_error = ""
         self._selected_provider = ""

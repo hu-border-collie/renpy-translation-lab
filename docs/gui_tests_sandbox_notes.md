@@ -88,20 +88,30 @@ tempfile._mkstemp_inner
 - 规避：仅需当前 WSL 会话缓存时，将 `XDG_STATE_HOME` 指到可写目录，例如
   `XDG_STATE_HOME=/tmp/renpy-translation-lab-state`；实测同一写入路径约 0.79 毫秒成功。
   需要跨 WSL 重启持久化时，将 `XDG_STATE_HOME` 指到可写且持久的挂载点。
+- 代码已增加自动回退：默认缓存目录不可写时，LiteLLM 缓存会自动写到系统临时目录，
+  并在 GUI 日志/状态栏提示；因此不再需要手动设置 `XDG_STATE_HOME` 也能避免 `OSError`，
+  但临时目录在重启后不会保留。
+- 回退探测基于对最近可写祖先目录的**真实写入检查**（而非仅 ACL 模拟），因此同一修复
+  也覆盖 Windows Codex 沙箱的写入拦截场景（见 #360）。
 
 ## 规避与修复
 
 ### 在 Codex 会话内
 
-- 不跑 GUI 全量测试；改为只跑改动相关文件（如
+- 自 #369 起，GUI 运行时的 LiteLLM 缓存会在默认目录不可写时自动回退到系统临时目录，
+  沙箱内跑 GUI 全量测试不再卡在缓存写入上；如仍想缩小范围，可只跑改动相关文件（如
   `python -m unittest tests.test_gui_settings_schema tests.test_gui_sync_translation_report`）。
-- 确需全量时，在沙箱外运行（需要用户批准 escalation），例如直接在本机终端执行
+- 确需排除运行时环境因素时，可在沙箱外运行（需要用户批准 escalation），例如直接在本机终端执行
   `python -B tests/run_gui_tests.py -q`。
 
 ### 长期建议（可选）
 
-- GUI 测试对 `%LOCALAPPDATA%` 的写入属于正常运行时行为，测试套件本身不需要改；
-- 若希望沙箱内也能跑 GUI 测试，需要在 Codex 沙箱配置中把
+- 代码已实现自动回退（默认目录不可写时改用系统临时目录），沙箱与只读 home 场景都
+  不再依赖修改 Codex 沙箱配置；若仍希望缓存跨重启持久化，可在 Codex 沙箱配置中把
   `%LOCALAPPDATA%\renpy-translation-lab` 加入可写范围；
 - 注意：shell 命令超时**不会杀死残留的 Python 测试进程**，排查时先
   `Get-Process | Where-Object { $_.ProcessName -like '*python*' }` 确认无残留再重跑。
+- 测试隔离提醒：GUI 测试共享用户级 LiteLLM 缓存（默认目录不可写时位于系统临时目录），
+  若缓存中存在历史 provider/model 选择，`test_workspace_action_bar_uses_immediate_save_context`
+  可能偶发判定“有未保存的更改”而失败；清理缓存（如删除 `%TEMP%\renpy-translation-lab`）后
+  全量可稳定通过。该问题在正常 Windows 环境同样存在，属于测试共享状态的既有隔离缺陷。

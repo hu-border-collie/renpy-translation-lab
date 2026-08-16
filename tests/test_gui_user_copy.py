@@ -4,6 +4,7 @@ import doctor_recommendations as doctor_rec
 
 from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,
+    LITELLM_CACHE_COPY,
     check_status_label,
     doctor_mode_label,
     format_bootstrap_fact,
@@ -109,6 +110,19 @@ class GuiUserCopyTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(message, DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES[code])
 
+    def test_litellm_cache_copy_covers_fallback_and_failure_wording(self):
+        reason = LITELLM_CACHE_COPY["fallback_reason"].format(
+            directory="C:/Temp/renpy-translation-lab"
+        )
+        self.assertIn("回退到临时目录", reason)
+        self.assertIn("C:/Temp/renpy-translation-lab", reason)
+        self.assertIn("重启后可能不会保留", LITELLM_CACHE_COPY["save_status"])
+        self.assertIn("写入失败", LITELLM_CACHE_COPY["save_failed_status"])
+        failed_log = LITELLM_CACHE_COPY["save_failed_log"].format(
+            error="denied"
+        )
+        self.assertIn("denied", failed_log)
+        self.assertIn("缓存失败", failed_log)
 
 if __name__ == "__main__":
     unittest.main()

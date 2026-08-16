@@ -328,6 +328,18 @@ LITELLM_CONNECTION_TEST_COPY = {
 }
 
 
+# Shared copy for the user-level LiteLLM catalog cache fallback (#360/#361).
+# Keep GUI wording in one place per the repo convention (AGENTS.md).
+LITELLM_CACHE_COPY = {
+    "fallback_reason": (
+        "默认 LiteLLM 用户目录缓存不可写，已回退到临时目录：{directory}"
+    ),
+    "save_status": "LiteLLM 选择已保存到临时目录；重启后可能不会保留。",
+    "save_failed_status": "LiteLLM 选择已更新，但用户目录缓存写入失败。",
+    "save_failed_log": "保存 LiteLLM 用户目录缓存失败：{error}",
+}
+
+
 GAMES_REGISTRY_SOURCE_URL_COPY = {
     "field_label": "发布地址",
     "placeholder": "https://…（可留空）",

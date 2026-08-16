@@ -1,8 +1,10 @@
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from gui_qt.litellm_catalog_cache import (
     CatalogSnapshot,
@@ -145,5 +147,116 @@ class LiteLLMCatalogCacheTests(unittest.TestCase):
             "更新时间无效",
             catalog_snapshot_warning(invalid),
         )
+
+    def test_default_cache_falls_back_when_default_parent_is_not_writable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            blocker = Path(temp_dir) / "not-a-directory"
+            blocker.write_text("x", encoding="utf-8")
+            default_path = blocker / "litellm_catalog_cache.json"
+            fallback_dir = Path(temp_dir) / "fallback"
+
+            with (
+                mock.patch(
+                    "gui_qt.litellm_catalog_cache.default_litellm_catalog_cache_path",
+                    return_value=default_path,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_RUNTIME_DIR": ""},
+                ),
+                mock.patch(
+                    "gui_qt.litellm_catalog_cache.tempfile.gettempdir",
+                    return_value=str(fallback_dir),
+                ),
+            ):
+                cache = LiteLLMCatalogCache()
+
+            self.assertNotEqual(cache.path, default_path)
+            self.assertEqual(
+                cache.path,
+                fallback_dir / "renpy-translation-lab" / "litellm_catalog_cache.json",
+            )
+            self.assertIn("回退到临时目录", cache.fallback_reason)
+
+            cache.select_provider("openai")
+            self.assertTrue(cache.path.is_file())
+            self.assertEqual(
+                LiteLLMCatalogCache(cache.path).selected_provider,
+                "openai",
+            )
+
+    def test_default_cache_stays_put_when_default_parent_is_writable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            default_dir = Path(temp_dir) / "default"
+            default_dir.mkdir()
+            default_path = default_dir / "litellm_catalog_cache.json"
+
+            with mock.patch(
+                "gui_qt.litellm_catalog_cache.default_litellm_catalog_cache_path",
+                return_value=default_path,
+            ):
+                cache = LiteLLMCatalogCache()
+
+            self.assertEqual(cache.path, default_path)
+            self.assertEqual(cache.fallback_reason, "")
+
+            cache.select_provider("openai")
+            self.assertTrue(cache.path.is_file())
+            self.assertEqual(
+                LiteLLMCatalogCache(cache.path).selected_provider,
+                "openai",
+            )
+
+    def test_default_cache_falls_back_when_acl_looks_writable_but_write_is_blocked(
+        self,
+    ):
+        """Sandboxed Windows: os.access says writable but real writes fail."""
+        real_open = os.open
+        with tempfile.TemporaryDirectory() as temp_dir:
+            default_dir = Path(temp_dir) / "default"
+            default_dir.mkdir()
+            default_path = default_dir / "litellm_catalog_cache.json"
+            fallback_dir = Path(temp_dir) / "fallback"
+
+            def blocked_open(path, *args, **kwargs):
+                if Path(path).is_relative_to(default_dir):
+                    raise PermissionError(13, "Permission denied")
+                return real_open(path, *args, **kwargs)
+
+            with (
+                mock.patch(
+                    "gui_qt.litellm_catalog_cache.default_litellm_catalog_cache_path",
+                    return_value=default_path,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_RUNTIME_DIR": ""},
+                ),
+                mock.patch(
+                    "gui_qt.litellm_catalog_cache.tempfile.gettempdir",
+                    return_value=str(fallback_dir),
+                ),
+                mock.patch(
+                    "gui_qt.litellm_catalog_cache.os.open",
+                    side_effect=blocked_open,
+                ),
+            ):
+                cache = LiteLLMCatalogCache()
+
+            self.assertNotEqual(cache.path, default_path)
+            self.assertEqual(
+                cache.path,
+                fallback_dir / "renpy-translation-lab" / "litellm_catalog_cache.json",
+            )
+            self.assertIn("回退到临时目录", cache.fallback_reason)
+
+            cache.select_provider("openai")
+            self.assertTrue(cache.path.is_file())
+            self.assertEqual(
+                LiteLLMCatalogCache(cache.path).selected_provider,
+                "openai",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
