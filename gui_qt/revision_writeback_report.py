@@ -114,6 +114,26 @@ def summarize_revision_writeback_from_manifest(
     if not isinstance(manifest_path, str) or not manifest_path.strip():
         manifest_path = ""
 
+    proposal_import = manifest.get("proposal_import")
+    if isinstance(proposal_import, dict) and (
+        proposal_import.get("status") not in {"previewed", "no_op"}
+        or not proposal_import.get("writeback_eligible")
+    ):
+        proposal_status = str(proposal_import.get("status") or "blocked")
+        facts = [format_manifest_path_fact(manifest_path)] if manifest_path else []
+        report_path = proposal_import.get("report_path")
+        if isinstance(report_path, str) and report_path.strip():
+            facts.append(f"导入报告：{report_path.strip()}")
+        return WritebackSummary(
+            status="failed",
+            heading="润色提案禁止写回",
+            message=f"提案导入状态为 {proposal_status}；请修正并重新导入后再写回。",
+            facts=facts,
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
     apply_state = manifest.get("revision_apply_state")
     if apply_state in ("blocked", "no_op", "partial"):
         facts: list[str] = []

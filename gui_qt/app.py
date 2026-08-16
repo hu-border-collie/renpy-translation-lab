@@ -9621,6 +9621,44 @@ class MainWindow(QMainWindow):
         if action == "open_doctor":
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
             return
+        if action == "import_revision_proposals":
+            if bool(getattr(self, "_task_running", False)):
+                return
+            if not self._confirm_unsaved_config_before_workflow():
+                return
+            from .revision_workflow import RevisionProposalImportWorkflow
+            from .user_copy import REVISION_PROPOSAL_COPY
+
+            selected, _filter = QFileDialog.getOpenFileName(
+                self,
+                REVISION_PROPOSAL_COPY["dialog_title"],
+                "",
+                "JSON Lines (*.jsonl);;All files (*)",
+            )
+            if not selected:
+                return
+            corpus_manifest_path = ""
+            companion_manifest = Path(selected).with_name(
+                "revision_corpus_manifest.json"
+            )
+            if not companion_manifest.is_file():
+                corpus_manifest_path, _filter = QFileDialog.getOpenFileName(
+                    self,
+                    REVISION_PROPOSAL_COPY["corpus_dialog_title"],
+                    str(Path(selected).parent),
+                    "JSON (*.json);;All files (*)",
+                )
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+            )
+            self._clear_log_view()
+            self._show_workbench_log_drawer()
+            self._begin_translation_workflow(
+                RevisionProposalImportWorkflow(selected, corpus_manifest_path),
+                log_heading=REVISION_PROPOSAL_COPY["running"],
+                status_tab=1,
+            )
+            return
         if action != "select_final_review_findings":
             return
         if bool(getattr(self, "_task_running", False)):

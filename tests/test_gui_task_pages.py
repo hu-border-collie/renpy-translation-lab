@@ -30,7 +30,7 @@ from gui_qt.work_modes import (
     work_mode_submode_label,
     workbench_nav_spec,
 )
-from gui_qt.user_copy import PROJECT_ANALYSIS_COPY
+from gui_qt.user_copy import PROJECT_ANALYSIS_COPY, REVISION_PROPOSAL_COPY
 from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
@@ -737,6 +737,7 @@ class GuiTaskPageTests(unittest.TestCase):
         resumes: list[bool] = []
         stops: list[bool] = []
         writebacks: list[bool] = []
+        actions: list[str] = []
         selected: list[WorkMode] = []
         page.set_action_callbacks(
             WorkbenchPageActions(
@@ -745,6 +746,7 @@ class GuiTaskPageTests(unittest.TestCase):
                 stop=lambda: stops.append(True),
                 writeback=lambda: writebacks.append(True),
                 select_mode=selected.append,
+                action=actions.append,
             )
         )
         page.activate(WorkMode.REVISION, WorkbenchModeSession())
@@ -757,6 +759,12 @@ class GuiTaskPageTests(unittest.TestCase):
             result_message="订正预览已通过。",
         )
         page.start_btn.click()
+        self.assertFalse(page.import_proposals_btn.isHidden())
+        self.assertEqual(page.import_proposals_btn.text(), REVISION_PROPOSAL_COPY["action"])
+        self.assertEqual(
+            page.import_proposals_btn.toolTip(), REVISION_PROPOSAL_COPY["tooltip"]
+        )
+        page.import_proposals_btn.click()
         page.resume_btn.click()
         page.writeback_btn.click()
         page.set_task_running(True)
@@ -769,8 +777,46 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(starts, [True])
         self.assertEqual(resumes, [True])
         self.assertEqual(writebacks, [True])
+        self.assertEqual(actions, ["import_revision_proposals"])
         self.assertEqual(stops, [True])
         self.assertEqual(selected, [WorkMode.SYNC_REVISION])
+
+    def test_revision_proposal_action_starts_import_workflow(self) -> None:
+        proposal_path = "C:/review/proposals.jsonl"
+        corpus_manifest_path = "D:/exports/revision_corpus_manifest.json"
+        with (
+            mock.patch.object(
+                self.window,
+                "_confirm_unsaved_config_before_workflow",
+                return_value=True,
+            ),
+            mock.patch(
+                "gui_qt.app.QFileDialog.getOpenFileName",
+                side_effect=[
+                    (proposal_path, "JSON Lines (*.jsonl)"),
+                    (corpus_manifest_path, "JSON (*.json)"),
+                ],
+            ),
+            mock.patch.object(self.window, "_set_writeback_summary") as set_summary,
+            mock.patch.object(self.window, "_clear_log_view") as clear_log,
+            mock.patch.object(self.window, "_show_workbench_log_drawer") as show_log,
+            mock.patch.object(
+                self.window, "_begin_translation_workflow"
+            ) as begin_workflow,
+        ):
+            self.window._on_final_review_page_action("import_revision_proposals")
+
+        workflow = begin_workflow.call_args.args[0]
+        self.assertEqual(workflow.proposal_path, proposal_path)
+        self.assertEqual(workflow.corpus_manifest_path, corpus_manifest_path)
+        self.assertEqual(
+            begin_workflow.call_args.kwargs["log_heading"],
+            REVISION_PROPOSAL_COPY["running"],
+        )
+        self.assertEqual(begin_workflow.call_args.kwargs["status_tab"], 1)
+        set_summary.assert_called_once()
+        clear_log.assert_called_once_with()
+        show_log.assert_called_once_with()
 
     def test_revision_page_mode_selector_and_running_lock(self) -> None:
         self.window._set_work_mode(WorkMode.REVISION, refresh_manifest_writeback=False)
@@ -792,6 +838,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(page.mode_combo.currentData(), WorkMode.FINAL_REVIEW.value)
         self.assertEqual(page.start_btn.text(), "开始最终审校")
         self.assertFalse(page.review_findings_btn.isHidden())
+        self.assertTrue(page.import_proposals_btn.isHidden())
         self.assertEqual(page.writeback_btn.text(), "写回所选订正")
         self.assertIn("人工选择", self.window.work_mode_hint_label.text())
 

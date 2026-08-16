@@ -115,6 +115,38 @@ class TestDiscoveryRunners(unittest.TestCase):
 
         shutdown.assert_called_once_with()
 
+    def test_gui_script_path_checks_pool_without_widget_cleanup(self):
+        guard = mock.Mock(rejected_dialogs=())
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = guard
+        manager.__exit__.return_value = False
+        with (
+            mock.patch(
+                "gui_test_support.guarded_gui_test_environment",
+                return_value=manager,
+            ),
+            mock.patch(
+                "gui_test_support.shutdown_gui_test_runtime",
+                return_value=True,
+            ) as shutdown,
+            mock.patch.object(
+                run_gui_tests,
+                "build_suite",
+                return_value=unittest.TestSuite(),
+            ),
+            mock.patch.object(
+                run_gui_tests,
+                "run_discovered_suite",
+                return_value=0,
+            ),
+        ):
+            self.assertEqual(
+                run_gui_tests.main([], shutdown_runtime=False),
+                0,
+            )
+
+        shutdown.assert_called_once_with(cleanup_widgets=False)
+
     def test_gui_runner_fails_when_qt_pool_does_not_stop(self):
         guard = mock.Mock(rejected_dialogs=())
         manager = mock.MagicMock()

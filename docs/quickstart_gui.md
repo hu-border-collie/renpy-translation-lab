@@ -92,6 +92,14 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 只有最近一次 `check` 与当前任务结果匹配且 `writeback_gate.decision=allow` 时，GUI 才允许执行 `apply`。`allow` 只表示源快照、身份、占位符和标签等结构条件满足写回合同，**不代表译文内容已经达到交付质量**；`quality_gate` 会单独显示质量报警。
 
+如需导入人工或 Agent 润色建议，打开左侧「订正」，点击「导入润色提案」并选择
+schema v1 JSONL。GUI 会在本地校验 occurrence identity、语料/项目快照、当前译文、
+Ren'Py 标签变量和 adapter 写回计划，然后生成订正预览；导入步骤不会修改 `.rpy`。
+若配套 `revision_corpus_manifest.json` 不在 proposal 同目录，可在随后出现的可选文件
+对话框中指定；若没有 manifest，可取消并由逐行项目身份与快照字段完成校验。
+只有状态为 `previewed` 的提案包才会开放「写回订正」。完整字段合同见
+[Batch 工作流与安全检查](batch_workflows.md#导入人工--agent-润色提案)。
+
 ## 6. 写回后
 
 - 检查目标语言目录中的改动，并在 Ren'Py 中运行 lint 或实际启动游戏验证。

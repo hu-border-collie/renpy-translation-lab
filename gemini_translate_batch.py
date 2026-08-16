@@ -58,6 +58,7 @@ import keyword_glossary_merge
 import model_usage_ledger
 import prompt_context
 import revision_corpus
+import revision_proposals
 import translation_ab_experiment
 import story_memory
 import translation_core
@@ -114,6 +115,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply',
         'apply-revisions',
         'export-revision-corpus',
+        'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
     }
@@ -128,6 +130,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'preview-revisions',
         'apply-revisions',
         'export-revision-corpus',
+        'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'split',
@@ -4041,6 +4044,283 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         for warning_text in build_warnings:
             print(f'- {warning_text}')
     return manifest_path
+
+
+def _proposal_import_report_markdown(report):
+    lines = [
+        '# Revision Proposal Import',
+        '',
+        f"- Status: {report.get('status') or 'unknown'}",
+        f"- Input rows: {report.get('input_count', 0)}",
+        f"- Requested selected rows: {report.get('requested_selected_count', 0)}",
+        f"- Validated selected rows: {report.get('selected_count', 0)}",
+        f"- Candidate rows: {report.get('candidate_count', 0)}",
+        '',
+    ]
+    diagnostics = list(report.get('diagnostics') or [])
+    if diagnostics:
+        lines.extend(['## Diagnostics', ''])
+        for item in diagnostics:
+            lines.append(
+                f"- `{item.get('code') or 'UNKNOWN'}` row {item.get('row') or '-'}: "
+                f"{item.get('message') or ''}"
+            )
+    return '\n'.join(lines) + '\n'
+
+
+def _write_proposal_import_report(package_dir, report):
+    json_path = os.path.join(package_dir, 'proposal_import_report.json')
+    markdown_path = os.path.join(package_dir, 'proposal_import_report.md')
+    atomic_write_json(json_path, report, ensure_ascii=False, indent=2)
+    atomic_write_text(markdown_path, _proposal_import_report_markdown(report))
+    return {'import_report': json_path, 'import_report_markdown': markdown_path}
+
+
+def _proposal_status_from_preview_summary(summary):
+    """Map the latest revision preview summary to proposal eligibility state."""
+    failures = int((summary or {}).get('failure_items') or 0)
+    candidates = int((summary or {}).get('valid_items') or 0)
+    unchanged = int((summary or {}).get('unchanged_items') or 0)
+    if failures and candidates:
+        return 'partial'
+    if failures:
+        return 'blocked'
+    if candidates:
+        return 'previewed'
+    if unchanged:
+        return 'no_op'
+    return 'blocked'
+
+
+def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
+    """Import structured proposals into the existing revision preview gate.
+
+    The command is local-only and never writes ``.rpy``.  Invalid structural or
+    stale input produces an auditable report but no revision manifest.  Valid
+    candidates are encoded as ordinary revision results and immediately
+    previewed by ``preview_revisions``.
+    """
+    proposal_path = os.path.abspath(str(proposal_path or '').strip())
+    if not proposal_path or not os.path.isfile(proposal_path):
+        raise cli_contract.MachineContractError(
+            f'Proposal JSONL not found: {proposal_path or "(missing)"}',
+            code_name='PROPOSAL_FILE_NOT_FOUND',
+            suggested_action='pass_existing_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    try:
+        rows = revision_proposals.load_jsonl(proposal_path)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Invalid proposal JSONL: {exc}',
+            code_name='PROPOSAL_JSONL_INVALID',
+            suggested_action='fix_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        ) from exc
+    if not rows:
+        raise cli_contract.MachineContractError(
+            'Proposal JSONL contains no proposal rows.',
+            code_name='NO_PROPOSAL_ROWS',
+            suggested_action='provide_non_empty_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    resolved_corpus_manifest = revision_proposals.find_corpus_manifest(
+        proposal_path,
+        corpus_manifest_path,
+    )
+    corpus_manifest = None
+    if resolved_corpus_manifest:
+        try:
+            corpus_manifest = revision_proposals.load_corpus_manifest(
+                resolved_corpus_manifest
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise cli_contract.MachineContractError(
+                f'Invalid revision corpus manifest: {exc}',
+                code_name='CORPUS_MANIFEST_INVALID',
+                suggested_action='pass_matching_revision_corpus_manifest',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            ) from exc
+
+    file_paths = list(collect_files_to_process())
+    file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
+    digests_before = revision_corpus.collect_file_digests(file_path_map)
+    live_jobs = collect_revision_file_jobs(file_paths=file_paths, include_empty_files=True)
+    digests_after = revision_corpus.collect_file_digests(file_path_map)
+    live_snapshot_digest = revision_corpus.aggregate_digest(digests_before)
+    live_items = {
+        str(item.get('id') or ''): item
+        for job in live_jobs
+        for item in (job.get('items') or [])
+    }
+    validation = revision_proposals.validate(
+        rows,
+        live_items,
+        live_snapshot_digest=live_snapshot_digest,
+        live_project_identity={'tl_dir': legacy.TL_DIR},
+        corpus_manifest=corpus_manifest,
+    )
+    diagnostics = [dict(item) for item in validation.diagnostics]
+    if digests_before != digests_after:
+        diagnostics.append({
+            'code': 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
+            'message': 'live project files changed while proposals were being imported',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_dir = create_batch_package_dir(
+        f'{stamp}_{guess_project_slug()}_revision_proposals'
+    )
+    status = validation.status
+    if revision_proposals.diagnostics_are_stale(diagnostics):
+        status = 'stale'
+    elif diagnostics:
+        status = 'blocked'
+    report = {
+        'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
+        'kind': 'revision_proposal_import',
+        'status': status,
+        'proposal_path': proposal_path,
+        'corpus_manifest_path': resolved_corpus_manifest,
+        'live_snapshot_digest': live_snapshot_digest,
+        'input_count': validation.input_count,
+        'requested_selected_count': validation.requested_selected_count,
+        'selected_count': validation.selected_count,
+        'candidate_count': len(validation.proposals),
+        'diagnostics': diagnostics,
+        'suggested_action': (
+            're_export_corpus_and_regenerate_proposals'
+            if status == 'stale'
+            else 'fix_proposal_diagnostics'
+            if status == 'blocked'
+            else 'no_writeback_needed'
+            if status == 'no_op'
+            else 'inspect_revision_preview'
+        ),
+    }
+    artifacts = _write_proposal_import_report(package_dir, report)
+    if diagnostics or not validation.proposals:
+        print(f'Revision proposal import status: {status}')
+        print(f'Import report: {artifacts["import_report"]}')
+        return {**report, 'paths': {'output_dir': package_dir, **artifacts}}
+
+    selected_by_identity = {
+        str(row['identity_v2']): row for row in validation.proposals
+    }
+    filtered_jobs = []
+    for job in live_jobs:
+        items = [
+            item for item in (job.get('items') or [])
+            if str(item.get('id') or '') in selected_by_identity
+        ]
+        if items:
+            filtered_jobs.append({**job, 'items': items, 'task_count': len(items)})
+    chunks = build_revision_chunks(filtered_jobs, chunk_size=REVISION_CHUNK_SIZE)
+    requests_path = os.path.join(package_dir, 'requests.jsonl')
+    results_path = os.path.join(package_dir, 'results.jsonl')
+    atomic_write_text(requests_path, '')
+    result_rows = []
+    for chunk in chunks:
+        results = []
+        for item in chunk['items']:
+            proposal = selected_by_identity[str(item.get('id') or '')]
+            proposed = str(proposal.get('proposed_translation') or '').strip()
+            results.append({
+                'id': item['id'],
+                'should_update': compact_text(proposed) != compact_text(item.get('current_translation') or ''),
+                'revised_translation': proposed,
+                'reason': str(proposal.get('reason') or '').strip() or 'Imported revision proposal',
+            })
+        result_rows.append({
+            'key': chunk['key'],
+            'response': {'candidates': [{
+                'content': {'parts': [{'text': json.dumps(results, ensure_ascii=False)}]},
+                'finishReason': 'STOP',
+            }]},
+        })
+    atomic_write_jsonl(results_path, result_rows, ensure_ascii=False)
+    manifest = {
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
+        'mode': MANIFEST_MODE_REVISION,
+        'execution': 'proposal_import',
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': f'{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{stamp}',
+        'batch_model': '',
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        'input_jsonl_path': requests_path,
+        'result_jsonl_path': results_path,
+        'job_name': '',
+        'job_state': 'LOCAL_CANDIDATES',
+        'submit_disabled': True,
+        'settings': {'revision_chunk_size': REVISION_CHUNK_SIZE},
+        'revision_settings': {
+            'chunk_size': REVISION_CHUNK_SIZE,
+            'candidate_source': 'revision_proposals',
+        },
+        'summary': {
+            'file_count': len(filtered_jobs),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk['items']) for chunk in chunks),
+            'proposal_count': len(validation.proposals),
+        },
+        'files': {
+            job['file_rel_path']: {
+                'path': job['file_path'],
+                'task_count': job['task_count'],
+            }
+            for job in filtered_jobs
+        },
+        'chunks': chunks,
+        'proposal_import': {
+            'schema_version': revision_proposals.PROPOSAL_SCHEMA_VERSION,
+            'status': 'imported',
+            'history': ['imported'],
+            'writeback_eligible': False,
+            'proposal_path': proposal_path,
+            'proposal_sha256': _sha256_file(proposal_path),
+            'corpus_manifest_path': resolved_corpus_manifest,
+            'corpus_snapshot_digest': live_snapshot_digest,
+            'report_path': artifacts['import_report'],
+        },
+    }
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
+    previewed = preview_revisions(manifest_path, update_latest=False)
+    preview_summary = dict((previewed.get('last_revision_preview') or {}).get('summary') or {})
+    final_status = _proposal_status_from_preview_summary(preview_summary)
+    report.update({
+        'status': final_status,
+        'preview_summary': preview_summary,
+        'suggested_action': (
+            'run_apply_revisions' if final_status == 'previewed'
+            else 'no_writeback_needed' if final_status == 'no_op'
+            else 'fix_preview_diagnostics_and_reimport'
+        ),
+    })
+    _write_proposal_import_report(package_dir, report)
+    save_manifest(
+        previewed,
+        update_latest=final_status in {'previewed', 'no_op'},
+    )
+    print(f'Revision proposal import status: {final_status}')
+    print(f'Manifest: {manifest_path}')
+    return {
+        **report,
+        'manifest': previewed,
+        'paths': {
+            'output_dir': package_dir,
+            'manifest': manifest_path,
+            'revision_preview_jsonl': previewed['last_revision_preview']['jsonl_path'],
+            'revision_preview_markdown': previewed['last_revision_preview']['markdown_path'],
+            **artifacts,
+        },
+    }
 
 
 def _flatten_revision_items(file_jobs):
@@ -8288,6 +8568,11 @@ def _revision_manifest_identity(manifest):
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Preserve the v1 fingerprint for pre-proposal revision/final-review
+    # packages.  Proposal manifests bind their immutable import provenance and
+    # eligibility state without adding a null field to every legacy payload.
+    if isinstance(manifest.get('proposal_import'), dict):
+        payload['proposal_import'] = manifest['proposal_import']
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
     ).hexdigest()
@@ -8331,6 +8616,16 @@ def _require_valid_revision_preview(manifest):
     ``--force`` deliberately does not bypass preview staleness, project identity
     or source snapshot checks: it only bypasses the already-applied guard.
     """
+    proposal_import = manifest.get('proposal_import')
+    if isinstance(proposal_import, dict) and (
+        not proposal_import.get('writeback_eligible')
+        or proposal_import.get('status') not in {'previewed', 'no_op'}
+    ):
+        _mark_revision_apply_blocked(
+            manifest,
+            'proposal_import_not_eligible',
+            'proposal import is blocked, partial, stale, or not previewed; re-import valid proposals.',
+        )
     preview = manifest.get('last_revision_preview')
     if (
         not isinstance(preview, dict)
@@ -8436,7 +8731,14 @@ def write_revision_markdown(path, entries, summary):
         handle.write('\n'.join(lines) + '\n')
 
 
-def preview_revisions(target=None, output_jsonl='', output_markdown=''):
+def preview_revisions(
+    target=None,
+    output_jsonl='',
+    output_markdown='',
+    *,
+    update_latest=None,
+):
+    """Build a revision preview and optionally control the latest pointer."""
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
     _replacements, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
@@ -8467,6 +8769,23 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'source_snapshots': _revision_source_snapshots(manifest),
         'summary': summary,
     }
+    proposal_state = manifest.get('proposal_import')
+    if isinstance(proposal_state, dict):
+        proposal_state = dict(proposal_state)
+        proposal_status = _proposal_status_from_preview_summary(summary)
+        history = list(proposal_state.get('history') or [])
+        if not history or history[-1] != proposal_status:
+            history.append(proposal_status)
+        proposal_state['status'] = proposal_status
+        proposal_state['history'] = history
+        proposal_state['writeback_eligible'] = proposal_status in {
+            'previewed',
+            'no_op',
+        }
+        manifest['proposal_import'] = proposal_state
+        manifest['last_revision_preview']['manifest_identity'] = (
+            _revision_manifest_identity(manifest)
+        )
     # A fresh preview invalidates any prior blocked/no_op/partial terminal state:
     # the user may have fixed the blocker and expects the writeback gate to reopen.
     # A prior real writeback is preserved in revision_apply_history.
@@ -8489,7 +8808,12 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
     manifest.pop('revision_applied_at', None)
     manifest.pop('revision_apply_summary', None)
     manifest.pop('last_revision_apply_summary', None)
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    should_update_latest = (
+        manifest.get('execution') != 'sync'
+        if update_latest is None
+        else bool(update_latest)
+    )
+    save_manifest(manifest, update_latest=should_update_latest)
     if manifest.get('final_review_source'):
         import final_review as fr
         import final_review_revision
@@ -13354,6 +13678,30 @@ def build_arg_parser():
     )
     add_machine_output_argument(export_revision_corpus_parser)
 
+    import_revision_proposals_parser = subparsers.add_parser(
+        'import-revision-proposals',
+        help=(
+            'Validate structured human/Agent proposal JSONL against the live project, '
+            'build a local revision package, and run preview-revisions. Never writes .rpy.'
+        ),
+    )
+    import_revision_proposals_parser.add_argument(
+        'proposal',
+        help=(
+            'Proposal JSONL path (schema_version=1, identity_v2, project identity, '
+            'snapshots, provenance).'
+        ),
+    )
+    import_revision_proposals_parser.add_argument(
+        '--corpus-manifest',
+        default='',
+        help=(
+            'Companion revision_corpus_manifest.json. Defaults to the proposal file directory '
+            'when present.'
+        ),
+    )
+    add_machine_output_argument(import_revision_proposals_parser)
+
     export_project_snapshot_parser = subparsers.add_parser(
         'export-project-snapshot',
         help=(
@@ -14559,6 +14907,17 @@ def dispatch_command(parser, args):
             getattr(args, 'output_dir', '') or None,
         )
 
+    if command == 'import-revision-proposals':
+        # Local candidate conversion and preview only: no provider/API setup,
+        # prepare command, or game-file write is allowed here.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        return import_revision_proposals(
+            args.proposal,
+            corpus_manifest_path=args.corpus_manifest,
+        )
+
     if command in {'usage-import', 'usage-report'}:
         as_json = bool(getattr(args, 'json', False))
 
@@ -14999,6 +15358,32 @@ def build_machine_success_envelope(command, value, args):
                 'corpus_markdown': paths.get('markdown') or '',
             },
         )
+    elif command == 'import-revision-proposals':
+        imported = dict(value or {})
+        paths = dict(imported.get('paths') or {})
+        result = {
+            'input_count': int(imported.get('input_count') or 0),
+            'requested_selected_count': int(
+                imported.get('requested_selected_count') or 0
+            ),
+            'selected_count': int(imported.get('selected_count') or 0),
+            'candidate_count': int(imported.get('candidate_count') or 0),
+            'diagnostics': list(imported.get('diagnostics') or []),
+            'preview_summary': dict(imported.get('preview_summary') or {}),
+            'suggested_action': imported.get('suggested_action') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(imported.get('status') or 'blocked'),
+            result=result,
+            artifacts={
+                'manifest': paths.get('manifest') or '',
+                'import_report': paths.get('import_report') or '',
+                'import_report_markdown': paths.get('import_report_markdown') or '',
+                'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',
+                'revision_preview_markdown': paths.get('revision_preview_markdown') or '',
+            },
+        )
 
     return cli_contract.success_envelope(
         command,
@@ -15296,6 +15681,8 @@ def _collect_output_file_protected_paths(args):
         'summary_jsonl',
         'summary_markdown',
         'variants_file',
+        'proposal',
+        'corpus_manifest',
     ):
         value = getattr(args, attr, None)
         if not isinstance(value, str) or not value.strip():

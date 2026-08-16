@@ -248,7 +248,7 @@ class GuiTestRuntimeShutdownTests(unittest.TestCase):
         widget.deleteLater.assert_called_once_with()
         send_posted_events.assert_called_once()
         app.processEvents.assert_called_once_with()
-        app.shutdown.assert_called_once_with()
+        app.shutdown.assert_not_called()
 
     @mock.patch("PySide6.QtCore.QCoreApplication.sendPostedEvents")
     @mock.patch("PySide6.QtCore.QThreadPool.globalInstance")

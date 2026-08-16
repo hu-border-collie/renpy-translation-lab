@@ -2,6 +2,7 @@ import unittest
 
 from gui_qt.revision_workflow import (
     RevisionBatchWorkflow,
+    RevisionProposalImportWorkflow,
     extract_created_revision_package_path,
 )
 
@@ -145,6 +146,44 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "failed")
         self.assertFalse(update.should_continue)
         self.assertIsNone(workflow.current_step())
+
+    def test_proposal_import_runs_one_local_preview_step(self):
+        workflow = RevisionProposalImportWorkflow(r"C:\review\proposals.jsonl")
+        self.assertEqual(
+            workflow.current_step().args,
+            ["import-revision-proposals", r"C:\review\proposals.jsonl"],
+        )
+        update = workflow.complete_current_step(
+            0,
+            "Revision proposal import status: previewed\n"
+            "Manifest: C:\\package\\manifest.json\n",
+        )
+        self.assertEqual(update.status, "done")
+        self.assertIn("预览已生成", update.heading)
+        self.assertIsNone(workflow.current_step())
+
+    def test_proposal_import_passes_explicit_corpus_manifest(self):
+        workflow = RevisionProposalImportWorkflow(
+            r"C:\review\proposals.jsonl",
+            r"D:\exports\revision_corpus_manifest.json",
+        )
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "import-revision-proposals",
+                r"C:\review\proposals.jsonl",
+                "--corpus-manifest",
+                r"D:\exports\revision_corpus_manifest.json",
+            ],
+        )
+
+    def test_stale_proposal_import_is_not_presented_as_writable(self):
+        workflow = RevisionProposalImportWorkflow("proposal.jsonl")
+        update = workflow.complete_current_step(
+            0, "Revision proposal import status: stale\n"
+        )
+        self.assertEqual(update.status, "failed")
+        self.assertIn("未通过安全校验", update.heading)
 
 
 if __name__ == "__main__":

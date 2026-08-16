@@ -148,6 +148,12 @@ class CliContractTests(unittest.TestCase):
             "reconcile-project-snapshots",
             status="attention",
         )
+        proposal_partial = cli_contract.success_envelope(
+            "import-revision-proposals", status="partial"
+        )
+        proposal_stale = cli_contract.success_envelope(
+            "import-revision-proposals", status="stale"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -165,6 +171,14 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(
             cli_contract.strict_exit_code(reconciliation_attention),
             cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(proposal_partial),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(proposal_stale),
+            cli_contract.EXIT_BLOCKED,
         )
         unknown = cli_contract.success_envelope("check", status="unknown")
         unclassified_error = cli_contract.error_envelope(

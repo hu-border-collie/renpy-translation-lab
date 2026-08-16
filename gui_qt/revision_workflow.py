@@ -254,3 +254,57 @@ class RevisionBatchWorkflow:
         if extra_facts:
             facts.extend(extra_facts)
         return facts
+
+
+class RevisionProposalImportWorkflow:
+    """One-step local proposal import that stops at the revision preview gate."""
+
+    def __init__(self, proposal_path: str, corpus_manifest_path: str = ""):
+        self.proposal_path = proposal_path
+        self.corpus_manifest_path = corpus_manifest_path
+        self.manifest_path = ""
+        self._pending = True
+
+    def current_step(self) -> WorkflowStep | None:
+        if not self._pending:
+            return None
+        args = ["import-revision-proposals", self.proposal_path]
+        if self.corpus_manifest_path:
+            args.extend(["--corpus-manifest", self.corpus_manifest_path])
+        return WorkflowStep(
+            key="import-revision-proposals",
+            args=args,
+            heading="正在导入润色提案",
+            message="正在校验身份、快照和格式，并生成安全订正预览。",
+        )
+
+    def complete_current_step(self, exit_code: int, output: str) -> WorkflowUpdate:
+        self._pending = False
+        self.manifest_path = _extract_line_value(output, "Manifest:")
+        status = _extract_line_value(output, "Revision proposal import status:")
+        facts = self._facts()
+        if exit_code != 0 or status in {"blocked", "stale", "partial"}:
+            return WorkflowUpdate(
+                status="failed",
+                heading="润色提案未通过安全校验",
+                message="没有修改任何 .rpy；请根据导入报告修正提案后重试。",
+                facts=facts,
+            )
+        if status == "no_op":
+            return WorkflowUpdate(
+                status="done",
+                heading="润色提案无需写回",
+                message="所选提案没有产生译文变化。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="润色提案预览已生成",
+            message="请检查订正预览；确认后可使用“写回订正”。",
+            facts=facts,
+        )
+
+    def _facts(self) -> list[str]:
+        if self.manifest_path:
+            return [format_manifest_path_fact(self.manifest_path)]
+        return []
