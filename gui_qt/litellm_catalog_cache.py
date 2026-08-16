@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Callable, Mapping
 
 from atomic_io import atomic_write_json
@@ -40,6 +41,46 @@ def default_litellm_catalog_cache_path() -> Path:
             or (Path.home() / ".local" / "state")
         )
     return root / "renpy-translation-lab" / "litellm_catalog_cache.json"
+
+
+def _can_create_under(directory: Path) -> bool:
+    """Return whether *directory* can be created/written on this system.
+
+    This checks the nearest existing ancestor instead of trying an actual
+    write, so it also avoids hanging on sandboxes that block writes outside
+    the allowed workspace.
+    """
+    current = directory
+    while not current.exists():
+        parent = current.parent
+        if parent == current:
+            return False
+        current = parent
+    if not current.is_dir():
+        return False
+    try:
+        return os.access(current, os.W_OK | os.X_OK)
+    except OSError:
+        return False
+
+
+def _fallback_litellm_cache_path() -> Path | None:
+    """Return a writable fallback for the LiteLLM GUI cache, if available."""
+    candidates: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir:
+        candidates.append(
+            Path(runtime_dir) / "renpy-translation-lab" / "litellm_catalog_cache.json"
+        )
+    candidates.append(
+        Path(tempfile.gettempdir())
+        / "renpy-translation-lab"
+        / "litellm_catalog_cache.json"
+    )
+    for candidate in candidates:
+        if _can_create_under(candidate.parent):
+            return candidate
+    return None
 
 
 def _clean_text(value: object, *, limit: int) -> str:
@@ -118,7 +159,23 @@ class LiteLLMCatalogCache:
         *,
         now: Callable[[], datetime] | None = None,
     ) -> None:
-        self.path = Path(path) if path is not None else default_litellm_catalog_cache_path()
+        self.fallback_reason = ""
+        if path is None:
+            default_path = default_litellm_catalog_cache_path()
+            if _can_create_under(default_path.parent):
+                self.path = default_path
+            else:
+                fallback = _fallback_litellm_cache_path()
+                if fallback is not None:
+                    self.path = fallback
+                    self.fallback_reason = (
+                        "默认 LiteLLM 用户目录缓存不可写，已回退到临时目录："
+                        f"{fallback.parent}"
+                    )
+                else:
+                    self.path = default_path
+        else:
+            self.path = Path(path)
         self._now = now or (lambda: datetime.now(timezone.utc))
         self.load_error = ""
         self._selected_provider = ""

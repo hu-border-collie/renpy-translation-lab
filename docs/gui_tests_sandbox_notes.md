@@ -88,6 +88,9 @@ tempfile._mkstemp_inner
 - 规避：仅需当前 WSL 会话缓存时，将 `XDG_STATE_HOME` 指到可写目录，例如
   `XDG_STATE_HOME=/tmp/renpy-translation-lab-state`；实测同一写入路径约 0.79 毫秒成功。
   需要跨 WSL 重启持久化时，将 `XDG_STATE_HOME` 指到可写且持久的挂载点。
+- 代码已增加自动回退：默认缓存目录不可写时，LiteLLM 缓存会自动写到系统临时目录，
+  并在 GUI 日志/状态栏提示；因此不再需要手动设置 `XDG_STATE_HOME` 也能避免 `OSError`，
+  但临时目录在重启后不会保留。
 
 ## 规避与修复
 

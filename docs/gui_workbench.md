@@ -250,7 +250,7 @@ GUI 不引入新的主配置系统。
 
 - Gemini API Key 仍保存到本机 `api_keys.json` 的 `api_keys` 列表。本项目没有自建中转服务，但 Gemini 请求会把认证信息、待译文本、提示词和启用上下文发送给 Google；本地保存密钥不等于文本留在本机。完整数据边界见 [同步翻译工作流](sync_workflow.md#gemini-与-litellm-数据边界)。
 - LiteLLM 的供应商密钥按 Provider 保存到操作系统凭据管理器，不写入 `api_keys.json`、用户级目录缓存或 `translator_config.json`，也不会回显；已有的供应商环境变量仍可使用。若两者同时存在，系统凭据管理器中的密钥优先。切换或取消 Provider 会丢弃尚未保存的明文输入，但不会删除已保存凭据。
-- LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。自定义 OpenAI 兼容 Provider 的模型列表直接请求其 `models_url`，不依赖 LiteLLM 在线子集目录（该目录不含用户定义 id）；未保存密钥时不会发起请求，而是提示先保存 API Key。
+- LiteLLM 的 Provider / 模型目录、目录来源、抓取时间和每个 Provider 的上次选择保存在用户级 GUI 缓存，不污染项目配置。只有用户点击加载按钮才会联网；失败时保留旧缓存，没有缓存则保持空白，不回填内置默认模型。若默认用户目录缓存不可写（例如只读 home 或沙箱环境），会自动回退到系统临时目录，并在日志/状态栏提示；此时选择不会跨重启保留。LiteLLM 在线价格 / 上下文目录可能只是供应商目录的子集；无法枚举的 Provider、Azure 部署或自建 OpenAI-compatible 模型仍可手动填写，并按 LiteLLM 文档配置对应的 API Base、版本和额外认证环境变量。自定义 OpenAI 兼容 Provider 的模型列表直接请求其 `models_url`，不依赖 LiteLLM 在线子集目录（该目录不含用户定义 id）；未保存密钥时不会发起请求，而是提示先保存 API Key。
 - **自定义 Provider 删除边界**：删除自定义 Provider 只移除 `translator_config.json` 中的注册信息，不会删除系统凭据管理器中的密钥或用户级目录缓存；如需清理密钥请到「管理密钥…」中删除。若删除的是当前正在使用的 Provider，GUI 会提示并清除当前模型选择，避免留下无法运行的 `<id>/<模型>` 配置。
 - **自定义 Provider 删除边界**：删除自定义 Provider 只移除 `translator_config.json` 中的注册信息，不会删除系统凭据管理器中的密钥或用户级目录缓存；如需清理密钥请到「管理密钥…」中删除。
 - 项目路径、准备流程、过滤器、模型、embedding model、批量 thinking level、GUI 主题、任务专用参数和上下文参数等写入 `translator_config.json`。

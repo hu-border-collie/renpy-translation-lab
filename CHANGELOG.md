@@ -15,6 +15,7 @@
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
 - `check` 新增确定性机械质量检查与 `quality_findings.jsonl`：标签插字、未闭合括号、中英文粘连、可疑英文残留、CJK/拉丁间距、半角标点、glossary 未满足、说话人标签与短感叹词漏译、配置错乱词黑名单等。
 - 同步初译增加局部前后文（`sync.context_before` / `sync.context_after`，默认 30/10，限定同文件与 translate block 边界）、`sync.macro_setting_file` 风格设定注入，以及不依赖 RAG 开关、不受 `top_k_terms` 截断的术语命中（`normalize_map` / 保留词 / 不可翻译词，全部实际命中进入提示词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
+- LiteLLM 用户目录缓存不可写时自动回退到系统临时目录，并在 GUI 日志/状态栏提示缓存不会跨重启保留。
 
 ### 变更
 

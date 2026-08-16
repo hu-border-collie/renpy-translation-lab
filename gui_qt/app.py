@@ -7527,6 +7527,14 @@ class MainWindow(QMainWindow):
                 "LiteLLM 选择已更新，但用户目录缓存写入失败。",
                 6000,
             )
+        else:
+            fallback_reason = getattr(self._litellm_cache, "fallback_reason", "")
+            if fallback_reason:
+                self._append_log(fallback_reason)
+                self.statusBar().showMessage(
+                    "LiteLLM 选择已保存到临时目录；重启后可能不会保留。",
+                    6000,
+                )
 
     def _schedule_litellm_model_selection_save(self, provider: str, model: str) -> None:
         provider = str(provider or "").strip().lower()
