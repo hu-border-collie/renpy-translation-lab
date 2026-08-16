@@ -317,6 +317,22 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         allow_empty=True,
     ),
     SettingField(
+        "batch_quality_gate",
+        ("batch", "quality_gate"),
+        "质量检查策略（JSON）",
+        "检查阶段的确定性质量规则。可把规则 disposition 设为 warning / blocker / off，"
+        "并配置 allowed_latin_tokens 白名单与 garbled_phrases 错乱词黑名单；"
+        "修改后需重新运行 check。",
+        "json",
+        {
+            "enabled": True,
+            "rules": {},
+            "allowed_latin_tokens": [],
+            "garbled_phrases": [],
+        },
+        "翻译吞吐",
+    ),
+    SettingField(
         "context_storage_game_dir_name",
         ("context_storage", "game_dir_name"),
         "游戏目录上下文文件夹",

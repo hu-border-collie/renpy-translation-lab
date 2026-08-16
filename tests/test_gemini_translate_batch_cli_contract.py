@@ -33,6 +33,8 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "reuse.json", "decisions.jsonl"]
         if command == "export-reuse-results":
             return [command, "reuse.json", "manifest.json"]
+        if command == "import-revision-proposals":
+            return [command, "proposals.jsonl"]
         return [command]
 
     def test_core_commands_accept_json_output_after_subcommand(self):
@@ -717,6 +719,35 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertEqual(args.output, "json")
 
+    def test_proposal_import_machine_envelope_exposes_status_actions_and_artifacts(self):
+        args = SimpleNamespace(command="import-revision-proposals")
+        envelope = batch.build_machine_success_envelope(
+            "import-revision-proposals",
+            {
+                "status": "stale",
+                "input_count": 2,
+                "requested_selected_count": 1,
+                "selected_count": 0,
+                "candidate_count": 0,
+                "diagnostics": [{"code": "CURRENT_TRANSLATION_STALE"}],
+                "suggested_action": "re_export_corpus_and_regenerate_proposals",
+                "paths": {"import_report": "C:/jobs/import/report.json"},
+            },
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "stale")
+        self.assertEqual(envelope["result"]["requested_selected_count"], 1)
+        self.assertEqual(envelope["result"]["selected_count"], 0)
+        self.assertEqual(
+            envelope["result"]["suggested_action"],
+            "re_export_corpus_and_regenerate_proposals",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["import_report"],
+            "C:/jobs/import/report.json",
+        )
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
@@ -813,6 +844,7 @@ class BatchCliContractTests(unittest.TestCase):
                 "failure_items": 1,
             },
             "last_check_report_path": "C:/jobs/demo/check_failures.jsonl",
+            "last_quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
         }
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -841,6 +873,10 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(
             payload["artifacts"]["check_report"],
             "C:/jobs/demo/check_failures.jsonl",
+        )
+        self.assertEqual(
+            payload["artifacts"]["quality_findings"],
+            "C:/jobs/demo/quality_findings.jsonl",
         )
         self.assertIn("check text", stderr.getvalue())
 
@@ -890,6 +926,58 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(payload["error"]["code"], "INTERNAL_ERROR")
         self.assertNotIn("semantic_exit_code", payload["error"]["details"])
+
+    def test_strict_check_ready_with_warnings_reports_needs_action(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {
+                "safety_level": "safe",
+                "check_status": "ready_with_warnings",
+                "writeback_gate": {"decision": "allow", "can_apply": True},
+                "quality_gate": {"decision": "needs_review", "warning_count": 2},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "check",
+                    "manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_NEEDS_ACTION)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "ready_with_warnings")
+
+    def test_strict_check_ready_exit_code_is_ok(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_check_summary": {
+                "safety_level": "safe",
+                "check_status": "ready",
+                "writeback_gate": {"decision": "allow", "can_apply": True},
+                "quality_gate": {"decision": "pass", "warning_count": 0},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                ["check", "manifest.json", "--output", "json", "--strict-exit-codes"]
+            )
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_OK)
+        self.assertEqual(json.loads(stdout.getvalue())["status"], "ready")
 
     def test_strict_check_exit_code_reports_needs_action(self):
         manifest = {
@@ -1192,6 +1280,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"paths": {}, "scope": {}},
                             )
                         )
+                    elif command == "import-revision-proposals":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "import_revision_proposals",
+                                return_value={"status": "previewed", "paths": {}},
+                            )
+                        )
                     elif command == "export-project-snapshot":
                         handler_patches.append(
                             mock.patch.object(
@@ -1270,6 +1366,8 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
                         elif command == "export-revision-corpus":
                             argv = ["export-revision-corpus"]
+                        elif command == "import-revision-proposals":
+                            argv = ["import-revision-proposals", "proposals.jsonl"]
                         elif command == "export-project-snapshot":
                             argv = ["export-project-snapshot", "--version-id", "test-version"]
                         elif command == "reconcile-project-snapshots":
@@ -1311,6 +1409,7 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertEqual(exit_code, 0)
                 if command in {
                     "export-revision-corpus",
+                    "import-revision-proposals",
                     "export-project-snapshot",
                     "reconcile-project-snapshots",
                     "build-translation-records",
@@ -1323,6 +1422,49 @@ class BatchCliContractTests(unittest.TestCase):
                     load_config.assert_not_called()
                 else:
                     load_config.assert_called_once_with(require_api_key=False)
+
+    def test_merge_keywords_yes_explicitly_overrides_history_review(self):
+        cases = (
+            (("--yes",), False, True),
+            (("--accept-confidence", "0.8"), True, False),
+        )
+        for extra_args, expected_interactive, expected_override in cases:
+            with self.subTest(extra_args=extra_args):
+                load_config = mock.Mock()
+                merge = mock.Mock(return_value=None)
+                with (
+                    mock.patch.object(batch, "initialize_batch_logging"),
+                    mock.patch.object(batch.legacy, "load_config", load_config),
+                    mock.patch.object(batch.legacy, "load_translator_settings"),
+                    mock.patch.object(batch.legacy, "load_glossary"),
+                    mock.patch.object(batch, "load_batch_settings"),
+                    mock.patch.object(batch, "print_banner"),
+                    mock.patch.object(
+                        batch.keyword_glossary_merge,
+                        "resolve_keyword_candidates_path",
+                        return_value="candidates.jsonl",
+                    ),
+                    mock.patch.object(
+                        batch.keyword_glossary_merge,
+                        "merge_keywords_to_glossary",
+                        merge,
+                    ),
+                    mock.patch.object(batch.legacy, "GLOSSARY_FILE", "glossary.json"),
+                ):
+                    exit_code = batch.main(
+                        [
+                            "merge-keywords-to-glossary",
+                            "candidates.jsonl",
+                            *extra_args,
+                        ]
+                    )
+
+                self.assertEqual(exit_code, 0)
+                load_config.assert_called_once_with(require_api_key=False)
+                merge.assert_called_once()
+                kwargs = merge.call_args.kwargs
+                self.assertEqual(kwargs["interactive"], expected_interactive)
+                self.assertEqual(kwargs["allow_history_review"], expected_override)
 
     def test_remote_batch_commands_still_require_api_key(self):
         load_config = mock.Mock()

@@ -207,11 +207,11 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
     command = str(envelope.get("command") or "")
     status = str(envelope.get("status") or "").strip().lower()
     if command == "check":
-        if status == "safe":
+        if status in {"safe", "ready"}:
             return EXIT_OK
-        if status == "warn":
+        if status in {"warn", "ready_with_warnings"}:
             return EXIT_NEEDS_ACTION
-        if status == "block":
+        if status in {"block", "blocked"}:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
     if command == "doctor" and status == "blocked":
@@ -221,6 +221,14 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
             return EXIT_OK
         if status == "attention":
             return EXIT_NEEDS_ACTION
+        return EXIT_INVALID_STATE
+    if command == "import-revision-proposals":
+        if status in {"previewed", "no_op", "imported"}:
+            return EXIT_OK
+        if status == "partial":
+            return EXIT_NEEDS_ACTION
+        if status in {"blocked", "stale"}:
+            return EXIT_BLOCKED
         return EXIT_INVALID_STATE
     if command in {"submit", "status"} and status in {
         "failed",

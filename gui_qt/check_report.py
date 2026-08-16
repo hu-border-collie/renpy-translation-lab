@@ -7,7 +7,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from .summary_helpers import extend_facts_with_notices
-from .user_copy import format_manifest_path_fact, safety_level_label
+from .user_copy import (
+    QUALITY_DELIVERY_NOTICE,
+    format_manifest_path_fact,
+    format_quality_gate_fact,
+    quality_gate_label,
+    safety_level_label,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,14 @@ def extract_safety_status(output: str) -> str:
     return _parse_line_value(output, "Safety status:")
 
 
+def extract_check_status(output: str) -> str:
+    return _parse_line_value(output, "Check status:") or extract_safety_status(output)
+
+
+def extract_writeback_gate(output: str) -> str:
+    return _parse_line_value(output, "Writeback gate:")
+
+
 def extract_next_split_manifest(output: str) -> str:
     return _parse_line_value(output, "Next split manifest:")
 
@@ -50,6 +64,9 @@ def parse_check_output(output: str) -> dict[str, object]:
         ("Pending lines:", "pending_lines"),
         ("Failure items:", "failure_items"),
         ("Recoverable valid items:", "valid_items"),
+        ("Quality warnings:", "quality_warnings"),
+        ("Quality blockers:", "quality_blockers"),
+        ("Acknowledged warnings:", "acknowledged_warnings"),
     ):
         value = _parse_int_field(output, field)
         if value is not None:
@@ -58,6 +75,14 @@ def parse_check_output(output: str) -> dict[str, object]:
     report_path = _parse_line_value(output, "Check failure report:")
     if report_path:
         parsed["check_failure_report"] = report_path
+    quality_report_path = _parse_line_value(output, "Quality findings report:")
+    if quality_report_path:
+        parsed["quality_findings_report"] = quality_report_path
+    parsed["check_status"] = extract_check_status(output)
+    parsed["writeback_gate"] = extract_writeback_gate(output)
+    quality_decision = _parse_line_value(output, "Quality gate:")
+    if quality_decision:
+        parsed["quality_gate_decision"] = quality_decision
 
     current_section = ""
     for raw_line in output.splitlines():
@@ -72,6 +97,32 @@ def parse_check_output(output: str) -> dict[str, object]:
             current_section = ""
 
     return parsed
+
+
+def _can_apply_from_check_fields(
+    writeback_gate: object,
+    check_status: str,
+    safety_status: str,
+) -> bool:
+    if isinstance(writeback_gate, str) and writeback_gate.strip().lower() == "allow":
+        return True
+    if isinstance(writeback_gate, str) and writeback_gate.strip().lower() == "deny":
+        return False
+    # New check output always carries a writeback gate line.  Treat a missing
+    # gate as stale rather than inferring allow from the legacy safety label.
+    return False
+
+
+def _can_apply_from_manifest_gate(
+    writeback_gate: object,
+    check_status: str,
+    safety_status: str,
+) -> bool:
+    if isinstance(writeback_gate, dict):
+        return writeback_gate.get("decision") == "allow" and bool(
+            writeback_gate.get("can_apply")
+        )
+    return False
 
 
 def _format_check_finding(finding: str) -> str:
@@ -102,7 +153,11 @@ def summarize_check_envelope(
     result = envelope.get("result")
     check = result.get("check") if isinstance(result, Mapping) else None
     check_summary = dict(check) if isinstance(check, Mapping) else {}
-    check_summary.setdefault("safety_level", str(envelope.get("status") or ""))
+    envelope_status = str(envelope.get("status") or "")
+    check_summary.setdefault(
+        "safety_level",
+        "safe" if envelope_status in {"ready", "ready_with_warnings"} else envelope_status,
+    )
     manifest: dict[str, object] = {
         "_manifest_path": manifest_path,
         "last_check_summary": check_summary,
@@ -142,6 +197,10 @@ def summarize_check_output(
     parsed = parse_check_output(output)
     safety = parsed.get("safety_status")
     safety_text = safety if isinstance(safety, str) else ""
+    check_status = parsed.get("check_status")
+    check_status_text = check_status if isinstance(check_status, str) else safety_text
+    writeback_gate = parsed.get("writeback_gate")
+    can_apply = _can_apply_from_check_fields(writeback_gate, check_status_text, safety_text)
 
     facts: list[str] = []
     if manifest_path:
@@ -158,6 +217,22 @@ def summarize_check_output(
 
     if isinstance(parsed.get("check_failure_report"), str):
         facts.append(f"检查报告：{parsed['check_failure_report']}")
+    if isinstance(parsed.get("quality_findings_report"), str):
+        facts.append(f"质量检查报告：{parsed['quality_findings_report']}")
+
+    quality_warnings = parsed.get("quality_warnings")
+    quality_blockers = parsed.get("quality_blockers")
+    if isinstance(quality_warnings, int) or isinstance(quality_blockers, int):
+        warning_count = quality_warnings if isinstance(quality_warnings, int) else 0
+        blocker_count = quality_blockers if isinstance(quality_blockers, int) else 0
+        quality_decision = str(
+            parsed.get("quality_gate_decision")
+            or ("needs_review" if warning_count or blocker_count else "pass")
+        )
+        facts.append(
+            f"质量检查：{quality_gate_label(quality_decision)}"
+            f"（报警 {warning_count}，阻断 {blocker_count}）"
+        )
 
     findings = [
         _format_check_finding(finding)
@@ -176,7 +251,38 @@ def summarize_check_output(
             manifest_path=manifest_path,
         )
 
-    if safety_text == "safe":
+    if (
+        not isinstance(writeback_gate, str)
+        or not writeback_gate.strip()
+    ) and safety_text == "safe":
+        return WritebackSummary(
+            status="stale",
+            heading="检查结果已过期",
+            message=(
+                "最近一次检查缺少 writeback_gate，可能是旧版本检查合同。\n"
+                "请点击「重新检查」后再写回。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    if can_apply:
+        if quality_warnings or quality_blockers or check_status_text == "ready_with_warnings":
+            return WritebackSummary(
+                status="safe",
+                heading="可以写回翻译（有质量报警）",
+                message=(
+                    "检查结果满足写回条件，但存在需要人工关注的质量问题。"
+                    "可先写回，再按规则、文件或严重程度筛选报警并处理。"
+                    + QUALITY_DELIVERY_NOTICE
+                ),
+                facts=extend_facts_with_notices(facts, findings),
+                findings=findings,
+                can_apply=True,
+                manifest_path=manifest_path,
+            )
         return WritebackSummary(
             status="safe",
             heading="可以写回翻译",
@@ -187,14 +293,15 @@ def summarize_check_output(
             manifest_path=manifest_path,
         )
 
-    if safety_text == "warn":
+    if safety_text == "safe" and (
+        isinstance(quality_blockers, int) and quality_blockers > 0
+    ):
         return WritebackSummary(
-            status="warn",
-            heading="需要先处理问题",
+            status="block",
+            heading="质量规则阻断写回",
             message=(
-                "检查结果为需处理，暂不能写回。"
-                "可先查看问题清单，必要时生成「补译包」并预览；"
-                "处理完重新检查后，显示「可写回」才能写入项目。"
+                f"项目配置把 {quality_blockers} 条质量规则提升为 blocker，"
+                "当前不能写回。请先处理对应质量报警并重新检查。"
             ),
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
@@ -202,11 +309,17 @@ def summarize_check_output(
             manifest_path=manifest_path,
         )
 
-    if safety_text == "block":
+    if safety_text == "warn" or check_status_text in {"warn", "blocked", "block"}:
         return WritebackSummary(
-            status="block",
-            heading="当前不能写回",
-            message="检查结果为禁止写回。请修复源文件变化或重新生成任务后再检查。",
+            status="warn" if safety_text == "warn" else "block",
+            heading="需要先处理问题" if safety_text == "warn" else "当前不能写回",
+            message=(
+                "检查结果为需处理，暂不能写回。"
+                "可先查看问题清单，必要时生成「补译包」并预览；"
+                "处理完重新检查后，显示「可写回」才能写入项目。"
+            )
+            if safety_text == "warn"
+            else "检查结果为禁止写回。请修复源文件变化或重新生成任务后再检查。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
@@ -315,6 +428,14 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
         facts: list[str] = []
         if manifest_path:
             facts.append(format_manifest_path_fact(manifest_path))
+        last_summary = manifest.get("last_check_summary")
+        if isinstance(last_summary, dict):
+            quality_gate = last_summary.get("quality_gate")
+            if isinstance(quality_gate, dict) and (
+                int(quality_gate.get("warning_count") or 0) > 0
+                or int(quality_gate.get("blocker_count") or 0) > 0
+            ):
+                facts.append(format_quality_gate_fact(quality_gate, prefix="写回后质量检查"))
         if isinstance(apply_summary, dict):
             applied_files = apply_summary.get("applied_files")
             applied_lines = apply_summary.get("applied_lines")
@@ -355,6 +476,10 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
 
     safety = last_summary.get("safety_level")
     safety_text = safety if isinstance(safety, str) else ""
+    check_status = last_summary.get("check_status")
+    check_status_text = check_status if isinstance(check_status, str) else safety_text
+    writeback_gate = last_summary.get("writeback_gate")
+    can_apply = _can_apply_from_manifest_gate(writeback_gate, check_status_text, safety_text)
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
@@ -372,6 +497,14 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
     if isinstance(report_path, str) and report_path.strip():
         facts.append(f"检查报告：{report_path}")
 
+    quality_findings_path = manifest.get("last_quality_findings_path")
+    if isinstance(quality_findings_path, str) and quality_findings_path.strip():
+        facts.append(f"质量检查报告：{quality_findings_path}")
+
+    quality_gate = last_summary.get("quality_gate")
+    if isinstance(quality_gate, dict):
+        facts.append(format_quality_gate_fact(quality_gate))
+
     findings: list[str] = []
     safety_reasons = last_summary.get("safety_reasons")
     if isinstance(safety_reasons, dict):
@@ -381,7 +514,47 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
                 for name, count in sorted(reasons.items()):
                     findings.append(f"[{safety_level_label(level)}] {name}: {count}")
 
-    if safety_text == "safe":
+    quality_reason_counts = last_summary.get("quality_reason_counts")
+    if isinstance(quality_reason_counts, dict):
+        for name, count in sorted(quality_reason_counts.items()):
+            findings.append(f"[质量报警] {name}: {count}")
+
+    if not isinstance(writeback_gate, dict) and safety_text == "safe":
+        return WritebackSummary(
+            status="stale",
+            heading="检查结果已过期",
+            message=(
+                "最近一次检查缺少 writeback_gate，可能是旧版本检查合同。\n"
+                "请点击「重新检查」后再写回。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    if can_apply:
+        has_warnings = (
+            isinstance(quality_gate, dict)
+            and (
+                int(quality_gate.get("warning_count") or 0) > 0
+                or int(quality_gate.get("blocker_count") or 0) > 0
+            )
+        ) or bool(quality_reason_counts)
+        if has_warnings:
+            return WritebackSummary(
+                status="safe",
+                heading="可以写回翻译（有质量报警）",
+                message=(
+                    "最近一次检查满足写回条件，但存在需要人工关注的质量问题。"
+                    "可先写回，再按规则、文件或严重程度筛选报警并处理。"
+                    + QUALITY_DELIVERY_NOTICE
+                ),
+                facts=extend_facts_with_notices(facts, findings),
+                findings=findings,
+                can_apply=True,
+                manifest_path=manifest_path,
+            )
         return WritebackSummary(
             status="safe",
             heading="可以写回翻译",
@@ -391,6 +564,24 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             can_apply=True,
             manifest_path=manifest_path,
         )
+    if (
+        isinstance(quality_gate, dict)
+        and int(quality_gate.get("blocker_count") or 0) > 0
+        and safety_text == "safe"
+    ):
+        return WritebackSummary(
+            status="block",
+            heading="质量规则阻断写回",
+            message=(
+                "项目配置把质量规则提升为 blocker，当前不能写回。"
+                "请先处理对应质量报警并重新检查。"
+            ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
     if safety_text == "warn":
         return WritebackSummary(
             status="warn",
@@ -405,7 +596,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
             can_apply=False,
             manifest_path=manifest_path,
         )
-    if safety_text == "block":
+    if safety_text == "block" or check_status_text in {"blocked", "block"}:
         return WritebackSummary(
             status="block",
             heading="当前不能写回",

@@ -461,6 +461,39 @@ def build_cli_commands(
             )
         )
     if mode_text == "revision":
+        proposal_import = manifest.get("proposal_import")
+        proposal_path = str(
+            (
+                proposal_import.get("proposal_path")
+                if isinstance(proposal_import, dict)
+                else ""
+            )
+            or ""
+        ).strip()
+        if proposal_path:
+            proposal_args = ["import-revision-proposals", proposal_path]
+            corpus_manifest_path = str(
+                (
+                    proposal_import.get("corpus_manifest_path")
+                    if isinstance(proposal_import, dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if corpus_manifest_path:
+                proposal_args.extend(
+                    ["--corpus-manifest", corpus_manifest_path]
+                )
+            commands.append(
+                DiagnosticsCommand(
+                    label="导入结构化润色提案",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        proposal_args,
+                    ),
+                )
+            )
         if not manifest.get("submit_disabled"):
             commands.extend(
                 build_cloud_job_commands(
@@ -759,8 +792,18 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
     summary = manifest.get("last_check_summary")
     if not isinstance(summary, dict):
         return ""
+    writeback_gate = summary.get("writeback_gate")
+    if isinstance(writeback_gate, dict):
+        if writeback_gate.get("decision") == "allow":
+            return "safe"
+        safety = summary.get("safety_level")
+        return safety.strip().lower() if isinstance(safety, str) else "block"
+    # Contract v3 check summaries always carry a writeback gate.  Legacy
+    # summaries are stale for apply; keep warn/block visible for remediation
+    # but never infer "safe" from the old field alone.
     safety = summary.get("safety_level")
-    return safety.strip().lower() if isinstance(safety, str) else ""
+    safety_text = safety.strip().lower() if isinstance(safety, str) else ""
+    return safety_text if safety_text in {"warn", "block"} else ""
 
 
 def existing_retry_manifest_path(manifest: dict[str, object]) -> str:

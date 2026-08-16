@@ -18,6 +18,20 @@ SAFETY_LEVEL_LABELS = {
     "block": "禁止写回",
 }
 
+CHECK_STATUS_LABELS = {
+    "ready": "可写回（无质量报警）",
+    "ready_with_warnings": "可写回，有质量报警",
+    "blocked": "禁止写回",
+}
+
+QUALITY_GATE_LABELS = {
+    "pass": "无质量报警",
+    "needs_review": "需人工复核",
+    "acknowledged": "质量报警已确认",
+}
+
+QUALITY_DELIVERY_NOTICE = "可写回 ≠ 可交付：写回门禁只证明结构安全，质量报警处理完前不建议交付。"
+
 DOCTOR_MODE_LABELS = {
     "can_generate_template": "可生成翻译模板",
     "existing_tl_only": "已有翻译模板",
@@ -82,11 +96,19 @@ TASK_PROJECT_GATE_COPY = {
     ),
     "keywords_body": (
         "选择项目并运行环境检查后，才能提取关键词。"
-        "任务只生成候选报告，不修改游戏脚本；审核后可合并到 glossary.json。"
+        "任务只生成候选报告，不修改游戏脚本；报告会附上历史首次译法与保留不译的人工作提示，审核后可合并到 glossary.json。"
     ),
     "revision_body": (
         "选择项目并运行环境检查后，才能生成订正预览；确认预览后才可写回。"
     ),
+}
+
+REVISION_PROPOSAL_COPY = {
+    "action": "导入润色提案",
+    "tooltip": "导入结构化 JSONL 提案并生成安全预览；此步骤不会修改 .rpy。",
+    "dialog_title": "选择润色提案 JSONL",
+    "corpus_dialog_title": "选择配套语料 manifest（没有则取消）",
+    "running": "正在校验提案并生成订正预览。",
 }
 
 USAGE_LEDGER_COPY = {
@@ -461,6 +483,16 @@ def safety_level_label(level: str) -> str:
     return SAFETY_LEVEL_LABELS.get(text, level or "未知")
 
 
+def check_status_label(status: str) -> str:
+    text = str(status or "").strip().lower()
+    return CHECK_STATUS_LABELS.get(text, status or "未知")
+
+
+def quality_gate_label(decision: str) -> str:
+    text = str(decision or "").strip().lower()
+    return QUALITY_GATE_LABELS.get(text, decision or "未知")
+
+
 def doctor_mode_label(mode: str) -> str:
     text = str(mode or "").strip()
     return DOCTOR_MODE_LABELS.get(text, text or "未知")
@@ -494,6 +526,15 @@ def format_job_state_fact(state: str) -> str:
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
     return f"{prefix}：{safety_level_label(level)}"
+
+
+def format_quality_gate_fact(gate: Any, *, prefix: str = "质量检查") -> str:
+    if not isinstance(gate, dict):
+        return f"{prefix}：未知"
+    warning_count = gate.get("warning_count", 0)
+    blocker_count = gate.get("blocker_count", 0)
+    decision = quality_gate_label(str(gate.get("decision") or ""))
+    return f"{prefix}：{decision}（报警 {warning_count}，阻断 {blocker_count}）"
 
 
 def _format_usage_cost_values(metric: Any) -> str:

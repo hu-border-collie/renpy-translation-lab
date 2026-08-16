@@ -283,7 +283,7 @@ build -> submit -> status -> download -> check
 - **Reasoning 参数**：项目不把 Gemini 的 `thinking_level` / `thinking_config` 伪装成跨 Provider 通用选项；LiteLLM 请求会忽略该 Gemini 专属字段并留下安全能力诊断。需要供应商专属 reasoning 参数时，应等待显式 capability/provider options 支持。
 - **恢复与多 Key**：429 可在当前 LiteLLM Provider 已保存的 Key 中按脱敏后缀有界轮换；401/403 不重试，timeout/503 只做有界退避，同步恢复不会触碰 Gemini keyring。点击停止后，迟到的子进程成功不会继续进入 preview 或写回。
 - **隐私**：本项目直接调用 LiteLLM Python SDK，不经过本项目自建代理。待译文本、提示词和必要上下文会发送给所选模型供应商；应按该供应商的日志、训练和数据保留政策评估敏感内容。供应商密钥保存到操作系统凭据管理器或由环境变量提供，不写入 `translator_config.json`。
-- **安全边界**：同步翻译默认只生成预览，显式 apply 才会写入当前项目；仍应先备份并小范围验证。同步 manifest 使用独立的项目绑定、源文件快照和制品哈希复核，不复用 Batch manifest 的 `check=safe` 状态。
+- **安全边界**：同步翻译默认只生成预览，显式 apply 才会写入当前项目；仍应先备份并小范围验证。同步 manifest 使用独立的项目绑定、源文件快照和制品哈希复核，不复用 Batch manifest 的 `writeback_gate` 状态。
 
 ### 订正（批量与同步）
 
@@ -333,7 +333,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 如果 build 已生成 package 但还没有 job，恢复会从 submit 继续，而不是错误地直接跑 status。
 
-`export-keywords` 完成后，界面会摘要候选数量与 JSONL / Markdown 报告路径，并把四个关键词报告复制到当前 `work` 目录上级的 `extracted_keywords/`；完整原始路径仍可在诊断与运行日志复制。诊断与运行日志对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
+`export-keywords` 完成后，界面会摘要候选数量、历史首次译法证据统计与 JSONL / Markdown 报告路径，并把四个关键词报告复制到当前 `work` 目录上级的 `extracted_keywords/`；完整原始路径仍可在诊断与运行日志复制。候选表会展示首次 occurrence、现译和冲突原因；这只是人工提示，不会自动改写脚本或 glossary。诊断与运行日志对关键词任务记录会显示 `export-keywords` 等命令，而不是翻译的 `check/apply`。
 
 ### 同步关键词
 
@@ -341,7 +341,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 合并候选到 glossary
 
-关键词报告生成后，可在 GUI 内把 `keyword_candidates.jsonl` 中经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。
+关键词报告生成后，可在 GUI 内查看每条候选的首次历史译法，再把经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。历史证据冲突、歧义、保留不译、缺失，或与当前候选不一致的条目默认不勾选。
 
 **入口：**
 
@@ -353,7 +353,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 **交互要点：**
 
 - 表格列出 `source`、`suggested_target`、`category`、`confidence`、计划写入分区（`preserve_terms` / `normalize_map`）与冲突提示。
-- 默认**不勾选**疑似 Ren'Py 启动器 / UI 噪音项；与 `macro_setting` 或现有 glossary 冲突的条目会标红提示。
+- 默认**不勾选**疑似 Ren'Py 启动器 / UI 噪音项，以及历史证据缺失、冲突或不可用的旧版 / 手工候选；与 `macro_setting` 或现有 glossary 冲突的条目会标红提示。
 - 支持全选 / 全不选 / 反选；可勾选「覆盖已有 glossary 冲突项」后再写入。
 - **预览写入**只生成摘要，不修改 glossary；**写入 glossary** 前会二次确认，并自动创建 `glossary.json.bak-<timestamp>` 备份。
 
@@ -404,15 +404,17 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 
 | 界面显示 | CLI `check` 输出 |
 |----------|------------------|
-| 可写回 | `safe` |
-| 需处理 | `warn` |
-| 禁止写回 | `block` |
+| 可写回（无质量报警） | `ready`，`writeback_gate.decision=allow` |
+| 可写回，有质量报警 | `ready_with_warnings`，`writeback_gate.decision=allow` |
+| 需处理 | 旧 `warn` / `writeback_gate.decision=deny` |
+| 禁止写回 | `blocked` / 旧 `block` |
 
-「写回翻译」按钮只在最近一次检查为**可写回**时启用（批量翻译 · 结果区主按钮）。
+「写回翻译」按钮只在最近一次检查满足**写回门禁**时启用（`writeback_gate.decision=allow`；批量翻译 · 结果区主按钮）。质量报警默认不阻止写回，但会单独显示在写回摘要中。
 
-「可写回」只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。写回后仍须运行机械质量检查，并对错译、术语、语气与上下文进行人工/LLM 通读。
+`writeback_gate=allow` 只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。界面明确区分「可写回」与「可交付」：`quality_gate` 会输出机械质量报警；写回后仍须按报警处理，并对错译、术语、语气与上下文进行人工/LLM 通读。
 
-- **可写回**：允许进入写回确认，并调用 `apply`。
+- **可写回（无质量报警）**：允许进入写回确认，并调用 `apply`。
+- **可写回，有质量报警**：仍允许写回；结果区显示报警数量，用户可按规则、文件和严重程度筛选并选择先处理或写回后处理。
 - **需处理**：禁用写回。展开 **问题处理**（默认折叠；需处理时自动展开或角标）。其中可：查看问题清单、生成/查看补译包、**继续补译**、**同步修补**、**重新检查**、查看写回失败报告、补救命令（高级回退）。
   - **继续补译**：预览确认后编排 `submit → status → download → check → merge-retry → check`；云端排队中可再次点击继续，或在工作台使用「继续翻译」从 `status` 恢复。
   - **同步修补**：对 repair 类问题调用 `gemini_translate_batch.py repair <jsonl>`（默认 `--batch-size 2`）；运行前会二次确认并提醒备份，完成后应 **重新检查**。

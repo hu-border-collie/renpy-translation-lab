@@ -13,7 +13,7 @@
 
 - CLI 是行为事实来源，但 GUI 不是二等公民。新增面向用户的能力默认要同步 CLI、GUI、配置、文案和测试；仅 CLI / 仅 GUI 的例外须明确说明。
 - 优先把核心行为放进可复用模块，再接 CLI 入口和 GUI 包装层。不要在 GUI 中另写一套翻译语义。
-- 不得绕过 Batch `check -> apply` 合约。只有与当前 manifest/results 匹配的最近一次检查为 `safe` 时才允许写回；`apply --force` 也不能绕过 stale check、源快照校验或 `block`。
+- 不得绕过 Batch `check -> apply` 合约。只有与当前 manifest/results 匹配的最近一次检查 `writeback_gate.decision=allow` 时才允许写回；质量报警（`quality_gate`）默认不阻止写回，但项目配置提升为 blocker 的规则必须阻止写回。`apply --force` 也不能绕过 stale check、源快照校验或结构阻断。
 - `translator_config.json` 属于可执行的本地配置；不要运行来源不明的 prepare 自定义命令。
 - 直接依赖只在对应的 `requirements-*.txt` 权威输入中维护。不要手改 `requirements-lock/`；依赖升级应单独提交，并用既有生成器重建全部锁。
 

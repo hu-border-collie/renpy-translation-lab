@@ -13,7 +13,7 @@ CLI 是自动化操作的事实来源。必要时可以使用 GUI 做可视验�
 - 先运行只读的 `doctor`，不要直接提交任务。
 - 用 `python gemini_translate_batch.py --help` 和子命令 `--help` 读取当前参数，不要根据其他项目猜命令。
 - 记录 `build` 输出的确切 manifest 路径，并在后续命令中显式传入；不要依赖“最新任务”推断。
-- 只有 `check` 对当前 manifest/results 返回 `safe` 时才执行 `apply`。
+- 只有 `check` 对当前 manifest/results 返回 `writeback_gate.decision=allow` 时才执行 `apply`。
 - 不要用 `--force` 规避安全判断；它只处理有限的重复/恢复场景，不能绕过 stale check、源快照校验或 `block`。
 
 ## 机器可读输出
@@ -48,7 +48,7 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
   "schema_version": 1,
   "command": "check",
   "ok": true,
-  "status": "safe",
+  "status": "ready",
   "result": {},
   "artifacts": {},
   "warnings": [],
@@ -58,12 +58,15 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 
 其中：
 
-- `status` 表示业务状态，例如 Batch job state、`safe / warn / block`、reconciliation
+- `status` 表示业务状态，例如 Batch job state、检查结论 `ready / ready_with_warnings / blocked`
+  （兼容旧字段 `safety_level` 的 `safe / warn / block`）、reconciliation
   的 `ready / attention` 或 `applied`；
 - `result` 是命令摘要，`artifacts` 给出 manifest、results、检查报告等产物路径；
 - 命令拒绝执行时 `ok=false`，`error.code` 与 `error.message` 用于程序判断和诊断；
 - 默认退出码仍保持兼容。Agent 可同时传入 `--output json --strict-exit-codes`，让业务状态映射为稳定退出码；严格模式只与 JSON 输出组合使用。
-- 无论是否启用严格退出码，都必须读取 `status`；只有 `check` 的 `status=safe` 才能继续 `apply`。
+- 无论是否启用严格退出码，都必须读取 `result.check.writeback_gate.decision`；只有它为
+  `allow` 才能继续 `apply`。`quality_gate.decision=needs_review` 表示存在质量报警，默认不阻止
+  `apply`，但需要在写回后继续人工处理。
 
 当 argparse 在生成参数对象前就失败时，只要原始参数包含精确的 `--output json` 或 `--output=json`，stdout 仍会返回一个 schema v1 错误 envelope（`error.code=ARGUMENT_PARSE_ERROR`，退出码 `2`），原生 usage 和诊断保留在 stderr。此阶段尚未解析出完整参数，因此不会使用 `--output-file` 或 `--fields`；未能可靠识别 JSON 意图的最早期语法错误继续使用普通 argparse 文本。原始参数扫描遇到 `--` 后停止，其后的内容只作为 positional 数据处理。
 
@@ -71,10 +74,10 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 
 | 退出码 | 含义 | 常见场景 |
 |---:|---|---|
-| `0` | 命令成功，可继续或继续轮询 | `safe`、job pending/running、无待处理工作 |
+| `0` | 命令成功，可继续或继续轮询 | `check` 返回 `ready`、job pending/running、无待处理工作 |
 | `1` | 未分类的内部错误，默认不可重试 | 意外异常或未知 SDK 错误 |
 | `2` | 命令行用法错误 | 参数缺失、严格模式未配合 JSON 输出 |
-| `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `warn`，或 reconciliation 返回 `attention` |
+| `3` | 命令完成，但需要 Agent 处理 | `check` 返回 `ready_with_warnings` 或旧 `warn`，reconciliation 返回 `attention` |
 | `4` | 被门禁阻止或进入终止失败状态 | `block`、doctor blocked、job failed/cancelled |
 | `5` | 输入、配置或状态已失效 | stale check、manifest/results 漂移、前置产物缺失 |
 | `6` | 远端临时错误，可稍后重试 | rate limit、quota、timeout、service unavailable |
@@ -109,7 +112,7 @@ python gemini_translate_batch.py status <manifest> --output json --non-interacti
 
 ```powershell
 python gemini_translate_batch.py status <manifest> --output json --compact
-python gemini_translate_batch.py check <manifest> --output json --fields command status result.check.safety_level artifacts.manifest
+python gemini_translate_batch.py check <manifest> --output json --fields command status result.check.writeback_gate result.check.quality_gate artifacts.manifest
 python gemini_translate_batch.py status <manifest> --output json --output-file .\status.json
 ```
 
@@ -241,10 +244,13 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json
 
 - 提交前按任务要求设置并确认成本上限；参数以 `submit --help` 为准。
 - `status` 显示云端任务成功后才运行 `download`；仍在运行时等待并再次查询，不要重复提交。
-- `check` 是干跑校验，不修改 `.rpy`；它会输出 `safe / warn / block`，并把失败报告写入任务包目录。
-- `warn` 或 `block` 时停止写回，阅读 `check_failures.jsonl` 及命令输出，再按 [Batch 工作流与安全检查](batch_workflows.md) 使用 retry、repair 或 revision 流程。
+- `check` 是干跑校验，不修改 `.rpy`；它会输出 `writeback_gate` / `quality_gate`（文本模式仍保留
+  `Safety status` 行），并把结构失败报告写入 `check_failures.jsonl`、质量报警写入 `quality_findings.jsonl`。
+- `writeback_gate.decision=deny` 时停止写回，阅读 `check_failures.jsonl` 及命令输出，再按
+  [Batch 工作流与安全检查](batch_workflows.md) 使用 retry、repair 或 revision 流程。
+- `quality_gate.decision=needs_review` 不阻止写回，但必须在写回后按规则、文件与严重程度处理报警。
 
-只有检查明确为 `safe` 时才执行。`safe` 是**结构性写回安全**结论，不是译文质量验收：
+只有 `writeback_gate.decision=allow` 时才执行。`allow` 是**结构性写回安全**结论，不是译文质量验收：
 
 ```powershell
 python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
@@ -256,7 +262,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
 
 - 检查 `apply` 摘要和目标 `.rpy` diff。
 - 在 Ren'Py 中运行 lint 或项目既有 smoke test。
-- 运行机械质量检查，并对错译、术语、语气、反讽和上下文一致性进行人工/LLM 通读；不能把 `check=safe` 报告成“译文质量合格”。
+- 按 `quality_findings.jsonl` 运行机械质量检查，并对错译、术语、语气、反讽和上下文一致性进行人工/LLM 通读；不能把 `writeback_gate=allow` 报告成“译文质量合格”。
 - 报告使用的 manifest、最终安全等级、写回结果和仍未处理的失败项。
 - 不提交 `api_keys.json`、`translator_config.json`、私有游戏脚本、`logs/` 或 Batch 结果到公开仓库。
 

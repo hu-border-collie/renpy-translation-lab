@@ -112,6 +112,11 @@ from .apply_failure_report import (
 )
 from .check_failures_report import build_check_issues_report
 from .check_issues_dialog import CheckIssuesDialog
+from .quality_findings_dialog import QualityFindingsDialog
+from .quality_findings_report import (
+    build_quality_findings_report,
+    quality_issues_report_ready,
+)
 from .check_report import (
     WritebackSummary,
     build_recheck_cli_args,
@@ -6382,9 +6387,23 @@ class MainWindow(QMainWindow):
             self.recheck_btn.setEnabled(not running and recheck_ready)
 
         if hasattr(self, "check_issues_btn"):
+            quality_issues_ready = (
+                manifest is not None
+                and quality_issues_report_ready(
+                    manifest,
+                    manifest_path=summary.manifest_path,
+                )
+            )
             self.check_issues_btn.setVisible(needs_translation_manifest)
             self.check_issues_btn.setEnabled(
-                not running and needs_translation_manifest and issues_ready
+                not running
+                and needs_translation_manifest
+                and (issues_ready or quality_issues_ready)
+            )
+            self.check_issues_btn.setToolTip(
+                "查看结构失败或译文质量报警清单；质量报警默认不阻止写回。"
+                if quality_issues_ready
+                else "展开检查失败清单；检查为「需处理」时会自动提示。"
             )
 
         apply_failure_ready = self._apply_failure_report_ready(
@@ -6687,6 +6706,33 @@ class MainWindow(QMainWindow):
             manifest = self.state.load_manifest_file(manifest_path)
         except ValueError as exc:
             message_box_warning(self, "无法查看问题清单", str(exc))
+            return
+
+        last_summary = manifest.get("last_check_summary")
+        writeback_gate = (
+            last_summary.get("writeback_gate")
+            if isinstance(last_summary, dict)
+            else None
+        )
+        structural_blocked = (
+            isinstance(writeback_gate, dict)
+            and int(writeback_gate.get("structural_blocker_count") or 0) > 0
+        ) or (
+            isinstance(writeback_gate, dict) is False
+            and isinstance(last_summary, dict)
+            and last_summary.get("safety_level") in {"warn", "block"}
+        )
+        if quality_issues_report_ready(
+            manifest,
+            manifest_path=manifest_path,
+        ) and not structural_blocked:
+            quality_report = build_quality_findings_report(
+                manifest,
+                manifest_path=manifest_path,
+            )
+            dialog = QualityFindingsDialog(self, report=quality_report)
+            dialog.exec()
+            self.statusBar().showMessage("已查看译文质量报警。", 3000)
             return
 
         report = build_check_issues_report(manifest, manifest_path=manifest_path)
@@ -9574,6 +9620,44 @@ class MainWindow(QMainWindow):
         """Start manual finding selection only for a completed review campaign."""
         if action == "open_doctor":
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
+        if action == "import_revision_proposals":
+            if bool(getattr(self, "_task_running", False)):
+                return
+            if not self._confirm_unsaved_config_before_workflow():
+                return
+            from .revision_workflow import RevisionProposalImportWorkflow
+            from .user_copy import REVISION_PROPOSAL_COPY
+
+            selected, _filter = QFileDialog.getOpenFileName(
+                self,
+                REVISION_PROPOSAL_COPY["dialog_title"],
+                "",
+                "JSON Lines (*.jsonl);;All files (*)",
+            )
+            if not selected:
+                return
+            corpus_manifest_path = ""
+            companion_manifest = Path(selected).with_name(
+                "revision_corpus_manifest.json"
+            )
+            if not companion_manifest.is_file():
+                corpus_manifest_path, _filter = QFileDialog.getOpenFileName(
+                    self,
+                    REVISION_PROPOSAL_COPY["corpus_dialog_title"],
+                    str(Path(selected).parent),
+                    "JSON (*.json);;All files (*)",
+                )
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+            )
+            self._clear_log_view()
+            self._show_workbench_log_drawer()
+            self._begin_translation_workflow(
+                RevisionProposalImportWorkflow(selected, corpus_manifest_path),
+                log_heading=REVISION_PROPOSAL_COPY["running"],
+                status_tab=1,
+            )
             return
         if action != "select_final_review_findings":
             return

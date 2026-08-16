@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
-from ..user_copy import TASK_PROJECT_GATE_COPY
+from ..user_copy import REVISION_PROPOSAL_COPY, TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -75,6 +75,13 @@ class RevisionPage(QFrame):
         self.start_btn.setEnabled(False)
         self.start_btn.clicked.connect(self._trigger_start)
         self.actions.add_action(self.start_btn, min_width=120)
+
+        self.import_proposals_btn = QPushButton(REVISION_PROPOSAL_COPY["action"])
+        self.import_proposals_btn.setObjectName("revision_import_proposals_btn")
+        self.import_proposals_btn.setEnabled(False)
+        self.import_proposals_btn.setToolTip(REVISION_PROPOSAL_COPY["tooltip"])
+        self.import_proposals_btn.clicked.connect(self._trigger_import_proposals)
+        self.actions.add_action(self.import_proposals_btn, min_width=128)
 
         self.resume_btn = QPushButton("继续订正")
         self.resume_btn.setObjectName("revision_resume_btn")
@@ -198,6 +205,7 @@ class RevisionPage(QFrame):
         self.start_btn.setText("开始最终审校" if final_review else "生成订正预览")
         self.writeback_btn.setText("写回所选订正" if final_review else "写回订正")
         self.review_findings_btn.setVisible(final_review)
+        self.import_proposals_btn.setVisible(mode == WorkMode.REVISION)
         self.result_hint.setText(
             "审查完成后，选择需要处理的问题并生成订正预览。"
             if final_review
@@ -214,6 +222,7 @@ class RevisionPage(QFrame):
             self.resume_btn.setEnabled(False)
             self.writeback_btn.setEnabled(False)
             self.review_findings_btn.setEnabled(False)
+            self.import_proposals_btn.setEnabled(False)
 
     def set_controls(
         self,
@@ -232,6 +241,7 @@ class RevisionPage(QFrame):
         self.resume_btn.setEnabled(resume_enabled and not self._running)
         self.writeback_btn.setEnabled(writeback_enabled and not self._running)
         self.review_findings_btn.setEnabled(findings_enabled and not self._running)
+        self.import_proposals_btn.setEnabled(start_enabled and not self._running)
         self.result_hint.setText(result_message)
         self.task_layout.reflow()
         self.updateGeometry()
@@ -278,6 +288,14 @@ class RevisionPage(QFrame):
             and self._actions.action is not None
         ):
             self._actions.action("select_final_review_findings")
+
+    def _trigger_import_proposals(self) -> None:
+        if (
+            not self._running
+            and self.import_proposals_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("import_revision_proposals")
 
     def _trigger_writeback(self) -> None:
         if (

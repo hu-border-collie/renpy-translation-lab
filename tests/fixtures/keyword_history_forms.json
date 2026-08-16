@@ -1,0 +1,58 @@
+{
+  "cases": [
+    {
+      "name": "possessive_form",
+      "candidate": {
+        "source": "Noah",
+        "suggested_target": "诺亚",
+        "category": "character"
+      },
+      "rows": [
+        {
+          "identity_v2": "chapter01/character:1",
+          "occurrence_id": "chapter01/character:1",
+          "file_rel_path": "chapter01/character.rpy",
+          "display_line": 1,
+          "locator": {
+            "line_number": 1,
+            "start": 0
+          },
+          "source": "Noah’s compass is ready.",
+          "current_translation": "诺亚的罗盘已经准备好了。"
+        }
+      ],
+      "expected": {
+        "status": "ambiguous",
+        "match_kind": "possessive_variant",
+        "reason_code": "possessive_variant"
+      }
+    },
+    {
+      "name": "vocative_form",
+      "candidate": {
+        "source": "Noah",
+        "suggested_target": "诺亚",
+        "category": "character"
+      },
+      "rows": [
+        {
+          "identity_v2": "chapter01/character:2",
+          "occurrence_id": "chapter01/character:2",
+          "file_rel_path": "chapter01/character.rpy",
+          "display_line": 2,
+          "locator": {
+            "line_number": 2,
+            "start": 0
+          },
+          "source": "Noah, come here!",
+          "current_translation": "诺亚，过来！"
+        }
+      ],
+      "expected": {
+        "status": "ambiguous",
+        "match_kind": "exact",
+        "reason_code": "translation_alignment_unknown"
+      }
+    }
+  ]
+}

@@ -26,7 +26,7 @@
 
 ### 校验的语义边界（2026-08-06 记录）
 
-`check` 的 `safe` 只表示**结构性写回安全**（源文本匹配、标签/占位符完整、含中文字符等），**不表示译文内容质量合格**。2026-08-06 在真实项目 Chapter 4（约 6,062 块）的审校中发现，初译直出即使 `check=safe` 仍存在系统性文本问题：
+`writeback_gate.decision=allow` 只表示**结构性写回安全**（源文本匹配、标签/占位符完整、含中文字符等），**不表示译文内容质量合格**；`quality_gate` 负责报告机械质量报警。2026-08-06 在真实项目 Chapter 4（约 6,062 块）的审校中发现，初译直出即使结构检查通过仍存在系统性文本问题：
 
 - `{w=...}` 标签插进中文词语中间，全文件约 241 处；
 - 中文与英文/数字紧贴缺空格，全文件约 339 处；
@@ -36,7 +36,7 @@
 结论与建议：
 
 1. 直出文本只能作为草稿，交付前必须经过“机械质量门禁 + 人工/LLM 通读审校”两层处理。
-2. 机械门禁建议新增：汉字+标签+汉字检测、CJK/拉丁字符间距检测、已知错乱词黑名单、`[[法术名]]` 英文词缀保护；全部归零才算通过。
+2. 本页上文列出的机械规则已由 `check` 写入 `quality_findings.jsonl`（稳定 reason code、定位、原文/译文和证据）；默认只报警，可在 `batch.quality_gate.rules` 中把特定规则提升为 `blocker`。处理完 `blocker` 后仍需把剩余报警按规则、文件与严重程度复核。
 3. 语义层（错译、反讽丢失、术语取舍、语气）无法由脚本保证，仍需逐块通读。
 
 ## 命令说明
@@ -47,7 +47,7 @@
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json
 ```
 
-JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 报告路径，`status` 表示 job state 或 `safe / warn / block` 等业务状态。文本模式和默认退出码保持兼容；仍须根据 `status` 判断是否可以继续写回。
+JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 检查报告路径，`status` 表示 job state 或检查结论 `ready / ready_with_warnings / blocked`。文本模式和默认退出码保持兼容；判断能否写回应读 `result.check.writeback_gate.decision`，只有 `allow` 才可继续 `apply`。
 
 ### Parser-level 错误
 
@@ -61,7 +61,7 @@ Agent 可追加 `--strict-exit-codes`（必须与 `--output json` 同时使用�
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json --strict-exit-codes
 ```
 
-严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 只有 `safe` 才退出 `0` 并允许进入 `apply`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
+严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 在 `ready` 时退出 `0`，`ready_with_warnings` 退出 `3` 但仍满足写回门禁（`writeback_gate.decision=allow`），`blocked` 退出 `4`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
 
 需要确定性调用时追加 `--non-interactive`。该选项保证核心命令不等待 stdin，并让 `submit / status / download / check / apply` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
@@ -74,7 +74,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
-核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.safety_level` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。
+核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.writeback_gate.decision result.check.quality_gate` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。
 输出文件会在 workflow 前进行可写性探测。若创建或原子替换失败，stderr 保留诊断，stdout 回退为未投影的 `OUTPUT_FILE_WRITE_FAILED` envelope；严格模式退出 `5`，兼容模式退出 `1`。必须同时读取 `error.details.workflow_started` 和 `error.details.command_completed`：分别区分 workflow 未启动、已启动但以错误结束、以及已成功完成后仅结果文件落盘失败；后两种状态都应按原命令可能已产生业务副作用处理。
 `capabilities / schema` 也支持这三个选项；它们原生输出 JSON，因此无需 `--output json`。
 
@@ -85,11 +85,13 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
 - `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。
 - `probe` 会用同步请求做最小 smoke test；每个被抽样的 request row 必须能对应当前 manifest 中的非空 chunk，否则会在调用 Provider 前拒绝并提示重建 package，避免把过期或损坏的请求误判为成功。
-- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `safe / warn / block` 安全等级，并在包目录写入 `check_failures.jsonl`。
-- `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且安全等级必须是 `safe`；未 check、results 变化、manifest item 变化、`warn` 或 `block` 都会拒绝写回。
+- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状、质量规则配置和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `writeback_gate` / `quality_gate` / `check_status`（文本模式仍保留 `Safety status` 兼容行），并在包目录写入 `check_failures.jsonl` 与 `quality_findings.jsonl`。
+- `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且 `writeback_gate.decision` 必须是 `allow`；未 check、results 变化、manifest item 变化、结构 `warn / block` 或质量规则被配置为 blocker 都会拒绝写回。
 - `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot 校验或 `block`。
 - `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
+
+`translator_config.example.json` 的 `batch.quality_gate` 控制机械质量检查：`rules` 可把每条规则设为 `warning` / `blocker` / `off`，`allowed_latin_tokens` 是拉丁词白名单，`garbled_phrases` 是已知错乱词黑名单。质量规则配置进入 `check_fingerprint`；修改配置后必须重新 `check`，旧检查会变 stale。每条 finding 记录稳定 `reason_code`、severity / disposition、item ID、文件与行号、原文/译文和证据，GUI 与 CLI 都只把 `disposition=blocker` 计入写回阻断。
 
 ### 提交前估算与异常恢复
 
@@ -163,7 +165,7 @@ python gemini_translate_batch.py sync-revisions --apply
 
 阻断的退出语义：preview 校验类阻断（preview 缺失、结果/项目/源快照变化）与 `adapter_writeback_block` 以非零退出码结束；有效 preview 下全部条目被跳过/源不匹配/校验失败时的 `blocked` 以零退出码结束，但 machine envelope 的 `status=blocked` 且 manifest 写有 `revision_apply_blocked_reason`。依赖退出码的自动化应解析 `revision_apply_state` / `status`，不要仅凭零退出码判定写回成功。
 
-当前 `safe / warn / block` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
+当前 `writeback_gate` 强制闸门只覆盖普通 translation manifest 的 `check/apply`；质量 `quality_gate` 默认不阻断写回。订正写回仍走 `preview-revisions -> apply-revisions` 的独立快照校验。
 
 `sync-revisions` 复用订正 prompt、schema、RAG / Story Memory 注入、预览报告和写回前源快照校验；默认只预览，传 `--apply` 才调用 `apply-revisions` 写回。
 
@@ -275,6 +277,57 @@ python gemini_translate_batch.py export-revision-corpus --output json
 - 只读：不修改 `.rpy`、manifest、glossary 或 RAG；机器输出可用
   `--output json`（envelope 含三个产物路径与 item/file 计数）。
 
+### 导入人工 / Agent 润色提案
+
+权威输入必须是结构化 JSONL；自由格式 Markdown 只能作为伴生审阅报告。导入会把
+通过校验的提案转换成标准 `mode=revision` 本地候选包，并立即运行
+`preview-revisions`，自身绝不修改 `.rpy`：
+
+```powershell
+python gemini_translate_batch.py import-revision-proposals C:/review/proposals.jsonl
+python gemini_translate_batch.py import-revision-proposals C:/review/proposals.jsonl `
+  --corpus-manifest C:/review/revision_corpus_manifest.json `
+  --output json --strict-exit-codes --non-interactive
+```
+
+每行 proposal schema v1 至少包含：
+
+```json
+{
+  "schema_version": 1,
+  "occurrence_id": "identity-v2-value",
+  "identity_v2": "identity-v2-value",
+  "file_rel_path": "chapter01/revisions.rpy",
+  "source": "原文",
+  "current_translation": "当前译文",
+  "proposed_translation": "建议译文",
+  "reason": "修改理由",
+  "selected": true,
+  "disposition": "accepted",
+  "producer": {"type": "human", "tool": "optional", "model": "optional"},
+  "project_identity": {"tl_dir": "C:/game/tl/schinese"},
+  "snapshot_digest": "该条 source/current_translation 的导出摘要",
+  "corpus_snapshot_digest": "revision_corpus_manifest.json 的 source.snapshot_digest"
+}
+```
+
+`source`、`current_translation`、`proposed_translation` 和 `reason` 必须是字符串；
+`snapshot_digest` 与 `item_snapshot_digest` 只填一个，或同时填写且必须一致。
+`producer.type` 只接受 `human` / `agent`。若 proposal 同目录存在
+`revision_corpus_manifest.json`，可省略逐行 `project_identity` 和
+`corpus_snapshot_digest`；也可用 `--corpus-manifest` 显式指定，此时 manifest 的
+`source.snapshot_digest` 必须是非空字符串。没有配套 manifest
+时，每条选中提案必须携带与当前项目匹配的 `project_identity.tl_dir`。未知/重复/冲突
+identity、项目或语料快照 stale、
+source/current translation 变化、空建议、Ren'Py 标签/变量破坏、adapter 校验失败或
+不安全写回计划都不会获得写回资格。
+
+状态固定区分 `imported`（内部导入阶段）、`previewed`、`no_op`、`partial`、
+`blocked`、`stale`。机器 envelope 同时返回稳定 `status`、diagnostics、artifacts 和
+`suggested_action`；严格退出码下 `partial` 为“需处理”，`blocked/stale` 为“阻断”。
+只有 `previewed/no_op` manifest 能进入 `apply-revisions`，`--force` 不能绕过此闸门，
+也不能绕过 preview/result hash、项目身份、源快照或 adapter writeback 校验。
+
 ## 项目版本快照与只读 reconciliation
 
 本节对应 `#265` P3 / `#330` 与 P4 / `#354`，增加六个不调用模型、不要求
@@ -337,17 +390,19 @@ python gemini_translate_batch.py sync-keywords --limit 3
 
 `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`。候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`。
 
-`export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源。
+`export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源，并从现有 revision corpus 扫描投影中附上术语的首次历史 occurrence、文件/行号、现译和冲突原因。该历史证据只做人工作提示；大小写/复数变体、Ren'Py 插值、多个不同现译、保留不译（原文=译文）、无证据和无法对齐的项目不会被自动锁入 glossary。中文译法只有与整句历史现译完全相等时才作为安全对齐，中文子串命中仍需人工确认。
 
 `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告。
 
-人工确认后，可用 `merge-keywords-to-glossary` 把 `keyword_candidates.jsonl` 中的候选追加进 `glossary.json`（默认写入 `normalize_map`；`source` 与 `suggested_target` 相同时写入 `preserve_terms`）：
+人工确认后，可用 `merge-keywords-to-glossary` 把 `keyword_candidates.jsonl` 中的候选追加进 `glossary.json`（默认写入 `normalize_map`；`source` 与 `suggested_target` 相同时写入 `preserve_terms`）。合并预览会再次展示首次历史译法；有冲突或没有证据的候选默认不勾选/不会被静默自动接受，仍需人工明确确认：
 
 ```bash
 python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/keyword_candidates.jsonl
 python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/manifest.json --dry-run
 python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/manifest.json --accept-confidence 0.85 --yes
 ```
+
+`--yes` 是明确的人工覆盖开关；仅设置 `--accept-confidence` 不会绕过历史证据的歧义、缺失、不可用，或证据与当前候选不一致。旧版 / 手工构造且缺少 `history_evidence` 的候选、以及导出后手工改过 `source` / `suggested_target` 但仍携带旧证据的候选同样按无证据处理。
 
 - 默认逐条 `y/n` 确认；`--accept-confidence` 可半自动接受高置信候选，`--yes` 跳过交互。
 - `--min-confidence` 过滤低置信候选；已有 `source` 默认不覆盖，需 `--overwrite` 才改目标译法。

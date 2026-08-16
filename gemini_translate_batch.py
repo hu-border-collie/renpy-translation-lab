@@ -56,12 +56,15 @@ from engine_adapters.writeback import (
     source_snapshot_fingerprint,
 )
 import keyword_glossary_merge
+import keyword_history
 import model_usage_ledger
 import prompt_context
 import revision_corpus
+import revision_proposals
 import translation_ab_experiment
 import story_memory
 import translation_core
+import translation_quality
 import translator_runtime as runtime
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -116,6 +119,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply',
         'apply-revisions',
         'export-revision-corpus',
+        'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'build-translation-records',
@@ -134,6 +138,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'preview-revisions',
         'apply-revisions',
         'export-revision-corpus',
+        'import-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'build-translation-records',
@@ -203,11 +208,12 @@ BATCH_SPLIT_RECOMMEND_CHUNKS = 400
 BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
 BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.normalize_non_chinese_rules(None)
+BATCH_QUALITY_POLICY = translation_quality.normalize_policy(None)
 MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
 MANIFEST_MODE_FINAL_REVIEW = 'final_review'
-CHECK_CONTRACT_VERSION = 2
+CHECK_CONTRACT_VERSION = 3
 CHECK_SAFETY_SAFE = 'safe'
 CHECK_SAFETY_WARN = 'warn'
 CHECK_SAFETY_BLOCK = 'block'
@@ -451,7 +457,7 @@ def load_batch_settings():
     global FINAL_REVIEW_ENABLED, FINAL_REVIEW_REQUIRE_ZERO_PENDING, FINAL_REVIEW_CHUNK_SIZE
     global FINAL_REVIEW_PROMPT_SCHEMA_VERSION, FINAL_REVIEW_MODEL
     global FINAL_REVIEW_DISPLAY_NAME_PREFIX
-    global BATCH_NON_CHINESE_RULES, SYNC_BACKEND, SYNC_MODEL, SYNC_TIMEOUT_SECONDS
+    global BATCH_NON_CHINESE_RULES, BATCH_QUALITY_POLICY, SYNC_BACKEND, SYNC_MODEL, SYNC_TIMEOUT_SECONDS
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
@@ -502,6 +508,7 @@ def load_batch_settings():
         batch = {}
 
     BATCH_NON_CHINESE_RULES = batch_non_chinese_rules.load_non_chinese_rules(translator_config)
+    BATCH_QUALITY_POLICY = translation_quality.load_policy_from_config(translator_config)
 
     sync = translator_config.get('sync')
     if not isinstance(sync, dict):
@@ -2433,6 +2440,7 @@ def build_check_fingerprint(manifest):
         'core_schema_version': manifest.get('core_schema_version', 1),
         'batch_model': manifest.get('batch_model', ''),
         'settings': manifest.get('settings') or {},
+        'quality_policy': BATCH_QUALITY_POLICY,
         'project': project_identity,
         'result': file_content_fingerprint(result_path),
         'target_shape': manifest_target_shape(manifest),
@@ -2494,13 +2502,75 @@ def summarize_check_safety(summary):
     }
 
 
-def attach_check_contract(manifest, summary):
+def summarize_writeback_gate(safety, quality_gate):
+    structural_blocker_count = safety.get('counts', {}).get(CHECK_SAFETY_BLOCK, 0)
+    # Legacy structural warnings (partial rows, missing ids, ...) remain part of
+    # the #39 writeback safety contract.  They are not quality warnings.
+    structural_blocker_count += safety.get('counts', {}).get(CHECK_SAFETY_WARN, 0)
+    quality_blocker_count = int((quality_gate or {}).get('blocker_count') or 0)
+    blocker_count = structural_blocker_count + quality_blocker_count
+    can_apply = blocker_count == 0 and safety.get('level') != CHECK_SAFETY_BLOCK
+    if safety.get('level') == CHECK_SAFETY_BLOCK:
+        can_apply = False
+    return {
+        'decision': (
+            translation_quality.GATE_ALLOW if can_apply else translation_quality.GATE_DENY
+        ),
+        'can_apply': can_apply,
+        'blocker_count': blocker_count,
+        'structural_blocker_count': structural_blocker_count,
+        'quality_blocker_count': quality_blocker_count,
+    }
+
+
+def attach_check_contract(manifest, summary, quality_findings=None):
     safety = summarize_check_safety(summary)
+    if quality_findings is not None:
+        quality_gate = translation_quality.summarize_quality_gate(
+            quality_findings,
+            acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+        )
+    else:
+        # Apply revalidation does not recompute quality findings; the preflight
+        # already proved the last check is fresh.  Reuse the persisted quality
+        # gate so configured blockers remain visible and still block writeback.
+        last_summary = manifest.get('last_check_summary')
+        persisted_quality_gate = (
+            last_summary.get('quality_gate')
+            if isinstance(last_summary, dict)
+            else None
+        )
+        if isinstance(persisted_quality_gate, dict):
+            quality_gate = dict(persisted_quality_gate)
+            quality_gate.setdefault('has_warnings', False)
+            quality_gate.setdefault('acknowledged_count', 0)
+        else:
+            quality_gate = translation_quality.summarize_quality_gate(
+                [],
+                acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+            )
+    writeback_gate = summarize_writeback_gate(safety, quality_gate)
+    can_apply = bool(writeback_gate.get('can_apply'))
+    check_status = translation_quality.overall_check_status(writeback_gate, quality_gate)
+
     summary['check_contract_version'] = CHECK_CONTRACT_VERSION
     summary['check_fingerprint'] = build_check_fingerprint(manifest)
+    # ``safety_level`` remains the legacy *structural* safety label.  Quality
+    # blockers are expressed through writeback_gate / quality_gate so the GUI
+    # can explain the actual reason instead of misreporting a source problem.
     summary['safety_level'] = safety['level']
     summary['safety_counts'] = safety['counts']
     summary['safety_reasons'] = safety['reasons']
+    summary['check_status'] = check_status
+    summary['can_apply'] = can_apply
+    summary['has_warnings'] = bool(quality_gate.get('has_warnings'))
+    summary['writeback_gate'] = writeback_gate
+    summary['quality_gate'] = quality_gate
+    summary['quality_finding_schema_version'] = (
+        translation_quality.QUALITY_FINDING_SCHEMA_VERSION
+    )
+    summary['quality_rule_schema_version'] = translation_quality.QUALITY_RULE_SCHEMA_VERSION
+    summary['quality_policy_digest'] = translation_quality.policy_digest(BATCH_QUALITY_POLICY)
     return summary
 
 
@@ -2640,11 +2710,22 @@ def require_safe_check_for_apply(manifest):
             current_fingerprint=current_fingerprint,
         )
 
-    safety_level = last_summary.get('safety_level')
-    if safety_level != CHECK_SAFETY_SAFE:
+    writeback_gate = last_summary.get('writeback_gate')
+    if not isinstance(writeback_gate, dict):
+        fail_apply_preflight(
+            manifest,
+            'missing_writeback_gate',
+            'Manifest check summary has no writeback gate. Run check again before apply.',
+            current_fingerprint=current_fingerprint,
+        )
+    if writeback_gate.get('decision') != translation_quality.GATE_ALLOW:
         reason_code = 'unsafe_check_status'
+        safety_level = last_summary.get('safety_level')
+        quality_gate = last_summary.get('quality_gate') or {}
         message = (
-            f'Last check safety status is {safety_level or "unknown"}, not safe. '
+            f'Last check writeback gate is {writeback_gate.get("decision") or "unknown"}, not safe to apply. '
+            f'(safety={safety_level or "unknown"}, '
+            f'quality={quality_gate.get("decision") or "pass"}). '
             'Repair the results or run check again before apply.'
         )
         fail_apply_preflight(manifest, reason_code, message, current_fingerprint=current_fingerprint)
@@ -3361,6 +3442,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(runtime_policy=BATCH_QUALITY_POLICY),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -4437,6 +4519,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(runtime_policy=BATCH_QUALITY_POLICY),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -4504,6 +4587,283 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         for warning_text in build_warnings:
             print(f'- {warning_text}')
     return manifest_path
+
+
+def _proposal_import_report_markdown(report):
+    lines = [
+        '# Revision Proposal Import',
+        '',
+        f"- Status: {report.get('status') or 'unknown'}",
+        f"- Input rows: {report.get('input_count', 0)}",
+        f"- Requested selected rows: {report.get('requested_selected_count', 0)}",
+        f"- Validated selected rows: {report.get('selected_count', 0)}",
+        f"- Candidate rows: {report.get('candidate_count', 0)}",
+        '',
+    ]
+    diagnostics = list(report.get('diagnostics') or [])
+    if diagnostics:
+        lines.extend(['## Diagnostics', ''])
+        for item in diagnostics:
+            lines.append(
+                f"- `{item.get('code') or 'UNKNOWN'}` row {item.get('row') or '-'}: "
+                f"{item.get('message') or ''}"
+            )
+    return '\n'.join(lines) + '\n'
+
+
+def _write_proposal_import_report(package_dir, report):
+    json_path = os.path.join(package_dir, 'proposal_import_report.json')
+    markdown_path = os.path.join(package_dir, 'proposal_import_report.md')
+    atomic_write_json(json_path, report, ensure_ascii=False, indent=2)
+    atomic_write_text(markdown_path, _proposal_import_report_markdown(report))
+    return {'import_report': json_path, 'import_report_markdown': markdown_path}
+
+
+def _proposal_status_from_preview_summary(summary):
+    """Map the latest revision preview summary to proposal eligibility state."""
+    failures = int((summary or {}).get('failure_items') or 0)
+    candidates = int((summary or {}).get('valid_items') or 0)
+    unchanged = int((summary or {}).get('unchanged_items') or 0)
+    if failures and candidates:
+        return 'partial'
+    if failures:
+        return 'blocked'
+    if candidates:
+        return 'previewed'
+    if unchanged:
+        return 'no_op'
+    return 'blocked'
+
+
+def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
+    """Import structured proposals into the existing revision preview gate.
+
+    The command is local-only and never writes ``.rpy``.  Invalid structural or
+    stale input produces an auditable report but no revision manifest.  Valid
+    candidates are encoded as ordinary revision results and immediately
+    previewed by ``preview_revisions``.
+    """
+    proposal_path = os.path.abspath(str(proposal_path or '').strip())
+    if not proposal_path or not os.path.isfile(proposal_path):
+        raise cli_contract.MachineContractError(
+            f'Proposal JSONL not found: {proposal_path or "(missing)"}',
+            code_name='PROPOSAL_FILE_NOT_FOUND',
+            suggested_action='pass_existing_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    try:
+        rows = revision_proposals.load_jsonl(proposal_path)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Invalid proposal JSONL: {exc}',
+            code_name='PROPOSAL_JSONL_INVALID',
+            suggested_action='fix_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        ) from exc
+    if not rows:
+        raise cli_contract.MachineContractError(
+            'Proposal JSONL contains no proposal rows.',
+            code_name='NO_PROPOSAL_ROWS',
+            suggested_action='provide_non_empty_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    resolved_corpus_manifest = revision_proposals.find_corpus_manifest(
+        proposal_path,
+        corpus_manifest_path,
+    )
+    corpus_manifest = None
+    if resolved_corpus_manifest:
+        try:
+            corpus_manifest = revision_proposals.load_corpus_manifest(
+                resolved_corpus_manifest
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise cli_contract.MachineContractError(
+                f'Invalid revision corpus manifest: {exc}',
+                code_name='CORPUS_MANIFEST_INVALID',
+                suggested_action='pass_matching_revision_corpus_manifest',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            ) from exc
+
+    file_paths = list(collect_files_to_process())
+    file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
+    digests_before = revision_corpus.collect_file_digests(file_path_map)
+    live_jobs = collect_revision_file_jobs(file_paths=file_paths, include_empty_files=True)
+    digests_after = revision_corpus.collect_file_digests(file_path_map)
+    live_snapshot_digest = revision_corpus.aggregate_digest(digests_before)
+    live_items = {
+        str(item.get('id') or ''): item
+        for job in live_jobs
+        for item in (job.get('items') or [])
+    }
+    validation = revision_proposals.validate(
+        rows,
+        live_items,
+        live_snapshot_digest=live_snapshot_digest,
+        live_project_identity={'tl_dir': legacy.TL_DIR},
+        corpus_manifest=corpus_manifest,
+    )
+    diagnostics = [dict(item) for item in validation.diagnostics]
+    if digests_before != digests_after:
+        diagnostics.append({
+            'code': 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
+            'message': 'live project files changed while proposals were being imported',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_dir = create_batch_package_dir(
+        f'{stamp}_{guess_project_slug()}_revision_proposals'
+    )
+    status = validation.status
+    if revision_proposals.diagnostics_are_stale(diagnostics):
+        status = 'stale'
+    elif diagnostics:
+        status = 'blocked'
+    report = {
+        'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
+        'kind': 'revision_proposal_import',
+        'status': status,
+        'proposal_path': proposal_path,
+        'corpus_manifest_path': resolved_corpus_manifest,
+        'live_snapshot_digest': live_snapshot_digest,
+        'input_count': validation.input_count,
+        'requested_selected_count': validation.requested_selected_count,
+        'selected_count': validation.selected_count,
+        'candidate_count': len(validation.proposals),
+        'diagnostics': diagnostics,
+        'suggested_action': (
+            're_export_corpus_and_regenerate_proposals'
+            if status == 'stale'
+            else 'fix_proposal_diagnostics'
+            if status == 'blocked'
+            else 'no_writeback_needed'
+            if status == 'no_op'
+            else 'inspect_revision_preview'
+        ),
+    }
+    artifacts = _write_proposal_import_report(package_dir, report)
+    if diagnostics or not validation.proposals:
+        print(f'Revision proposal import status: {status}')
+        print(f'Import report: {artifacts["import_report"]}')
+        return {**report, 'paths': {'output_dir': package_dir, **artifacts}}
+
+    selected_by_identity = {
+        str(row['identity_v2']): row for row in validation.proposals
+    }
+    filtered_jobs = []
+    for job in live_jobs:
+        items = [
+            item for item in (job.get('items') or [])
+            if str(item.get('id') or '') in selected_by_identity
+        ]
+        if items:
+            filtered_jobs.append({**job, 'items': items, 'task_count': len(items)})
+    chunks = build_revision_chunks(filtered_jobs, chunk_size=REVISION_CHUNK_SIZE)
+    requests_path = os.path.join(package_dir, 'requests.jsonl')
+    results_path = os.path.join(package_dir, 'results.jsonl')
+    atomic_write_text(requests_path, '')
+    result_rows = []
+    for chunk in chunks:
+        results = []
+        for item in chunk['items']:
+            proposal = selected_by_identity[str(item.get('id') or '')]
+            proposed = str(proposal.get('proposed_translation') or '').strip()
+            results.append({
+                'id': item['id'],
+                'should_update': compact_text(proposed) != compact_text(item.get('current_translation') or ''),
+                'revised_translation': proposed,
+                'reason': str(proposal.get('reason') or '').strip() or 'Imported revision proposal',
+            })
+        result_rows.append({
+            'key': chunk['key'],
+            'response': {'candidates': [{
+                'content': {'parts': [{'text': json.dumps(results, ensure_ascii=False)}]},
+                'finishReason': 'STOP',
+            }]},
+        })
+    atomic_write_jsonl(results_path, result_rows, ensure_ascii=False)
+    manifest = {
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
+        'mode': MANIFEST_MODE_REVISION,
+        'execution': 'proposal_import',
+        'created_at': datetime.now().isoformat(timespec='seconds'),
+        'display_name': f'{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{stamp}',
+        'batch_model': '',
+        'base_dir': legacy.BASE_DIR,
+        'tl_dir': legacy.TL_DIR,
+        **_manifest_target_language_fields(),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        'input_jsonl_path': requests_path,
+        'result_jsonl_path': results_path,
+        'job_name': '',
+        'job_state': 'LOCAL_CANDIDATES',
+        'submit_disabled': True,
+        'settings': {'revision_chunk_size': REVISION_CHUNK_SIZE},
+        'revision_settings': {
+            'chunk_size': REVISION_CHUNK_SIZE,
+            'candidate_source': 'revision_proposals',
+        },
+        'summary': {
+            'file_count': len(filtered_jobs),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk['items']) for chunk in chunks),
+            'proposal_count': len(validation.proposals),
+        },
+        'files': {
+            job['file_rel_path']: {
+                'path': job['file_path'],
+                'task_count': job['task_count'],
+            }
+            for job in filtered_jobs
+        },
+        'chunks': chunks,
+        'proposal_import': {
+            'schema_version': revision_proposals.PROPOSAL_SCHEMA_VERSION,
+            'status': 'imported',
+            'history': ['imported'],
+            'writeback_eligible': False,
+            'proposal_path': proposal_path,
+            'proposal_sha256': _sha256_file(proposal_path),
+            'corpus_manifest_path': resolved_corpus_manifest,
+            'corpus_snapshot_digest': live_snapshot_digest,
+            'report_path': artifacts['import_report'],
+        },
+    }
+    manifest_path = os.path.join(package_dir, 'manifest.json')
+    atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
+    previewed = preview_revisions(manifest_path, update_latest=False)
+    preview_summary = dict((previewed.get('last_revision_preview') or {}).get('summary') or {})
+    final_status = _proposal_status_from_preview_summary(preview_summary)
+    report.update({
+        'status': final_status,
+        'preview_summary': preview_summary,
+        'suggested_action': (
+            'run_apply_revisions' if final_status == 'previewed'
+            else 'no_writeback_needed' if final_status == 'no_op'
+            else 'fix_preview_diagnostics_and_reimport'
+        ),
+    })
+    _write_proposal_import_report(package_dir, report)
+    save_manifest(
+        previewed,
+        update_latest=final_status in {'previewed', 'no_op'},
+    )
+    print(f'Revision proposal import status: {final_status}')
+    print(f'Manifest: {manifest_path}')
+    return {
+        **report,
+        'manifest': previewed,
+        'paths': {
+            'output_dir': package_dir,
+            'manifest': manifest_path,
+            'revision_preview_jsonl': previewed['last_revision_preview']['jsonl_path'],
+            'revision_preview_markdown': previewed['last_revision_preview']['markdown_path'],
+            **artifacts,
+        },
+    }
 
 
 def _flatten_revision_items(file_jobs):
@@ -5242,6 +5602,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(runtime_policy=BATCH_QUALITY_POLICY),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -5361,6 +5722,10 @@ def split_manifest(target=None, max_chunks=600, max_items=0, display_name_prefix
             'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
             **_manifest_target_language_fields(manifest),
             **batch_non_chinese_rules.manifest_non_chinese_rules_fields(manifest),
+            **translation_quality.manifest_quality_policy_fields(
+            manifest,
+            runtime_policy=BATCH_QUALITY_POLICY,
+        ),
             'input_jsonl_path': part_input_jsonl_path,
             'result_jsonl_path': '',
             'job_name': '',
@@ -5759,6 +6124,10 @@ def build_retry_package(target=None, display_name_override=''):
         'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
         **_manifest_target_language_fields(manifest),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(manifest),
+        **translation_quality.manifest_quality_policy_fields(
+            manifest,
+            runtime_policy=BATCH_QUALITY_POLICY,
+        ),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': '',
         'job_name': '',
@@ -7280,6 +7649,140 @@ def markdown_escape_cell(value):
     return compact_text(str(value or '')).replace('|', '\\|').replace('\n', ' ')
 
 
+def _keyword_history_file_paths(manifest):
+    """Resolve the keyword package's recorded source files for history scan."""
+
+    file_paths = []
+    base_dir = str(manifest.get('base_dir') or '').strip()
+    package_dir = str(manifest.get('_package_dir') or '').strip()
+    for rel_path, info in sorted((manifest.get('files') or {}).items()):
+        if not isinstance(info, dict):
+            continue
+        raw_path = str(info.get('path') or '').strip()
+        if not raw_path:
+            continue
+        file_path = raw_path
+        if not os.path.isabs(file_path):
+            file_path = os.path.join(base_dir or package_dir, file_path)
+        file_paths.append((str(rel_path), os.path.abspath(file_path)))
+    return file_paths
+
+
+def collect_keyword_history_corpus(manifest):
+    """Build a read-only revision-corpus projection for keyword evidence.
+
+    The scan reuses ``collect_revision_file_jobs`` and
+    ``revision_corpus.build_corpus_items``.  It is intentionally derived at
+    export time and is never persisted as a second canonical translation
+    store.  Digests are collected before scanning and after corpus construction
+    so a source change during either phase fails closed.  A missing source file
+    fails closed so candidates receive an ``unavailable`` evidence record rather
+    than an apparently safe match.
+    """
+
+    file_paths = _keyword_history_file_paths(manifest)
+    if not file_paths:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': 0,
+            'source_changed_during_scan': False,
+            'diagnostics': ['keyword manifest has no recorded source files'],
+        }
+
+    file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
+    missing = sorted(rel_path for rel_path, file_path in file_paths if not os.path.isfile(file_path))
+    if missing:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': len(file_paths),
+            'source_changed_during_scan': False,
+            'diagnostics': [f'missing source file: {rel_path}' for rel_path in missing],
+        }
+
+    try:
+        digests_before = revision_corpus.collect_file_digests(file_path_map)
+        file_jobs = collect_revision_file_jobs(
+            file_paths=file_paths,
+            include_empty_files=True,
+        )
+        items, diagnostics = revision_corpus.build_corpus_items(file_jobs)
+        digests_after = revision_corpus.collect_file_digests(file_path_map)
+        # The revision scanner also recognizes untranslated comment/source
+        # pairs.  Ordinary changed translations are historical evidence;
+        # unchanged rows are kept as review-only preserve_evidence so
+        # preserve-term candidates are not silently auto-accepted.
+        items = [
+            item for item in items
+            if keyword_history.is_history_evidence_row(item)
+        ]
+    except (OSError, UnicodeError, ValueError) as exc:
+        return {
+            'items': [],
+            'status': 'unavailable',
+            'reason': 'history_scan_unavailable',
+            'file_count': len(file_paths),
+            'source_changed_during_scan': False,
+            'diagnostics': [str(exc)],
+        }
+
+    return {
+        'items': items,
+        'status': 'ready',
+        'reason': '',
+        'file_count': len(file_paths),
+        'source_changed_during_scan': digests_before != digests_after,
+        'diagnostics': diagnostics,
+    }
+
+
+def _keyword_history_summary(candidates, history_scan):
+    status_counts = {
+        keyword_history.STATUS_CONSISTENT: 0,
+        keyword_history.STATUS_CONFLICT: 0,
+        keyword_history.STATUS_AMBIGUOUS: 0,
+        keyword_history.STATUS_PRESERVE_EVIDENCE: 0,
+        keyword_history.STATUS_UNMATCHED: 0,
+        keyword_history.STATUS_UNAVAILABLE: 0,
+    }
+    for candidate in candidates:
+        evidence = candidate.get('history_evidence') or {}
+        status = str(evidence.get('status') or keyword_history.STATUS_UNAVAILABLE)
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        'schema_version': keyword_history.HISTORY_EVIDENCE_SCHEMA_VERSION,
+        'scan_status': history_scan.get('status') or 'unavailable',
+        'file_count': int(history_scan.get('file_count') or 0),
+        'occurrence_count': len(history_scan.get('items') or []),
+        'source_changed_during_scan': bool(history_scan.get('source_changed_during_scan')),
+        'diagnostic_count': len(history_scan.get('diagnostics') or []),
+        'candidate_status_counts': status_counts,
+        'diagnostics': list(history_scan.get('diagnostics') or []),
+    }
+
+
+def format_keyword_history_markdown(evidence):
+    """Render one compact history-evidence cell for the Markdown report."""
+
+    evidence = evidence if isinstance(evidence, dict) else {}
+    status = str(evidence.get('status') or keyword_history.STATUS_UNAVAILABLE)
+    first = evidence.get('first_occurrence') or {}
+    if first:
+        location = f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0}"
+        identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
+        translation = str(first.get('current_translation') or '(空)')
+        text = f"{location} [{identity}] → {translation} [{status}]"
+    else:
+        text = f"无首次 occurrence [{status}]"
+    reasons = evidence.get('conflict_reasons') or []
+    if reasons:
+        text += '；' + '；'.join(str(reason) for reason in reasons)
+    return text
+
+
 def write_keyword_markdown(path, candidates, summary):
     lines = [
         '# Keyword Candidates',
@@ -7288,9 +7791,10 @@ def write_keyword_markdown(path, candidates, summary):
         f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
         f"- Missing chunk rows: {summary.get('missing_chunk_rows', 0)}",
         f"- Ambiguous provenance candidates: {summary.get('ambiguous_provenance_candidates', 0)}",
+        f"- Historical evidence: {summary.get('history_candidate_status_counts', {})}",
         '',
-        '| Source | Suggested target | Category | Confidence | Evidence | Files |',
-        '| --- | --- | --- | ---: | --- | --- |',
+        '| Source | Suggested target | Category | Confidence | Evidence | Files | First historical occurrence / current translation |',
+        '| --- | --- | --- | ---: | --- | --- | --- |',
     ]
     for candidate in candidates:
         files = ', '.join(candidate.get('source_files') or [])
@@ -7304,6 +7808,9 @@ def write_keyword_markdown(path, candidates, summary):
                     f"{candidate.get('confidence', 0.0):.2f}",
                     markdown_escape_cell(candidate.get('evidence')),
                     markdown_escape_cell(files),
+                    markdown_escape_cell(
+                        format_keyword_history_markdown(candidate.get('history_evidence'))
+                    ),
                 ]
             )
             + ' |'
@@ -7484,7 +7991,28 @@ def export_keyword_candidates(
         merged_candidates.values(),
         key=lambda item: (-item.get('confidence', 0.0), item.get('category', ''), item.get('source', '').lower()),
     )
+
+    history_scan = collect_keyword_history_corpus(manifest)
+    candidates = keyword_history.attach_keyword_history_evidence(
+        candidates,
+        history_scan.get('items') or [],
+        source_changed_during_scan=bool(history_scan.get('source_changed_during_scan')),
+        unavailable_reason=str(history_scan.get('reason') or ''),
+    )
+    history_summary = _keyword_history_summary(candidates, history_scan)
     summary['candidate_count_deduped'] = len(candidates)
+    summary['history_scan_status'] = history_summary['scan_status']
+    summary['history_occurrence_count'] = history_summary['occurrence_count']
+    summary['history_file_count'] = history_summary['file_count']
+    summary['history_source_changed_during_scan'] = history_summary['source_changed_during_scan']
+    summary['history_candidate_status_counts'] = history_summary['candidate_status_counts']
+    summary['history_diagnostic_count'] = history_summary['diagnostic_count']
+    if history_summary['diagnostics']:
+        summary['history_diagnostics'] = history_summary['diagnostics']
+        bump_counter(summary['reason_counts'], 'history_scan_diagnostic', len(history_summary['diagnostics']))
+    for status, count in history_summary['candidate_status_counts'].items():
+        if status != keyword_history.STATUS_CONSISTENT and count:
+            bump_counter(summary['reason_counts'], f'history_{status}', count)
 
     jsonl_path = resolve_keyword_export_path(manifest, output_jsonl, 'keyword_candidates.jsonl', 'keyword JSONL output')
     markdown_path = resolve_keyword_export_path(manifest, output_markdown, 'keyword_candidates.md', 'keyword Markdown output')
@@ -7523,6 +8051,7 @@ def export_keyword_candidates(
         'summary_jsonl_path': summary_jsonl_path,
         'summary_markdown_path': summary_markdown_path,
         'summary': summary,
+        'history_evidence': history_summary,
     }
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
 
@@ -7532,6 +8061,11 @@ def export_keyword_candidates(
     print(f'Markdown: {markdown_path}')
     print(f'Summary JSONL: {summary_jsonl_path}')
     print(f'Summary Markdown: {summary_markdown_path}')
+    print(
+        'Historical evidence: '
+        f"{summary['history_occurrence_count']} occurrences, "
+        f"statuses={summary['history_candidate_status_counts']}"
+    )
     if summary.get('reason_counts'):
         print('Warnings:')
         for name in sorted(summary['reason_counts']):
@@ -8742,6 +9276,11 @@ def _revision_manifest_identity(manifest):
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Preserve the v1 fingerprint for pre-proposal revision/final-review
+    # packages.  Proposal manifests bind their immutable import provenance and
+    # eligibility state without adding a null field to every legacy payload.
+    if isinstance(manifest.get('proposal_import'), dict):
+        payload['proposal_import'] = manifest['proposal_import']
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode('utf-8')
     ).hexdigest()
@@ -8785,6 +9324,16 @@ def _require_valid_revision_preview(manifest):
     ``--force`` deliberately does not bypass preview staleness, project identity
     or source snapshot checks: it only bypasses the already-applied guard.
     """
+    proposal_import = manifest.get('proposal_import')
+    if isinstance(proposal_import, dict) and (
+        not proposal_import.get('writeback_eligible')
+        or proposal_import.get('status') not in {'previewed', 'no_op'}
+    ):
+        _mark_revision_apply_blocked(
+            manifest,
+            'proposal_import_not_eligible',
+            'proposal import is blocked, partial, stale, or not previewed; re-import valid proposals.',
+        )
     preview = manifest.get('last_revision_preview')
     if (
         not isinstance(preview, dict)
@@ -8890,7 +9439,14 @@ def write_revision_markdown(path, entries, summary):
         handle.write('\n'.join(lines) + '\n')
 
 
-def preview_revisions(target=None, output_jsonl='', output_markdown=''):
+def preview_revisions(
+    target=None,
+    output_jsonl='',
+    output_markdown='',
+    *,
+    update_latest=None,
+):
+    """Build a revision preview and optionally control the latest pointer."""
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
     _replacements, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
@@ -8921,6 +9477,23 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
         'source_snapshots': _revision_source_snapshots(manifest),
         'summary': summary,
     }
+    proposal_state = manifest.get('proposal_import')
+    if isinstance(proposal_state, dict):
+        proposal_state = dict(proposal_state)
+        proposal_status = _proposal_status_from_preview_summary(summary)
+        history = list(proposal_state.get('history') or [])
+        if not history or history[-1] != proposal_status:
+            history.append(proposal_status)
+        proposal_state['status'] = proposal_status
+        proposal_state['history'] = history
+        proposal_state['writeback_eligible'] = proposal_status in {
+            'previewed',
+            'no_op',
+        }
+        manifest['proposal_import'] = proposal_state
+        manifest['last_revision_preview']['manifest_identity'] = (
+            _revision_manifest_identity(manifest)
+        )
     # A fresh preview invalidates any prior blocked/no_op/partial terminal state:
     # the user may have fixed the blocker and expects the writeback gate to reopen.
     # A prior real writeback is preserved in revision_apply_history.
@@ -8943,7 +9516,12 @@ def preview_revisions(target=None, output_jsonl='', output_markdown=''):
     manifest.pop('revision_applied_at', None)
     manifest.pop('revision_apply_summary', None)
     manifest.pop('last_revision_apply_summary', None)
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    should_update_latest = (
+        manifest.get('execution') != 'sync'
+        if update_latest is None
+        else bool(update_latest)
+    )
+    save_manifest(manifest, update_latest=should_update_latest)
     if manifest.get('final_review_source'):
         import final_review as fr
         import final_review_revision
@@ -9362,6 +9940,96 @@ def collect_result_actions(manifest, validate_sources=False):
     return replacements_by_file, translated_lines_by_file, failure_entries, summary
 
 
+def collect_quality_subjects(manifest, replacements_by_file, stats=None):
+    """Build quality-check subjects from structurally validated replacements.
+
+    Quality rules only inspect items that already passed translation contract
+    validation and source validation.  Structural failures continue to be
+    reported through the existing check failure report and writeback gate.
+
+    When *stats* is provided it receives collection counters so callers can
+    surface silently unmapped actions instead of skipping them invisibly.
+    """
+
+    item_index = {}
+    counters = {
+        'quality_action_items': 0,
+        'quality_subject_items': 0,
+        'quality_unmatched_items': 0,
+    }
+    for chunk in manifest.get('chunks') or []:
+        if not isinstance(chunk, dict):
+            continue
+        file_rel_path = str(chunk.get('file_rel_path') or '')
+        for item in chunk.get('items') or []:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get('id') or '')
+            item_index[(file_rel_path, item_id)] = (chunk, item)
+            item_index[(str(chunk.get('key') or ''), item_id)] = (chunk, item)
+
+    subjects = []
+    for file_key, replacements_by_line in replacements_by_file.items():
+        for line_index, actions in replacements_by_line.items():
+            for action in actions or []:
+                counters['quality_action_items'] += 1
+                if not isinstance(action, (tuple, list)) or len(action) < 6:
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                replacement = str(action[2] or '')
+                expected_text = str(action[5] or '') if len(action) > 5 else ''
+                item_id = str(action[6] or '') if len(action) > 6 else ''
+                chunk_key = str(action[7] or '') if len(action) > 7 else ''
+                chunk, item = item_index.get(
+                    (str(file_key), item_id),
+                    item_index.get((chunk_key, item_id), (None, None)),
+                )
+                if chunk is None or item is None:
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                try:
+                    unit = translation_core.unit_from_manifest_item(
+                        item,
+                        mode=translation_core.MODE_TRANSLATION,
+                        chunk=chunk,
+                    )
+                    if unit is None:
+                        raise ValueError('unit_from_manifest_item returned None')
+                    subject = {
+                        'item_id': item_id,
+                        'file_rel_path': str(file_key),
+                        'line': unit.line,
+                        'line_number': unit.display_line_number,
+                        'start': unit.start,
+                        'end': unit.end,
+                        'source': expected_text or unit.text,
+                        'translation': replacement,
+                        'speaker_id': unit.speaker_id,
+                        'speaker_name': unit.speaker_name,
+                    }
+                except (AttributeError, TypeError, ValueError):
+                    # Quality inspection is additive; a malformed item must not
+                    # take down the structural check workflow.  Count it and
+                    # let the existing failure contract own diagnostics.
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                subjects.append(subject)
+    counters['quality_subject_items'] = len(subjects)
+    if isinstance(stats, dict):
+        stats.update(counters)
+    return subjects
+
+
+def write_quality_findings(manifest, findings):
+    path = os.path.join(manifest.get('_package_dir', ''), 'quality_findings.jsonl')
+    atomic_write_jsonl(
+        path,
+        [translation_quality.normalize_finding(finding) for finding in findings],
+        ensure_ascii=False,
+    )
+    return path
+
+
 def print_check_summary(summary):
     print(f"Expected chunks: {summary['expected_chunks']}")
     print(f"Result rows: {summary['result_rows']}")
@@ -9392,6 +10060,35 @@ def print_check_summary(summary):
                 print(f"{status.capitalize()} reasons:")
                 for name in sorted(reasons):
                     print(f"- {name}: {reasons[name]}")
+
+    writeback_gate = summary.get('writeback_gate')
+    if isinstance(writeback_gate, dict):
+        print(f"Writeback gate: {writeback_gate.get('decision', 'unknown')}")
+        print(f"Writeback blockers: {writeback_gate.get('blocker_count', 0)}")
+
+    quality_gate = summary.get('quality_gate')
+    if isinstance(quality_gate, dict):
+        print(f"Quality gate: {quality_gate.get('decision', 'unknown')}")
+        if summary.get('quality_glossary_path'):
+            print(f"Quality glossary entries: {summary.get('quality_glossary_entries', 0)}")
+            if not summary.get('quality_glossary_loaded'):
+                print(f"Quality glossary not loaded: {summary['quality_glossary_path']}")
+        if summary.get('quality_subject_items') is not None:
+            print(f"Quality subjects: {summary.get('quality_subject_items', 0)}")
+        if summary.get('quality_unmatched_items'):
+            print(f"Quality unmatched items: {summary['quality_unmatched_items']}")
+        if summary.get('quality_coverage_complete') is False:
+            print("Quality coverage: incomplete")
+        print(f"Quality warnings: {quality_gate.get('warning_count', 0)}")
+        print(f"Quality blockers: {quality_gate.get('blocker_count', 0)}")
+        print(f"Acknowledged warnings: {quality_gate.get('acknowledged_count', 0)}")
+        quality_reason_counts = summary.get('quality_reason_counts') or {}
+        if quality_reason_counts:
+            print('Quality categories:')
+            for name in sorted(quality_reason_counts):
+                print(f"- {name}: {quality_reason_counts[name]}")
+    if summary.get('check_status'):
+        print(f"Check status: {summary['check_status']}")
 
 
 def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
@@ -9579,17 +10276,118 @@ def check_results(target=None):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
     require_manifest_project_match(manifest, 'check')
-    _replacements, _translated, failure_entries, summary = collect_result_actions(manifest, validate_sources=True)
-    attach_check_contract(manifest, summary)
+    replacements_by_file, _translated, failure_entries, summary = collect_result_actions(
+        manifest,
+        validate_sources=True,
+    )
+    quality_collection_stats = {}
+    quality_subjects = collect_quality_subjects(
+        manifest,
+        replacements_by_file,
+        stats=quality_collection_stats,
+    )
+    glossary_path = str(
+        manifest.get('glossary_file')
+        or os.environ.get('GLOSSARY_FILE')
+        or getattr(legacy, 'GLOSSARY_FILE', '')
+        or ''
+    )
+    quality_glossary_map = {}
+    quality_glossary_base = ''
+    for base_dir in (
+        str(manifest.get('_package_dir') or ''),
+        str(manifest.get('base_dir') or ''),
+    ):
+        if not base_dir:
+            continue
+        candidate = translation_quality.load_glossary_map(
+            glossary_path,
+            base_dir=base_dir,
+        )
+        if candidate:
+            quality_glossary_map = candidate
+            quality_glossary_base = base_dir
+            break
+    if not quality_glossary_map and glossary_path:
+        quality_glossary_map = translation_quality.load_glossary_map(glossary_path)
+    summary['quality_glossary_path'] = glossary_path
+    summary['quality_glossary_base'] = quality_glossary_base
+    summary['quality_glossary_entries'] = len(quality_glossary_map)
+    summary['quality_glossary_loaded'] = bool(
+        not glossary_path or quality_glossary_map
+    )
+    quality_findings = translation_quality.check_quality(
+        quality_subjects,
+        manifest=manifest,
+        policy=BATCH_QUALITY_POLICY,
+        glossary_map=quality_glossary_map,
+    )
+    quality_coverage_complete = not int(
+        quality_collection_stats.get('quality_unmatched_items') or 0
+    )
+    summary['quality_coverage_complete'] = quality_coverage_complete
+    if not quality_coverage_complete:
+        evidence = json.dumps(
+            dict(quality_collection_stats),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        finding_id = hashlib.sha256(
+            f'{translation_quality.QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
+        ).hexdigest()[:20]
+        quality_findings.append(
+            {
+                'finding_id': finding_id,
+                'schema_version': translation_quality.QUALITY_FINDING_SCHEMA_VERSION,
+                'reason_code': translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT,
+                'rule_id': 'unmatched_subject',
+                'severity': 'medium',
+                'disposition': translation_quality.DISPOSITION_WARNING,
+                'item_id': '',
+                'file': '',
+                'line': 0,
+                'source': '',
+                'translation': '',
+                'evidence': evidence,
+                'suggestion': 'Inspect quality_action_items / quality_unmatched_items and rerun check.',
+                'rule_version': translation_quality.QUALITY_RULE_SCHEMA_VERSION,
+            }
+        )
+    quality_report_path = write_quality_findings(manifest, quality_findings)
+    quality_reason_counts = {}
+    for finding in quality_findings:
+        bump_counter(
+            quality_reason_counts,
+            finding.get('reason_code') or 'quality.unknown',
+        )
+    summary['quality_findings_count'] = len(quality_findings)
+    summary.update(quality_collection_stats)
+    summary['quality_policy_source'] = 'runtime'
+    summary['quality_policy_runtime_digest'] = translation_quality.policy_digest(
+        BATCH_QUALITY_POLICY
+    )
+    manifest_policy = manifest.get('quality_policy')
+    if isinstance(manifest_policy, dict):
+        summary['quality_policy_manifest_digest'] = translation_quality.policy_digest(
+            manifest_policy
+        )
+    summary['quality_reason_counts'] = quality_reason_counts
+    summary['quality_findings_path'] = quality_report_path
+    attach_check_contract(manifest, summary, quality_findings=quality_findings)
     check_report_path = write_check_failure_report(manifest, failure_entries)
     manifest['last_check_at'] = datetime.now().isoformat(timespec='seconds')
     manifest['last_check_summary'] = summary
     manifest['last_check_report_path'] = check_report_path
+    manifest['last_quality_findings_path'] = quality_report_path
+    # Keep the persisted policy snapshot in sync with the policy that produced
+    # these findings; split/retry packages and GUI readers consume the snapshot.
+    manifest['quality_policy'] = translation_quality.normalize_policy(BATCH_QUALITY_POLICY)
     manifest.pop('last_apply_failure_report_path', None)
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
     print(f"Check failure report: {check_report_path}")
+    print(f"Quality findings report: {quality_report_path}")
     return manifest
 
 
@@ -9612,12 +10410,13 @@ def apply_results(target=None, force=False):
         validate_sources=True,
     )
     attach_check_contract(manifest, summary)
-    if summary.get('safety_level') != CHECK_SAFETY_SAFE:
+    writeback_gate = summary.get('writeback_gate') or {}
+    if writeback_gate.get('decision') != translation_quality.GATE_ALLOW:
         append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
         report_path = write_apply_failure_report(
             manifest,
             'unsafe_apply_recheck',
-            f'Apply recheck status is {summary.get("safety_level")}, not safe. No files were written.',
+            f'Apply recheck writeback gate is {writeback_gate.get("decision") or "unknown"}, not allow. No files were written.',
             summary=summary,
             failure_entries=failure_entries,
             current_fingerprint=summary.get('check_fingerprint'),
@@ -9675,12 +10474,13 @@ def apply_results(target=None, force=False):
         ),
     )
     attach_check_contract(manifest, summary)
-    if summary.get('safety_level') != CHECK_SAFETY_SAFE:
+    writeback_gate = summary.get('writeback_gate') or {}
+    if writeback_gate.get('decision') != translation_quality.GATE_ALLOW:
         append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
         report_path = write_apply_failure_report(
             manifest,
             'unsafe_apply_revalidation',
-            f'Apply source revalidation status is {summary.get("safety_level")}, not safe. No files were written.',
+            f'Apply source revalidation writeback gate is {writeback_gate.get("decision") or "unknown"}, not allow. No files were written.',
             summary=summary,
             failure_entries=failure_entries,
             current_fingerprint=summary.get('check_fingerprint'),
@@ -11773,6 +12573,7 @@ def make_sync_manifest(
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(runtime_policy=BATCH_QUALITY_POLICY),
         'input_jsonl_path': input_jsonl_path,
         'result_jsonl_path': result_jsonl_path,
         'job_name': '',
@@ -13585,6 +14386,30 @@ def build_arg_parser():
     )
     add_machine_output_argument(export_revision_corpus_parser)
 
+    import_revision_proposals_parser = subparsers.add_parser(
+        'import-revision-proposals',
+        help=(
+            'Validate structured human/Agent proposal JSONL against the live project, '
+            'build a local revision package, and run preview-revisions. Never writes .rpy.'
+        ),
+    )
+    import_revision_proposals_parser.add_argument(
+        'proposal',
+        help=(
+            'Proposal JSONL path (schema_version=1, identity_v2, project identity, '
+            'snapshots, provenance).'
+        ),
+    )
+    import_revision_proposals_parser.add_argument(
+        '--corpus-manifest',
+        default='',
+        help=(
+            'Companion revision_corpus_manifest.json. Defaults to the proposal file directory '
+            'when present.'
+        ),
+    )
+    add_machine_output_argument(import_revision_proposals_parser)
+
     export_project_snapshot_parser = subparsers.add_parser(
         'export-project-snapshot',
         help=(
@@ -14294,7 +15119,11 @@ def build_arg_parser():
         '--accept-confidence',
         type=float,
         default=None,
-        help='Auto-accept candidates at or above this confidence without prompting.',
+        help=(
+            'Auto-accept candidates at or above this confidence without prompting; '
+            'history conflicts, missing evidence, or evidence that no longer matches '
+            'the candidate still require review unless --yes is used.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--overwrite',
@@ -14304,7 +15133,10 @@ def build_arg_parser():
     merge_keywords_parser.add_argument(
         '--yes',
         action='store_true',
-        help='Accept all non-skipped candidates without interactive prompts.',
+        help=(
+            'Accept all non-skipped candidates without interactive prompts; explicitly '
+            'override history-evidence review.'
+        ),
     )
     merge_keywords_parser.add_argument(
         '--no-backup',
@@ -15004,6 +15836,17 @@ def dispatch_command(parser, args):
             getattr(args, 'output_dir', '') or None,
         )
 
+    if command == 'import-revision-proposals':
+        # Local candidate conversion and preview only: no provider/API setup,
+        # prepare command, or game-file write is allowed here.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        return import_revision_proposals(
+            args.proposal,
+            corpus_manifest_path=args.corpus_manifest,
+        )
+
     if command in {'usage-import', 'usage-report'}:
         as_json = bool(getattr(args, 'json', False))
 
@@ -15160,6 +16003,7 @@ def dispatch_command(parser, args):
             overwrite=args.overwrite,
             interactive=not args.yes and not dry_run,
             backup=not args.no_backup,
+            allow_history_review=bool(args.yes),
         )
         return
 
@@ -15332,6 +16176,7 @@ def build_machine_success_envelope(command, value, args):
         ),
         status_snapshot=manifest.get('last_status_snapshot_path'),
         check_report=manifest.get('last_check_report_path'),
+        quality_findings=manifest.get('last_quality_findings_path'),
         apply_failure_report=manifest.get('last_apply_failure_report_path'),
     )
     warnings = list(manifest.get('build_warnings') or [])
@@ -15350,7 +16195,11 @@ def build_machine_success_envelope(command, value, args):
     elif command == 'check':
         check_summary = dict(manifest.get('last_check_summary') or {})
         result['check'] = check_summary
-        status = str(check_summary.get('safety_level') or 'unknown')
+        status = str(
+            check_summary.get('check_status')
+            or check_summary.get('safety_level')
+            or 'unknown'
+        )
     elif command == 'apply':
         result['apply'] = dict(manifest.get('apply_summary') or {})
         result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
@@ -15528,6 +16377,32 @@ def build_machine_success_envelope(command, value, args):
                 'corpus_manifest': paths.get('manifest') or '',
                 'corpus_jsonl': paths.get('jsonl') or '',
                 'corpus_markdown': paths.get('markdown') or '',
+            },
+        )
+    elif command == 'import-revision-proposals':
+        imported = dict(value or {})
+        paths = dict(imported.get('paths') or {})
+        result = {
+            'input_count': int(imported.get('input_count') or 0),
+            'requested_selected_count': int(
+                imported.get('requested_selected_count') or 0
+            ),
+            'selected_count': int(imported.get('selected_count') or 0),
+            'candidate_count': int(imported.get('candidate_count') or 0),
+            'diagnostics': list(imported.get('diagnostics') or []),
+            'preview_summary': dict(imported.get('preview_summary') or {}),
+            'suggested_action': imported.get('suggested_action') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(imported.get('status') or 'blocked'),
+            result=result,
+            artifacts={
+                'manifest': paths.get('manifest') or '',
+                'import_report': paths.get('import_report') or '',
+                'import_report_markdown': paths.get('import_report_markdown') or '',
+                'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',
+                'revision_preview_markdown': paths.get('revision_preview_markdown') or '',
             },
         )
 
@@ -15827,6 +16702,8 @@ def _collect_output_file_protected_paths(args):
         'summary_jsonl',
         'summary_markdown',
         'variants_file',
+        'proposal',
+        'corpus_manifest',
     ):
         value = getattr(args, attr, None)
         if not isinstance(value, str) or not value.strip():

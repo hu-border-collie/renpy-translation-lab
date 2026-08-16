@@ -46,6 +46,7 @@ _TAIL_SCALAR_KEYS = (
     "next_split_manifest_path",
     "last_apply_failure_report_path",
     "last_check_report_path",
+    "last_quality_findings_path",
     "retry_of_manifest",
     "last_retry_manifest_path",
     "last_check_at",
