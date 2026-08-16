@@ -311,6 +311,11 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
         self.assertTrue(worker.cancel_requested)
         self.assertEqual(dialog._sdk_stop_pending, "reject")
 
+        # Settle the deferred stop so no live modal leaks to the test guard.
+        worker.finish()
+        dialog.reject()
+        self.assertTrue(dialog.isHidden())
+
     def test_progress_ticks_do_not_overwrite_stop_copy(self):
         dialog = WorkspaceSetupDialog(None)
         worker = _FakeSdkWorker(dialog)
