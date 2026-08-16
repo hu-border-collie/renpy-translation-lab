@@ -385,5 +385,33 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
                     self.assertEqual(evidence["conflict_codes"], [])
 
 
+class PluralVariantGenerationTests(unittest.TestCase):
+    def test_consonant_y_becomes_ies(self):
+        self.assertIn("stories", keyword_history._plural_variants("story"))
+        self.assertIn("bossies", keyword_history._plural_variants("bossy"))
+        self.assertNotIn("storys", keyword_history._plural_variants("story"))
+        self.assertNotIn("bossys", keyword_history._plural_variants("bossy"))
+
+    def test_s_ending_singular_gets_es_plural(self):
+        self.assertEqual(keyword_history._plural_variants("boss"), ["bosses"])
+        self.assertNotIn("bos", keyword_history._plural_variants("boss"))
+        self.assertIn("classes", keyword_history._plural_variants("class"))
+        self.assertNotIn("clas", keyword_history._plural_variants("class"))
+        self.assertIn("buses", keyword_history._plural_variants("bus"))
+        self.assertNotIn("bu", keyword_history._plural_variants("bus"))
+
+    def test_existing_plural_to_singular_rules_are_preserved(self):
+        self.assertEqual(keyword_history._plural_variants("stories"), ["story"])
+        self.assertEqual(keyword_history._plural_variants("bosses"), ["boss"])
+        self.assertEqual(keyword_history._plural_variants("cats"), ["cat"])
+        self.assertEqual(keyword_history._plural_variants("boxes"), ["box"])
+
+    def test_vowel_y_and_regular_plurals_still_work(self):
+        self.assertEqual(keyword_history._plural_variants("boy"), ["boys"])
+        self.assertEqual(keyword_history._plural_variants("day"), ["days"])
+        self.assertEqual(keyword_history._plural_variants("church"), ["churches"])
+        self.assertEqual(keyword_history._plural_variants("bush"), ["bushes"])
+
+
 if __name__ == "__main__":
     unittest.main()
