@@ -74,8 +74,11 @@ def load_corpus_manifest(path: str) -> dict[str, Any]:
         raise ValueError("corpus manifest must be a revision_corpus object")
     if value.get("schema_version") != revision_corpus.REVISION_CORPUS_SCHEMA_VERSION:
         raise ValueError("corpus manifest schema/version is unsupported")
-    if not isinstance(value.get("source"), Mapping):
+    source = value.get("source")
+    if not isinstance(source, Mapping):
         raise ValueError("corpus manifest source must be an object")
+    if not isinstance(source.get("snapshot_digest"), str) or not source.get("snapshot_digest").strip():
+        raise ValueError("corpus manifest source.snapshot_digest must be a non-empty string")
     if not isinstance(value.get("project"), Mapping):
         raise ValueError("corpus manifest project must be an object")
     return value
@@ -217,12 +220,27 @@ def validate(
         ):
             diagnostics.append(_diag("FILE_PATH_MISMATCH", row, "file_rel_path does not match the live occurrence"))
             mismatch = True
-        for field, expected, code in (
-            ("source", str(live.get("source") or ""), "SOURCE_MISMATCH"),
-            ("current_translation", str(live.get("current_translation") or ""), "CURRENT_TRANSLATION_STALE"),
+        for field, value, expected, type_code, mismatch_code in (
+            (
+                "source",
+                row.get("source"),
+                str(live.get("source") or ""),
+                "INVALID_SOURCE_TYPE",
+                "SOURCE_MISMATCH",
+            ),
+            (
+                "current_translation",
+                row.get("current_translation"),
+                str(live.get("current_translation") or ""),
+                "INVALID_CURRENT_TRANSLATION_TYPE",
+                "CURRENT_TRANSLATION_STALE",
+            ),
         ):
-            if str(row.get(field) or "") != expected:
-                diagnostics.append(_diag(code, row, f"{field} does not match the live occurrence"))
+            if not isinstance(value, str):
+                diagnostics.append(_diag(type_code, row, f"{field} must be a string"))
+                mismatch = True
+            elif value != expected:
+                diagnostics.append(_diag(mismatch_code, row, f"{field} does not match the live occurrence"))
                 mismatch = True
         proposed_value = row.get("proposed_translation")
         proposed = proposed_value.strip() if isinstance(proposed_value, str) else ""
@@ -240,7 +258,22 @@ def validate(
         elif not reason:
             diagnostics.append(_diag("MISSING_REASON", row, "reason is required for every selected proposal"))
             mismatch = True
-        item_digest = str(row.get("snapshot_digest") or row.get("item_snapshot_digest") or "")
+        snapshot_digest = row.get("snapshot_digest")
+        item_snapshot_digest = row.get("item_snapshot_digest")
+        if (
+            snapshot_digest is not None
+            and item_snapshot_digest is not None
+            and str(snapshot_digest or "") != str(item_snapshot_digest or "")
+        ):
+            diagnostics.append(
+                _diag(
+                    "ITEM_SNAPSHOT_CONFLICT",
+                    row,
+                    "snapshot_digest and item_snapshot_digest must identify the same item snapshot",
+                )
+            )
+            mismatch = True
+        item_digest = str(snapshot_digest or item_snapshot_digest or "")
         expected_item_digest = revision_corpus.item_snapshot_digest(
             str(live.get("source") or ""), str(live.get("current_translation") or "")
         )

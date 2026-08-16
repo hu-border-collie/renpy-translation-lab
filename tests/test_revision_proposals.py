@@ -112,6 +112,58 @@ class RevisionProposalContractTests(unittest.TestCase):
         )
         self.assertIn("INVALID_REASON_TYPE", {x["code"] for x in result.diagnostics})
 
+    def test_source_and_current_translation_must_be_strings(self):
+        result = proposals.validate(
+            [self.row(source=123, current_translation=["你好 {name}"])],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn("INVALID_SOURCE_TYPE", {x["code"] for x in result.diagnostics})
+        self.assertIn(
+            "INVALID_CURRENT_TRANSLATION_TYPE",
+            {x["code"] for x in result.diagnostics},
+        )
+
+    def test_stringified_source_and_current_translation_are_not_accepted(self):
+        live = {
+            "occ-1": {
+                "id": "occ-1",
+                "file_rel_path": "chapter.rpy",
+                "source": "123",
+                "current_translation": "456",
+            }
+        }
+        row = self.row(
+            source=123,
+            current_translation=456,
+            snapshot_digest=revision_corpus.item_snapshot_digest("123", "456"),
+        )
+        result = proposals.validate(
+            [row], live, live_snapshot_digest=self.corpus_digest
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn("INVALID_SOURCE_TYPE", {x["code"] for x in result.diagnostics})
+        self.assertIn(
+            "INVALID_CURRENT_TRANSLATION_TYPE",
+            {x["code"] for x in result.diagnostics},
+        )
+
+    def test_conflicting_item_snapshot_fields_are_blocked(self):
+        result = proposals.validate(
+            [self.row(item_snapshot_digest="b" * 64)],
+            self.live,
+            live_snapshot_digest=self.corpus_digest,
+        )
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.selected_count, 0)
+        self.assertIn(
+            "ITEM_SNAPSHOT_CONFLICT",
+            {x["code"] for x in result.diagnostics},
+        )
+
     def test_file_path_separator_style_is_normalized(self):
         self.live["occ-1"]["file_rel_path"] = "chapter/scene.rpy"
         result = proposals.validate(
@@ -346,6 +398,27 @@ class RevisionProposalImportTests(unittest.TestCase):
             batch.import_revision_proposals(str(proposal_path))
         self.assertEqual(caught.exception.code_name, "NO_PROPOSAL_ROWS")
         self.assertEqual(self.rpy.read_bytes(), before)
+        self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
+
+    def test_corpus_manifest_without_snapshot_digest_is_rejected(self):
+        corpus_path = self.root / "missing-snapshot-corpus.json"
+        corpus_path.write_text(
+            json.dumps(
+                {
+                    "kind": "revision_corpus",
+                    "schema_version": revision_corpus.REVISION_CORPUS_SCHEMA_VERSION,
+                    "project": {"tl_dir": str(self.tl_dir)},
+                    "source": {"source_changed_during_scan": False},
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaises(batch.cli_contract.MachineContractError) as caught:
+            batch.import_revision_proposals(
+                str(self._write_proposal(self._proposal())),
+                corpus_manifest_path=str(corpus_path),
+            )
+        self.assertEqual(caught.exception.code_name, "CORPUS_MANIFEST_INVALID")
         self.assertFalse(Path(batch.BATCH_JOBS_DIR).exists())
 
     def test_malformed_corpus_manifest_has_stable_machine_error(self):
