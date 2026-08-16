@@ -13761,7 +13761,8 @@ def build_arg_parser():
         default=None,
         help=(
             'Auto-accept candidates at or above this confidence without prompting; '
-            'history conflicts or missing evidence still require review unless --yes is used.'
+            'history conflicts, missing evidence, or evidence that no longer matches '
+            'the candidate still require review unless --yes is used.'
         ),
     )
     merge_keywords_parser.add_argument(

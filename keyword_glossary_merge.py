@@ -111,14 +111,21 @@ def _coerce_confidence(value: object) -> float:
 def _history_requires_review(candidate: dict) -> bool:
     """Return whether historical evidence must stay on the human-review path.
 
-    Candidates exported before historical evidence was added, or candidates
-    assembled by hand, have no trustworthy evidence status.  Treat those
-    records as unavailable so confidence thresholds cannot silently write them
-    into the glossary.
+    Candidates exported before historical evidence was added, candidates
+    assembled by hand, and candidates whose source/target changed after export
+    have no trustworthy evidence status.  Treat those records as unavailable
+    so confidence thresholds cannot silently write them into the glossary.
     """
 
-    return not keyword_history.is_complete_consistent_history_evidence(
-        candidate.get('history_evidence')
+    history_evidence = candidate.get('history_evidence')
+    return (
+        not keyword_history.is_complete_consistent_history_evidence(
+            history_evidence
+        )
+        or not keyword_history.history_evidence_matches_candidate(
+            history_evidence,
+            candidate,
+        )
     )
 
 
@@ -414,7 +421,7 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
         status = (
             'unavailable'
             if raw_status == keyword_history.STATUS_CONSISTENT
-            and not keyword_history.is_complete_consistent_history_evidence(history)
+            and _history_requires_review(candidate)
             else raw_status
         )
         first = history.get('first_occurrence')
@@ -429,7 +436,7 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
         else:
             lines.append(f'history_first: none [{status}]')
         if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
-            lines.append('history_note: 历史证据字段不完整，需重新导出或人工确认')
+            lines.append('history_note: 历史证据与当前候选不一致或字段不完整，需重新导出或人工确认')
         for reason in history.get('conflict_reasons') or []:
             lines.append(f'history_note: {_compact_text(reason)}')
     else:
@@ -458,7 +465,7 @@ def format_history_evidence_preview(candidate: dict) -> str:
     status = (
         'unavailable'
         if raw_status == keyword_history.STATUS_CONSISTENT
-        and not keyword_history.is_complete_consistent_history_evidence(history)
+        and _history_requires_review(candidate)
         else raw_status
     )
     first = history.get('first_occurrence')
@@ -479,7 +486,7 @@ def format_history_evidence_preview(candidate: dict) -> str:
     if reasons:
         text += '；' + '；'.join(reasons)
     if raw_status == keyword_history.STATUS_CONSISTENT and status == 'unavailable':
-        text += '；历史证据字段不完整，需重新导出或人工确认'
+        text += '；历史证据与当前候选不一致或字段不完整，需重新导出或人工确认'
     return text
 
 
@@ -651,7 +658,7 @@ def detect_candidate_warnings(
     else:
         history_status = _compact_text(history.get('status')) or 'unavailable'
         if history_status == keyword_history.STATUS_CONSISTENT and _history_requires_review(candidate):
-            warnings.append('历史证据字段不完整或 schema 不兼容，按 unavailable 处理，需重新导出或人工确认')
+            warnings.append('历史证据与当前候选不一致、字段不完整或 schema 不兼容，按 unavailable 处理，需重新导出或人工确认')
         elif history_status != keyword_history.STATUS_CONSISTENT:
             first = history.get('first_occurrence')
             if isinstance(first, dict) and first:
@@ -898,7 +905,6 @@ def merge_keywords_to_glossary(
             _history_requires_review(candidate)
             and not interactive
             and not allow_history_review
-            and not dry_run
         ):
             summary.skipped_user += 1
             summary.preview_lines.append(

@@ -167,6 +167,106 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
 
         self.assertEqual(rows, [{"identity_v2": "id1"}])
 
+    def test_mixed_interpolation_match_is_human_review_evidence(self):
+        rows = [
+            self._row(
+                "id1",
+                "a.rpy",
+                3,
+                "Hello {name}! My name is Nova.",
+                "名字",
+            )
+        ]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "name", "suggested_target": "名字", "category": "term"},
+            rows,
+        )
+
+        self.assertEqual(evidence["status"], keyword_history.STATUS_AMBIGUOUS)
+        self.assertTrue(evidence["review_required"])
+        self.assertIn("interpolation_match_ignored", evidence["conflict_codes"])
+        self.assertEqual(
+            evidence["occurrences"][0]["matched_text"],
+            "name",
+        )
+
+        match_result = keyword_history.match_keyword_in_source(
+            rows[0]["source"],
+            "name",
+        )
+        self.assertFalse(match_result["interpolation_only"])
+        self.assertTrue(match_result["interpolation_match_ignored"])
+
+    def test_attach_batch_collector_matches_individual_builds(self):
+        rows = [
+            self._row("id1", "a.rpy", 1, "Void Gate", "虚空门"),
+            self._row(
+                "id2",
+                "b.rpy",
+                2,
+                "The Crystal Key gleams.",
+                "水晶钥匙闪闪发光。",
+            ),
+            self._row(
+                "id3",
+                "c.rpy",
+                3,
+                "Hello {name}! My name is Nova.",
+                "名字",
+            ),
+            self._row(
+                "id4",
+                "d.rpy",
+                4,
+                "Noah’s compass is ready.",
+                "诺亚的罗盘准备好了。",
+            ),
+        ]
+        candidates = [
+            {"source": "Void Gate", "suggested_target": "虚空门"},
+            {"source": "Crystal Key", "suggested_target": "水晶钥匙"},
+            {"source": "name", "suggested_target": "名字"},
+            {"source": "Noah", "suggested_target": "诺亚"},
+        ]
+
+        enriched = keyword_history.attach_keyword_history_evidence(
+            candidates,
+            rows,
+        )
+
+        for candidate, row in zip(candidates, enriched):
+            with self.subTest(source=candidate["source"]):
+                self.assertEqual(
+                    row["history_evidence"],
+                    keyword_history.build_keyword_history_evidence(candidate, rows),
+                )
+
+    def test_consistent_evidence_validator_rejects_internally_mismatched_payload(self):
+        rows = [self._row("id1", "a.rpy", 1, "Void Gate", "虚空门")]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "Void Gate", "suggested_target": "虚空门"},
+            rows,
+        )
+        self.assertTrue(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+        changed_first = dict(evidence["first_occurrence"])
+        changed_first["line_number"] = 99
+        evidence["first_occurrence"] = changed_first
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "Void Gate", "suggested_target": "虚空门"},
+            rows,
+        )
+        evidence["translations"] = ["另一译法"]
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
     def test_fixture_covers_possessive_and_vocative_forms(self):
         fixture_path = Path(__file__).parent / "fixtures" / "keyword_history_forms.json"
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))

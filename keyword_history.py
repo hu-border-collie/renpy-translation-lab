@@ -62,6 +62,7 @@ _INTERPOLATION_TOKEN_RE = re.compile(
     r"\{[^{}\r\n]*\}|\[[^\[\]\r\n]*\]|%\([^)\r\n]+\)[#0+\- ]*\d*(?:\.\d+)?[a-zA-Z%]?"
 )
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+_ASCII_LETTER_RE = re.compile(r"[A-Za-z]+")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
@@ -142,45 +143,94 @@ def _plural_variants(term: str) -> list[str]:
     return [variant for variant in variants if _match_key(variant) != _match_key(term)]
 
 
-def _find_term_matches(source_text: str, term: str) -> tuple[list[dict[str, Any]], bool]:
-    """Find safe matches and report whether only interpolation matches existed."""
+def _search_specs_for_term(term: Any) -> tuple[str, list[dict[str, Any]]]:
+    """Build compiled search specs for one candidate source term.
 
-    source = _normalize_text(source_text)
+    Compiling once per candidate avoids rebuilding boundary/plural patterns for
+    every corpus row in the export path.
+    """
+
     normalized_term = _compact_text(term)
-    if not source or not normalized_term:
-        return [], False
+    if not normalized_term:
+        return "", []
 
     has_interpolation = bool(_INTERPOLATION_TOKEN_RE.search(normalized_term))
-    terms = [(normalized_term, "exact")]
+    terms = [(normalized_term, "exact", has_interpolation)]
     if not has_interpolation:
-        terms.extend((variant, "plural_variant") for variant in _plural_variants(normalized_term))
+        terms.extend(
+            (variant, "plural_variant", False)
+            for variant in _plural_variants(normalized_term)
+        )
+
+    specs: list[dict[str, Any]] = []
+    for search_term, kind, is_interpolation in terms:
+        try:
+            pattern_text = (
+                _space_flexible_pattern(search_term)
+                if is_interpolation
+                else _boundary_pattern(search_term)
+            )
+            pattern = re.compile(pattern_text, flags=re.IGNORECASE)
+        except re.error:
+            pattern = None
+        probe_words = tuple(
+            dict.fromkeys(
+                match.group(0).casefold()
+                for match in _ASCII_LETTER_RE.finditer(search_term)
+            )
+        )
+        specs.append(
+            {
+                "search_term": search_term,
+                "kind": kind,
+                "pattern": pattern,
+                "interpolation": is_interpolation,
+                "probe_words": probe_words,
+            }
+        )
+    return normalized_term, specs
+
+
+def _matches_for_specs(
+    source_text: Any,
+    normalized_term: str,
+    specs: Sequence[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Run prepared specs against one source line.
+
+    The second return value means "a plain-term match was skipped because it
+    landed inside a Ren'Py interpolation token", regardless of whether other
+    safe matches were found.
+    """
+
+    source = _normalize_text(source_text)
+    if not source or not normalized_term or not specs:
+        return [], False
 
     interpolation_spans = _interpolation_spans(source)
     matches: list[dict[str, Any]] = []
-    interpolation_only = False
+    skipped_interpolation = False
     seen_spans: set[tuple[int, int]] = set()
-    for search_term, kind in terms:
-        try:
-            pattern = _boundary_pattern(search_term) if not has_interpolation else _space_flexible_pattern(search_term)
-            found = list(re.finditer(pattern, source, flags=re.IGNORECASE))
-        except re.error:
-            found = []
-        for match in found:
+    for spec in specs:
+        pattern = spec["pattern"]
+        if pattern is None:
+            continue
+        for match in pattern.finditer(source):
             span = match.span()
             if span in seen_spans:
                 continue
             seen_spans.add(span)
             inside_interpolation = _span_is_inside_interpolation(span, interpolation_spans)
-            if inside_interpolation and not has_interpolation:
-                interpolation_only = True
+            if inside_interpolation and not spec["interpolation"]:
+                skipped_interpolation = True
                 continue
             matched_text = match.group(0)
-            match_kind = kind
-            if kind == "exact" and _compact_text(matched_text) != _compact_text(normalized_term):
+            match_kind = spec["kind"]
+            if spec["kind"] == "exact" and _compact_text(matched_text) != _compact_text(normalized_term):
                 match_kind = "case_variant"
-            elif kind == "exact" and source[span[1]:].casefold().startswith(("'s", "’s")):
+            elif spec["kind"] == "exact" and source[span[1]:].casefold().startswith(("'s", "’s")):
                 match_kind = "possessive_variant"
-            if has_interpolation:
+            if spec["interpolation"]:
                 match_kind = "interpolation_exact"
             matches.append(
                 {
@@ -191,16 +241,27 @@ def _find_term_matches(source_text: str, term: str) -> tuple[list[dict[str, Any]
                     "inside_interpolation": inside_interpolation,
                 }
             )
-    return matches, interpolation_only
+    return matches, skipped_interpolation
+
+
+def _find_term_matches(source_text: str, term: str) -> tuple[list[dict[str, Any]], bool]:
+    """Find safe matches and report whether any interpolation-only skip happened."""
+
+    source = _normalize_text(source_text)
+    normalized_term, specs = _search_specs_for_term(term)
+    if not source or not normalized_term:
+        return [], False
+    return _matches_for_specs(source, normalized_term, specs)
 
 
 def match_keyword_in_source(source_text: str, term: str) -> dict[str, Any]:
     """Return a deterministic, conservative match result for one source line."""
 
-    matches, interpolation_only = _find_term_matches(source_text, term)
+    matches, skipped_interpolation = _find_term_matches(source_text, term)
     return {
         "matches": matches,
-        "interpolation_only": interpolation_only and not matches,
+        "interpolation_only": skipped_interpolation and not matches,
+        "interpolation_match_ignored": skipped_interpolation and bool(matches),
     }
 
 
@@ -241,6 +302,137 @@ def _occurrence_from_row(row: Mapping[str, Any], match: Mapping[str, Any]) -> di
     if speaker_name:
         occurrence["speaker_name"] = speaker_name
     return occurrence
+
+
+def _collect_matches_for_source(
+    source: Any,
+    corpus_items: Sequence[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], bool, bool]:
+    """Collect safe matches for one candidate source across sorted corpus rows."""
+
+    normalized_source, specs = _search_specs_for_term(source)
+    matched_occurrences: list[dict[str, Any]] = []
+    interpolation_only = False
+    interpolation_match_ignored = False
+    for row in sorted(corpus_items, key=_row_sort_key):
+        row_source = _compact_text(row.get("source") or row.get("source_text"))
+        matches, skipped_interpolation = _matches_for_specs(
+            row_source,
+            normalized_source,
+            specs,
+        )
+        if matches:
+            if skipped_interpolation:
+                interpolation_match_ignored = True
+            matched_occurrences.extend(
+                _occurrence_from_row(row, match)
+                for match in matches
+            )
+        elif skipped_interpolation:
+            interpolation_only = True
+
+    matched_occurrences.sort(
+        key=lambda item: (
+            item.get("file_rel_path", ""),
+            _coerce_int(item.get("line_number")),
+            _coerce_int(item.get("match_start")),
+            item.get("occurrence_id", ""),
+        )
+    )
+    return matched_occurrences, interpolation_only, interpolation_match_ignored
+
+
+def _candidate_probe_groups(
+    specs_by_candidate: Sequence[tuple[str, list[dict[str, Any]]]],
+) -> tuple[dict[str, list[int]], set[int]]:
+    """Group candidates by an ASCII probe word for a cheaper row prefilter.
+
+    A candidate is selected when any probe word appears in the row.  This is
+    only a necessary condition for a regex match; the real boundary/plural
+    matching still runs afterwards, so a probe collision can only cost time,
+    never change evidence semantics.
+    """
+
+    probe_groups: dict[str, list[int]] = {}
+    fallback_candidates: set[int] = set()
+    for index, (_, specs) in enumerate(specs_by_candidate):
+        if not specs:
+            continue
+        if any(not spec["probe_words"] for spec in specs):
+            fallback_candidates.add(index)
+            continue
+        for spec in specs:
+            probe = max(spec["probe_words"], key=lambda word: (len(word), word))
+            probe_groups.setdefault(probe, []).append(index)
+    return probe_groups, fallback_candidates
+
+
+def _collect_matches_for_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    corpus_items: Sequence[Mapping[str, Any]],
+) -> tuple[list[list[dict[str, Any]]], list[bool], list[bool]]:
+    """Collect evidence matches for many candidates with one corpus pass.
+
+    Instead of running ``candidates x corpus_rows`` regex scans, candidates are
+    prefixed by a probe word from each search variant.  Only candidates whose
+    probe occurs in a row are matched against that row.  Terms without an
+    ASCII probe (for example Chinese-only candidates) remain on the old
+    per-row path to preserve correctness.
+    """
+
+    specs_by_candidate: list[tuple[str, list[dict[str, Any]]]] = []
+    for candidate in candidates:
+        normalized_source, specs = _search_specs_for_term(
+            candidate.get("source")
+        )
+        specs_by_candidate.append((normalized_source, specs))
+
+    probe_groups, fallback_candidates = _candidate_probe_groups(
+        specs_by_candidate
+    )
+    matched_by_candidate: list[list[dict[str, Any]]] = [
+        [] for _ in candidates
+    ]
+    interpolation_only = [False] * len(candidates)
+    interpolation_match_ignored = [False] * len(candidates)
+
+    for row in sorted(corpus_items, key=_row_sort_key):
+        row_source = _compact_text(row.get("source") or row.get("source_text"))
+        row_tokens = {
+            match.group(0).casefold()
+            for match in _ASCII_LETTER_RE.finditer(row_source)
+        }
+        selected = set(fallback_candidates)
+        for token in row_tokens:
+            selected.update(probe_groups.get(token, ()))
+
+        for index in sorted(selected):
+            normalized_source, specs = specs_by_candidate[index]
+            matches, skipped_interpolation = _matches_for_specs(
+                row_source,
+                normalized_source,
+                specs,
+            )
+            if matches:
+                if skipped_interpolation:
+                    interpolation_match_ignored[index] = True
+                matched_by_candidate[index].extend(
+                    _occurrence_from_row(row, match)
+                    for match in matches
+                )
+            elif skipped_interpolation:
+                interpolation_only[index] = True
+
+    for index, matched_occurrences in enumerate(matched_by_candidate):
+        matched_occurrences.sort(
+            key=lambda item: (
+                item.get("file_rel_path", ""),
+                _coerce_int(item.get("line_number")),
+                _coerce_int(item.get("match_start")),
+                item.get("occurrence_id", ""),
+            )
+        )
+    return matched_by_candidate, interpolation_only, interpolation_match_ignored
 
 
 def _is_complete_history_occurrence(value: object) -> bool:
@@ -285,8 +477,11 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
     """Return whether evidence is complete enough for automatic glossary merge.
 
     Only a fully formed, schema-compatible ``consistent`` record is safe for
-    confidence-based auto-accept.  Missing or malformed fields fail closed so
-    old or hand-written candidate files remain on the explicit review path.
+    confidence-based auto-accept.  Missing, malformed, or internally
+    inconsistent fields fail closed so old or hand-written candidate files
+    remain on the explicit review path.  Callers that also need to bind the
+    evidence to the current candidate fields must additionally call
+    :func:`history_evidence_matches_candidate`.
     """
 
     if not isinstance(value, Mapping):
@@ -302,11 +497,16 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
 
     candidate_source = value.get("candidate_source")
     candidate_target = value.get("candidate_target")
-    if not _compact_text(candidate_source) or not isinstance(candidate_target, str):
+    if (
+        not _compact_text(candidate_source)
+        or not isinstance(candidate_target, str)
+        or not _compact_text(candidate_target)
+    ):
         return False
 
     match_count = value.get("match_count")
     occurrence_count = value.get("occurrence_count")
+    occurrences = value.get("occurrences")
     if (
         not isinstance(match_count, int)
         or isinstance(match_count, bool)
@@ -315,16 +515,17 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
         or isinstance(occurrence_count, bool)
         or occurrence_count < 1
         or match_count < occurrence_count
+        or not isinstance(occurrences, list)
+        or not occurrences
+        or match_count < len(occurrences)
     ):
         return False
 
-    occurrences = value.get("occurrences")
     first_occurrence = value.get("first_occurrence")
     if (
-        not isinstance(occurrences, list)
-        or not occurrences
-        or not _is_complete_history_occurrence(first_occurrence)
+        not _is_complete_history_occurrence(first_occurrence)
         or not all(_is_complete_history_occurrence(item) for item in occurrences)
+        or first_occurrence not in occurrences
     ):
         return False
 
@@ -344,14 +545,47 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
         or not all(isinstance(item, str) and _compact_text(item) for item in translations)
     ):
         return False
+    translation_keys = {_match_key(item) for item in translations}
+    if len(translation_keys) != len(translations):
+        return False
+    if len(translations) > occurrence_count:
+        return False
     first_translation = _match_key(first_occurrence.get("current_translation"))
-    if first_translation not in {_match_key(item) for item in translations}:
+    if first_translation not in translation_keys:
+        return False
+    reported_translation_keys = {
+        _match_key(item.get("current_translation"))
+        for item in occurrences
+        if isinstance(item, Mapping)
+    }
+    if not reported_translation_keys <= translation_keys:
         return False
 
     # A consistent record must not carry hidden conflict signals.
     if value.get("conflict_codes") != [] or value.get("conflict_reasons") != []:
         return False
     return True
+
+
+def history_evidence_matches_candidate(
+    history_evidence: object,
+    candidate: Mapping[str, Any],
+) -> bool:
+    """Return whether evidence snapshots the candidate's current source/target.
+
+    Exported JSONL is editable.  A candidate whose ``suggested_target`` (or
+    ``source``) changed after export still carries the old evidence snapshot,
+    so the merge path must not trust that evidence for auto-accept decisions.
+    """
+
+    if not isinstance(history_evidence, Mapping):
+        return False
+    return (
+        _match_key(history_evidence.get("candidate_source"))
+        == _match_key(candidate.get("source"))
+        and _match_key(history_evidence.get("candidate_target"))
+        == _match_key(candidate.get("suggested_target"))
+    )
 
 
 def _unique_translations(occurrences: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -409,13 +643,14 @@ def _history_status(
     candidate_source: str,
     candidate_target: str,
     interpolation_only: bool,
+    interpolation_match_ignored: bool = False,
 ) -> tuple[str, list[str]]:
     if not occurrences:
         code = "only_interpolation_match" if interpolation_only else "no_history_occurrence"
         return STATUS_UNMATCHED, [code]
 
     reasons: list[str] = []
-    if interpolation_only:
+    if interpolation_match_ignored:
         reasons.append("interpolation_match_ignored")
     kinds = {str(item.get("match_kind") or "") for item in occurrences}
     if "case_variant" in kinds:
@@ -455,6 +690,46 @@ def _history_status(
     return STATUS_CONSISTENT, reasons
 
 
+def _build_history_evidence(
+    *,
+    candidate_source: str,
+    candidate_target: str,
+    matched_occurrences: Sequence[Mapping[str, Any]],
+    interpolation_only: bool,
+    interpolation_match_ignored: bool,
+    source_changed_during_scan: bool,
+) -> dict[str, Any]:
+    """Render one stable evidence record from already collected matches."""
+
+    status, reason_codes = _history_status(
+        matched_occurrences,
+        candidate_source=candidate_source,
+        candidate_target=candidate_target,
+        interpolation_only=interpolation_only,
+        interpolation_match_ignored=interpolation_match_ignored,
+    )
+    if source_changed_during_scan:
+        reason_codes.append("history_source_changed")
+        status = STATUS_AMBIGUOUS if status == STATUS_CONSISTENT else status
+
+    reported_occurrences = list(matched_occurrences[:MAX_REPORTED_OCCURRENCES])
+    first = dict(reported_occurrences[0]) if reported_occurrences else None
+    return {
+        "schema_version": HISTORY_EVIDENCE_SCHEMA_VERSION,
+        "status": status,
+        "review_required": status != STATUS_CONSISTENT,
+        "candidate_source": candidate_source,
+        "candidate_target": candidate_target,
+        "match_count": len(matched_occurrences),
+        "occurrence_count": len({item.get("occurrence_id") for item in matched_occurrences}),
+        "first_occurrence": first,
+        "translations": _unique_translations(matched_occurrences),
+        "conflict_codes": list(dict.fromkeys(reason_codes)),
+        "conflict_reasons": [_reason(code) for code in dict.fromkeys(reason_codes)],
+        "occurrences": reported_occurrences,
+    }
+
+
 def build_keyword_history_evidence(
     candidate: Mapping[str, Any],
     corpus_items: Sequence[Mapping[str, Any]],
@@ -471,52 +746,17 @@ def build_keyword_history_evidence(
 
     source = _compact_text(candidate.get("source"))
     target = _compact_text(candidate.get("suggested_target"))
-    matched_occurrences: list[dict[str, Any]] = []
-    interpolation_only = False
-    for row in sorted(corpus_items, key=_row_sort_key):
-        row_source = _compact_text(row.get("source") or row.get("source_text"))
-        match_result = match_keyword_in_source(row_source, source)
-        if match_result["interpolation_only"]:
-            interpolation_only = True
-        for match in match_result["matches"]:
-            matched_occurrences.append(_occurrence_from_row(row, match))
-
-    # A row can contain a term more than once; preserve those spans for counts,
-    # but keep the evidence payload bounded and deterministic.
-    matched_occurrences.sort(
-        key=lambda item: (
-            item.get("file_rel_path", ""),
-            _coerce_int(item.get("line_number")),
-            _coerce_int(item.get("match_start")),
-            item.get("occurrence_id", ""),
-        )
+    matched_occurrences, interpolation_only, interpolation_match_ignored = (
+        _collect_matches_for_source(source, corpus_items)
     )
-    status, reason_codes = _history_status(
-        matched_occurrences,
+    return _build_history_evidence(
         candidate_source=source,
         candidate_target=target,
+        matched_occurrences=matched_occurrences,
         interpolation_only=interpolation_only,
+        interpolation_match_ignored=interpolation_match_ignored,
+        source_changed_during_scan=source_changed_during_scan,
     )
-    if source_changed_during_scan:
-        reason_codes.append("history_source_changed")
-        status = STATUS_AMBIGUOUS if status == STATUS_CONSISTENT else status
-
-    reported_occurrences = matched_occurrences[:MAX_REPORTED_OCCURRENCES]
-    first = dict(reported_occurrences[0]) if reported_occurrences else None
-    return {
-        "schema_version": HISTORY_EVIDENCE_SCHEMA_VERSION,
-        "status": status,
-        "review_required": status != STATUS_CONSISTENT,
-        "candidate_source": source,
-        "candidate_target": target,
-        "match_count": len(matched_occurrences),
-        "occurrence_count": len({item.get("occurrence_id") for item in matched_occurrences}),
-        "first_occurrence": first,
-        "translations": _unique_translations(matched_occurrences),
-        "conflict_codes": list(dict.fromkeys(reason_codes)),
-        "conflict_reasons": [_reason(code) for code in dict.fromkeys(reason_codes)],
-        "occurrences": reported_occurrences,
-    }
 
 
 def unavailable_history_evidence(
@@ -554,19 +794,32 @@ def attach_keyword_history_evidence(
     """Return candidate copies enriched with read-only historical evidence."""
 
     enriched: list[dict[str, Any]] = []
-    for candidate in candidates:
-        row = dict(candidate)
-        if unavailable_reason:
+    if unavailable_reason:
+        for candidate in candidates:
+            row = dict(candidate)
             row["history_evidence"] = unavailable_history_evidence(
                 candidate,
                 reason_code=unavailable_reason,
             )
-        else:
-            row["history_evidence"] = build_keyword_history_evidence(
-                candidate,
-                corpus_items,
-                source_changed_during_scan=source_changed_during_scan,
-            )
+            enriched.append(row)
+        return enriched
+
+    candidate_list = list(candidates)
+    matched_by_candidate, interpolation_only, interpolation_match_ignored = (
+        _collect_matches_for_candidates(candidate_list, corpus_items)
+    )
+    for index, candidate in enumerate(candidate_list):
+        row = dict(candidate)
+        source = _compact_text(candidate.get("source"))
+        target = _compact_text(candidate.get("suggested_target"))
+        row["history_evidence"] = _build_history_evidence(
+            candidate_source=source,
+            candidate_target=target,
+            matched_occurrences=matched_by_candidate[index],
+            interpolation_only=interpolation_only[index],
+            interpolation_match_ignored=interpolation_match_ignored[index],
+            source_changed_during_scan=source_changed_during_scan,
+        )
         enriched.append(row)
     return enriched
 

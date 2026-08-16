@@ -341,7 +341,7 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 合并候选到 glossary
 
-关键词报告生成后，可在 GUI 内查看每条候选的首次历史译法，再把经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。历史证据冲突、歧义或缺失的条目默认不勾选。
+关键词报告生成后，可在 GUI 内查看每条候选的首次历史译法，再把经人工审核的候选写入当前项目的 `glossary.json`，无需复制 CLI 到终端逐条 `y/n` 确认。历史证据冲突、歧义、缺失，或与当前候选不一致的条目默认不勾选。
 
 **入口：**
 

@@ -524,6 +524,87 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
                 {'normalize_map': {}},
             )
 
+    def test_stale_consistent_history_for_edited_target_is_not_auto_accepted(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            evidence = self._consistent_history('Void Gate', '虚空门')
+            candidate = {
+                'source': 'Void Gate',
+                'suggested_target': '星门',
+                'category': 'place',
+                'confidence': 0.99,
+                'history_evidence': evidence,
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            rows = merge_mod.build_candidate_merge_rows(
+                [candidate],
+                {'normalize_map': {}},
+            )
+            self.assertFalse(rows[0].default_checked)
+            self.assertTrue(any('候选不一致' in warning for warning in rows[0].warnings))
+            preview = merge_mod.format_history_evidence_preview(candidate)
+            self.assertIn('unavailable', preview)
+            self.assertIn('候选不一致', preview)
+
+            summary = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                accept_confidence=0.8,
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_user, 1)
+            self.assertIn(
+                '= skip (history_review): Void Gate -> 星门',
+                summary.preview_lines,
+            )
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
+    def test_dry_run_history_preview_matches_real_history_gate(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir).resolve()
+            candidates_path = root / 'keyword_candidates.jsonl'
+            glossary_path = root / 'glossary.json'
+            glossary_path.write_text('{"normalize_map": {}}', encoding='utf-8')
+            candidate = {
+                'source': 'Legacy Term',
+                'suggested_target': '旧术语',
+                'category': 'term',
+                'confidence': 0.99,
+            }
+            self._write_jsonl(candidates_path, [candidate])
+
+            dry_run = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                dry_run=True,
+                interactive=False,
+                backup=False,
+            )
+            real_run = merge_mod.merge_keywords_to_glossary(
+                str(candidates_path),
+                str(glossary_path),
+                interactive=False,
+                backup=False,
+            )
+
+            self.assertEqual(dry_run.accepted, 0)
+            self.assertEqual(dry_run.skipped_user, 1)
+            self.assertEqual(dry_run.preview_lines, real_run.preview_lines)
+            self.assertEqual(
+                json.loads(glossary_path.read_text(encoding='utf-8')),
+                {'normalize_map': {}},
+            )
+
     def test_explicit_history_override_accepts_missing_history(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir).resolve()

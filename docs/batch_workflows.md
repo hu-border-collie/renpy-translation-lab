@@ -333,7 +333,7 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<package>/manifest.json --accept-confidence 0.85 --yes
 ```
 
-`--yes` 是明确的人工覆盖开关；仅设置 `--accept-confidence` 不会绕过历史证据的歧义、缺失或不可用。旧版 / 手工构造且缺少 `history_evidence` 的候选同样按无证据处理。
+`--yes` 是明确的人工覆盖开关；仅设置 `--accept-confidence` 不会绕过历史证据的歧义、缺失、不可用，或证据与当前候选不一致。旧版 / 手工构造且缺少 `history_evidence` 的候选、以及导出后手工改过 `source` / `suggested_target` 但仍携带旧证据的候选同样按无证据处理。
 
 - 默认逐条 `y/n` 确认；`--accept-confidence` 可半自动接受高置信候选，`--yes` 跳过交互。
 - `--min-confidence` 过滤低置信候选；已有 `source` 默认不覆盖，需 `--overwrite` 才改目标译法。
