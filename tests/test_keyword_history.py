@@ -289,6 +289,31 @@ class KeywordHistoryEvidenceTests(unittest.TestCase):
             keyword_history.is_complete_consistent_history_evidence(evidence)
         )
 
+    def test_consistent_validator_uses_export_alignment_rule_for_non_chinese_target(self):
+        rows = [
+            self._row(
+                "id1",
+                "a.rpy",
+                1,
+                "The STAR guild arrived.",
+                "STAR 的公会到了。",
+            )
+        ]
+        evidence = keyword_history.build_keyword_history_evidence(
+            {"source": "STAR", "suggested_target": "STAR"},
+            rows,
+        )
+
+        self.assertEqual(evidence["status"], keyword_history.STATUS_CONSISTENT)
+        self.assertTrue(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
+        evidence["candidate_target"] = "STARLIGHT"
+        self.assertFalse(
+            keyword_history.is_complete_consistent_history_evidence(evidence)
+        )
+
     def test_consistent_validator_rejects_target_mismatching_unique_translation(self):
         rows = [self._row("id1", "a.rpy", 1, "Void Gate", "虚空门")]
         evidence = keyword_history.build_keyword_history_evidence(

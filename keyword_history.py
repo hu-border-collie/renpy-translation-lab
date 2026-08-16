@@ -551,10 +551,22 @@ def is_complete_consistent_history_evidence(value: object) -> bool:
     if len(translations) > occurrence_count:
         return False
     unique_translation_key = next(iter(translation_keys))
+    unique_translation = translations[0]
     first_translation = _match_key(first_occurrence.get("current_translation"))
     if first_translation != unique_translation_key:
         return False
-    if _match_key(candidate_target) != unique_translation_key:
+    # Keep the same alignment rule as export-time status derivation: a direct
+    # whole-source occurrence must match exactly, while a term embedded in a
+    # longer translated sentence may align through the conservative
+    # word-boundary rule (Chinese targets still require an exact match).
+    if _match_key(first_occurrence.get("source")) == _match_key(candidate_source):
+        target_matches_history = _match_key(candidate_target) == unique_translation_key
+    else:
+        target_matches_history = _target_is_visible_in_translation(
+            candidate_target,
+            unique_translation,
+        )
+    if not target_matches_history:
         return False
     reported_translation_keys = {
         _match_key(item.get("current_translation"))
