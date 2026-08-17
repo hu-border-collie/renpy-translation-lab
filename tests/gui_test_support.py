@@ -18,7 +18,9 @@ Use in test modules::
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
+import tempfile
 import unittest
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -31,6 +33,33 @@ _T = TypeVar("_T", bound=type)
 # thread: the import takes ~10s on machines with the optional dependency and a
 # QThread destroyed while still importing aborts the process.
 os.environ.setdefault("RTL_DISABLE_LITELLM_WARMUP", "1")
+
+# Isolate GUI tests from the developer/user-level LiteLLM catalog cache.
+# MainWindow constructs LiteLLMCatalogCache() without an explicit path, so on
+# machines with real cached provider/model selections the settings layout tests
+# could pick up stale state and report transient "unsaved changes".  Point the
+# default cache at a fresh per-run temp directory instead.
+_GUI_TEST_LITELLM_CACHE_DIR = Path(
+    tempfile.mkdtemp(prefix="renpy-translation-lab-test-litellm-cache-")
+)
+os.environ["LOCALAPPDATA"] = str(_GUI_TEST_LITELLM_CACHE_DIR)
+os.environ["XDG_STATE_HOME"] = str(_GUI_TEST_LITELLM_CACHE_DIR)
+
+
+def _test_litellm_catalog_cache_path() -> Path:
+    return _GUI_TEST_LITELLM_CACHE_DIR / "litellm_catalog_cache.json"
+
+
+try:
+    import gui_qt.litellm_catalog_cache as _litellm_catalog_cache_module
+except ImportError:
+    # The environment overrides above cover Windows/Linux even when the GUI
+    # package has not been imported yet (e.g. non-GUI helper tests).
+    pass
+else:
+    _litellm_catalog_cache_module.default_litellm_catalog_cache_path = (
+        _test_litellm_catalog_cache_path
+    )
 
 
 class GuiTestModalGuard:

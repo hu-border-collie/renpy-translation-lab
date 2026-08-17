@@ -1,7 +1,8 @@
 # GUI 测试在 Codex 沙箱环境卡住：调查报告
 
-> 结论先行：**不是测试代码问题，也不是机器负载问题，而是 Codex 沙箱的写限制**。
-> GUI 测试在运行时会真实写入 `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`
+> 结论先行：历史根因是 **Codex 沙箱的写限制**，不是测试代码逻辑或机器负载问题。
+> 在 issue #370 的测试隔离落地前，GUI 测试会真实写入
+> `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`
 > （LiteLLM 模型选择缓存，属 GUI 正常运行行为）。该路径不在 Codex 沙箱的可写范围内，
 > 写入被拦截后表现为挂起或 `PermissionError`，导致整个 GUI 测试套件卡死。
 
@@ -98,20 +99,22 @@ tempfile._mkstemp_inner
 
 ### 在 Codex 会话内
 
-- 自 #369 起，GUI 运行时的 LiteLLM 缓存会在默认目录不可写时自动回退到系统临时目录，
-  沙箱内跑 GUI 全量测试不再卡在缓存写入上；如仍想缩小范围，可只跑改动相关文件（如
-  `python -m unittest tests.test_gui_settings_schema tests.test_gui_sync_translation_report`）。
-- 确需排除运行时环境因素时，可在沙箱外运行（需要用户批准 escalation），例如直接在本机终端执行
-  `python -B tests/run_gui_tests.py -q`。
+- 自 #370 起，GUI 测试通过 `tests/gui_test_support.py` 使用一次性临时目录缓存，
+  不再读取/写入用户级 `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`，
+  因此可以直接运行 GUI 全量测试，例如 `python -B tests/run_gui_tests.py -q`。
+- 自 #369 起，真实 GUI 运行时的 LiteLLM 缓存会在默认目录不可写时自动回退到系统临时目录，
+  沙箱内跑真实 GUI 也不再卡在缓存写入上。
+- 在 #369 / #370 修复落地前的旧版本上，建议只跑改动相关文件（如
+  `python -m unittest tests.test_gui_settings_schema tests.test_gui_sync_translation_report`）；
+  确需全量时在沙箱外运行（需要用户批准 escalation）。
 
 ### 长期建议（可选）
 
-- 代码已实现自动回退（默认目录不可写时改用系统临时目录），沙箱与只读 home 场景都
-  不再依赖修改 Codex 沙箱配置；若仍希望缓存跨重启持久化，可在 Codex 沙箱配置中把
-  `%LOCALAPPDATA%\renpy-translation-lab` 加入可写范围；
+- 自 #370 起，GUI 测试通过 `tests/gui_test_support.py` 将默认 LiteLLM 缓存指向一次性临时目录，
+  不再读取/写入用户级 `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`；
+  因此在沙箱内跑 GUI 全量测试时，无需再为测试进程放行该路径。
+- 真实 GUI 运行时仍会写入用户级缓存；代码已实现自动回退（默认目录不可写时改用系统临时目录），
+  沙箱与只读 home 场景都不再依赖修改 Codex 沙箱配置。若仍希望缓存跨重启持久化，可在 Codex
+  沙箱配置中把 `%LOCALAPPDATA%\renpy-translation-lab` 加入可写范围；
 - 注意：shell 命令超时**不会杀死残留的 Python 测试进程**，排查时先
   `Get-Process | Where-Object { $_.ProcessName -like '*python*' }` 确认无残留再重跑。
-- 测试隔离提醒：GUI 测试共享用户级 LiteLLM 缓存（默认目录不可写时位于系统临时目录），
-  若缓存中存在历史 provider/model 选择，`test_workspace_action_bar_uses_immediate_save_context`
-  可能偶发判定“有未保存的更改”而失败；清理缓存（如删除 `%TEMP%\renpy-translation-lab`）后
-  全量可稳定通过。该问题在正常 Windows 环境同样存在，属于测试共享状态的既有隔离缺陷。
