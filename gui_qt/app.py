@@ -6776,7 +6776,13 @@ class MainWindow(QMainWindow):
                 manifest,
                 manifest_path=manifest_path,
             )
-            dialog = QualityFindingsDialog(self, report=quality_report)
+            dialog = QualityFindingsDialog(
+                self,
+                report=quality_report,
+                manifest=manifest,
+                manifest_path=manifest_path,
+            )
+            dialog.quality_acknowledged.connect(self._on_quality_acknowledged)
             dialog.exec()
             self.statusBar().showMessage("已查看译文质量报警。", 3000)
             return
@@ -6790,6 +6796,22 @@ class MainWindow(QMainWindow):
         dialog.repair_requested.connect(self._on_run_repair)
         dialog.exec()
         self.statusBar().showMessage("已查看检查问题清单。", 3000)
+
+    def _on_quality_acknowledged(self) -> None:
+        manifest_path = getattr(self, "_writeback_manifest_path", "")
+        if not manifest_path:
+            return
+        state = getattr(self, "state", None)
+        if state is not None:
+            state.invalidate_manifest_file_cache(manifest_path)
+        try:
+            manifest = state.load_manifest_file(manifest_path)
+        except ValueError:
+            return
+        summary = summarize_manifest_writeback(manifest)
+        if summary is not None:
+            self._set_writeback_summary(summary)
+        self.statusBar().showMessage("质量报警确认状态已更新。", 3000)
 
     def _open_remediation_commands(self) -> None:
         self._refresh_diagnostics_context()

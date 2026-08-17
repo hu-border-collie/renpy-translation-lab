@@ -1,9 +1,13 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from gui_qt.quality_findings_report import (
+    acknowledged_finding_ids_from_manifest,
     build_quality_findings_report,
     filter_quality_items,
+    persist_quality_acknowledgement,
     normalize_quality_finding,
     parse_quality_findings_jsonl,
     quality_issues_report_ready,
@@ -112,6 +116,53 @@ class QualityFindingsReportTests(unittest.TestCase):
             resolve_quality_findings_path(blocked_manifest),
             "blocked/quality_findings.apply.jsonl",
         )
+
+    def test_acknowledged_finding_ids_from_manifest(self):
+        self.assertEqual(
+            acknowledged_finding_ids_from_manifest(
+                {"quality_acknowledged_finding_ids": ["f1", "f2", "", None]}
+            ),
+            {"f1", "f2"},
+        )
+
+    def test_persist_quality_acknowledgement_updates_manifest_only(self):
+        base = Path(tempfile.mkdtemp())
+        manifest_path = base / "manifest.json"
+        report_path = base / "quality_findings.jsonl"
+        report_path.write_text(REPORT_TEXT, encoding="utf-8")
+        manifest = {
+            "mode": "translation",
+            "last_quality_findings_path": str(report_path),
+            "last_check_summary": {
+                "check_status": "ready_with_warnings",
+                "writeback_gate": {
+                    "decision": "allow",
+                    "can_apply": True,
+                    "blocker_count": 0,
+                    "quality_blocker_count": 0,
+                },
+            },
+        }
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        applied = persist_quality_acknowledgement(
+            str(manifest_path),
+            finding_ids=["f1"],
+        )
+
+        self.assertEqual(applied["manifest"]["quality_acknowledged_finding_ids"], ["f1"])
+        self.assertEqual(applied["quality_gate"]["acknowledged_count"], 1)
+        # The JSONL report itself is never rewritten.
+        self.assertEqual(
+            json.loads(report_path.read_text(encoding="utf-8").splitlines()[0]),
+            FINDING_1,
+        )
+        updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["quality_acknowledged_finding_ids"], ["f1"])
+        self.assertEqual(updated["last_check_summary"]["quality_gate"]["acknowledged_count"], 1)
 
     def test_filter_by_rule_file_and_severity(self):
         items = [

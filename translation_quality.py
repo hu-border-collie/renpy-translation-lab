@@ -1032,6 +1032,103 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
+def update_manifest_quality_gate(
+    manifest: Mapping[str, Any],
+    quality_gate: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Refresh the cached quality gate inside ``last_check_summary``.
+
+    Acknowledging warnings is allowed to change ``quality_gate`` and the
+    derived ``check_status`` / ``has_warnings`` fields, but it must never
+    rewrite ``writeback_gate``.  Blockers and structural safety decisions are
+    only produced by a real check, so that gate is left authoritative.
+    """
+
+    manifest = dict(manifest)
+    last_summary = manifest.get('last_check_summary')
+    if not isinstance(last_summary, dict):
+        last_summary = {}
+    else:
+        last_summary = dict(last_summary)
+    quality_gate = dict(quality_gate)
+    quality_gate.setdefault('has_warnings', False)
+    quality_gate.setdefault('acknowledged_count', 0)
+    last_summary['quality_gate'] = quality_gate
+    last_summary['has_warnings'] = bool(quality_gate.get('has_warnings'))
+    writeback_gate = last_summary.get('writeback_gate')
+    if isinstance(writeback_gate, dict):
+        writeback_gate = dict(writeback_gate)
+        writeback_gate['quality_blocker_count'] = int(
+            quality_gate.get('blocker_count') or 0
+        )
+        last_summary['writeback_gate'] = writeback_gate
+        last_summary['can_apply'] = bool(writeback_gate.get('can_apply'))
+        last_summary['check_status'] = overall_check_status(
+            writeback_gate,
+            quality_gate,
+        )
+    else:
+        last_summary['can_apply'] = True
+        last_summary['check_status'] = overall_check_status(
+            {'can_apply': True},
+            quality_gate,
+        )
+    manifest['last_check_summary'] = last_summary
+    return dict(manifest)
+
+
+def apply_manifest_quality_acknowledgement(
+    manifest: Mapping[str, Any],
+    findings: Iterable[Mapping[str, Any]],
+    *,
+    finding_ids: Iterable[Any] = (),
+    all_findings: bool = False,
+    unack: bool = False,
+) -> dict[str, Any]:
+    """Apply a quality acknowledgement update to a manifest.
+
+    Returns the mutated manifest plus the ids that were selected, unmatched,
+    and the freshly summarized quality gate.  Only warning dispositions can be
+    acknowledged; blocker ids are ignored for acknowledgement purposes.
+    """
+
+    manifest = dict(manifest)
+    findings = [dict(item) for item in findings if isinstance(item, Mapping)]
+    warning_ids: set[str] = {
+        str((finding.get('finding_id') or '')).strip()
+        for finding in findings
+        if finding.get('disposition') == DISPOSITION_WARNING
+        and str((finding.get('finding_id') or '')).strip()
+    }
+    requested = {
+        str((finding_id or '')).strip()
+        for finding_id in finding_ids
+        if str((finding_id or '')).strip()
+    }
+    if all_findings:
+        selected_ids = set(warning_ids)
+        unmatched: list[str] = []
+    else:
+        selected_ids = requested & warning_ids
+        unmatched = sorted(requested - warning_ids)
+    current_ids = {
+        str((finding_id or '')).strip()
+        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+        if str((finding_id or '')).strip()
+    }
+    new_ids = current_ids - selected_ids if unack else current_ids | selected_ids
+    manifest['quality_acknowledged_finding_ids'] = sorted(new_ids)
+    quality_gate = summarize_quality_gate(findings, acknowledged_ids=new_ids)
+    manifest = update_manifest_quality_gate(manifest, quality_gate)
+    return {
+        'manifest': manifest,
+        'quality_gate': quality_gate,
+        'selected_ids': selected_ids,
+        'unmatched': unmatched,
+        'acknowledged_finding_ids': sorted(new_ids),
+    }
+
+
 def _coerce_line(value: Any) -> int:
     return max(0, _coerce_int(value, 0))
 

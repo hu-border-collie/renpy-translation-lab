@@ -225,13 +225,24 @@ def summarize_check_output(
     if isinstance(quality_warnings, int) or isinstance(quality_blockers, int):
         warning_count = quality_warnings if isinstance(quality_warnings, int) else 0
         blocker_count = quality_blockers if isinstance(quality_blockers, int) else 0
+        acknowledged_count = (
+            parsed.get("acknowledged_warnings")
+            if isinstance(parsed.get("acknowledged_warnings"), int)
+            else 0
+        )
         quality_decision = str(
             parsed.get("quality_gate_decision")
             or ("needs_review" if warning_count or blocker_count else "pass")
         )
         facts.append(
-            f"质量检查：{quality_gate_label(quality_decision)}"
-            f"（报警 {warning_count}，阻断 {blocker_count}）"
+            format_quality_gate_fact(
+                {
+                    "decision": quality_decision,
+                    "warning_count": warning_count,
+                    "blocker_count": blocker_count,
+                    "acknowledged_count": acknowledged_count,
+                }
+            )
         )
 
     findings = [

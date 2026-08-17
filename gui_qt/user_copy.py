@@ -552,10 +552,17 @@ def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:
 def format_quality_gate_fact(gate: Any, *, prefix: str = "质量检查") -> str:
     if not isinstance(gate, dict):
         return f"{prefix}：未知"
-    warning_count = gate.get("warning_count", 0)
-    blocker_count = gate.get("blocker_count", 0)
+    warning_count = int(gate.get("warning_count") or 0)
+    blocker_count = int(gate.get("blocker_count") or 0)
+    acknowledged_count = int(gate.get("acknowledged_count") or 0)
     decision = quality_gate_label(str(gate.get("decision") or ""))
-    return f"{prefix}：{decision}（报警 {warning_count}，阻断 {blocker_count}）"
+    if warning_count > 0:
+        unacknowledged_count = max(0, warning_count - acknowledged_count)
+        return (
+            f"{prefix}：{decision}（报警 {warning_count}，"
+            f"未确认 {unacknowledged_count}，阻断 {blocker_count}）"
+        )
+    return f"{prefix}：{decision}（报警 0，阻断 {blocker_count}）"
 
 
 def _format_usage_cost_values(metric: Any) -> str:

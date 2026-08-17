@@ -485,6 +485,68 @@ class QualityGateTests(unittest.TestCase):
             quality.GATE_BLOCKED,
         )
 
+    def test_apply_manifest_quality_acknowledgement_updates_gate(self):
+        manifest = {
+            'last_check_summary': {
+                'check_status': 'ready_with_warnings',
+                'writeback_gate': {
+                    'decision': 'allow',
+                    'can_apply': True,
+                    'blocker_count': 0,
+                    'quality_blocker_count': 0,
+                },
+            },
+            'quality_acknowledged_finding_ids': [],
+        }
+        findings = [
+            {'finding_id': 'w1', 'disposition': 'warning'},
+            {'finding_id': 'w2', 'disposition': 'warning'},
+            {'finding_id': 'b1', 'disposition': 'blocker'},
+        ]
+
+        applied = quality.apply_manifest_quality_acknowledgement(
+            manifest,
+            findings,
+            finding_ids=['w1', 'missing'],
+        )
+
+        self.assertEqual(
+            applied['manifest']['quality_acknowledged_finding_ids'],
+            ['w1'],
+        )
+        self.assertEqual(applied['quality_gate']['acknowledged_count'], 1)
+        self.assertEqual(applied['quality_gate']['decision'], quality.GATE_NEEDS_REVIEW)
+        self.assertEqual(applied['selected_ids'], {'w1'})
+        self.assertEqual(applied['unmatched'], ['missing'])
+        summary = applied['manifest']['last_check_summary']
+        self.assertEqual(summary['quality_gate']['acknowledged_count'], 1)
+        self.assertEqual(summary['check_status'], 'ready_with_warnings')
+        self.assertEqual(summary['writeback_gate']['decision'], 'allow')
+
+    def test_apply_manifest_quality_unacknowledgement_never_unblocks_blocker(self):
+        manifest = {
+            'last_check_summary': {},
+            'quality_acknowledged_finding_ids': ['w1', 'b1'],
+        }
+        findings = [
+            {'finding_id': 'w1', 'disposition': 'warning'},
+            {'finding_id': 'b1', 'disposition': 'blocker'},
+        ]
+
+        applied = quality.apply_manifest_quality_acknowledgement(
+            manifest,
+            findings,
+            finding_ids=['w1'],
+            unack=True,
+        )
+
+        self.assertEqual(
+            applied['manifest']['quality_acknowledged_finding_ids'],
+            ['b1'],
+        )
+        self.assertEqual(applied['quality_gate']['blocker_count'], 1)
+        self.assertEqual(applied['quality_gate']['decision'], quality.GATE_NEEDS_REVIEW)
+
 
 if __name__ == '__main__':
     unittest.main()

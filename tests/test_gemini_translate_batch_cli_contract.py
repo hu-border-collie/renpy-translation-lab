@@ -1272,6 +1272,28 @@ class BatchCliContractTests(unittest.TestCase):
                                 batch, "export_keyword_candidates", return_value=None
                             )
                         )
+                    elif command in {"quality-ack", "quality-unack"}:
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch,
+                                    "quality_acknowledge_command",
+                                    return_value={
+                                        "manifest": {"_manifest_path": "manifest.json"},
+                                        "findings": [],
+                                        "old_gate": {},
+                                        "new_gate": {},
+                                        "selected_ids": set(),
+                                        "unmatched": [],
+                                        "acknowledged_finding_ids": [],
+                                    },
+                                ),
+                                mock.patch.object(
+                                    batch,
+                                    "print_quality_acknowledgement_summary",
+                                ),
+                            ]
+                        )
                     elif command == "export-revision-corpus":
                         handler_patches.append(
                             mock.patch.object(

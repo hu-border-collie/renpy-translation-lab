@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import translation_quality
+from atomic_io import atomic_write_json
 
 from .diagnostics_context import join_directory_file, resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
@@ -242,7 +243,22 @@ def filter_quality_items(
     return result
 
 
-def _format_item_line(item: QualityFindingItem) -> str:
+def acknowledged_finding_ids_from_manifest(manifest: dict[str, object]) -> set[str]:
+    acknowledged: set[str] = set()
+    for value in (manifest.get("quality_acknowledged_finding_ids") or []):
+        if value is None:
+            continue
+        finding_id = str(value).strip()
+        if finding_id:
+            acknowledged.add(finding_id)
+    return acknowledged
+
+
+def _format_item_line(
+    item: QualityFindingItem,
+    *,
+    acknowledged: bool = False,
+) -> str:
     location_parts: list[str] = []
     if item.file_rel_path:
         location_parts.append(item.file_rel_path)
@@ -252,10 +268,11 @@ def _format_item_line(item: QualityFindingItem) -> str:
         location_parts.append(f"ID {item.item_id}")
     location = " / ".join(location_parts) if location_parts else "位置未知"
 
+    state = "，已确认" if acknowledged else ""
     lines = [
         (
             f"- [{severity_label(item.severity)}/{item.disposition}] "
-            f"{reason_label(item.reason_code)} ({item.reason_code})"
+            f"{reason_label(item.reason_code)} ({item.reason_code}){state}"
         ),
         f"  {location}",
     ]
@@ -268,6 +285,78 @@ def _format_item_line(item: QualityFindingItem) -> str:
     if item.suggestion:
         lines.append(f"  建议：{_safe_preview(item.suggestion)}")
     return "\n".join(lines)
+
+
+def read_manifest_json(manifest_path: str) -> dict[str, object]:
+    path = Path(manifest_path)
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise ValueError(f"无法读取任务记录：{path}") from exc
+    if not raw.strip():
+        raise ValueError(f"任务记录为空：{path}")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"任务记录不是有效 JSON：{path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"任务记录必须是 JSON 对象：{path}")
+    return payload
+
+
+def write_manifest_json(manifest_path: str, manifest: dict[str, object]) -> None:
+    data = dict(manifest)
+    data.pop("_manifest_path", None)
+    data.pop("_package_dir", None)
+    atomic_write_json(
+        manifest_path,
+        data,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def load_raw_quality_findings(
+    manifest: dict[str, object],
+    *,
+    manifest_path: str = "",
+) -> list[dict[str, object]]:
+    """Read the full quality findings JSONL referenced by a manifest."""
+
+    report_path = resolve_quality_findings_path(manifest, manifest_path=manifest_path)
+    if not report_path:
+        raise ValueError("任务记录中没有质量检查报告路径。")
+    try:
+        raw = Path(report_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"无法读取质量检查报告：{report_path}") from exc
+    return parse_quality_findings_jsonl(raw)
+
+
+def persist_quality_acknowledgement(
+    manifest_path: str,
+    *,
+    finding_ids: list[str] | tuple[str, ...] = (),
+    unack: bool = False,
+) -> dict[str, object]:
+    """Update acknowledged warning ids in a manifest and return the result.
+
+    The core calculation lives in ``translation_quality`` so the GUI and the
+    CLI share identical acknowledgement semantics.  The JSONL report itself is
+    never rewritten.
+    """
+
+    manifest = read_manifest_json(manifest_path)
+    raw_findings = load_raw_quality_findings(manifest, manifest_path=manifest_path)
+    applied = translation_quality.apply_manifest_quality_acknowledgement(
+        manifest,
+        raw_findings,
+        finding_ids=finding_ids,
+        all_findings=False,
+        unack=unack,
+    )
+    write_manifest_json(manifest_path, applied["manifest"])
+    return applied
 
 
 def build_quality_findings_report(

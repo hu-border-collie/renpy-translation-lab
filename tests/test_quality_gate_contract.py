@@ -713,5 +713,144 @@ class QualitySubjectCollectionTests(unittest.TestCase):
         self.assertEqual(stats['quality_subject_items'], 0)
 
 
+class QualityAcknowledgeCommandTests(unittest.TestCase):
+    def _manifest(self):
+        return {
+            '_manifest_path': '/tmp/pkg/manifest.json',
+            '_package_dir': '/tmp/pkg',
+            'execution': 'batch',
+            'quality_acknowledged_finding_ids': [],
+            'last_check_summary': {
+                'check_status': 'ready_with_warnings',
+                'writeback_gate': {
+                    'decision': 'allow',
+                    'can_apply': True,
+                    'blocker_count': 0,
+                    'quality_blocker_count': 0,
+                },
+            },
+        }
+
+    def _findings(self):
+        return [
+            {
+                'finding_id': 'w1',
+                'disposition': 'warning',
+                'reason_code': translation_quality.REASON_CJK_LATIN_SPACING,
+                'severity': 'medium',
+                'item_id': 'item-1',
+                'file': 'script.rpy',
+                'line': 1,
+                'source': 'Hello',
+                'translation': '你好iPhone',
+                'evidence': '{}',
+                'suggestion': '',
+                'rule_version': 1,
+                'schema_version': 1,
+            },
+            {
+                'finding_id': 'b1',
+                'disposition': 'blocker',
+                'reason_code': translation_quality.REASON_UNCLOSED_DELIMITERS,
+                'severity': 'high',
+                'item_id': 'item-2',
+                'file': 'script.rpy',
+                'line': 2,
+                'source': 'Hi',
+                'translation': '你{w=0.5}好',
+                'evidence': '{}',
+                'suggestion': '',
+                'rule_version': 1,
+                'schema_version': 1,
+            },
+        ]
+
+    def test_quality_ack_persists_selected_warning_ids(self):
+        manifest = self._manifest()
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'read_quality_findings',
+                return_value=self._findings(),
+            ),
+            mock.patch.object(
+                batch,
+                'save_manifest',
+                side_effect=lambda m, **kwargs: None,
+            ) as save_manifest,
+        ):
+            result = batch.quality_acknowledge_command(
+                '/tmp/pkg/manifest.json',
+                finding_ids=('w1', 'missing'),
+            )
+
+        self.assertEqual(
+            result['acknowledged_finding_ids'],
+            ['w1'],
+        )
+        self.assertEqual(result['selected_ids'], {'w1'})
+        self.assertEqual(result['unmatched'], ['missing'])
+        self.assertEqual(result['new_gate']['acknowledged_count'], 1)
+        self.assertEqual(result['new_gate']['decision'], 'needs_review')
+        save_manifest.assert_called_once()
+        saved = save_manifest.call_args.args[0]
+        self.assertEqual(saved['quality_acknowledged_finding_ids'], ['w1'])
+        self.assertEqual(saved['last_check_summary']['quality_gate']['acknowledged_count'], 1)
+
+    def test_quality_unack_removes_ids_without_touching_writeback_gate(self):
+        manifest = self._manifest()
+        manifest['quality_acknowledged_finding_ids'] = ['w1']
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'read_quality_findings',
+                return_value=self._findings(),
+            ),
+            mock.patch.object(
+                batch,
+                'save_manifest',
+                side_effect=lambda m, **kwargs: None,
+            ) as save_manifest,
+        ):
+            result = batch.quality_acknowledge_command(
+                '/tmp/pkg/manifest.json',
+                finding_ids=('w1',),
+                unack=True,
+            )
+
+        self.assertEqual(result['acknowledged_finding_ids'], [])
+        saved = save_manifest.call_args.args[0]
+        self.assertFalse(saved['quality_acknowledged_finding_ids'])
+        self.assertEqual(
+            saved['last_check_summary']['writeback_gate']['decision'],
+            'allow',
+        )
+        self.assertEqual(saved['last_check_summary']['quality_gate']['decision'], 'needs_review')
+
+    def test_quality_ack_listing_does_not_save(self):
+        manifest = self._manifest()
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'read_quality_findings',
+                return_value=self._findings(),
+            ),
+            mock.patch.object(batch, 'save_manifest') as save_manifest,
+        ):
+            result = batch.quality_acknowledge_command('/tmp/pkg/manifest.json')
+
+        self.assertEqual(result['selected_ids'], set())
+        save_manifest.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
