@@ -81,7 +81,7 @@ class QualityFindingsDialog(QDialog):
         filters.addWidget(QLabel("最低严重程度："))
         self.severity_filter = QComboBox()
         self.severity_filter.addItem("全部", "")
-        for severity in ("low", "medium", "high"):
+        for severity in ("info", "low", "medium", "high"):
             self.severity_filter.addItem(severity_label(severity), severity)
         filters.addWidget(self.severity_filter)
         layout.addLayout(filters)

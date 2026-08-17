@@ -59,6 +59,17 @@ Preview JSONL: C:\\package\\revision_preview.jsonl
 Preview Markdown: C:\\package\\revision_preview.md
 """
 
+BLOCKED_PREVIEW_OUTPUT = """
+Recoverable revision items: 2
+Pending files: 1
+Pending lines: 2
+Failure items: 0
+Quality gate: blocked (warnings=1, blockers=1)
+Revision writeback gate: deny
+Preview JSONL: C:\\package\\revision_preview.jsonl
+Preview Markdown: C:\\package\\revision_preview.md
+"""
+
 
 class GuiRevisionReportTests(unittest.TestCase):
     def test_parse_revision_summary_extracts_preview_paths_and_counts(self):
@@ -97,6 +108,13 @@ class GuiRevisionReportTests(unittest.TestCase):
 
         self.assertEqual(update.status, "failed")
         self.assertIn("预览中断", update.heading)
+
+    def test_summarize_preview_gate_deny_warns(self):
+        update = summarize_revision_preview_output(BLOCKED_PREVIEW_OUTPUT, 0)
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("质量门禁", update.heading)
+        self.assertIn("质量阻断 1 条", "\n".join(update.facts))
 
     def test_summarize_sync_success_marks_done(self):
         update = summarize_sync_revision_output(SYNC_OUTPUT, 0)

@@ -64,6 +64,7 @@ import prompt_context
 import story_memory
 import sync_translation_preview
 import translation_core
+import translation_quality
 from sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     MAX_SYNC_TIMEOUT_SECONDS,
@@ -5735,20 +5736,33 @@ def apply_sync_translation_preview(manifest_path):
             "Sync apply blocked: the macro setting file changed since this "
             "preview was generated. Regenerate and review a new preview."
         )
+    runtime_config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
+    active_quality_policy = translation_quality.load_policy_from_config(
+        runtime_config
+    )
     try:
         manifest = sync_translation_preview.apply_sync_preview(
             manifest_path,
             active_project_root=BASE_DIR,
             active_tl_dir=TL_DIR,
             on_file_applied=record_progress,
+            active_quality_policy=active_quality_policy,
+            active_glossary_file=GLOSSARY_FILE,
         )
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
 
     summary = manifest.get("summary") or {}
+    quality_gate = summary.get("quality_gate") or {}
     print(f"Sync apply manifest: {os.path.abspath(manifest_path)}")
     print(f"Applied files: {len(manifest.get('applied_files') or [])}")
     print(f"Applied translations: {int(summary.get('translated_items') or 0)}")
+    print(
+        "Sync apply quality gate: "
+        f"{quality_gate.get('decision') or 'pass'}, "
+        f"warnings={int(quality_gate.get('warning_count') or 0)}, "
+        f"blockers={int(quality_gate.get('blocker_count') or 0)}"
+    )
     print("Sync translation apply complete.")
     return manifest
 
@@ -5921,6 +5935,44 @@ def run_translation(*, prepare=False):
 
             if any(replacements.values()):
                 normalized_entries = _normalize_progress_entries(successful_entries)
+                accepted_entries = set(normalized_entries)
+                quality_subjects = []
+                for task in tasks:
+                    task_progress = _normalize_progress_entry(
+                        task.get("progress_entry")
+                    )
+                    if not task_progress or task_progress not in accepted_entries:
+                        continue
+                    translated_text = str(task.get("translated_text") or "")
+                    if not translated_text:
+                        task_line = int(task.get("line") or 0)
+                        task_start = int(task.get("start") or 0)
+                        for replacement in replacements.get(task_line, []) or []:
+                            if (
+                                isinstance(replacement, (tuple, list))
+                                and len(replacement) >= 3
+                                and int(replacement[0]) == task_start
+                            ):
+                                translated_text = str(replacement[2] or "")
+                                break
+                    quality_subjects.append(
+                        {
+                            "item_id": str(task.get("id") or ""),
+                            "file_rel_path": progress_key,
+                            "line": int(task.get("line") or 0),
+                            "line_number": int(task.get("line") or 0) + 1,
+                            "start": int(task.get("start") or 0),
+                            "end": int(task.get("end") or 0),
+                            "source": str(
+                                task.get("source_for_id")
+                                or task.get("text")
+                                or ""
+                            ),
+                            "translation": translated_text,
+                            "speaker_id": str(task.get("speaker_id") or ""),
+                            "speaker_name": str(task.get("speaker_name") or ""),
+                        }
+                    )
                 adapter_plan, rendered_by_file, preview_failure = build_sync_adapter_preview(
                     adapter,
                     adapter_snapshot,
@@ -5951,6 +6003,7 @@ def run_translation(*, prepare=False):
                         "progress_entries": normalized_entries,
                         "translated_items": len(normalized_entries),
                         "writeback_plan": adapter_plan.to_dict(),
+                        "quality_subjects": quality_subjects,
                         "prompt_context": {
                             "batches": file_context_batches,
                         },
@@ -5982,6 +6035,13 @@ def run_translation(*, prepare=False):
             "truncated_batches": context_truncated_batches,
             "files": attempted_file_contexts,
         }
+        runtime_config = _read_json_object(
+            TRANSLATOR_CONFIG,
+            label="translator config",
+        )
+        quality_policy = translation_quality.load_policy_from_config(
+            runtime_config
+        )
         manifest_path, manifest = sync_translation_preview.create_sync_preview(
             log_dir=LOG_DIR,
             project_root=BASE_DIR,
@@ -5990,6 +6050,8 @@ def run_translation(*, prepare=False):
             failures=preview_failures,
             contract_diagnostics=finalized_contract,
             prompt_context=prompt_context,
+            quality_policy=quality_policy,
+            glossary_file=GLOSSARY_FILE,
         )
         try:
             export_coverage_package(
@@ -6008,6 +6070,21 @@ def run_translation(*, prepare=False):
         print(f"Sync preview report: {report_path}")
         print(f"Preview files: {int(summary.get('files_changed') or 0)}")
         print(f"Preview translations: {int(summary.get('translated_items') or 0)}")
+        quality_gate = summary.get("quality_gate") or {}
+        quality_findings_path = manifest.get("last_quality_findings_path")
+        if quality_findings_path:
+            quality_findings_path = os.path.join(
+                os.path.dirname(manifest_path),
+                quality_findings_path,
+            )
+        print(
+            "Sync quality gate: "
+            f"{quality_gate.get('decision') or 'pass'}, "
+            f"warnings={int(quality_gate.get('warning_count') or 0)}, "
+            f"blockers={int(quality_gate.get('blocker_count') or 0)}"
+        )
+        if quality_findings_path:
+            print(f"Sync quality findings: {quality_findings_path}")
         print(
             "Model contract completeness: "
             f"{finalized_contract.get('final_valid', 0)}/"

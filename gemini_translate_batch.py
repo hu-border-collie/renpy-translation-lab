@@ -4796,6 +4796,9 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
         **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(
+            runtime_policy=BATCH_QUALITY_POLICY
+        ),
         'input_jsonl_path': requests_path,
         'result_jsonl_path': results_path,
         'job_name': '',
@@ -7591,6 +7594,7 @@ def validate_keyword_export_paths(manifest, *output_paths):
         os.path.join(manifest.get('_package_dir', ''), 'requests.jsonl'),
         os.path.join(manifest.get('_package_dir', ''), 'results.jsonl'),
         os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'quality_findings.jsonl'),
     }
     for manifest_key in ('_manifest_path', 'input_jsonl_path', 'result_jsonl_path'):
         value = manifest.get(manifest_key)
@@ -9226,6 +9230,19 @@ def print_revision_summary(summary):
         print('Failure categories:')
         for name in sorted(summary['reason_counts']):
             print(f"- {name}: {summary['reason_counts'][name]}")
+    if 'quality_gate' in summary:
+        quality_gate = summary.get('quality_gate') or {}
+        print(
+            f"Quality gate: {quality_gate.get('decision', 'unknown')} "
+            f"(warnings={quality_gate.get('warning_count', 0)}, "
+            f"blockers={quality_gate.get('blocker_count', 0)})"
+        )
+        writeback_gate = summary.get('writeback_gate') or {}
+        print(
+            f"Revision writeback gate: {writeback_gate.get('decision', 'unknown')}"
+        )
+    if summary.get('quality_findings_path'):
+        print(f"Quality findings: {summary['quality_findings_path']}")
 
 
 def resolve_revision_output_path(manifest, value, default_name, field_name):
@@ -9246,6 +9263,7 @@ def validate_revision_output_paths(manifest, jsonl_path, markdown_path):
         os.path.join(manifest.get('_package_dir', ''), 'requests.jsonl'),
         os.path.join(manifest.get('_package_dir', ''), 'results.jsonl'),
         os.path.join(manifest.get('_package_dir', ''), 'failures.jsonl'),
+        os.path.join(manifest.get('_package_dir', ''), 'quality_findings.jsonl'),
     }
     for manifest_key in ('_manifest_path', 'input_jsonl_path', 'result_jsonl_path'):
         value = manifest.get(manifest_key)
@@ -9276,6 +9294,7 @@ def _revision_manifest_identity(manifest):
         'summary', 'files', 'chunks', 'final_review_source',
     )
     payload = {key: manifest.get(key) for key in keys}
+    # Policy drift is enforced by ``_revision_quality_staleness``, not here.
     # Preserve the v1 fingerprint for pre-proposal revision/final-review
     # packages.  Proposal manifests bind their immutable import provenance and
     # eligibility state without adding a null field to every legacy payload.
@@ -9405,7 +9424,66 @@ def _require_valid_revision_preview(manifest):
             'source_changed',
             'source files changed since preview; run preview-revisions again.',
         )
+
+    quality_staleness = _revision_quality_staleness(manifest, preview)
+    if quality_staleness is not None:
+        reason, message = quality_staleness
+        _mark_revision_apply_blocked(manifest, reason, message)
     return preview
+
+
+def _revision_quality_staleness(manifest, preview):
+    """Return ``(reason, message)`` when revision quality evidence is stale."""
+
+    expected_rule_version = preview.get('quality_rule_schema_version')
+    if expected_rule_version is not None and expected_rule_version != (
+        translation_quality.QUALITY_RULE_SCHEMA_VERSION
+    ):
+        return (
+            'quality_rules_changed',
+            'quality rules changed since revision preview; run preview-revisions again.',
+        )
+    expected_runtime_policy_digest = preview.get('quality_policy_runtime_digest')
+    if expected_runtime_policy_digest and expected_runtime_policy_digest != (
+        translation_quality.policy_digest(BATCH_QUALITY_POLICY)
+    ):
+        return (
+            'quality_policy_changed',
+            'quality policy changed since revision preview; run preview-revisions again.',
+        )
+    expected_manifest_policy_digest = preview.get('quality_policy_digest')
+    if expected_manifest_policy_digest and expected_manifest_policy_digest != (
+        translation_quality.policy_digest(
+            translation_quality.effective_policy(manifest)
+        )
+    ):
+        return (
+            'quality_policy_changed',
+            'manifest quality policy changed since revision preview; run preview-revisions again.',
+        )
+    quality_findings_path = preview.get('quality_findings_path')
+    if quality_findings_path:
+        if not os.path.isfile(quality_findings_path):
+            return (
+                'quality_findings_missing',
+                'quality findings report no longer exists; run preview-revisions again.',
+            )
+        if _sha256_file(quality_findings_path) != preview.get(
+            'quality_findings_sha256'
+        ):
+            return (
+                'quality_findings_changed',
+                'quality findings changed since revision preview; run preview-revisions again.',
+            )
+    writeback_gate = preview.get('writeback_gate')
+    if isinstance(writeback_gate, dict) and writeback_gate.get(
+        'decision'
+    ) != translation_quality.GATE_ALLOW:
+        return (
+            'revision_writeback_gate_denied',
+            'revision preview is not allowed to write back; resolve quality blockers or structural blocks and run preview-revisions again.',
+        )
+    return None
 
 
 def write_revision_markdown(path, entries, summary):
@@ -9449,9 +9527,14 @@ def preview_revisions(
     """Build a revision preview and optionally control the latest pointer."""
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
-    _replacements, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
+    replacements_by_file, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
         manifest,
         validate_sources=True,
+    )
+    _quality_findings, quality_report_path = run_revision_quality_check(
+        manifest,
+        summary,
+        replacements_by_file,
     )
     jsonl_path = resolve_revision_output_path(manifest, output_jsonl, 'revision_preview.jsonl', 'revision JSONL output')
     markdown_path = resolve_revision_output_path(manifest, output_markdown, 'revision_preview.md', 'revision Markdown output')
@@ -9465,6 +9548,10 @@ def preview_revisions(
 
     now = datetime.now().isoformat(timespec='seconds')
     manifest['last_revision_preview_at'] = now
+    manifest['last_revision_quality_findings_path'] = quality_report_path
+    manifest['last_revision_quality_findings_sha256'] = _sha256_file(
+        quality_report_path
+    )
     manifest['last_revision_preview'] = {
         'schema_version': REVISION_PREVIEW_CONTRACT_VERSION,
         'generated_at': now,
@@ -9475,6 +9562,21 @@ def preview_revisions(
         'manifest_identity': _revision_manifest_identity(manifest),
         'project_identity': manifest_project_identity(manifest),
         'source_snapshots': _revision_source_snapshots(manifest),
+        'quality_findings_path': quality_report_path,
+        'quality_findings_sha256': _sha256_file(quality_report_path),
+        'quality_findings_count': summary.get('quality_findings_count', 0),
+        'quality_findings_digest': summary.get('quality_findings_digest'),
+        'quality_gate': summary.get('quality_gate'),
+        'writeback_gate': summary.get('writeback_gate'),
+        'check_status': summary.get('check_status'),
+        'quality_finding_schema_version': summary.get(
+            'quality_finding_schema_version'
+        ),
+        'quality_rule_schema_version': summary.get('quality_rule_schema_version'),
+        'quality_policy_digest': summary.get('quality_policy_digest'),
+        'quality_policy_runtime_digest': summary.get(
+            'quality_policy_runtime_digest'
+        ),
         'summary': summary,
     }
     proposal_state = manifest.get('proposal_import')
@@ -10030,6 +10132,224 @@ def write_quality_findings(manifest, findings):
     return path
 
 
+def collect_revision_quality_subjects(manifest, replacements_by_file, stats=None):
+    """Build quality subjects from structurally validated revision actions.
+
+    Revision quality inspection uses the same stable identity fields as Batch
+    check: item ID, file, line, source, and the text that is about to be
+    written back.  Quality findings never replace the structural writeback
+    contract; they are attached only to actions that already passed it.
+    """
+
+    item_index = {}
+    counters = {
+        'quality_action_items': 0,
+        'quality_subject_items': 0,
+        'quality_unmatched_items': 0,
+    }
+    for chunk in manifest.get('chunks') or []:
+        if not isinstance(chunk, dict):
+            continue
+        file_rel_path = str(chunk.get('file_rel_path') or '')
+        for item in chunk.get('items') or []:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get('id') or '')
+            item_index[(file_rel_path, item_id)] = (chunk, item)
+            item_index[(str(chunk.get('key') or ''), item_id)] = (chunk, item)
+
+    subjects = []
+    for file_key, replacements_by_line in replacements_by_file.items():
+        for line_index, actions in replacements_by_line.items():
+            for action in actions or []:
+                counters['quality_action_items'] += 1
+                if not isinstance(action, (tuple, list)) or len(action) < 6:
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                replacement = str(action[2] or '')
+                item_id = str(action[6] or '') if len(action) > 6 else ''
+                chunk_key = str(action[7] or '') if len(action) > 7 else ''
+                chunk, item = item_index.get(
+                    (str(file_key), item_id),
+                    item_index.get((chunk_key, item_id), (None, None)),
+                )
+                if chunk is None or item is None:
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                try:
+                    unit = translation_core.unit_from_manifest_item(
+                        item,
+                        mode=translation_core.MODE_REVISION,
+                        chunk=chunk,
+                    )
+                    if unit is None:
+                        raise ValueError('unit_from_manifest_item returned None')
+                    subject = {
+                        'item_id': item_id,
+                        'file_rel_path': str(file_key),
+                        'line': unit.line,
+                        'line_number': unit.display_line_number,
+                        'start': unit.start,
+                        'end': unit.end,
+                        'source': unit.source_text,
+                        'translation': replacement,
+                        'speaker_id': unit.speaker_id,
+                        'speaker_name': unit.speaker_name,
+                    }
+                except (AttributeError, TypeError, ValueError):
+                    counters['quality_unmatched_items'] += 1
+                    continue
+                subjects.append(subject)
+    counters['quality_subject_items'] = len(subjects)
+    if isinstance(stats, dict):
+        stats.update(counters)
+    return subjects
+
+
+def run_revision_quality_check(
+    manifest,
+    summary,
+    replacements_by_file,
+    *,
+    apply_stage=False,
+):
+    """Run shared mechanical rules on revision writeback candidates.
+
+    Like Batch ``check``, revision consumes the current runtime policy
+    (``BATCH_QUALITY_POLICY``) and then refreshes the manifest snapshot so the
+    persisted policy matches the findings just produced.  A policy change after
+    preview is detected through the separately persisted runtime digest.
+    """
+
+    collection_stats = {}
+    quality_subjects = collect_revision_quality_subjects(
+        manifest,
+        replacements_by_file,
+        stats=collection_stats,
+    )
+    glossary_path = str(
+        manifest.get('glossary_file')
+        or os.environ.get('GLOSSARY_FILE')
+        or getattr(legacy, 'GLOSSARY_FILE', '')
+        or ''
+    )
+    quality_glossary_map = {}
+    quality_glossary_base = ''
+    for base_dir in (
+        str(manifest.get('_package_dir') or ''),
+        str(manifest.get('base_dir') or ''),
+    ):
+        if not base_dir:
+            continue
+        candidate = translation_quality.load_glossary_map(
+            glossary_path,
+            base_dir=base_dir,
+        )
+        if candidate:
+            quality_glossary_map = candidate
+            quality_glossary_base = base_dir
+            break
+    if not quality_glossary_map and glossary_path:
+        quality_glossary_map = translation_quality.load_glossary_map(glossary_path)
+
+    policy = translation_quality.normalize_policy(BATCH_QUALITY_POLICY)
+    manifest['quality_policy'] = policy
+    quality_findings = translation_quality.check_quality(
+        quality_subjects,
+        policy=policy,
+        glossary_map=quality_glossary_map,
+    )
+    if int(collection_stats.get('quality_unmatched_items') or 0) > 0:
+        quality_findings.append(
+            translation_quality.make_unmatched_quality_subject_finding(
+                collection_stats
+            )
+        )
+    if apply_stage:
+        quality_report_path = os.path.join(
+            manifest.get('_package_dir', ''),
+            'quality_findings.apply.jsonl',
+        )
+        atomic_write_jsonl(
+            quality_report_path,
+            [
+                translation_quality.normalize_finding(finding)
+                for finding in quality_findings
+            ],
+            ensure_ascii=False,
+        )
+    else:
+        quality_report_path = write_quality_findings(
+            manifest,
+            quality_findings,
+        )
+    quality_gate = translation_quality.summarize_quality_gate(
+        quality_findings,
+        acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+    )
+    quality_reason_counts = {}
+    for finding in quality_findings:
+        bump_counter(
+            quality_reason_counts,
+            finding.get('reason_code') or 'quality.unknown',
+        )
+
+    summary.update(collection_stats)
+    summary['quality_glossary_path'] = glossary_path
+    summary['quality_glossary_base'] = quality_glossary_base
+    summary['quality_glossary_entries'] = len(quality_glossary_map)
+    summary['quality_glossary_loaded'] = bool(
+        not glossary_path or quality_glossary_map
+    )
+    summary['quality_findings_count'] = len(quality_findings)
+    summary['quality_reason_counts'] = quality_reason_counts
+    summary['quality_findings_path'] = quality_report_path
+    summary['quality_findings_sha256'] = _sha256_file(quality_report_path)
+    summary['quality_findings_digest'] = translation_quality.findings_digest(
+        quality_findings
+    )
+    summary['quality_gate'] = quality_gate
+    summary['quality_finding_schema_version'] = (
+        translation_quality.QUALITY_FINDING_SCHEMA_VERSION
+    )
+    summary['quality_rule_schema_version'] = (
+        translation_quality.QUALITY_RULE_SCHEMA_VERSION
+    )
+    summary['quality_policy_digest'] = translation_quality.policy_digest(policy)
+    summary['quality_policy_runtime_digest'] = translation_quality.policy_digest(
+        BATCH_QUALITY_POLICY
+    )
+
+    summarize_revision_writeback_gate(summary)
+    summary['has_warnings'] = bool(quality_gate.get('has_warnings'))
+    summary['check_status'] = translation_quality.overall_check_status(
+        summary['writeback_gate'],
+        quality_gate,
+    )
+    return quality_findings, quality_report_path
+
+
+def summarize_revision_writeback_gate(summary):
+    """Compute revision writeback gate from structural and quality blockers."""
+
+    quality_gate = summary.get('quality_gate') or {}
+    structural_block = summary.get('adapter_writeback_status') == 'block'
+    quality_blocker_count = int(quality_gate.get('blocker_count') or 0)
+    can_apply = (not structural_block) and quality_blocker_count == 0
+    summary['writeback_gate'] = {
+        'decision': (
+            translation_quality.GATE_ALLOW
+            if can_apply
+            else translation_quality.GATE_DENY
+        ),
+        'can_apply': can_apply,
+        'blocker_count': quality_blocker_count + (1 if structural_block else 0),
+        'structural_blocker_count': 1 if structural_block else 0,
+        'quality_blocker_count': quality_blocker_count,
+    }
+    return summary['writeback_gate']
+
+
 def print_check_summary(summary):
     print(f"Expected chunks: {summary['expected_chunks']}")
     print(f"Result rows: {summary['result_rows']}")
@@ -10327,31 +10647,10 @@ def check_results(target=None):
     )
     summary['quality_coverage_complete'] = quality_coverage_complete
     if not quality_coverage_complete:
-        evidence = json.dumps(
-            dict(quality_collection_stats),
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        finding_id = hashlib.sha256(
-            f'{translation_quality.QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
-        ).hexdigest()[:20]
         quality_findings.append(
-            {
-                'finding_id': finding_id,
-                'schema_version': translation_quality.QUALITY_FINDING_SCHEMA_VERSION,
-                'reason_code': translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT,
-                'rule_id': 'unmatched_subject',
-                'severity': 'medium',
-                'disposition': translation_quality.DISPOSITION_WARNING,
-                'item_id': '',
-                'file': '',
-                'line': 0,
-                'source': '',
-                'translation': '',
-                'evidence': evidence,
-                'suggestion': 'Inspect quality_action_items / quality_unmatched_items and rerun check.',
-                'rule_version': translation_quality.QUALITY_RULE_SCHEMA_VERSION,
-            }
+            translation_quality.make_unmatched_quality_subject_finding(
+                quality_collection_stats
+            )
         )
     quality_report_path = write_quality_findings(manifest, quality_findings)
     quality_reason_counts = {}
@@ -10617,6 +10916,21 @@ def apply_revisions(target=None, force=False):
             revalidated_file_paths[file_key] = file_path
             revalidated_source_documents[file_key] = source_document
 
+    _quality_findings, quality_report_path = run_revision_quality_check(
+        manifest,
+        summary,
+        revalidated_replacements_by_file,
+        apply_stage=True,
+    )
+    # The preview-bound quality_findings.jsonl stays immutable; apply-time
+    # findings live in quality_findings.apply.jsonl and are attached only to
+    # the apply summary so a later apply re-check cannot see the preview
+    # artifact as tampered.
+    manifest['last_revision_apply_summary'] = summary
+
+    # Validate the structural writeback plan before terminating on quality
+    # blockers so both structural and quality diagnostics are persisted in the
+    # blocked apply summary.
     adapter_plan, adapter_snapshot = _validate_adapter_writeback_plan(
         manifest,
         revalidated_replacements_by_file,
@@ -10628,15 +10942,36 @@ def apply_revisions(target=None, force=False):
             if file_key in revalidated_source_documents
         ),
     )
-    if summary.get('adapter_writeback_status') == 'block':
+    structural_block = summary.get('adapter_writeback_status') == 'block'
+    if structural_block:
         summary['pending_files'] = 0
         summary['pending_lines'] = 0
-        append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
-        _mark_revision_apply_blocked(
-            manifest,
-            'adapter_writeback_block',
-            'the adapter writeback plan is not safe. No files were written.',
+
+    quality_gate = summary.get('quality_gate') or {}
+    quality_blocker_count = int(quality_gate.get('blocker_count') or 0)
+    if quality_blocker_count > 0 or structural_block:
+        summarize_revision_writeback_gate(summary)
+        summary['check_status'] = translation_quality.overall_check_status(
+            summary['writeback_gate'],
+            quality_gate,
         )
+        append_failure_entries(failure_entries, package_dir=manifest['_package_dir'])
+        if quality_blocker_count > 0 and structural_block:
+            reason = 'quality_and_structural_blockers_present'
+            message = (
+                'configured quality blocker rules matched revision candidates and '
+                'the adapter writeback plan is not safe. No files were written.'
+            )
+        elif quality_blocker_count > 0:
+            reason = 'quality_blockers_present'
+            message = (
+                'configured quality blocker rules matched revision candidates. '
+                'No files were written.'
+            )
+        else:
+            reason = 'adapter_writeback_block'
+            message = 'the adapter writeback plan is not safe. No files were written.'
+        _mark_revision_apply_blocked(manifest, reason, message)
 
     writeback_files = []
     applied_file_keys = set()
@@ -10724,6 +11059,11 @@ def apply_revisions(target=None, force=False):
         'skipped_items': summary.get('skipped_items', 0),
         'source_mismatch_items': summary.get('source_mismatch_items', 0),
         'failure_count': len(failure_entries),
+        'quality_gate': summary.get('quality_gate'),
+        'writeback_gate': summary.get('writeback_gate'),
+        'quality_findings_count': summary.get('quality_findings_count', 0),
+        'quality_findings_path': 'quality_findings.apply.jsonl',
+        'quality_findings_sha256': summary.get('quality_findings_sha256'),
         'rag': rag_apply_summary,
     }
     manifest['last_revision_apply_summary'] = summary

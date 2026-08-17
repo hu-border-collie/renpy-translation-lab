@@ -31,6 +31,33 @@ DISPOSITION_BLOCKER = 'blocker'
 DISPOSITION_OFF = 'off'
 VALID_DISPOSITIONS = (DISPOSITION_WARNING, DISPOSITION_BLOCKER, DISPOSITION_OFF)
 
+SEVERITY_INFO = 'info'
+SEVERITY_LOW = 'low'
+SEVERITY_MEDIUM = 'medium'
+SEVERITY_HIGH = 'high'
+VALID_SEVERITIES = (SEVERITY_INFO, SEVERITY_LOW, SEVERITY_MEDIUM, SEVERITY_HIGH)
+SEVERITY_ORDER = {SEVERITY_INFO: 0, SEVERITY_LOW: 1, SEVERITY_MEDIUM: 2, SEVERITY_HIGH: 3}
+
+# Fields every persisted quality finding must carry.  Final-review semantic
+# findings are adapted into this same shape instead of inventing a second
+# persistence contract for GUI lists, filters, and digest/staleness checks.
+QUALITY_FINDING_FIELDS: tuple[str, ...] = (
+    'finding_id',
+    'schema_version',
+    'reason_code',
+    'rule_id',
+    'severity',
+    'disposition',
+    'item_id',
+    'file',
+    'line',
+    'source',
+    'translation',
+    'evidence',
+    'suggestion',
+    'rule_version',
+)
+
 GATE_READY = 'ready'
 GATE_READY_WITH_WARNINGS = 'ready_with_warnings'
 GATE_BLOCKED = 'blocked'
@@ -55,6 +82,35 @@ REASON_KNOWN_GARBLED_PHRASE = 'quality.garbled.known_bad_phrase'
 # Collection diagnostic emitted by check when a validated writeback action
 # cannot be mapped back to a manifest item for mechanical inspection.
 REASON_UNMATCHED_QUALITY_SUBJECT = 'quality.collection.unmatched_subject'
+
+# Final-review findings keep their LLM semantic fields, but are adapted into the
+# common quality-finding data model with stable ``quality.llm.*`` reason codes.
+# These codes deliberately sit in their own namespace so a literary conclusion
+# can never be mistaken for a deterministic mechanical rule.
+FINAL_REVIEW_REASON_PREFIX = 'quality.llm'
+FINAL_REVIEW_REASON_OMISSION = 'quality.llm.omission'
+FINAL_REVIEW_REASON_MISTRANSLATION = 'quality.llm.mistranslation'
+FINAL_REVIEW_REASON_ADDITION = 'quality.llm.addition'
+FINAL_REVIEW_REASON_FORMAT = 'quality.llm.format'
+FINAL_REVIEW_REASON_TERMINOLOGY = 'quality.llm.terminology'
+FINAL_REVIEW_REASON_ADDRESS = 'quality.llm.address'
+FINAL_REVIEW_REASON_STYLE_DRIFT = 'quality.llm.style_drift'
+FINAL_REVIEW_REASON_NEEDS_CONFIRMATION = 'quality.llm.needs_confirmation'
+
+FINAL_REVIEW_FINDING_TYPE_TO_REASON: dict[str, str] = {
+    'omission': FINAL_REVIEW_REASON_OMISSION,
+    'mistranslation': FINAL_REVIEW_REASON_MISTRANSLATION,
+    'addition': FINAL_REVIEW_REASON_ADDITION,
+    'format': FINAL_REVIEW_REASON_FORMAT,
+    'terminology': FINAL_REVIEW_REASON_TERMINOLOGY,
+    'address': FINAL_REVIEW_REASON_ADDRESS,
+    'style_drift': FINAL_REVIEW_REASON_STYLE_DRIFT,
+    'needs_confirmation': FINAL_REVIEW_REASON_NEEDS_CONFIRMATION,
+}
+FINAL_REVIEW_REASON_TO_FINDING_TYPE = {
+    reason: finding_type
+    for finding_type, reason in FINAL_REVIEW_FINDING_TYPE_TO_REASON.items()
+}
 
 ALL_REASON_CODES: tuple[str, ...] = (
     REASON_WAIT_TAG_INSIDE_CJK,
@@ -284,6 +340,24 @@ def policy_digest(policy: Mapping[str, Any] | None) -> str:
         'garbled_phrases': payload.get('garbled_phrases'),
     }
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
+def glossary_digest(glossary_map: Mapping[str, str] | None) -> str:
+    """Stable digest of the glossary pairs actually consumed by quality rules."""
+
+    entries = [
+        [str(source), str(target)]
+        for source, target in (glossary_map or {}).items()
+        if str(source).strip() or str(target).strip()
+    ]
+    entries.sort(key=lambda pair: (pair[0], pair[1]))
+    serialized = json.dumps(
+        entries,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
 
@@ -863,6 +937,39 @@ def check_quality(
     return findings
 
 
+def make_unmatched_quality_subject_finding(
+    collection_stats: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the collection-diagnostic finding for unmappable actions."""
+
+    evidence = json.dumps(
+        dict(collection_stats),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    finding_id = hashlib.sha256(
+        f'{QUALITY_FINDING_SCHEMA_VERSION}:{evidence}'.encode('utf-8')
+    ).hexdigest()[:20]
+    return {
+        'finding_id': finding_id,
+        'schema_version': QUALITY_FINDING_SCHEMA_VERSION,
+        'reason_code': REASON_UNMATCHED_QUALITY_SUBJECT,
+        'rule_id': 'unmatched_subject',
+        'severity': SEVERITY_MEDIUM,
+        'disposition': DISPOSITION_WARNING,
+        'item_id': '',
+        'file': '',
+        'line': 0,
+        'source': '',
+        'translation': '',
+        'evidence': evidence,
+        'suggestion': (
+            'Inspect quality_action_items / quality_unmatched_items and rerun check.'
+        ),
+        'rule_version': QUALITY_RULE_SCHEMA_VERSION,
+    }
+
+
 def _count_disposition(findings: Iterable[Mapping[str, Any]], disposition: str) -> int:
     return sum(
         1
@@ -918,20 +1025,64 @@ def overall_check_status(writeback_gate: Mapping[str, Any], quality_gate: Mappin
     return GATE_READY
 
 
-def normalize_finding(finding: Mapping[str, Any]) -> dict[str, Any]:
-    """Ensure a persisted finding carries the required contract fields."""
+def _coerce_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
+
+def _coerce_line(value: Any) -> int:
+    return max(0, _coerce_int(value, 0))
+
+
+def _coerce_rule_version(value: Any, *, default: int) -> int:
+    """Normalize rule versions without dropping intentionally unknown values."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return default
+
+
+def normalize_finding(finding: Mapping[str, Any]) -> dict[str, Any]:
+    """Ensure a persisted finding carries the required contract fields.
+
+    Extra fields (for example final-review provenance) are preserved so shared
+    GUI consumers can display the same record regardless of producer.
+    """
+
+    if not isinstance(finding, Mapping):
+        raise ValueError('quality finding must be a mapping')
     item = dict(finding)
-    item.setdefault('schema_version', QUALITY_FINDING_SCHEMA_VERSION)
+    schema_version = _coerce_int(
+        item.get('schema_version'),
+        QUALITY_FINDING_SCHEMA_VERSION,
+    )
+    reason_code = str(item.get('reason_code') or '').strip()
+    rule_id = str(item.get('rule_id') or '').strip() or REASON_TO_RULE_KEY.get(
+        reason_code,
+        reason_code,
+    )
+    severity = str(item.get('severity') or SEVERITY_MEDIUM).strip().lower()
+    if severity not in VALID_SEVERITIES:
+        severity = SEVERITY_MEDIUM
+    disposition = str(item.get('disposition') or DISPOSITION_WARNING).strip().lower()
+    if disposition not in VALID_DISPOSITIONS:
+        disposition = DISPOSITION_WARNING
+
+    item['schema_version'] = schema_version
     if not item.get('finding_id'):
         item['finding_id'] = hashlib.sha256(
             json.dumps(
                 [
-                    item.get('schema_version'),
+                    schema_version,
                     str(item.get('item_id') or ''),
                     str(item.get('file') or ''),
-                    int(item.get('line') or 0),
-                    str(item.get('reason_code') or ''),
+                    _coerce_line(item.get('line')),
+                    reason_code,
                     str(item.get('evidence') or ''),
                 ],
                 ensure_ascii=False,
@@ -939,36 +1090,392 @@ def normalize_finding(finding: Mapping[str, Any]) -> dict[str, Any]:
                 separators=(',', ':'),
             ).encode('utf-8')
         ).hexdigest()[:20]
+    item['finding_id'] = str(item.get('finding_id') or '').strip()
     item.setdefault('reason_code', '')
-    item.setdefault('severity', 'medium')
-    item.setdefault('disposition', DISPOSITION_WARNING)
-    item.setdefault('item_id', '')
-    item.setdefault('file', '')
-    item.setdefault('line', 0)
-    item.setdefault('source', '')
-    item.setdefault('translation', '')
-    item.setdefault('evidence', '')
-    item.setdefault('suggestion', '')
-    item.setdefault('rule_version', QUALITY_RULE_SCHEMA_VERSION)
+    item['reason_code'] = reason_code
+    item['rule_id'] = rule_id
+    item['severity'] = severity
+    item['disposition'] = disposition
+    item['item_id'] = str(item.get('item_id') or '')
+    item['file'] = str(item.get('file') or '')
+    item['line'] = _coerce_line(item.get('line'))
+    item['source'] = str(item.get('source') or '')
+    item['translation'] = str(item.get('translation') or '')
+    item['evidence'] = str(item.get('evidence') or '')
+    item['suggestion'] = str(item.get('suggestion') or '')
+    item['rule_version'] = _coerce_rule_version(
+        item.get('rule_version'),
+        default=QUALITY_RULE_SCHEMA_VERSION,
+    )
     return item
 
 
-def load_findings(path: str) -> list[dict[str, Any]]:
-    if not path or not os.path.isfile(path):
+def validate_finding(
+    finding: Mapping[str, Any],
+    *,
+    require_known_reason_code: bool = False,
+) -> list[str]:
+    """Return structural contract violations for one finding (empty means valid).
+
+    Validation is intentionally shape-only.  It does not judge whether a
+    finding is correct; final-review semantic findings and mechanical findings
+    must both satisfy the same persisted shape.
+    """
+
+    if not isinstance(finding, Mapping):
+        return ['quality finding must be a mapping']
+    item = dict(finding)
+    errors: list[str] = []
+    for field in QUALITY_FINDING_FIELDS:
+        if item.get(field) is None:
+            errors.append(f"missing required field: {field}")
+    if not str(item.get('finding_id') or '').strip():
+        errors.append('finding_id must be a non-empty string')
+    schema_version = item.get('schema_version')
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    ):
+        errors.append('schema_version must be a positive integer')
+    reason_code = item.get('reason_code')
+    if not isinstance(reason_code, str) or not reason_code.strip():
+        errors.append('reason_code must be a non-empty string')
+    elif require_known_reason_code and reason_code not in {
+        *ALL_REASON_CODES,
+        REASON_UNMATCHED_QUALITY_SUBJECT,
+        *FINAL_REVIEW_REASON_TO_FINDING_TYPE,
+    }:
+        errors.append(f'unknown reason_code: {reason_code}')
+    if item.get('severity') not in VALID_SEVERITIES:
+        errors.append(
+            'severity must be one of: ' + ', '.join(VALID_SEVERITIES)
+        )
+    if item.get('disposition') not in VALID_DISPOSITIONS:
+        errors.append(
+            'disposition must be one of: ' + ', '.join(VALID_DISPOSITIONS)
+        )
+    line = item.get('line')
+    if not isinstance(line, int) or isinstance(line, bool) or line < 0:
+        errors.append('line must be a non-negative integer')
+    rule_version = item.get('rule_version')
+    if (
+        not isinstance(rule_version, int)
+        or isinstance(rule_version, bool)
+        or rule_version < 0
+    ):
+        errors.append('rule_version must be a non-negative integer')
+    return errors
+
+
+def validate_findings(
+    findings: Iterable[Mapping[str, Any]],
+    *,
+    require_known_reason_code: bool = False,
+) -> dict[int, list[str]]:
+    """Return row-indexed validation errors for an iterable of findings."""
+
+    errors: dict[int, list[str]] = {}
+    for index, finding in enumerate(findings):
+        row_errors = validate_finding(
+            finding,
+            require_known_reason_code=require_known_reason_code,
+        )
+        if row_errors:
+            errors[index] = row_errors
+    return errors
+
+
+def file_matches_filter(file_value: Any, candidate: Any) -> bool:
+    """Path-aware file filter for findings and GUI file fragments.
+
+    Exact file names and path prefixes match at component boundaries so
+    ``script.rpy`` does not match ``xscript.rpy``.  Bare extension-less
+    fragments such as ``script`` keep the legacy substring behaviour expected
+    by the GUI file filter.
+    """
+
+    file_text = str(file_value or '').replace('\\', '/').casefold()
+    candidate_text = str(candidate or '').replace('\\', '/').strip().casefold()
+    if not file_text or not candidate_text:
+        return False
+    if file_text == candidate_text:
+        return True
+    if file_text.startswith(candidate_text.rstrip('/') + '/'):
+        return True
+    parts = file_text.split('/')
+    if candidate_text in parts:
+        return True
+    # Bare, extension-less fragments are the GUI file-filter contract.
+    return '/' not in candidate_text and '.' not in candidate_text and candidate_text in file_text
+
+
+def filter_findings(
+    findings: Iterable[Mapping[str, Any]],
+    *,
+    reason_codes: Iterable[str] | None = None,
+    files: Iterable[str] | None = None,
+    min_severity: str = '',
+    dispositions: Iterable[str] | None = None,
+    item_ids: Iterable[str] | None = None,
+    text: str = '',
+) -> list[dict[str, Any]]:
+    """Filter normalized findings by the shared GUI/persistence dimensions."""
+
+    selected_reasons = {
+        str(value).strip()
+        for value in (reason_codes or ())
+        if str(value).strip()
+    }
+    selected_files = {
+        str(value).strip().casefold()
+        for value in (files or ())
+        if str(value).strip()
+    }
+    selected_dispositions = {
+        str(value).strip().lower()
+        for value in (dispositions or ())
+        if str(value).strip()
+    }
+    selected_item_ids = {
+        str(value).strip()
+        for value in (item_ids or ())
+        if str(value).strip()
+    }
+    minimum = SEVERITY_ORDER.get(
+        str(min_severity or '').strip().lower(),
+        0,
+    )
+    needle = str(text or '').strip().casefold()
+    result: list[dict[str, Any]] = []
+    for raw in findings:
+        if not isinstance(raw, Mapping):
+            continue
+        item = normalize_finding(raw)
+        if selected_reasons and item.get('reason_code') not in selected_reasons:
+            continue
+        if selected_files and not any(
+            file_matches_filter(item.get('file'), candidate)
+            for candidate in selected_files
+        ):
+            continue
+        if (
+            SEVERITY_ORDER.get(str(item.get('severity') or ''), 2)
+            < minimum
+        ):
+            continue
+        if selected_dispositions and item.get('disposition') not in selected_dispositions:
+            continue
+        if selected_item_ids and item.get('item_id') not in selected_item_ids:
+            continue
+        if needle and needle not in ' '.join(
+            (
+                str(item.get('source') or ''),
+                str(item.get('translation') or ''),
+                str(item.get('evidence') or ''),
+            )
+        ).casefold():
+            continue
+        result.append(item)
+    return result
+
+
+def findings_digest(findings: Iterable[Mapping[str, Any]]) -> str:
+    """Stable SHA-256 over the shared persisted finding fields."""
+
+    rows = [
+        {
+            field: normalize_finding(finding).get(field)
+            for field in QUALITY_FINDING_FIELDS
+        }
+        for finding in findings
+        if isinstance(finding, Mapping)
+    ]
+    rows.sort(
+        key=lambda row: (
+            str(row.get('finding_id') or ''),
+            str(row.get('file') or ''),
+            int(row.get('line') or 0),
+            str(row.get('reason_code') or ''),
+        )
+    )
+    serialized = json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(',', ':'),
+    )
+    return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+
+
+def write_findings(
+    path: str | os.PathLike[str],
+    findings: Iterable[Mapping[str, Any]],
+) -> str:
+    """Atomically write normalized findings as JSONL and return the path."""
+
+    from atomic_io import atomic_write_jsonl
+
+    target = os.fspath(path)
+    atomic_write_jsonl(
+        target,
+        [normalize_finding(finding) for finding in findings if isinstance(finding, Mapping)],
+        ensure_ascii=False,
+    )
+    return target
+
+
+def final_review_reason_code(finding_type: Any) -> str:
+    """Map a final-review finding type to its stable common-schema code."""
+
+    key = str(finding_type or '').strip().lower()
+    return FINAL_REVIEW_FINDING_TYPE_TO_REASON.get(
+        key,
+        FINAL_REVIEW_REASON_NEEDS_CONFIRMATION,
+    )
+
+
+def adapt_final_review_finding(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Adapt a final-review finding to the common quality finding shape.
+
+    Final-review records keep their LLM semantic fields and are never claimed
+    to be deterministic mechanical findings.  The adapter only adds the shared
+    location, severity, disposition, and provenance envelope used by GUI lists,
+    filters, persistence, and digest checks.
+    """
+
+    if not isinstance(record, Mapping):
+        raise ValueError('final-review finding must be a mapping')
+    item = dict(record)
+    finding_type = str(item.get('finding_type') or item.get('type') or '').strip().lower()
+    if not finding_type:
+        finding_type = 'needs_confirmation'
+    reason_code = final_review_reason_code(finding_type)
+    severity = str(item.get('severity') or SEVERITY_MEDIUM).strip().lower()
+    if severity not in VALID_SEVERITIES:
+        severity = SEVERITY_MEDIUM
+    identity = str(
+        item.get('identity_v2')
+        or item.get('item_id')
+        or item.get('id')
+        or ''
+    ).strip()
+    file_rel_path = str(item.get('file_rel_path') or item.get('file') or '')
+    source = str(item.get('source') or '')
+    translation = str(
+        item.get('current_translation')
+        or item.get('translation')
+        or ''
+    )
+    evidence = str(item.get('evidence') or '')
+    reason = str(item.get('reason') or item.get('detail') or '')
+    # ``evidence`` is the shared filter/detail field; the full semantic reason
+    # is preserved verbatim in the ``reason`` provenance field below.
+    evidence = evidence or reason
+    suggestion = str(
+        item.get('suggested_revision')
+        or item.get('suggestion')
+        or ''
+    )
+    finding_id = str(item.get('finding_id') or '').strip()
+    if not finding_id:
+        finding_id = hashlib.sha256(
+            json.dumps(
+                [identity, finding_type, source, translation, reason],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        ).hexdigest()[:20]
+    adapted = {
+        'finding_id': finding_id,
+        'schema_version': QUALITY_FINDING_SCHEMA_VERSION,
+        'reason_code': reason_code,
+        'rule_id': 'final_review',
+        'severity': severity,
+        'disposition': DISPOSITION_WARNING,
+        'item_id': identity,
+        'file': file_rel_path,
+        'line': _coerce_line(item.get('line')),
+        'source': source,
+        'translation': translation,
+        'evidence': evidence,
+        'suggestion': suggestion,
+        'rule_version': 0,
+        # Semantic provenance stays intact and explicit.
+        'provenance': 'final_review',
+        'finding_type': finding_type,
+        'reason': reason,
+        'review_unit_id': str(item.get('review_unit_id') or ''),
+        'review_unit_digest': str(item.get('review_unit_digest') or ''),
+        'prompt_schema_version': str(item.get('prompt_schema_version') or ''),
+        'selection_state': str(item.get('selection_state') or ''),
+        'revision_state': str(item.get('revision_state') or ''),
+    }
+    return normalize_finding(adapted)
+
+
+def adapt_final_review_findings(
+    records: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Adapt a collection of final-review findings for shared consumers."""
+
+    return [
+        adapt_final_review_finding(record)
+        for record in records
+        if isinstance(record, Mapping)
+    ]
+
+
+def load_findings(
+    path: str | os.PathLike[str],
+    *,
+    strict: bool = False,
+) -> list[dict[str, Any]]:
+    """Load a JSONL findings report.
+
+    Default mode is lenient for backward compatibility: unreadable rows are
+    skipped.  ``strict=True`` raises ``ValueError`` on malformed JSON or rows
+    that do not satisfy :func:`validate_finding`.
+    """
+
+    target = os.fspath(path)
+    if not target or not os.path.isfile(target):
         return []
     findings: list[dict[str, Any]] = []
     try:
-        with open(path, 'r', encoding='utf-8-sig') as handle:
-            for raw_line in handle:
+        with open(target, 'r', encoding='utf-8-sig') as handle:
+            for row_number, raw_line in enumerate(handle, start=1):
                 line = raw_line.strip()
                 if not line:
                     continue
                 try:
                     value = json.loads(line)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as exc:
+                    if strict:
+                        raise ValueError(
+                            f'quality findings row {row_number} is invalid JSON: {exc}'
+                        ) from exc
                     continue
-                if isinstance(value, Mapping):
-                    findings.append(normalize_finding(value))
+                if not isinstance(value, Mapping):
+                    if strict:
+                        raise ValueError(
+                            f'quality findings row {row_number} must be an object'
+                        )
+                    continue
+                if strict:
+                    # Validate the raw persisted row before normalization so
+                    # invalid enums/numbers cannot be silently coerced into
+                    # defaults and then treated as contract-valid findings.
+                    errors = validate_finding(value)
+                    if errors:
+                        raise ValueError(
+                            f'quality findings row {row_number} is invalid: '
+                            + '; '.join(errors)
+                        )
+                findings.append(normalize_finding(value))
     except OSError:
+        if strict:
+            raise
         return []
     return findings

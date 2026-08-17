@@ -22,6 +22,11 @@ def main(
     *,
     shutdown_runtime: bool = True,
 ) -> int:
+    """Run the GUI suite; ``shutdown_runtime=False`` is hard-exit mode.
+
+    In hard-exit mode the caller is expected to call :func:`_terminate_process`
+    immediately, so no Qt pool teardown is performed at all.
+    """
     args = parse_runner_args(__doc__ or "", argv)
     ensure_tests_on_path()
     from gui_test_support import (
@@ -31,7 +36,7 @@ def main(
     )
 
     guard = None
-    with guarded_gui_test_environment() as guard:
+    with guarded_gui_test_environment(process_events=shutdown_runtime) as guard:
         exit_code = run_discovered_suite(
             build_suite(),
             quiet=args.quiet,
@@ -39,11 +44,13 @@ def main(
             resultclass=guarded_test_result_class(guard),
         )
     unexpected_dialogs = bool(guard and guard.rejected_dialogs)
-    runtime_stopped = (
-        shutdown_gui_test_runtime()
-        if shutdown_runtime
-        else shutdown_gui_test_runtime(cleanup_widgets=False)
-    )
+    if shutdown_runtime:
+        runtime_stopped = shutdown_gui_test_runtime()
+    else:
+        # Script entrypoint mode hard-exits immediately after ``main`` returns.
+        # Skip even the pool-only Qt teardown here: offscreen Linux runners can
+        # segfault after all tests passed while QThreadPool shuts down.
+        runtime_stopped = True
     return 1 if unexpected_dialogs or not runtime_stopped else exit_code
 
 

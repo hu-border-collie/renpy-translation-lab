@@ -15,6 +15,28 @@ Preview JSONL: C:\\package\\revision_preview.jsonl
 Preview Markdown: C:\\package\\revision_preview.md
 """
 
+QUALITY_BLOCKED_PREVIEW_OUTPUT = """
+Recoverable revision items: 2
+Pending files: 1
+Pending lines: 2
+Failure items: 0
+Quality gate: blocked (warnings=1, blockers=1)
+Revision writeback gate: deny
+Preview JSONL: C:\\package\\revision_preview.jsonl
+Preview Markdown: C:\\package\\revision_preview.md
+"""
+
+STRUCTURAL_BLOCKED_PREVIEW_OUTPUT = """
+Recoverable revision items: 2
+Pending files: 1
+Pending lines: 2
+Failure items: 0
+Quality gate: ready (warnings=0, blockers=0)
+Revision writeback gate: deny
+Preview JSONL: C:\\package\\revision_preview.jsonl
+Preview Markdown: C:\\package\\revision_preview.md
+"""
+
 
 class GuiRevisionWritebackReportTests(unittest.TestCase):
     def test_preview_with_recoverable_items_enables_apply(self):
@@ -58,6 +80,30 @@ class GuiRevisionWritebackReportTests(unittest.TestCase):
 
         self.assertEqual(summary.status, "failed")
         self.assertFalse(summary.can_apply)
+
+    def test_preview_quality_gate_deny_blocks_apply(self):
+        summary = summarize_revision_writeback_from_preview_output(
+            QUALITY_BLOCKED_PREVIEW_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("质量门禁", summary.heading)
+        self.assertIn("1 个质量 blocker", summary.message)
+        self.assertIn("质量报警 1 条，质量阻断 1 条", "\n".join(summary.facts))
+
+    def test_preview_structural_gate_deny_blocks_apply(self):
+        summary = summarize_revision_writeback_from_preview_output(
+            STRUCTURAL_BLOCKED_PREVIEW_OUTPUT,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("结构校验", summary.heading)
 
     def test_manifest_after_preview_enables_apply(self):
         summary = summarize_revision_writeback_from_manifest(
@@ -121,6 +167,58 @@ class GuiRevisionWritebackReportTests(unittest.TestCase):
         )
 
         self.assertIsNone(summary)
+
+    def test_manifest_structural_preview_deny_is_not_quality_label(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": "C:\\package\\manifest.json",
+                "last_revision_preview": {
+                    "jsonl_path": "C:\\package\\revision_preview.jsonl",
+                    "markdown_path": "C:\\package\\revision_preview.md",
+                    "writeback_gate": {
+                        "decision": "deny",
+                        "quality_blocker_count": 0,
+                        "structural_blocker_count": 1,
+                    },
+                    "summary": {
+                        "valid_items": 0,
+                        "pending_files": 0,
+                        "pending_lines": 0,
+                        "failure_items": 1,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被结构校验阻止")
+        self.assertFalse(summary.can_apply)
+
+    def test_manifest_quality_preview_deny_keeps_quality_label(self):
+        summary = summarize_revision_writeback_from_manifest(
+            {
+                "_manifest_path": "C:\\package\\manifest.json",
+                "last_revision_preview": {
+                    "jsonl_path": "C:\\package\\revision_preview.jsonl",
+                    "markdown_path": "C:\\package\\revision_preview.md",
+                    "writeback_gate": {
+                        "decision": "deny",
+                        "quality_blocker_count": 2,
+                        "structural_blocker_count": 0,
+                    },
+                    "summary": {
+                        "valid_items": 0,
+                        "pending_files": 0,
+                        "pending_lines": 0,
+                        "failure_items": 0,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被质量门禁阻止")
+        self.assertFalse(summary.can_apply)
 
     def test_manifest_blocked_apply_reports_blocked(self):
         summary = summarize_revision_writeback_from_manifest(

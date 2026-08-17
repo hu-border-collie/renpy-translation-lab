@@ -14,14 +14,20 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 from atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text
+
+import translation_quality
 from gemini_model_catalog import filter_gemini_generation_config, is_gemini_3_model
 from final_review import (
+    FINAL_REVIEW_QUALITY_MAPPING_VERSION,
     FINDINGS_FILENAME,
     MANIFEST_FILENAME,
     PROMPT_SCHEMA_VERSION,
+    QUALITY_FINDINGS_FILENAME,
     REPORT_MD_FILENAME,
     REQUESTS_JSONL_FILENAME,
     REVIEW_UNITS_FILENAME,
+    adapt_findings_to_quality_schema,
+    summarize_final_review_quality_gate,
     STATUS_DONE,
     STATUS_FAILED,
     STATUS_PENDING,
@@ -705,6 +711,8 @@ def persist_campaign_state(
     status_counts = summarize_unit_statuses(units)
     campaign_status = derive_campaign_status(status_counts)
     finding_rows = [normalize_finding(f) for f in findings]
+    quality_finding_rows = adapt_findings_to_quality_schema(finding_rows)
+    quality_gate = summarize_final_review_quality_gate(finding_rows)
 
     manifest_out = dict(manifest)
     manifest_out["status"] = campaign_status
@@ -726,17 +734,23 @@ def persist_campaign_state(
         "unit_count": len(unit_list),
         "item_count": sum(int(u.get("item_count") or 0) for u in unit_list),
         "finding_count": len(finding_rows),
+        "quality_findings_count": len(quality_finding_rows),
+        "quality_gate": quality_gate,
+        "quality_mapping_version": FINAL_REVIEW_QUALITY_MAPPING_VERSION,
         "status_counts": status_counts,
         "chunk_count": chunk_count,
     }
     manifest_out["last_ingest_at"] = utc_now_iso()
+    manifest_out["quality_findings_path"] = QUALITY_FINDINGS_FILENAME
 
     units_path = os.path.join(root, REVIEW_UNITS_FILENAME)
     findings_path = os.path.join(root, FINDINGS_FILENAME)
+    quality_findings_path = os.path.join(root, QUALITY_FINDINGS_FILENAME)
     report_path = os.path.join(root, REPORT_MD_FILENAME)
 
     atomic_write_jsonl(units_path, list(units), ensure_ascii=False)
     atomic_write_jsonl(findings_path, finding_rows, ensure_ascii=False)
+    translation_quality.write_findings(quality_findings_path, quality_finding_rows)
     atomic_write_text(
         report_path,
         format_campaign_report_markdown(manifest_out, units, finding_rows),
@@ -757,6 +771,7 @@ def persist_campaign_state(
         "manifest": manifest_path,
         "review_units": units_path,
         "findings": findings_path,
+        "quality_findings": quality_findings_path,
         "report": report_path,
     }
 

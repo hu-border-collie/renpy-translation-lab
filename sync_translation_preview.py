@@ -19,6 +19,8 @@ from atomic_io import (
     sha256_text,
 )
 
+import translation_quality
+
 
 SCHEMA = "sync_translation_preview"
 VERSION = 1
@@ -69,6 +71,19 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "summary": manifest.get("summary"),
         "files": manifest.get("files"),
     }
+    for key in (
+        "quality_policy",
+        "quality_policy_digest",
+        "quality_glossary_file",
+        "quality_glossary_digest",
+        "last_quality_findings_path",
+        "quality_findings_sha256",
+        "quality_findings_digest",
+        "quality_finding_schema_version",
+        "quality_rule_schema_version",
+    ):
+        if key in manifest:
+            payload[key] = manifest.get(key)
     if "prompt_context" in manifest:
         payload["prompt_context"] = manifest.get("prompt_context")
     if "failures" in manifest:
@@ -153,6 +168,8 @@ def create_sync_preview(
     failures: Iterable[dict[str, Any]] = (),
     contract_diagnostics: dict[str, Any] | None = None,
     prompt_context: dict[str, Any] | None = None,
+    quality_policy: dict[str, Any] | None = None,
+    glossary_file: str | os.PathLike[str] = "",
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
@@ -162,6 +179,12 @@ def create_sync_preview(
     per-batch context construction facts used for the run; when present it is
     also covered by the fingerprint so a changed macro/settings file invalidates
     an old preview at apply time.
+
+    Structurally validated sync candidates passed through each file's
+    ``quality_subjects`` list are run through the shared mechanical quality
+    rules.  Findings are persisted next to the preview diff as
+    ``quality_findings.jsonl`` and summarized by the same ``quality_gate``
+    contract as Batch check.
     """
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
@@ -180,6 +203,7 @@ def create_sync_preview(
     package_dir.mkdir(parents=True, exist_ok=False)
 
     entries: list[dict[str, Any]] = []
+    quality_subjects: list[dict[str, Any]] = []
     report_lines = [
         "# Synchronous translation preview\n\n",
         f"Created: {created.isoformat()}\n\n",
@@ -219,6 +243,12 @@ def create_sync_preview(
             entries[-1]["writeback_plan"] = raw.get("writeback_plan")
         if raw.get("prompt_context") is not None:
             entries[-1]["prompt_context"] = raw.get("prompt_context")
+        for subject in raw.get("quality_subjects") or []:
+            if not isinstance(subject, dict):
+                continue
+            normalized_subject = dict(subject)
+            normalized_subject.setdefault("file_rel_path", relative_path)
+            quality_subjects.append(normalized_subject)
         report_lines.extend(
             difflib.unified_diff(
                 source_text.splitlines(keepends=True),
@@ -233,6 +263,27 @@ def create_sync_preview(
 
     report_path = package_dir / "preview.diff"
     atomic_write_text(report_path, "".join(report_lines), encoding="utf-8")
+
+    effective_quality_policy = translation_quality.normalize_policy(quality_policy)
+    glossary_text = str(glossary_file or "").strip()
+    quality_glossary_map = translation_quality.load_glossary_map(
+        glossary_text,
+        base_dir=os.path.realpath(os.path.abspath(os.fspath(project_root))),
+    )
+    if not quality_glossary_map and glossary_text:
+        quality_glossary_map = translation_quality.load_glossary_map(glossary_text)
+    quality_glossary_digest = translation_quality.glossary_digest(
+        quality_glossary_map
+    )
+    quality_findings = translation_quality.check_quality(
+        quality_subjects,
+        policy=effective_quality_policy,
+        glossary_map=quality_glossary_map,
+    )
+    quality_findings_path = package_dir / "quality_findings.jsonl"
+    translation_quality.write_findings(quality_findings_path, quality_findings)
+    quality_gate = translation_quality.summarize_quality_gate(quality_findings)
+
     manifest: dict[str, Any] = {
         "schema": SCHEMA,
         "version": VERSION,
@@ -264,10 +315,47 @@ def create_sync_preview(
                 contract.get("targeted_retry_requests") or 0
             ),
             "model_contract_unresolved": len(contract.get("unresolved_ids") or []),
+            "quality_gate": quality_gate,
+            "quality_findings_count": len(quality_findings),
+            "quality_finding_schema_version": (
+                translation_quality.QUALITY_FINDING_SCHEMA_VERSION
+            ),
+            "quality_rule_schema_version": (
+                translation_quality.QUALITY_RULE_SCHEMA_VERSION
+            ),
+            "quality_policy_digest": translation_quality.policy_digest(
+                effective_quality_policy
+            ),
+            "quality_findings_digest": translation_quality.findings_digest(
+                quality_findings
+            ),
+            "quality_glossary_path": glossary_text,
+            "quality_glossary_digest": quality_glossary_digest,
+            "quality_glossary_entries": len(quality_glossary_map),
+            "quality_glossary_loaded": bool(
+                not glossary_text or quality_glossary_map
+            ),
         },
         "files": entries,
         "failures": failure_entries,
         "model_contract": contract,
+        "quality_policy": effective_quality_policy,
+        "quality_policy_digest": translation_quality.policy_digest(
+            effective_quality_policy
+        ),
+        "quality_glossary_file": glossary_text,
+        "quality_glossary_digest": quality_glossary_digest,
+        "last_quality_findings_path": "quality_findings.jsonl",
+        "quality_findings_sha256": file_sha256(quality_findings_path),
+        "quality_findings_digest": translation_quality.findings_digest(
+            quality_findings
+        ),
+        "quality_finding_schema_version": (
+            translation_quality.QUALITY_FINDING_SCHEMA_VERSION
+        ),
+        "quality_rule_schema_version": (
+            translation_quality.QUALITY_RULE_SCHEMA_VERSION
+        ),
     }
     if prompt_context is not None:
         manifest["prompt_context"] = dict(prompt_context)
@@ -300,6 +388,8 @@ def prepare_sync_preview_apply(
     *,
     active_project_root: str | os.PathLike[str],
     active_tl_dir: str | os.PathLike[str],
+    active_quality_policy: dict[str, Any] | None = None,
+    active_glossary_file: str | os.PathLike[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate every source and artifact before the first project write."""
     manifest = load_sync_preview(manifest_path)
@@ -309,8 +399,74 @@ def prepare_sync_preview_apply(
         raise ValueError("Sync preview belongs to a different project.")
     if _canonical(manifest.get("tl_dir", "")) != _canonical(active_tl_dir):
         raise ValueError("Sync preview belongs to a different translation directory.")
+    if manifest.get("quality_rule_schema_version") not in {
+        None,
+        translation_quality.QUALITY_RULE_SCHEMA_VERSION,
+    }:
+        raise ValueError(
+            "Quality rules changed since sync preview; regenerate the preview."
+        )
+    summary = manifest.get("summary") or {}
+    quality_gate = summary.get("quality_gate")
+    if isinstance(quality_gate, dict) and int(
+        quality_gate.get("blocker_count") or 0
+    ) > 0:
+        raise ValueError(
+            "Sync preview has quality blockers; resolve them and regenerate "
+            "the preview before applying."
+        )
+    if isinstance(active_quality_policy, dict):
+        expected_digest = summary.get("quality_policy_digest")
+        current_digest = translation_quality.policy_digest(
+            translation_quality.normalize_policy(active_quality_policy)
+        )
+        if expected_digest and current_digest != expected_digest:
+            raise ValueError(
+                "Quality policy changed since sync preview; regenerate the preview."
+            )
+    active_glossary_text = str(active_glossary_file or "").strip()
+    if (
+        active_glossary_file is not None
+        and "quality_glossary_file" in manifest
+        and active_glossary_text != str(manifest.get("quality_glossary_file") or "")
+    ):
+        raise ValueError(
+            "Quality glossary changed since sync preview; regenerate the preview."
+        )
+    if active_glossary_file is not None and "quality_glossary_digest" in manifest:
+        current_glossary_map = translation_quality.load_glossary_map(
+            active_glossary_text,
+            base_dir=os.path.realpath(
+                os.path.abspath(os.fspath(active_project_root))
+            ),
+        )
+        if not current_glossary_map and active_glossary_text:
+            current_glossary_map = translation_quality.load_glossary_map(
+                active_glossary_text
+            )
+        current_glossary_digest = translation_quality.glossary_digest(
+            current_glossary_map
+        )
+        expected_glossary_digest = (
+            manifest.get("quality_glossary_digest")
+            or summary.get("quality_glossary_digest")
+        )
+        if current_glossary_digest != expected_glossary_digest:
+            raise ValueError(
+                "Quality glossary content changed since sync preview; "
+                "regenerate the preview."
+            )
 
     package_dir = Path(manifest["_manifest_path"]).parent
+    if manifest.get("last_quality_findings_path"):
+        quality_report_path = _artifact_path(
+            package_dir,
+            manifest.get("last_quality_findings_path"),
+        )
+        if not quality_report_path.is_file():
+            raise ValueError("Sync preview quality findings are missing.")
+        if file_sha256(quality_report_path) != manifest.get("quality_findings_sha256"):
+            raise ValueError("Sync preview quality findings changed after preview generation.")
     report_path = _artifact_path(package_dir, manifest.get("report_path"))
     if not report_path.is_file() or file_sha256(report_path) != manifest.get("report_sha256"):
         raise ValueError("Sync preview diff report changed after preview generation.")
@@ -380,6 +536,8 @@ def apply_sync_preview(
     active_project_root: str | os.PathLike[str],
     active_tl_dir: str | os.PathLike[str],
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
+    active_quality_policy: dict[str, Any] | None = None,
+    active_glossary_file: str | os.PathLike[str] | None = None,
 ) -> dict[str, Any]:
     manifest_file = Path(manifest_path).resolve()
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
@@ -388,6 +546,8 @@ def apply_sync_preview(
         manifest_path,
         active_project_root=active_project_root,
         active_tl_dir=active_tl_dir,
+        active_quality_policy=active_quality_policy,
+        active_glossary_file=active_glossary_file,
     )
     applied_paths: list[str] = []
     try:

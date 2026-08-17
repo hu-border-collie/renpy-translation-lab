@@ -73,6 +73,15 @@ def parse_revision_summary(output: str) -> dict[str, object]:
     apply_reason = _parse_line_value(output, "Revision apply reason:")
     if apply_reason:
         parsed["apply_reason"] = apply_reason
+    quality_gate = _parse_line_value(output, "Quality gate:")
+    if quality_gate:
+        parsed["quality_gate"] = quality_gate
+    quality_findings = _parse_line_value(output, "Quality findings:")
+    if quality_findings:
+        parsed["quality_findings"] = quality_findings
+    writeback_gate = _parse_line_value(output, "Revision writeback gate:")
+    if writeback_gate:
+        parsed["revision_writeback_gate"] = writeback_gate
 
     current_section = ""
     for raw_line in output.splitlines():
@@ -107,7 +116,39 @@ def _collect_revision_preview_facts(output: str, parsed: dict[str, object]) -> l
     preview_markdown = parsed.get("preview_markdown")
     if isinstance(preview_markdown, str) and preview_markdown.strip():
         facts.append(f"预览 Markdown：{preview_markdown.strip()}")
+    quality_fact = _quality_gate_fact(str(parsed.get("quality_gate") or ""))
+    if quality_fact:
+        facts.append(quality_fact)
+    quality_findings = parsed.get("quality_findings")
+    if isinstance(quality_findings, str) and quality_findings.strip():
+        facts.append(f"质量检查报告：{quality_findings.strip()}")
     return facts
+
+
+def _quality_gate_fact(quality_gate_text: str) -> str:
+    warnings_match = re.search(r"warnings=(\d+)", quality_gate_text)
+    blockers_match = re.search(r"blockers=(\d+)", quality_gate_text)
+    if warnings_match is None and blockers_match is None:
+        return ""
+    warnings = int(warnings_match.group(1)) if warnings_match else 0
+    blockers = int(blockers_match.group(1)) if blockers_match else 0
+    return f"质量报警 {warnings} 条，质量阻断 {blockers} 条"
+
+
+def revision_writeback_gate_denial(parsed: dict[str, object]) -> tuple[str, int] | None:
+    """Return ``(kind, quality_blockers)`` when preview output denies writeback.
+
+    ``kind`` is ``"quality"`` when at least one configured quality blocker was
+    reported, otherwise ``"structural"`` for an adapter/writeback-plan block.
+    A missing or ``allow`` gate returns ``None``.
+    """
+    gate = str(parsed.get("revision_writeback_gate") or "").strip().lower()
+    if not gate or gate == "allow":
+        return None
+    quality_gate_text = str(parsed.get("quality_gate") or "")
+    blockers_match = re.search(r"blockers=(\d+)", quality_gate_text)
+    quality_blockers = int(blockers_match.group(1)) if blockers_match else 0
+    return ("quality" if quality_blockers else "structural", quality_blockers)
 
 
 def summarize_revision_preview_output(output: str, exit_code: int) -> WorkflowUpdate:
@@ -137,6 +178,28 @@ def summarize_revision_preview_output(output: str, exit_code: int) -> WorkflowUp
     ]
     if findings:
         facts = extend_facts_with_notices(facts, findings)
+
+    denial = revision_writeback_gate_denial(parsed)
+    if denial is not None:
+        kind, quality_blockers = denial
+        if kind == "quality":
+            heading = "订正预览被质量门禁阻止"
+            message = (
+                f"预览完成，但最近一次预览有 {quality_blockers} 个质量 blocker；"
+                "请处理后重新预览。"
+            )
+        else:
+            heading = "订正预览被结构校验阻止"
+            message = (
+                "预览完成，但未通过结构校验，不能写回；"
+                "请查看失败项后重新预览。"
+            )
+        return WorkflowUpdate(
+            status="warning",
+            heading=heading,
+            message=message,
+            facts=facts,
+        )
 
     if valid_items == 0:
         return WorkflowUpdate(
@@ -189,6 +252,28 @@ def summarize_sync_revision_output(output: str, exit_code: int) -> WorkflowUpdat
     ]
     if findings:
         facts = extend_facts_with_notices(facts, findings)
+
+    denial = revision_writeback_gate_denial(parsed)
+    if denial is not None:
+        kind, quality_blockers = denial
+        if kind == "quality":
+            heading = "同步订正预览被质量门禁阻止"
+            message = (
+                f"预览完成，但最近一次预览有 {quality_blockers} 个质量 blocker；"
+                "请处理后重新预览。"
+            )
+        else:
+            heading = "同步订正预览被结构校验阻止"
+            message = (
+                "预览完成，但未通过结构校验，不能写回；"
+                "请查看失败项后重新预览。"
+            )
+        return WorkflowUpdate(
+            status="warning",
+            heading=heading,
+            message=message,
+            facts=facts,
+        )
 
     if valid_items == 0:
         unresolved = _contract_unresolved_count(output)

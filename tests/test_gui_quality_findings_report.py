@@ -7,6 +7,7 @@ from gui_qt.quality_findings_report import (
     normalize_quality_finding,
     parse_quality_findings_jsonl,
     quality_issues_report_ready,
+    resolve_quality_findings_path,
 )
 
 
@@ -83,6 +84,33 @@ class QualityFindingsReportTests(unittest.TestCase):
             quality_issues_report_ready(
                 {"last_check_summary": {"quality_gate": {"warning_count": 0}}}
             )
+        )
+
+    def test_resolve_quality_paths_prefers_revision_apply_summary(self):
+        manifest = {
+            "last_revision_preview": {
+                "quality_findings_path": "preview/quality_findings.jsonl",
+            },
+            "revision_apply_summary": {
+                "quality_findings_path": "apply/quality_findings.apply.jsonl",
+            },
+        }
+        self.assertEqual(
+            resolve_quality_findings_path(manifest),
+            "apply/quality_findings.apply.jsonl",
+        )
+
+        blocked_manifest = {
+            "last_revision_preview": {
+                "quality_findings_path": "preview/quality_findings.jsonl",
+            },
+            "last_revision_apply_summary": {
+                "quality_findings_path": "blocked/quality_findings.apply.jsonl",
+            },
+        }
+        self.assertEqual(
+            resolve_quality_findings_path(blocked_manifest),
+            "blocked/quality_findings.apply.jsonl",
         )
 
     def test_filter_by_rule_file_and_severity(self):

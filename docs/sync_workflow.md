@@ -101,6 +101,8 @@ manifest 同时记录本次运行的局部上下文、macro 与术语命中诊�
 
 默认命令不会修改 `.rpy`，终端会打印本次 manifest 和 diff 的绝对路径。若模型结果合同仍有未解决项，或部分文件未通过 adapter 写回计划校验，运行结果会标为 `partial`；无效项不会进入可写回预览，已经通过合同与 adapter 校验的项仍会保留。
 
+同步预览只对通过结构校验的候选运行机械质量规则，并在包目录生成与 Batch 一致的 `quality_findings.jsonl`。manifest 的 `summary.quality_gate` 记录质量门禁摘要，顶层持久化 finding 路径、规则版本、策略 digest 与 glossary 内容 digest；这些字段进入预览指纹，质量规则/策略或 glossary 变化会使旧预览在 `--apply` 时拒绝写回。普通 `warning` 不阻止同步写回，但项目配置为 `blocker` 的规则会像 Batch 一样阻止 `--apply`；正式交付前仍须按报告逐条复核。
+
 只有明确需要运行配置中的 prepare 步骤时才使用：
 
 ```powershell
@@ -126,7 +128,7 @@ python gemini_translate.py --prepare
 python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 ```
 
-`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、每个源文件快照、预览制品哈希和 adapter 计划；项目切换、源文件变化或预览制品被修改都会阻止写回。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。
+`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、预览制品被修改或质量规则/策略版本变化都会阻止写回。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。
 
 `--prepare` 与 `--apply` 不能同时使用。同步 CLI 当前输出面向人类阅读，不提供 Batch 核心命令的 JSON envelope；自动化需要稳定机器合同、远程状态轮询或断点恢复时应改用 Batch。
 

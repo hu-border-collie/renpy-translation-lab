@@ -183,8 +183,13 @@ def guarded_test_result_class(guard: GuiTestModalGuard | None):
 
 
 @contextmanager
-def guarded_gui_test_environment():
-    """Reject accidental dialogs without changing the caller's Qt platform."""
+def guarded_gui_test_environment(*, process_events: bool = True):
+    """Reject accidental dialogs without changing the caller's Qt platform.
+
+    ``process_events=False`` is used by the script entrypoint before its hard
+    exit: draining Qt events after the suite can crash the offscreen Linux
+    platform plugin even when every test passed.
+    """
     try:
         from PySide6.QtCore import QCoreApplication, Qt
         from PySide6.QtWidgets import QApplication
@@ -210,10 +215,11 @@ def guarded_gui_test_environment():
             guard.reject_active_modal()
             guard.stop()
             guard.cleanup_top_levels()
-        try:
-            app.processEvents()
-        except RuntimeError:
-            pass
+        if process_events:
+            try:
+                app.processEvents()
+            except RuntimeError:
+                pass
         if guard is not None:
             if guard.rejected_dialogs:
                 summary = "\n".join(

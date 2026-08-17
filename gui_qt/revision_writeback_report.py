@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from .check_report import WritebackSummary
-from .revision_report import parse_revision_summary
+from .revision_report import (
+    _collect_revision_preview_facts,
+    parse_revision_summary,
+    revision_writeback_gate_denial,
+)
 from .summary_helpers import extend_facts_with_notices
-from .user_copy import format_manifest_path_fact
+from .user_copy import format_manifest_path_fact, format_quality_gate_fact
 
 
 def summarize_revision_writeback_from_preview_output(
@@ -29,26 +33,9 @@ def summarize_revision_writeback_from_preview_output(
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
+    facts.extend(_collect_revision_preview_facts(output, parsed))
 
     valid_items = parsed.get("valid_items")
-    pending_files = parsed.get("pending_files")
-    pending_lines = parsed.get("pending_lines")
-    if isinstance(valid_items, int):
-        facts.append(f"可写回订正项：{valid_items}")
-    if isinstance(pending_files, int) and isinstance(pending_lines, int):
-        facts.append(f"将影响 {pending_files} 个文件，约 {pending_lines} 处译文行")
-
-    failure_items = parsed.get("failure_items")
-    if isinstance(failure_items, int):
-        facts.append(f"失败项：{failure_items}")
-
-    preview_jsonl = parsed.get("preview_jsonl")
-    if isinstance(preview_jsonl, str) and preview_jsonl.strip():
-        facts.append(f"预览 JSONL：{preview_jsonl.strip()}")
-    preview_markdown = parsed.get("preview_markdown")
-    if isinstance(preview_markdown, str) and preview_markdown.strip():
-        facts.append(f"预览 Markdown：{preview_markdown.strip()}")
-
     findings = [
         finding
         for finding in parsed.get("findings", [])
@@ -72,6 +59,31 @@ def summarize_revision_writeback_from_preview_output(
             heading="订正已写回",
             message="该订正任务已经写回过。",
             facts=facts,
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    denial = revision_writeback_gate_denial(parsed)
+    if denial is not None:
+        kind, quality_blockers = denial
+        if kind == "quality":
+            heading = "订正写回被质量门禁阻止"
+            message = (
+                f"最近一次订正预览有 {quality_blockers} 个质量 blocker；"
+                "请处理后重新预览。"
+            )
+        else:
+            heading = "订正写回被结构校验阻止"
+            message = (
+                "最近一次订正预览未通过结构校验，不能写回；"
+                "请查看失败项后重新预览。"
+            )
+        return WritebackSummary(
+            status="failed",
+            heading=heading,
+            message=message,
+            facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,
             manifest_path=manifest_path,
@@ -234,6 +246,15 @@ def summarize_revision_writeback_from_manifest(
     if isinstance(markdown_path, str) and markdown_path.strip():
         facts.append(f"预览 Markdown：{markdown_path.strip()}")
 
+    quality_gate = last_preview.get("quality_gate")
+    if not isinstance(quality_gate, dict):
+        quality_gate = summary.get("quality_gate")
+    if isinstance(quality_gate, dict):
+        facts.append(format_quality_gate_fact(quality_gate))
+        quality_findings_path = last_preview.get("quality_findings_path")
+        if isinstance(quality_findings_path, str) and quality_findings_path.strip():
+            facts.append(f"质量检查报告：{quality_findings_path.strip()}")
+
     findings: list[str] = []
     reason_counts = summary.get("reason_counts")
     if isinstance(reason_counts, dict):
@@ -241,6 +262,46 @@ def summarize_revision_writeback_from_manifest(
             count = reason_counts[name]
             if isinstance(count, int):
                 findings.append(f"{name}: {count}")
+
+    writeback_gate = last_preview.get("writeback_gate")
+    if not isinstance(writeback_gate, dict):
+        writeback_gate = summary.get("writeback_gate")
+    if isinstance(writeback_gate, dict) and writeback_gate.get(
+        "decision"
+    ) != "allow":
+        quality_blockers = int(
+            writeback_gate.get("quality_blocker_count") or 0
+        )
+        structural_blockers = int(
+            writeback_gate.get("structural_blocker_count") or 0
+        )
+        if quality_blockers and structural_blockers:
+            heading = "订正写回被质量与结构门禁阻止"
+            message = (
+                f"最近一次订正预览有 {quality_blockers} 个质量 blocker、"
+                f"{structural_blockers} 个结构阻断；处理后重新预览。"
+            )
+        elif structural_blockers:
+            heading = "订正写回被结构校验阻止"
+            message = (
+                "最近一次订正预览未通过结构校验，不能写回；"
+                "请查看失败项后重新预览。"
+            )
+        else:
+            heading = "订正写回被质量门禁阻止"
+            message = (
+                f"最近一次订正预览有 {quality_blockers} 个质量 blocker；"
+                "请处理后重新预览。"
+            )
+        return WritebackSummary(
+            status="failed",
+            heading=heading,
+            message=message,
+            facts=facts,
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
 
     if isinstance(valid_items, int) and valid_items > 0:
         return WritebackSummary(
