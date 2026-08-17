@@ -443,10 +443,13 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     ``custom_providers`` is snapshotted at construction and forwarded to
     :class:`~litellm_sync_backend.LiteLLMSyncBackend` so custom ids get the same
     ``openai/<model>`` + ``api_base`` rewrite and credential resolution as
-    production sync requests.
+    production sync requests.  ``operation_identity`` is an opaque digest of
+    the provider/model/custom-provider state the test was started for; it is
+    echoed back on ``completed`` so the GUI can drop results whose inputs the
+    user has since changed.
     """
 
-    completed = Signal(bool, str)
+    completed = Signal(bool, str, str)
     progress = Signal(str)
 
     def __init__(
@@ -455,10 +458,12 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
         api_key: str = "",
         parent=None,
         custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+        operation_identity: str = "",
     ) -> None:
         super().__init__(parent)
         self.model = model
         self.api_key = api_key
+        self.operation_identity = str(operation_identity or "")
         self._custom_providers = (
             dict(custom_providers) if isinstance(custom_providers, Mapping) else {}
         )
@@ -500,7 +505,11 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
 
     def run(self) -> None:
         if self.is_cancelled():
-            self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+            self.completed.emit(
+                False,
+                f"{CANCELLED_MESSAGE_PREFIX}连接测试。",
+                self.operation_identity,
+            )
             return
         loop = asyncio.new_event_loop()
         self._async_loop = loop
@@ -510,19 +519,43 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
         try:
             result = loop.run_until_complete(task)
             if self.is_cancelled():
-                self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+                self.completed.emit(
+                    False,
+                    f"{CANCELLED_MESSAGE_PREFIX}连接测试。",
+                    self.operation_identity,
+                )
                 return
             _validate_connection_response(result)
-            self.completed.emit(True, LITELLM_CONNECTION_TEST_COPY["success"])
+            self.completed.emit(
+                True,
+                LITELLM_CONNECTION_TEST_COPY["success"],
+                self.operation_identity,
+            )
         except asyncio.CancelledError:
-            self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+            self.completed.emit(
+                False,
+                f"{CANCELLED_MESSAGE_PREFIX}连接测试。",
+                self.operation_identity,
+            )
         except OperationCancelled:
-            self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+            self.completed.emit(
+                False,
+                f"{CANCELLED_MESSAGE_PREFIX}连接测试。",
+                self.operation_identity,
+            )
         except Exception as exc:
             if self.is_cancelled():
-                self.completed.emit(False, f"{CANCELLED_MESSAGE_PREFIX}连接测试。")
+                self.completed.emit(
+                    False,
+                    f"{CANCELLED_MESSAGE_PREFIX}连接测试。",
+                    self.operation_identity,
+                )
             else:
-                self.completed.emit(False, _connection_error_message(exc))
+                self.completed.emit(
+                    False,
+                    _connection_error_message(exc),
+                    self.operation_identity,
+                )
         finally:
             self._async_task = None
             self._async_loop = None

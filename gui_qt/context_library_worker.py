@@ -7,6 +7,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+from .operation_identity import context_library_config_digest
+
 
 @dataclass(frozen=True)
 class ContextLibraryStatusResult:
@@ -18,13 +20,19 @@ class ContextLibraryStatusResult:
     label: str
     context_flags: dict[str, bool] = field(default_factory=dict)
     error: str = ""
+    config_digest: str = ""
 
 
 def collect_context_library_status(
     base_dir: str,
     config: dict[str, Any] | None = None,
 ) -> ContextLibraryStatusResult:
-    """Read project context flags and analysis artifacts outside the GUI thread."""
+    """Read project context flags and analysis artifacts outside the GUI thread.
+
+    The result carries a digest of the *config snapshot used for collection* so
+    the GUI thread can detect results that predate a settings change.
+    """
+    config_digest = context_library_config_digest(config)
     context_flags: dict[str, bool] = {}
     try:
         from .bootstrap_report import read_batch_context_flags
@@ -52,6 +60,7 @@ def collect_context_library_status(
             status=status,
             label=format_status_label(status),
             context_flags=context_flags,
+            config_digest=config_digest,
         )
     except Exception as exc:
         return ContextLibraryStatusResult(
@@ -61,6 +70,7 @@ def collect_context_library_status(
             label=f"读取失败 · {exc}",
             context_flags=context_flags,
             error=str(exc),
+            config_digest=config_digest,
         )
 
 

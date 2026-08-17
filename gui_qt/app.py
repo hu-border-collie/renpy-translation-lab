@@ -343,6 +343,7 @@ from .widget_helpers import (
 from .user_copy import (
     CUSTOM_LITELLM_PROVIDER_COPY,
     LITELLM_CACHE_COPY,
+    LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
@@ -357,6 +358,11 @@ from .context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
     collect_context_library_status,
+)
+from .operation_identity import (
+    context_library_config_digest,
+    is_current_identity,
+    litellm_connection_identity,
 )
 from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
 from .project_analysis_workflow import (
@@ -2953,7 +2959,13 @@ class MainWindow(QMainWindow):
         if running is None:
             running = self._task_page_running_chrome()
         cached = getattr(self, "_context_library_status_cache", None)
-        if cached is not None and cached.base_dir != base_dir:
+        if cached is not None and (
+            cached.base_dir != base_dir
+            or not is_current_identity(
+                getattr(cached, "config_digest", ""),
+                self._context_library_config_digest(),
+            )
+        ):
             cached = None
         self._render_context_library_panel(
             flags=flags,
@@ -2980,34 +2992,57 @@ class MainWindow(QMainWindow):
         self._context_library_status_pending_base = ""
         QThreadPool.globalInstance().start(job, -1)
 
+    def _context_library_config_digest(self) -> str:
+        """Digest the in-memory config snapshot the context page is showing."""
+        return context_library_config_digest(
+            getattr(self, "_context_library_config_snapshot", None)
+        )
+
     def _on_context_library_status_ready(self, result: object) -> None:
         self._context_library_status_job = None
         if getattr(self, "_shutdown_requested", False):
             self._context_library_status_pending_base = ""
             return
-        if not isinstance(result, ContextLibraryStatusResult):
-            return
-        self._context_library_status_cache = result
-        self._context_library_status_cache_at = time.monotonic()
-        self._context_library_flags_cache = (
-            result.base_dir,
-            dict(result.context_flags),
-        )
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         current_base = str(game_root or "")
-        if current_base == result.base_dir:
-            flags = result.context_flags
-            analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
-            self._render_context_library_panel(
-                flags=flags,
-                analysis_flags=analysis_flags,
-                game_root=game_root,
-                result=result,
-                running=self._task_page_running_chrome(),
-            )
         pending = str(getattr(self, "_context_library_status_pending_base", "") or "")
         self._context_library_status_pending_base = ""
-        if pending and pending != result.base_dir:
+        applied = False
+        if isinstance(result, ContextLibraryStatusResult):
+            current_digest = self._context_library_config_digest()
+            if current_base == result.base_dir and is_current_identity(
+                result.config_digest,
+                current_digest,
+            ):
+                self._context_library_status_cache = result
+                self._context_library_status_cache_at = time.monotonic()
+                self._context_library_flags_cache = (
+                    result.base_dir,
+                    dict(result.context_flags),
+                )
+                flags = result.context_flags
+                analysis_flags = self._saved_project_analysis_flags(
+                    context_flags=flags
+                )
+                self._render_context_library_panel(
+                    flags=flags,
+                    analysis_flags=analysis_flags,
+                    game_root=game_root,
+                    result=result,
+                    running=self._task_page_running_chrome(),
+                )
+                applied = True
+        result_base = getattr(result, "base_dir", "") if result is not None else ""
+        should_refresh = False
+        if pending and (not applied or pending != result_base):
+            should_refresh = True
+        elif (
+            not applied
+            and current_base
+            and isinstance(result, ContextLibraryStatusResult)
+        ):
+            should_refresh = True
+        if should_refresh:
             QTimer.singleShot(
                 0,
                 lambda: self._refresh_context_library_panel_async(force=True),
@@ -8342,9 +8377,13 @@ class MainWindow(QMainWindow):
         *,
         worker_attr: str,
         status_label_name: str = "",
+        worker: object | None = None,
     ) -> None:
         """Show mid-flight status for catalog/version/connection workers."""
-        if getattr(self, worker_attr, None) is None:
+        current = getattr(self, worker_attr, None)
+        if current is None:
+            return
+        if worker is not None and worker is not current:
             return
         text = str(message or "").strip()
         if not text:
@@ -8371,10 +8410,11 @@ class MainWindow(QMainWindow):
             button.setText("停止检查")
         worker = LiteLLMVersionWorker(self)
         worker.progress.connect(
-            lambda message: self._on_litellm_network_progress(
+            lambda message, owned=worker: self._on_litellm_network_progress(
                 message,
                 worker_attr="_litellm_version_worker",
                 status_label_name="litellm_version_label",
+                worker=owned,
             )
         )
         worker.completed.connect(self._on_litellm_version_checked)
@@ -8428,10 +8468,11 @@ class MainWindow(QMainWindow):
             button.setText("停止加载")
         worker = LiteLLMProviderCatalogWorker(self)
         worker.progress.connect(
-            lambda message: self._on_litellm_network_progress(
+            lambda message, owned=worker: self._on_litellm_network_progress(
                 message,
                 worker_attr="_litellm_provider_catalog_worker",
                 status_label_name="litellm_provider_catalog_status_label",
+                worker=owned,
             )
         )
         worker.completed.connect(self._on_litellm_providers_loaded)
@@ -8558,10 +8599,11 @@ class MainWindow(QMainWindow):
             custom_providers=self._custom_litellm_providers,
         )
         worker.progress.connect(
-            lambda message: self._on_litellm_network_progress(
+            lambda message, owned=worker: self._on_litellm_network_progress(
                 message,
                 worker_attr="_litellm_catalog_worker",
                 status_label_name="litellm_catalog_status_label",
+                worker=owned,
             )
         )
         worker.completed.connect(
@@ -8680,12 +8722,14 @@ class MainWindow(QMainWindow):
             api_key,
             self,
             custom_providers=self._custom_litellm_providers,
+            operation_identity=self._litellm_connection_operation_identity(),
         )
         worker.progress.connect(
-            lambda message: self._on_litellm_network_progress(
+            lambda message, owned=worker: self._on_litellm_network_progress(
                 message,
                 worker_attr="_litellm_connection_worker",
                 status_label_name="litellm_connection_status_label",
+                worker=owned,
             )
         )
         worker.completed.connect(self._on_litellm_connection_tested)
@@ -8694,11 +8738,37 @@ class MainWindow(QMainWindow):
         worker.start()
         self.statusBar().showMessage("正在测试 LiteLLM 连接…（可再次点击停止）", 0)
 
-    def _on_litellm_connection_tested(self, success: bool, message: str) -> None:
-        self._litellm_connection_worker = None
+    def _litellm_connection_operation_identity(self) -> str:
+        """Digest the provider/model the LiteLLM settings page currently shows."""
+        return litellm_connection_identity(
+            provider=self._current_litellm_provider(),
+            model=self._litellm_model_text(),
+            custom_providers=getattr(self, "_custom_litellm_providers", None),
+        )
+
+    def _on_litellm_connection_tested(
+        self,
+        success: bool,
+        message: str,
+        operation_identity: str = "",
+    ) -> None:
+        worker = self.sender()
+        current = getattr(self, "_litellm_connection_worker", None)
+        if worker is not None and current is not None and worker is not current:
+            return
+        if current is None or worker is current or worker is None:
+            self._litellm_connection_worker = None
         if getattr(self, "_shutdown_requested", False):
             return
         self.litellm_test_connection_btn.setText("测试连接")
+        if not is_current_identity(
+            operation_identity,
+            self._litellm_connection_operation_identity(),
+        ):
+            stale = LITELLM_CONNECTION_TEST_COPY["stale_result"]
+            self.litellm_connection_status_label.setText(stale)
+            self.statusBar().showMessage(stale, 6000)
+            return
         self.litellm_connection_status_label.setText(message)
         self._on_sync_backend_changed(-1)
         if is_cancelled_message(message):
