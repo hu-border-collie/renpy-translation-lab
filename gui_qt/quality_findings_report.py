@@ -142,11 +142,20 @@ def resolve_quality_findings_path(
             selected = report_path.strip()
             break
     if not selected:
-        revision_preview = manifest.get("last_revision_preview")
-        if isinstance(revision_preview, dict):
-            report_path = revision_preview.get("quality_findings_path")
+        for summary_key in ("revision_apply_summary", "last_revision_apply_summary"):
+            apply_summary = manifest.get(summary_key)
+            if not isinstance(apply_summary, dict):
+                continue
+            report_path = apply_summary.get("quality_findings_path")
             if isinstance(report_path, str) and report_path.strip():
                 selected = report_path.strip()
+                break
+        if not selected:
+            revision_preview = manifest.get("last_revision_preview")
+            if isinstance(revision_preview, dict):
+                report_path = revision_preview.get("quality_findings_path")
+                if isinstance(report_path, str) and report_path.strip():
+                    selected = report_path.strip()
     if selected:
         if Path(selected).is_absolute():
             return selected

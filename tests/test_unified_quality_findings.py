@@ -62,10 +62,12 @@ class SharedSchemaContractTests(unittest.TestCase):
         invalid.pop('reason_code')
         invalid['severity'] = 'catastrophic'
         invalid['line'] = -1
+        invalid['schema_version'] = True
         errors = quality.validate_finding(invalid)
         self.assertIn('missing required field: reason_code', errors)
         self.assertTrue(any('severity' in error for error in errors))
         self.assertTrue(any('line' in error for error in errors))
+        self.assertTrue(any('schema_version' in error for error in errors))
 
     def test_filter_findings_supports_shared_dimensions(self):
         findings = [

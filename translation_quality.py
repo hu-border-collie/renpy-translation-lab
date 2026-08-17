@@ -1132,7 +1132,11 @@ def validate_finding(
     if not str(item.get('finding_id') or '').strip():
         errors.append('finding_id must be a non-empty string')
     schema_version = item.get('schema_version')
-    if not isinstance(schema_version, int) or schema_version < 1:
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    ):
         errors.append('schema_version must be a positive integer')
     reason_code = item.get('reason_code')
     if not isinstance(reason_code, str) or not reason_code.strip():
