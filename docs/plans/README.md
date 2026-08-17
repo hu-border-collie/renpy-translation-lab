@@ -20,3 +20,6 @@
   adapter / coverage 与 P2 的 relocation、validation、writeback plan 消费均已落地；
   本文继续作为 reconciliation、coverage 下游门禁和后续引擎阶段的合同基线。
   当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
+- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
+  #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
+  KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。

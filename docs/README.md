@@ -66,6 +66,8 @@
 
 - [开放 Issues 审计（2026-08-08）](plans/open_issues_audit_2026-08-08.md)：基于当时 GitHub 与代码状态的时间点快照，不是长期事实源。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
+- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md)
+
 
 ### 历史参考（已归档）
 
