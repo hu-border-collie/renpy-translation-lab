@@ -2992,21 +2992,21 @@ class MainWindow(QMainWindow):
         self._context_library_status_pending_base = ""
         QThreadPool.globalInstance().start(job, -1)
 
+    def _context_library_live_flags(self, base_dir: str = "") -> dict[str, bool]:
+        """Resolve enablement flags the same way a context-library worker does."""
+        snapshot = getattr(self, "_context_library_config_snapshot", None)
+        return read_batch_context_flags(
+            snapshot if isinstance(snapshot, dict) else {},
+            game_root=base_dir or None,
+        )
+
     def _context_library_config_digest(self) -> str:
-        """Digest the enablement flags the context page is currently showing."""
-        base_dir = self._game_root_str_for_flags() or ""
-        cached = getattr(self, "_context_library_flags_cache", None)
-        if cached is not None and cached[0] == base_dir:
-            flags = dict(cached[1])
-        else:
-            snapshot = getattr(self, "_context_library_config_snapshot", None)
-            flags = read_batch_context_flags(
-                snapshot if isinstance(snapshot, dict) else {},
-                game_root=base_dir or None,
-            )
+        """Digest live enablement flags, not the last applied flags cache."""
         return context_library_config_digest(
             getattr(self, "_context_library_config_snapshot", None),
-            context_flags=flags,
+            context_flags=self._context_library_live_flags(
+                self._game_root_str_for_flags() or ""
+            ),
         )
 
     def _on_context_library_status_ready(self, result: object) -> None:
@@ -11880,17 +11880,11 @@ class MainWindow(QMainWindow):
         )
 
     def _context_library_flags_for_render(self, base_dir: str) -> dict[str, bool]:
-        """Return an in-memory snapshot; project overrides arrive via the worker."""
+        """Prefer the last saved/applied flags; otherwise resolve like the worker."""
         cached = getattr(self, "_context_library_flags_cache", None)
         if cached is not None and cached[0] == base_dir:
             return dict(cached[1])
-        snapshot = getattr(self, "_context_library_config_snapshot", None)
-        if snapshot is None:
-            return self._saved_batch_context_flags()
-        return read_batch_context_flags(
-            snapshot,
-            game_root=None,
-        )
+        return self._context_library_live_flags(base_dir)
 
     def _saved_project_analysis_flags(
         self,
