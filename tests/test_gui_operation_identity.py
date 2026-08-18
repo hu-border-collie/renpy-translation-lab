@@ -26,6 +26,24 @@ class OperationIdentityTests(unittest.TestCase):
         right = {"items": ["a", "b"], "batch": {"source_index": False, "rag": True}}
         self.assertEqual(canonical_digest(left), canonical_digest(right))
 
+    def test_canonical_digest_normalizes_non_finite_floats(self) -> None:
+        self.assertEqual(
+            canonical_digest({"n": float("nan")}),
+            canonical_digest({"n": "NaN"}),
+        )
+        self.assertEqual(
+            canonical_digest({"n": float("inf")}),
+            canonical_digest({"n": "Infinity"}),
+        )
+        self.assertEqual(
+            canonical_digest({"n": float("-inf")}),
+            canonical_digest({"n": "-Infinity"}),
+        )
+        self.assertNotEqual(
+            canonical_digest({"n": float("nan")}),
+            canonical_digest({"n": float("inf")}),
+        )
+
     def test_canonical_digest_changes_when_values_change(self) -> None:
         self.assertNotEqual(
             canonical_digest({"rag": True}),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import PurePath
@@ -12,7 +13,13 @@ from project_context_settings import default_context_flags_from_config
 
 def _canonical_value(value: object) -> object:
     """Normalize one snapshot value into sorted, JSON-serializable form."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "NaN"
+        if math.isinf(value):
+            return "Infinity" if value > 0 else "-Infinity"
         return value
     if isinstance(value, PurePath):
         return str(value)

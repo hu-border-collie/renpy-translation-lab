@@ -2995,10 +2995,9 @@ class MainWindow(QMainWindow):
     def _context_library_live_flags(self, base_dir: str = "") -> dict[str, bool]:
         """Resolve enablement flags the same way a context-library worker does."""
         snapshot = getattr(self, "_context_library_config_snapshot", None)
-        return read_batch_context_flags(
-            snapshot if isinstance(snapshot, dict) else {},
-            game_root=base_dir or None,
-        )
+        if not isinstance(snapshot, dict):
+            return self._saved_batch_context_flags()
+        return read_batch_context_flags(snapshot, game_root=base_dir or None)
 
     def _context_library_config_digest(self) -> str:
         """Digest live enablement flags, not the last applied flags cache."""
