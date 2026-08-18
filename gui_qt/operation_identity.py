@@ -1,11 +1,4 @@
-"""Stable operation identities for asynchronous GUI results.
-
-Issue #297 P2 requires every async task to carry an identity (project,
-config digest, provider/model) and completion callbacks to compare it before
-touching UI state, so a stale result can only finish cleanup.  The helpers
-here turn plain Python snapshots into one opaque digest string that both the
-worker (at start) and the window (at apply time) can compute independently.
-"""
+"""Opaque digests that a worker and the window can compute independently."""
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +6,8 @@ import json
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import PurePath
+
+from project_context_settings import default_context_flags_from_config
 
 
 def _canonical_value(value: object) -> object:
@@ -66,9 +61,51 @@ def is_current_identity(result_identity: str, current_identity: str) -> bool:
     return result == str(current_identity or "")
 
 
-def context_library_config_digest(config: object) -> str:
-    """Digest the translator-config snapshot used for a context-library scan."""
-    return canonical_digest(config or {})
+def context_library_config_digest(
+    config: object = None,
+    *,
+    context_flags: Mapping[str, object] | None = None,
+) -> str:
+    """Digest the enablement flags a context-library scan used.
+
+    Project switches live in ``project_context_settings.json``, not the raw
+    translator config, so the digest is the effective flag set. Unrelated
+    global keys (theme, models) must not change it.
+    """
+    flags = default_context_flags_from_config(
+        config if isinstance(config, dict) else None
+    )
+    if context_flags is not None:
+        flags.update(
+            {str(key): bool(value) for key, value in dict(context_flags).items()}
+        )
+    return canonical_digest({"context_flags": flags})
+
+
+def _selected_custom_provider_endpoint(
+    custom_providers: Mapping[str, object] | None,
+    provider: str,
+) -> dict[str, object]:
+    """Return rewrite/credential fields for ``provider``, or ``{}`` if builtin."""
+    if not provider or not isinstance(custom_providers, Mapping):
+        return {}
+    selected: object | None = None
+    for raw_key, item in custom_providers.items():
+        if str(raw_key or "").strip().lower() == provider:
+            selected = item
+            break
+    if selected is None:
+        return {}
+    if is_dataclass(selected) and not isinstance(selected, type):
+        selected = asdict(selected)
+    if not isinstance(selected, Mapping):
+        return {}
+    return {
+        "base_url": str(selected.get("base_url") or "").strip(),
+        "models_url": str(selected.get("models_url") or "").strip(),
+        "requires_key": bool(selected.get("requires_key", True)),
+        "api_key_env": str(selected.get("api_key_env") or "").strip(),
+    }
 
 
 def litellm_connection_identity(
@@ -77,11 +114,15 @@ def litellm_connection_identity(
     model: str,
     custom_providers: Mapping[str, object] | None = None,
 ) -> str:
-    """Digest the provider/model/custom-provider state a connection test used."""
+    """Digest the provider, model, and selected custom endpoint for one test."""
+    provider_id = str(provider or "").strip().lower()
     return canonical_digest(
         {
-            "provider": str(provider or "").strip().lower(),
+            "provider": provider_id,
             "model": str(model or "").strip(),
-            "custom_providers": custom_providers or {},
+            "custom_provider": _selected_custom_provider_endpoint(
+                custom_providers,
+                provider_id,
+            ),
         }
     )

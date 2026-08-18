@@ -2993,9 +2993,20 @@ class MainWindow(QMainWindow):
         QThreadPool.globalInstance().start(job, -1)
 
     def _context_library_config_digest(self) -> str:
-        """Digest the in-memory config snapshot the context page is showing."""
+        """Digest the enablement flags the context page is currently showing."""
+        base_dir = self._game_root_str_for_flags() or ""
+        cached = getattr(self, "_context_library_flags_cache", None)
+        if cached is not None and cached[0] == base_dir:
+            flags = dict(cached[1])
+        else:
+            snapshot = getattr(self, "_context_library_config_snapshot", None)
+            flags = read_batch_context_flags(
+                snapshot if isinstance(snapshot, dict) else {},
+                game_root=base_dir or None,
+            )
         return context_library_config_digest(
-            getattr(self, "_context_library_config_snapshot", None)
+            getattr(self, "_context_library_config_snapshot", None),
+            context_flags=flags,
         )
 
     def _on_context_library_status_ready(self, result: object) -> None:

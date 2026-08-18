@@ -443,10 +443,9 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     ``custom_providers`` is snapshotted at construction and forwarded to
     :class:`~litellm_sync_backend.LiteLLMSyncBackend` so custom ids get the same
     ``openai/<model>`` + ``api_base`` rewrite and credential resolution as
-    production sync requests.  ``operation_identity`` is an opaque digest of
-    the provider/model/custom-provider state the test was started for; it is
-    echoed back on ``completed`` so the GUI can drop results whose inputs the
-    user has since changed.
+    production sync requests.  ``operation_identity`` is echoed on
+    ``completed`` so the GUI can ignore a result after the selected
+    provider, model, or endpoint changed.
     """
 
     completed = Signal(bool, str, str)

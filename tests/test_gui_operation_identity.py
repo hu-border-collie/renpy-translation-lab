@@ -46,40 +46,72 @@ class OperationIdentityTests(unittest.TestCase):
         self.assertTrue(is_current_identity("abc", "abc"))
         self.assertFalse(is_current_identity("abc", "xyz"))
 
-    def test_context_library_digest_follows_config_snapshot(self) -> None:
-        enabled = {"batch": {"rag": {"enabled": True}}}
-        disabled = {"batch": {"rag": {"enabled": False}}}
-        self.assertEqual(
-            context_library_config_digest(enabled),
-            canonical_digest(enabled),
-        )
+    def test_context_library_digest_follows_effective_flags_not_raw_config(self) -> None:
+        enabled = {"batch": {"rag": {"enabled": True}}, "theme": "dark"}
+        disabled = {"batch": {"rag": {"enabled": False}}, "theme": "dark"}
+        theme_only = {"batch": {"rag": {"enabled": True}}, "theme": "light"}
         self.assertNotEqual(
             context_library_config_digest(enabled),
             context_library_config_digest(disabled),
         )
+        self.assertEqual(
+            context_library_config_digest(enabled),
+            context_library_config_digest(theme_only),
+        )
+        same_config = {"theme": "dark"}
+        self.assertNotEqual(
+            context_library_config_digest(
+                same_config,
+                context_flags={"rag_enabled": True},
+            ),
+            context_library_config_digest(
+                same_config,
+                context_flags={"rag_enabled": False},
+            ),
+        )
 
-    def test_connection_identity_binds_provider_model_and_custom_endpoint(self) -> None:
+    def test_connection_identity_binds_provider_model_and_selected_endpoint(self) -> None:
         first = litellm_connection_identity(
-            provider="openai",
-            model="openai/gpt-test",
+            provider="go",
+            model="go/gpt-test",
             custom_providers={"go": _ProviderStub("go", "https://a")},
         )
         same = litellm_connection_identity(
-            provider="OpenAI",
-            model="openai/gpt-test",
+            provider="GO",
+            model="go/gpt-test",
             custom_providers={"go": _ProviderStub("go", "https://a")},
         )
         other_model = litellm_connection_identity(
-            provider="openai",
-            model="openai/gpt-other",
+            provider="go",
+            model="go/gpt-other",
             custom_providers={"go": _ProviderStub("go", "https://a")},
         )
         other_endpoint = litellm_connection_identity(
+            provider="go",
+            model="go/gpt-test",
+            custom_providers={"go": _ProviderStub("go", "https://b")},
+        )
+        unused_row = litellm_connection_identity(
+            provider="go",
+            model="go/gpt-test",
+            custom_providers={
+                "go": _ProviderStub("go", "https://a"),
+                "other": _ProviderStub("other", "https://z"),
+            },
+        )
+        builtin_ignores_registry = litellm_connection_identity(
+            provider="openai",
+            model="openai/gpt-test",
+            custom_providers={"go": _ProviderStub("go", "https://a")},
+        )
+        builtin_other_registry = litellm_connection_identity(
             provider="openai",
             model="openai/gpt-test",
             custom_providers={"go": _ProviderStub("go", "https://b")},
         )
         self.assertEqual(first, same)
+        self.assertEqual(first, unused_row)
+        self.assertEqual(builtin_ignores_registry, builtin_other_registry)
         self.assertNotEqual(first, other_model)
         self.assertNotEqual(first, other_endpoint)
 

@@ -1536,6 +1536,75 @@ class GuiTaskPageTests(unittest.TestCase):
         )
         timer.assert_not_called()
 
+    def test_context_status_ready_ignores_stale_project_flags(self) -> None:
+        from gui_qt.context_library_worker import ContextLibraryStatusResult
+        from gui_qt.operation_identity import context_library_config_digest
+
+        game_root = Path("C:/Games/Current/work")
+        current_base = str(game_root)
+        same_config = {"theme": "dark"}
+        old_flags = {
+            "rag_enabled": False,
+            "source_index_enabled": False,
+            "bootstrap_on_build": True,
+            "project_analysis_enabled": False,
+            "project_analysis_inject_enabled": False,
+        }
+        new_flags = dict(old_flags, rag_enabled=True)
+        current = ContextLibraryStatusResult(
+            base_dir=current_base,
+            live_fingerprint="fp-now",
+            status={"overall_status": "published", "store_exists": True},
+            label="当前已启用",
+            context_flags=new_flags,
+            config_digest=context_library_config_digest(
+                same_config,
+                context_flags=new_flags,
+            ),
+        )
+        stale = ContextLibraryStatusResult(
+            base_dir=current_base,
+            live_fingerprint="fp-old",
+            status={"overall_status": "missing", "store_exists": False},
+            label="过期扫描",
+            context_flags=old_flags,
+            config_digest=context_library_config_digest(
+                same_config,
+                context_flags=old_flags,
+            ),
+        )
+        self.window._context_library_config_snapshot = same_config
+        self.window._context_library_flags_cache = (current_base, dict(new_flags))
+        self.window._context_library_status_cache = current
+        self.window._context_library_status_job = object()
+        self.window._render_context_library_panel(
+            flags=current.context_flags,
+            analysis_flags={"enabled": False, "inject_enabled": False},
+            game_root=current_base,
+            result=current,
+            running=False,
+        )
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=game_root,
+            ),
+            mock.patch("gui_qt.app.QTimer.singleShot") as timer,
+        ):
+            self.window._on_context_library_status_ready(stale)
+
+        self.assertIsNone(self.window._context_library_status_job)
+        self.assertEqual(self.window._context_library_status_cache, current)
+        self.assertEqual(
+            self.window._context_library_flags_cache,
+            (current_base, new_flags),
+        )
+        status_text = self.window.context_library_page.project_analysis_status_label.text()
+        self.assertIn("当前已启用", status_text)
+        self.assertNotIn("过期扫描", status_text)
+        timer.assert_called_once()
+
     def test_roundtrip_keyword_candidates_and_merge_button(self) -> None:
         self.window._set_work_mode(
             WorkMode.KEYWORD_EXTRACTION,
