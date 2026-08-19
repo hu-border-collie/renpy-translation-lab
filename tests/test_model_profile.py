@@ -1180,6 +1180,85 @@ class SyncEntryWiringTests(unittest.TestCase):
             self.assertIn("profiles", snapshot)
             self.assertIn("routes", snapshot)
 
+    def test_old_manifest_without_model_routing_keeps_recorded_model(self) -> None:
+        recorded = "gemini-old-recorded"
+        live = "gemini-live-new"
+        previous_batch = batch_mod.BATCH_MODEL
+        previous_sync = batch_mod.SYNC_MODEL
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                package_dir = Path(tmp) / "old-run"
+                package_dir.mkdir()
+                chunk = _translation_chunk(package_dir)
+                request_rows = [
+                    batch_mod.build_batch_request(chunk, model=recorded),
+                ]
+                plan = mp.resolve_routing_plan(
+                    {"sync": {"backend": "gemini", "model": recorded}},
+                )
+                manifest_path = batch_mod.make_sync_manifest(
+                    package_dir=str(package_dir),
+                    mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                    display_name="old-manifest-test",
+                    chunks=[chunk],
+                    request_rows=request_rows,
+                    settings={},
+                    routing_plan=plan,
+                )
+                raw = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+                raw.pop("model_routing", None)
+                raw["model"] = recorded
+                raw["batch_model"] = recorded
+                raw["provider"] = "gemini"
+                Path(manifest_path).write_text(
+                    json.dumps(raw, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                batch_mod.SYNC_MODEL = live
+                batch_mod.BATCH_MODEL = live
+
+                loaded = batch_mod.load_manifest(manifest_path)
+                self.assertNotIn("model_routing", loaded)
+                resolved = batch_mod.resolve_manifest_routing_plan(loaded)
+                self.assertEqual(
+                    batch_mod.route_model(
+                        resolved,
+                        batch_mod.route_for_manifest(resolved, loaded),
+                    ),
+                    recorded,
+                )
+
+                seen: list[str] = []
+
+                def fake_sync(request, route, plan=None, **_kwargs):
+                    seen.append(plan.profiles[route.profile_id].model)
+                    return self._sync_response(
+                        {
+                            "translations": [
+                                {"id": "a", "translation": "你好"},
+                                {"id": "b", "translation": "世界"},
+                            ]
+                        },
+                        model=plan.profiles[route.profile_id].model,
+                    )
+
+                with mock.patch.object(
+                    batch_mod, "run_sync_request", side_effect=fake_sync,
+                ):
+                    batch_mod.probe_requests(manifest_path, limit=1)
+                    batch_mod.execute_sync_request_rows(
+                        manifest_path,
+                        request_rows,
+                    )
+
+                self.assertGreaterEqual(len(seen), 2)
+                self.assertEqual(set(seen), {recorded})
+                self.assertNotIn(live, seen)
+        finally:
+            batch_mod.BATCH_MODEL = previous_batch
+            batch_mod.SYNC_MODEL = previous_sync
+
 
 if __name__ == "__main__":
     unittest.main()

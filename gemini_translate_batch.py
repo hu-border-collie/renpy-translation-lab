@@ -12456,6 +12456,14 @@ def _routing_config_origins():
     )
 
 
+def _runtime_custom_providers():
+    return {
+        key: value
+        for key, value in (getattr(legacy, 'CUSTOM_LITELLM_PROVIDERS', None) or {}).items()
+        if getattr(value, 'requires_key', None) is not None
+    } or None
+
+
 def freeze_runtime_routing_plan(
     *,
     execution=model_profile.ExecutionStrategy.SYNC,
@@ -12470,11 +12478,7 @@ def freeze_runtime_routing_plan(
         project_analysis_model=PROJECT_ANALYSIS_MODEL,
         final_review_model=FINAL_REVIEW_MODEL,
         sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
-        custom_providers={
-            key: value
-            for key, value in (getattr(legacy, 'CUSTOM_LITELLM_PROVIDERS', None) or {}).items()
-            if getattr(value, 'requires_key', None) is not None
-        } or None,
+        custom_providers=_runtime_custom_providers(),
         execution=execution,
         stage_overrides=stage_overrides,
         created_at=created_at,
@@ -12495,8 +12499,23 @@ def attach_model_routing(manifest, plan):
     return plan
 
 
+def _legacy_manifest_recorded_models(manifest):
+    """Return ``(model, batch_model, provider)`` persisted on a pre-snapshot run."""
+    payload = manifest or {}
+    return (
+        str(payload.get('model') or '').strip(),
+        str(payload.get('batch_model') or '').strip(),
+        str(payload.get('provider') or '').strip(),
+    )
+
+
 def resolve_manifest_routing_plan(manifest, *, execution=None, stage_overrides=None):
-    """Return the frozen plan for a run, preferring the manifest snapshot."""
+    """Return the frozen plan for a run, preferring the manifest snapshot.
+
+    Old manifests without ``model_routing`` keep the model recorded on that
+    manifest (``model`` / ``batch_model`` / ``provider``). Live ``SYNC_MODEL``
+    / ``BATCH_MODEL`` are used only when those fields are also missing.
+    """
     plan = routing_plan_from_manifest(manifest)
     if plan is not None:
         return plan
@@ -12506,9 +12525,29 @@ def resolve_manifest_routing_plan(manifest, *, execution=None, stage_overrides=N
             if str((manifest or {}).get('execution') or '') == 'sync'
             else model_profile.ExecutionStrategy.GEMINI_BATCH
         )
-    return freeze_runtime_routing_plan(
+    persisted_model, persisted_batch, persisted_provider = (
+        _legacy_manifest_recorded_models(manifest)
+    )
+    recorded = persisted_model or persisted_batch
+    merged_overrides = dict(stage_overrides or {})
+    if not recorded:
+        return freeze_runtime_routing_plan(
+            execution=execution,
+            stage_overrides=merged_overrides or None,
+        )
+    stage = model_profile.stage_for_manifest_mode(manifest_mode(manifest))
+    merged_overrides.setdefault(stage, recorded)
+    return model_profile.resolve_routing_plan_from_runtime(
+        sync_backend=persisted_provider or SYNC_BACKEND,
+        sync_model=persisted_model,
+        batch_model=persisted_batch or persisted_model,
+        project_analysis_model=PROJECT_ANALYSIS_MODEL,
+        final_review_model=FINAL_REVIEW_MODEL,
+        sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+        custom_providers=_runtime_custom_providers(),
         execution=execution,
-        stage_overrides=stage_overrides,
+        stage_overrides=merged_overrides or None,
+        config_origins=_routing_config_origins(),
     )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -546,6 +547,86 @@ def write_experiment_outputs(
     }
 
 
+_SIGNATURE_TYPEERROR_MARKERS = (
+    'unexpected keyword argument',
+    'got an unexpected keyword argument',
+    'takes 2 positional arguments but',
+    'takes 1 positional argument but',
+    'missing a required argument',
+    'required positional argument',
+)
+
+
+def _sync_runner_uses_task_route(sync_runner: Callable[..., object]) -> bool | None:
+    """Return whether ``sync_runner`` accepts the TaskRoute calling convention.
+
+    ``True`` means call with ``(payload, route, plan=..., api_key_index=...)``.
+    ``False`` means the pre-#345 ``(payload, model_name, api_key_index=...)``
+    convention. ``None`` means the signature could not be inspected.
+    """
+    try:
+        signature = inspect.signature(sync_runner)
+    except (TypeError, ValueError):
+        return None
+    parameters = signature.parameters
+    if 'route' in parameters or 'plan' in parameters:
+        return True
+    if 'model_name' in parameters:
+        return False
+    if any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    ):
+        return True
+    return True
+
+
+def _is_calling_convention_typeerror(exc: TypeError) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _SIGNATURE_TYPEERROR_MARKERS)
+
+
+def _invoke_ab_sync_runner(
+    sync_runner: Callable[..., dict],
+    request_payload: dict,
+    *,
+    route,
+    plan,
+    model_name: str,
+    api_key_index: int | None,
+) -> dict:
+    """Call a sync runner without treating a real TypeError as an old signature."""
+    convention = _sync_runner_uses_task_route(sync_runner)
+    if convention is False:
+        return sync_runner(
+            request_payload,
+            model_name,
+            api_key_index=api_key_index,
+        )
+    if convention is True:
+        return sync_runner(
+            request_payload,
+            route,
+            plan=plan,
+            api_key_index=api_key_index,
+        )
+    try:
+        return sync_runner(
+            request_payload,
+            route,
+            plan=plan,
+            api_key_index=api_key_index,
+        )
+    except TypeError as exc:
+        if not _is_calling_convention_typeerror(exc):
+            raise
+        return sync_runner(
+            request_payload,
+            model_name,
+            api_key_index=api_key_index,
+        )
+
+
 def run_variant_for_chunk(
     chunk: dict,
     *,
@@ -587,19 +668,14 @@ def run_variant_for_chunk(
                 api_key_index=api_key_index,
             )
         else:
-            try:
-                response = sync_runner(
-                    request_payload,
-                    route,
-                    plan=plan,
-                    api_key_index=api_key_index,
-                )
-            except TypeError:
-                response = sync_runner(
-                    request_payload,
-                    model_name,
-                    api_key_index=api_key_index,
-                )
+            response = _invoke_ab_sync_runner(
+                sync_runner,
+                request_payload,
+                route=route,
+                plan=plan,
+                model_name=model_name,
+                api_key_index=api_key_index,
+            )
         output_diagnostics = _batch().sync_output_diagnostics(
             response,
             request_payload,

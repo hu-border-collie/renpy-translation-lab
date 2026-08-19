@@ -358,6 +358,51 @@ class TranslationAbExperimentTests(unittest.TestCase):
             }
             self.assertEqual(categories['story_memory'], 'provider_error')
 
+    def test_run_variant_for_chunk_does_not_mask_new_runner_typeerror(self):
+        calls: list[tuple[object, object]] = []
+
+        def new_runner(request_payload, route, plan=None, api_key_index=None):
+            calls.append((route, plan))
+            raise TypeError("payload is missing 'contents'")
+
+        with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as handle:
+            chunk = json.load(handle)['chunks'][0]
+        result = ab_mod.run_variant_for_chunk(
+            chunk,
+            variant_name='baseline',
+            settings={'model': 'gemini-test'},
+            sync_runner=new_runner,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(result.error)
+        self.assertEqual(result.error_category, 'provider_error')
+        self.assertFalse(result.translations)
+
+    def test_run_variant_for_chunk_still_accepts_old_sync_runner_signature(self):
+        calls: list[str] = []
+
+        def old_runner(request_payload, model_name, api_key_index=None):
+            calls.append(model_name)
+            return {
+                'response_text': _full_chunk_translations(),
+                'finish_reason': 'STOP',
+                'usage_metadata': {'total_tokens': 3},
+            }
+
+        with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as handle:
+            chunk = json.load(handle)['chunks'][0]
+        result = ab_mod.run_variant_for_chunk(
+            chunk,
+            variant_name='baseline',
+            settings={'model': 'gemini-test'},
+            sync_runner=old_runner,
+        )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result.error, '')
+        self.assertEqual(result.translations[SAMPLE_ITEM_ID], '你好')
+
     def test_run_translation_ab_experiment_writes_partial_outputs_on_experiment_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = os.path.join(tmp, 'manifest.json')
