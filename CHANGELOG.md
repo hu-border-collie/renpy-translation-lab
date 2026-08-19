@@ -20,6 +20,7 @@
 
 ### 变更
 
+- 同步请求不再用 `sync.model` 覆盖调用方传入的阶段模型。显式 `TaskRoute` / 阶段配置优先，`sync.model` 只作为未单独配置阶段的 primary 回退；一次 run 开始时冻结 `ModelRoutingPlan`，中途改配置或重试不会换 profile。sync 与 translation / keyword / revision / final_review 四类 batch manifest 写入 `model_routing` 快照（仅凭据引用，不含凭据值）。
 - GUI 异步任务完成时会比对项目路径、配置 digest 和 LiteLLM 连接参数身份；过期结果只做清理，不再覆盖当前界面。
 - GUI 改为统一侧边导航与任务页自有状态，项目列表、上下文库、关键词、订正、同步翻译和批量翻译各自展示当前任务结果。
 - 同步翻译默认只生成 diff 与 manifest 预览，必须显式确认后才写回；写回时重新校验项目、源快照和预览制品。

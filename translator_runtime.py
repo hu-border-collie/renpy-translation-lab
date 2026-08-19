@@ -59,6 +59,7 @@ from rpa_safety import (
     member_output_size,
     read_bounded_compressed_index,
 )
+import model_profile
 import model_usage_ledger
 import prompt_context
 import story_memory
@@ -69,7 +70,6 @@ from sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,
-    GeminiSyncBackend,
     SyncGenerationRequest,
     normalize_sync_timeout_seconds,
     sync_error_detail,
@@ -4549,6 +4549,32 @@ def normalize_result_items(payload):
     )
 
 
+def _routing_custom_providers(custom_providers):
+    """Keep only real provider records for the resolver; mocks stay on the backend."""
+    if not custom_providers:
+        return None
+    return {
+        key: value
+        for key, value in custom_providers.items()
+        if getattr(value, "requires_key", None) is not None
+    } or None
+
+
+def freeze_translation_routing_plan(*, stage_overrides=None):
+    """Snapshot the translation TaskRoute from currently loaded sync settings."""
+    current = get_current_model()
+    overrides = dict(stage_overrides or {})
+    overrides.setdefault(model_profile.STAGE_TRANSLATION, current)
+    return model_profile.resolve_routing_plan_from_runtime(
+        sync_backend=SYNC_BACKEND,
+        sync_model=current,
+        sync_models=tuple(MODELS),
+        custom_providers=_routing_custom_providers(CUSTOM_LITELLM_PROVIDERS),
+        execution=model_profile.ExecutionStrategy.SYNC,
+        stage_overrides=overrides,
+    )
+
+
 def call_gemini_sdk(
     prompt,
     items,
@@ -4556,9 +4582,20 @@ def call_gemini_sdk(
     usage_buffer=None,
     usage_operation_id='',
     return_contract=False,
+    route=None,
+    plan=None,
 ):
     """Calls the explicitly configured synchronous backend."""
-    model_name = get_current_model()
+    if plan is None or route is None:
+        plan = freeze_translation_routing_plan()
+        route = plan.routes[model_profile.STAGE_TRANSLATION]
+    if not isinstance(route, model_profile.TaskRoute):
+        raise TypeError(
+            'call_gemini_sdk requires an explicit TaskRoute; '
+            f'got {type(route).__name__}.'
+        )
+    profile = model_profile.profile_for_route(plan, route)
+    model_name = profile.model
     generation_config = {
         "temperature": 0.2,
         "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
@@ -4568,21 +4605,10 @@ def call_gemini_sdk(
     }
     generation_config = filter_gemini_generation_config(model_name, generation_config)
 
-    if SYNC_BACKEND == "litellm":
-        from litellm_sync_backend import LiteLLMSyncBackend
-
-        backend = LiteLLMSyncBackend(
-            custom_providers=CUSTOM_LITELLM_PROVIDERS
-        )
-    else:
-        configure_genai()
-        backend = GeminiSyncBackend(
-            create_genai_client(),
-            serialize_response=serialize_unknown,
-            extract_text=extract_text_from_response_payload,
-            extract_finish_reason=extract_finish_reason,
-            extract_usage=model_usage_ledger.extract_provider_usage,
-        )
+    backend = model_profile.build_sync_backend(
+        profile,
+        custom_providers=CUSTOM_LITELLM_PROVIDERS,
+    )
     request = SyncGenerationRequest(
             model=model_name,
             contents=prompt,
@@ -4678,6 +4704,8 @@ def process_batch(
     translation_validator=None,
     context_window=None,
     return_contract=False,
+    route=None,
+    plan=None,
 ):
     # Local glossary matches are lexical and must not depend on the RAG
     # switch: normalize_map / preserve / non-translatable hits always reach
@@ -4721,6 +4749,8 @@ def process_batch(
         usage_buffer=usage_buffer,
         usage_operation_id=usage_operation_id,
         return_contract=True,
+        route=route,
+        plan=plan,
     )
     if isinstance(contract, list):
         # Compatibility for injected/test callables that still return the
@@ -4947,6 +4977,8 @@ def process_batch_with_retry(
     contract_failures=None,
     retry_kind='first_pass',
     context_window=None,
+    route=None,
+    plan=None,
 ):
     if contract_diagnostics is not None and retry_kind == 'first_pass':
         original_ids = [
@@ -4986,6 +5018,8 @@ def process_batch_with_retry(
                 usage_operation_id=usage_operation_id,
                 context_window=context_window,
                 return_contract=True,
+                route=route,
+                plan=plan,
             )
             _record_sync_contract_report(
                 contract_diagnostics,
@@ -5067,6 +5101,8 @@ def process_batch_with_retry(
                 # context window; reuse it so missing items keep the same
                 # surrounding context as the first request.
                 context_window=context_window,
+                route=route,
+                plan=plan,
             )
             return successful + retried
 
@@ -5176,6 +5212,8 @@ def process_batch_with_retry(
             retry_kind='split_retry',
             # Split children no longer line up with the original local context
             # window, so it is intentionally omitted (issue #338).
+            route=route,
+            plan=plan,
         )
         r2 = process_batch_with_retry(
             right_batch, replacements, retry_depth + 1,
@@ -5187,6 +5225,8 @@ def process_batch_with_retry(
             contract_failures=contract_failures,
             retry_kind='split_retry',
             # See the split-left call above: context window is not reused.
+            route=route,
+            plan=plan,
         )
         return r1 + r2
 
@@ -5791,6 +5831,8 @@ def run_translation(*, prepare=False):
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")
     print(f"Progress log: {PROGRESS_LOG}")
     print("=" * 60)
+    routing_plan = freeze_translation_routing_plan()
+    translation_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
 
     try:
         if prepare:
@@ -5898,6 +5940,8 @@ def run_translation(*, prepare=False):
                         contract_diagnostics=contract_diagnostics,
                         contract_failures=contract_failures,
                         context_window=context_window,
+                        route=translation_route,
+                        plan=routing_plan,
                     ))
                     batch = []
                     batch_start = batch_index
@@ -5923,6 +5967,8 @@ def run_translation(*, prepare=False):
                     contract_diagnostics=contract_diagnostics,
                     contract_failures=contract_failures,
                     context_window=context_window,
+                    route=translation_route,
+                    plan=routing_plan,
                 ))
             # Persist attempted-batch diagnostics even when the file produced
             # no preview (all items rejected or adapter writeback blocked), so

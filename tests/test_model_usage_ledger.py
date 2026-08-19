@@ -663,18 +663,22 @@ class ModelUsageLedgerTests(unittest.TestCase):
                 usage_metadata={"totalTokenCount": 9},
             )
 
-            class SuccessBackend:
-                def __init__(self, *_args, **_kwargs):
-                    pass
-
-                def generate(self, _request):
-                    return success
+            success_response = {
+                "response_payload": success.response_payload,
+                "response_text": success.response_text,
+                "finish_reason": success.finish_reason,
+                "usage_metadata": success.usage_metadata,
+                "provider": success.provider,
+                "model": success.model,
+                "execution_mode": success.execution_mode,
+            }
 
             with (
                 mock.patch.object(batch, "load_manifest", return_value=manifest),
                 mock.patch.object(batch, "load_request_rows", return_value=request_rows),
-                mock.patch.object(batch, "create_batch_client", return_value=object()),
-                mock.patch.object(batch, "GeminiSyncBackend", SuccessBackend),
+                mock.patch.object(
+                    batch, "run_sync_request", return_value=success_response
+                ),
                 mock.patch.object(
                     batch, "record_generation_usage_best_effort"
                 ) as recorder,
@@ -686,18 +690,14 @@ class ModelUsageLedgerTests(unittest.TestCase):
             recorder.assert_called_once()
             self.assertEqual(recorder.call_args.kwargs["stage"], "probe")
 
-            class FailingBackend:
-                def __init__(self, *_args, **_kwargs):
-                    pass
-
-                def generate(self, _request):
-                    raise RuntimeError("provider failed")
-
             with (
                 mock.patch.object(batch, "load_manifest", return_value=manifest),
                 mock.patch.object(batch, "load_request_rows", return_value=request_rows),
-                mock.patch.object(batch, "create_batch_client", return_value=object()),
-                mock.patch.object(batch, "GeminiSyncBackend", FailingBackend),
+                mock.patch.object(
+                    batch,
+                    "run_sync_request",
+                    side_effect=RuntimeError("provider failed"),
+                ),
                 mock.patch.object(
                     batch, "record_generation_usage_best_effort"
                 ) as failed_recorder,
