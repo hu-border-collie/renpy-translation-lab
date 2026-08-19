@@ -333,6 +333,7 @@ LITELLM_CONNECTION_TEST_COPY = {
         "unsupported_capability": "当前 Provider 不支持连接测试所需的 JSON 能力。",
         "provider_error": "请求失败，请检查模型、API Base 和网络。",
     },
+    "stale_result": "连接参数已修改，本次测试结果已忽略；请用当前设置重新测试。",
 }
 
 

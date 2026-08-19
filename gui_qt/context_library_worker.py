@@ -7,6 +7,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
+from .operation_identity import context_library_config_digest
+
 
 @dataclass(frozen=True)
 class ContextLibraryStatusResult:
@@ -18,6 +20,7 @@ class ContextLibraryStatusResult:
     label: str
     context_flags: dict[str, bool] = field(default_factory=dict)
     error: str = ""
+    config_digest: str = ""
 
 
 def collect_context_library_status(
@@ -52,6 +55,10 @@ def collect_context_library_status(
             status=status,
             label=format_status_label(status),
             context_flags=context_flags,
+            config_digest=context_library_config_digest(
+                config,
+                context_flags=context_flags,
+            ),
         )
     except Exception as exc:
         return ContextLibraryStatusResult(
@@ -61,6 +68,10 @@ def collect_context_library_status(
             label=f"读取失败 · {exc}",
             context_flags=context_flags,
             error=str(exc),
+            config_digest=context_library_config_digest(
+                config,
+                context_flags=context_flags,
+            ),
         )
 
 

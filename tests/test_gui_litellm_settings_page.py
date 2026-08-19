@@ -68,6 +68,10 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._custom_litellm_providers = {}
         self.window._custom_litellm_providers_load_error = ""
         self.window._custom_litellm_providers_modified = False
+        self.window._litellm_connection_worker = None
+        self.window._litellm_catalog_worker = None
+        self.window._litellm_provider_catalog_worker = None
+        self.window._litellm_version_worker = None
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
 
@@ -497,6 +501,57 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.assertFalse(self.window.litellm_refresh_models_btn.isEnabled())
         finally:
             self.window.sync_backend_combo.setCurrentIndex(litellm_index)
+
+    def test_connection_test_drops_stale_provider_model_result(self):
+        from gui_qt.user_copy import LITELLM_CONNECTION_TEST_COPY
+
+        self._load_provider_choices()
+        self.window.litellm_model_combo.setEditText("openai/gpt-current")
+        self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
+        self.window._litellm_connection_worker = None
+        self.window._on_litellm_connection_tested(
+            True,
+            "连接成功。",
+            "stale-provider-model",
+        )
+        self.assertEqual(
+            self.window.litellm_connection_status_label.text(),
+            LITELLM_CONNECTION_TEST_COPY["stale_result"],
+        )
+        self.assertEqual(self.window.litellm_test_connection_btn.text(), "测试连接")
+
+    def test_connection_test_applies_matching_identity(self):
+        self._load_provider_choices()
+        self.window.litellm_model_combo.setEditText("openai/gpt-current")
+        self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
+        self.window._litellm_connection_worker = None
+        identity = self.window._litellm_connection_operation_identity()
+        self.assertTrue(identity)
+        self.window._on_litellm_connection_tested(True, "连接成功。", identity)
+        self.assertEqual(
+            self.window.litellm_connection_status_label.text(),
+            "连接成功。",
+        )
+
+    def test_connection_test_ignores_retired_worker(self):
+        current = mock.Mock()
+        retired = mock.Mock()
+        self.window._litellm_connection_worker = current
+        self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
+        try:
+            with mock.patch.object(self.window, "sender", return_value=retired):
+                self.window._on_litellm_connection_tested(
+                    True,
+                    "旧测试成功。",
+                    "retired-identity",
+                )
+            self.assertIs(self.window._litellm_connection_worker, current)
+            self.assertEqual(
+                self.window.litellm_connection_status_label.text(),
+                "正在后台发起最小请求…",
+            )
+        finally:
+            self.window._litellm_connection_worker = None
 
     def test_models_page_is_gemini_only(self):
         # Materialize the lazy models settings page before inspecting widgets.

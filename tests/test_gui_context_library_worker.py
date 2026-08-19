@@ -10,6 +10,7 @@ try:
         ContextLibraryStatusJob,
         collect_context_library_status,
     )
+    from gui_qt.operation_identity import context_library_config_digest
 except ImportError as exc:
     collect_context_library_status = None  # type: ignore[assignment]
     IMPORT_ERROR = exc
@@ -50,6 +51,10 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
         self.assertEqual(result.status, status)
         self.assertEqual(result.label, "已启用")
         self.assertTrue(result.context_flags["rag_enabled"])
+        self.assertEqual(
+            result.config_digest,
+            context_library_config_digest(config, context_flags=result.context_flags),
+        )
         read_flags.assert_called_once_with(
             config,
             game_root="C:/Games/Demo/work",
@@ -70,6 +75,10 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
         self.assertIsNone(result.status)
         self.assertIn("读取失败", result.label)
         self.assertIn("broken store", result.error)
+        self.assertEqual(
+            result.config_digest,
+            context_library_config_digest({}, context_flags=result.context_flags),
+        )
 
     def test_cancelled_queued_job_completes_without_scanning(self) -> None:
         job = ContextLibraryStatusJob("C:/Games/Demo/work")

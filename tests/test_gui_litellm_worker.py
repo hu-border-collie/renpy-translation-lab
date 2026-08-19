@@ -35,6 +35,14 @@ else:
     IMPORT_ERROR = None
 
 
+def _record_connection_completed(worker, completed: list) -> None:
+    worker.completed.connect(
+        lambda success, message, identity="": completed.append(
+            (success, message, identity)
+        )
+    )
+
+
 @unittest.skipIf(
     LiteLLMConnectionTestWorker is None,
     f"GUI dependencies are unavailable: {IMPORT_ERROR}",
@@ -47,7 +55,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test", "typed-secret")
-        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        _record_connection_completed(worker, completed)
 
         with mock.patch(
             "gui_qt.litellm_worker.LiteLLMSyncBackend",
@@ -71,8 +79,29 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         self.assertEqual(
             completed,
-            [(True, "连接成功。已通过最小 JSON 响应校验。")],
+            [(True, "连接成功。已通过最小 JSON 响应校验。", "")],
         )
+
+    def test_connection_test_echoes_operation_identity(self):
+        backend = mock.Mock()
+        backend.generate_async = mock.AsyncMock(
+            return_value=SimpleNamespace(response_text='{"ok":true}')
+        )
+        completed = []
+        worker = LiteLLMConnectionTestWorker(
+            "openai/test",
+            operation_identity="digest-abc",
+        )
+        _record_connection_completed(worker, completed)
+
+        with mock.patch(
+            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            return_value=backend,
+        ):
+            worker.run()
+
+        self.assertEqual(completed[0][0], True)
+        self.assertEqual(completed[0][2], "digest-abc")
 
     def test_connection_test_omits_sampling_for_new_gemini_model(self):
         backend = mock.Mock()
@@ -110,9 +139,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 )
                 completed = []
                 worker = LiteLLMConnectionTestWorker("openai/test")
-                worker.completed.connect(
-                    lambda success, message: completed.append((success, message))
-                )
+                _record_connection_completed(worker, completed)
 
                 with mock.patch(
                     "gui_qt.litellm_worker.LiteLLMSyncBackend",
@@ -145,9 +172,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 backend.generate_async = mock.AsyncMock(return_value=result)
                 completed = []
                 worker = LiteLLMConnectionTestWorker("openai/test")
-                worker.completed.connect(
-                    lambda success, message: completed.append((success, message))
-                )
+                _record_connection_completed(worker, completed)
 
                 with mock.patch(
                     "gui_qt.litellm_worker.LiteLLMSyncBackend",
@@ -169,7 +194,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
-        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        _record_connection_completed(worker, completed)
 
         with mock.patch(
             "gui_qt.litellm_worker.LiteLLMSyncBackend",
@@ -186,7 +211,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         backend = mock.Mock()
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
-        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        _record_connection_completed(worker, completed)
         worker.request_cancel()
 
         with mock.patch(
@@ -208,7 +233,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
-        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        _record_connection_completed(worker, completed)
 
         def generate_and_cancel(request):
             worker.request_cancel()
@@ -243,7 +268,9 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         completed = []
         worker = LiteLLMConnectionTestWorker("openai/test")
         worker.completed.connect(
-            lambda success, message: completed.append((success, message)),
+            lambda success, message, identity="": completed.append(
+                (success, message, identity)
+            ),
             Qt.ConnectionType.DirectConnection,
         )
 
@@ -555,7 +582,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
             "custom-secret",
             custom_providers=registry,
         )
-        worker.completed.connect(lambda success, message: completed.append((success, message)))
+        _record_connection_completed(worker, completed)
 
         with mock.patch(
             "gui_qt.litellm_worker.LiteLLMSyncBackend",
@@ -568,7 +595,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         self.assertEqual(request.model, "opencode-go/gpt-4o-mini")
         self.assertEqual(
             completed,
-            [(True, "连接成功。已通过最小 JSON 响应校验。")],
+            [(True, "连接成功。已通过最小 JSON 响应校验。", "")],
         )
 
     def test_openrouter_falls_back_to_litellm_subset_then_local(self):
