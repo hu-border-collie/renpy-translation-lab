@@ -1044,6 +1044,71 @@ def warning_finding_ids(findings: Iterable[Mapping[str, Any]]) -> set[str]:
     }
 
 
+def select_quality_findings_path(manifest: Mapping[str, Any] | None) -> str:
+    """Return the relative or absolute findings path recorded on a manifest."""
+
+    payload = manifest if isinstance(manifest, Mapping) else {}
+    for key in (
+        'last_quality_findings_path',
+        'last_revision_quality_findings_path',
+        'quality_findings_path',
+    ):
+        report_path = payload.get(key)
+        if isinstance(report_path, str) and report_path.strip():
+            return report_path.strip()
+    for summary_key in ('revision_apply_summary', 'last_revision_apply_summary'):
+        apply_summary = payload.get(summary_key)
+        if not isinstance(apply_summary, Mapping):
+            continue
+        report_path = apply_summary.get('quality_findings_path')
+        if isinstance(report_path, str) and report_path.strip():
+            return report_path.strip()
+    revision_preview = payload.get('last_revision_preview')
+    if isinstance(revision_preview, Mapping):
+        report_path = revision_preview.get('quality_findings_path')
+        if isinstance(report_path, str) and report_path.strip():
+            return report_path.strip()
+    last_summary = payload.get('last_check_summary')
+    if isinstance(last_summary, Mapping):
+        report_path = last_summary.get('quality_findings_path')
+        if isinstance(report_path, str) and report_path.strip():
+            return report_path.strip()
+    return ''
+
+
+def resolve_quality_findings_path(
+    manifest: Mapping[str, Any] | None,
+    *,
+    package_dir: str = '',
+    manifest_path: str = '',
+) -> str:
+    """Resolve the findings report CLI and GUI should both read.
+
+    Preference order matches the GUI readers: explicit last-report fields,
+    then revision apply/preview snapshots, then the last check summary, then
+    ``quality_findings.jsonl`` next to the manifest.
+    """
+
+    selected = select_quality_findings_path(manifest)
+    base = str(package_dir or '').strip()
+    if not base:
+        payload = manifest if isinstance(manifest, Mapping) else {}
+        recorded = payload.get('_package_dir')
+        if isinstance(recorded, str) and recorded.strip():
+            base = recorded.strip()
+        elif str(manifest_path or '').strip():
+            base = os.path.dirname(str(manifest_path).strip())
+    if not selected:
+        selected = 'quality_findings.jsonl' if base else ''
+    if not selected:
+        return ''
+    if os.path.isabs(selected):
+        return selected
+    if base:
+        return os.path.join(base, selected)
+    return selected
+
+
 def prune_acknowledged_finding_ids(
     acknowledged_ids: Iterable[Any] | None,
     findings: Iterable[Mapping[str, Any]],

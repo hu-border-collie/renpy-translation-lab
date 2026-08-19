@@ -10360,13 +10360,11 @@ def summarize_revision_writeback_gate(summary):
 
 
 def resolve_quality_findings_path(manifest):
-    package_dir = manifest.get('_package_dir', '')
-    path = manifest.get('last_quality_findings_path')
-    if isinstance(path, str) and path.strip():
-        if os.path.isabs(path.strip()):
-            return path.strip()
-        return os.path.join(package_dir, path.strip())
-    return os.path.join(package_dir, 'quality_findings.jsonl')
+    return translation_quality.resolve_quality_findings_path(
+        manifest,
+        package_dir=str((manifest or {}).get('_package_dir') or ''),
+        manifest_path=str((manifest or {}).get('_manifest_path') or ''),
+    )
 
 
 def read_quality_findings(manifest):
@@ -16761,12 +16759,12 @@ def build_machine_success_envelope(command, value, args):
             getattr(args, 'finding_ids', None)
             or getattr(args, 'all_findings', False)
         )
-        if not requested:
-            status = 'listed'
-        elif previous_acknowledged_finding_ids != acknowledged_finding_ids:
+        if previous_acknowledged_finding_ids != acknowledged_finding_ids:
             status = 'updated'
-        else:
+        elif requested:
             status = 'no_work'
+        else:
+            status = 'listed'
         return cli_contract.success_envelope(
             command,
             status=status,
@@ -16774,7 +16772,7 @@ def build_machine_success_envelope(command, value, args):
             artifacts=_nonempty_artifacts(
                 manifest=result['manifest_path'],
                 quality_findings=(
-                    manifest.get('last_quality_findings_path')
+                    resolve_quality_findings_path(manifest)
                     if isinstance(manifest, dict)
                     else ''
                 ),

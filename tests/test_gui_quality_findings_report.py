@@ -117,6 +117,12 @@ class QualityFindingsReportTests(unittest.TestCase):
             resolve_quality_findings_path(blocked_manifest),
             "blocked/quality_findings.apply.jsonl",
         )
+        import gemini_translate_batch as batch
+
+        self.assertEqual(
+            batch.resolve_quality_findings_path(blocked_manifest),
+            resolve_quality_findings_path(blocked_manifest),
+        )
 
     def test_acknowledged_finding_ids_from_manifest(self):
         self.assertEqual(

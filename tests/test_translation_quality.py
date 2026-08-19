@@ -450,6 +450,31 @@ class QualityGateTests(unittest.TestCase):
         self.assertEqual(gate['blocker_count'], 1)
         self.assertEqual(gate['decision'], quality.GATE_NEEDS_REVIEW)
 
+    def test_resolve_quality_findings_path_prefers_apply_then_check_summary(self):
+        self.assertEqual(
+            quality.resolve_quality_findings_path(
+                {
+                    'last_revision_preview': {
+                        'quality_findings_path': 'preview/quality_findings.jsonl',
+                    },
+                    'revision_apply_summary': {
+                        'quality_findings_path': 'apply/quality_findings.apply.jsonl',
+                    },
+                }
+            ),
+            'apply/quality_findings.apply.jsonl',
+        )
+        self.assertEqual(
+            quality.resolve_quality_findings_path(
+                {
+                    'last_check_summary': {
+                        'quality_findings_path': 'check/quality_findings.jsonl',
+                    }
+                }
+            ),
+            'check/quality_findings.jsonl',
+        )
+
     def test_prune_acknowledged_finding_ids_drops_stale_and_blocker_ids(self):
         findings = [
             {'finding_id': 'w2', 'disposition': quality.DISPOSITION_WARNING},

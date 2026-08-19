@@ -809,6 +809,22 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(no_work["result"]["selected_finding_ids"], [])
         self.assertEqual(no_work["result"]["unmatched_finding_ids"], ["missing"])
 
+        pruned = batch.build_machine_success_envelope(
+            "quality-ack",
+            {
+                "manifest": {"_manifest_path": "C:/jobs/demo/manifest.json"},
+                "old_gate": {"decision": "needs_review", "acknowledged_count": 1},
+                "new_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "selected_ids": set(),
+                "unmatched": [],
+                "previous_acknowledged_finding_ids": ["stale"],
+                "acknowledged_finding_ids": [],
+            },
+            SimpleNamespace(finding_ids=[], all_findings=False),
+        )
+        self.assertEqual(pruned["status"], "updated")
+        self.assertEqual(pruned["result"]["acknowledged_finding_ids"], [])
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 

@@ -10,7 +10,7 @@ from typing import Callable, Iterable
 import translation_quality
 from atomic_io import atomic_write_json
 
-from .diagnostics_context import join_directory_file, resolve_package_dir
+from .diagnostics_context import resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
@@ -132,43 +132,11 @@ def resolve_quality_findings_path(
     *,
     manifest_path: str = "",
 ) -> str:
-    selected = ""
-    for key in (
-        "last_quality_findings_path",
-        "last_revision_quality_findings_path",
-        "quality_findings_path",
-    ):
-        report_path = manifest.get(key)
-        if isinstance(report_path, str) and report_path.strip():
-            selected = report_path.strip()
-            break
-    if not selected:
-        for summary_key in ("revision_apply_summary", "last_revision_apply_summary"):
-            apply_summary = manifest.get(summary_key)
-            if not isinstance(apply_summary, dict):
-                continue
-            report_path = apply_summary.get("quality_findings_path")
-            if isinstance(report_path, str) and report_path.strip():
-                selected = report_path.strip()
-                break
-        if not selected:
-            revision_preview = manifest.get("last_revision_preview")
-            if isinstance(revision_preview, dict):
-                report_path = revision_preview.get("quality_findings_path")
-                if isinstance(report_path, str) and report_path.strip():
-                    selected = report_path.strip()
-    if selected:
-        if Path(selected).is_absolute():
-            return selected
-        package_dir = resolve_package_dir(manifest_path, manifest)
-        if package_dir:
-            return join_directory_file(package_dir, selected)
-        return selected
-
-    package_dir = resolve_package_dir(manifest_path, manifest)
-    if package_dir:
-        return join_directory_file(package_dir, "quality_findings.jsonl")
-    return ""
+    return translation_quality.resolve_quality_findings_path(
+        manifest,
+        package_dir=resolve_package_dir(manifest_path, manifest),
+        manifest_path=manifest_path,
+    )
 
 
 def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]:
