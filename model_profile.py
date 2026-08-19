@@ -16,8 +16,9 @@ Resolution semantics (approved with issue #345, option B):
   ``gemini_batch`` runs.
 
 The production entry points (``run_sync_request``, ``call_gemini_sdk``, ...)
-adopt this resolver in follow-up PRs; until then nothing in the runtime
-imports this module besides tests.
+freeze one :class:`ModelRoutingPlan` at run start and pass the stage
+:class:`TaskRoute` into every sync call. ``sync.model`` is only the
+inherited primary; an explicit stage route always wins.
 
 Profile ids are **resolver slot ids** (``primary``, ``batch``,
 ``<stage>_model``, ``<stage>_override``) — an internal compatibility layer
@@ -32,7 +33,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Mapping
@@ -702,6 +703,8 @@ def _sync_profile(
     if sync_backend == SYNC_BACKEND_LITELLM:
         provider = provider_from_model(model)
         custom = (custom_providers or {}).get(provider)
+        if custom is not None and getattr(custom, "requires_key", None) is None:
+            custom = None
         if custom is not None:
             credential = CredentialRef(
                 CREDENTIAL_KIND_NONE if not custom.requires_key
@@ -942,6 +945,15 @@ def resolve_routing_plan(
         route(STAGE_KEYWORD, "primary", strategy, ROUTE_SOURCE_INHERITED)
         route(STAGE_REVISION, "primary", strategy, ROUTE_SOURCE_INHERITED)
 
+    for stage in (STAGE_TRANSLATION, STAGE_KEYWORD, STAGE_REVISION):
+        if stage in overrides:
+            route(
+                stage,
+                f"{stage}_override",
+                routes[stage].strategy,
+                ROUTE_SOURCE_EXPLICIT,
+            )
+
     if STAGE_PROJECT_ANALYSIS in overrides:
         route(
             STAGE_PROJECT_ANALYSIS,
@@ -1156,30 +1168,121 @@ def validate_routing_plan(
     return tuple(issues)
 
 
+_MANIFEST_MODE_TO_STAGE = {
+    "translation": STAGE_TRANSLATION,
+    "keyword_extraction": STAGE_KEYWORD,
+    "revision": STAGE_REVISION,
+    "final_review": STAGE_FINAL_REVIEW,
+}
+
+
+def stage_for_manifest_mode(mode: str) -> str:
+    """Map a package/manifest mode string to a routing stage."""
+    text = str(mode or "").strip()
+    if text in _MANIFEST_MODE_TO_STAGE:
+        return _MANIFEST_MODE_TO_STAGE[text]
+    if text in KNOWN_STAGES:
+        return text
+    return STAGE_TRANSLATION
+
+
+def profile_for_route(plan: ModelRoutingPlan, route: TaskRoute) -> ModelProfile:
+    """Return the frozen profile a route points at."""
+    try:
+        return plan.profiles[route.profile_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"Route for stage {route.stage} references unknown profile "
+            f"{route.profile_id}."
+        ) from exc
+
+
+def resolve_routing_plan_from_runtime(
+    *,
+    sync_backend: str,
+    sync_model: str = "",
+    batch_model: str = "",
+    project_analysis_model: str = "",
+    final_review_model: str = "",
+    sync_models: tuple[str, ...] | list[str] = (),
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    execution: str | ExecutionStrategy = ExecutionStrategy.SYNC,
+    stage_overrides: Mapping[str, str] | None = None,
+    created_at: str = "",
+    config_origins: tuple[ConfigOrigin, ...] = (),
+) -> ModelRoutingPlan:
+    """Build a plan from already-loaded runtime settings.
+
+    Callers snapshot ``SYNC_MODEL`` / ``BATCH_MODEL`` / stage models into
+    this helper *once* at run start. Later mutations of those globals must
+    not be re-read.
+    """
+    translator_config: dict[str, Any] = {
+        "sync": {"backend": _clean_str(sync_backend) or SYNC_BACKEND_GEMINI},
+        "batch": {},
+    }
+    if _clean_str(sync_model):
+        translator_config["sync"]["model"] = _clean_str(sync_model)
+    models = tuple(
+        _clean_str(item) for item in (sync_models or ()) if _clean_str(item)
+    )
+    if models:
+        translator_config["sync"]["models"] = list(models)
+    if _clean_str(batch_model):
+        translator_config["batch"]["model"] = _clean_str(batch_model)
+    if _clean_str(project_analysis_model):
+        translator_config["batch"]["project_analysis"] = {
+            "model": _clean_str(project_analysis_model),
+        }
+    if _clean_str(final_review_model):
+        translator_config["batch"]["final_review"] = {
+            "model": _clean_str(final_review_model),
+        }
+    plan = resolve_routing_plan(
+        translator_config,
+        custom_providers=custom_providers,
+        execution=execution,
+        stage_overrides=stage_overrides,
+        created_at=created_at,
+    )
+    if config_origins:
+        plan = replace(plan, config_origins=tuple(config_origins))
+    return plan
+
+
 def build_sync_backend(
     profile: ModelProfile,
     *,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    client: Any = None,
+    serialize_response: Callable[..., Any] | None = None,
+    extract_text: Callable[..., Any] | None = None,
+    extract_finish_reason: Callable[..., Any] | None = None,
+    extract_usage: Callable[..., Any] | None = None,
 ):
     """Construct the sync backend for one profile.
 
-    Deferred imports keep this module free of heavy SDK imports; the gemini
-    branch mirrors the production wiring in ``translator_runtime`` and the
-    litellm branch forwards the custom provider registry exactly like
-    ``run_sync_request`` does today.
+    Deferred imports keep this module free of heavy SDK imports. Production
+    sync callers must go through this function; they may pass a pre-built
+    Gemini ``client`` (for API-key rotation) and usage extractors that match
+    the existing request contract.
     """
     if profile.adapter == ADAPTER_GEMINI:
         import model_usage_ledger
         import translator_runtime as runtime
         from sync_model_backend import GeminiSyncBackend
 
-        runtime.configure_genai()
+        if client is None:
+            runtime.configure_genai()
+            client = runtime.create_genai_client()
         return GeminiSyncBackend(
-            runtime.create_genai_client(),
-            serialize_response=runtime.serialize_unknown,
-            extract_text=runtime.extract_text_from_response_payload,
-            extract_finish_reason=runtime.extract_finish_reason,
-            extract_usage=model_usage_ledger.extract_provider_usage,
+            client,
+            serialize_response=serialize_response or runtime.serialize_unknown,
+            extract_text=extract_text or runtime.extract_text_from_response_payload,
+            extract_finish_reason=(
+                extract_finish_reason or runtime.extract_finish_reason
+            ),
+            extract_usage=extract_usage or model_usage_ledger.extract_provider_usage,
         )
     if profile.adapter == ADAPTER_LITELLM:
         from litellm_sync_backend import LiteLLMSyncBackend

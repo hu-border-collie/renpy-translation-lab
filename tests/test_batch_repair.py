@@ -1312,7 +1312,11 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     },
                 ],
             }
-            request_rows = [batch_mod.build_batch_request(chunk, model='gemini-test')]
+            request_rows = [batch_mod.build_batch_request(chunk, model='stage-explicit-model')]
+            routing_plan = batch_mod.model_profile.resolve_routing_plan(
+                {'sync': {'backend': 'gemini', 'model': 'primary-should-lose'}},
+                stage_overrides={'translation': 'stage-explicit-model'},
+            )
             manifest_path = batch_mod.make_sync_manifest(
                 package_dir=str(package_dir),
                 mode=batch_mod.MANIFEST_MODE_TRANSLATION,
@@ -1320,6 +1324,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                 chunks=[chunk],
                 request_rows=request_rows,
                 settings={},
+                routing_plan=routing_plan,
             )
             responses = [
                 {'translations': [{'id': 'a', 'translation': '你好'}]},
@@ -1327,10 +1332,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
             ]
             seen_requests = []
             seen_models = []
+            seen_routes = []
 
-            def fake_sync(request, model_name, **_kwargs):
+            def fake_sync(request, route, plan=None, **_kwargs):
                 seen_requests.append(request)
-                seen_models.append(model_name)
+                seen_routes.append(route)
+                seen_models.append(plan.profiles[route.profile_id].model)
                 payload = responses[len(seen_requests) - 1]
                 text = json.dumps(payload, ensure_ascii=False)
                 return {
@@ -1341,7 +1348,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     'finish_reason': 'STOP',
                     'usage_metadata': {'totalTokenCount': 1},
                     'provider': 'gemini',
-                    'model': 'gemini-test',
+                    'model': 'stage-explicit-model',
                     'execution_mode': 'sync',
                 }
 
@@ -1386,7 +1393,12 @@ class BatchRepairRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(len(seen_requests), 2)
-        self.assertEqual(seen_models, ['sync-override', 'sync-override'])
+        self.assertEqual(seen_models, ['stage-explicit-model', 'stage-explicit-model'])
+        self.assertTrue(all(
+            isinstance(route, batch_mod.model_profile.TaskRoute)
+            for route in seen_routes
+        ))
+        self.assertNotIn('sync-override', seen_models)
         self.assertNotIn('"id":"a"', retry_prompt)
         self.assertIn('"id":"b"', retry_prompt)
         self.assertEqual(

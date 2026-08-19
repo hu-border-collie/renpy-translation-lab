@@ -57,6 +57,7 @@ from engine_adapters.writeback import (
 )
 import keyword_glossary_merge
 import keyword_history
+import model_profile
 import model_usage_ledger
 import prompt_context
 import revision_corpus
@@ -76,7 +77,6 @@ from project_version import __version__
 from sync_model_backend import (
     DEFAULT_SYNC_RETRY_ATTEMPTS,
     DEFAULT_SYNC_TIMEOUT_SECONDS,
-    GeminiSyncBackend,
     SyncGenerationRequest,
     normalize_sync_timeout_seconds,
     sync_recovery_decision,
@@ -2803,6 +2803,8 @@ def create_batch_package_dir(package_name):
 
 
 def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
+    if source_manifest.get('model_routing'):
+        part_manifest['model_routing'] = copy.deepcopy(source_manifest.get('model_routing'))
     if source_manifest.get('keyword_settings'):
         part_manifest['keyword_settings'] = dict(source_manifest.get('keyword_settings') or {})
     if source_manifest.get('revision_settings'):
@@ -3515,6 +3517,12 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         },
         'chunks': chunks,
     }
+    attach_model_routing(
+        manifest,
+        freeze_runtime_routing_plan(
+            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        ),
+    )
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
     manifest['_manifest_path'] = manifest_path
@@ -4581,6 +4589,13 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         }
         manifest['story_memory_summary'] = summarize_batch_story_memory(chunks)
 
+    attach_model_routing(
+        manifest,
+        freeze_runtime_routing_plan(
+            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        ),
+    )
+
     manifest_path = os.path.join(package_dir, 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as handle:
         json.dump(manifest, handle, ensure_ascii=False, indent=2)
@@ -5244,6 +5259,9 @@ def create_final_review_package(
             'build_warnings': get_batch_risk_warnings(),
             'input_jsonl_path': requests_path,
             'request_count': request_count,
+            'model_routing': freeze_runtime_routing_plan(
+                execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+            ).to_manifest_dict(),
         },
     )
     # batch_cost_estimate uses summary.chunk_count for max output tokens.
@@ -5646,6 +5664,12 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         },
         'chunks': chunks,
     }
+    attach_model_routing(
+        manifest,
+        freeze_runtime_routing_plan(
+            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        ),
+    )
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
     with open(manifest_path, 'w', encoding='utf-8') as handle:
@@ -10626,7 +10650,8 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
             str(manifest.get('_manifest_path') or '').encode('utf-8')
         ).hexdigest()[:20]
     )
-    client = create_batch_client(api_key_index=api_key_index)
+    routing_plan = resolve_manifest_routing_plan(manifest)
+    probe_route = route_for_manifest(routing_plan, manifest)
     summary = {
         'sample_count': len(sample),
         'parse_ok': 0,
@@ -10640,7 +10665,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     for index, (row, chunk) in enumerate(zip(sample, sample_chunks), start=1):
         key = str(row.get('key') or '')
         request_payload = row.get('request') or {}
-        model_name = str(manifest.get('batch_model') or BATCH_MODEL or '')
+        model_name = route_model(routing_plan, probe_route)
         config = filter_gemini_generation_config(
             model_name,
             request_payload.get('generation_config') or {},
@@ -10661,22 +10686,20 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
         finish_reason = ''
         usage_metadata = {}
         response_text = ''
+        result = None
         try:
-            backend = GeminiSyncBackend(
-                client,
-                serialize_response=serialize_unknown,
-                extract_text=extract_text_from_response_payload,
-                extract_finish_reason=extract_finish_reason,
-                extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
+            probe_payload = dict(request_payload)
+            probe_payload['generation_config'] = config
+            raw = run_sync_request(
+                probe_payload,
+                probe_route,
+                plan=routing_plan,
+                api_key_index=api_key_index,
             )
-            result = backend.generate(SyncGenerationRequest(
-                model=model_name,
-                contents=request_payload.get('contents') or [],
-                config=config,
-            ))
-            finish_reason = result.finish_reason
-            usage_metadata = dict(result.usage_metadata)
-            response_text = result.response_text
+            finish_reason = raw.get('finish_reason') or ''
+            usage_metadata = dict(raw.get('usage_metadata') or {})
+            response_text = raw.get('response_text') or ''
+            result = raw
         except Exception as exc:
             summary['request_errors'] += 1
             parse_error = str(exc)
@@ -10684,7 +10707,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
             record_generation_usage_best_effort(
                 task_mode='analysis',
                 stage='probe',
-                result=_sync_result_to_dict(result),
+                result=result if isinstance(result, dict) else _sync_result_to_dict(result),
                 operation_id=usage_operation_id,
                 run_id=usage_run_id,
                 source_key=str(key),
@@ -12406,7 +12429,199 @@ def _run_sync_backend_with_retry(
     raise RuntimeError('Sync request failed without a captured exception.')
 
 
-def run_sync_request(request_payload, model_name, api_key_index=None):
+def _routing_config_origins():
+    path = str(getattr(legacy, 'TRANSLATOR_CONFIG', '') or '')
+    if not path:
+        return ()
+    view = {
+        'sync': {
+            'backend': SYNC_BACKEND,
+            'model': SYNC_MODEL,
+        },
+        'batch': {
+            'model': BATCH_MODEL,
+            'project_analysis': {'model': PROJECT_ANALYSIS_MODEL},
+            'final_review': {'model': FINAL_REVIEW_MODEL},
+        },
+    }
+    fingerprint = 'sha256:' + hashlib.sha256(
+        json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    ).hexdigest()
+    return (
+        model_profile.ConfigOrigin(
+            kind='translator_config',
+            path=path,
+            fingerprint=fingerprint,
+        ),
+    )
+
+
+def _runtime_custom_providers():
+    return {
+        key: value
+        for key, value in (getattr(legacy, 'CUSTOM_LITELLM_PROVIDERS', None) or {}).items()
+        if getattr(value, 'requires_key', None) is not None
+    } or None
+
+
+def freeze_runtime_routing_plan(
+    *,
+    execution=model_profile.ExecutionStrategy.SYNC,
+    stage_overrides=None,
+    created_at='',
+):
+    """Snapshot routing from currently loaded globals. Call once at run start."""
+    return model_profile.resolve_routing_plan_from_runtime(
+        sync_backend=SYNC_BACKEND,
+        sync_model=SYNC_MODEL,
+        batch_model=BATCH_MODEL,
+        project_analysis_model=PROJECT_ANALYSIS_MODEL,
+        final_review_model=FINAL_REVIEW_MODEL,
+        sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+        custom_providers=_runtime_custom_providers(),
+        execution=execution,
+        stage_overrides=stage_overrides,
+        created_at=created_at,
+        config_origins=_routing_config_origins(),
+    )
+
+
+def routing_plan_from_manifest(manifest):
+    payload = (manifest or {}).get('model_routing')
+    if not isinstance(payload, dict) or not payload:
+        return None
+    return model_profile.ModelRoutingPlan.from_manifest_dict(payload)
+
+
+def attach_model_routing(manifest, plan):
+    """Write the frozen plan snapshot onto a manifest dict."""
+    manifest['model_routing'] = plan.to_manifest_dict()
+    return plan
+
+
+def _legacy_manifest_recorded_models(manifest):
+    """Return ``(model, batch_model, provider)`` persisted on a pre-snapshot run."""
+    payload = manifest or {}
+    return (
+        str(payload.get('model') or '').strip(),
+        str(payload.get('batch_model') or '').strip(),
+        str(payload.get('provider') or '').strip(),
+    )
+
+
+def resolve_manifest_routing_plan(manifest, *, execution=None, stage_overrides=None):
+    """Return the frozen plan for a run, preferring the manifest snapshot.
+
+    Old manifests without ``model_routing`` keep the model recorded on that
+    manifest (``model`` / ``batch_model`` / ``provider``). Live ``SYNC_MODEL``
+    / ``BATCH_MODEL`` are used only when those fields are also missing.
+    """
+    plan = routing_plan_from_manifest(manifest)
+    if plan is not None:
+        return plan
+    if execution is None:
+        execution = (
+            model_profile.ExecutionStrategy.SYNC
+            if str((manifest or {}).get('execution') or '') == 'sync'
+            else model_profile.ExecutionStrategy.GEMINI_BATCH
+        )
+    persisted_model, persisted_batch, persisted_provider = (
+        _legacy_manifest_recorded_models(manifest)
+    )
+    recorded = persisted_model or persisted_batch
+    merged_overrides = dict(stage_overrides or {})
+    if not recorded:
+        return freeze_runtime_routing_plan(
+            execution=execution,
+            stage_overrides=merged_overrides or None,
+        )
+    stage = model_profile.stage_for_manifest_mode(manifest_mode(manifest))
+    merged_overrides.setdefault(stage, recorded)
+    return model_profile.resolve_routing_plan_from_runtime(
+        sync_backend=persisted_provider or SYNC_BACKEND,
+        sync_model=persisted_model,
+        batch_model=persisted_batch or persisted_model,
+        project_analysis_model=PROJECT_ANALYSIS_MODEL,
+        final_review_model=FINAL_REVIEW_MODEL,
+        sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+        custom_providers=_runtime_custom_providers(),
+        execution=execution,
+        stage_overrides=merged_overrides or None,
+        config_origins=_routing_config_origins(),
+    )
+
+
+def route_for_manifest(plan, manifest):
+    stage = model_profile.stage_for_manifest_mode(manifest_mode(manifest))
+    try:
+        return plan.routes[stage]
+    except KeyError as exc:
+        raise ValueError(
+            f'Frozen routing plan has no route for stage {stage}.'
+        ) from exc
+
+
+def route_model(plan, route):
+    return model_profile.profile_for_route(plan, route).model
+
+
+def _require_task_route(route):
+    if not isinstance(route, model_profile.TaskRoute):
+        raise TypeError(
+            'run_sync_request requires an explicit TaskRoute; '
+            f'got {type(route).__name__}.'
+        )
+    return route
+
+
+def build_project_analysis_sync_runner(plan, route):
+    """Return the shipped project-analysis generate callback.
+
+    Freezes the TaskRoute/plan at construction time so retries and later
+    config mutations cannot switch profiles.
+    """
+    from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationResult
+
+    route = _require_task_route(route)
+
+    def _generate(request):
+        payload = {
+            'contents': request.contents,
+            'generation_config': dict(request.config or {}),
+        }
+        system = (request.config or {}).get('system_instruction')
+        if system:
+            payload['system_instruction'] = system
+        raw = run_sync_request(payload, route, plan=plan)
+        return SyncGenerationResult(
+            provider=str(raw.get('provider') or SYNC_BACKEND or 'gemini'),
+            model=str(raw.get('model') or route_model(plan, route)),
+            execution_mode=str(raw.get('execution_mode') or SYNC_EXECUTION_MODE),
+            response_payload=raw.get('response_payload') or raw,
+            response_text=str(raw.get('response_text') or ''),
+            finish_reason=str(raw.get('finish_reason') or ''),
+            usage_metadata=dict(raw.get('usage_metadata') or {}),
+            output_diagnostics=dict(raw.get('output_diagnostics') or {}),
+            request_metadata=dict(raw.get('request_metadata') or {}),
+        )
+
+    return _generate
+
+
+def run_sync_request(request_payload, route, plan=None, *, api_key_index=None):
+    """Execute one sync request using a frozen TaskRoute.
+
+    The model comes from ``plan.profiles[route.profile_id]``. ``SYNC_MODEL``
+    is never consulted here; callers must freeze a :class:`ModelRoutingPlan`
+    at run start and pass that snapshot.
+    """
+    route = _require_task_route(route)
+    if plan is None:
+        raise TypeError(
+            'run_sync_request requires the frozen ModelRoutingPlan from run start.'
+        )
+    profile = model_profile.profile_for_route(plan, route)
+    effective_model = profile.model
     config = dict(request_payload.get('generation_config') or {})
     config['timeout'] = SYNC_TIMEOUT_SECONDS
     system_instruction = request_payload.get('system_instruction')
@@ -12415,15 +12630,13 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
     safety_settings = request_payload.get('safety_settings')
     if safety_settings:
         config['safety_settings'] = safety_settings
-    effective_model = SYNC_MODEL or model_name
     config = filter_gemini_generation_config(effective_model, config)
 
-    if SYNC_BACKEND == 'litellm':
+    if profile.adapter == model_profile.ADAPTER_LITELLM:
         if api_key_index is not None:
             raise SystemExit('--api-key-index is only supported by the Gemini sync backend.')
-        from litellm_sync_backend import LiteLLMSyncBackend
-
-        backend = LiteLLMSyncBackend(
+        backend = model_profile.build_sync_backend(
+            profile,
             custom_providers=legacy.CUSTOM_LITELLM_PROVIDERS,
         )
         request = SyncGenerationRequest(
@@ -12452,12 +12665,15 @@ def run_sync_request(request_payload, model_name, api_key_index=None):
     for attempt in range(1, attempts + 1):
         client = create_batch_client(api_key_index=api_key_index)
         try:
-            backend = GeminiSyncBackend(
-                client,
+            backend = model_profile.build_sync_backend(
+                profile,
+                client=client,
                 serialize_response=serialize_unknown,
                 extract_text=extract_text_from_response_payload,
                 extract_finish_reason=extract_finish_reason,
-                extract_usage=lambda payload: summarize_usage_metadata(extract_usage_metadata(payload)),
+                extract_usage=lambda payload: summarize_usage_metadata(
+                    extract_usage_metadata(payload)
+                ),
             )
             result = backend.generate(SyncGenerationRequest(
                 model=effective_model,
@@ -12529,9 +12745,16 @@ def _contract_mode_for_manifest(manifest):
     return translation_core.MODE_TRANSLATION
 
 
-def _effective_sync_model(manifest):
-    """Return the one model used to build and execute every sync attempt."""
-    return str(SYNC_MODEL or manifest.get('batch_model') or BATCH_MODEL or '')
+def _effective_sync_model(manifest, plan=None):
+    """Return the frozen model for this sync manifest.
+
+    After a run starts, live ``SYNC_MODEL`` is ignored. Old manifests without
+    a ``model_routing`` snapshot fall back to the persisted model fields.
+    """
+    resolved = plan or routing_plan_from_manifest(manifest)
+    if resolved is not None:
+        return route_model(resolved, route_for_manifest(resolved, manifest))
+    return str(manifest.get('model') or manifest.get('batch_model') or BATCH_MODEL or '')
 
 
 def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None):
@@ -12666,15 +12889,24 @@ def write_manifest_file(package_dir, manifest, update_latest=True):
     return manifest_path
 
 
-def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
+def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *, routing_plan=None):
     """Execute one complete, unique request row for every manifest chunk.
 
     Full coverage is validated before any provider call so the rewritten result
     JSONL and the manifest's terminal sync status always describe the same run.
+    The routing plan is frozen before the first request; later config changes
+    and targeted retries reuse that snapshot.
     """
     manifest = load_manifest(manifest_path)
     result_path = resolve_manifest_result_path(manifest)
-    effective_model = _effective_sync_model(manifest)
+    plan = routing_plan or resolve_manifest_routing_plan(
+        manifest,
+        execution=model_profile.ExecutionStrategy.SYNC,
+    )
+    route = route_for_manifest(plan, manifest)
+    effective_model = route_model(plan, route)
+    if not manifest.get('model_routing'):
+        attach_model_routing(manifest, plan)
     manifest_chunks = list(manifest.get('chunks') or [])
     chunk_map = {chunk.get('key'): chunk for chunk in manifest_chunks}
     contract_mode = _contract_mode_for_manifest(manifest)
@@ -12766,7 +12998,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
         try:
             result = run_sync_request(
                 row.get('request') or {},
-                effective_model,
+                route,
+                plan=plan,
                 api_key_index=api_key_index,
             )
             result_row['response'] = result.get('response_payload') or {}
@@ -12788,7 +13021,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                     )
                 )
             result_row['provider'] = result.get('provider') or SYNC_BACKEND
-            result_row['model'] = result.get('model') or SYNC_MODEL or BATCH_MODEL
+            result_row['model'] = result.get('model') or effective_model
             result_row['execution_mode'] = result.get('execution_mode') or 'sync'
             summary['successful_request_count'] += 1
             result_row['provider_response_attempts'] = [{
@@ -12861,7 +13094,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None):
                 try:
                     retry_result = run_sync_request(
                         retry_row.get('request') or {},
-                        effective_model,
+                        route,
+                        plan=plan,
                         api_key_index=api_key_index,
                     )
                     result_row['provider_response_attempts'].append({
@@ -13055,12 +13289,18 @@ def make_sync_manifest(
     request_rows,
     settings,
     extra_fields=None,
+    routing_plan=None,
 ):
     settings = dict(settings or {})
     settings.setdefault('timeout_seconds', SYNC_TIMEOUT_SECONDS)
     input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
     result_jsonl_path = os.path.join(package_dir, 'results.jsonl')
     write_request_rows(input_jsonl_path, request_rows)
+    plan = routing_plan or freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+    )
+    route = plan.routes[model_profile.stage_for_manifest_mode(mode)]
+    profile = model_profile.profile_for_route(plan, route)
     manifest = {
         'version': 2,
         'manifest_version': 2,
@@ -13069,10 +13309,11 @@ def make_sync_manifest(
         'execution': 'sync',
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': SYNC_MODEL or BATCH_MODEL,
+        'batch_model': profile.model,
         'provider': SYNC_BACKEND,
-        'model': SYNC_MODEL or BATCH_MODEL,
+        'model': profile.model,
         'execution_mode': 'sync',
+        'model_routing': plan.to_manifest_dict(),
         'model_response_contract': {
             'version': 1,
             'mode': mode,
@@ -13102,6 +13343,8 @@ def make_sync_manifest(
     }
     if extra_fields:
         manifest.update(extra_fields)
+    if 'model_routing' not in manifest or not manifest.get('model_routing'):
+        attach_model_routing(manifest, plan)
     return write_manifest_file(package_dir, manifest, update_latest=manifest.get('execution') != 'sync')
 
 
@@ -13139,7 +13382,13 @@ def sync_keyword_candidates(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{KEYWORD_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    effective_model = SYNC_MODEL or BATCH_MODEL
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+    )
+    effective_model = route_model(
+        routing_plan,
+        routing_plan.routes[model_profile.STAGE_KEYWORD],
+    )
     request_rows = [
         build_keyword_request(chunk, max_candidates, model=effective_model)
         for chunk in chunks
@@ -13163,8 +13412,14 @@ def sync_keyword_candidates(
                 'max_candidates_per_chunk': max_candidates,
             },
         },
+        routing_plan=routing_plan,
     )
-    manifest = execute_sync_request_rows(manifest_path, request_rows, api_key_index=api_key_index)
+    manifest = execute_sync_request_rows(
+        manifest_path,
+        request_rows,
+        api_key_index=api_key_index,
+        routing_plan=routing_plan,
+    )
     print(f"Sync keyword run: {manifest['_package_dir']}")
     return export_keyword_candidates(
         target=manifest['_manifest_path'],
@@ -13208,7 +13463,13 @@ def sync_revisions(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    effective_model = SYNC_MODEL or BATCH_MODEL
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+    )
+    effective_model = route_model(
+        routing_plan,
+        routing_plan.routes[model_profile.STAGE_REVISION],
+    )
     request_rows = [
         build_revision_request(chunk, model=effective_model)
         for chunk in chunks
@@ -13251,8 +13512,14 @@ def sync_revisions(
             'thinking_level': BATCH_THINKING_LEVEL,
         },
         extra_fields=extra_fields,
+        routing_plan=routing_plan,
     )
-    manifest = execute_sync_request_rows(manifest_path, request_rows, api_key_index=api_key_index)
+    manifest = execute_sync_request_rows(
+        manifest_path,
+        request_rows,
+        api_key_index=api_key_index,
+        routing_plan=routing_plan,
+    )
     print(f"Sync revision run: {manifest['_package_dir']}")
     preview_manifest = preview_revisions(
         target=manifest['_manifest_path'],
@@ -13366,7 +13633,11 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             }
         )
 
-    effective_model = SYNC_MODEL or BATCH_MODEL
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+    )
+    repair_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    effective_model = route_model(routing_plan, repair_route)
     request_rows = [build_repair_request(job, model=effective_model) for job in jobs]
     write_jsonl_file(request_log_path, request_rows)
 
@@ -13382,7 +13653,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         try:
             response_data = run_sync_request(
                 request_row['request'],
-                model_name=BATCH_MODEL,
+                repair_route,
+                plan=routing_plan,
                 api_key_index=api_key_index,
             )
             finish_reason = response_data['finish_reason']
@@ -16071,7 +16343,6 @@ def dispatch_command(parser, args):
             ingest_keyword_summaries,
         )
         from project_analysis_llm import run_mapreduce_drafts
-        from sync_model_backend import SyncGenerationRequest
 
         store_dir = getattr(args, 'store_dir', None) or None
         as_json = bool(getattr(args, 'json', False))
@@ -16106,39 +16377,27 @@ def dispatch_command(parser, args):
                     entry_labels=args.entry_label or None,
                 )
             if command == 'project-analysis-generate':
-                model = (
-                    getattr(args, 'model', '') or PROJECT_ANALYSIS_MODEL or BATCH_MODEL or SYNC_MODEL
+                cli_model = str(getattr(args, 'model', '') or '').strip()
+                analysis_overrides = (
+                    {model_profile.STAGE_PROJECT_ANALYSIS: cli_model}
+                    if cli_model
+                    else None
                 )
+                analysis_plan = freeze_runtime_routing_plan(
+                    execution=model_profile.ExecutionStrategy.SYNC,
+                    stage_overrides=analysis_overrides,
+                )
+                analysis_route = analysis_plan.routes[model_profile.STAGE_PROJECT_ANALYSIS]
+                model = route_model(analysis_plan, analysis_route)
                 analysis_usage_run_id = model_usage_ledger.new_run_id('project-analysis')
                 analysis_usage_operation_id = (
                     'project-analysis-'
                     + hashlib.sha256(str(legacy.BASE_DIR or '').encode('utf-8')).hexdigest()[:20]
                 )
-
-
-                def _generate(request: SyncGenerationRequest):
-                    # Reuse production sync path (Gemini / LiteLLM).
-                    payload = {
-                        'contents': request.contents,
-                        'generation_config': dict(request.config or {}),
-                    }
-                    system = (request.config or {}).get('system_instruction')
-                    if system:
-                        payload['system_instruction'] = system
-                    raw = run_sync_request(payload, model)
-                    from sync_model_backend import SyncGenerationResult, SYNC_EXECUTION_MODE
-
-                    return SyncGenerationResult(
-                        provider=str(raw.get('provider') or SYNC_BACKEND or 'gemini'),
-                        model=str(raw.get('model') or model),
-                        execution_mode=str(raw.get('execution_mode') or SYNC_EXECUTION_MODE),
-                        response_payload=raw.get('response_payload') or raw,
-                        response_text=str(raw.get('response_text') or ''),
-                        finish_reason=str(raw.get('finish_reason') or ''),
-                        usage_metadata=dict(raw.get('usage_metadata') or {}),
-                        output_diagnostics=dict(raw.get('output_diagnostics') or {}),
-                        request_metadata=dict(raw.get('request_metadata') or {}),
-                    )
+                _generate = build_project_analysis_sync_runner(
+                    analysis_plan,
+                    analysis_route,
+                )
 
                 pricing_config = batch_cost_estimate.load_pricing_config(
                     _read_translator_config_object()

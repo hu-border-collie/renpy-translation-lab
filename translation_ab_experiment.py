@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -546,6 +547,50 @@ def write_experiment_outputs(
     }
 
 
+def _sync_runner_uses_task_route(sync_runner: Callable[..., object]) -> bool:
+    """Return whether ``sync_runner`` accepts the TaskRoute calling convention.
+
+    ``True`` means call with ``(payload, route, plan=..., api_key_index=...)``.
+    ``False`` means the pre-#345 ``(payload, model_name, api_key_index=...)``
+    convention. An uninspectable signature is treated as the current
+    TaskRoute convention; never guess from a later TypeError message.
+    """
+    try:
+        signature = inspect.signature(sync_runner)
+    except (TypeError, ValueError):
+        return True
+    parameters = signature.parameters
+    if 'route' in parameters or 'plan' in parameters:
+        return True
+    if 'model_name' in parameters:
+        return False
+    return True
+
+
+def _invoke_ab_sync_runner(
+    sync_runner: Callable[..., dict],
+    request_payload: dict,
+    *,
+    route,
+    plan,
+    model_name: str,
+    api_key_index: int | None,
+) -> dict:
+    """Call a sync runner using only the inspected calling convention."""
+    if _sync_runner_uses_task_route(sync_runner):
+        return sync_runner(
+            request_payload,
+            route,
+            plan=plan,
+            api_key_index=api_key_index,
+        )
+    return sync_runner(
+        request_payload,
+        model_name,
+        api_key_index=api_key_index,
+    )
+
+
 def run_variant_for_chunk(
     chunk: dict,
     *,
@@ -556,11 +601,25 @@ def run_variant_for_chunk(
     dry_run: bool = False,
     sync_runner: Callable[..., dict] | None = None,
     usage_context: dict | None = None,
+    route=None,
+    plan=None,
 ) -> VariantRunResult:
-    model_name = model_override.strip() or settings.get('model') or _batch().BATCH_MODEL
+    batch_mod = _batch()
+    if plan is None or route is None:
+        overrides = {}
+        explicit = (
+            model_override.strip()
+            or str(settings.get('model') or '').strip()
+            or str(batch_mod.BATCH_MODEL or '').strip()
+        )
+        if explicit:
+            overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = explicit
+        plan = batch_mod.freeze_runtime_routing_plan(stage_overrides=overrides or None)
+        route = plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
+    model_name = batch_mod.route_model(plan, route)
     try:
         enriched = enrich_chunk_for_current_settings(chunk, dry_run=dry_run)
-        request_row = _batch().build_batch_request(enriched, model=model_name)
+        request_row = batch_mod.build_batch_request(enriched, model=model_name)
         request_payload = request_row.get('request') or {}
         if dry_run:
             return VariantRunResult(
@@ -569,8 +628,22 @@ def run_variant_for_chunk(
                 dry_run=True,
             )
 
-        runner = sync_runner or _batch().run_sync_request
-        response = runner(request_payload, model_name, api_key_index=api_key_index)
+        if sync_runner is None:
+            response = batch_mod.run_sync_request(
+                request_payload,
+                route,
+                plan=plan,
+                api_key_index=api_key_index,
+            )
+        else:
+            response = _invoke_ab_sync_runner(
+                sync_runner,
+                request_payload,
+                route=route,
+                plan=plan,
+                model_name=model_name,
+                api_key_index=api_key_index,
+            )
         output_diagnostics = _batch().sync_output_diagnostics(
             response,
             request_payload,
@@ -650,6 +723,14 @@ def run_translation_ab_experiment(
     batch_mod.require_manifest_mode(manifest, batch_mod.MANIFEST_MODE_TRANSLATION, 'compare-variants')
     chunks = select_manifest_chunks(manifest, limit=limit, offset=offset)
     default_model = model_override.strip() or manifest.get('batch_model') or batch_mod.BATCH_MODEL
+    ab_overrides = {}
+    if str(default_model or '').strip():
+        ab_overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = str(default_model).strip()
+    routing_plan = batch_mod.freeze_runtime_routing_plan(
+        stage_overrides=ab_overrides or None,
+    )
+    ab_route = routing_plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
+    default_model = batch_mod.route_model(routing_plan, ab_route)
 
     if not output_dir:
         slug = batch_mod.guess_project_slug()
@@ -690,6 +771,8 @@ def run_translation_ab_experiment(
                             dry_run=dry_run,
                             sync_runner=sync_runner,
                             usage_context=usage_context,
+                            route=ab_route,
+                            plan=routing_plan,
                         )
                     )
     except Exception as exc:

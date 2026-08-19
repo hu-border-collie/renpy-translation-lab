@@ -1,14 +1,20 @@
-"""Tests for the model routing contract module (issue #345 P1)."""
+"""Tests for the model routing contract module (issue #345 P1/P2)."""
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from unittest import mock
 
+import gemini_translate_batch as batch_mod
 import litellm_provider_config as lpc
 import model_profile as mp
-from sync_model_backend import GeminiSyncBackend
+import translation_ab_experiment as ab_mod
+from litellm_sync_backend import LiteLLMBackendError
+from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 
 def _custom_providers() -> dict[str, lpc.CustomLiteLLMProvider]:
@@ -227,6 +233,16 @@ class ResolveRoutingPlanTests(unittest.TestCase):
             plan.profiles["project_analysis_override"].model,
             "deepseek/deepseek-chat",
         )
+
+    def test_translation_stage_override_wins_over_primary(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "gemini", "model": "gemini-primary"}},
+            stage_overrides={"translation": "gemini-explicit"},
+        )
+        route = plan.routes["translation"]
+        self.assertEqual(route.profile_id, "translation_override")
+        self.assertEqual(route.source, mp.ROUTE_SOURCE_EXPLICIT)
+        self.assertEqual(plan.profiles["translation_override"].model, "gemini-explicit")
 
     def test_ab_experiment_override(self) -> None:
         plan = mp.resolve_routing_plan(
@@ -664,6 +680,584 @@ class BuildSyncBackendTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             mp.build_sync_backend(profile)
+
+
+def _translation_chunk(package_dir: Path) -> dict:
+    return {
+        "key": "chunk-1",
+        "file_path": str(package_dir / "script.rpy"),
+        "file_rel_path": "script.rpy",
+        "chunk_index": 1,
+        "context_past": [],
+        "context_future": [],
+        "items": [
+            {
+                "id": "a",
+                "text": "Hello",
+                "file_rel_path": "script.rpy",
+                "line": 0,
+                "line_number": 1,
+                "start": 4,
+                "end": 11,
+                "prefix": "",
+                "quote": '"',
+            },
+            {
+                "id": "b",
+                "text": "World",
+                "file_rel_path": "script.rpy",
+                "line": 1,
+                "line_number": 2,
+                "start": 4,
+                "end": 11,
+                "prefix": "",
+                "quote": '"',
+            },
+        ],
+    }
+
+
+def _walk_forbid_credential_slots(payload: object) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            unittest.TestCase().assertNotIn(
+                str(key).lower(),
+                {"api_key", "apikey", "value", "secret", "token"},
+            )
+            _walk_forbid_credential_slots(value)
+    elif isinstance(payload, list):
+        for item in payload:
+            _walk_forbid_credential_slots(item)
+
+
+class SyncEntryWiringTests(unittest.TestCase):
+    def _sync_response(self, payload, *, model="stage-explicit-model"):
+        text = json.dumps(payload, ensure_ascii=False)
+        return {
+            "response_payload": {
+                "candidates": [{"content": {"parts": [{"text": text}]}}],
+            },
+            "response_text": text,
+            "finish_reason": "STOP",
+            "usage_metadata": {"totalTokenCount": 1},
+            "provider": "gemini",
+            "model": model,
+            "execution_mode": "sync",
+        }
+
+    def test_execute_sync_rows_use_explicit_route_on_first_pass_and_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = Path(tmp) / "sync-run"
+            package_dir.mkdir()
+            chunk = _translation_chunk(package_dir)
+            plan = mp.resolve_routing_plan(
+                {"sync": {"backend": "gemini", "model": "primary-should-lose"}},
+                stage_overrides={"translation": "stage-explicit-model"},
+            )
+            request_rows = [
+                batch_mod.build_batch_request(chunk, model="stage-explicit-model"),
+            ]
+            manifest_path = batch_mod.make_sync_manifest(
+                package_dir=str(package_dir),
+                mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                display_name="explicit-route-test",
+                chunks=[chunk],
+                request_rows=request_rows,
+                settings={},
+                routing_plan=plan,
+            )
+            payloads = [
+                {"translations": [{"id": "a", "translation": "你好"}]},
+                {"translations": [{"id": "b", "translation": "世界"}]},
+            ]
+            seen_routes: list[mp.TaskRoute] = []
+            seen_models: list[str] = []
+
+            def fake_sync(request, route, plan=None, **_kwargs):
+                seen_routes.append(route)
+                seen_models.append(plan.profiles[route.profile_id].model)
+                return self._sync_response(payloads[len(seen_routes) - 1])
+
+            with (
+                mock.patch.object(batch_mod, "SYNC_MODEL", "sync-overlay"),
+                mock.patch.object(
+                    batch_mod, "run_sync_request", side_effect=fake_sync,
+                ),
+            ):
+                batch_mod.execute_sync_request_rows(manifest_path, request_rows)
+
+        self.assertEqual(len(seen_routes), 2)
+        self.assertTrue(all(isinstance(route, mp.TaskRoute) for route in seen_routes))
+        self.assertEqual(seen_models, ["stage-explicit-model", "stage-explicit-model"])
+        self.assertEqual({route.stage for route in seen_routes}, {"translation"})
+
+    def test_keyword_revision_analysis_and_ab_callers_pass_task_route(self) -> None:
+        captured: dict[str, list] = {
+            "keyword": [],
+            "revision": [],
+            "project_analysis": [],
+            "ab_experiment": [],
+        }
+
+        def record(stage):
+            def _fake(request, route, plan=None, **_kwargs):
+                captured[stage].append(route)
+                if stage == "keyword":
+                    payload = {
+                        "candidates": [{
+                            "source": "Void Gate",
+                            "suggested_target": "虚空门",
+                            "category": "term",
+                            "confidence": 0.9,
+                            "evidence": "script.rpy:2:keyword:0",
+                            "source_item_ids": ["script.rpy:2:keyword:0"],
+                        }],
+                        "chunk_summary": "ok",
+                        "summary_evidence_item_ids": ["script.rpy:2:keyword:0"],
+                    }
+                else:
+                    payload = {"translations": [{"id": "a", "translation": "你好"}]}
+                return self._sync_response(payload)
+            return _fake
+
+        old = {
+            "tl_dir": batch_mod.legacy.TL_DIR,
+            "log_dir": batch_mod.LOG_DIR,
+            "jobs_dir": batch_mod.BATCH_JOBS_DIR,
+            "repair_dir": batch_mod.REPAIR_RUNS_DIR,
+            "sync_dir": batch_mod.SYNC_RUNS_DIR,
+            "latest": batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / "tl"
+                jobs_dir = root / "batch_jobs"
+                tl_dir.mkdir()
+                jobs_dir.mkdir()
+                (tl_dir / "script.rpy").write_text(
+                    "translate schinese start:\n"
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n',
+                    encoding="utf-8",
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / "logs")
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / "repair")
+                batch_mod.SYNC_RUNS_DIR = str(root / "sync")
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / "latest.txt")
+
+                with mock.patch.object(
+                    batch_mod, "run_sync_request", side_effect=record("keyword"),
+                ):
+                    batch_mod.sync_keyword_candidates(
+                        skip_prepare=True, chunk_size=1, limit=1,
+                    )
+                with mock.patch.object(
+                    batch_mod, "run_sync_request", side_effect=record("revision"),
+                ), mock.patch.object(batch_mod, "preview_revisions", return_value={
+                    "_manifest_path": "unused",
+                }):
+                    batch_mod.sync_revisions(skip_prepare=True, chunk_size=1, limit=1)
+        finally:
+            batch_mod.legacy.TL_DIR = old["tl_dir"]
+            batch_mod.LOG_DIR = old["log_dir"]
+            batch_mod.BATCH_JOBS_DIR = old["jobs_dir"]
+            batch_mod.REPAIR_RUNS_DIR = old["repair_dir"]
+            batch_mod.SYNC_RUNS_DIR = old["sync_dir"]
+            batch_mod.LATEST_MANIFEST_FILE = old["latest"]
+
+        analysis_plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "gemini", "model": "primary-should-lose"}},
+            stage_overrides={"project_analysis": "analysis-explicit"},
+        )
+        analysis_route = analysis_plan.routes["project_analysis"]
+        runner = batch_mod.build_project_analysis_sync_runner(
+            analysis_plan, analysis_route,
+        )
+        with mock.patch.object(
+            batch_mod, "run_sync_request", side_effect=record("project_analysis"),
+        ):
+            runner(SyncGenerationRequest(model="ignored", contents=[], config={}))
+
+        fixture = (
+            Path(__file__).parent / "fixtures" / "golden_batch_minimal"
+            / "expected" / "manifest_snapshot.json"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            manifest = json.loads(fixture.read_text(encoding="utf-8"))
+            manifest["mode"] = batch_mod.MANIFEST_MODE_TRANSLATION
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False), encoding="utf-8",
+            )
+            loaded = batch_mod.load_manifest(str(manifest_path))
+            variants = ab_mod.load_variants_file(
+                str(Path(__file__).parent / "fixtures" / "ab_variants_minimal.json"),
+            )
+            with mock.patch.object(
+                batch_mod, "run_sync_request", side_effect=record("ab_experiment"),
+            ), mock.patch.object(
+                ab_mod, "enrich_chunk_for_current_settings", side_effect=lambda chunk, **_: chunk,
+            ):
+                ab_mod.run_translation_ab_experiment(
+                    loaded,
+                    variants,
+                    limit=1,
+                    offset=0,
+                    output_dir=str(Path(tmp) / "ab"),
+                    model_override="ab-explicit-model",
+                    dry_run=False,
+                )
+
+        self.assertTrue(captured["keyword"])
+        self.assertTrue(all(
+            isinstance(route, mp.TaskRoute) and route.stage == "keyword"
+            for route in captured["keyword"]
+        ))
+        self.assertTrue(captured["revision"])
+        self.assertTrue(all(
+            isinstance(route, mp.TaskRoute) and route.stage == "revision"
+            for route in captured["revision"]
+        ))
+        self.assertTrue(captured["project_analysis"])
+        self.assertEqual(captured["project_analysis"][0].stage, "project_analysis")
+        self.assertTrue(captured["ab_experiment"])
+        self.assertTrue(all(
+            isinstance(route, mp.TaskRoute) and route.stage == "ab_experiment"
+            for route in captured["ab_experiment"]
+        ))
+
+    def test_production_sync_backends_come_from_build_sync_backend(self) -> None:
+        route, plan = (
+            mp.resolve_routing_plan(
+                {"sync": {"backend": "litellm", "model": "openai/primary-lose"}},
+                stage_overrides={"translation": "openai/explicit-stage"},
+            ).routes["translation"],
+            mp.resolve_routing_plan(
+                {"sync": {"backend": "litellm", "model": "openai/primary-lose"}},
+                stage_overrides={"translation": "openai/explicit-stage"},
+            ),
+        )
+        fake_backend = mock.Mock()
+        fake_backend.generate.return_value = type("Result", (), {
+            "response_payload": {"choices": []},
+            "response_text": "[]",
+            "finish_reason": "stop",
+            "usage_metadata": {},
+            "provider": "litellm",
+            "model": "openai/explicit-stage",
+            "execution_mode": "sync",
+        })()
+        with (
+            mock.patch.object(batch_mod, "SYNC_MODEL", "openai/sync-overlay"),
+            mock.patch.object(
+                mp, "build_sync_backend", return_value=fake_backend,
+            ) as builder,
+        ):
+            batch_mod.run_sync_request({"contents": []}, route, plan=plan)
+        builder.assert_called_once()
+        self.assertEqual(builder.call_args.args[0].model, "openai/explicit-stage")
+        self.assertEqual(
+            fake_backend.generate.call_args.args[0].model,
+            "openai/explicit-stage",
+        )
+
+        repo = Path(__file__).resolve().parents[1]
+        hits: list[str] = []
+        for path in repo.rglob("*.py"):
+            rel = path.relative_to(repo).as_posix()
+            if rel.startswith(("gui_qt/", "tests/", "scripts/")):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for index, line in enumerate(text.splitlines(), start=1):
+                stripped = line.strip()
+                if "LiteLLMSyncBackend(" not in stripped and "GeminiSyncBackend(" not in stripped:
+                    continue
+                if rel == "model_profile.py" and "return " in stripped:
+                    continue
+                hits.append(f"{rel}:{index}:{stripped}")
+        self.assertEqual(hits, [])
+        overlay = (repo / "gemini_translate_batch.py").read_text(encoding="utf-8")
+        self.assertNotIn("effective_model = SYNC_MODEL or model_name", overlay)
+
+    def test_mid_run_config_mutation_and_retry_keep_frozen_profile(self) -> None:
+        previous_batch_model = batch_mod.BATCH_MODEL
+        previous_sync_model = batch_mod.SYNC_MODEL
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                package_dir = Path(tmp) / "sync-run"
+                package_dir.mkdir()
+                chunk = _translation_chunk(package_dir)
+                plan = mp.resolve_routing_plan(
+                    {"sync": {"backend": "gemini", "model": "primary-should-lose"}},
+                    stage_overrides={"translation": "frozen-stage-model"},
+                    created_at="2026-08-18T00:00:00Z",
+                )
+                request_rows = [
+                    batch_mod.build_batch_request(chunk, model="frozen-stage-model"),
+                ]
+                manifest_path = batch_mod.make_sync_manifest(
+                    package_dir=str(package_dir),
+                    mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                    display_name="freeze-retry-test",
+                    chunks=[chunk],
+                    request_rows=request_rows,
+                    settings={},
+                    routing_plan=plan,
+                )
+                seen: list[tuple[str, str, str]] = []
+                payloads = [
+                    {"translations": [{"id": "a", "translation": "你好"}]},
+                    {"translations": [{"id": "b", "translation": "世界"}]},
+                ]
+
+                def fake_sync(request, route, plan=None, **_kwargs):
+                    batch_mod.SYNC_MODEL = "mutated-sync-model"
+                    batch_mod.BATCH_MODEL = "mutated-batch-model"
+                    seen.append((
+                        route.profile_id,
+                        plan.profiles[route.profile_id].model,
+                        plan.created_at,
+                    ))
+                    return self._sync_response(
+                        payloads[len(seen) - 1],
+                        model=plan.profiles[route.profile_id].model,
+                    )
+
+                with (
+                    mock.patch.object(batch_mod, "SYNC_MODEL", "live-sync-model"),
+                    mock.patch.object(
+                        batch_mod, "run_sync_request", side_effect=fake_sync,
+                    ),
+                ):
+                    batch_mod.execute_sync_request_rows(manifest_path, request_rows)
+
+            self.assertEqual(len(seen), 2)
+            self.assertEqual({item[1] for item in seen}, {"frozen-stage-model"})
+            self.assertEqual({item[2] for item in seen}, {"2026-08-18T00:00:00Z"})
+            self.assertEqual(seen[0], seen[1])
+
+            retry_plan = mp.resolve_routing_plan(
+                {"sync": {"backend": "litellm", "model": "openai/primary-lose"}},
+                stage_overrides={"translation": "openai/frozen-retry"},
+            )
+            route = retry_plan.routes["translation"]
+            models_seen: list[str] = []
+            fake_backend = mock.Mock()
+
+            def generate(request):
+                batch_mod.SYNC_MODEL = "openai/mutated-after-start"
+                models_seen.append(request.model)
+                if len(models_seen) == 1:
+                    raise LiteLLMBackendError("timeout one", category="timeout")
+                return type("Result", (), {
+                    "response_payload": {},
+                    "response_text": "[]",
+                    "finish_reason": "stop",
+                    "usage_metadata": {},
+                    "provider": "litellm",
+                    "model": request.model,
+                    "execution_mode": "sync",
+                })()
+
+            fake_backend.generate.side_effect = generate
+            with (
+                mock.patch.object(batch_mod, "SYNC_MODEL", "openai/live-overlay"),
+                mock.patch.object(batch_mod.time, "sleep"),
+                mock.patch.object(mp, "build_sync_backend", return_value=fake_backend),
+            ):
+                batch_mod.run_sync_request({"contents": []}, route, plan=retry_plan)
+            self.assertEqual(models_seen, ["openai/frozen-retry", "openai/frozen-retry"])
+        finally:
+            batch_mod.BATCH_MODEL = previous_batch_model
+            batch_mod.SYNC_MODEL = previous_sync_model
+
+    def test_shipped_manifests_write_model_routing_without_credentials(self) -> None:
+        planted = "sk-test-secret"
+        old = {
+            "tl_dir": batch_mod.legacy.TL_DIR,
+            "log_dir": batch_mod.LOG_DIR,
+            "jobs_dir": batch_mod.BATCH_JOBS_DIR,
+            "repair_dir": batch_mod.REPAIR_RUNS_DIR,
+            "sync_dir": batch_mod.SYNC_RUNS_DIR,
+            "latest": batch_mod.LATEST_MANIFEST_FILE,
+            "final_enabled": batch_mod.FINAL_REVIEW_ENABLED,
+            "require_zero": batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING,
+            "include_files": set(batch_mod.legacy.INCLUDE_FILES),
+            "include_prefixes": set(batch_mod.legacy.INCLUDE_PREFIXES),
+            "base_dir": batch_mod.legacy.BASE_DIR,
+        }
+        written: list[dict] = []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / "tl"
+                jobs_dir = root / "batch_jobs"
+                tl_dir.mkdir()
+                jobs_dir.mkdir()
+                (tl_dir / "script.rpy").write_text(
+                    "translate schinese start:\n"
+                    '    old "Hello"\n'
+                    '    new "你好"\n',
+                    encoding="utf-8",
+                )
+                pending_tl = root / "game" / "tl" / "schinese"
+                pending_tl.parent.mkdir(parents=True)
+                shutil.copytree(
+                    Path(__file__).parent / "fixtures" / "golden_batch_minimal" / "tl",
+                    pending_tl,
+                )
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+                batch_mod.LOG_DIR = str(root / "logs")
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / "repair")
+                batch_mod.SYNC_RUNS_DIR = str(root / "sync")
+                batch_mod.LATEST_MANIFEST_FILE = str(jobs_dir / "latest.txt")
+                batch_mod.FINAL_REVIEW_ENABLED = True
+                batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING = False
+
+                sync_pkg = root / "sync-pkg"
+                sync_pkg.mkdir()
+                sync_path = batch_mod.make_sync_manifest(
+                    package_dir=str(sync_pkg),
+                    mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                    display_name="routing-scan",
+                    chunks=[],
+                    request_rows=[],
+                    settings={},
+                )
+                written.append(json.loads(Path(sync_path).read_text(encoding="utf-8")))
+
+                keyword_path = batch_mod.create_keyword_package(
+                    skip_prepare=True, chunk_size=1,
+                )
+                written.append(json.loads(Path(keyword_path).read_text(encoding="utf-8")))
+
+                revision_path = batch_mod.create_revision_package(
+                    skip_prepare=True, chunk_size=1,
+                )
+                written.append(json.loads(Path(revision_path).read_text(encoding="utf-8")))
+
+                batch_mod.legacy.TL_DIR = str(pending_tl)
+                translation_path = batch_mod.create_batch_package(skip_prepare=True)
+                self.assertIsNotNone(translation_path)
+                written.append(
+                    json.loads(Path(translation_path).read_text(encoding="utf-8"))
+                )
+
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                review_path = batch_mod.create_final_review_package(
+                    skip_prepare=True,
+                    chunk_size=1,
+                    allow_pending=True,
+                )
+                written.append(json.loads(Path(review_path).read_text(encoding="utf-8")))
+        finally:
+            batch_mod.legacy.TL_DIR = old["tl_dir"]
+            batch_mod.LOG_DIR = old["log_dir"]
+            batch_mod.BATCH_JOBS_DIR = old["jobs_dir"]
+            batch_mod.REPAIR_RUNS_DIR = old["repair_dir"]
+            batch_mod.SYNC_RUNS_DIR = old["sync_dir"]
+            batch_mod.LATEST_MANIFEST_FILE = old["latest"]
+            batch_mod.FINAL_REVIEW_ENABLED = old["final_enabled"]
+            batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING = old["require_zero"]
+            batch_mod.legacy.INCLUDE_FILES = old["include_files"]
+            batch_mod.legacy.INCLUDE_PREFIXES = old["include_prefixes"]
+            batch_mod.legacy.BASE_DIR = old["base_dir"]
+
+        self.assertEqual(len(written), 5)
+        for manifest in written:
+            self.assertIn("model_routing", manifest)
+            snapshot = manifest["model_routing"]
+            _walk_forbid_credential_slots(snapshot)
+            text = json.dumps(snapshot)
+            self.assertNotIn(planted, text)
+            self.assertIn("profiles", snapshot)
+            self.assertIn("routes", snapshot)
+
+    def test_old_manifest_without_model_routing_keeps_recorded_model(self) -> None:
+        recorded = "gemini-old-recorded"
+        live = "gemini-live-new"
+        previous_batch = batch_mod.BATCH_MODEL
+        previous_sync = batch_mod.SYNC_MODEL
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                package_dir = Path(tmp) / "old-run"
+                package_dir.mkdir()
+                chunk = _translation_chunk(package_dir)
+                request_rows = [
+                    batch_mod.build_batch_request(chunk, model=recorded),
+                ]
+                plan = mp.resolve_routing_plan(
+                    {"sync": {"backend": "gemini", "model": recorded}},
+                )
+                manifest_path = batch_mod.make_sync_manifest(
+                    package_dir=str(package_dir),
+                    mode=batch_mod.MANIFEST_MODE_TRANSLATION,
+                    display_name="old-manifest-test",
+                    chunks=[chunk],
+                    request_rows=request_rows,
+                    settings={},
+                    routing_plan=plan,
+                )
+                raw = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+                raw.pop("model_routing", None)
+                raw["model"] = recorded
+                raw["batch_model"] = recorded
+                raw["provider"] = "gemini"
+                Path(manifest_path).write_text(
+                    json.dumps(raw, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                batch_mod.SYNC_MODEL = live
+                batch_mod.BATCH_MODEL = live
+
+                loaded = batch_mod.load_manifest(manifest_path)
+                self.assertNotIn("model_routing", loaded)
+                resolved = batch_mod.resolve_manifest_routing_plan(loaded)
+                self.assertEqual(
+                    batch_mod.route_model(
+                        resolved,
+                        batch_mod.route_for_manifest(resolved, loaded),
+                    ),
+                    recorded,
+                )
+
+                seen: list[str] = []
+
+                def fake_sync(request, route, plan=None, **_kwargs):
+                    seen.append(plan.profiles[route.profile_id].model)
+                    return self._sync_response(
+                        {
+                            "translations": [
+                                {"id": "a", "translation": "你好"},
+                                {"id": "b", "translation": "世界"},
+                            ]
+                        },
+                        model=plan.profiles[route.profile_id].model,
+                    )
+
+                with mock.patch.object(
+                    batch_mod, "run_sync_request", side_effect=fake_sync,
+                ):
+                    batch_mod.probe_requests(manifest_path, limit=1)
+                    batch_mod.execute_sync_request_rows(
+                        manifest_path,
+                        request_rows,
+                    )
+
+                self.assertGreaterEqual(len(seen), 2)
+                self.assertEqual(set(seen), {recorded})
+                self.assertNotIn(live, seen)
+        finally:
+            batch_mod.BATCH_MODEL = previous_batch
+            batch_mod.SYNC_MODEL = previous_sync
 
 
 if __name__ == "__main__":
