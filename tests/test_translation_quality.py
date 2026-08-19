@@ -450,6 +450,20 @@ class QualityGateTests(unittest.TestCase):
         self.assertEqual(gate['blocker_count'], 1)
         self.assertEqual(gate['decision'], quality.GATE_NEEDS_REVIEW)
 
+    def test_prune_acknowledged_finding_ids_drops_stale_and_blocker_ids(self):
+        findings = [
+            {'finding_id': 'w2', 'disposition': quality.DISPOSITION_WARNING},
+            {'finding_id': 'b1', 'disposition': quality.DISPOSITION_BLOCKER},
+        ]
+
+        self.assertEqual(
+            quality.prune_acknowledged_finding_ids(
+                ['w1', 'w2', 'b1', ''],
+                findings,
+            ),
+            ['w2'],
+        )
+
     def test_stale_acknowledged_ids_do_not_count_after_findings_change(self):
         findings = [
             {
@@ -559,7 +573,7 @@ class QualityGateTests(unittest.TestCase):
 
         self.assertEqual(
             applied['manifest']['quality_acknowledged_finding_ids'],
-            ['b1'],
+            [],
         )
         self.assertEqual(applied['quality_gate']['blocker_count'], 1)
         self.assertEqual(applied['quality_gate']['decision'], quality.GATE_NEEDS_REVIEW)

@@ -95,6 +95,35 @@ class WritebackGateContractTests(unittest.TestCase):
         self.assertEqual(summary['quality_gate']['warning_count'], 1)
         self.assertEqual(summary['check_contract_version'], batch.CHECK_CONTRACT_VERSION)
 
+    def test_attach_check_contract_prunes_stale_acknowledgement_ids(self):
+        manifest = {
+            '_manifest_path': '/tmp/pkg/manifest.json',
+            '_package_dir': '/tmp/pkg',
+            'settings': {},
+            'quality_acknowledged_finding_ids': ['stale', 'finding-1', 'blocker-1'],
+        }
+        summary = {'reason_counts': {}, 'valid_items': 1, 'failure_items': 0}
+        findings = [
+            {
+                'finding_id': 'finding-1',
+                'disposition': 'warning',
+            },
+            {
+                'finding_id': 'blocker-1',
+                'disposition': 'blocker',
+            },
+        ]
+
+        with mock.patch.object(
+            batch,
+            'build_check_fingerprint',
+            return_value={'fingerprint_sha256': 'fp'},
+        ):
+            summary = batch.attach_check_contract(manifest, summary, findings)
+
+        self.assertEqual(manifest['quality_acknowledged_finding_ids'], ['finding-1'])
+        self.assertEqual(summary['quality_gate']['acknowledged_count'], 1)
+
     def test_attach_check_contract_with_quality_blocker_marks_blocked(self):
         manifest = {
             '_manifest_path': '/tmp/pkg/manifest.json',
@@ -856,6 +885,32 @@ class QualityAcknowledgeCommandTests(unittest.TestCase):
         self.assertEqual(result['acknowledged_finding_ids'], [])
         self.assertEqual(result['previous_acknowledged_finding_ids'], [])
         save_manifest.assert_not_called()
+
+    def test_quality_ack_listing_prunes_stale_ids(self):
+        manifest = self._manifest()
+        manifest['quality_acknowledged_finding_ids'] = ['w1', 'stale']
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'read_quality_findings',
+                return_value=self._findings(),
+            ),
+            mock.patch.object(
+                batch,
+                'save_manifest',
+                side_effect=lambda m, **kwargs: None,
+            ) as save_manifest,
+        ):
+            result = batch.quality_acknowledge_command('/tmp/pkg/manifest.json')
+
+        self.assertEqual(result['selected_ids'], set())
+        self.assertEqual(result['acknowledged_finding_ids'], ['w1'])
+        save_manifest.assert_called_once()
+        saved = save_manifest.call_args.args[0]
+        self.assertEqual(saved['quality_acknowledged_finding_ids'], ['w1'])
 
     def test_quality_ack_listing_does_not_save(self):
         manifest = self._manifest()

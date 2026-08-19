@@ -2530,9 +2530,14 @@ def summarize_writeback_gate(safety, quality_gate):
 def attach_check_contract(manifest, summary, quality_findings=None):
     safety = summarize_check_safety(summary)
     if quality_findings is not None:
+        pruned_ids = translation_quality.prune_acknowledged_finding_ids(
+            manifest.get('quality_acknowledged_finding_ids'),
+            quality_findings,
+        )
+        manifest['quality_acknowledged_finding_ids'] = pruned_ids
         quality_gate = translation_quality.summarize_quality_gate(
             quality_findings,
-            acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+            acknowledged_ids=pruned_ids,
         )
     else:
         # Apply revalidation does not recompute quality findings; the preflight
@@ -10437,29 +10442,24 @@ def quality_acknowledge_command(
         acknowledged_ids=old_ids,
     )
     previous_acknowledged_finding_ids = sorted(old_ids)
-    if finding_ids or all_findings:
-        applied = translation_quality.apply_manifest_quality_acknowledgement(
-            manifest,
-            findings,
-            finding_ids=finding_ids,
-            all_findings=all_findings,
-            unack=unack,
-        )
-        manifest = applied['manifest']
-        selected_ids = applied['selected_ids']
-        unmatched = applied['unmatched']
-        new_gate = applied['quality_gate']
-        new_ids = {
-            str((finding_id or '')).strip()
-            for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
-            if str((finding_id or '')).strip()
-        }
-        if new_ids != old_ids:
-            save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
-    else:
-        selected_ids = set()
-        unmatched = []
-        new_gate = old_gate
+    applied = translation_quality.apply_manifest_quality_acknowledgement(
+        manifest,
+        findings,
+        finding_ids=finding_ids,
+        all_findings=all_findings,
+        unack=unack,
+    )
+    manifest = applied['manifest']
+    selected_ids = applied['selected_ids'] if (finding_ids or all_findings) else set()
+    unmatched = applied['unmatched'] if (finding_ids or all_findings) else []
+    new_gate = applied['quality_gate']
+    new_ids = {
+        str((finding_id or '')).strip()
+        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+        if str((finding_id or '')).strip()
+    }
+    if new_ids != old_ids:
+        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     return {
         'manifest': manifest,
         'findings': findings,

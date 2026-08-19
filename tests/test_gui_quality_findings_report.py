@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gui_qt.quality_findings_report import (
     acknowledged_finding_ids_from_manifest,
@@ -148,10 +149,14 @@ class QualityFindingsReportTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        applied = persist_quality_acknowledgement(
-            str(manifest_path),
-            finding_ids=["f1"],
-        )
+        with (
+            mock.patch("gemini_translate_batch.require_manifest_mode"),
+            mock.patch("gemini_translate_batch.require_manifest_project_match"),
+        ):
+            applied = persist_quality_acknowledgement(
+                str(manifest_path),
+                finding_ids=["f1"],
+            )
 
         self.assertEqual(applied["manifest"]["quality_acknowledged_finding_ids"], ["f1"])
         self.assertEqual(applied["quality_gate"]["acknowledged_count"], 1)
@@ -163,6 +168,24 @@ class QualityFindingsReportTests(unittest.TestCase):
         updated = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(updated["quality_acknowledged_finding_ids"], ["f1"])
         self.assertEqual(updated["last_check_summary"]["quality_gate"]["acknowledged_count"], 1)
+
+    def test_persist_quality_acknowledgement_rejects_project_mismatch(self):
+        import cli_contract
+
+        with mock.patch(
+            "gemini_translate_batch.quality_acknowledge_command",
+            side_effect=cli_contract.MachineContractError(
+                "manifest project does not match the active project",
+                code_name="MANIFEST_PROJECT_MISMATCH",
+                suggested_action="select_matching_project_or_manifest",
+            ),
+        ):
+            with self.assertRaises(ValueError) as raised:
+                persist_quality_acknowledgement(
+                    "C:/other/manifest.json",
+                    finding_ids=["f1"],
+                )
+        self.assertIn("does not match the active project", str(raised.exception))
 
     def test_filter_by_rule_file_and_severity(self):
         items = [

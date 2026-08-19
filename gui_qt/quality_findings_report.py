@@ -339,24 +339,37 @@ def persist_quality_acknowledgement(
     finding_ids: list[str] | tuple[str, ...] = (),
     unack: bool = False,
 ) -> dict[str, object]:
-    """Update acknowledged warning ids in a manifest and return the result.
+    """Update acknowledged warning ids through the CLI acknowledgement command.
 
-    The core calculation lives in ``translation_quality`` so the GUI and the
-    CLI share identical acknowledgement semantics.  The JSONL report itself is
+    This reuses the same mode / project-match guards as ``quality-ack`` so the
+    GUI cannot write a foreign-package manifest.  The JSONL report itself is
     never rewritten.
     """
 
-    manifest = read_manifest_json(manifest_path)
-    raw_findings = load_raw_quality_findings(manifest, manifest_path=manifest_path)
-    applied = translation_quality.apply_manifest_quality_acknowledgement(
-        manifest,
-        raw_findings,
-        finding_ids=finding_ids,
-        all_findings=False,
-        unack=unack,
-    )
-    write_manifest_json(manifest_path, applied["manifest"])
-    return applied
+    import cli_contract
+    import gemini_translate_batch as batch
+
+    try:
+        result = batch.quality_acknowledge_command(
+            manifest_path,
+            finding_ids=tuple(
+                str(finding_id).strip()
+                for finding_id in finding_ids
+                if str(finding_id).strip()
+            ),
+            unack=unack,
+        )
+    except cli_contract.MachineContractError as exc:
+        raise ValueError(str(exc)) from exc
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
+    return {
+        "manifest": result["manifest"],
+        "quality_gate": result["new_gate"],
+        "selected_ids": result["selected_ids"],
+        "unmatched": result["unmatched"],
+        "acknowledged_finding_ids": result["acknowledged_finding_ids"],
+    }
 
 
 def build_quality_findings_report(

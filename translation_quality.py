@@ -1032,6 +1032,33 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
+def warning_finding_ids(findings: Iterable[Mapping[str, Any]]) -> set[str]:
+    """Return current warning finding IDs that acknowledgement may reference."""
+
+    return {
+        str((finding.get('finding_id') or '')).strip()
+        for finding in findings
+        if isinstance(finding, Mapping)
+        and finding.get('disposition') == DISPOSITION_WARNING
+        and str((finding.get('finding_id') or '')).strip()
+    }
+
+
+def prune_acknowledged_finding_ids(
+    acknowledged_ids: Iterable[Any] | None,
+    findings: Iterable[Mapping[str, Any]],
+) -> list[str]:
+    """Keep only acknowledgement IDs that still match current warning findings."""
+
+    current = warning_finding_ids(findings)
+    kept = {
+        str((finding_id or '')).strip()
+        for finding_id in (acknowledged_ids or [])
+        if str((finding_id or '')).strip() in current
+    }
+    return sorted(kept)
+
+
 def update_manifest_quality_gate(
     manifest: Mapping[str, Any],
     quality_gate: Mapping[str, Any],
@@ -1055,13 +1082,12 @@ def update_manifest_quality_gate(
     quality_gate.setdefault('acknowledged_count', 0)
     last_summary['quality_gate'] = quality_gate
     last_summary['has_warnings'] = bool(quality_gate.get('has_warnings'))
-    writeback_gate = last_summary.get('writeback_gate')
-    if isinstance(writeback_gate, dict):
-        writeback_gate = dict(writeback_gate)
-        writeback_gate['quality_blocker_count'] = int(
+    if 'quality_blocker_count' in last_summary:
+        last_summary['quality_blocker_count'] = int(
             quality_gate.get('blocker_count') or 0
         )
-        last_summary['writeback_gate'] = writeback_gate
+    writeback_gate = last_summary.get('writeback_gate')
+    if isinstance(writeback_gate, dict):
         last_summary['can_apply'] = bool(writeback_gate.get('can_apply'))
         last_summary['check_status'] = overall_check_status(
             writeback_gate,
@@ -1094,12 +1120,7 @@ def apply_manifest_quality_acknowledgement(
 
     manifest = dict(manifest)
     findings = [dict(item) for item in findings if isinstance(item, Mapping)]
-    warning_ids: set[str] = {
-        str((finding.get('finding_id') or '')).strip()
-        for finding in findings
-        if finding.get('disposition') == DISPOSITION_WARNING
-        and str((finding.get('finding_id') or '')).strip()
-    }
+    warning_ids = warning_finding_ids(findings)
     requested = {
         str((finding_id or '')).strip()
         for finding_id in finding_ids
@@ -1111,12 +1132,14 @@ def apply_manifest_quality_acknowledgement(
     else:
         selected_ids = requested & warning_ids
         unmatched = sorted(requested - warning_ids)
-    current_ids = {
-        str((finding_id or '')).strip()
-        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
-        if str((finding_id or '')).strip()
-    }
+    current_ids = set(
+        prune_acknowledged_finding_ids(
+            manifest.get('quality_acknowledged_finding_ids'),
+            findings,
+        )
+    )
     new_ids = current_ids - selected_ids if unack else current_ids | selected_ids
+    new_ids &= warning_ids
     manifest['quality_acknowledged_finding_ids'] = sorted(new_ids)
     quality_gate = summarize_quality_gate(findings, acknowledged_ids=new_ids)
     manifest = update_manifest_quality_gate(manifest, quality_gate)
