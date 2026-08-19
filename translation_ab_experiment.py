@@ -547,43 +547,24 @@ def write_experiment_outputs(
     }
 
 
-_SIGNATURE_TYPEERROR_MARKERS = (
-    'unexpected keyword argument',
-    'got an unexpected keyword argument',
-    'takes 2 positional arguments but',
-    'takes 1 positional argument but',
-    'missing a required argument',
-    'required positional argument',
-)
-
-
-def _sync_runner_uses_task_route(sync_runner: Callable[..., object]) -> bool | None:
+def _sync_runner_uses_task_route(sync_runner: Callable[..., object]) -> bool:
     """Return whether ``sync_runner`` accepts the TaskRoute calling convention.
 
     ``True`` means call with ``(payload, route, plan=..., api_key_index=...)``.
     ``False`` means the pre-#345 ``(payload, model_name, api_key_index=...)``
-    convention. ``None`` means the signature could not be inspected.
+    convention. An uninspectable signature is treated as the current
+    TaskRoute convention; never guess from a later TypeError message.
     """
     try:
         signature = inspect.signature(sync_runner)
     except (TypeError, ValueError):
-        return None
+        return True
     parameters = signature.parameters
     if 'route' in parameters or 'plan' in parameters:
         return True
     if 'model_name' in parameters:
         return False
-    if any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    ):
-        return True
     return True
-
-
-def _is_calling_convention_typeerror(exc: TypeError) -> bool:
-    message = str(exc).lower()
-    return any(marker in message for marker in _SIGNATURE_TYPEERROR_MARKERS)
 
 
 def _invoke_ab_sync_runner(
@@ -595,36 +576,19 @@ def _invoke_ab_sync_runner(
     model_name: str,
     api_key_index: int | None,
 ) -> dict:
-    """Call a sync runner without treating a real TypeError as an old signature."""
-    convention = _sync_runner_uses_task_route(sync_runner)
-    if convention is False:
-        return sync_runner(
-            request_payload,
-            model_name,
-            api_key_index=api_key_index,
-        )
-    if convention is True:
+    """Call a sync runner using only the inspected calling convention."""
+    if _sync_runner_uses_task_route(sync_runner):
         return sync_runner(
             request_payload,
             route,
             plan=plan,
             api_key_index=api_key_index,
         )
-    try:
-        return sync_runner(
-            request_payload,
-            route,
-            plan=plan,
-            api_key_index=api_key_index,
-        )
-    except TypeError as exc:
-        if not _is_calling_convention_typeerror(exc):
-            raise
-        return sync_runner(
-            request_payload,
-            model_name,
-            api_key_index=api_key_index,
-        )
+    return sync_runner(
+        request_payload,
+        model_name,
+        api_key_index=api_key_index,
+    )
 
 
 def run_variant_for_chunk(
@@ -643,7 +607,11 @@ def run_variant_for_chunk(
     batch_mod = _batch()
     if plan is None or route is None:
         overrides = {}
-        explicit = model_override.strip() or str(settings.get('model') or '').strip()
+        explicit = (
+            model_override.strip()
+            or str(settings.get('model') or '').strip()
+            or str(batch_mod.BATCH_MODEL or '').strip()
+        )
         if explicit:
             overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = explicit
         plan = batch_mod.freeze_runtime_routing_plan(stage_overrides=overrides or None)
