@@ -748,6 +748,83 @@ class BatchCliContractTests(unittest.TestCase):
             "C:/jobs/import/report.json",
         )
 
+    def test_quality_ack_machine_envelope_is_stable_and_reports_no_work(self):
+        listed_args = SimpleNamespace(finding_ids=[], all_findings=False)
+        listed = batch.build_machine_success_envelope(
+            "quality-ack",
+            {
+                "manifest": {
+                    "_manifest_path": "C:/jobs/demo/manifest.json",
+                    "last_quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                },
+                "old_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "new_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "selected_ids": set(),
+                "unmatched": [],
+                "previous_acknowledged_finding_ids": [],
+                "acknowledged_finding_ids": [],
+            },
+            listed_args,
+        )
+        self.assertTrue(listed["ok"])
+        self.assertEqual(listed["status"], "listed")
+        self.assertEqual(listed["result"]["selected_finding_ids"], [])
+
+        updated_args = SimpleNamespace(
+            finding_ids=["w2", "w1"],
+            all_findings=False,
+        )
+        updated = batch.build_machine_success_envelope(
+            "quality-ack",
+            {
+                "manifest": {"_manifest_path": "C:/jobs/demo/manifest.json"},
+                "old_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "new_gate": {"decision": "needs_review", "acknowledged_count": 2},
+                "selected_ids": {"w2", "w1"},
+                "unmatched": ["missing"],
+                "previous_acknowledged_finding_ids": [],
+                "acknowledged_finding_ids": ["w1", "w2"],
+            },
+            updated_args,
+        )
+        self.assertEqual(updated["status"], "updated")
+        self.assertEqual(updated["result"]["selected_finding_ids"], ["w1", "w2"])
+        self.assertEqual(updated["result"]["unmatched_finding_ids"], ["missing"])
+        self.assertEqual(updated["result"]["acknowledged_finding_ids"], ["w1", "w2"])
+
+        no_work = batch.build_machine_success_envelope(
+            "quality-ack",
+            {
+                "manifest": {"_manifest_path": "C:/jobs/demo/manifest.json"},
+                "old_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "new_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "selected_ids": set(),
+                "unmatched": ["missing"],
+                "previous_acknowledged_finding_ids": [],
+                "acknowledged_finding_ids": [],
+            },
+            SimpleNamespace(finding_ids=["missing"], all_findings=False),
+        )
+        self.assertEqual(no_work["status"], "no_work")
+        self.assertEqual(no_work["result"]["selected_finding_ids"], [])
+        self.assertEqual(no_work["result"]["unmatched_finding_ids"], ["missing"])
+
+        pruned = batch.build_machine_success_envelope(
+            "quality-ack",
+            {
+                "manifest": {"_manifest_path": "C:/jobs/demo/manifest.json"},
+                "old_gate": {"decision": "needs_review", "acknowledged_count": 1},
+                "new_gate": {"decision": "needs_review", "acknowledged_count": 0},
+                "selected_ids": set(),
+                "unmatched": [],
+                "previous_acknowledged_finding_ids": ["stale"],
+                "acknowledged_finding_ids": [],
+            },
+            SimpleNamespace(finding_ids=[], all_findings=False),
+        )
+        self.assertEqual(pruned["status"], "updated")
+        self.assertEqual(pruned["result"]["acknowledged_finding_ids"], [])
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
@@ -1271,6 +1348,28 @@ class BatchCliContractTests(unittest.TestCase):
                             mock.patch.object(
                                 batch, "export_keyword_candidates", return_value=None
                             )
+                        )
+                    elif command in {"quality-ack", "quality-unack"}:
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch,
+                                    "quality_acknowledge_command",
+                                    return_value={
+                                        "manifest": {"_manifest_path": "manifest.json"},
+                                        "findings": [],
+                                        "old_gate": {},
+                                        "new_gate": {},
+                                        "selected_ids": set(),
+                                        "unmatched": [],
+                                        "acknowledged_finding_ids": [],
+                                    },
+                                ),
+                                mock.patch.object(
+                                    batch,
+                                    "print_quality_acknowledgement_summary",
+                                ),
+                            ]
                         )
                     elif command == "export-revision-corpus":
                         handler_patches.append(

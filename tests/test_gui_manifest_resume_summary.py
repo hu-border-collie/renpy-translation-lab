@@ -74,6 +74,34 @@ class ManifestResumeSummaryTests(unittest.TestCase):
         self.assertEqual(display.timeline_step_key, "check")
         self.assertEqual(display.heading, "补译结果仍需处理")
 
+    def test_resume_summary_shows_unacknowledged_quality_warnings(self):
+        spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
+        manifest = {
+            "job_state": "JOB_STATE_SUCCEEDED",
+            "job_name": "batches/example",
+            "last_check_summary": {
+                "quality_gate": {
+                    "decision": "needs_review",
+                    "warning_count": 3,
+                    "blocker_count": 0,
+                    "acknowledged_count": 1,
+                }
+            },
+        }
+        with mock.patch("gui_qt.manifest_resume_summary.resume_workflow") as resume_mock:
+            workflow = mock.Mock()
+            workflow.current_step.return_value = None
+            resume_mock.return_value = workflow
+            display = build_manifest_workflow_display(
+                spec,
+                "C:/logs/batch_jobs/current/manifest.json",
+                manifest,
+            )
+
+        quality_facts = [fact for fact in display.facts if fact.startswith("质量检查：")]
+        self.assertTrue(quality_facts)
+        self.assertIn("未确认 2", quality_facts[0])
+
     def test_retry_manifest_completed_archives_when_idle(self):
         spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
         manifest = {

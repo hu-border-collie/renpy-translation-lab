@@ -36,6 +36,14 @@ class GuiUserCopyTests(unittest.TestCase):
         self.assertIn("报警 3", format_quality_gate_fact(
             {"decision": "needs_review", "warning_count": 3, "blocker_count": 1}
         ))
+        self.assertIn("未确认 2", format_quality_gate_fact(
+            {
+                "decision": "needs_review",
+                "warning_count": 3,
+                "blocker_count": 1,
+                "acknowledged_count": 1,
+            }
+        ))
         self.assertIn("可写回 ≠ 可交付", QUALITY_DELIVERY_NOTICE)
 
     def test_safety_level_label_case_insensitive(self):

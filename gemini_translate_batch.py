@@ -126,9 +126,11 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'build-reuse-candidates',
         'import-reuse-decisions',
         'export-reuse-results',
+        'quality-ack',
+        'quality-unack',
     }
 )
-EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply'})
+EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply', 'quality-ack', 'quality-unack'})
 # Local-only batch commands must not be blocked by API-key preflight.
 OFFLINE_BATCH_COMMANDS = frozenset(
     {
@@ -145,6 +147,8 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'build-reuse-candidates',
         'import-reuse-decisions',
         'export-reuse-results',
+        'quality-ack',
+        'quality-unack',
         'split',
         'build-retry',
         'merge-retry',
@@ -2526,9 +2530,14 @@ def summarize_writeback_gate(safety, quality_gate):
 def attach_check_contract(manifest, summary, quality_findings=None):
     safety = summarize_check_safety(summary)
     if quality_findings is not None:
+        pruned_ids = translation_quality.prune_acknowledged_finding_ids(
+            manifest.get('quality_acknowledged_finding_ids'),
+            quality_findings,
+        )
+        manifest['quality_acknowledged_finding_ids'] = pruned_ids
         quality_gate = translation_quality.summarize_quality_gate(
             quality_findings,
-            acknowledged_ids=manifest.get('quality_acknowledged_finding_ids') or [],
+            acknowledged_ids=pruned_ids,
         )
     else:
         # Apply revalidation does not recompute quality findings; the preflight
@@ -10350,6 +10359,167 @@ def summarize_revision_writeback_gate(summary):
     return summary['writeback_gate']
 
 
+def resolve_quality_findings_path(manifest):
+    return translation_quality.resolve_quality_findings_path(
+        manifest,
+        package_dir=str((manifest or {}).get('_package_dir') or ''),
+        manifest_path=str((manifest or {}).get('_manifest_path') or ''),
+    )
+
+
+def read_quality_findings(manifest):
+    path = resolve_quality_findings_path(manifest)
+    if not path or not os.path.exists(path):
+        raise cli_contract.MachineContractError(
+            f'Quality findings report is not available: {path or "missing path"}.',
+            code_name='QUALITY_FINDINGS_UNAVAILABLE',
+            suggested_action='rerun_check',
+            details={'quality_findings_path': path},
+        )
+    findings = []
+    try:
+        with open(path, 'r', encoding='utf-8') as handle:
+            for line_number, raw_line in enumerate(handle, start=1):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise cli_contract.MachineContractError(
+                        (
+                            f'Quality findings report contains invalid JSON at line '
+                            f'{line_number}: {exc}.'
+                        ),
+                        code_name='INVALID_QUALITY_FINDINGS_JSON',
+                        suggested_action='rerun_check',
+                        details={'quality_findings_path': path, 'line': line_number},
+                    ) from exc
+                if not isinstance(payload, dict):
+                    raise cli_contract.MachineContractError(
+                        (
+                            f'Quality findings report line {line_number} is not a '
+                            f'JSON object.'
+                        ),
+                        code_name='INVALID_QUALITY_FINDINGS_JSON',
+                        suggested_action='rerun_check',
+                        details={'quality_findings_path': path, 'line': line_number},
+                    )
+                findings.append(translation_quality.normalize_finding(payload))
+    except OSError as exc:
+        raise cli_contract.MachineContractError(
+            f'Quality findings report could not be read: {path} ({exc}).',
+            code_name='QUALITY_FINDINGS_UNAVAILABLE',
+            suggested_action='rerun_check',
+            details={'quality_findings_path': path},
+        ) from exc
+    return findings
+
+
+def quality_acknowledge_command(
+    target=None,
+    *,
+    finding_ids=(),
+    all_findings=False,
+    unack=False,
+):
+    """Execute quality-ack / quality-unack and return its structured result."""
+
+    command_name = 'quality-unack' if unack else 'quality-ack'
+    manifest = load_manifest(target)
+    require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, command_name)
+    require_manifest_project_match(manifest, command_name)
+    findings = read_quality_findings(manifest)
+    old_ids = {
+        str((finding_id or '')).strip()
+        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+        if str((finding_id or '')).strip()
+    }
+    old_gate = translation_quality.summarize_quality_gate(
+        findings,
+        acknowledged_ids=old_ids,
+    )
+    previous_acknowledged_finding_ids = sorted(old_ids)
+    applied = translation_quality.apply_manifest_quality_acknowledgement(
+        manifest,
+        findings,
+        finding_ids=finding_ids,
+        all_findings=all_findings,
+        unack=unack,
+    )
+    manifest = applied['manifest']
+    selected_ids = applied['selected_ids'] if (finding_ids or all_findings) else set()
+    unmatched = applied['unmatched'] if (finding_ids or all_findings) else []
+    new_gate = applied['quality_gate']
+    new_ids = {
+        str((finding_id or '')).strip()
+        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+        if str((finding_id or '')).strip()
+    }
+    if new_ids != old_ids:
+        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    return {
+        'manifest': manifest,
+        'findings': findings,
+        'old_gate': old_gate,
+        'new_gate': new_gate,
+        'selected_ids': selected_ids,
+        'unmatched': unmatched,
+        'previous_acknowledged_finding_ids': previous_acknowledged_finding_ids,
+        'acknowledged_finding_ids': list(
+            manifest.get('quality_acknowledged_finding_ids') or []
+        ),
+    }
+
+
+def print_quality_acknowledgement_summary(manifest, findings, gate, unmatched):
+    print(f"Manifest: {manifest['_manifest_path']}")
+    print(f"Quality findings report: {resolve_quality_findings_path(manifest)}")
+    print(f"Quality gate: {gate.get('decision', 'unknown')}")
+    print(f"Quality warnings: {gate.get('warning_count', 0)}")
+    print(f"Quality blockers: {gate.get('blocker_count', 0)}")
+    print(f"Acknowledged warnings: {gate.get('acknowledged_count', 0)}")
+    unacknowledged_warnings = max(
+        0,
+        int(gate.get('warning_count') or 0) - int(gate.get('acknowledged_count') or 0),
+    )
+    print(f"Unacknowledged warnings: {unacknowledged_warnings}")
+    acknowledged_ids = {
+        str((finding_id or '')).strip()
+        for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+    }
+    shown = 0
+    for finding in findings:
+        if finding.get('disposition') != translation_quality.DISPOSITION_WARNING:
+            continue
+        finding_id = str((finding.get('finding_id') or '')).strip()
+        if finding_id in acknowledged_ids:
+            continue
+        shown += 1
+        file_text = finding.get('file') or ''
+        line = finding.get('line')
+        location = f"{file_text}:{line}" if file_text else finding_id
+        print(
+            f"- [{severity_label_for_quality(finding.get('severity'))}] "
+            f"{finding.get('reason_code')} {location}"
+        )
+    if not shown and unacknowledged_warnings == 0:
+        print("No unacknowledged warnings.")
+    for finding_id in unmatched:
+        print(f"Ignored unknown finding ID: {finding_id}")
+
+
+def severity_label_for_quality(severity):
+    text = str(severity or '').strip().lower()
+    if text == 'high':
+        return '高'
+    if text == 'medium':
+        return '中'
+    if text == 'low':
+        return '低'
+    return text or '未知'
+
+
 def print_check_summary(summary):
     print(f"Expected chunks: {summary['expected_chunks']}")
     print(f"Result rows: {summary['result_rows']}")
@@ -15368,6 +15538,46 @@ def build_arg_parser():
         help='Manifest path or package dir. Defaults to latest package.',
     )
 
+    for ack_command in ('quality-ack', 'quality-unack'):
+        action_text = (
+            'Acknowledge' if ack_command == 'quality-ack' else 'Revert acknowledged'
+        )
+        ack_parser = subparsers.add_parser(
+            ack_command,
+            help=(
+                f'{action_text} warning finding IDs in the manifest without '
+                f'touching quality_findings.jsonl.'
+            ),
+        )
+        add_machine_output_argument(ack_parser)
+        ack_parser.add_argument(
+            'target',
+            nargs='?',
+            default='',
+            help='Manifest path or package dir. Defaults to latest package.',
+        )
+        selection = ack_parser.add_mutually_exclusive_group()
+        selection.add_argument(
+            '--finding',
+            dest='finding_ids',
+            action='append',
+            default=[],
+            metavar='ID',
+            help=(
+                'Finding ID to select. Repeat to select multiple warning findings.'
+            ),
+        )
+        selection.add_argument(
+            '--all',
+            dest='all_findings',
+            action='store_true',
+            help=(
+                'Select all current warning findings.'
+                if ack_command == 'quality-ack'
+                else 'Revert all acknowledged warning findings.'
+            ),
+        )
+
     probe_parser = subparsers.add_parser('probe', help='Run a small synchronous smoke test with normal generate_content calls.')
     probe_parser.add_argument(
         'target',
@@ -16305,6 +16515,22 @@ def dispatch_command(parser, args):
     if command == 'check':
         return check_results(args.target or None)
 
+    if command in {'quality-ack', 'quality-unack'}:
+        result = quality_acknowledge_command(
+            args.target or None,
+            finding_ids=tuple(getattr(args, 'finding_ids', []) or []),
+            all_findings=bool(getattr(args, 'all_findings', False)),
+            unack=command == 'quality-unack',
+        )
+        manifest = result['manifest']
+        print_quality_acknowledgement_summary(
+            manifest,
+            result['findings'],
+            result['new_gate'],
+            result['unmatched'],
+        )
+        return result
+
     if command == 'probe':
         probe_requests(
             target=args.target or None,
@@ -16501,6 +16727,56 @@ def build_machine_success_envelope(command, value, args):
             command,
             status='no_work',
             result={'reason': 'no_pending_translation_work'},
+        )
+
+    if command in {'quality-ack', 'quality-unack'}:
+        payload = dict(value or {})
+        manifest = payload.get('manifest')
+        summary = payload.get('summary') or {}
+        quality_gate = payload.get('new_gate') or summary.get('quality_gate') or {}
+        previous_gate = payload.get('old_gate') or {}
+        selected_finding_ids = sorted(payload.get('selected_ids') or [])
+        unmatched_finding_ids = sorted(payload.get('unmatched') or [])
+        acknowledged_finding_ids = sorted(
+            payload.get('acknowledged_finding_ids') or []
+        )
+        previous_acknowledged_finding_ids = sorted(
+            payload.get('previous_acknowledged_finding_ids') or []
+        )
+        result = {
+            'manifest_path': (
+                manifest.get('_manifest_path')
+                if isinstance(manifest, dict)
+                else ''
+            ),
+            'quality_gate': dict(quality_gate),
+            'previous_quality_gate': dict(previous_gate),
+            'acknowledged_finding_ids': acknowledged_finding_ids,
+            'selected_finding_ids': selected_finding_ids,
+            'unmatched_finding_ids': unmatched_finding_ids,
+        }
+        requested = bool(
+            getattr(args, 'finding_ids', None)
+            or getattr(args, 'all_findings', False)
+        )
+        if previous_acknowledged_finding_ids != acknowledged_finding_ids:
+            status = 'updated'
+        elif requested:
+            status = 'no_work'
+        else:
+            status = 'listed'
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                quality_findings=(
+                    resolve_quality_findings_path(manifest)
+                    if isinstance(manifest, dict)
+                    else ''
+                ),
+            ),
         )
 
     manifest = _load_machine_manifest(command, value, args)

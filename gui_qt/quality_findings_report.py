@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import translation_quality
+from atomic_io import atomic_write_json
 
-from .diagnostics_context import join_directory_file, resolve_package_dir
+from .diagnostics_context import resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
@@ -131,43 +132,11 @@ def resolve_quality_findings_path(
     *,
     manifest_path: str = "",
 ) -> str:
-    selected = ""
-    for key in (
-        "last_quality_findings_path",
-        "last_revision_quality_findings_path",
-        "quality_findings_path",
-    ):
-        report_path = manifest.get(key)
-        if isinstance(report_path, str) and report_path.strip():
-            selected = report_path.strip()
-            break
-    if not selected:
-        for summary_key in ("revision_apply_summary", "last_revision_apply_summary"):
-            apply_summary = manifest.get(summary_key)
-            if not isinstance(apply_summary, dict):
-                continue
-            report_path = apply_summary.get("quality_findings_path")
-            if isinstance(report_path, str) and report_path.strip():
-                selected = report_path.strip()
-                break
-        if not selected:
-            revision_preview = manifest.get("last_revision_preview")
-            if isinstance(revision_preview, dict):
-                report_path = revision_preview.get("quality_findings_path")
-                if isinstance(report_path, str) and report_path.strip():
-                    selected = report_path.strip()
-    if selected:
-        if Path(selected).is_absolute():
-            return selected
-        package_dir = resolve_package_dir(manifest_path, manifest)
-        if package_dir:
-            return join_directory_file(package_dir, selected)
-        return selected
-
-    package_dir = resolve_package_dir(manifest_path, manifest)
-    if package_dir:
-        return join_directory_file(package_dir, "quality_findings.jsonl")
-    return ""
+    return translation_quality.resolve_quality_findings_path(
+        manifest,
+        package_dir=resolve_package_dir(manifest_path, manifest),
+        manifest_path=manifest_path,
+    )
 
 
 def quality_gate_from_manifest(manifest: dict[str, object]) -> dict[str, object]:
@@ -242,7 +211,22 @@ def filter_quality_items(
     return result
 
 
-def _format_item_line(item: QualityFindingItem) -> str:
+def acknowledged_finding_ids_from_manifest(manifest: dict[str, object]) -> set[str]:
+    acknowledged: set[str] = set()
+    for value in (manifest.get("quality_acknowledged_finding_ids") or []):
+        if value is None:
+            continue
+        finding_id = str(value).strip()
+        if finding_id:
+            acknowledged.add(finding_id)
+    return acknowledged
+
+
+def _format_item_line(
+    item: QualityFindingItem,
+    *,
+    acknowledged: bool = False,
+) -> str:
     location_parts: list[str] = []
     if item.file_rel_path:
         location_parts.append(item.file_rel_path)
@@ -252,10 +236,11 @@ def _format_item_line(item: QualityFindingItem) -> str:
         location_parts.append(f"ID {item.item_id}")
     location = " / ".join(location_parts) if location_parts else "位置未知"
 
+    state = "，已确认" if acknowledged else ""
     lines = [
         (
             f"- [{severity_label(item.severity)}/{item.disposition}] "
-            f"{reason_label(item.reason_code)} ({item.reason_code})"
+            f"{reason_label(item.reason_code)} ({item.reason_code}){state}"
         ),
         f"  {location}",
     ]
@@ -268,6 +253,91 @@ def _format_item_line(item: QualityFindingItem) -> str:
     if item.suggestion:
         lines.append(f"  建议：{_safe_preview(item.suggestion)}")
     return "\n".join(lines)
+
+
+def read_manifest_json(manifest_path: str) -> dict[str, object]:
+    path = Path(manifest_path)
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError as exc:
+        raise ValueError(f"无法读取任务记录：{path}") from exc
+    if not raw.strip():
+        raise ValueError(f"任务记录为空：{path}")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"任务记录不是有效 JSON：{path}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"任务记录必须是 JSON 对象：{path}")
+    return payload
+
+
+def write_manifest_json(manifest_path: str, manifest: dict[str, object]) -> None:
+    data = dict(manifest)
+    data.pop("_manifest_path", None)
+    data.pop("_package_dir", None)
+    atomic_write_json(
+        manifest_path,
+        data,
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+def load_raw_quality_findings(
+    manifest: dict[str, object],
+    *,
+    manifest_path: str = "",
+) -> list[dict[str, object]]:
+    """Read the full quality findings JSONL referenced by a manifest."""
+
+    report_path = resolve_quality_findings_path(manifest, manifest_path=manifest_path)
+    if not report_path:
+        raise ValueError("任务记录中没有质量检查报告路径。")
+    try:
+        raw = Path(report_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"无法读取质量检查报告：{report_path}") from exc
+    return parse_quality_findings_jsonl(raw)
+
+
+def persist_quality_acknowledgement(
+    manifest_path: str,
+    *,
+    finding_ids: list[str] | tuple[str, ...] = (),
+    unack: bool = False,
+) -> dict[str, object]:
+    """Update acknowledged warning ids through the CLI acknowledgement command.
+
+    This reuses the same mode / project-match guards as ``quality-ack`` so the
+    GUI cannot write a foreign-package manifest.  The JSONL report itself is
+    never rewritten.
+    """
+
+    import cli_contract
+    import gemini_translate_batch as batch
+
+    try:
+        result = batch.quality_acknowledge_command(
+            manifest_path,
+            finding_ids=tuple(
+                str(finding_id).strip()
+                for finding_id in finding_ids
+                if str(finding_id).strip()
+            ),
+            unack=unack,
+        )
+    except cli_contract.MachineContractError as exc:
+        raise ValueError(str(exc)) from exc
+    except SystemExit as exc:
+        raise ValueError(str(exc)) from exc
+    return {
+        "manifest": result["manifest"],
+        "quality_gate": result["new_gate"],
+        "selected_ids": result["selected_ids"],
+        "unmatched": result["unmatched"],
+        "acknowledged_finding_ids": result["acknowledged_finding_ids"],
+    }
 
 
 def build_quality_findings_report(
