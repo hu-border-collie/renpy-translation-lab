@@ -135,6 +135,47 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         ):
             self.assertFalse(button.isHidden())
 
+    def test_workspace_action_bar_refreshes_after_config_load_completes(self) -> None:
+        workspace_row = self.window._settings_nav_rows["workspace"]
+        self.window.settings_nav.setCurrentRow(workspace_row)
+        _process(self._app, 5)
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+
+        # Simulate the stale UNSAVED label that can appear while a settings page
+        # is populated from the user-level LiteLLM catalog cache.
+        original = self.window._config_tab_has_unsaved_changes
+        self.window._config_tab_has_unsaved_changes = lambda: True
+        try:
+            self.window._sync_settings_action_bar_enabled(
+                task_running=False,
+                nav_row=workspace_row,
+            )
+            self.assertEqual(
+                self.window.settings_action_context_label.text(),
+                "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。",
+            )
+            self.assertEqual(
+                self.window.settings_action_context_label.property("tone"),
+                "warning",
+            )
+        finally:
+            self.window._config_tab_has_unsaved_changes = original
+
+        # Loading config again must refresh the saved snapshot and recompute the
+        # action bar, dropping the stale UNSAVED variant.
+        self.window._load_config_to_ui(refresh_task_gates=False)
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+
     def test_shortcuts_section_lists_core_bindings(self) -> None:
         from PySide6.QtWidgets import QLabel
 

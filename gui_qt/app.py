@@ -14497,6 +14497,14 @@ class MainWindow(QMainWindow):
             # Partial tab loads must not rewrite the whole baseline — that would
             # treat dirty widgets on other open pages as "already saved".
             self._update_config_ui_saved_snapshot(pages=want)
+        # A settings page load can pass through a transient "unsaved changes"
+        # state (for example while cached LiteLLM selections are populated
+        # before the saved baseline is captured).  Re-sync the workspace action
+        # bar now that loading is finished and the saved snapshot is current.
+        if "settings_action_context_label" in self.__dict__:
+            self._sync_settings_action_bar_enabled(
+                task_running=bool(getattr(self, "_task_running", False))
+            )
         if refresh_task_gates and "translate_btn" in self.__dict__:
             self._set_task_running(bool(getattr(self, "_task_running", False)))
 
