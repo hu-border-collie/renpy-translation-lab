@@ -450,6 +450,23 @@ class QualityGateTests(unittest.TestCase):
         self.assertEqual(gate['blocker_count'], 1)
         self.assertEqual(gate['decision'], quality.GATE_NEEDS_REVIEW)
 
+    def test_stale_acknowledged_ids_do_not_count_after_findings_change(self):
+        findings = [
+            {
+                'finding_id': 'warning-2',
+                'disposition': quality.DISPOSITION_WARNING,
+            },
+        ]
+
+        gate = quality.summarize_quality_gate(
+            findings,
+            acknowledged_ids=['warning-1'],
+        )
+
+        self.assertEqual(gate['acknowledged_count'], 0)
+        self.assertEqual(gate['warning_count'], 1)
+        self.assertEqual(gate['decision'], quality.GATE_NEEDS_REVIEW)
+
     def test_quality_blocker_counts_as_blocker(self):
         policy = quality.normalize_policy({'rules': {'unclosed_delimiters': 'blocker'}})
         findings = quality.check_subject(

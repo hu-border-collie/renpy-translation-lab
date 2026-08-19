@@ -10436,6 +10436,7 @@ def quality_acknowledge_command(
         findings,
         acknowledged_ids=old_ids,
     )
+    previous_acknowledged_finding_ids = sorted(old_ids)
     if finding_ids or all_findings:
         applied = translation_quality.apply_manifest_quality_acknowledgement(
             manifest,
@@ -10448,7 +10449,13 @@ def quality_acknowledge_command(
         selected_ids = applied['selected_ids']
         unmatched = applied['unmatched']
         new_gate = applied['quality_gate']
-        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+        new_ids = {
+            str((finding_id or '')).strip()
+            for finding_id in manifest.get('quality_acknowledged_finding_ids') or []
+            if str((finding_id or '')).strip()
+        }
+        if new_ids != old_ids:
+            save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     else:
         selected_ids = set()
         unmatched = []
@@ -10460,9 +10467,10 @@ def quality_acknowledge_command(
         'new_gate': new_gate,
         'selected_ids': selected_ids,
         'unmatched': unmatched,
-        'acknowledged_finding_ids': manifest.get(
-            'quality_acknowledged_finding_ids'
-        ) or [],
+        'previous_acknowledged_finding_ids': previous_acknowledged_finding_ids,
+        'acknowledged_finding_ids': list(
+            manifest.get('quality_acknowledged_finding_ids') or []
+        ),
     }
 
 
@@ -16729,6 +16737,14 @@ def build_machine_success_envelope(command, value, args):
         summary = payload.get('summary') or {}
         quality_gate = payload.get('new_gate') or summary.get('quality_gate') or {}
         previous_gate = payload.get('old_gate') or {}
+        selected_finding_ids = sorted(payload.get('selected_ids') or [])
+        unmatched_finding_ids = sorted(payload.get('unmatched') or [])
+        acknowledged_finding_ids = sorted(
+            payload.get('acknowledged_finding_ids') or []
+        )
+        previous_acknowledged_finding_ids = sorted(
+            payload.get('previous_acknowledged_finding_ids') or []
+        )
         result = {
             'manifest_path': (
                 manifest.get('_manifest_path')
@@ -16737,15 +16753,20 @@ def build_machine_success_envelope(command, value, args):
             ),
             'quality_gate': dict(quality_gate),
             'previous_quality_gate': dict(previous_gate),
-            'acknowledged_finding_ids': list(
-                payload.get('acknowledged_finding_ids') or []
-            ),
-            'selected_finding_ids': list(payload.get('selected_ids') or []),
-            'unmatched_finding_ids': list(payload.get('unmatched') or []),
+            'acknowledged_finding_ids': acknowledged_finding_ids,
+            'selected_finding_ids': selected_finding_ids,
+            'unmatched_finding_ids': unmatched_finding_ids,
         }
-        status = 'updated' if getattr(args, 'finding_ids', None) or getattr(
-            args, 'all_findings', False
-        ) else 'listed'
+        requested = bool(
+            getattr(args, 'finding_ids', None)
+            or getattr(args, 'all_findings', False)
+        )
+        if not requested:
+            status = 'listed'
+        elif previous_acknowledged_finding_ids != acknowledged_finding_ids:
+            status = 'updated'
+        else:
+            status = 'no_work'
         return cli_contract.success_envelope(
             command,
             status=status,

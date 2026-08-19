@@ -833,6 +833,30 @@ class QualityAcknowledgeCommandTests(unittest.TestCase):
         )
         self.assertEqual(saved['last_check_summary']['quality_gate']['decision'], 'needs_review')
 
+    def test_quality_ack_unmatched_id_does_not_save(self):
+        manifest = self._manifest()
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, 'require_manifest_mode'),
+            mock.patch.object(batch, 'require_manifest_project_match'),
+            mock.patch.object(
+                batch,
+                'read_quality_findings',
+                return_value=self._findings(),
+            ),
+            mock.patch.object(batch, 'save_manifest') as save_manifest,
+        ):
+            result = batch.quality_acknowledge_command(
+                '/tmp/pkg/manifest.json',
+                finding_ids=('missing',),
+            )
+
+        self.assertEqual(result['selected_ids'], set())
+        self.assertEqual(result['unmatched'], ['missing'])
+        self.assertEqual(result['acknowledged_finding_ids'], [])
+        self.assertEqual(result['previous_acknowledged_finding_ids'], [])
+        save_manifest.assert_not_called()
+
     def test_quality_ack_listing_does_not_save(self):
         manifest = self._manifest()
         with (
