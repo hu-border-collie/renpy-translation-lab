@@ -654,8 +654,34 @@ class ValidateRoutingPlanTests(unittest.TestCase):
             self.assertEqual(error.code_name, code)
             self.assertEqual(error.suggested_action, expected_action)
 
+    def test_resolution_error_uses_stable_profile_contract(self) -> None:
+        source = mp.ModelRoutingConfigError("Unsupported sync backend: typo")
+        error = mp.routing_resolution_error(
+            source,
+            stage=mp.STAGE_TRANSLATION,
+        )
+        self.assertEqual(error.code_name, mp.MODEL_PROFILE_INVALID)
+        self.assertEqual(error.suggested_action, "fix_translator_config")
+        self.assertEqual(error.semantic_exit_code, 5)
+        self.assertEqual(error.details["stage"], mp.STAGE_TRANSLATION)
+
 
 class RoutingPreflightIntegrationTests(unittest.TestCase):
+    def test_runtime_resolver_error_is_stable_machine_refusal(self) -> None:
+        old_backend = batch_mod.SYNC_BACKEND
+        try:
+            batch_mod.SYNC_BACKEND = "litelllm"
+            with self.assertRaises(SystemExit) as caught:
+                batch_mod.freeze_runtime_routing_plan(
+                    required_stages={mp.STAGE_TRANSLATION},
+                )
+            self.assertEqual(caught.exception.code_name, mp.MODEL_PROFILE_INVALID)
+            self.assertEqual(
+                caught.exception.details["stage"], mp.STAGE_TRANSLATION,
+            )
+        finally:
+            batch_mod.SYNC_BACKEND = old_backend
+
     def test_runtime_preflight_checks_only_required_stage(self) -> None:
         old = (batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL, batch_mod.BATCH_MODEL)
         try:
@@ -714,6 +740,25 @@ class RoutingPreflightIntegrationTests(unittest.TestCase):
             self.assertIn("capabilities", status["plans"]["sync"])
         finally:
             batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL = old
+
+    def test_doctor_reports_resolver_error_without_crashing(self) -> None:
+        old_backend = batch_mod.SYNC_BACKEND
+        try:
+            batch_mod.SYNC_BACKEND = "litelllm"
+            status = batch_mod.collect_doctor_model_routing_status()
+        finally:
+            batch_mod.SYNC_BACKEND = old_backend
+        self.assertEqual(status["status"], "attention")
+        self.assertEqual(status["plans"], {})
+        self.assertEqual(len(status["issues"]), 2)
+        self.assertTrue(all(
+            issue["code"] == mp.MODEL_PROFILE_INVALID
+            for issue in status["issues"]
+        ))
+        self.assertEqual(
+            {issue["execution_strategy"] for issue in status["issues"]},
+            {"sync", "gemini_batch"},
+        )
 
     def test_submit_model_override_stays_gemini_batch_on_litellm_sync(self) -> None:
         frozen = mp.resolve_routing_plan(

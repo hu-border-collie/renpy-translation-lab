@@ -96,6 +96,8 @@ ModelProfile 与 ExecutionStrategy。拒绝时使用以下稳定合同：
 | `MODEL_PROFILE_CREDENTIAL_REF_MISSING` | env/keyring 凭据引用无法解析 | `inspect_configuration_and_artifacts` |
 
 三者均为不可自动重试的配置错误，严格模式退出 `5`。`details.issues` 包含本次活动阶段的完整问题列表；不要因失败而切换到另一个 Provider 或模型。
+如果配置在 plan 构建前就无效（例如 `sync.backend` 拼写错误），任务入口同样归一为
+`MODEL_PROFILE_INVALID`，不会向 Agent 暴露裸 `ValueError`。
 
 `doctor --output json` 的 `result.model_routing.status` 只有 `ok` 或 `attention`，表示只读诊断，**不会**把 doctor 退出码改成 blocked。Agent 不要看到 `"status": "attention"` 就拒绝启动同步翻译；真正阻断启动的是活动阶段的上述错误码。未使用的终审 / Batch 配置无效只会进入 `attention` 与 warnings。
 

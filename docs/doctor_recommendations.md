@@ -206,6 +206,8 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 人类输出只显示错误码、执行策略、阶段和安全消息。路由问题进入 warnings，使 GUI
 状态显示需要注意；真正启动任务时仍按该任务的活动阶段再次 fail-fast，未参与本次
 任务的阶段不会阻断启动。
+plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor 将其记录为
+`model_routing.status=attention` 并继续形成报告，而任务启动路径以稳定机器合同拒绝。
 
 `start_pending_batch`、`start_incremental_batch`、`substantially_complete` 和 `no_pending_lines` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
 

@@ -2,6 +2,7 @@ import io
 import unittest
 from unittest import mock
 
+import model_profile as mp
 import translator_runtime as runtime
 
 
@@ -113,6 +114,17 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as captured:
             runtime.load_sync_translation_settings({"sync": {"backend": "automatic"}})
         self.assertIn("Unsupported sync backend", str(captured.exception))
+
+    def test_sync_run_converts_routing_config_error_to_machine_contract(self):
+        source = mp.ModelRoutingConfigError("Unsupported sync backend: automatic")
+        with mock.patch.object(
+            runtime, "load_config", side_effect=source,
+        ), mock.patch.object(runtime, "load_translator_settings") as load_paths:
+            with self.assertRaises(SystemExit) as caught:
+                runtime.run_translation()
+        load_paths.assert_not_called()
+        self.assertEqual(caught.exception.code_name, mp.MODEL_PROFILE_INVALID)
+        self.assertEqual(caught.exception.details["stage"], mp.STAGE_TRANSLATION)
 
     def test_sync_timeout_settings_are_bounded(self):
         previous = runtime.SYNC_TIMEOUT_SECONDS

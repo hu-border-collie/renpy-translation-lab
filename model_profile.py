@@ -135,6 +135,11 @@ _SUGGESTED_ACTION_BY_CODE = {
     MODEL_PROFILE_CREDENTIAL_REF_MISSING: "inspect_configuration_and_artifacts",
 }
 
+
+class ModelRoutingConfigError(ValueError):
+    """Invalid routing configuration before a plan can be constructed."""
+
+
 # Resolver slot ids are internal compatibility slots over the legacy
 # ``sync.*`` / ``batch.*`` keys — they are NOT the user-visible profile ids
 # of the productized config (#344/#348). User profile ids must match
@@ -569,6 +574,28 @@ def routing_validation_error(
     )
 
 
+def routing_resolution_issue(
+    exc: Exception,
+    *,
+    stage: str = "",
+) -> RoutingValidationIssue:
+    """Convert a resolver configuration exception into the stable issue shape."""
+    return RoutingValidationIssue(
+        MODEL_PROFILE_INVALID,
+        f"Model routing configuration is invalid: {exc}",
+        stage=stage,
+    )
+
+
+def routing_resolution_error(
+    exc: Exception,
+    *,
+    stage: str = "",
+) -> MachineContractError:
+    """Convert a resolver configuration exception into the CLI refusal."""
+    return routing_validation_error((routing_resolution_issue(exc, stage=stage),))
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -867,7 +894,7 @@ def resolve_routing_plan(
 
     sync_backend = _clean_str(sync_cfg.get("backend")).lower() or SYNC_BACKEND_GEMINI
     if sync_backend not in KNOWN_SYNC_BACKENDS:
-        raise ValueError(
+        raise ModelRoutingConfigError(
             f"Unsupported sync backend: {sync_backend}. "
             "Choose 'gemini' or 'litellm'."
         )

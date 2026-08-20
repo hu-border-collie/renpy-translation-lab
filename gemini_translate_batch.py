@@ -431,7 +431,7 @@ def normalize_batch_safety_settings(value):
     return settings
 
 
-def load_batch_settings():
+def load_batch_settings(*, tolerate_routing_errors=False):
     """Load persisted settings, normalizing sync timeouts to the shared contract.
 
     ``sync.timeout_seconds`` is a per-model-request limit in seconds. Missing or
@@ -519,9 +519,12 @@ def load_batch_settings():
         sync = {}
     backend_name = str(sync.get('backend') or 'gemini').strip().lower()
     if backend_name not in {'gemini', 'litellm'}:
-        raise SystemExit(
-            f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
-        )
+        if not tolerate_routing_errors:
+            exc = model_profile.ModelRoutingConfigError(
+                f"Unsupported sync backend: {backend_name}. "
+                "Choose 'gemini' or 'litellm'."
+            )
+            raise model_profile.routing_resolution_error(exc) from exc
     SYNC_BACKEND = backend_name
     sync_model = sync.get('model')
     if isinstance(sync_model, str) and sync_model.strip():
@@ -12530,19 +12533,24 @@ def freeze_runtime_routing_plan(
     execute. Callers must invoke this before creating task artifacts.
     """
     custom_providers = _runtime_custom_providers()
-    plan = model_profile.resolve_routing_plan_from_runtime(
-        sync_backend=SYNC_BACKEND,
-        sync_model=SYNC_MODEL,
-        batch_model=BATCH_MODEL,
-        project_analysis_model=PROJECT_ANALYSIS_MODEL,
-        final_review_model=FINAL_REVIEW_MODEL,
-        sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
-        custom_providers=custom_providers,
-        execution=execution,
-        stage_overrides=stage_overrides,
-        created_at=created_at,
-        config_origins=_routing_config_origins(),
-    )
+    try:
+        plan = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend=SYNC_BACKEND,
+            sync_model=SYNC_MODEL,
+            batch_model=BATCH_MODEL,
+            project_analysis_model=PROJECT_ANALYSIS_MODEL,
+            final_review_model=FINAL_REVIEW_MODEL,
+            sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+            custom_providers=custom_providers,
+            execution=execution,
+            stage_overrides=stage_overrides,
+            created_at=created_at,
+            config_origins=_routing_config_origins(),
+        )
+    except (ValueError, TypeError) as exc:
+        stages = tuple(sorted(str(item) for item in (required_stages or ())))
+        stage = stages[0] if stages else ''
+        raise model_profile.routing_resolution_error(exc, stage=stage) from exc
     if required_stages is not None:
         require_valid_routing_plan(plan, required_stages)
     return plan
@@ -14616,17 +14624,23 @@ def collect_doctor_model_routing_status():
         model_profile.ExecutionStrategy.SYNC,
         model_profile.ExecutionStrategy.GEMINI_BATCH,
     ):
-        plan = model_profile.resolve_routing_plan_from_runtime(
-            sync_backend=SYNC_BACKEND,
-            sync_model=SYNC_MODEL,
-            batch_model=BATCH_MODEL,
-            project_analysis_model=PROJECT_ANALYSIS_MODEL,
-            final_review_model=FINAL_REVIEW_MODEL,
-            sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
-            custom_providers=custom_providers,
-            execution=strategy,
-            config_origins=_routing_config_origins(),
-        )
+        try:
+            plan = model_profile.resolve_routing_plan_from_runtime(
+                sync_backend=SYNC_BACKEND,
+                sync_model=SYNC_MODEL,
+                batch_model=BATCH_MODEL,
+                project_analysis_model=PROJECT_ANALYSIS_MODEL,
+                final_review_model=FINAL_REVIEW_MODEL,
+                sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+                custom_providers=custom_providers,
+                execution=strategy,
+                config_origins=_routing_config_origins(),
+            )
+        except (ValueError, TypeError) as exc:
+            payload = model_profile.routing_resolution_issue(exc).to_manifest_dict()
+            payload['execution_strategy'] = strategy.value
+            issues.append(payload)
+            continue
         plans[strategy.value] = plan.to_manifest_dict()
         for issue in model_profile.validate_routing_plan(
             plan,
@@ -16367,7 +16381,7 @@ def dispatch_command(parser, args):
         # doctor is read-only: never persist auto-corrected game_root.
         legacy.load_translator_settings(persist_corrected_game_root=False)
         legacy.load_glossary()
-        load_batch_settings()
+        load_batch_settings(tolerate_routing_errors=True)
         print_banner()
         report = collect_doctor_report()
         print_doctor_report(report)
@@ -16485,7 +16499,13 @@ def dispatch_command(parser, args):
             if not store_dir or command == 'project-analysis-generate':
                 # generate needs API keys from load_config() for run_sync_request.
                 if command == 'project-analysis-generate':
-                    legacy.load_config()
+                    try:
+                        legacy.load_config()
+                    except model_profile.ModelRoutingConfigError as exc:
+                        raise model_profile.routing_resolution_error(
+                            exc,
+                            stage=model_profile.STAGE_PROJECT_ANALYSIS,
+                        ) from exc
                 legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
 
@@ -16840,7 +16860,10 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
     require_api_key = command not in OFFLINE_BATCH_COMMANDS
-    legacy.load_config(require_api_key=require_api_key)
+    try:
+        legacy.load_config(require_api_key=require_api_key)
+    except model_profile.ModelRoutingConfigError as exc:
+        raise model_profile.routing_resolution_error(exc) from exc
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()
