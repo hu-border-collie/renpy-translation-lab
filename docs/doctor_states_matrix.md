@@ -84,7 +84,24 @@
 
 ---
 
-## 6. 决策流（基于优先级的漏斗抑制逻辑）
+## 6. 维度六：模型路由启动前状态
+
+`doctor.model_routing` 分别解析 `sync` 与 `gemini_batch` 计划，但不调用模型：
+
+| 状态/问题码 | 判定 | doctor / 任务启动行为 |
+| :--- | :--- | :--- |
+| **`ok`** | 两种计划的路由、profile、能力与可判定凭据引用均有效。 | 不增加模型路由 warning。 |
+| **`MODEL_PROFILE_INVALID`** | adapter、模型格式、阶段引用或能力覆盖无效。 | doctor 显示 warning；活动阶段启动前以退出码 5 拒绝。 |
+| **`MODEL_ROUTE_CAPABILITY_MISSING`** | profile 不具备所选策略要求的同步生成、Gemini adapter 或远程 Batch 能力。 | 同上，并在 `missing_capabilities` 中列出缺项。 |
+| **`MODEL_PROFILE_CREDENTIAL_REF_MISSING`** | 可明确判定的 env/keyring 引用为空。 | 同上；报告只记录引用，不记录凭据值。 |
+
+doctor 会检查完整计划以便提前暴露配置问题；真正启动任务时只检查该任务的活动
+阶段及其引用 profile。因此未参与当前任务的终审、A/B 或项目分析配置不会误阻断
+其他任务。路由 warning 会让 GUI 显示“需要注意”，但不替代活动阶段的启动门禁。
+
+---
+
+## 7. 决策流（基于优先级的漏斗抑制逻辑）
 
 决策分两段：布局 / 模板阻断仍通过漏斗提前返回；布局就绪后，上下文建议改为累计收集，并按“必需在前、可选在后”输出：
 

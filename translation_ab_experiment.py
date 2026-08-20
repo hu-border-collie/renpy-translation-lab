@@ -614,7 +614,10 @@ def run_variant_for_chunk(
         )
         if explicit:
             overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = explicit
-        plan = batch_mod.freeze_runtime_routing_plan(stage_overrides=overrides or None)
+        plan = batch_mod.freeze_runtime_routing_plan(
+            stage_overrides=overrides or None,
+            required_stages={batch_mod.model_profile.STAGE_AB_EXPERIMENT},
+        )
         route = plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
     model_name = batch_mod.route_model(plan, route)
     try:
@@ -728,6 +731,7 @@ def run_translation_ab_experiment(
         ab_overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = str(default_model).strip()
     routing_plan = batch_mod.freeze_runtime_routing_plan(
         stage_overrides=ab_overrides or None,
+        required_stages={batch_mod.model_profile.STAGE_AB_EXPERIMENT},
     )
     ab_route = routing_plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
     default_model = batch_mod.route_model(routing_plan, ab_route)

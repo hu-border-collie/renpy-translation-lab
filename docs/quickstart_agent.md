@@ -86,6 +86,17 @@ JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、
 
 除 `UNSAFE_CHECK_STATUS` 按安全门禁退出 `4` 外，上述前置条件错误在严格模式下退出 `5`。同时读取 `retryable`、`suggested_action` 和权威的 `details.semantic_exit_code`，不要解析 `message` 文本。未启用严格模式时保持 schema v1 的兼容退出行为。
 
+模型任务还会在 prepare、创建 package 或发送请求前校验本次阶段实际使用的
+ModelProfile 与 ExecutionStrategy。拒绝时使用以下稳定合同：
+
+| `error.code` | 含义 | `suggested_action` |
+|---|---|---|
+| `MODEL_PROFILE_INVALID` | adapter、模型格式、阶段路由或能力覆盖无效 | `fix_translator_config` |
+| `MODEL_ROUTE_CAPABILITY_MISSING` | profile 不支持所选执行方式 | `choose_supported_strategy_or_profile` |
+| `MODEL_PROFILE_CREDENTIAL_REF_MISSING` | env/keyring 凭据引用无法解析 | `inspect_configuration_and_artifacts` |
+
+三者均为不可自动重试的配置错误，严格模式退出 `5`。`details.issues` 包含本次活动阶段的完整问题列表；不要因失败而切换到另一个 Provider 或模型。
+
 
 ## 严格非交互与显式 manifest
 

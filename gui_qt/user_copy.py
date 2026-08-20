@@ -737,6 +737,8 @@ def translate_doctor_warning(warning: str) -> str:
         return "自定义模板命令无法解析，请检查配置。"
     if text.startswith("RAG store contains legacy ID format keys."):
         return "记忆库含有旧版键格式，下次写回时会自动迁移。"
+    if text.startswith("Model routing preflight ["):
+        return "模型路由启动前检查失败；请检查 Provider、模型、执行方式和凭据引用。"
     if text.startswith("glossary_file does not match current project;"):
         return (
             "术语表路径仍指向其他位置，与当前 work 不一致。"

@@ -377,6 +377,49 @@ class ValidateRoutingPlanTests(unittest.TestCase):
             self.assertIn("remote_batch", issue.missing_capabilities)
             self.assertIn("gemini_adapter", issue.missing_capabilities)
 
+    def test_stage_scope_ignores_unrelated_invalid_route(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {
+                "sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"},
+                "batch": {"model": "deepseek/deepseek-chat"},
+            },
+            execution=mp.ExecutionStrategy.SYNC,
+        )
+        self.assertEqual(
+            mp.validate_routing_plan(
+                plan,
+                stages={mp.STAGE_TRANSLATION},
+                environ={},
+                keyring_has_credential=lambda _name: True,
+            ),
+            (),
+        )
+        final_review_issues = mp.validate_routing_plan(
+            plan,
+            stages={mp.STAGE_FINAL_REVIEW},
+            environ={},
+            keyring_has_credential=lambda _name: True,
+        )
+        self.assertTrue(any(
+            issue.code == mp.MODEL_ROUTE_CAPABILITY_MISSING
+            for issue in final_review_issues
+        ))
+
+    def test_stage_scope_reports_missing_required_route(self) -> None:
+        plan = mp.resolve_routing_plan({})
+        plan = replace(
+            plan,
+            routes={
+                stage: route for stage, route in plan.routes.items()
+                if stage != mp.STAGE_TRANSLATION
+            },
+        )
+        issues = mp.validate_routing_plan(
+            plan, stages={mp.STAGE_TRANSLATION}, environ={},
+        )
+        self.assertEqual(issues[0].code, mp.MODEL_PROFILE_INVALID)
+        self.assertIn("no route", issues[0].message)
+
     def test_litellm_bare_model_invalid(self) -> None:
         plan = mp.resolve_routing_plan({
             "sync": {"backend": "litellm", "model": "no-prefix-model"},
@@ -553,6 +596,67 @@ class ValidateRoutingPlanTests(unittest.TestCase):
             self.assertEqual(error.suggested_action, expected_action)
 
 
+class RoutingPreflightIntegrationTests(unittest.TestCase):
+    def test_runtime_preflight_checks_only_required_stage(self) -> None:
+        old = (batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL, batch_mod.BATCH_MODEL)
+        try:
+            batch_mod.SYNC_BACKEND = "litellm"
+            batch_mod.SYNC_MODEL = "openai/gpt-4o-mini"
+            batch_mod.BATCH_MODEL = "deepseek/deepseek-chat"
+            with mock.patch.object(
+                batch_mod, "_runtime_keyring_has_credential", return_value=True,
+            ):
+                batch_mod.freeze_runtime_routing_plan(
+                    execution=mp.ExecutionStrategy.SYNC,
+                    required_stages={mp.STAGE_TRANSLATION},
+                )
+                with self.assertRaisesRegex(SystemExit, "gemini_batch"):
+                    batch_mod.freeze_runtime_routing_plan(
+                        execution=mp.ExecutionStrategy.SYNC,
+                        required_stages={mp.STAGE_FINAL_REVIEW},
+                    )
+        finally:
+            batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL, batch_mod.BATCH_MODEL = old
+
+    def test_batch_build_refuses_before_prepare_side_effect(self) -> None:
+        old_batch = batch_mod.BATCH_MODEL
+        try:
+            batch_mod.BATCH_MODEL = "deepseek/deepseek-chat"
+            with mock.patch.object(batch_mod.legacy, "run_prepare_steps") as prepare:
+                with self.assertRaises(SystemExit) as caught:
+                    batch_mod.create_batch_package(skip_prepare=False)
+            prepare.assert_not_called()
+            self.assertEqual(
+                caught.exception.code_name, mp.MODEL_ROUTE_CAPABILITY_MISSING,
+            )
+            self.assertEqual(caught.exception.semantic_exit_code, 5)
+        finally:
+            batch_mod.BATCH_MODEL = old_batch
+
+    def test_doctor_routing_status_is_machine_decidable_and_secret_free(self) -> None:
+        old = (batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL)
+        planted = "sk-doctor-must-not-leak"
+        try:
+            batch_mod.SYNC_BACKEND = "litellm"
+            batch_mod.SYNC_MODEL = "opencode-go/glm-5.3"
+            with mock.patch.object(
+                batch_mod, "_runtime_custom_providers",
+                return_value=_custom_providers(),
+            ), mock.patch.object(
+                batch_mod, "_runtime_keyring_has_credential", return_value=False,
+            ), mock.patch.dict("os.environ", {"UNRELATED_SECRET": planted}, clear=False):
+                status = batch_mod.collect_doctor_model_routing_status()
+            self.assertEqual(status["status"], "blocked")
+            self.assertTrue(any(
+                issue["code"] == mp.MODEL_PROFILE_CREDENTIAL_REF_MISSING
+                for issue in status["issues"]
+            ))
+            self.assertNotIn(planted, json.dumps(status))
+            self.assertIn("capabilities", status["plans"]["sync"])
+        finally:
+            batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL = old
+
+
 class SlotIdNamespaceTests(unittest.TestCase):
     """Resolver slot ids are reserved; #348 user ids must not collide."""
 
@@ -659,6 +763,15 @@ class BuildSyncBackendTests(unittest.TestCase):
         )
         self.assertIsInstance(backend, LiteLLMSyncBackend)
         self.assertEqual(backend._custom_providers.keys(), {"opencode-go"})
+
+    def test_litellm_backend_accepts_ephemeral_diagnostic_key(self) -> None:
+        registry = mp.build_profile_registry({
+            "sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"},
+        })
+        backend = mp.build_sync_backend(
+            registry["primary"], diagnostic_api_key="typed-secret",
+        )
+        self.assertEqual(backend._api_key, "typed-secret")
 
     def test_gemini_backend_wiring(self) -> None:
         import translator_runtime as runtime

@@ -20,6 +20,7 @@
 
 ### 变更
 
+- 模型任务在 prepare、创建 package 或发送请求前按活动阶段校验 ModelProfile、ExecutionStrategy、能力与凭据引用；不支持的组合返回稳定机器错误。`doctor` 增加只读模型路由诊断，GUI LiteLLM 连接测试改用与生产请求相同的 profile resolver/backend factory。
 - 同步请求不再用 `sync.model` 覆盖调用方传入的阶段模型。显式 `TaskRoute` / 阶段配置优先，`sync.model` 只作为未单独配置阶段的 primary 回退；一次 run 开始时冻结 `ModelRoutingPlan`，中途改配置或重试不会换 profile。sync 与 translation / keyword / revision / final_review 四类 batch manifest 写入 `model_routing` 快照（仅凭据引用，不含凭据值）。没有 `model_routing` 的旧 manifest 在 probe / resume / execute 时继续使用当时记录的 `model` / `batch_model` / `provider`，不会改用当前运行时模型。
 - GUI 异步任务完成时会比对项目路径、配置 digest 和 LiteLLM 连接参数身份；过期结果只做清理，不再覆盖当前界面。
 - GUI 改为统一侧边导航与任务页自有状态，项目列表、上下文库、关键词、订正、同步翻译和批量翻译各自展示当前任务结果。

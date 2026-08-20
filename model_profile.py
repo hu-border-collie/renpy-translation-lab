@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -1030,13 +1031,16 @@ def resolve_routing_plan(
 def validate_routing_plan(
     plan: ModelRoutingPlan,
     *,
+    stages: Collection[str] | None = None,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     keyring_has_credential: Callable[[str], bool] | None = None,
 ) -> tuple[RoutingValidationIssue, ...]:
     """Return every machine-decidable routing problem.
 
-    An empty tuple means the plan may start. Credential availability is
+    An empty tuple means the plan may start. When ``stages`` is supplied, only
+    those routes and the profiles they reference are checked, so an unrelated
+    optional stage cannot block the current task. Credential availability is
     checked honestly: environment references are verified against
     ``environ`` (default: the real process environment); keyring references
     are only flagged when a ``keyring_has_credential`` probe is supplied and
@@ -1044,14 +1048,32 @@ def validate_routing_plan(
     """
     issues: list[RoutingValidationIssue] = []
     env_lookup = os.environ if environ is None else environ
+    selected_stages = (
+        frozenset(str(stage) for stage in stages)
+        if stages is not None
+        else frozenset(plan.routes)
+    )
+    selected_profile_ids: set[str] = (
+        set(plan.profiles) if stages is None else set()
+    )
 
-    for stage, task_route in sorted(plan.routes.items()):
+    for stage in sorted(selected_stages):
         if stage not in KNOWN_STAGES:
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Unknown task stage in routing plan: {stage}",
                 stage=stage,
             ))
+            continue
+        task_route = plan.routes.get(stage)
+        if task_route is None:
+            issues.append(RoutingValidationIssue(
+                MODEL_PROFILE_INVALID,
+                f"Routing plan has no route for required stage {stage}.",
+                stage=stage,
+            ))
+            continue
+        selected_profile_ids.add(task_route.profile_id)
         profile = plan.profiles.get(task_route.profile_id)
         if profile is None:
             issues.append(RoutingValidationIssue(
@@ -1100,7 +1122,11 @@ def validate_routing_plan(
                     missing_capabilities=tuple(missing),
                 ))
 
-    for profile_id, profile in sorted(plan.profiles.items()):
+    for profile_id in sorted(selected_profile_ids):
+        profile = plan.profiles.get(profile_id)
+        if profile is None:
+            # The route-level issue above already describes this failure.
+            continue
         if profile.adapter not in KNOWN_ADAPTERS:
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
@@ -1151,7 +1177,8 @@ def validate_routing_plan(
         elif ref.kind == CREDENTIAL_KIND_KEYRING:
             env_missing = not (ref.env_name and ref.env_name in env_lookup)
             keyring_missing = (
-                keyring_has_credential is not None
+                (custom is not None or bool(ref.env_name))
+                and keyring_has_credential is not None
                 and ref.name
                 and not keyring_has_credential(ref.name)
             )
@@ -1254,6 +1281,7 @@ def build_sync_backend(
     profile: ModelProfile,
     *,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    diagnostic_api_key: str | None = None,
     client: Any = None,
     serialize_response: Callable[..., Any] | None = None,
     extract_text: Callable[..., Any] | None = None,
@@ -1265,7 +1293,9 @@ def build_sync_backend(
     Deferred imports keep this module free of heavy SDK imports. Production
     sync callers must go through this function; they may pass a pre-built
     Gemini ``client`` (for API-key rotation) and usage extractors that match
-    the existing request contract.
+    the existing request contract. ``diagnostic_api_key`` is an ephemeral GUI
+    or doctor probe override and must never be persisted in a profile or
+    manifest.
     """
     if profile.adapter == ADAPTER_GEMINI:
         import model_usage_ledger
@@ -1287,7 +1317,10 @@ def build_sync_backend(
     if profile.adapter == ADAPTER_LITELLM:
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        return LiteLLMSyncBackend(custom_providers=dict(custom_providers or {}))
+        return LiteLLMSyncBackend(
+            api_key=str(diagnostic_api_key or "").strip() or None,
+            custom_providers=dict(custom_providers or {}),
+        )
     raise ValueError(
         f"Profile {profile.id} uses adapter {profile.adapter}, which has no "
         "sync backend."
