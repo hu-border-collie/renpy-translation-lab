@@ -266,6 +266,52 @@ class ResolveRoutingPlanTests(unittest.TestCase):
             plan.profiles["final_review_override"].adapter, mp.ADAPTER_GEMINI,
         )
 
+    def test_gemini_batch_translation_override_uses_batch_adapter(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"}},
+            execution=mp.ExecutionStrategy.GEMINI_BATCH,
+            stage_overrides={"translation": "gemini-2.5-flash"},
+        )
+        profile = plan.profiles["translation_override"]
+        self.assertEqual(profile.adapter, mp.ADAPTER_GEMINI)
+        self.assertEqual(profile.provider, "gemini")
+        self.assertEqual(profile.model, "gemini-2.5-flash")
+        self.assertEqual(
+            plan.routes["translation"].strategy, mp.ExecutionStrategy.GEMINI_BATCH,
+        )
+
+    def test_override_gemini_batch_stage_keeps_other_profiles(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {
+                "sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"},
+                "batch": {
+                    "model": "gemini-2.0-flash",
+                    "final_review": {"model": "gemini-2.5-pro"},
+                    "project_analysis": {"model": "openai/pa-frozen"},
+                },
+            },
+            execution=mp.ExecutionStrategy.GEMINI_BATCH,
+        )
+        patched = mp.override_gemini_batch_stage(
+            plan, mp.STAGE_TRANSLATION, "gemini-2.5-flash",
+        )
+        translation = patched.profiles[patched.routes["translation"].profile_id]
+        self.assertEqual(translation.adapter, mp.ADAPTER_GEMINI)
+        self.assertEqual(translation.model, "gemini-2.5-flash")
+        self.assertEqual(
+            patched.profiles[patched.routes["project_analysis"].profile_id].model,
+            "openai/pa-frozen",
+        )
+        self.assertEqual(
+            patched.profiles[patched.routes["final_review"].profile_id].model,
+            "gemini-2.5-pro",
+        )
+        self.assertEqual(patched.profiles["primary"].model, "openai/gpt-4o-mini")
+        self.assertEqual(
+            plan.profiles[plan.routes["translation"].profile_id].model,
+            "gemini-2.0-flash",
+        )
+
     def test_unknown_sync_backend_refused(self) -> None:
         with self.assertRaises(ValueError):
             mp.resolve_routing_plan({"sync": {"backend": "openai"}})
@@ -507,6 +553,19 @@ class ValidateRoutingPlanTests(unittest.TestCase):
             for issue in issues
         ))
 
+    def test_builtin_litellm_keyring_emptiness_is_not_probed(self) -> None:
+        plan = mp.resolve_routing_plan({
+            "sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"},
+        })
+        self.assertEqual(
+            mp.validate_routing_plan(
+                plan,
+                environ={},
+                keyring_has_credential=lambda _name: False,
+            ),
+            (),
+        )
+
     def test_unknown_capability_override_flagged(self) -> None:
         base = mp.build_profile_registry({})["primary"]
         profile = replace(base, capability_overrides={"telepathy": True})
@@ -646,7 +705,7 @@ class RoutingPreflightIntegrationTests(unittest.TestCase):
                 batch_mod, "_runtime_keyring_has_credential", return_value=False,
             ), mock.patch.dict("os.environ", {"UNRELATED_SECRET": planted}, clear=False):
                 status = batch_mod.collect_doctor_model_routing_status()
-            self.assertEqual(status["status"], "blocked")
+            self.assertEqual(status["status"], "attention")
             self.assertTrue(any(
                 issue["code"] == mp.MODEL_PROFILE_CREDENTIAL_REF_MISSING
                 for issue in status["issues"]
@@ -655,6 +714,94 @@ class RoutingPreflightIntegrationTests(unittest.TestCase):
             self.assertIn("capabilities", status["plans"]["sync"])
         finally:
             batch_mod.SYNC_BACKEND, batch_mod.SYNC_MODEL = old
+
+    def test_submit_model_override_stays_gemini_batch_on_litellm_sync(self) -> None:
+        frozen = mp.resolve_routing_plan(
+            {
+                "sync": {"backend": "litellm", "model": "openai/gpt-4o-mini"},
+                "batch": {
+                    "model": "gemini-2.0-flash",
+                    "final_review": {"model": "gemini-2.5-pro"},
+                    "project_analysis": {"model": "openai/pa-frozen"},
+                },
+            },
+            execution=mp.ExecutionStrategy.GEMINI_BATCH,
+            created_at="frozen-at",
+        )
+        old = {
+            "sync_backend": batch_mod.SYNC_BACKEND,
+            "sync_model": batch_mod.SYNC_MODEL,
+            "batch_model": batch_mod.BATCH_MODEL,
+            "pa_model": batch_mod.PROJECT_ANALYSIS_MODEL,
+            "fr_model": batch_mod.FINAL_REVIEW_MODEL,
+            "latest": batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                package_dir = Path(tmp) / "pkg"
+                package_dir.mkdir()
+                jsonl_path = package_dir / "requests.jsonl"
+                jsonl_path.write_text("{}\n", encoding="utf-8")
+                manifest_path = package_dir / "manifest.json"
+                latest_path = Path(tmp) / "latest.txt"
+                manifest_path.write_text(
+                    json.dumps(
+                        {
+                            "mode": batch_mod.MANIFEST_MODE_TRANSLATION,
+                            "display_name": "submit-override",
+                            "batch_model": "gemini-2.0-flash",
+                            "input_jsonl_path": str(jsonl_path),
+                            "job_name": "",
+                            "model_routing": frozen.to_manifest_dict(),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                batch_mod.SYNC_BACKEND = "litellm"
+                batch_mod.SYNC_MODEL = "openai/live-sync"
+                batch_mod.BATCH_MODEL = "gemini-live-batch"
+                batch_mod.PROJECT_ANALYSIS_MODEL = "openai/live-pa"
+                batch_mod.FINAL_REVIEW_MODEL = "gemini-live-fr"
+                batch_mod.LATEST_MANIFEST_FILE = str(latest_path)
+                with mock.patch.object(
+                    batch_mod, "create_batch_client",
+                    side_effect=RuntimeError("do not upload"),
+                ), mock.patch.object(
+                    batch_mod, "_runtime_keyring_has_credential",
+                    return_value=True,
+                ):
+                    with self.assertRaises(RuntimeError):
+                        batch_mod.submit_manifest(
+                            str(manifest_path),
+                            model_override="gemini-2.5-flash",
+                        )
+                saved = json.loads(manifest_path.read_text(encoding="utf-8"))
+            snapshot = saved["model_routing"]
+            translation = snapshot["profiles"][snapshot["routes"]["translation"]["profile_id"]]
+            self.assertEqual(translation["adapter"], mp.ADAPTER_GEMINI)
+            self.assertEqual(translation["model"], "gemini-2.5-flash")
+            self.assertEqual(
+                snapshot["profiles"][snapshot["routes"]["project_analysis"]["profile_id"]]["model"],
+                "openai/pa-frozen",
+            )
+            self.assertEqual(
+                snapshot["profiles"][snapshot["routes"]["final_review"]["profile_id"]]["model"],
+                "gemini-2.5-pro",
+            )
+            self.assertEqual(snapshot["profiles"]["primary"]["model"], "openai/gpt-4o-mini")
+            text = json.dumps(snapshot)
+            self.assertNotIn("openai/live-sync", text)
+            self.assertNotIn("gemini-live-batch", text)
+            self.assertNotIn("openai/live-pa", text)
+            self.assertNotIn("gemini-live-fr", text)
+        finally:
+            batch_mod.SYNC_BACKEND = old["sync_backend"]
+            batch_mod.SYNC_MODEL = old["sync_model"]
+            batch_mod.BATCH_MODEL = old["batch_model"]
+            batch_mod.PROJECT_ANALYSIS_MODEL = old["pa_model"]
+            batch_mod.FINAL_REVIEW_MODEL = old["fr_model"]
+            batch_mod.LATEST_MANIFEST_FILE = old["latest"]
 
 
 class SlotIdNamespaceTests(unittest.TestCase):

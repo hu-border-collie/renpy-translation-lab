@@ -186,6 +186,25 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 if not expected_success:
                     self.assertIn("invalid_response", completed[0][1])
 
+    def test_connection_test_preflight_reports_missing_provider_prefix(self):
+        completed = []
+        worker = LiteLLMConnectionTestWorker("gpt-4o-mini")
+        _record_connection_completed(worker, completed)
+
+        with mock.patch(
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
+        ) as build_backend:
+            worker.run()
+
+        build_backend.assert_not_called()
+        self.assertEqual(len(completed), 1)
+        self.assertFalse(completed[0][0])
+        message = completed[0][1]
+        self.assertIn("MODEL_PROFILE_INVALID", message)
+        self.assertIn("<provider>/<model>", message)
+        self.assertNotIn("JSON 能力", message)
+        self.assertNotIn("unsupported_capability", message)
+
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
         backend.generate_async.side_effect = LiteLLMBackendError(

@@ -333,6 +333,18 @@ LITELLM_CONNECTION_TEST_COPY = {
         "unsupported_capability": "当前 Provider 不支持连接测试所需的 JSON 能力。",
         "provider_error": "请求失败，请检查模型、API Base 和网络。",
     },
+    "routing_errors": {
+        "MODEL_PROFILE_INVALID": (
+            "连接失败 [{code}]: 模型或 Provider 配置无效。{message}"
+        ),
+        "MODEL_ROUTE_CAPABILITY_MISSING": (
+            "连接失败 [{code}]: 当前执行方式不支持该模型。{message}"
+        ),
+        "MODEL_PROFILE_CREDENTIAL_REF_MISSING": (
+            "连接失败 [{code}]: 缺少可用凭据引用。{message}"
+        ),
+        "default": "连接失败 [{code}]: {message}",
+    },
     "stale_result": "连接参数已修改，本次测试结果已忽略；请用当前设置重新测试。",
 }
 
@@ -738,6 +750,16 @@ def translate_doctor_warning(warning: str) -> str:
     if text.startswith("RAG store contains legacy ID format keys."):
         return "记忆库含有旧版键格式，下次写回时会自动迁移。"
     if text.startswith("Model routing preflight ["):
+        rest = text[len("Model routing preflight ["):]
+        code, _sep, rest = rest.partition("]")
+        rest = rest.strip()
+        if rest.startswith("(") and "): " in rest:
+            location, _sep, message = rest[1:].partition("): ")
+            strategy, _slash, stage = location.partition("/")
+            return (
+                f"模型路由启动前检查失败 [{code.strip()}]"
+                f"（{strategy}/{stage}）：{message}"
+            )
         return "模型路由启动前检查失败；请检查 Provider、模型、执行方式和凭据引用。"
     if text.startswith("glossary_file does not match current project;"):
         return (

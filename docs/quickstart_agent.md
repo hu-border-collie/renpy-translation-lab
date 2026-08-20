@@ -97,6 +97,8 @@ ModelProfile 与 ExecutionStrategy。拒绝时使用以下稳定合同：
 
 三者均为不可自动重试的配置错误，严格模式退出 `5`。`details.issues` 包含本次活动阶段的完整问题列表；不要因失败而切换到另一个 Provider 或模型。
 
+`doctor --output json` 的 `result.model_routing.status` 只有 `ok` 或 `attention`，表示只读诊断，**不会**把 doctor 退出码改成 blocked。Agent 不要看到 `"status": "attention"` 就拒绝启动同步翻译；真正阻断启动的是活动阶段的上述错误码。未使用的终审 / Batch 配置无效只会进入 `attention` 与 warnings。
+
 
 ## 严格非交互与显式 manifest
 

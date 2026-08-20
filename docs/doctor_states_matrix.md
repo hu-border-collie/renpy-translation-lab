@@ -91,9 +91,13 @@
 | 状态/问题码 | 判定 | doctor / 任务启动行为 |
 | :--- | :--- | :--- |
 | **`ok`** | 两种计划的路由、profile、能力与可判定凭据引用均有效。 | 不增加模型路由 warning。 |
+| **`attention`** | 任一策略的任一阶段存在机器可判定问题。 | 只增加 warning；**不**改变 doctor 退出码，也不等于 CLI envelope 的 `status=blocked`。 |
 | **`MODEL_PROFILE_INVALID`** | adapter、模型格式、阶段引用或能力覆盖无效。 | doctor 显示 warning；活动阶段启动前以退出码 5 拒绝。 |
 | **`MODEL_ROUTE_CAPABILITY_MISSING`** | profile 不具备所选策略要求的同步生成、Gemini adapter 或远程 Batch 能力。 | 同上，并在 `missing_capabilities` 中列出缺项。 |
 | **`MODEL_PROFILE_CREDENTIAL_REF_MISSING`** | 可明确判定的 env/keyring 引用为空。 | 同上；报告只记录引用，不记录凭据值。 |
+
+`model_routing.status` 只有 `ok` / `attention`。`blocked` 只用于任务启动时的
+`routing_validation_error`，不会出现在 doctor 这份快照里。
 
 doctor 会检查完整计划以便提前暴露配置问题；真正启动任务时只检查该任务的活动
 阶段及其引用 profile。因此未参与当前任务的终审、A/B 或项目分析配置不会误阻断

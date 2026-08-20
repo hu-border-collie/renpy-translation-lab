@@ -6732,25 +6732,18 @@ def submit_manifest(
         manifest['batch_model'] = model_override.strip()
 
     submit_stage = model_profile.stage_for_manifest_mode(manifest_mode(manifest))
+    submit_plan = resolve_manifest_routing_plan(
+        manifest,
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+    )
     if model_override:
-        submit_plan = model_profile.resolve_routing_plan_from_runtime(
-            sync_backend=SYNC_BACKEND,
-            sync_model=SYNC_MODEL,
-            batch_model=model_override.strip(),
-            project_analysis_model=PROJECT_ANALYSIS_MODEL,
-            final_review_model=FINAL_REVIEW_MODEL,
-            sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+        submit_plan = model_profile.override_gemini_batch_stage(
+            submit_plan,
+            submit_stage,
+            model_override.strip(),
             custom_providers=_runtime_custom_providers(),
-            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-            stage_overrides={submit_stage: model_override.strip()},
-            config_origins=_routing_config_origins(),
         )
         attach_model_routing(manifest, submit_plan)
-    else:
-        submit_plan = resolve_manifest_routing_plan(
-            manifest,
-            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-        )
     require_valid_routing_plan(submit_plan, {submit_stage})
 
     if max_cost is not None:
@@ -14610,7 +14603,11 @@ def collect_doctor_project_assets_warnings(project_assets):
 
 
 def collect_doctor_model_routing_status():
-    """Return read-only routing snapshots and machine-decidable issues."""
+    """Return read-only routing snapshots and machine-decidable issues.
+
+    ``status`` is ``ok`` or ``attention``. It never uses ``blocked`` and does
+    not change the doctor command exit or workflow gate.
+    """
     custom_providers = _runtime_custom_providers()
     plans = {}
     issues = []
@@ -14646,7 +14643,7 @@ def collect_doctor_model_routing_status():
                 seen.add(key)
                 issues.append(payload)
     return {
-        'status': 'blocked' if issues else 'ok',
+        'status': 'attention' if issues else 'ok',
         'issues': issues,
         'plans': plans,
     }

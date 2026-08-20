@@ -69,7 +69,33 @@ class BudgetExhausted(TimeoutError):
     """Shared operation deadline elapsed before the next network hop."""
 
 
+class _RoutingPreflightError(LiteLLMBackendError):
+    """Connection-test wrapper that keeps the routing issue for GUI copy."""
+
+    def __init__(self, issue: model_profile.RoutingValidationIssue) -> None:
+        self.issue = issue
+        super().__init__(
+            issue.message,
+            category="provider_error",
+            internal=True,
+        )
+
+
+def _format_routing_connection_error(
+    issue: model_profile.RoutingValidationIssue,
+) -> str:
+    templates = LITELLM_CONNECTION_TEST_COPY["routing_errors"]
+    template = templates.get(issue.code, templates["default"])
+    return template.format(
+        code=issue.code,
+        message=issue.message,
+        stage=issue.stage or "translation",
+    )
+
+
 def _connection_error_message(exc: Exception) -> str:
+    if isinstance(exc, _RoutingPreflightError):
+        return _format_routing_connection_error(exc.issue)
     category = sync_error_category(exc)
     details = LITELLM_CONNECTION_TEST_COPY["errors"]
     return f"连接失败 [{category}]: {details.get(category, details['provider_error'])}"
@@ -503,10 +529,7 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
             keyring_has_credential=None,
         )
         if issues:
-            raise LiteLLMBackendError(
-                issues[0].message,
-                category="unsupported_capability",
-            )
+            raise _RoutingPreflightError(issues[0])
         route = plan.routes[model_profile.STAGE_TRANSLATION]
         profile = model_profile.profile_for_route(plan, route)
         backend = model_profile.build_sync_backend(

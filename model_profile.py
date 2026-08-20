@@ -883,18 +883,23 @@ def resolve_routing_plan(
         game_config=game_config,
         custom_providers=custom_providers,
     )
+    gemini_batch_override_stages = {STAGE_FINAL_REVIEW}
+    if strategy is ExecutionStrategy.GEMINI_BATCH:
+        gemini_batch_override_stages.update(
+            {STAGE_TRANSLATION, STAGE_KEYWORD, STAGE_REVISION},
+        )
     overrides = dict(stage_overrides or {})
     for stage in list(overrides):
         model = _clean_str(overrides[stage])
         if not model:
             overrides.pop(stage)
             continue
-        if stage == STAGE_FINAL_REVIEW:
+        if stage in gemini_batch_override_stages:
             profiles[f"{stage}_override"] = _batch_profile(
                 model,
                 custom_providers,
                 profile_id=f"{stage}_override",
-                label="final review explicit model",
+                label=f"{stage} explicit model",
             )
         else:
             profiles[f"{stage}_override"] = _sync_profile(
@@ -1045,6 +1050,13 @@ def validate_routing_plan(
     ``environ`` (default: the real process environment); keyring references
     are only flagged when a ``keyring_has_credential`` probe is supplied and
     reports the slot empty.
+
+    Built-in LiteLLM profiles (``CredentialRef(KEYRING, provider)`` with an
+    empty ``env_name``) are not probed even when a probe is supplied. Those
+    providers also read native environment variables such as ``OPENAI_API_KEY``
+    that this module does not model, so an empty keyring slot is not enough to
+    call the reference missing. Custom-provider and named-env refs are
+    machine-decidable here.
     """
     issues: list[RoutingValidationIssue] = []
     env_lookup = os.environ if environ is None else environ
@@ -1176,6 +1188,8 @@ def validate_routing_plan(
                 ))
         elif ref.kind == CREDENTIAL_KIND_KEYRING:
             env_missing = not (ref.env_name and ref.env_name in env_lookup)
+            # Built-in providers also have native env vars this module does
+            # not model; only custom/env_name refs are machine-decidable.
             keyring_missing = (
                 (custom is not None or bool(ref.env_name))
                 and keyring_has_credential is not None
@@ -1222,6 +1236,53 @@ def profile_for_route(plan: ModelRoutingPlan, route: TaskRoute) -> ModelProfile:
             f"Route for stage {route.stage} references unknown profile "
             f"{route.profile_id}."
         ) from exc
+
+
+def override_gemini_batch_stage(
+    plan: ModelRoutingPlan,
+    stage: str,
+    model: str,
+    *,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> ModelRoutingPlan:
+    """Replace one Gemini-batch stage on a frozen plan.
+
+    Other stages, profiles, and ``config_origins`` stay as they were. The
+    override is always a Gemini-batch profile, even when ``sync.backend`` is
+    LiteLLM, so ``submit --model gemini-...`` cannot be rebuilt as a sync
+    LiteLLM route.
+    """
+    cleaned = _clean_str(model)
+    if not cleaned:
+        raise ValueError("Gemini batch stage override requires a model id.")
+    if stage not in KNOWN_STAGES:
+        raise ValueError(f"Unknown task stage in routing plan: {stage}")
+    profile_id = f"{stage}_override"
+    profile = _batch_profile(
+        cleaned,
+        custom_providers,
+        profile_id=profile_id,
+        label=f"{stage} explicit model",
+    )
+    profiles = dict(plan.profiles)
+    profiles[profile_id] = profile
+    capabilities = dict(plan.capabilities)
+    capabilities[profile_id] = resolve_capabilities(
+        profile, custom_providers=custom_providers,
+    )
+    routes = dict(plan.routes)
+    routes[stage] = TaskRoute(
+        stage=stage,
+        profile_id=profile_id,
+        strategy=ExecutionStrategy.GEMINI_BATCH,
+        source=ROUTE_SOURCE_EXPLICIT,
+    )
+    return replace(
+        plan,
+        profiles=profiles,
+        routes=routes,
+        capabilities=capabilities,
+    )
 
 
 def resolve_routing_plan_from_runtime(
