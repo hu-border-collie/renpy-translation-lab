@@ -2,6 +2,7 @@ import io
 import unittest
 from unittest import mock
 
+import model_profile as mp
 import translator_runtime as runtime
 
 
@@ -9,12 +10,14 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
     def test_sync_runner_does_not_require_gemini_key_for_litellm(self):
         previous_backend = runtime.SYNC_BACKEND
         previous_keys = runtime.API_KEYS
+        previous_models = runtime.MODELS
 
         def select_litellm():
             runtime.SYNC_BACKEND = "litellm"
 
         try:
             runtime.API_KEYS = []
+            runtime.MODELS = ["openai/test-model"]
             with (
                 mock.patch.object(runtime, "load_config") as load_config,
                 mock.patch.object(
@@ -42,6 +45,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         finally:
             runtime.SYNC_BACKEND = previous_backend
             runtime.API_KEYS = previous_keys
+            runtime.MODELS = previous_models
 
     def test_sync_runner_still_requires_gemini_key_for_gemini(self):
         previous_backend = runtime.SYNC_BACKEND
@@ -110,6 +114,17 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         with self.assertRaises(ValueError) as captured:
             runtime.load_sync_translation_settings({"sync": {"backend": "automatic"}})
         self.assertIn("Unsupported sync backend", str(captured.exception))
+
+    def test_sync_run_converts_routing_config_error_to_machine_contract(self):
+        source = mp.ModelRoutingConfigError("Unsupported sync backend: automatic")
+        with mock.patch.object(
+            runtime, "load_config", side_effect=source,
+        ), mock.patch.object(runtime, "load_translator_settings") as load_paths:
+            with self.assertRaises(SystemExit) as caught:
+                runtime.run_translation()
+        load_paths.assert_not_called()
+        self.assertEqual(caught.exception.code_name, mp.MODEL_PROFILE_INVALID)
+        self.assertEqual(caught.exception.details["stage"], mp.STAGE_TRANSLATION)
 
     def test_sync_timeout_settings_are_bounded(self):
         previous = runtime.SYNC_TIMEOUT_SECONDS

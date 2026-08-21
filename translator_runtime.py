@@ -1092,7 +1092,7 @@ def load_sync_translation_settings(config):
 
     backend_name = str(sync.get("backend") or "gemini").strip().lower()
     if backend_name not in {"gemini", "litellm"}:
-        raise ValueError(
+        raise model_profile.ModelRoutingConfigError(
             f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
         )
     SYNC_BACKEND = backend_name
@@ -4561,18 +4561,44 @@ def _routing_custom_providers(custom_providers):
 
 
 def freeze_translation_routing_plan(*, stage_overrides=None):
-    """Snapshot the translation TaskRoute from currently loaded sync settings."""
+    """Snapshot and validate the translation route before task side effects."""
     current = get_current_model()
     overrides = dict(stage_overrides or {})
     overrides.setdefault(model_profile.STAGE_TRANSLATION, current)
-    return model_profile.resolve_routing_plan_from_runtime(
-        sync_backend=SYNC_BACKEND,
-        sync_model=current,
-        sync_models=tuple(MODELS),
-        custom_providers=_routing_custom_providers(CUSTOM_LITELLM_PROVIDERS),
-        execution=model_profile.ExecutionStrategy.SYNC,
-        stage_overrides=overrides,
+    custom_providers = _routing_custom_providers(CUSTOM_LITELLM_PROVIDERS)
+    try:
+        plan = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend=SYNC_BACKEND,
+            sync_model=current,
+            sync_models=tuple(MODELS),
+            custom_providers=custom_providers,
+            execution=model_profile.ExecutionStrategy.SYNC,
+            stage_overrides=overrides,
+        )
+    except (ValueError, TypeError) as exc:
+        raise model_profile.routing_resolution_error(
+            exc,
+            stage=model_profile.STAGE_TRANSLATION,
+        ) from exc
+    try:
+        from litellm_provider_config import load_provider_api_key
+
+        def _has_key(provider_id):
+            try:
+                return bool(load_provider_api_key(provider_id))
+            except Exception:
+                return True
+    except ImportError:
+        _has_key = None
+    issues = model_profile.validate_routing_plan(
+        plan,
+        stages={model_profile.STAGE_TRANSLATION},
+        custom_providers=custom_providers,
+        keyring_has_credential=_has_key,
     )
+    if issues:
+        raise model_profile.routing_validation_error(issues)
+    return plan
 
 
 def call_gemini_sdk(
@@ -5809,7 +5835,13 @@ def apply_sync_translation_preview(manifest_path):
 
 def run_translation(*, prepare=False):
     """Translate into a reviewable preview package without changing project scripts."""
-    load_config(require_api_key=False)
+    try:
+        load_config(require_api_key=False)
+    except model_profile.ModelRoutingConfigError as exc:
+        raise model_profile.routing_resolution_error(
+            exc,
+            stage=model_profile.STAGE_TRANSLATION,
+        ) from exc
     load_translator_settings()
     if SYNC_BACKEND == "gemini":
         _require_gemini_api_key()

@@ -198,6 +198,17 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 - `gui_qt/doctor_report.py`：把 report 转换成 GUI 摘要、事实和状态。
 - `gui_qt/user_copy.py`：根据稳定代码生成中文文案和严重程度表现。
 
+`doctor` 还会返回 `model_routing`：其中分别保存 `sync` 与 `gemini_batch`
+的只读路由/能力快照，以及 `MODEL_PROFILE_INVALID`、
+`MODEL_ROUTE_CAPABILITY_MISSING`、`MODEL_PROFILE_CREDENTIAL_REF_MISSING`
+问题。`model_routing.status` 为 `ok` 或 `attention`，从不使用 `blocked`，
+也不改变 doctor 退出码。该检查不调用模型，不把 keyring/env 中的凭据值写入报告；
+人类输出只显示错误码、执行策略、阶段和安全消息。路由问题进入 warnings，使 GUI
+状态显示需要注意；真正启动任务时仍按该任务的活动阶段再次 fail-fast，未参与本次
+任务的阶段不会阻断启动。
+plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor 将其记录为
+`model_routing.status=attention` 并继续形成报告，而任务启动路径以稳定机器合同拒绝。
+
 `start_pending_batch`、`start_incremental_batch`、`substantially_complete` 和 `no_pending_lines` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
 
 当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。

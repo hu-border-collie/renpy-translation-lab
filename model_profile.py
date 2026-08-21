@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -133,6 +134,11 @@ _SUGGESTED_ACTION_BY_CODE = {
     MODEL_ROUTE_CAPABILITY_MISSING: "choose_supported_strategy_or_profile",
     MODEL_PROFILE_CREDENTIAL_REF_MISSING: "inspect_configuration_and_artifacts",
 }
+
+
+class ModelRoutingConfigError(ValueError):
+    """Invalid routing configuration before a plan can be constructed."""
+
 
 # Resolver slot ids are internal compatibility slots over the legacy
 # ``sync.*`` / ``batch.*`` keys — they are NOT the user-visible profile ids
@@ -568,6 +574,28 @@ def routing_validation_error(
     )
 
 
+def routing_resolution_issue(
+    exc: Exception,
+    *,
+    stage: str = "",
+) -> RoutingValidationIssue:
+    """Convert a resolver configuration exception into the stable issue shape."""
+    return RoutingValidationIssue(
+        MODEL_PROFILE_INVALID,
+        f"Model routing configuration is invalid: {exc}",
+        stage=stage,
+    )
+
+
+def routing_resolution_error(
+    exc: Exception,
+    *,
+    stage: str = "",
+) -> MachineContractError:
+    """Convert a resolver configuration exception into the CLI refusal."""
+    return routing_validation_error((routing_resolution_issue(exc, stage=stage),))
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -866,7 +894,7 @@ def resolve_routing_plan(
 
     sync_backend = _clean_str(sync_cfg.get("backend")).lower() or SYNC_BACKEND_GEMINI
     if sync_backend not in KNOWN_SYNC_BACKENDS:
-        raise ValueError(
+        raise ModelRoutingConfigError(
             f"Unsupported sync backend: {sync_backend}. "
             "Choose 'gemini' or 'litellm'."
         )
@@ -882,18 +910,23 @@ def resolve_routing_plan(
         game_config=game_config,
         custom_providers=custom_providers,
     )
+    gemini_batch_override_stages = {STAGE_FINAL_REVIEW}
+    if strategy is ExecutionStrategy.GEMINI_BATCH:
+        gemini_batch_override_stages.update(
+            {STAGE_TRANSLATION, STAGE_KEYWORD, STAGE_REVISION},
+        )
     overrides = dict(stage_overrides or {})
     for stage in list(overrides):
         model = _clean_str(overrides[stage])
         if not model:
             overrides.pop(stage)
             continue
-        if stage == STAGE_FINAL_REVIEW:
+        if stage in gemini_batch_override_stages:
             profiles[f"{stage}_override"] = _batch_profile(
                 model,
                 custom_providers,
                 profile_id=f"{stage}_override",
-                label="final review explicit model",
+                label=f"{stage} explicit model",
             )
         else:
             profiles[f"{stage}_override"] = _sync_profile(
@@ -1030,28 +1063,56 @@ def resolve_routing_plan(
 def validate_routing_plan(
     plan: ModelRoutingPlan,
     *,
+    stages: Collection[str] | None = None,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
     environ: Mapping[str, str] | None = None,
     keyring_has_credential: Callable[[str], bool] | None = None,
 ) -> tuple[RoutingValidationIssue, ...]:
     """Return every machine-decidable routing problem.
 
-    An empty tuple means the plan may start. Credential availability is
+    An empty tuple means the plan may start. When ``stages`` is supplied, only
+    those routes and the profiles they reference are checked, so an unrelated
+    optional stage cannot block the current task. Credential availability is
     checked honestly: environment references are verified against
     ``environ`` (default: the real process environment); keyring references
     are only flagged when a ``keyring_has_credential`` probe is supplied and
     reports the slot empty.
+
+    Built-in LiteLLM profiles (``CredentialRef(KEYRING, provider)`` with an
+    empty ``env_name``) are not probed even when a probe is supplied. Those
+    providers also read native environment variables such as ``OPENAI_API_KEY``
+    that this module does not model, so an empty keyring slot is not enough to
+    call the reference missing. Custom-provider and named-env refs are
+    machine-decidable here.
     """
     issues: list[RoutingValidationIssue] = []
     env_lookup = os.environ if environ is None else environ
+    selected_stages = (
+        frozenset(str(stage) for stage in stages)
+        if stages is not None
+        else frozenset(plan.routes)
+    )
+    selected_profile_ids: set[str] = (
+        set(plan.profiles) if stages is None else set()
+    )
 
-    for stage, task_route in sorted(plan.routes.items()):
+    for stage in sorted(selected_stages):
         if stage not in KNOWN_STAGES:
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Unknown task stage in routing plan: {stage}",
                 stage=stage,
             ))
+            continue
+        task_route = plan.routes.get(stage)
+        if task_route is None:
+            issues.append(RoutingValidationIssue(
+                MODEL_PROFILE_INVALID,
+                f"Routing plan has no route for required stage {stage}.",
+                stage=stage,
+            ))
+            continue
+        selected_profile_ids.add(task_route.profile_id)
         profile = plan.profiles.get(task_route.profile_id)
         if profile is None:
             issues.append(RoutingValidationIssue(
@@ -1100,7 +1161,11 @@ def validate_routing_plan(
                     missing_capabilities=tuple(missing),
                 ))
 
-    for profile_id, profile in sorted(plan.profiles.items()):
+    for profile_id in sorted(selected_profile_ids):
+        profile = plan.profiles.get(profile_id)
+        if profile is None:
+            # The route-level issue above already describes this failure.
+            continue
         if profile.adapter not in KNOWN_ADAPTERS:
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
@@ -1150,8 +1215,11 @@ def validate_routing_plan(
                 ))
         elif ref.kind == CREDENTIAL_KIND_KEYRING:
             env_missing = not (ref.env_name and ref.env_name in env_lookup)
+            # Built-in providers also have native env vars this module does
+            # not model; only custom/env_name refs are machine-decidable.
             keyring_missing = (
-                keyring_has_credential is not None
+                (custom is not None or bool(ref.env_name))
+                and keyring_has_credential is not None
                 and ref.name
                 and not keyring_has_credential(ref.name)
             )
@@ -1195,6 +1263,53 @@ def profile_for_route(plan: ModelRoutingPlan, route: TaskRoute) -> ModelProfile:
             f"Route for stage {route.stage} references unknown profile "
             f"{route.profile_id}."
         ) from exc
+
+
+def override_gemini_batch_stage(
+    plan: ModelRoutingPlan,
+    stage: str,
+    model: str,
+    *,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> ModelRoutingPlan:
+    """Replace one Gemini-batch stage on a frozen plan.
+
+    Other stages, profiles, and ``config_origins`` stay as they were. The
+    override is always a Gemini-batch profile, even when ``sync.backend`` is
+    LiteLLM, so ``submit --model gemini-...`` cannot be rebuilt as a sync
+    LiteLLM route.
+    """
+    cleaned = _clean_str(model)
+    if not cleaned:
+        raise ValueError("Gemini batch stage override requires a model id.")
+    if stage not in KNOWN_STAGES:
+        raise ValueError(f"Unknown task stage in routing plan: {stage}")
+    profile_id = f"{stage}_override"
+    profile = _batch_profile(
+        cleaned,
+        custom_providers,
+        profile_id=profile_id,
+        label=f"{stage} explicit model",
+    )
+    profiles = dict(plan.profiles)
+    profiles[profile_id] = profile
+    capabilities = dict(plan.capabilities)
+    capabilities[profile_id] = resolve_capabilities(
+        profile, custom_providers=custom_providers,
+    )
+    routes = dict(plan.routes)
+    routes[stage] = TaskRoute(
+        stage=stage,
+        profile_id=profile_id,
+        strategy=ExecutionStrategy.GEMINI_BATCH,
+        source=ROUTE_SOURCE_EXPLICIT,
+    )
+    return replace(
+        plan,
+        profiles=profiles,
+        routes=routes,
+        capabilities=capabilities,
+    )
 
 
 def resolve_routing_plan_from_runtime(
@@ -1254,6 +1369,7 @@ def build_sync_backend(
     profile: ModelProfile,
     *,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    diagnostic_api_key: str | None = None,
     client: Any = None,
     serialize_response: Callable[..., Any] | None = None,
     extract_text: Callable[..., Any] | None = None,
@@ -1265,7 +1381,9 @@ def build_sync_backend(
     Deferred imports keep this module free of heavy SDK imports. Production
     sync callers must go through this function; they may pass a pre-built
     Gemini ``client`` (for API-key rotation) and usage extractors that match
-    the existing request contract.
+    the existing request contract. ``diagnostic_api_key`` is an ephemeral GUI
+    or doctor probe override and must never be persisted in a profile or
+    manifest.
     """
     if profile.adapter == ADAPTER_GEMINI:
         import model_usage_ledger
@@ -1287,7 +1405,10 @@ def build_sync_backend(
     if profile.adapter == ADAPTER_LITELLM:
         from litellm_sync_backend import LiteLLMSyncBackend
 
-        return LiteLLMSyncBackend(custom_providers=dict(custom_providers or {}))
+        return LiteLLMSyncBackend(
+            api_key=str(diagnostic_api_key or "").strip() or None,
+            custom_providers=dict(custom_providers or {}),
+        )
     raise ValueError(
         f"Profile {profile.id} uses adapter {profile.adapter}, which has no "
         "sync backend."

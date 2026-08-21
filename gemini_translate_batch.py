@@ -431,7 +431,7 @@ def normalize_batch_safety_settings(value):
     return settings
 
 
-def load_batch_settings():
+def load_batch_settings(*, tolerate_routing_errors=False):
     """Load persisted settings, normalizing sync timeouts to the shared contract.
 
     ``sync.timeout_seconds`` is a per-model-request limit in seconds. Missing or
@@ -519,9 +519,12 @@ def load_batch_settings():
         sync = {}
     backend_name = str(sync.get('backend') or 'gemini').strip().lower()
     if backend_name not in {'gemini', 'litellm'}:
-        raise SystemExit(
-            f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
-        )
+        if not tolerate_routing_errors:
+            exc = model_profile.ModelRoutingConfigError(
+                f"Unsupported sync backend: {backend_name}. "
+                "Choose 'gemini' or 'litellm'."
+            )
+            raise model_profile.routing_resolution_error(exc) from exc
     SYNC_BACKEND = backend_name
     sync_model = sync.get('model')
     if isinstance(sync_model, str) and sync_model.strip():
@@ -3393,6 +3396,10 @@ def get_batch_risk_warnings():
 
 
 def create_batch_package(display_name_override='', skip_prepare=False):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        required_stages={model_profile.STAGE_TRANSLATION},
+    )
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -3519,9 +3526,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     }
     attach_model_routing(
         manifest,
-        freeze_runtime_routing_plan(
-            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-        ),
+        routing_plan,
     )
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
@@ -4493,6 +4498,10 @@ def build_revision_request(chunk, model=None):
 
 
 def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        required_stages={model_profile.STAGE_REVISION},
+    )
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -4591,9 +4600,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
 
     attach_model_routing(
         manifest,
-        freeze_runtime_routing_plan(
-            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-        ),
+        routing_plan,
     )
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
@@ -5166,6 +5173,11 @@ def create_final_review_package(
             'Final review is disabled in config (batch.final_review.enabled=false).'
         )
 
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        required_stages={model_profile.STAGE_FINAL_REVIEW},
+    )
+
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -5259,9 +5271,7 @@ def create_final_review_package(
             'build_warnings': get_batch_risk_warnings(),
             'input_jsonl_path': requests_path,
             'request_count': request_count,
-            'model_routing': freeze_runtime_routing_plan(
-                execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-            ).to_manifest_dict(),
+            'model_routing': routing_plan.to_manifest_dict(),
         },
     )
     # batch_cost_estimate uses summary.chunk_count for max output tokens.
@@ -5590,6 +5600,10 @@ def build_keyword_request(chunk, max_candidates_per_chunk=None, model=None):
 
 
 def create_keyword_package(display_name_override='', skip_prepare=True, chunk_size=None, max_candidates_per_chunk=None):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        required_stages={model_profile.STAGE_KEYWORD},
+    )
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -5666,9 +5680,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
     }
     attach_model_routing(
         manifest,
-        freeze_runtime_routing_plan(
-            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-        ),
+        routing_plan,
     )
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
@@ -6721,6 +6733,21 @@ def submit_manifest(
         manifest['display_name'] = display_name_override.strip()
     if model_override:
         manifest['batch_model'] = model_override.strip()
+
+    submit_stage = model_profile.stage_for_manifest_mode(manifest_mode(manifest))
+    submit_plan = resolve_manifest_routing_plan(
+        manifest,
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+    )
+    if model_override:
+        submit_plan = model_profile.override_gemini_batch_stage(
+            submit_plan,
+            submit_stage,
+            model_override.strip(),
+            custom_providers=_runtime_custom_providers(),
+        )
+        attach_model_routing(manifest, submit_plan)
+    require_valid_routing_plan(submit_plan, {submit_stage})
 
     if max_cost is not None:
         cost_estimate = ensure_manifest_cost_estimate(manifest)
@@ -10652,6 +10679,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     )
     routing_plan = resolve_manifest_routing_plan(manifest)
     probe_route = route_for_manifest(routing_plan, manifest)
+    require_valid_routing_plan(routing_plan, {probe_route.stage})
     summary = {
         'sample_count': len(sample),
         'parse_ok': 0,
@@ -12464,26 +12492,68 @@ def _runtime_custom_providers():
     } or None
 
 
+def _runtime_keyring_has_credential(provider_id):
+    """Best-effort keyring probe for routing preflight.
+
+    An unavailable credential store is not evidence that a slot is empty; the
+    request backend will surface that infrastructure error with its own stable
+    category. Only a successful empty read becomes a missing-reference issue.
+    """
+    try:
+        from litellm_provider_config import load_provider_api_key
+
+        return bool(load_provider_api_key(provider_id))
+    except Exception:
+        return True
+
+
+def require_valid_routing_plan(plan, required_stages):
+    """Raise the stable machine refusal for active-stage routing problems."""
+    issues = model_profile.validate_routing_plan(
+        plan,
+        stages=required_stages,
+        custom_providers=_runtime_custom_providers(),
+        keyring_has_credential=_runtime_keyring_has_credential,
+    )
+    if issues:
+        raise model_profile.routing_validation_error(issues)
+    return plan
+
+
 def freeze_runtime_routing_plan(
     *,
     execution=model_profile.ExecutionStrategy.SYNC,
     stage_overrides=None,
     created_at='',
+    required_stages=None,
 ):
-    """Snapshot routing from currently loaded globals. Call once at run start."""
-    return model_profile.resolve_routing_plan_from_runtime(
-        sync_backend=SYNC_BACKEND,
-        sync_model=SYNC_MODEL,
-        batch_model=BATCH_MODEL,
-        project_analysis_model=PROJECT_ANALYSIS_MODEL,
-        final_review_model=FINAL_REVIEW_MODEL,
-        sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
-        custom_providers=_runtime_custom_providers(),
-        execution=execution,
-        stage_overrides=stage_overrides,
-        created_at=created_at,
-        config_origins=_routing_config_origins(),
-    )
+    """Snapshot routing from loaded globals and optionally fail fast.
+
+    ``required_stages`` scopes validation to the routes this task will really
+    execute. Callers must invoke this before creating task artifacts.
+    """
+    custom_providers = _runtime_custom_providers()
+    try:
+        plan = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend=SYNC_BACKEND,
+            sync_model=SYNC_MODEL,
+            batch_model=BATCH_MODEL,
+            project_analysis_model=PROJECT_ANALYSIS_MODEL,
+            final_review_model=FINAL_REVIEW_MODEL,
+            sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+            custom_providers=custom_providers,
+            execution=execution,
+            stage_overrides=stage_overrides,
+            created_at=created_at,
+            config_origins=_routing_config_origins(),
+        )
+    except (ValueError, TypeError) as exc:
+        stages = tuple(sorted(str(item) for item in (required_stages or ())))
+        stage = stages[0] if stages else ''
+        raise model_profile.routing_resolution_error(exc, stage=stage) from exc
+    if required_stages is not None:
+        require_valid_routing_plan(plan, required_stages)
+    return plan
 
 
 def routing_plan_from_manifest(manifest):
@@ -12904,6 +12974,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
         execution=model_profile.ExecutionStrategy.SYNC,
     )
     route = route_for_manifest(plan, manifest)
+    require_valid_routing_plan(plan, {route.stage})
     effective_model = route_model(plan, route)
     if not manifest.get('model_routing'):
         attach_model_routing(manifest, plan)
@@ -13361,6 +13432,10 @@ def sync_keyword_candidates(
     output_summary_markdown='',
     api_key_index=None,
 ):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+        required_stages={model_profile.STAGE_KEYWORD},
+    )
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -13382,9 +13457,6 @@ def sync_keyword_candidates(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{KEYWORD_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    routing_plan = freeze_runtime_routing_plan(
-        execution=model_profile.ExecutionStrategy.SYNC,
-    )
     effective_model = route_model(
         routing_plan,
         routing_plan.routes[model_profile.STAGE_KEYWORD],
@@ -13442,6 +13514,10 @@ def sync_revisions(
     force=False,
     api_key_index=None,
 ):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+        required_stages={model_profile.STAGE_REVISION},
+    )
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -13463,9 +13539,6 @@ def sync_revisions(
     display_name = display_name_override.strip() if display_name_override else ''
     if not display_name:
         display_name = f'sync-{REVISION_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
-    routing_plan = freeze_runtime_routing_plan(
-        execution=model_profile.ExecutionStrategy.SYNC,
-    )
     effective_model = route_model(
         routing_plan,
         routing_plan.routes[model_profile.STAGE_REVISION],
@@ -13556,6 +13629,10 @@ def print_repair_summary(summary):
 
 
 def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2, api_key_index=None):
+    routing_plan = freeze_runtime_routing_plan(
+        execution=model_profile.ExecutionStrategy.SYNC,
+        required_stages={model_profile.STAGE_TRANSLATION},
+    )
     report_items = load_repair_report_items(report_path)
     if offset < 0:
         offset = 0
@@ -13633,9 +13710,6 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             }
         )
 
-    routing_plan = freeze_runtime_routing_plan(
-        execution=model_profile.ExecutionStrategy.SYNC,
-    )
     repair_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
     effective_model = route_model(routing_plan, repair_route)
     request_rows = [build_repair_request(job, model=effective_model) for job in jobs]
@@ -14536,6 +14610,59 @@ def collect_doctor_project_assets_warnings(project_assets):
     return warnings
 
 
+def collect_doctor_model_routing_status():
+    """Return read-only routing snapshots and machine-decidable issues.
+
+    ``status`` is ``ok`` or ``attention``. It never uses ``blocked`` and does
+    not change the doctor command exit or workflow gate.
+    """
+    custom_providers = _runtime_custom_providers()
+    plans = {}
+    issues = []
+    seen = set()
+    for strategy in (
+        model_profile.ExecutionStrategy.SYNC,
+        model_profile.ExecutionStrategy.GEMINI_BATCH,
+    ):
+        try:
+            plan = model_profile.resolve_routing_plan_from_runtime(
+                sync_backend=SYNC_BACKEND,
+                sync_model=SYNC_MODEL,
+                batch_model=BATCH_MODEL,
+                project_analysis_model=PROJECT_ANALYSIS_MODEL,
+                final_review_model=FINAL_REVIEW_MODEL,
+                sync_models=tuple(getattr(legacy, 'MODELS', ()) or ()),
+                custom_providers=custom_providers,
+                execution=strategy,
+                config_origins=_routing_config_origins(),
+            )
+        except (ValueError, TypeError) as exc:
+            payload = model_profile.routing_resolution_issue(exc).to_manifest_dict()
+            payload['execution_strategy'] = strategy.value
+            issues.append(payload)
+            continue
+        plans[strategy.value] = plan.to_manifest_dict()
+        for issue in model_profile.validate_routing_plan(
+            plan,
+            custom_providers=custom_providers,
+            keyring_has_credential=_runtime_keyring_has_credential,
+        ):
+            payload = issue.to_manifest_dict()
+            payload['execution_strategy'] = strategy.value
+            key = (
+                payload['code'], payload['stage'], payload['profile_id'],
+                tuple(payload['missing_capabilities']), strategy.value,
+            )
+            if key not in seen:
+                seen.add(key)
+                issues.append(payload)
+    return {
+        'status': 'attention' if issues else 'ok',
+        'issues': issues,
+        'plans': plans,
+    }
+
+
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
@@ -14691,6 +14818,13 @@ def collect_doctor_report():
     context_status = collect_doctor_context_status()
     project_assets = collect_doctor_project_assets_status(legacy.BASE_DIR)
     warnings.extend(collect_doctor_project_assets_warnings(project_assets))
+    model_routing_status = collect_doctor_model_routing_status()
+    for issue in model_routing_status['issues']:
+        warnings.append(
+            'Model routing preflight '
+            f"[{issue['code']}] ({issue['execution_strategy']}/"
+            f"{issue['stage'] or 'profile'}): {issue['message']}"
+        )
     glossary_path = project_assets.get('glossary_file') or ''
     if project_assets.get('glossary_exists'):
         warnings.extend(
@@ -14732,6 +14866,7 @@ def collect_doctor_report():
         'total_task_count': total_task_count,
         'context_status': context_status,
         'project_assets': project_assets,
+        'model_routing': model_routing_status,
         'warnings': warnings,
     }
     layout_context = collect_doctor_layout_context(report)
@@ -14768,6 +14903,18 @@ def print_doctor_report(report):
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
     print(f"- TL subdir: {report.get('tl_subdir') or ''}")
     print(f"- Language: {report['language']}")
+    routing_status = report.get('model_routing') or {}
+    routing_issues = list(routing_status.get('issues') or [])
+    print(
+        f"- Model routing: {routing_status.get('status') or 'unknown'} "
+        f"({len(routing_issues)} issue(s))"
+    )
+    for issue in routing_issues:
+        print(
+            "  - "
+            f"[{issue.get('code')}] {issue.get('execution_strategy')}/"
+            f"{issue.get('stage') or 'profile'}: {issue.get('message')}"
+        )
     print(
         f"- Prepare: enabled={report['prepare_enabled']}, "
         f"generate_template={report['generate_template']}, "
@@ -16234,7 +16381,7 @@ def dispatch_command(parser, args):
         # doctor is read-only: never persist auto-corrected game_root.
         legacy.load_translator_settings(persist_corrected_game_root=False)
         legacy.load_glossary()
-        load_batch_settings()
+        load_batch_settings(tolerate_routing_errors=True)
         print_banner()
         report = collect_doctor_report()
         print_doctor_report(report)
@@ -16352,7 +16499,13 @@ def dispatch_command(parser, args):
             if not store_dir or command == 'project-analysis-generate':
                 # generate needs API keys from load_config() for run_sync_request.
                 if command == 'project-analysis-generate':
-                    legacy.load_config()
+                    try:
+                        legacy.load_config()
+                    except model_profile.ModelRoutingConfigError as exc:
+                        raise model_profile.routing_resolution_error(
+                            exc,
+                            stage=model_profile.STAGE_PROJECT_ANALYSIS,
+                        ) from exc
                 legacy.load_translator_settings(persist_corrected_game_root=False)
                 load_batch_settings()
 
@@ -16386,6 +16539,7 @@ def dispatch_command(parser, args):
                 analysis_plan = freeze_runtime_routing_plan(
                     execution=model_profile.ExecutionStrategy.SYNC,
                     stage_overrides=analysis_overrides,
+                    required_stages={model_profile.STAGE_PROJECT_ANALYSIS},
                 )
                 analysis_route = analysis_plan.routes[model_profile.STAGE_PROJECT_ANALYSIS]
                 model = route_model(analysis_plan, analysis_route)
@@ -16706,7 +16860,10 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
     require_api_key = command not in OFFLINE_BATCH_COMMANDS
-    legacy.load_config(require_api_key=require_api_key)
+    try:
+        legacy.load_config(require_api_key=require_api_key)
+    except model_profile.ModelRoutingConfigError as exc:
+        raise model_profile.routing_resolution_error(exc) from exc
     legacy.load_translator_settings()
     legacy.load_glossary()
     load_batch_settings()

@@ -58,7 +58,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         _record_connection_completed(worker, completed)
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -95,7 +95,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         _record_connection_completed(worker, completed)
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -111,7 +111,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         worker = LiteLLMConnectionTestWorker("gemini/gemini-3.6-flash")
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -142,7 +142,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 _record_connection_completed(worker, completed)
 
                 with mock.patch(
-                    "gui_qt.litellm_worker.LiteLLMSyncBackend",
+                    "gui_qt.litellm_worker.model_profile.build_sync_backend",
                     return_value=backend,
                 ):
                     worker.run()
@@ -175,7 +175,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 _record_connection_completed(worker, completed)
 
                 with mock.patch(
-                    "gui_qt.litellm_worker.LiteLLMSyncBackend",
+                    "gui_qt.litellm_worker.model_profile.build_sync_backend",
                     return_value=backend,
                 ):
                     worker.run()
@@ -185,6 +185,25 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
                 self.assertNotIn("provider-secret", completed[0][1])
                 if not expected_success:
                     self.assertIn("invalid_response", completed[0][1])
+
+    def test_connection_test_preflight_reports_missing_provider_prefix(self):
+        completed = []
+        worker = LiteLLMConnectionTestWorker("gpt-4o-mini")
+        _record_connection_completed(worker, completed)
+
+        with mock.patch(
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
+        ) as build_backend:
+            worker.run()
+
+        build_backend.assert_not_called()
+        self.assertEqual(len(completed), 1)
+        self.assertFalse(completed[0][0])
+        message = completed[0][1]
+        self.assertIn("MODEL_PROFILE_INVALID", message)
+        self.assertIn("<provider>/<model>", message)
+        self.assertNotIn("JSON 能力", message)
+        self.assertNotIn("unsupported_capability", message)
 
     def test_connection_error_never_includes_provider_exception_text(self):
         backend = mock.Mock()
@@ -197,7 +216,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         _record_connection_completed(worker, completed)
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -215,7 +234,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         worker.request_cancel()
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -241,7 +260,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
 
         backend.generate_async.side_effect = generate_and_cancel
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             worker.run()
@@ -275,7 +294,7 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ):
             thread = threading.Thread(target=worker.run)
@@ -585,12 +604,16 @@ class LiteLLMConnectionTestWorkerTests(unittest.TestCase):
         _record_connection_completed(worker, completed)
 
         with mock.patch(
-            "gui_qt.litellm_worker.LiteLLMSyncBackend",
+            "gui_qt.litellm_worker.model_profile.build_sync_backend",
             return_value=backend,
         ) as backend_cls:
             worker.run()
 
         self.assertEqual(backend_cls.call_args.kwargs["custom_providers"], registry)
+        self.assertEqual(
+            backend_cls.call_args.kwargs["diagnostic_api_key"], "custom-secret",
+        )
+        self.assertEqual(backend_cls.call_args.args[0].adapter, "litellm")
         request = backend.generate_async.call_args.args[0]
         self.assertEqual(request.model, "opencode-go/gpt-4o-mini")
         self.assertEqual(

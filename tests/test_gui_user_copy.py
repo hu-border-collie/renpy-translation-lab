@@ -76,6 +76,17 @@ class GuiUserCopyTests(unittest.TestCase):
         )
         self.assertIn("界面字符串块", translated)
 
+    def test_translate_doctor_warning_maps_model_routing_preflight(self):
+        translated = translate_doctor_warning(
+            "Model routing preflight [MODEL_PROFILE_INVALID] "
+            "(sync/translation): invalid profile"
+        )
+        self.assertIn("模型路由启动前检查失败", translated)
+        self.assertIn("MODEL_PROFILE_INVALID", translated)
+        self.assertIn("sync", translated)
+        self.assertIn("translation", translated)
+        self.assertIn("invalid profile", translated)
+
     def test_manifest_mode_label_falls_back_for_empty_and_unknown(self):
         self.assertEqual(manifest_mode_label(""), "未知")
         self.assertEqual(manifest_mode_label("custom_mode"), "custom_mode")

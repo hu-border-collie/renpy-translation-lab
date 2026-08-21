@@ -606,6 +606,8 @@ class SyncRuntimeQualityFindingsTests(unittest.TestCase):
                 mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
                 mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
                 mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+                mock.patch.object(runtime, "MODELS", ["openai/test-model"]),
+                mock.patch.object(runtime, "CURRENT_MODEL_INDEX", 0),
                 mock.patch.object(runtime, "PREP_ENABLED", False),
                 mock.patch.object(runtime, "INCLUDE_FILES", []),
                 mock.patch.object(runtime, "INCLUDE_PREFIXES", []),

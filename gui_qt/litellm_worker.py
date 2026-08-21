@@ -28,7 +28,8 @@ from litellm_provider_config import (
     providers_from_remote_catalog,
     warm_litellm_module,
 )
-from litellm_sync_backend import LiteLLMBackendError, LiteLLMSyncBackend
+from litellm_sync_backend import LiteLLMBackendError
+import model_profile
 from sync_model_backend import SyncGenerationRequest, sync_error_category
 from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY, LITELLM_CONNECTION_TEST_COPY
 
@@ -68,7 +69,33 @@ class BudgetExhausted(TimeoutError):
     """Shared operation deadline elapsed before the next network hop."""
 
 
+class _RoutingPreflightError(LiteLLMBackendError):
+    """Connection-test wrapper that keeps the routing issue for GUI copy."""
+
+    def __init__(self, issue: model_profile.RoutingValidationIssue) -> None:
+        self.issue = issue
+        super().__init__(
+            issue.message,
+            category="provider_error",
+            internal=True,
+        )
+
+
+def _format_routing_connection_error(
+    issue: model_profile.RoutingValidationIssue,
+) -> str:
+    templates = LITELLM_CONNECTION_TEST_COPY["routing_errors"]
+    template = templates.get(issue.code, templates["default"])
+    return template.format(
+        code=issue.code,
+        message=issue.message,
+        stage=issue.stage or "translation",
+    )
+
+
 def _connection_error_message(exc: Exception) -> str:
+    if isinstance(exc, _RoutingPreflightError):
+        return _format_routing_connection_error(exc.issue)
     category = sync_error_category(exc)
     details = LITELLM_CONNECTION_TEST_COPY["errors"]
     return f"连接失败 [{category}]: {details.get(category, details['provider_error'])}"
@@ -440,10 +467,9 @@ class LiteLLMVersionWorker(_CancellableNetworkWorker):
 class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     """Send one minimal completion request to verify a provider connection.
 
-    ``custom_providers`` is snapshotted at construction and forwarded to
-    :class:`~litellm_sync_backend.LiteLLMSyncBackend` so custom ids get the same
-    ``openai/<model>`` + ``api_base`` rewrite and credential resolution as
-    production sync requests.  ``operation_identity`` is echoed on
+    ``custom_providers`` is snapshotted at construction and resolved through
+    the same ModelProfile registry and backend factory as production requests.
+    ``operation_identity`` is echoed on
     ``completed`` so the GUI can ignore a result after the selected
     provider, model, or endpoint changed.
     """
@@ -483,10 +509,35 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
     async def _generate_async(self):
         self._ensure_not_cancelled()
         self._emit_progress(LITELLM_CONNECTION_TEST_COPY["progress"])
-        return await LiteLLMSyncBackend(
-            api_key=self.api_key or None,
+        plan = model_profile.resolve_routing_plan(
+            {
+                "sync": {
+                    "backend": model_profile.SYNC_BACKEND_LITELLM,
+                    "model": self.model,
+                },
+            },
             custom_providers=self._custom_providers,
-        ).generate_async(
+            execution=model_profile.ExecutionStrategy.SYNC,
+        )
+        issues = model_profile.validate_routing_plan(
+            plan,
+            stages={model_profile.STAGE_TRANSLATION},
+            custom_providers=self._custom_providers,
+            # Connection testing is itself the credential probe. A typed key
+            # is ephemeral, while an empty value may still resolve from the
+            # normal keyring/environment path inside the backend.
+            keyring_has_credential=None,
+        )
+        if issues:
+            raise _RoutingPreflightError(issues[0])
+        route = plan.routes[model_profile.STAGE_TRANSLATION]
+        profile = model_profile.profile_for_route(plan, route)
+        backend = model_profile.build_sync_backend(
+            profile,
+            custom_providers=self._custom_providers,
+            diagnostic_api_key=self.api_key or None,
+        )
+        return await backend.generate_async(
             SyncGenerationRequest(
                 model=self.model,
                 contents=CONNECTION_TEST_PROMPT,
