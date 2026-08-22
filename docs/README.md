@@ -66,6 +66,7 @@
 
 - [开放 Issues 审计（2026-08-08）](plans/open_issues_audit_2026-08-08.md)：基于当时 GitHub 与代码状态的时间点快照，不是长期事实源。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
+- [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](plans/issue-346-implementation-plan.md)：基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；决策表 D1–D7 在 issue #346 定稿后进入 P1 编码。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md)
 
 
