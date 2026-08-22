@@ -4127,6 +4127,7 @@ class MainWindow(QMainWindow):
         self.download_fonts_btn.setObjectName("secondary_btn")
         self.download_fonts_btn.setToolTip(
             "从华为和霞鹜文楷官方来源下载固定版本字体，并执行 SHA-256 校验。"
+            "下载中点击可停止。"
         )
         self.download_fonts_btn.clicked.connect(self._on_download_recommended_fonts)
         font_actions_layout.addWidget(self.download_fonts_btn)
@@ -11047,7 +11048,9 @@ class MainWindow(QMainWindow):
             button.setText("重新下载推荐字体" if installed else "下载推荐字体")
 
     def _on_download_recommended_fonts(self) -> None:
-        if getattr(self, "_font_install_worker", None) is not None:
+        active_worker = getattr(self, "_font_install_worker", None)
+        if active_worker is not None:
+            self._request_cancel_font_install(active_worker)
             return
         reply = message_box_question(
             self,
@@ -11067,8 +11070,10 @@ class MainWindow(QMainWindow):
 
         button = getattr(self, "download_fonts_btn", None)
         if button is not None:
-            button.setEnabled(False)
-            button.setText("正在下载…")
+            # The button doubles as the stop control so the download always
+            # has a user cancellation entry (#297 P3).
+            button.setEnabled(True)
+            button.setText("停止下载")
         label = getattr(self, "font_install_status_label", None)
         if label is not None:
             label.setText("正在从字体发布者的官方来源下载并校验，请稍候…")
@@ -11082,6 +11087,20 @@ class MainWindow(QMainWindow):
         self._font_install_worker = worker
         worker.start()
 
+    def _request_cancel_font_install(self, worker: object) -> bool:
+        """If the font install is running, request cancel and flip the button."""
+        if worker is None or not getattr(worker, "isRunning", lambda: False)():
+            return False
+        request_cancel = getattr(worker, "request_cancel", None)
+        if callable(request_cancel):
+            request_cancel()
+        button = getattr(self, "download_fonts_btn", None)
+        if button is not None:
+            button.setEnabled(True)
+            button.setText("正在取消…")
+        self.statusBar().showMessage("正在取消字体下载…", 4000)
+        return True
+
     def _on_recommended_fonts_downloaded(self, result: FontInstallResult) -> None:
         self._font_install_worker = None
         if getattr(self, "_shutdown_requested", False):
@@ -11090,6 +11109,9 @@ class MainWindow(QMainWindow):
         if progress is not None:
             progress.setVisible(False)
         self._refresh_font_install_status()
+        if getattr(result, "cancelled", False):
+            self._show_settings_status("已取消推荐字体下载。", 4000)
+            return
         if result.ok:
             self._show_settings_status("推荐字体下载完成；重启 GUI 后生效。", 8000)
             message_box_information(
