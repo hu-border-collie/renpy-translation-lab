@@ -13,6 +13,7 @@ import time
 import unittest
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
@@ -675,6 +676,21 @@ class RevisionGoldenCorpusTests(unittest.TestCase):
                 )
 
                 preview_manifest = batch_mod.preview_revisions(str(manifest_path))
+                machine_preview = batch_mod.build_machine_success_envelope(
+                    'preview-revisions',
+                    preview_manifest,
+                    SimpleNamespace(target=str(manifest_path)),
+                )
+                self.assertTrue(machine_preview['ok'])
+                self.assertEqual(
+                    machine_preview['status'],
+                    preview_manifest['last_revision_preview']['check_status'],
+                )
+                self.assertTrue(
+                    machine_preview['artifacts']['revision_preview_jsonl'].endswith(
+                        '.jsonl'
+                    )
+                )
                 preview_rows = self._read_preview_rows(preview_manifest)
                 preview_markdown = Path(preview_manifest['last_revision_preview']['markdown_path']).read_text(
                     encoding='utf-8'
@@ -1030,6 +1046,17 @@ class KeywordGoldenCorpusTests(unittest.TestCase):
                 )
 
                 export = batch_mod.export_keyword_candidates(str(manifest_path))
+                machine_export = batch_mod.build_machine_success_envelope(
+                    'export-keywords',
+                    dict(export),
+                    SimpleNamespace(target=str(manifest_path)),
+                )
+                self.assertTrue(machine_export['ok'])
+                self.assertEqual(machine_export['status'], 'completed')
+                self.assertEqual(
+                    machine_export['artifacts']['keyword_candidates'],
+                    export['jsonl_path'],
+                )
                 self.assertEqual(source_path.read_text(encoding='utf-8'), source_before_export)
                 export_snapshot = {
                     'summary': export['summary'],

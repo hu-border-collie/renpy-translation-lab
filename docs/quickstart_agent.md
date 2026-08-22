@@ -41,6 +41,32 @@ python gemini_translate_batch.py import-reuse-decisions <reuse-report> <decision
 python gemini_translate_batch.py export-reuse-results <reuse-report> <manifest> --output json
 ```
 
+Revision、keyword 与 final-review 工作流命令同样使用该 envelope：
+
+```powershell
+python gemini_translate_batch.py build-revisions --output json
+python gemini_translate_batch.py preview-revisions <manifest> --output json
+python gemini_translate_batch.py build-keywords --output json
+python gemini_translate_batch.py export-keywords <manifest> --output json
+python gemini_translate_batch.py merge-keywords-to-glossary <candidates> --yes --output json
+python gemini_translate_batch.py final-review-build --output json
+python gemini_translate_batch.py final-review-status <manifest> --output json
+python gemini_translate_batch.py final-review-export <manifest> --output json
+python gemini_translate_batch.py final-review-resume <manifest> --output json
+python gemini_translate_batch.py final-review-ingest-results <manifest> --output json
+python gemini_translate_batch.py final-review-create-revisions <manifest> --output json
+```
+
+注意：
+
+- `preview-revisions` 与 `final-review-create-revisions` 的 `status` 使用与 `check` 相同的
+  `ready / ready_with_warnings / blocked` 门禁结论；严格模式下同样映射为 `0 / 3 / 4`。
+- `final-review-status` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`）；
+  严格模式下 `failed` 退出 `4`、`stale` 退出 `3`。`final-review-status --json` 仍输出未版本化的
+  裸 JSON，仅为兼容保留，新代码请使用 `--output json`。
+- `merge-keywords-to-glossary` 在 `--output json` 模式下必须搭配 `--yes` 或 `--dry-run`，
+  否则返回 `error.code=INTERACTIVE_REVIEW_UNSUPPORTED`（严格模式退出 `5`）。
+
 JSON 模式的 stdout 只包含一个 JSON 文档；banner、进度、warning、prepare 子进程输出和原有文本摘要会实时写入 stderr，完整 Batch 控制台日志仍会落盘。成功结果使用版本化 envelope：
 
 ```json
@@ -104,13 +130,15 @@ ModelProfile 与 ExecutionStrategy。拒绝时使用以下稳定合同：
 
 ## 严格非交互与显式 manifest
 
-七个核心命令支持 `--non-interactive`。当前核心流程本身不会读取 stdin；该选项进一步禁止 manifest 消费命令使用隐藏 target：
+核心命令、版本资产命令以及 revision / keyword / final-review 工作流命令都支持 `--non-interactive`。当前核心流程本身不会读取 stdin；该选项进一步禁止 manifest 消费命令使用隐藏 target：
 
 ```powershell
 python gemini_translate_batch.py status <manifest> --output json --non-interactive --strict-exit-codes
 ```
 
-在 `submit / status / download / check / apply` 中，`--non-interactive` 要求显式传入 manifest 路径或 package 目录：
+在 `submit / status / download / check / apply / quality-ack / quality-unack` 以及
+`preview-revisions / export-keywords / final-review-status / final-review-export / final-review-resume / final-review-ingest-results / final-review-create-revisions`
+中，`--non-interactive` 要求显式传入 manifest 路径或 package 目录：
 
 - 不再读取 `latest_manifest.txt` 或扫描最新 package；
 - `submit` 不再因 target 为空而隐式执行 build；
@@ -123,7 +151,7 @@ python gemini_translate_batch.py status <manifest> --output json --non-interacti
 
 ## 输出裁剪与文件输出
 
-上述七个核心 JSON 命令与两个版本资产命令还支持三个可组合选项：
+所有支持 `--output json` 的命令还支持三个可组合选项：
 
 ```powershell
 python gemini_translate_batch.py status <manifest> --output json --compact

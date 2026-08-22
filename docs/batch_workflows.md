@@ -160,6 +160,8 @@ python gemini_translate_batch.py sync-revisions --apply
 - `blocked`：没有发生写回且存在阻断（preview 缺失/过期、适配器写回计划不安全，或全部条目被跳过/源不匹配/校验失败，不写 `revision_applied_at`）；
 - `partial`：部分写回、部分跳过/失败（仅真实写回的行计入 applied）。
 
+`build-revisions` 与 `preview-revisions` 支持 `--output json`（`preview-revisions` 的 envelope `status` 复用 `ready / ready_with_warnings / blocked` 门禁结论，`result` 含 `writeback_gate`、`quality_gate` 与 preview 摘要，`artifacts` 给出 preview JSONL/Markdown 与 quality findings 路径）；参数与状态语义见 [Agent / CLI 快速开始](quickstart_agent.md)。
+
 `revision_applied_at` 只在 `applied` / `partial` 时写入；`no_op` / `blocked` 不会把 final-review finding 错误标记为已应用。
 
 重新运行 `preview-revisions` 会清空旧的 apply 终态（blocked/no_op/partial）并重新打开写回闸门；若此前已真实写回过，旧写回记录会移到 `revision_apply_history`，`revision_applied_at` 不再拦截新的 preview/apply 流程。
@@ -200,6 +202,8 @@ python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-packa
 ```
 
 通用 `status` 必须轮询到远端 job 成功后才能 `download`；pending/running 不是失败，也不能跳过轮询直接下载。`final-review-status` 查看的是 campaign 内 review unit / finding 生命周期，不能替代远端 job 的通用 `status`。`final-review-resume` 若报告 `Units to run: 0`，说明当前 digest 已是最新，不应再次 submit；若有待跑 unit，则必须完整执行 `submit -> status -> download -> final-review-ingest-results`，不能复用 resume 前的 `results.jsonl`。
+
+全部六个 `final-review-*` 命令都支持 `--output json` 版本化 envelope：`final-review-status` / `final-review-ingest-results` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`，严格模式下 `failed` 退出 `4`、`stale` 退出 `3`）；`final-review-resume` 用 `rebuilt / no_work` 区分是否需要重新 submit；`final-review-create-revisions` 的 envelope 与 `preview-revisions` 相同。`final-review-status --json` 的裸 JSON 输出仅为兼容保留，自动化请使用 `--output json`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
 
 ### 启动闸门
 
@@ -411,6 +415,8 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 - 默认逐条 `y/n` 确认；`--accept-confidence` 可半自动接受高置信候选，`--yes` 跳过交互。
 - `--min-confidence` 过滤低置信候选；已有 `source` 默认不覆盖，需 `--overwrite` 才改目标译法。
 - `--dry-run` / `--preview` 只预览 diff；真实写入前会生成 `glossary.json.bak-<timestamp>` 备份（可用 `--no-backup` 关闭）。
+
+`build-keywords`、`export-keywords` 与 `merge-keywords-to-glossary` 都支持 `--output json` 版本化 envelope（`export-keywords` 的 `artifacts` 覆盖四份候选/概要报告；`merge-keywords-to-glossary` 的 `status` 区分 `previewed / merged / no_work`）。注意 `merge-keywords-to-glossary` 的 JSON 模式没有交互通道，必须搭配 `--yes` 或 `--dry-run`，否则返回 `INTERACTIVE_REVIEW_UNSUPPORTED`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
 
 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`。
 
