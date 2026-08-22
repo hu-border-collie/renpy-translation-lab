@@ -16440,7 +16440,10 @@ def dispatch_command(parser, args):
                 allow_pending=bool(getattr(args, 'allow_pending', False)),
             )
         if command == 'final-review-status':
-            if not getattr(args, 'json', False):
+            machine_output = (
+                str(getattr(args, 'output', 'text') or 'text') == 'json'
+            )
+            if not machine_output and not getattr(args, 'json', False):
                 print_banner()
             return run_final_review_status(
                 getattr(args, 'target', '') or None,

@@ -904,6 +904,34 @@ class BatchCliContractTests(unittest.TestCase):
             "C:/jobs/demo/revision_preview.jsonl",
         )
 
+    def test_final_review_status_machine_mode_suppresses_banner_and_returns_envelope(self):
+        status = {"status": "done", "manifest_path": "C:/jobs/demo/manifest.json"}
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "run_final_review_status", return_value=status),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner") as banner,
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "final-review-status",
+                    "C:/jobs/demo/manifest.json",
+                    "--output",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        banner.assert_not_called()
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "final-review-status")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "done")
+
     def test_final_review_status_machine_cli_returns_json_envelope(self):
         status = {"status": "done", "manifest_path": "C:/jobs/demo/manifest.json"}
         stdout = io.StringIO()

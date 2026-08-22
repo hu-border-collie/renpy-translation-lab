@@ -166,6 +166,12 @@ class CliContractTests(unittest.TestCase):
         final_review_blocked = cli_contract.success_envelope(
             "final-review-ingest-results", status="blocked"
         )
+        final_review_build_local = cli_contract.success_envelope(
+            "final-review-build", status="LOCAL_ONLY"
+        )
+        final_review_build_no_work = cli_contract.success_envelope(
+            "final-review-build", status="no_work"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -207,6 +213,14 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(
             cli_contract.strict_exit_code(final_review_blocked),
             cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_build_local),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_build_no_work),
+            cli_contract.EXIT_OK,
         )
         unknown = cli_contract.success_envelope("check", status="unknown")
         unclassified_error = cli_contract.error_envelope(
