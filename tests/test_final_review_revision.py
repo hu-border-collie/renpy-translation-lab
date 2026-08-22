@@ -5,6 +5,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import final_review as fr
 import final_review_revision as handoff
@@ -113,6 +114,65 @@ class FinalReviewRevisionHandoffTests(unittest.TestCase):
             findings=[finding],
         )
         return paths["manifest"], finding["finding_id"]
+
+    def test_machine_envelopes_cover_real_campaign_lifecycle(self):
+        campaign, finding_id = self._campaign()
+        target = str(campaign)
+        args = SimpleNamespace(target=target, force=False)
+
+        status = batch.build_machine_success_envelope(
+            "final-review-status",
+            batch.run_final_review_status(target),
+            args,
+        )
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["command"], "final-review-status")
+        self.assertEqual(status["status"], "done")
+        self.assertEqual(status["result"]["unit_count"], 1)
+        self.assertEqual(status["result"]["finding_count"], 1)
+        self.assertEqual(status["artifacts"]["manifest"], target)
+
+        export = batch.build_machine_success_envelope(
+            "final-review-export",
+            batch.run_final_review_export(target),
+            args,
+        )
+        self.assertTrue(export["ok"])
+        self.assertEqual(export["status"], "completed")
+        self.assertEqual(export["result"]["finding_count"], 1)
+        self.assertTrue(Path(export["artifacts"]["findings_jsonl"]).is_file())
+        self.assertTrue(Path(export["artifacts"]["findings_markdown"]).is_file())
+
+        handoff_manifest = batch.run_final_review_create_revisions(target, [finding_id])
+        create = batch.build_machine_success_envelope(
+            "final-review-create-revisions",
+            handoff_manifest,
+            args,
+        )
+        self.assertTrue(create["ok"])
+        self.assertEqual(
+            create["status"],
+            handoff_manifest["last_revision_preview"]["check_status"],
+        )
+        self.assertTrue(
+            Path(create["artifacts"]["revision_preview_jsonl"]).is_file()
+        )
+        self.assertEqual(
+            create["result"]["final_review_source"]["manifest_path"],
+            target,
+        )
+
+        resume = batch.build_machine_success_envelope(
+            "final-review-resume",
+            batch.run_final_review_resume(target),
+            args,
+        )
+        self.assertTrue(resume["ok"])
+        self.assertEqual(
+            resume["result"]["run_count"] + resume["result"]["skip_count"],
+            1,
+        )
+        self.assertIn(resume["status"], {"no_work", "rebuilt"})
 
     def test_selected_finding_previews_then_apply_marks_real_state(self):
         campaign, finding_id = self._campaign()

@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import tokenize
-from dataclasses import replace
+from dataclasses import asdict, replace
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -128,9 +128,37 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'export-reuse-results',
         'quality-ack',
         'quality-unack',
+        'build-revisions',
+        'preview-revisions',
+        'build-keywords',
+        'export-keywords',
+        'merge-keywords-to-glossary',
+        'final-review-build',
+        'final-review-status',
+        'final-review-export',
+        'final-review-resume',
+        'final-review-ingest-results',
+        'final-review-create-revisions',
     }
 )
-EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply', 'quality-ack', 'quality-unack'})
+EXPLICIT_TARGET_COMMANDS = frozenset(
+    {
+        'submit',
+        'status',
+        'download',
+        'check',
+        'apply',
+        'quality-ack',
+        'quality-unack',
+        'preview-revisions',
+        'export-keywords',
+        'final-review-status',
+        'final-review-export',
+        'final-review-resume',
+        'final-review-ingest-results',
+        'final-review-create-revisions',
+    }
+)
 # Local-only batch commands must not be blocked by API-key preflight.
 OFFLINE_BATCH_COMMANDS = frozenset(
     {
@@ -15282,6 +15310,7 @@ def build_arg_parser():
         default=0,
         help='Maximum keyword candidates requested from each chunk.',
     )
+    add_machine_output_argument(keyword_build_parser)
 
     revision_build_parser = subparsers.add_parser(
         'build-revisions',
@@ -15299,6 +15328,7 @@ def build_arg_parser():
         default=0,
         help='Old/new pair count per revision chunk. Defaults to batch.revision.chunk_size.',
     )
+    add_machine_output_argument(revision_build_parser)
 
     export_revision_corpus_parser = subparsers.add_parser(
         'export-revision-corpus',
@@ -15621,6 +15651,7 @@ def build_arg_parser():
             '(not recommended; results may be incomplete).'
         ),
     )
+    add_machine_output_argument(final_review_build_parser)
 
     final_review_status_parser = subparsers.add_parser(
         'final-review-status',
@@ -15635,8 +15666,9 @@ def build_arg_parser():
     final_review_status_parser.add_argument(
         '--json',
         action='store_true',
-        help='Print machine-readable JSON status.',
+        help='Print unversioned JSON status (legacy); prefer --output json for the versioned contract.',
     )
+    add_machine_output_argument(final_review_status_parser)
 
     final_review_export_parser = subparsers.add_parser(
         'final-review-export',
@@ -15658,6 +15690,7 @@ def build_arg_parser():
         default='',
         help='Output report Markdown path (default: package report.md).',
     )
+    add_machine_output_argument(final_review_export_parser)
 
     final_review_resume_parser = subparsers.add_parser(
         'final-review-resume',
@@ -15678,6 +15711,7 @@ def build_arg_parser():
         action='store_true',
         help='Re-queue all units, including done units with matching digests.',
     )
+    add_machine_output_argument(final_review_resume_parser)
 
     final_review_ingest_parser = subparsers.add_parser(
         'final-review-ingest-results',
@@ -15709,6 +15743,7 @@ def build_arg_parser():
             'resume (escape hatch / re-parse). Prefer a fresh download or --result.'
         ),
     )
+    add_machine_output_argument(final_review_ingest_parser)
 
     final_review_revisions_parser = subparsers.add_parser(
         'final-review-create-revisions',
@@ -15732,6 +15767,7 @@ def build_arg_parser():
             'already marked selection_state=selected.'
         ),
     )
+    add_machine_output_argument(final_review_revisions_parser)
     project_analysis_status_parser = subparsers.add_parser(
         'project-analysis-status',
         help=(
@@ -16054,6 +16090,7 @@ def build_arg_parser():
         default='',
         help='Relative chunk summary Markdown path inside the package.',
     )
+    add_machine_output_argument(keyword_export_parser)
 
     merge_keywords_parser = subparsers.add_parser(
         'merge-keywords-to-glossary',
@@ -16112,6 +16149,7 @@ def build_arg_parser():
         action='store_true',
         help='Skip creating a timestamped glossary backup before writing.',
     )
+    add_machine_output_argument(merge_keywords_parser)
 
     compare_variants_parser = subparsers.add_parser(
         'compare-variants',
@@ -16155,6 +16193,7 @@ def build_arg_parser():
     )
     revision_preview_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
     revision_preview_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
+    add_machine_output_argument(revision_preview_parser)
 
     revision_apply_parser = subparsers.add_parser(
         'apply-revisions',
@@ -16420,52 +16459,49 @@ def dispatch_command(parser, args):
         load_batch_settings()
         if command == 'final-review-build':
             print_banner()
-            create_final_review_package(
-                display_name_override=getattr(args, 'display_name', '') or '',
-                skip_prepare=bool(getattr(args, 'skip_prepare', False)),
-                chunk_size=getattr(args, 'chunk_size', 0) or None,
-                allow_pending=bool(getattr(args, 'allow_pending', False)),
+            return (
+                create_final_review_package(
+                    display_name_override=getattr(args, 'display_name', '') or '',
+                    skip_prepare=bool(getattr(args, 'skip_prepare', False)),
+                    chunk_size=getattr(args, 'chunk_size', 0) or None,
+                    allow_pending=bool(getattr(args, 'allow_pending', False)),
+                )
+                or ''
             )
-            return
         if command == 'final-review-status':
             if not getattr(args, 'json', False):
                 print_banner()
-            run_final_review_status(
+            return run_final_review_status(
                 getattr(args, 'target', '') or None,
                 as_json=bool(getattr(args, 'json', False)),
             )
-            return
         if command == 'final-review-export':
             print_banner()
-            run_final_review_export(
+            return run_final_review_export(
                 getattr(args, 'target', '') or None,
                 output_jsonl=getattr(args, 'jsonl', '') or '',
                 output_markdown=getattr(args, 'markdown', '') or '',
             )
-            return
         if command == 'final-review-resume':
             print_banner()
-            run_final_review_resume(
+            return run_final_review_resume(
                 getattr(args, 'target', '') or None,
                 force=bool(getattr(args, 'force', False)),
             )
-            return
         if command == 'final-review-ingest-results':
             print_banner()
-            run_final_review_ingest_results(
+            return run_final_review_ingest_results(
                 getattr(args, 'target', '') or None,
                 result_path=getattr(args, 'result', '') or '',
                 allow_stale_results=bool(getattr(args, 'allow_stale_results', False)),
             )
-            return
 
         if command == 'final-review-create-revisions':
             print_banner()
-            run_final_review_create_revisions(
+            return run_final_review_create_revisions(
                 getattr(args, 'target', '') or None,
                 finding_ids=getattr(args, 'finding_id', []) or [],
             )
-            return
     if command in {
         'project-analysis-status',
         'project-analysis-ingest-keywords',
@@ -16876,21 +16912,25 @@ def dispatch_command(parser, args):
         )
 
     if command == 'build-keywords':
-        create_keyword_package(
-            display_name_override=args.display_name,
-            skip_prepare=(not args.prepare) or args.skip_prepare,
-            chunk_size=args.chunk_size,
-            max_candidates_per_chunk=args.max_candidates_per_chunk,
+        return (
+            create_keyword_package(
+                display_name_override=args.display_name,
+                skip_prepare=(not args.prepare) or args.skip_prepare,
+                chunk_size=args.chunk_size,
+                max_candidates_per_chunk=args.max_candidates_per_chunk,
+            )
+            or ''
         )
-        return
 
     if command == 'build-revisions':
-        create_revision_package(
-            display_name_override=args.display_name,
-            skip_prepare=args.skip_prepare,
-            chunk_size=args.chunk_size,
+        return (
+            create_revision_package(
+                display_name_override=args.display_name,
+                skip_prepare=args.skip_prepare,
+                chunk_size=args.chunk_size,
+            )
+            or ''
         )
-        return
 
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
@@ -16963,31 +17003,51 @@ def dispatch_command(parser, args):
         return apply_results(args.target or None, force=args.force)
 
     if command == 'export-keywords':
-        export_keyword_candidates(
+        return export_keyword_candidates(
             target=args.target or None,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
             output_summary_jsonl=args.summary_jsonl,
             output_summary_markdown=args.summary_markdown,
         )
-        return
 
     if command == 'merge-keywords-to-glossary':
         candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
         glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
         dry_run = args.dry_run or args.preview
-        keyword_glossary_merge.merge_keywords_to_glossary(
+        interactive = not args.yes and not dry_run
+        if interactive and (
+            cli_contract.machine_output_active()
+            or getattr(args, 'non_interactive', False)
+        ):
+            message = (
+                'merge-keywords-to-glossary prompts for review; '
+                'pass --yes or --dry-run to run non-interactively.'
+            )
+            if cli_contract.machine_output_active():
+                raise cli_contract.MachineContractError(
+                    message,
+                    code_name='INTERACTIVE_REVIEW_UNSUPPORTED',
+                    suggested_action='pass_yes_or_dry_run',
+                    details={'command': 'merge-keywords-to-glossary'},
+                )
+            raise SystemExit(message)
+        summary = keyword_glossary_merge.merge_keywords_to_glossary(
             candidates_path,
             glossary_path,
             dry_run=dry_run,
             min_confidence=max(0.0, float(args.min_confidence or 0.0)),
             accept_confidence=args.accept_confidence,
             overwrite=args.overwrite,
-            interactive=not args.yes and not dry_run,
+            interactive=interactive,
             backup=not args.no_backup,
             allow_history_review=bool(args.yes),
         )
-        return
+        return (
+            asdict(summary)
+            if isinstance(summary, keyword_glossary_merge.MergeSummary)
+            else summary
+        )
 
     if command == 'compare-variants':
         manifest = load_manifest(args.target or None)
@@ -17013,12 +17073,11 @@ def dispatch_command(parser, args):
         return
 
     if command == 'preview-revisions':
-        preview_revisions(
+        return preview_revisions(
             target=args.target or None,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
         )
-        return
 
     if command == 'apply-revisions':
         apply_revisions(args.target or None, force=args.force)
@@ -17114,7 +17173,14 @@ def _machine_manifest_summary(manifest):
 def _load_machine_manifest(command, value, args):
     if isinstance(value, dict):
         return value
-    if command in {'build', 'submit'} and value:
+    builder_commands = {
+        'build',
+        'submit',
+        'build-revisions',
+        'build-keywords',
+        'final-review-build',
+    }
+    if command in builder_commands and value:
         return load_manifest(value)
     return load_manifest(getattr(args, 'target', '') or None)
 
@@ -17143,6 +17209,17 @@ def build_machine_success_envelope(command, value, args):
             command,
             status='no_work',
             result={'reason': 'no_pending_translation_work'},
+        )
+
+    if (
+        command
+        in {'build-revisions', 'build-keywords', 'final-review-build'}
+        and not value
+    ):
+        return cli_contract.success_envelope(
+            command,
+            status='no_work',
+            result={'reason': 'no_source_items'},
         )
 
     if command in {'quality-ack', 'quality-unack'}:
@@ -17214,9 +17291,10 @@ def build_machine_success_envelope(command, value, args):
     warnings = list(manifest.get('build_warnings') or [])
     status = 'completed'
 
-    if command == 'build':
+    if command in {'build', 'build-revisions', 'build-keywords', 'final-review-build'}:
         status = str(manifest.get('job_state') or 'LOCAL_ONLY')
-        result['cost_estimate'] = dict(manifest.get('cost_estimate') or {})
+        if command == 'build':
+            result['cost_estimate'] = dict(manifest.get('cost_estimate') or {})
     elif command in {'submit', 'status'}:
         status = str(manifest.get('job_state') or 'unknown')
         if manifest.get('job_error'):
@@ -17246,6 +17324,163 @@ def build_machine_success_envelope(command, value, args):
         status = str(
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
+        )
+    elif command in {'preview-revisions', 'final-review-create-revisions'}:
+        manifest = (
+            value
+            if isinstance(value, dict)
+            else _load_machine_manifest(command, value, args)
+        )
+        preview = dict(manifest.get('last_revision_preview') or {})
+        result = {
+            'manifest_path': manifest.get('_manifest_path') or '',
+            'preview_jsonl_path': preview.get('jsonl_path') or '',
+            'preview_markdown_path': preview.get('markdown_path') or '',
+            'check_status': preview.get('check_status') or '',
+            'writeback_gate': dict(preview.get('writeback_gate') or {}),
+            'quality_gate': dict(preview.get('quality_gate') or {}),
+            'quality_findings_count': int(preview.get('quality_findings_count') or 0),
+            'summary': dict(preview.get('summary') or {}),
+        }
+        if command == 'final-review-create-revisions':
+            result['final_review_source'] = dict(
+                manifest.get('final_review_source') or {}
+            )
+        return cli_contract.success_envelope(
+            command,
+            status=str(preview.get('check_status') or 'completed'),
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                revision_preview_jsonl=result['preview_jsonl_path'],
+                revision_preview_markdown=result['preview_markdown_path'],
+                quality_findings=preview.get('quality_findings_path') or '',
+            ),
+        )
+    elif command == 'export-keywords':
+        export = dict(value or {})
+        keyword_manifest = load_manifest(getattr(args, 'target', '') or None)
+        result = {
+            'manifest_path': keyword_manifest.get('_manifest_path') or '',
+            'jsonl_path': export.get('jsonl_path') or '',
+            'markdown_path': export.get('markdown_path') or '',
+            'summary_jsonl_path': export.get('summary_jsonl_path') or '',
+            'summary_markdown_path': export.get('summary_markdown_path') or '',
+            'summary': dict(export.get('summary') or {}),
+            'history_evidence': dict(export.get('history_evidence') or {}),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                keyword_candidates=result['jsonl_path'],
+                keyword_candidates_markdown=result['markdown_path'],
+                keyword_chunk_summaries=result['summary_jsonl_path'],
+                keyword_chunk_summaries_markdown=result['summary_markdown_path'],
+            ),
+        )
+    elif command == 'merge-keywords-to-glossary':
+        summary = dict(value or {})
+        dry_run = bool(summary.get('dry_run'))
+        wrote_glossary = bool(summary.get('wrote_glossary'))
+        result = {
+            'candidates_path': summary.get('candidates_path') or '',
+            'glossary_path': summary.get('glossary_path') or '',
+            'candidates_read': int(summary.get('candidates_read') or 0),
+            'accepted': int(summary.get('accepted') or 0),
+            'overwritten': int(summary.get('overwritten') or 0),
+            'skipped_duplicate': int(summary.get('skipped_duplicate') or 0),
+            'skipped_low_confidence': int(summary.get('skipped_low_confidence') or 0),
+            'skipped_empty': int(summary.get('skipped_empty') or 0),
+            'skipped_user': int(summary.get('skipped_user') or 0),
+            'dry_run': dry_run,
+            'wrote_glossary': wrote_glossary,
+        }
+        status = 'previewed' if dry_run else ('merged' if wrote_glossary else 'no_work')
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                glossary=result['glossary_path'],
+                glossary_backup=summary.get('backup_path') or '',
+                keyword_candidates=result['candidates_path'],
+            ),
+        )
+    elif command == 'final-review-status':
+        campaign = dict(value or {})
+        return cli_contract.success_envelope(
+            command,
+            status=str(campaign.get('status') or 'unknown'),
+            result=campaign,
+            artifacts=_nonempty_artifacts(
+                manifest=campaign.get('manifest_path') or '',
+            ),
+        )
+    elif command == 'final-review-export':
+        export = dict(value or {})
+        campaign = dict(export.get('status') or {})
+        result = {
+            'jsonl_path': export.get('jsonl_path') or '',
+            'markdown_path': export.get('markdown_path') or '',
+            'finding_count': int(export.get('finding_count') or 0),
+            'campaign_status': campaign.get('status') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts=_nonempty_artifacts(
+                findings_jsonl=result['jsonl_path'],
+                findings_markdown=result['markdown_path'],
+            ),
+        )
+    elif command == 'final-review-resume':
+        resume = dict(value or {})
+        paths = dict(resume.get('paths') or {})
+        campaign = dict(resume.get('status') or {})
+        run_count = int(resume.get('run_count') or 0)
+        result = {
+            'manifest_path': paths.get('manifest') or '',
+            'package_dir': paths.get('package_dir') or '',
+            'run_count': run_count,
+            'skip_count': int(resume.get('skip_count') or 0),
+            'to_run_unit_ids': list(resume.get('to_run_unit_ids') or []),
+            'force': bool(getattr(args, 'force', False)),
+            'campaign_status': campaign.get('status') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='rebuilt' if run_count else 'no_work',
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                review_units=paths.get('review_units') or '',
+                campaign_report=paths.get('report') or '',
+            ),
+        )
+    elif command == 'final-review-ingest-results':
+        ingest = dict(value or {})
+        paths = dict(ingest.get('paths') or {})
+        campaign = dict(ingest.get('status') or {})
+        result = {
+            'manifest_path': paths.get('manifest') or '',
+            'package_dir': paths.get('package_dir') or '',
+            'summary': dict(ingest.get('summary') or {}),
+            'campaign_status': campaign.get('status') or '',
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(campaign.get('status') or 'completed'),
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                findings_jsonl=paths.get('findings') or '',
+                quality_findings=paths.get('quality_findings') or '',
+                campaign_report=paths.get('report') or '',
+            ),
         )
     elif command == 'export-project-snapshot':
         snapshot = dict(value or {})

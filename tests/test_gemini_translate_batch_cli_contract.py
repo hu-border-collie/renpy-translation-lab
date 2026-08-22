@@ -35,6 +35,16 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "reuse.json", "manifest.json"]
         if command == "import-revision-proposals":
             return [command, "proposals.jsonl"]
+        if command == "merge-keywords-to-glossary":
+            return [command, "candidates.jsonl"]
+        if command in {
+            "final-review-status",
+            "final-review-export",
+            "final-review-resume",
+            "final-review-ingest-results",
+            "final-review-create-revisions",
+        }:
+            return [command, "campaign-manifest.json"]
         return [command]
 
     def test_core_commands_accept_json_output_after_subcommand(self):
@@ -718,6 +728,505 @@ class BatchCliContractTests(unittest.TestCase):
             ["apply-revisions", "C:/jobs/demo/manifest.json", "--output", "json"]
         )
         self.assertEqual(args.output, "json")
+
+    def test_noncore_workflow_commands_are_registered_for_machine_output(self):
+        expected = {
+            "build-revisions",
+            "preview-revisions",
+            "build-keywords",
+            "export-keywords",
+            "merge-keywords-to-glossary",
+            "final-review-build",
+            "final-review-status",
+            "final-review-export",
+            "final-review-resume",
+            "final-review-ingest-results",
+            "final-review-create-revisions",
+        }
+        self.assertTrue(expected <= batch.MACHINE_OUTPUT_COMMANDS)
+        self.assertTrue(
+            {
+                "preview-revisions",
+                "export-keywords",
+                "final-review-status",
+                "final-review-export",
+                "final-review-resume",
+                "final-review-ingest-results",
+                "final-review-create-revisions",
+            }
+            <= batch.EXPLICIT_TARGET_COMMANDS
+        )
+        parser = batch.build_arg_parser()
+        for command in sorted(expected):
+            with self.subTest(command=command):
+                argv = self._machine_command_argv(command)
+                args = parser.parse_args([*argv, "--output", "json"])
+                self.assertEqual(args.output, "json")
+
+    def test_builder_commands_translate_manifest_paths_into_envelopes(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "job_state": "",
+            "summary": {"item_count": 2},
+            "input_jsonl_path": "C:/jobs/demo/input.jsonl",
+        }
+        with mock.patch.object(
+            batch, "load_manifest", return_value=manifest
+        ) as load_manifest_mock:
+            for command in (
+                "build-revisions",
+                "build-keywords",
+                "final-review-build",
+            ):
+                with self.subTest(command=command):
+                    envelope = batch.build_machine_success_envelope(
+                        command,
+                        "C:/jobs/demo/manifest.json",
+                        args,
+                    )
+                    self.assertTrue(envelope["ok"])
+                    self.assertEqual(envelope["status"], "LOCAL_ONLY")
+                    self.assertEqual(
+                        envelope["artifacts"]["manifest"],
+                        "C:/jobs/demo/manifest.json",
+                    )
+                    self.assertEqual(
+                        envelope["artifacts"]["input_jsonl"],
+                        "C:/jobs/demo/input.jsonl",
+                    )
+                with self.subTest(command=command, case="no_work"):
+                    calls_before = load_manifest_mock.call_count
+                    no_work = batch.build_machine_success_envelope(
+                        command,
+                        "",
+                        args,
+                    )
+                    self.assertEqual(no_work["status"], "no_work")
+                    self.assertEqual(
+                        no_work["result"]["reason"],
+                        "no_source_items",
+                    )
+                    self.assertEqual(
+                        load_manifest_mock.call_count,
+                        calls_before,
+                    )
+
+    def test_revision_preview_machine_envelope_exposes_gates_and_artifacts(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/demo/revision_preview.md",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "quality_findings_count": 2,
+                "check_status": "ready_with_warnings",
+                "writeback_gate": {"can_apply": True},
+                "quality_gate": {"has_warnings": True},
+                "summary": {"preview_entry_count": 3},
+            },
+            "final_review_source": {"manifest_path": "C:/jobs/fr/manifest.json"},
+        }
+        for command in ("preview-revisions", "final-review-create-revisions"):
+            with self.subTest(command=command):
+                envelope = batch.build_machine_success_envelope(
+                    command,
+                    dict(manifest),
+                    args,
+                )
+                self.assertTrue(envelope["ok"])
+                self.assertEqual(envelope["status"], "ready_with_warnings")
+                self.assertEqual(
+                    envelope["result"]["check_status"],
+                    "ready_with_warnings",
+                )
+                self.assertTrue(envelope["result"]["writeback_gate"]["can_apply"])
+                self.assertEqual(envelope["result"]["quality_findings_count"], 2)
+                self.assertEqual(
+                    envelope["artifacts"]["revision_preview_jsonl"],
+                    "C:/jobs/demo/revision_preview.jsonl",
+                )
+                self.assertEqual(
+                    envelope["artifacts"]["quality_findings"],
+                    "C:/jobs/demo/quality_findings.jsonl",
+                )
+        create = batch.build_machine_success_envelope(
+            "final-review-create-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertEqual(
+            create["result"]["final_review_source"]["manifest_path"],
+            "C:/jobs/fr/manifest.json",
+        )
+        plain = batch.build_machine_success_envelope(
+            "preview-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertNotIn("final_review_source", plain["result"])
+
+    def test_keyword_export_machine_envelope_lists_review_artifacts(self):
+        args = SimpleNamespace(target="C:/jobs/kw/manifest.json")
+        keyword_manifest = {"_manifest_path": "C:/jobs/kw/manifest.json"}
+        export = {
+            "jsonl_path": "C:/jobs/kw/keyword_candidates.jsonl",
+            "markdown_path": "C:/jobs/kw/keyword_candidates.md",
+            "summary_jsonl_path": "C:/jobs/kw/keyword_chunk_summaries.jsonl",
+            "summary_markdown_path": "C:/jobs/kw/keyword_chunk_summaries.md",
+            "summary": {"candidate_count_deduped": 5},
+            "history_evidence": {"occurrence_count": 4},
+        }
+        with mock.patch.object(batch, "load_manifest", return_value=keyword_manifest):
+            envelope = batch.build_machine_success_envelope(
+                "export-keywords",
+                dict(export),
+                args,
+            )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "completed")
+        self.assertEqual(
+            envelope["result"]["manifest_path"],
+            "C:/jobs/kw/manifest.json",
+        )
+        self.assertEqual(
+            envelope["result"]["summary"]["candidate_count_deduped"],
+            5,
+        )
+        self.assertEqual(
+            envelope["artifacts"]["keyword_candidates"],
+            "C:/jobs/kw/keyword_candidates.jsonl",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["keyword_chunk_summaries"],
+            "C:/jobs/kw/keyword_chunk_summaries.jsonl",
+        )
+
+    def test_keyword_merge_machine_envelope_reports_preview_merge_and_no_work(self):
+        args = SimpleNamespace(target="candidates.jsonl")
+        base = {
+            "candidates_path": "candidates.jsonl",
+            "glossary_path": "glossary.json",
+            "candidates_read": 4,
+            "accepted": 2,
+            "overwritten": 1,
+            "skipped_duplicate": 1,
+            "skipped_low_confidence": 0,
+            "skipped_empty": 0,
+            "skipped_user": 0,
+            "backup_path": "glossary.backup.json",
+        }
+        preview = batch.build_machine_success_envelope(
+            "merge-keywords-to-glossary",
+            {**base, "dry_run": True, "wrote_glossary": False},
+            args,
+        )
+        self.assertEqual(preview["status"], "previewed")
+        self.assertFalse(preview["result"]["wrote_glossary"])
+        self.assertEqual(
+            preview["artifacts"]["glossary_backup"],
+            "glossary.backup.json",
+        )
+
+        merged = batch.build_machine_success_envelope(
+            "merge-keywords-to-glossary",
+            {**base, "dry_run": False, "wrote_glossary": True},
+            args,
+        )
+        self.assertEqual(merged["status"], "merged")
+
+        no_work = batch.build_machine_success_envelope(
+            "merge-keywords-to-glossary",
+            {**base, "dry_run": False, "wrote_glossary": False},
+            args,
+        )
+        self.assertEqual(no_work["status"], "no_work")
+
+    def test_final_review_campaign_envelopes_cover_status_export_resume_ingest(self):
+        args = SimpleNamespace(target="campaign.json", force=False)
+        campaign_status = {
+            "status": "running",
+            "manifest_path": "C:/jobs/fr/manifest.json",
+            "package_dir": "C:/jobs/fr",
+            "unit_count": 3,
+            "finding_count": 1,
+            "status_counts": {"done": 2, "pending": 1},
+        }
+        status = batch.build_machine_success_envelope(
+            "final-review-status",
+            dict(campaign_status),
+            args,
+        )
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["status"], "running")
+        self.assertEqual(
+            status["result"]["status_counts"],
+            {"done": 2, "pending": 1},
+        )
+        self.assertEqual(
+            status["artifacts"]["manifest"],
+            "C:/jobs/fr/manifest.json",
+        )
+
+        export = batch.build_machine_success_envelope(
+            "final-review-export",
+            {
+                "jsonl_path": "C:/jobs/fr/findings.jsonl",
+                "markdown_path": "C:/jobs/fr/report.md",
+                "finding_count": 1,
+                "status": dict(campaign_status),
+            },
+            args,
+        )
+        self.assertEqual(export["status"], "completed")
+        self.assertEqual(export["result"]["campaign_status"], "running")
+        self.assertEqual(
+            export["artifacts"]["findings_jsonl"],
+            "C:/jobs/fr/findings.jsonl",
+        )
+
+        resume = batch.build_machine_success_envelope(
+            "final-review-resume",
+            {
+                "paths": {
+                    "manifest": "C:/jobs/fr/manifest.json",
+                    "package_dir": "C:/jobs/fr",
+                    "review_units": "C:/jobs/fr/review_units.jsonl",
+                    "report": "C:/jobs/fr/report.md",
+                },
+                "run_count": 2,
+                "skip_count": 1,
+                "to_run_unit_ids": ["u1", "u2"],
+                "status": {"status": "running"},
+            },
+            args,
+        )
+        self.assertEqual(resume["status"], "rebuilt")
+        self.assertEqual(resume["result"]["run_count"], 2)
+        self.assertEqual(resume["result"]["to_run_unit_ids"], ["u1", "u2"])
+        self.assertEqual(
+            resume["artifacts"]["review_units"],
+            "C:/jobs/fr/review_units.jsonl",
+        )
+
+        up_to_date = batch.build_machine_success_envelope(
+            "final-review-resume",
+            {
+                "paths": {},
+                "run_count": 0,
+                "skip_count": 3,
+                "status": {"status": "done"},
+            },
+            args,
+        )
+        self.assertEqual(up_to_date["status"], "no_work")
+
+        ingest = batch.build_machine_success_envelope(
+            "final-review-ingest-results",
+            {
+                "paths": {
+                    "manifest": "C:/jobs/fr/manifest.json",
+                    "package_dir": "C:/jobs/fr",
+                    "findings": "C:/jobs/fr/findings.jsonl",
+                    "quality_findings": "C:/jobs/fr/quality_findings.jsonl",
+                    "report": "C:/jobs/fr/report.md",
+                },
+                "summary": {
+                    "result_rows": 2,
+                    "done_units": 2,
+                    "failed_units": 0,
+                    "finding_count": 1,
+                },
+                "status": {"status": "done"},
+            },
+            args,
+        )
+        self.assertEqual(ingest["status"], "done")
+        self.assertEqual(ingest["result"]["summary"]["done_units"], 2)
+        self.assertEqual(
+            ingest["artifacts"]["quality_findings"],
+            "C:/jobs/fr/quality_findings.jsonl",
+        )
+
+    def test_final_review_status_machine_mode_wraps_campaign_in_envelope(self):
+        campaign = {
+            "status": "running",
+            "manifest_path": "C:/jobs/fr/manifest.json",
+            "unit_count": 3,
+            "finding_count": 1,
+            "status_counts": {"done": 2, "pending": 1},
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        seen = {}
+
+        def fake_status(target=None, as_json=False):
+            seen["as_json"] = as_json
+            print("campaign text summary")
+            return dict(campaign)
+
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch, "run_final_review_status", side_effect=fake_status
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "final-review-status",
+                    "C:/jobs/fr/manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(
+            payload["result"]["status_counts"],
+            {"done": 2, "pending": 1},
+        )
+        self.assertEqual(
+            payload["artifacts"]["manifest"],
+            "C:/jobs/fr/manifest.json",
+        )
+        # Machine mode must not depend on the legacy --json flag; text
+        # diagnostics stay on stderr and the envelope reads the handler
+        # return value.
+        self.assertFalse(seen["as_json"])
+        self.assertIn("campaign text summary", stderr.getvalue())
+
+    def test_merge_keywords_machine_mode_requires_yes_or_dry_run(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        merge = mock.Mock()
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "resolve_keyword_candidates_path",
+                return_value="candidates.jsonl",
+            ),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "merge_keywords_to_glossary",
+                merge,
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "merge-keywords-to-glossary",
+                    "candidates.jsonl",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload["error"]["code"], "INTERACTIVE_REVIEW_UNSUPPORTED")
+        self.assertEqual(
+            payload["error"]["suggested_action"],
+            "pass_yes_or_dry_run",
+        )
+        merge.assert_not_called()
+
+    def test_merge_keywords_non_interactive_text_mode_requires_yes_or_dry_run(self):
+        stderr = io.StringIO()
+        merge = mock.Mock()
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "resolve_keyword_candidates_path",
+                return_value="candidates.jsonl",
+            ),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "merge_keywords_to_glossary",
+                merge,
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
+            with self.assertRaisesRegex(SystemExit, "--yes or --dry-run"):
+                batch.main(
+                    [
+                        "merge-keywords-to-glossary",
+                        "candidates.jsonl",
+                        "--non-interactive",
+                    ]
+                )
+        merge.assert_not_called()
+
+    def test_merge_keywords_machine_mode_runs_non_interactively_with_yes(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        summary = batch.keyword_glossary_merge.MergeSummary(
+            candidates_read=2,
+            accepted=1,
+            wrote_glossary=True,
+            glossary_path="glossary.json",
+            candidates_path="candidates.jsonl",
+            backup_path="glossary.backup.json",
+        )
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "resolve_keyword_candidates_path",
+                return_value="candidates.jsonl",
+            ),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "merge_keywords_to_glossary",
+                return_value=summary,
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "merge-keywords-to-glossary",
+                    "candidates.jsonl",
+                    "--yes",
+                    "--output",
+                    "json",
+                ]
+            )
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["status"], "merged")
+        self.assertEqual(payload["result"]["accepted"], 1)
+        self.assertEqual(payload["artifacts"]["glossary"], "glossary.json")
 
     def test_proposal_import_machine_envelope_exposes_status_actions_and_artifacts(self):
         args = SimpleNamespace(command="import-revision-proposals")
