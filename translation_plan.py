@@ -74,6 +74,10 @@ _SENSITIVE_KEY_SUBSTRINGS = (
     'password',
     'credentialvalue',
     'bearer',
+    'accesskey',
+    'privatekey',
+    'clientkey',
+    'signingkey',
 )
 _SENSITIVE_KEY_SUFFIXES = ('token',)
 _REDACTED_KEY_ALLOWLIST = ('credential_ref', 'credential_refs')
@@ -149,14 +153,18 @@ def short_fingerprint(text):
 def _canonical_term_sequence(terms):
     """Deterministic sequence for term iterables of any collection type.
 
-    Lists and tuples keep their given order (deduplicated); ``set`` /
-    ``frozenset`` are sorted, because set iteration order is
+    A bare ``str`` is treated as one single term, never split into
+    characters. Lists and tuples keep their given order (deduplicated);
+    ``set`` / ``frozenset`` are sorted, because set iteration order is
     ``PYTHONHASHSEED``-dependent and plan ids must be reproducible across
     processes.
     """
-    items = list(terms or [])
-    if isinstance(terms, (set, frozenset)):
-        items.sort()
+    if isinstance(terms, str):
+        items = [terms]
+    else:
+        items = list(terms or [])
+        if isinstance(terms, (set, frozenset)):
+            items.sort()
     seen = set()
     ordered = []
     for item in items:

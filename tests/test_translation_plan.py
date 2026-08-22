@@ -124,6 +124,25 @@ class CanonicalJsonTests(unittest.TestCase):
         )
         self.assertEqual(translation_plan._canonical_term_sequence(None), [])
 
+    def test_bare_string_term_is_one_term_not_characters(self):
+        self.assertEqual(
+            translation_plan._canonical_term_sequence('Dawn Chorus'),
+            ['Dawn Chorus'],
+        )
+        str_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            preserve_terms='Dawn Chorus',
+            non_translatable_exact='B-side',
+        )
+        list_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            preserve_terms=['Dawn Chorus'],
+            non_translatable_exact=['B-side'],
+        )
+        self.assertEqual(str_build.plan.plan_id, list_build.plan.plan_id)
+        self.assertIn('- Preserve: Dawn Chorus', str_build.requests[0].user_prompt)
+        self.assertIn('- Non-translatable: B-side', str_build.requests[0].user_prompt)
+
 
 class RedactionTests(unittest.TestCase):
     def test_replaces_credential_values_recursively(self):
@@ -164,19 +183,32 @@ class RedactionTests(unittest.TestCase):
                 'session-token': 'secret-g',
                 'X-Trace-Id': 'keep-me',
             },
+            'credentials': {
+                'access_key': 'secret-h',
+                'private_key': 'secret-i',
+                'client_key': 'secret-j',
+                'aws_access_key_id': 'secret-k',
+                'signing_key': 'secret-l',
+            },
             'generation': {'max_output_tokens': 8192, 'temperature': 0.2},
             'usage': {'total_tokens': 12345, 'usages': [{'prompt_tokens': 1}]},
+            'ui_hints': {'hotkey': 'F5', 'keyboard': 'qwerty'},
         }
         redacted = translation_plan.redact_sensitive(payload)
         headers = redacted['extra_headers']
         for key in ('X-Api-Key', 'x-api-key', 'token', 'AUTH_TOKEN', 'X-Token', 'x_token', 'session-token'):
             self.assertEqual(headers[key], translation_plan.REDACTED_VALUE, key)
+        for key in ('access_key', 'private_key', 'client_key', 'aws_access_key_id', 'signing_key'):
+            self.assertEqual(redacted['credentials'][key], translation_plan.REDACTED_VALUE, key)
         self.assertEqual(headers['X-Trace-Id'], 'keep-me')
         # Suffix matching must stay singular: plural token-count keys are
         # legitimate generation/usage data, not credentials.
         self.assertEqual(redacted['generation']['max_output_tokens'], 8192)
         self.assertEqual(redacted['usage']['total_tokens'], 12345)
         self.assertEqual(redacted['usage']['usages'][0]['prompt_tokens'], 1)
+        # Non-credential key names that merely contain "key" stay intact.
+        self.assertEqual(redacted['ui_hints']['hotkey'], 'F5')
+        self.assertEqual(redacted['ui_hints']['keyboard'], 'qwerty')
 
 
 class ChunkingTests(unittest.TestCase):
