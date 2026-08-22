@@ -166,6 +166,9 @@ class CliContractTests(unittest.TestCase):
         sync_ready = cli_contract.success_envelope(
             "sync-revisions", status="previewed"
         )
+        sync_no_work = cli_contract.success_envelope(
+            "sync-revisions", status="no_work"
+        )
         sync_applied = cli_contract.success_envelope(
             "sync-revisions", status="applied"
         )
@@ -215,6 +218,10 @@ class CliContractTests(unittest.TestCase):
         )
         self.assertEqual(
             cli_contract.strict_exit_code(sync_ready),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_no_work),
             cli_contract.EXIT_OK,
         )
         self.assertEqual(

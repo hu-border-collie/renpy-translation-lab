@@ -245,7 +245,7 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
     if command == "sync-revisions":
-        if status in {"ready", "previewed", "applied", "no_op"}:
+        if status in {"ready", "previewed", "applied", "no_op", "no_work"}:
             return EXIT_OK
         if status in {"ready_with_warnings", "warn", "attention", "partial"}:
             return EXIT_NEEDS_ACTION

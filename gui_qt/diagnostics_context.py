@@ -377,6 +377,38 @@ def build_cli_commands(
                 ["final-review-ingest-results", manifest_path],
             ),
         ),
+        DiagnosticsCommand(
+            label="订正·构建任务",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["build-revisions"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="订正·同步预览",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["sync-revisions"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="关键词·构建任务",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["build-keywords"],
+            ),
+        ),
+        DiagnosticsCommand(
+            label="关键词·同步提取",
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                ["sync-keywords"],
+            ),
+        ),
     ]
     # Keep usage commands ahead of mode-specific early returns so revision /
     # keyword / retry packages expose the same import/report actions.
