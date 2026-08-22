@@ -827,7 +827,7 @@ class BatchCliContractTests(unittest.TestCase):
                 "quality_gate": {"has_warnings": True},
                 "summary": {"preview_entry_count": 3},
             },
-            "final_review_source": {"campaign_manifest": "C:/jobs/fr/manifest.json"},
+            "final_review_source": {"manifest_path": "C:/jobs/fr/manifest.json"},
         }
         for command in ("preview-revisions", "final-review-create-revisions"):
             with self.subTest(command=command):
@@ -858,7 +858,7 @@ class BatchCliContractTests(unittest.TestCase):
             args,
         )
         self.assertEqual(
-            create["result"]["final_review_source"]["campaign_manifest"],
+            create["result"]["final_review_source"]["manifest_path"],
             "C:/jobs/fr/manifest.json",
         )
         plain = batch.build_machine_success_envelope(
