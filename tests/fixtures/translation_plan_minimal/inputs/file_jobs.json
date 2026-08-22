@@ -4,49 +4,49 @@
     "file_path": "game/chapter01/dialogue.rpy",
     "tasks": [
       {
-        "id": "chapter01/dialogue.rpy:chapter01_start:1:2fc92d42",
+        "id": "chapter01/dialogue.rpy:chapter01_start:1:10a68e16",
         "text": "Hey [Gil_name!t], did you finish the Dawn Chorus setlist?",
-        "line": 5,
-        "speaker_id": "g",
-        "speaker_name": "Gil",
-        "block_name": "chapter01/dialogue.rpy::chapter01_start"
-      },
-      {
-        "id": "chapter01/dialogue.rpy:chapter01_start:2:76c75e96",
-        "text": "Almost. {i}Almost{/i} is the operative word, Gil.",
         "line": 6,
-        "speaker_id": "p",
-        "speaker_name": "Parker",
-        "block_name": "chapter01/dialogue.rpy::chapter01_start"
-      },
-      {
-        "id": "chapter01/dialogue.rpy:chapter01_start:3:b4ff32ae",
-        "text": "Mrs. Parker will flip if we're late to rehearsal again.",
-        "line": 7,
         "speaker_id": "g",
         "speaker_name": "Gil",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
       },
       {
-        "id": "chapter01/dialogue.rpy:chapter01_start:4:97290b97",
-        "text": "Relax. I kept the B-side as the encore, like you asked.",
-        "line": 8,
+        "id": "chapter01/dialogue.rpy:chapter01_start:2:c4d75441",
+        "text": "Almost. {i}Almost{/i} is the operative word, Gil.",
+        "line": 7,
         "speaker_id": "p",
         "speaker_name": "Parker",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
       },
       {
-        "id": "chapter01/dialogue.rpy:chapter01_hall:1:5a148e37",
+        "id": "chapter01/dialogue.rpy:chapter01_start:3:39f88feb",
+        "text": "Mrs. Parker will flip if we're late to rehearsal again.",
+        "line": 8,
+        "speaker_id": "g",
+        "speaker_name": "Gil",
+        "block_name": "chapter01/dialogue.rpy::chapter01_start"
+      },
+      {
+        "id": "chapter01/dialogue.rpy:chapter01_start:4:23a766ca",
+        "text": "Relax. I kept the B-side as the encore, like you asked.",
+        "line": 9,
+        "speaker_id": "p",
+        "speaker_name": "Parker",
+        "block_name": "chapter01/dialogue.rpy::chapter01_start"
+      },
+      {
+        "id": "chapter01/dialogue.rpy:chapter01_hall:1:aa916e5f",
         "text": "You two. Practice room, five minutes, or the setlist is cut.",
-        "line": 12,
+        "line": 13,
         "speaker_id": "m",
         "speaker_name": "Mrs. Parker",
         "block_name": "chapter01/dialogue.rpy::chapter01_hall"
       },
       {
-        "id": "chapter01/dialogue.rpy:chapter01_hall:2:312652f9",
+        "id": "chapter01/dialogue.rpy:chapter01_hall:2:e0e4d9f7",
         "text": "On it! Come on, [Parker_last!t], move!",
-        "line": 13,
+        "line": 14,
         "speaker_id": "g",
         "speaker_name": "Gil",
         "block_name": "chapter01/dialogue.rpy::chapter01_hall"
@@ -58,7 +58,7 @@
     "file_path": "game/chapter02/strings.rpy",
     "tasks": [
       {
-        "id": "chapter02/strings.rpy:strings:1:946ed705",
+        "id": "chapter02/strings.rpy:strings:1:602b26d9",
         "text": "New game",
         "line": 4,
         "speaker_id": "",
@@ -66,7 +66,7 @@
         "block_name": ""
       },
       {
-        "id": "chapter02/strings.rpy:strings:2:31fbef16",
+        "id": "chapter02/strings.rpy:strings:2:2e026239",
         "text": "Continue",
         "line": 7,
         "speaker_id": "",
@@ -74,7 +74,7 @@
         "block_name": ""
       },
       {
-        "id": "chapter02/strings.rpy:strings:3:d649170f",
+        "id": "chapter02/strings.rpy:strings:3:23abf38c",
         "text": "Dawn Chorus — Route B",
         "line": 10,
         "speaker_id": "",

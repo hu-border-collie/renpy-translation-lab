@@ -2,7 +2,7 @@
   "artifacts": {},
   "chunk_policy": {
     "max_chars": 18000,
-    "max_items": 4
+    "max_items": 3
   },
   "chunks": [
     {
@@ -11,8 +11,8 @@
       "context_window_spec": {
         "block_bounded_after": true,
         "block_bounded_before": false,
-        "context_after_chars": 0,
-        "context_after_items": 0,
+        "context_after_chars": 55,
+        "context_after_items": 1,
         "context_after_limit": 10,
         "context_before_chars": 0,
         "context_before_items": 0,
@@ -22,17 +22,15 @@
       "file_path": "game/chapter01/dialogue.rpy",
       "file_rel_path": "chapter01/dialogue.rpy",
       "line_numbers": [
-        5,
         6,
         7,
         8
       ],
-      "source_char_count": 216,
+      "source_char_count": 161,
       "unit_ids": [
-        "chapter01/dialogue.rpy:chapter01_start:1:2fc92d42",
-        "chapter01/dialogue.rpy:chapter01_start:2:76c75e96",
-        "chapter01/dialogue.rpy:chapter01_start:3:b4ff32ae",
-        "chapter01/dialogue.rpy:chapter01_start:4:97290b97"
+        "chapter01/dialogue.rpy:chapter01_start:1:10a68e16",
+        "chapter01/dialogue.rpy:chapter01_start:2:c4d75441",
+        "chapter01/dialogue.rpy:chapter01_start:3:39f88feb"
       ]
     },
     {
@@ -40,25 +38,27 @@
       "chunk_index": 2,
       "context_window_spec": {
         "block_bounded_after": false,
-        "block_bounded_before": true,
+        "block_bounded_before": false,
         "context_after_chars": 0,
         "context_after_items": 0,
         "context_after_limit": 10,
-        "context_before_chars": 0,
-        "context_before_items": 0,
+        "context_before_chars": 161,
+        "context_before_items": 3,
         "context_before_limit": 30,
         "context_truncated": false
       },
       "file_path": "game/chapter01/dialogue.rpy",
       "file_rel_path": "chapter01/dialogue.rpy",
       "line_numbers": [
-        12,
-        13
+        9,
+        13,
+        14
       ],
-      "source_char_count": 98,
+      "source_char_count": 153,
       "unit_ids": [
-        "chapter01/dialogue.rpy:chapter01_hall:1:5a148e37",
-        "chapter01/dialogue.rpy:chapter01_hall:2:312652f9"
+        "chapter01/dialogue.rpy:chapter01_start:4:23a766ca",
+        "chapter01/dialogue.rpy:chapter01_hall:1:aa916e5f",
+        "chapter01/dialogue.rpy:chapter01_hall:2:e0e4d9f7"
       ]
     },
     {
@@ -84,9 +84,9 @@
       ],
       "source_char_count": 37,
       "unit_ids": [
-        "chapter02/strings.rpy:strings:1:946ed705",
-        "chapter02/strings.rpy:strings:2:31fbef16",
-        "chapter02/strings.rpy:strings:3:d649170f"
+        "chapter02/strings.rpy:strings:1:602b26d9",
+        "chapter02/strings.rpy:strings:2:2e026239",
+        "chapter02/strings.rpy:strings:3:23abf38c"
       ]
     }
   ],
@@ -124,26 +124,26 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "2e27b184884a69a3",
-  "plan_id": "4150ca49dc749568",
+  "plan_fingerprint": "5b265d7dc5e8c347",
+  "plan_id": "c24ba960433436e9",
   "request_summaries": [
     {
       "chunk_id": "004851531f-00001",
-      "prompt_fingerprint": "77575fbc1e18e8f0",
-      "request_fingerprint": "ae2bf85398b7631a",
-      "request_id": "138bc2678b01c789"
+      "prompt_fingerprint": "05b50b65da84b6fa",
+      "request_fingerprint": "83f220848910d4bc",
+      "request_id": "a7c2c56c7f4895b8"
     },
     {
       "chunk_id": "004851531f-00002",
-      "prompt_fingerprint": "88e4800fbd8a254b",
-      "request_fingerprint": "236ea0ed04af2b1a",
-      "request_id": "19a3aaa8d0cbf9e3"
+      "prompt_fingerprint": "4508daee3de4cd63",
+      "request_fingerprint": "80d995bd14a3409f",
+      "request_id": "3f25ef73cef53e3d"
     },
     {
       "chunk_id": "029e98ba77-00001",
-      "prompt_fingerprint": "51331611e20b41b8",
-      "request_fingerprint": "7dbf421ea4c05bcb",
-      "request_id": "6615fa0650e99e3f"
+      "prompt_fingerprint": "af431f0d8cae99d7",
+      "request_fingerprint": "f17f6b0d81755c0d",
+      "request_id": "cb535eddb76a5755"
     }
   ],
   "run_id": "fixture-run",

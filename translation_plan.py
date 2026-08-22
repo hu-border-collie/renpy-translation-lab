@@ -805,14 +805,21 @@ def _resolve_profile_snapshot(value):
 
 
 def _resolve_text_source(value, chunk_input, label):
-    """Accept a constant string or a per-chunk callable."""
+    """Accept a constant string or a per-chunk callable, LF-normalized.
+
+    Provider text is normalized to LF line endings on entry so a CRLF
+    checkout (or CRLF-producing provider) cannot move fingerprints: prompt
+    text is byte-stable by contract, not by caller discipline.
+    """
     if value is None:
         return ''
     if callable(value):
-        return str(value(chunk_input) or '')
-    if isinstance(value, str):
-        return value
-    raise TypeError(f'{label} must be a string or a callable(chunk_input) -> str')
+        resolved = str(value(chunk_input) or '')
+    elif isinstance(value, str):
+        resolved = value
+    else:
+        raise TypeError(f'{label} must be a string or a callable(chunk_input) -> str')
+    return resolved.replace('\r\n', '\n')
 
 
 def _unit_semantic_entry(unit):

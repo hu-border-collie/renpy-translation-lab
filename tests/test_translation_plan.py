@@ -28,7 +28,9 @@ def _load_json(name):
 
 
 def _load_text(name):
-    return (INPUTS_DIR / name).read_text(encoding='utf-8')
+    # Normalize line endings: git checkout may convert fixture text files to
+    # CRLF (core.autocrlf) and these bytes are hashed into prompt fingerprints.
+    return (INPUTS_DIR / name).read_text(encoding='utf-8').replace('\r\n', '\n')
 
 
 def _file_digest(rel_path):
@@ -61,10 +63,12 @@ def build_fixture_plan(strategy, **overrides):
         config_snapshot=_load_json('config_snapshot.json'),
         model_profile_snapshot=_load_json('model_profile.json'),
         run_id='fixture-run',
-        # Shrink item budget so chapter01 splits across its two labels and the
-        # frozen golden plans exercise the D1 block boundary (the production
-        # D4 default 60/18000 is asserted in ChunkingTests).
-        chunk_policy=translation_plan.ChunkPolicy(max_items=4),
+        # Shrink the item budget so chapter01 splits inside and across its
+        # two labels: the frozen golden plans then exercise both real block
+        # boundaries and in-block CONTEXT BEFORE/AFTER rendered from task
+        # dicts (the production D4 default 60/18000 is asserted in
+        # ChunkingTests).
+        chunk_policy=translation_plan.ChunkPolicy(max_items=3),
         preserve_terms=glossary['preserve_terms'],
         normalize_map=glossary['normalize_map'],
         non_translatable_exact=glossary['non_translatable_exact'],
@@ -140,8 +144,16 @@ class CanonicalJsonTests(unittest.TestCase):
             non_translatable_exact=['B-side'],
         )
         self.assertEqual(str_build.plan.plan_id, list_build.plan.plan_id)
-        self.assertIn('- Preserve: Dawn Chorus', str_build.requests[0].user_prompt)
-        self.assertIn('- Non-translatable: B-side', str_build.requests[0].user_prompt)
+        dawn_chorus_chunk = next(
+            request for request in str_build.requests
+            if '- Preserve: Dawn Chorus' in request.user_prompt
+        )
+        self.assertIn('- Preserve: Dawn Chorus', dawn_chorus_chunk.user_prompt)
+        b_side_chunk = next(
+            request for request in str_build.requests
+            if '- Non-translatable: B-side' in request.user_prompt
+        )
+        self.assertIn('- Non-translatable: B-side', b_side_chunk.user_prompt)
 
 
 class RedactionTests(unittest.TestCase):
@@ -628,15 +640,78 @@ class ContextAssemblyTests(unittest.TestCase):
             chunk for chunk in build.plan.chunks
             if chunk.file_rel_path == 'chapter01/dialogue.rpy'
         ]
-        # max_items=4 splits chapter01 across its two labels; each side of
-        # the split stops at the translate-block boundary (D1).
+        # max_items=3 splits chapter01 into [0:3] and [3:6] (chunking is
+        # item/char based and does not see blocks): the first chunk's after
+        # window stops at the hall block boundary but keeps the fourth
+        # start-block task, and the second chunk keeps the full in-block
+        # before window.
         self.assertEqual(len(dialogue_chunks), 2)
-        first_spec = dialogue_chunks[0].context_window_spec
-        second_spec = dialogue_chunks[1].context_window_spec
-        self.assertEqual(first_spec['block_bounded_after'], True)
-        self.assertEqual(first_spec['context_after_items'], 0)
-        self.assertEqual(second_spec['block_bounded_before'], True)
-        self.assertEqual(second_spec['context_before_items'], 0)
+        by_spec = [chunk.context_window_spec for chunk in dialogue_chunks]
+        self.assertEqual(by_spec[0]['context_before_items'], 0)
+        self.assertEqual(by_spec[0]['context_after_items'], 1)
+        self.assertEqual(by_spec[0]['block_bounded_after'], True)
+        self.assertEqual(by_spec[1]['context_before_items'], 3)
+        self.assertEqual(by_spec[1]['context_after_items'], 0)
+        self.assertFalse(by_spec[1]['block_bounded_before'])
+
+    def test_golden_prompt_embeds_in_block_context_from_task_dicts(self):
+        build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        # The first chapter01 chunk ([0:3]) carries the fourth start task as
+        # CONTEXT AFTER and the second ([3:6]) carries the first three as
+        # CONTEXT BEFORE — rendered from the task dicts with speaker labels
+        # ("Name (id)"), so a regression in dict context rendering must move
+        # the frozen prompt fingerprint.
+        first = next(
+            request for request in build.requests
+            if request.chunk_id == translation_plan.build_chunk_id('chapter01/dialogue.rpy', 1)
+        )
+        self.assertIn(
+            'CONTEXT AFTER:\n- Parker (p): Relax. I kept the B-side as the encore, like you asked.',
+            first.user_prompt,
+        )
+        second = next(
+            request for request in build.requests
+            if request.chunk_id == translation_plan.build_chunk_id('chapter01/dialogue.rpy', 2)
+        )
+        self.assertIn(
+            'CONTEXT BEFORE:\n- Gil (g): Hey [Gil_name!t], did you finish the Dawn Chorus setlist?',
+            second.user_prompt,
+        )
+        self.assertIn('- Gil (g): Mrs. Parker will flip', second.user_prompt)
+        self.assertIn('CONTEXT AFTER:\n(none)', second.user_prompt)
+
+    def test_file_jobs_lines_index_source_lines_containing_task_text(self):
+        jobs = _load_json('file_jobs.json')
+        for job in jobs:
+            source_lines = (GAME_DIR / job['file_rel_path']).read_text(
+                encoding='utf-8'
+            ).replace('\r\n', '\n').splitlines()
+            for task in job['tasks']:
+                self.assertLess(
+                    task['line'], len(source_lines),
+                    f"{task['id']} line {task['line']} out of range",
+                )
+                self.assertIn(
+                    task['text'], source_lines[task['line']],
+                    f"{task['id']} line {task['line']} does not contain its text",
+                )
+
+    def test_crlf_normalization_keeps_frozen_fingerprints_stable(self):
+        # A CRLF checkout of the multi-line reference inputs must not move
+        # the frozen fingerprints: _load_text normalizes line endings before
+        # the text is hashed into the prompt.
+        baseline = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        crlf_retrieval = _load_text('retrieval_blocks.txt').replace('\n', '\r\n')
+        crlf_analysis = _load_text('analysis_blocks.txt').replace('\n', '\r\n')
+        build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider=crlf_retrieval,
+            analysis_blocks_provider=crlf_analysis,
+        )
+        self.assertEqual(
+            [request.prompt_fingerprint for request in build.requests],
+            [request.prompt_fingerprint for request in baseline.requests],
+        )
 
 
 class GoldenPlanTests(unittest.TestCase):
