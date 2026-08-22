@@ -1252,6 +1252,59 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(activated, [True])
         self.assertEqual(self.window._last_main_tab_index, 1)
 
+    def test_rapid_tab_switches_drop_stale_deferred_enter_effects(self):
+        work_tab = object()
+        diag_tab = object()
+
+        class FakeTabs:
+            def __init__(self):
+                self.current_index = 0
+
+            def widget(self, index):
+                return {1: work_tab, 2: diag_tab}.get(index)
+
+            def setCurrentIndex(self, index):
+                self.current_index = index
+
+            def currentWidget(self):
+                return self.widget(self.current_index)
+
+        class FakeNav:
+            def currentRow(self):
+                return 0
+
+        self.window._config_tab = object()
+        self.window._diagnostics_tab = diag_tab
+        self.window.tab_widget = FakeTabs()
+        self.window.settings_nav = FakeNav()
+        self.window._settings_nav_rows = {"workspace": 0}
+        self.window._handling_config_tab_leave = False
+        self.window._last_main_tab_index = 0
+        self.window._sync_shell_nav_selection = lambda: None
+        refreshed = []
+        self.window._refresh_diagnostics_context = lambda: refreshed.append(True)
+        self.window._refresh_api_status = lambda: None
+
+        deferred = []
+        with (
+            mock.patch("gui_qt.app.QApplication") as qapp,
+            mock.patch("gui_qt.app.QTimer") as timer,
+            mock.patch.object(self.window, "thread", return_value=object()),
+        ):
+            qapp.instance.return_value = object()
+            timer.singleShot.side_effect = lambda delay, callback: deferred.append(
+                callback
+            )
+            self.window._on_tab_changed(2)
+            self.window._on_tab_changed(1)
+            # Stale diagnostics callback arrives after the user switched away.
+            deferred[0]()
+            self.assertEqual(refreshed, [])
+            self.window._on_tab_changed(2)
+        # The fresh diagnostics callback still applies its enter effects.
+        deferred[-1]()
+        self.assertEqual(refreshed, [True])
+
     def test_on_registry_switch_project_stays_on_workspace_section(self):
         switched = []
         focused = []
@@ -2276,10 +2329,111 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(worker.started)
         self.assertEqual(worker.completed.callback, self.window._on_recommended_fonts_downloaded)
         self.assertEqual(worker.finished.callback, worker.deleteLater)
-        self.assertFalse(button.enabled)
-        self.assertEqual(button.text, "正在下载…")
+        # The button stays enabled as the stop control while downloading.
+        self.assertTrue(button.enabled)
+        self.assertEqual(button.text, "停止下载")
         self.assertTrue(progress.visible)
         self.assertIn("正在从字体发布者", label.text)
+
+    def test_download_fonts_button_click_while_running_requests_cancel(self):
+        worker = mock.Mock(spec=["isRunning", "request_cancel"])
+        worker.isRunning.return_value = True
+        button = mock.Mock()
+        status_bar = mock.Mock()
+        self.window._font_install_worker = worker
+        self.window.download_fonts_btn = button
+
+        with (
+            mock.patch.object(self.window, "statusBar", return_value=status_bar),
+            mock.patch("gui_qt.app.message_box_question") as question,
+            mock.patch("gui_qt.app.FontInstallWorker") as worker_cls,
+        ):
+            self.window._on_download_recommended_fonts()
+
+        worker.request_cancel.assert_called_once_with()
+        question.assert_not_called()
+        worker_cls.assert_not_called()
+        # Ownership is retained until the real completed signal arrives (#297 P1).
+        self.assertIs(self.window._font_install_worker, worker)
+        button.setEnabled.assert_called_once_with(True)
+        button.setText.assert_called_once_with("正在取消…")
+        status_bar.showMessage.assert_called_once_with("正在取消字体下载…", 4000)
+
+    def test_recommended_fonts_cancelled_completion_is_not_an_error(self):
+        from gui_qt.font_worker import FontInstallResult
+
+        label = mock.Mock()
+        progress = mock.Mock()
+        messages = []
+        self.window._font_install_worker = object()
+        self.window.font_install_status_label = label
+        self.window.font_install_progress = progress
+        self.window._refresh_font_install_status = mock.Mock()
+        self.window._show_settings_status = lambda message, timeout: messages.append(
+            (message, timeout)
+        )
+
+        with mock.patch("gui_qt.app.message_box_information") as information:
+            self.window._on_recommended_fonts_downloaded(
+                FontInstallResult(False, error="字体下载已取消。", cancelled=True)
+            )
+
+        self.assertIsNone(self.window._font_install_worker)
+        progress.setVisible.assert_called_once_with(False)
+        self.window._refresh_font_install_status.assert_called_once_with()
+        label.setText.assert_not_called()
+        self.assertIn("已取消", messages[-1][0])
+        self.assertNotIn("失败", messages[-1][0])
+        information.assert_not_called()
+
+    def test_font_install_allows_restart_after_cancelled_completion(self):
+        from gui_qt.font_worker import FontInstallResult
+
+        class FakeSignal:
+            def __init__(self):
+                self.callback = None
+
+            def connect(self, callback):
+                self.callback = callback
+
+        class FakeWorker:
+            def __init__(self, parent):
+                self.completed = FakeSignal()
+                self.finished = FakeSignal()
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def deleteLater(self):
+                pass
+
+        button = mock.Mock()
+        progress = mock.Mock()
+        self.window._font_install_worker = object()
+        self.window.download_fonts_btn = button
+        self.window.font_install_progress = progress
+        self.window._refresh_font_install_status = mock.Mock()
+        self.window._show_settings_status = lambda message, timeout: None
+
+        # Rapid restart: cancel terminal state clears the worker first.
+        self.window._on_recommended_fonts_downloaded(
+            FontInstallResult(False, error="字体下载已取消。", cancelled=True)
+        )
+        self.assertIsNone(self.window._font_install_worker)
+
+        with (
+            mock.patch("gui_qt.app.message_box_question", return_value="yes"),
+            mock.patch("gui_qt.app.FontInstallWorker", FakeWorker),
+        ):
+            self.window._on_download_recommended_fonts()
+
+        restarted = self.window._font_install_worker
+        self.assertIsInstance(restarted, FakeWorker)
+        self.assertTrue(restarted.started)
+        self.assertEqual(
+            restarted.completed.callback, self.window._on_recommended_fonts_downloaded
+        )
 
     def test_recommended_fonts_download_failure_keeps_system_fallback(self):
         class FakeWidget:
