@@ -1,6 +1,6 @@
 # #346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同
 
-状态：草案（未开工）· 基线 `main@fa69d14`（2026-08-21）· 本文是实施计划，不是已合并的设计
+状态：已定稿决策（D1–D7 已于 2026-08-22 冻结，见 [定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547)）· 基线 `main@fa69d14`（2026-08-21）· 本文是实施计划，不是已合并的设计
 关联 issue：<https://github.com/hu-border-collie/renpy-translation-lab/issues/346>
 
 ## 0. 结论
@@ -54,6 +54,8 @@
 P0 只产出决策记录和 golden fixture，不改生产路径。目标是把基线评论中的三个漂移决策扩展为可执行决策表；fixture 用于 P4 暴露并锁定 Sync/Batch 漂移，不在 P0 提交会失败的断言。
 
 ### 3.1 决策表（P0 必须定稿）
+
+> **已定稿**：下表全部建议默认值已于 2026-08-22 冻结为最终决策（D4 选 A=`60/18000`，D5 `story_char_limit=1200`、`include_source_text=true`，D6 `temperature=0.2` 等），定稿记录见 [issue #346 定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547)。
 
 | 编号 | 决策 | 建议默认 | 影响 |
 |---|---|---|---|

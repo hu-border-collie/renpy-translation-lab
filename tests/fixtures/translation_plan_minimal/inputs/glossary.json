@@ -1,0 +1,12 @@
+{
+  "preserve_terms": [
+    "Dawn Chorus",
+    "Mrs. Parker"
+  ],
+  "normalize_map": {
+    "setlist": "曲目单"
+  },
+  "non_translatable_exact": [
+    "B-side"
+  ]
+}

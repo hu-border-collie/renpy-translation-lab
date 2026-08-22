@@ -17,6 +17,8 @@
 - sync 预览、revision 预览/写回与 final review 统一消费同一套 quality finding schema：共享 normalize / validate / load / filter / digest 工具，各路径生成同一 `quality_findings.jsonl` + `quality_gate` 摘要；final review 仅做 LLM 语义字段到公共模型的适配，不冒充机械规则。
 - 同步初译增加局部前后文（`sync.context_before` / `sync.context_after`，默认 30/10，限定同文件与 translate block 边界）、`sync.macro_setting_file` 风格设定注入，以及不依赖 RAG 开关、不受 `top_k_terms` 截断的术语命中（`normalize_map` / 保留词 / 不可翻译词，全部实际命中进入提示词）；上下文构造事实与 macro 指纹写入 manifest 并纳入预览指纹。
 - LiteLLM 用户目录缓存不可写（只读 home、沙箱写入受限等）时自动回退到系统临时目录，并在 GUI 日志/状态栏提示缓存不会跨重启保留。
+- 新增执行策略无关的翻译计划纯核心 `translation_plan.py`（#346 P1）：D4 共享 chunking 与稳定 chunk/request ID、D1 block 边界局部上下文、D2 词法术语命中、上下文分层组装（required/local/project/retrieval/analysis 五个内容层，排序、去重与逐层预算/丢弃诊断作为组装级记账）、D3 canonical prompt（Batch system/user 形态合并 Sync 独有规则）、plan/prompt/request 三级内容派生指纹与敏感键脱敏；`tests/fixtures/translation_plan_minimal` 冻结 sync 与 gemini_batch 的等价语义合同（同 chunk 的 `prompt_fingerprint` 一致）。改为委托共享实现的既有函数：batch 的 `iter_translation_chunk_ranges` / `hash_key` / `task_text_char_count`，sync 的 `build_sync_local_context` / `retrieve_sync_glossary_hits`；其余生产路径（sync 内联 40/12000 切块、batch 原始切片上下文、batch 词法术语 RAG 门控）留待 #346 P2/P3 切换。
+- 同步初译 prompt 中词法术语（`normalize_map` 命中）的渲染顺序改为按键排序的稳定顺序（#346 确定性要求）；配置中同批多个命中且插入序非字典序的项目，glossary 行顺序会与旧版不同，词法注入块内容不变（始终全量）。RAG 开启时 `LOCKED TERMS` 参考列表按 `top_k_terms` 取排序后命中前缀，命中数超过 top_k 时保留的术语集合可能与旧版不同（排序后的字典序首个优先保留）。chunking、hash key 与局部上下文的委托保持行为不变。
 
 ### 变更
 
