@@ -159,20 +159,24 @@ class RedactionTests(unittest.TestCase):
                 'x-api-key': 'secret-b',
                 'token': 'secret-c',
                 'AUTH_TOKEN': 'secret-d',
+                'X-Token': 'secret-e',
+                'x_token': 'secret-f',
+                'session-token': 'secret-g',
                 'X-Trace-Id': 'keep-me',
             },
             'generation': {'max_output_tokens': 8192, 'temperature': 0.2},
+            'usage': {'total_tokens': 12345, 'usages': [{'prompt_tokens': 1}]},
         }
         redacted = translation_plan.redact_sensitive(payload)
         headers = redacted['extra_headers']
-        self.assertEqual(headers['X-Api-Key'], translation_plan.REDACTED_VALUE)
-        self.assertEqual(headers['x-api-key'], translation_plan.REDACTED_VALUE)
-        self.assertEqual(headers['token'], translation_plan.REDACTED_VALUE)
-        self.assertEqual(headers['AUTH_TOKEN'], translation_plan.REDACTED_VALUE)
+        for key in ('X-Api-Key', 'x-api-key', 'token', 'AUTH_TOKEN', 'X-Token', 'x_token', 'session-token'):
+            self.assertEqual(headers[key], translation_plan.REDACTED_VALUE, key)
         self.assertEqual(headers['X-Trace-Id'], 'keep-me')
-        # Exact-only matching for `token` must not redact legitimate token
-        # count keys.
+        # Suffix matching must stay singular: plural token-count keys are
+        # legitimate generation/usage data, not credentials.
         self.assertEqual(redacted['generation']['max_output_tokens'], 8192)
+        self.assertEqual(redacted['usage']['total_tokens'], 12345)
+        self.assertEqual(redacted['usage']['usages'][0]['prompt_tokens'], 1)
 
 
 class ChunkingTests(unittest.TestCase):

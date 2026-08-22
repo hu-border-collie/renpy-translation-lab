@@ -17,9 +17,12 @@ Hard constraints (enforced by tests):
   and unordered inputs (sets) are canonicalized before hashing;
 * ``run_id`` is an audit label only; retrieved content is captured by
   ``prompt_fingerprint``, not by ``plan_id``;
-* the canonical prompt is built from the budgeted layer texts kept by
-  :func:`assemble_context_layers` — layer accounting and the embedded prompt
-  text can never disagree.
+* retrieval and analysis layer texts are embedded in the canonical prompt
+  verbatim after budgeting, so those layers' accounting matches the prompt
+  byte-for-byte; the required/local/project layers are canonical renderings
+  owned by the ``translation_core`` prompt builders and are accounted in the
+  assembly for budget and diagnostics only — the request's ``user_prompt``
+  stays the authoritative record of what the model sees.
 """
 
 from dataclasses import dataclass, field
@@ -54,10 +57,11 @@ CONTEXT_LAYER_RANKS = {
     CONTEXT_LAYER_BUDGET: 6,
 }
 
-# Keys are normalized (lowercased, '-'/'_'/' ' stripped) before substring
-# matching so header spellings like ``X-Api-Key`` are caught. ``token`` alone
-# matches exactly: a substring match would redact legitimate keys such as
-# ``max_output_tokens`` / ``usage_tokens``.
+# Keys are normalized (lowercased, '-'/'_'/' ' stripped) before matching so
+# header spellings like ``X-Api-Key`` are caught. ``token`` matches by suffix
+# (``X-Token`` → ``xtoken``): a bare substring rule would redact legitimate
+# token-count keys such as ``max_output_tokens`` / ``usage_tokens`` — plural
+# ``tokens`` never matches the singular suffix.
 _SENSITIVE_KEY_SUBSTRINGS = (
     'apikey',
     'authorization',
@@ -71,7 +75,7 @@ _SENSITIVE_KEY_SUBSTRINGS = (
     'credentialvalue',
     'bearer',
 )
-_SENSITIVE_KEY_EXACT = frozenset({'token'})
+_SENSITIVE_KEY_SUFFIXES = ('token',)
 _REDACTED_KEY_ALLOWLIST = ('credential_ref', 'credential_refs')
 REDACTED_VALUE = '[redacted]'
 
@@ -84,7 +88,7 @@ def _is_sensitive_key(key):
     if str(key) in _REDACTED_KEY_ALLOWLIST:
         return False
     normalized = _normalize_sensitive_key(key)
-    if normalized in _SENSITIVE_KEY_EXACT:
+    if normalized.endswith(_SENSITIVE_KEY_SUFFIXES):
         return True
     return any(marker in normalized for marker in _SENSITIVE_KEY_SUBSTRINGS)
 
@@ -92,9 +96,11 @@ def _is_sensitive_key(key):
 def redact_sensitive(value):
     """Recursively replace credential-shaped values with a redaction marker.
 
-    Keys whose normalized name carries API key, authorization, token, secret,
-    or password markers have their values replaced wholesale — including
-    header spellings like ``X-Api-Key``. ``credential_ref`` objects pass
+    Keys whose normalized name carries API key, authorization, secret,
+    password, or bearer markers — or ends with a singular ``token`` suffix
+    (``X-Token``, ``session_token``) — have their values replaced wholesale,
+    including header spellings like ``X-Api-Key``. Plural count keys
+    (``max_output_tokens``) stay intact. ``credential_ref`` objects pass
     through: they hold lookup references (slot ids, env var names), never
     credential values (see ``model_profile.CredentialRef``).
     """
@@ -967,10 +973,10 @@ def build_translation_plan(
             preserve_terms,
             macro_setting=str(macro_setting or ''),
         )
-        # The canonical prompt embeds exactly the budgeted layer texts the
-        # assembly kept, so layer accounting and the prompt can never diverge
-        # (an oversized provider text is truncated before it reaches the
-        # model, and the truncation is visible in both places).
+        # Retrieval/analysis layer texts are embedded verbatim (budgeted by
+        # the assembly); required/local/project are canonical renderings the
+        # translation_core builders own — user_prompt stays the authoritative
+        # record of the model's input.
         reference_blocks_text = ''.join(
             layer.text
             for layer in assembly.layers
