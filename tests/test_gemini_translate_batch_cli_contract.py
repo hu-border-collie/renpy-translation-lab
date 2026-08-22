@@ -714,10 +714,402 @@ class BatchCliContractTests(unittest.TestCase):
 
     def test_apply_revisions_is_registered_for_machine_output(self):
         self.assertIn("apply-revisions", batch.MACHINE_OUTPUT_COMMANDS)
+        self.assertIn("apply-revisions", batch.EXPLICIT_TARGET_COMMANDS)
         args = batch.build_arg_parser().parse_args(
             ["apply-revisions", "C:/jobs/demo/manifest.json", "--output", "json"]
         )
         self.assertEqual(args.output, "json")
+
+    def test_preview_revisions_is_registered_for_machine_output(self):
+        self.assertIn("preview-revisions", batch.MACHINE_OUTPUT_COMMANDS)
+        self.assertIn("preview-revisions", batch.EXPLICIT_TARGET_COMMANDS)
+        args = batch.build_arg_parser().parse_args(
+            ["preview-revisions", "C:/jobs/demo/manifest.json", "--output", "json"]
+        )
+        self.assertEqual(args.output, "json")
+
+    def test_machine_result_builder_covers_revision_preview(self):
+        args = SimpleNamespace(target="C:/jobs/demo/manifest.json")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "last_revision_preview": {
+                "generated_at": "2026-08-22T00:00:00",
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/demo/revision_preview.md",
+                "results_path": "C:/jobs/demo/results.jsonl",
+                "results_sha256": "abc123",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "quality_findings_count": 2,
+                "quality_findings_digest": "def456",
+                "quality_gate": {
+                    "decision": "needs_review",
+                    "blocker_count": 0,
+                },
+                "writeback_gate": {"decision": "allow"},
+                "check_status": "ready",
+                "summary": {
+                    "expected_items": 2,
+                    "valid_items": 2,
+                    "failure_items": 0,
+                    "skipped_items": 0,
+                    "source_mismatch_items": 0,
+                    "recoverable_items": 2,
+                    "unchanged_items": 0,
+                    "already_applied_items": 0,
+                },
+            },
+        }
+        envelope = batch.build_machine_success_envelope(
+            "preview-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "ready")
+        self.assertEqual(
+            envelope["result"]["jsonl_path"],
+            "C:/jobs/demo/revision_preview.jsonl",
+        )
+        self.assertEqual(
+            envelope["result"]["quality_gate"]["decision"],
+            "needs_review",
+        )
+        self.assertEqual(envelope["result"]["writeback_gate"]["decision"], "allow")
+        self.assertEqual(envelope["result"]["summary"]["valid_items"], 2)
+        self.assertEqual(
+            envelope["artifacts"]["revision_preview_jsonl"],
+            "C:/jobs/demo/revision_preview.jsonl",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["revision_preview_markdown"],
+            "C:/jobs/demo/revision_preview.md",
+        )
+
+    def test_preview_revisions_machine_cli_returns_json_envelope(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/demo/revision_preview.md",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "quality_gate": {"decision": "needs_review"},
+                "writeback_gate": {"decision": "allow"},
+                "check_status": "ready",
+                "summary": {"valid_items": 1},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "preview-revisions",
+                    "C:/jobs/demo/manifest.json",
+                    "--output",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "preview-revisions")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(
+            payload["result"]["jsonl_path"],
+            "C:/jobs/demo/revision_preview.jsonl",
+        )
+
+    def test_build_revisions_is_registered_for_machine_output(self):
+        self.assertIn("build-revisions", batch.MACHINE_OUTPUT_COMMANDS)
+        args = batch.build_arg_parser().parse_args(
+            ["build-revisions", "--output", "json"]
+        )
+        self.assertEqual(args.output, "json")
+
+    def test_machine_result_builder_covers_revision_build(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "job_state": "LOCAL_ONLY",
+            "input_jsonl_path": "C:/jobs/demo/requests.jsonl",
+            "summary": {"file_count": 1, "chunk_count": 2, "item_count": 3},
+            "build_warnings": ["warning"],
+        }
+        envelope = batch.build_machine_success_envelope(
+            "build-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "LOCAL_ONLY")
+        self.assertEqual(envelope["result"]["summary"]["item_count"], 3)
+        self.assertEqual(
+            envelope["artifacts"]["manifest"],
+            "C:/jobs/demo/manifest.json",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["input_jsonl"],
+            "C:/jobs/demo/requests.jsonl",
+        )
+        self.assertEqual(envelope["warnings"], ["warning"])
+
+    def test_build_revisions_no_work_returns_no_work_envelope(self):
+        envelope = batch.build_machine_success_envelope(
+            "build-revisions",
+            None,
+            SimpleNamespace(target=""),
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "no_work")
+        self.assertEqual(
+            envelope["result"]["reason"],
+            "no_pending_revision_work",
+        )
+
+    def test_build_revisions_machine_cli_returns_json_envelope(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "job_state": "LOCAL_ONLY",
+            "input_jsonl_path": "C:/jobs/demo/requests.jsonl",
+            "summary": {"item_count": 3},
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                ["build-revisions", "--output", "json"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "build-revisions")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "LOCAL_ONLY")
+        self.assertEqual(payload["result"]["summary"]["item_count"], 3)
+
+    def test_sync_revisions_is_registered_for_machine_output(self):
+        self.assertIn("sync-revisions", batch.MACHINE_OUTPUT_COMMANDS)
+        args = batch.build_arg_parser().parse_args(
+            ["sync-revisions", "--output", "json"]
+        )
+        self.assertEqual(args.output, "json")
+
+    def test_machine_result_builder_covers_sync_revision_preview(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/demo/revision_preview.md",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "quality_gate": {"decision": "needs_review"},
+                "writeback_gate": {"decision": "allow"},
+                "check_status": "ready",
+                "summary": {"valid_items": 1},
+            },
+            "revision_apply_state": "",
+        }
+        envelope = batch.build_machine_success_envelope(
+            "sync-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "ready")
+        self.assertEqual(envelope["result"]["revision_apply_state"], "")
+        self.assertEqual(
+            envelope["artifacts"]["revision_preview_jsonl"],
+            "C:/jobs/demo/revision_preview.jsonl",
+        )
+
+    def test_machine_result_builder_covers_sync_revision_applied(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "check_status": "ready",
+                "summary": {"valid_items": 1},
+            },
+            "revision_apply_state": "partial",
+            "revision_apply_summary": {"applied_lines": 1},
+        }
+        envelope = batch.build_machine_success_envelope(
+            "sync-revisions",
+            dict(manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "partial")
+        self.assertEqual(envelope["result"]["revision_apply_state"], "partial")
+        self.assertEqual(
+            envelope["result"]["revision_apply"]["applied_lines"],
+            1,
+        )
+
+    def test_sync_revisions_no_work_returns_no_work_envelope(self):
+        envelope = batch.build_machine_success_envelope(
+            "sync-revisions",
+            None,
+            SimpleNamespace(target=""),
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "no_work")
+        self.assertEqual(
+            envelope["result"]["reason"],
+            "no_pending_revision_work",
+        )
+
+    def test_sync_revisions_machine_cli_returns_json_envelope(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "revision",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/demo/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/demo/revision_preview.md",
+                "quality_findings_path": "C:/jobs/demo/quality_findings.jsonl",
+                "check_status": "ready",
+                "summary": {"valid_items": 1},
+            },
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=manifest),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                ["sync-revisions", "--output", "json"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "sync-revisions")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(
+            payload["result"]["jsonl_path"],
+            "C:/jobs/demo/revision_preview.jsonl",
+        )
+
+    def test_keyword_commands_are_registered_for_machine_output(self):
+        for command in ("build-keywords", "export-keywords", "sync-keywords"):
+            with self.subTest(command=command):
+                self.assertIn(command, batch.MACHINE_OUTPUT_COMMANDS)
+                args = batch.build_arg_parser().parse_args(
+                    [command, "--output", "json"]
+                )
+                self.assertEqual(args.output, "json")
+
+    def test_machine_result_builder_covers_keyword_build(self):
+        args = SimpleNamespace(target="")
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "keyword_extraction",
+            "job_state": "LOCAL_ONLY",
+            "input_jsonl_path": "C:/jobs/demo/requests.jsonl",
+            "summary": {"file_count": 1, "chunk_count": 2, "item_count": 3},
+        }
+        envelope = batch.build_machine_success_envelope(
+            "build-keywords",
+            dict(manifest),
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "LOCAL_ONLY")
+        self.assertEqual(envelope["result"]["summary"]["item_count"], 3)
+        self.assertEqual(
+            envelope["artifacts"]["manifest"],
+            "C:/jobs/demo/manifest.json",
+        )
+
+    def test_keyword_build_no_work_returns_no_work_envelope(self):
+        envelope = batch.build_machine_success_envelope(
+            "build-keywords",
+            None,
+            SimpleNamespace(target=""),
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "no_work")
+        self.assertEqual(
+            envelope["result"]["reason"],
+            "no_pending_keyword_work",
+        )
+
+    def test_machine_result_builder_covers_keyword_export(self):
+        args = SimpleNamespace(target="")
+        payload = {
+            "jsonl_path": "C:/jobs/demo/keyword_candidates.jsonl",
+            "markdown_path": "C:/jobs/demo/keyword_candidates.md",
+            "summary_jsonl_path": "C:/jobs/demo/keyword_chunk_summaries.jsonl",
+            "summary_markdown_path": "C:/jobs/demo/keyword_chunk_summaries.md",
+            "summary": {
+                "candidate_count_raw": 5,
+                "candidate_count_deduped": 4,
+                "chunk_summary_count": 2,
+                "processed_chunks": 2,
+                "result_rows": 6,
+                "history_scan_status": "ok",
+                "history_occurrence_count": 3,
+                "history_candidate_status_counts": {"consistent": 3},
+            },
+        }
+        for command in ("export-keywords", "sync-keywords"):
+            with self.subTest(command=command):
+                envelope = batch.build_machine_success_envelope(
+                    command,
+                    dict(payload),
+                    args,
+                )
+                self.assertTrue(envelope["ok"])
+                self.assertEqual(envelope["status"], "completed")
+                self.assertEqual(
+                    envelope["result"]["candidate_count_deduped"], 4
+                )
+                self.assertEqual(
+                    envelope["artifacts"]["keyword_candidates_jsonl"],
+                    "C:/jobs/demo/keyword_candidates.jsonl",
+                )
+
+    def test_keyword_export_machine_cli_returns_json_envelope(self):
+        payload = {
+            "jsonl_path": "C:/jobs/demo/keyword_candidates.jsonl",
+            "markdown_path": "C:/jobs/demo/keyword_candidates.md",
+            "summary_jsonl_path": "C:/jobs/demo/keyword_chunk_summaries.jsonl",
+            "summary_markdown_path": "C:/jobs/demo/keyword_chunk_summaries.md",
+            "summary": {"candidate_count_deduped": 4},
+        }
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=payload),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(["export-keywords", "--output", "json"])
+
+        self.assertEqual(exit_code, 0)
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(result["command"], "export-keywords")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result"]["candidate_count_deduped"], 4)
+        self.assertEqual(
+            result["artifacts"]["keyword_candidates_jsonl"],
+            "C:/jobs/demo/keyword_candidates.jsonl",
+        )
 
     def test_proposal_import_machine_envelope_exposes_status_actions_and_artifacts(self):
         args = SimpleNamespace(command="import-revision-proposals")

@@ -112,12 +112,18 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
     {
         'doctor',
         'build',
+        'build-keywords',
+        'build-revisions',
+        'export-keywords',
+        'sync-keywords',
         'submit',
         'status',
         'download',
         'check',
         'apply',
         'apply-revisions',
+        'preview-revisions',
+        'sync-revisions',
         'export-revision-corpus',
         'import-revision-proposals',
         'export-project-snapshot',
@@ -130,7 +136,19 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'quality-unack',
     }
 )
-EXPLICIT_TARGET_COMMANDS = frozenset({'submit', 'status', 'download', 'check', 'apply', 'quality-ack', 'quality-unack'})
+EXPLICIT_TARGET_COMMANDS = frozenset(
+    {
+        'submit',
+        'status',
+        'download',
+        'check',
+        'apply',
+        'preview-revisions',
+        'apply-revisions',
+        'quality-ack',
+        'quality-unack',
+    }
+)
 # Local-only batch commands must not be blocked by API-key preflight.
 OFFLINE_BATCH_COMMANDS = frozenset(
     {
@@ -15282,6 +15300,7 @@ def build_arg_parser():
         default=0,
         help='Maximum keyword candidates requested from each chunk.',
     )
+    add_machine_output_argument(keyword_build_parser)
 
     revision_build_parser = subparsers.add_parser(
         'build-revisions',
@@ -15299,6 +15318,7 @@ def build_arg_parser():
         default=0,
         help='Old/new pair count per revision chunk. Defaults to batch.revision.chunk_size.',
     )
+    add_machine_output_argument(revision_build_parser)
 
     export_revision_corpus_parser = subparsers.add_parser(
         'export-revision-corpus',
@@ -16054,6 +16074,7 @@ def build_arg_parser():
         default='',
         help='Relative chunk summary Markdown path inside the package.',
     )
+    add_machine_output_argument(keyword_export_parser)
 
     merge_keywords_parser = subparsers.add_parser(
         'merge-keywords-to-glossary',
@@ -16155,6 +16176,7 @@ def build_arg_parser():
     )
     revision_preview_parser.add_argument('--jsonl', default='', help='Relative output JSONL path inside the package.')
     revision_preview_parser.add_argument('--markdown', default='', help='Relative output Markdown path inside the package.')
+    add_machine_output_argument(revision_preview_parser)
 
     revision_apply_parser = subparsers.add_parser(
         'apply-revisions',
@@ -16218,6 +16240,7 @@ def build_arg_parser():
         help='Relative chunk summary Markdown path inside the sync run dir.',
     )
     sync_keyword_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    add_machine_output_argument(sync_keyword_parser)
 
     sync_revision_parser = subparsers.add_parser(
         'sync-revisions',
@@ -16253,6 +16276,7 @@ def build_arg_parser():
         ),
     )
     sync_revision_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    add_machine_output_argument(sync_revision_parser)
 
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
@@ -16876,21 +16900,19 @@ def dispatch_command(parser, args):
         )
 
     if command == 'build-keywords':
-        create_keyword_package(
+        return create_keyword_package(
             display_name_override=args.display_name,
             skip_prepare=(not args.prepare) or args.skip_prepare,
             chunk_size=args.chunk_size,
             max_candidates_per_chunk=args.max_candidates_per_chunk,
         )
-        return
 
     if command == 'build-revisions':
-        create_revision_package(
+        return create_revision_package(
             display_name_override=args.display_name,
             skip_prepare=args.skip_prepare,
             chunk_size=args.chunk_size,
         )
-        return
 
     if command == 'bootstrap-rag':
         bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
@@ -16963,14 +16985,13 @@ def dispatch_command(parser, args):
         return apply_results(args.target or None, force=args.force)
 
     if command == 'export-keywords':
-        export_keyword_candidates(
+        return export_keyword_candidates(
             target=args.target or None,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
             output_summary_jsonl=args.summary_jsonl,
             output_summary_markdown=args.summary_markdown,
         )
-        return
 
     if command == 'merge-keywords-to-glossary':
         candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
@@ -17013,19 +17034,18 @@ def dispatch_command(parser, args):
         return
 
     if command == 'preview-revisions':
-        preview_revisions(
+        return preview_revisions(
             target=args.target or None,
             output_jsonl=args.jsonl,
             output_markdown=args.markdown,
         )
-        return
 
     if command == 'apply-revisions':
         apply_revisions(args.target or None, force=args.force)
         return
 
     if command == 'sync-keywords':
-        sync_keyword_candidates(
+        return sync_keyword_candidates(
             display_name_override=args.display_name,
             skip_prepare=(not args.prepare) or args.skip_prepare,
             chunk_size=args.chunk_size,
@@ -17038,10 +17058,9 @@ def dispatch_command(parser, args):
             output_summary_markdown=args.summary_markdown,
             api_key_index=args.api_key_index,
         )
-        return
 
     if command == 'sync-revisions':
-        sync_revisions(
+        return sync_revisions(
             display_name_override=args.display_name,
             skip_prepare=args.skip_prepare,
             chunk_size=args.chunk_size,
@@ -17053,7 +17072,6 @@ def dispatch_command(parser, args):
             force=args.force,
             api_key_index=args.api_key_index,
         )
-        return
 
     if command == 'split':
         split_manifest(
@@ -17114,7 +17132,7 @@ def _machine_manifest_summary(manifest):
 def _load_machine_manifest(command, value, args):
     if isinstance(value, dict):
         return value
-    if command in {'build', 'submit'} and value:
+    if command in {'build', 'build-keywords', 'build-revisions', 'submit'} and value:
         return load_manifest(value)
     return load_manifest(getattr(args, 'target', '') or None)
 
@@ -17138,11 +17156,28 @@ def build_machine_success_envelope(command, value, args):
             warnings=report.get('warnings') or [],
         )
 
-    if command in {'build', 'submit'} and not value:
+    if command in {
+        'build',
+        'submit',
+        'build-revisions',
+        'sync-revisions',
+        'build-keywords',
+        'sync-keywords',
+    } and not value:
         return cli_contract.success_envelope(
             command,
             status='no_work',
-            result={'reason': 'no_pending_translation_work'},
+            result={
+                'reason': (
+                    'no_pending_revision_work'
+                    if command in {'build-revisions', 'sync-revisions'}
+                    else (
+                        'no_pending_keyword_work'
+                        if command in {'build-keywords', 'sync-keywords'}
+                        else 'no_pending_translation_work'
+                    )
+                )
+            },
         )
 
     if command in {'quality-ack', 'quality-unack'}:
@@ -17214,7 +17249,7 @@ def build_machine_success_envelope(command, value, args):
     warnings = list(manifest.get('build_warnings') or [])
     status = 'completed'
 
-    if command == 'build':
+    if command in {'build', 'build-keywords', 'build-revisions'}:
         status = str(manifest.get('job_state') or 'LOCAL_ONLY')
         result['cost_estimate'] = dict(manifest.get('cost_estimate') or {})
     elif command in {'submit', 'status'}:
@@ -17246,6 +17281,139 @@ def build_machine_success_envelope(command, value, args):
         status = str(
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
+        )
+    elif command == 'preview-revisions':
+        preview = dict(manifest.get('last_revision_preview') or {})
+        preview_summary = dict(preview.get('summary') or {})
+        result = {
+            'generated_at': preview.get('generated_at') or '',
+            'jsonl_path': preview.get('jsonl_path') or '',
+            'markdown_path': preview.get('markdown_path') or '',
+            'results_path': preview.get('results_path') or '',
+            'results_sha256': preview.get('results_sha256') or '',
+            'quality_findings_path': preview.get('quality_findings_path') or '',
+            'quality_findings_count': int(preview.get('quality_findings_count') or 0),
+            'quality_findings_digest': preview.get('quality_findings_digest') or '',
+            'quality_gate': dict(preview.get('quality_gate') or {}),
+            'writeback_gate': dict(preview.get('writeback_gate') or {}),
+            'check_status': preview.get('check_status') or '',
+            'summary': {
+                'expected_items': int(preview_summary.get('expected_items') or 0),
+                'valid_items': int(preview_summary.get('valid_items') or 0),
+                'failure_items': int(preview_summary.get('failure_items') or 0),
+                'skipped_items': int(preview_summary.get('skipped_items') or 0),
+                'source_mismatch_items': int(
+                    preview_summary.get('source_mismatch_items') or 0
+                ),
+                'recoverable_items': int(
+                    preview_summary.get('recoverable_items') or 0
+                ),
+                'unchanged_items': int(preview_summary.get('unchanged_items') or 0),
+                'already_applied_items': int(
+                    preview_summary.get('already_applied_items') or 0
+                ),
+            },
+        }
+        status = str(
+            preview.get('check_status')
+            or preview_summary.get('check_status')
+            or 'previewed'
+        )
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=manifest.get('_manifest_path'),
+                revision_preview_jsonl=preview.get('jsonl_path') or '',
+                revision_preview_markdown=preview.get('markdown_path') or '',
+                quality_findings=preview.get('quality_findings_path') or '',
+            ),
+        )
+    elif command == 'sync-revisions':
+        preview = dict(manifest.get('last_revision_preview') or {})
+        preview_summary = dict(preview.get('summary') or {})
+        apply_state = manifest.get('revision_apply_state') or ''
+        apply_summary = dict(manifest.get('revision_apply_summary') or {})
+        result = {
+            'generated_at': preview.get('generated_at') or '',
+            'jsonl_path': preview.get('jsonl_path') or '',
+            'markdown_path': preview.get('markdown_path') or '',
+            'results_path': preview.get('results_path') or '',
+            'results_sha256': preview.get('results_sha256') or '',
+            'quality_findings_path': preview.get('quality_findings_path') or '',
+            'quality_findings_count': int(preview.get('quality_findings_count') or 0),
+            'quality_findings_digest': preview.get('quality_findings_digest') or '',
+            'quality_gate': dict(preview.get('quality_gate') or {}),
+            'writeback_gate': dict(preview.get('writeback_gate') or {}),
+            'check_status': preview.get('check_status') or '',
+            'revision_apply_state': apply_state,
+            'revision_apply': dict(apply_summary),
+            'summary': {
+                'expected_items': int(preview_summary.get('expected_items') or 0),
+                'valid_items': int(preview_summary.get('valid_items') or 0),
+                'failure_items': int(preview_summary.get('failure_items') or 0),
+                'skipped_items': int(preview_summary.get('skipped_items') or 0),
+                'source_mismatch_items': int(
+                    preview_summary.get('source_mismatch_items') or 0
+                ),
+                'recoverable_items': int(
+                    preview_summary.get('recoverable_items') or 0
+                ),
+                'unchanged_items': int(preview_summary.get('unchanged_items') or 0),
+                'already_applied_items': int(
+                    preview_summary.get('already_applied_items') or 0
+                ),
+            },
+        }
+        status = str(
+            apply_state
+            or preview.get('check_status')
+            or preview_summary.get('check_status')
+            or 'previewed'
+        )
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=manifest.get('_manifest_path'),
+                revision_preview_jsonl=preview.get('jsonl_path') or '',
+                revision_preview_markdown=preview.get('markdown_path') or '',
+                quality_findings=preview.get('quality_findings_path') or '',
+            ),
+        )
+    elif command in {'export-keywords', 'sync-keywords'}:
+        payload = dict(value or {})
+        summary = dict(payload.get('summary') or {})
+        result = {
+            'candidate_count_raw': int(summary.get('candidate_count_raw') or 0),
+            'candidate_count_deduped': int(
+                summary.get('candidate_count_deduped') or 0
+            ),
+            'chunk_summary_count': int(summary.get('chunk_summary_count') or 0),
+            'processed_chunks': int(summary.get('processed_chunks') or 0),
+            'result_rows': int(summary.get('result_rows') or 0),
+            'history_scan_status': summary.get('history_scan_status') or '',
+            'history_occurrence_count': int(
+                summary.get('history_occurrence_count') or 0
+            ),
+            'history_candidate_status_counts': dict(
+                summary.get('history_candidate_status_counts') or {}
+            ),
+        }
+        return cli_contract.success_envelope(
+            command,
+            status='completed',
+            result=result,
+            artifacts=_nonempty_artifacts(
+                keyword_candidates_jsonl=payload.get('jsonl_path') or '',
+                keyword_candidates_markdown=payload.get('markdown_path') or '',
+                keyword_summaries_jsonl=payload.get('summary_jsonl_path') or '',
+                keyword_summaries_markdown=(
+                    payload.get('summary_markdown_path') or ''
+                ),
+            ),
         )
     elif command == 'export-project-snapshot':
         snapshot = dict(value or {})

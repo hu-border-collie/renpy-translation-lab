@@ -64,14 +64,14 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 在 `ready` 时退出 `0`，`ready_with_warnings` 退出 `3` 但仍满足写回门禁（`writeback_gate.decision=allow`），`blocked` 退出 `4`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
 
-需要确定性调用时追加 `--non-interactive`。该选项保证核心命令不等待 stdin，并让 `submit / status / download / check / apply / quality-ack / quality-unack` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
+需要确定性调用时追加 `--non-interactive`。该选项保证核心命令不等待 stdin，并让 `submit / status / download / check / apply / preview-revisions / apply-revisions / quality-ack / quality-unack` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
 
 ```powershell
 python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json --output json --non-interactive --strict-exit-codes
 ```
 
 只需关闭 target 回退时可单独使用 `--require-explicit-target`。默认模式保持现有 latest-manifest 和 submit-build 行为；`doctor / build` 不消费 manifest，不受显式 target 要求影响。
-结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply / quality-ack / quality-unack`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
+结构化输出当前覆盖 `doctor / build / build-revisions / build-keywords / submit / status / download / check / apply / apply-revisions / preview-revisions / sync-revisions / export-revision-corpus / import-revision-proposals / export-keywords / sync-keywords / quality-ack / quality-unack` 以及版本资产/复用命令；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
 核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.writeback_gate.decision result.check.quality_gate` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。
