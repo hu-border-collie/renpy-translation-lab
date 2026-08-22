@@ -1,0 +1,400 @@
+{
+  "schema_version": 1,
+  "purpose": "Offline, privacy-safe regression corpus for the first-version mechanical quality rules (issue #364).",
+  "provenance": "Samples are sanitized representative cases reconstructed from the public issue #313 / #364 descriptions. They contain no private game script text. After real-project sampling (issue #364 line B), replace or extend these entries with anonymized findings from the calibration report.",
+  "conventions": "Each case maps one first-version reason_code to a positive sample that must report it and a negative sample that must stay silent for it. Optional policy and glossary_map are normalized with translation_quality.normalize_policy, so entries only need to specify deltas from the runtime defaults.",
+  "cases": [
+    {
+      "rule_id": "renpy_wait_inside_cjk",
+      "reason_code": "quality.renpy.wait_tag_inside_cjk",
+      "positive": {
+        "name": "wait tag inserted inside a Chinese word",
+        "subject": {
+          "item_id": "issue-364/wait-tag/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 12,
+          "source": "",
+          "translation": "你{w=0.5}好"
+        },
+        "policy": {
+          "rules": {
+            "renpy_wait_inside_cjk": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "wait tag at a sentence boundary is legitimate",
+        "subject": {
+          "item_id": "issue-364/wait-tag/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 13,
+          "source": "",
+          "translation": "……{w=0.3}走吧"
+        },
+        "policy": {
+          "rules": {
+            "renpy_wait_inside_cjk": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "unclosed_delimiters",
+      "reason_code": "quality.structure.unclosed_delimiters",
+      "positive": {
+        "name": "unclosed Ren'Py tag delimiter",
+        "subject": {
+          "item_id": "issue-364/unclosed-delimiters/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 21,
+          "source": "",
+          "translation": "你好 {w=0.5"
+        },
+        "policy": {
+          "rules": {
+            "unclosed_delimiters": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "Ren'Py escaped literal brackets are not broken delimiters",
+        "subject": {
+          "item_id": "issue-364/unclosed-delimiters/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 22,
+          "source": "",
+          "translation": "这是[[说明文字]]"
+        },
+        "policy": {
+          "rules": {
+            "unclosed_delimiters": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "english_suffix_adjacent",
+      "reason_code": "quality.language.english_suffix_adjacent",
+      "positive": {
+        "name": "English morphology suffix glued to a Chinese word",
+        "subject": {
+          "item_id": "issue-364/english-suffix/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 31,
+          "source": "",
+          "translation": "迷踪步ping"
+        },
+        "policy": {
+          "rules": {
+            "english_suffix_adjacent": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "project allowlisted abbreviation ending in s does not look like a suffix",
+        "subject": {
+          "item_id": "issue-364/english-suffix/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 32,
+          "source": "",
+          "translation": "中文cos"
+        },
+        "policy": {
+          "rules": {
+            "english_suffix_adjacent": "warning"
+          },
+          "allowed_latin_tokens": [
+            "cos"
+          ]
+        }
+      }
+    },
+    {
+      "rule_id": "suspicious_english_residue",
+      "reason_code": "quality.language.suspicious_english_residue",
+      "positive": {
+        "name": "visible English token left in a Chinese translation",
+        "subject": {
+          "item_id": "issue-364/english-residue/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 41,
+          "source": "",
+          "translation": "TA也说过"
+        },
+        "policy": {
+          "rules": {
+            "suspicious_english_residue": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "default allowlisted acronym is not visible residue",
+        "subject": {
+          "item_id": "issue-364/english-residue/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 42,
+          "source": "",
+          "translation": "当前HP为100"
+        },
+        "policy": {
+          "rules": {
+            "suspicious_english_residue": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "cjk_latin_spacing",
+      "reason_code": "quality.typography.cjk_latin_spacing",
+      "positive": {
+        "name": "Latin token touches CJK text without project spacing",
+        "subject": {
+          "item_id": "issue-364/cjk-latin-spacing/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 51,
+          "source": "",
+          "translation": "这是iPhone手机"
+        },
+        "policy": {
+          "rules": {
+            "cjk_latin_spacing": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "default allowlisted acronym may stay adjacent to CJK",
+        "subject": {
+          "item_id": "issue-364/cjk-latin-spacing/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 52,
+          "source": "",
+          "translation": "这是VIP通道"
+        },
+        "policy": {
+          "rules": {
+            "cjk_latin_spacing": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "halfwidth_punctuation",
+      "reason_code": "quality.typography.halfwidth_punctuation",
+      "positive": {
+        "name": "halfwidth comma sits between CJK characters",
+        "subject": {
+          "item_id": "issue-364/halfwidth-punctuation/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 61,
+          "source": "",
+          "translation": "你好,世界"
+        },
+        "policy": {
+          "rules": {
+            "halfwidth_punctuation": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "full-width punctuation follows the project convention",
+        "subject": {
+          "item_id": "issue-364/halfwidth-punctuation/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 62,
+          "source": "",
+          "translation": "你好，世界。"
+        },
+        "policy": {
+          "rules": {
+            "halfwidth_punctuation": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "ascii_ellipsis",
+      "reason_code": "quality.typography.ascii_ellipsis",
+      "positive": {
+        "name": "ASCII dots used as a Chinese ellipsis",
+        "subject": {
+          "item_id": "issue-364/ascii-ellipsis/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 71,
+          "source": "",
+          "translation": "你好..."
+        },
+        "policy": {
+          "rules": {
+            "ascii_ellipsis": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "full-width Chinese ellipsis follows the project convention",
+        "subject": {
+          "item_id": "issue-364/ascii-ellipsis/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 72,
+          "source": "",
+          "translation": "你好……"
+        },
+        "policy": {
+          "rules": {
+            "ascii_ellipsis": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "glossary_term_not_applied",
+      "reason_code": "quality.glossary.term_not_applied",
+      "positive": {
+        "name": "source glossary term is still visible instead of its target",
+        "subject": {
+          "item_id": "issue-364/glossary/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 81,
+          "source": "Church Knight says hello.",
+          "translation": "Church Knight说你好。"
+        },
+        "policy": {
+          "rules": {
+            "glossary_term_not_applied": "warning"
+          }
+        },
+        "glossary_map": {
+          "Church Knight": "教会骑士"
+        }
+      },
+      "negative": {
+        "name": "glossary target is applied and the source term is gone",
+        "subject": {
+          "item_id": "issue-364/glossary/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 82,
+          "source": "Church Knight says hello.",
+          "translation": "教会骑士说你好。"
+        },
+        "policy": {
+          "rules": {
+            "glossary_term_not_applied": "warning"
+          }
+        },
+        "glossary_map": {
+          "Church Knight": "教会骑士"
+        }
+      }
+    },
+    {
+      "rule_id": "speaker_label_untranslated",
+      "reason_code": "quality.speaker.label_untranslated",
+      "positive": {
+        "name": "occupation speaker label has no translation evidence",
+        "subject": {
+          "item_id": "issue-364/speaker-label/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 91,
+          "source": "Welcome.",
+          "translation": "欢迎。",
+          "speaker_name": "Church Knight"
+        },
+        "policy": {
+          "rules": {
+            "speaker_label_untranslated": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "translated speaker label evidence suppresses the rule",
+        "subject": {
+          "item_id": "issue-364/speaker-label/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 92,
+          "source": "Welcome.",
+          "translation": "欢迎。",
+          "speaker_name": "Church Knight",
+          "speaker_name_translation": "教会骑士"
+        },
+        "policy": {
+          "rules": {
+            "speaker_label_untranslated": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "interjection_untranslated",
+      "reason_code": "quality.completeness.interjection_untranslated",
+      "positive": {
+        "name": "short interjection is left unchanged",
+        "subject": {
+          "item_id": "issue-364/interjection/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 101,
+          "source": "Oh!",
+          "translation": "Oh!"
+        },
+        "policy": {
+          "rules": {
+            "interjection_untranslated": "warning"
+          }
+        }
+      },
+      "negative": {
+        "name": "interjection is translated into Chinese",
+        "subject": {
+          "item_id": "issue-364/interjection/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 102,
+          "source": "Oh!",
+          "translation": "哦！"
+        },
+        "policy": {
+          "rules": {
+            "interjection_untranslated": "warning"
+          }
+        }
+      }
+    },
+    {
+      "rule_id": "known_garbled_phrase",
+      "reason_code": "quality.garbled.known_bad_phrase",
+      "positive": {
+        "name": "project-configured garbled phrase appears verbatim",
+        "subject": {
+          "item_id": "issue-364/garbled-phrase/positive",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 111,
+          "source": "",
+          "translation": "这是迷踪步ping吗"
+        },
+        "policy": {
+          "rules": {
+            "known_garbled_phrase": "warning"
+          },
+          "garbled_phrases": [
+            "迷踪步ping"
+          ]
+        }
+      },
+      "negative": {
+        "name": "same line without the garbled phrase stays silent",
+        "subject": {
+          "item_id": "issue-364/garbled-phrase/negative",
+          "file_rel_path": "chapter01/dialogue.rpy",
+          "line_number": 112,
+          "source": "",
+          "translation": "这是迷踪步吗"
+        },
+        "policy": {
+          "rules": {
+            "known_garbled_phrase": "warning"
+          },
+          "garbled_phrases": [
+            "迷踪步ping"
+          ]
+        }
+      }
+    }
+  ]
+}
