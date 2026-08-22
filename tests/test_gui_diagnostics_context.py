@@ -344,7 +344,11 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("合并候选到 glossary", by_label)
         self.assertIn("merge-keywords-to-glossary", by_label["合并候选到 glossary（预览）"])
         self.assertIn("--dry-run", by_label["合并候选到 glossary（预览）"])
+        self.assertIn("--output", by_label["合并候选到 glossary（预览）"])
+        self.assertIn("json", by_label["合并候选到 glossary（预览）"])
         self.assertIn(manifest_path, by_label["合并候选到 glossary"])
+        self.assertIn("--output", by_label["合并候选到 glossary"])
+        self.assertIn("json", by_label["合并候选到 glossary"])
 
     def test_build_diagnostics_context_idle_without_manifest(self):
         context = build_diagnostics_context(

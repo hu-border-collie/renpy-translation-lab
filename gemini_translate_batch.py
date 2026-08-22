@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 import tokenize
-from dataclasses import replace
+from dataclasses import asdict, replace
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -120,6 +120,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply-revisions',
         'export-revision-corpus',
         'import-revision-proposals',
+        'merge-keywords-to-glossary',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'build-translation-records',
@@ -16112,6 +16113,7 @@ def build_arg_parser():
         action='store_true',
         help='Skip creating a timestamped glossary backup before writing.',
     )
+    add_machine_output_argument(merge_keywords_parser)
 
     compare_variants_parser = subparsers.add_parser(
         'compare-variants',
@@ -16976,18 +16978,20 @@ def dispatch_command(parser, args):
         candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
         glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
         dry_run = args.dry_run or args.preview
-        keyword_glossary_merge.merge_keywords_to_glossary(
+        machine_output = (
+            str(getattr(args, 'output', 'text') or 'text') == 'json'
+        )
+        return keyword_glossary_merge.merge_keywords_to_glossary(
             candidates_path,
             glossary_path,
             dry_run=dry_run,
             min_confidence=max(0.0, float(args.min_confidence or 0.0)),
             accept_confidence=args.accept_confidence,
             overwrite=args.overwrite,
-            interactive=not args.yes and not dry_run,
+            interactive=(not machine_output) and (not args.yes) and not dry_run,
             backup=not args.no_backup,
             allow_history_review=bool(args.yes),
         )
-        return
 
     if command == 'compare-variants':
         manifest = load_manifest(args.target or None)
@@ -17192,6 +17196,46 @@ def build_machine_success_envelope(command, value, args):
                     if isinstance(manifest, dict)
                     else ''
                 ),
+            ),
+        )
+
+    if command == 'merge-keywords-to-glossary':
+        if hasattr(value, 'candidates_read'):
+            summary = asdict(value)
+        else:
+            summary = dict(value or {})
+        result = {
+            'candidates_read': int(summary.get('candidates_read') or 0),
+            'accepted': int(summary.get('accepted') or 0),
+            'skipped_duplicate': int(summary.get('skipped_duplicate') or 0),
+            'skipped_low_confidence': int(
+                summary.get('skipped_low_confidence') or 0
+            ),
+            'skipped_empty': int(summary.get('skipped_empty') or 0),
+            'skipped_user': int(summary.get('skipped_user') or 0),
+            'overwritten': int(summary.get('overwritten') or 0),
+            'dry_run': bool(summary.get('dry_run')),
+            'wrote_glossary': bool(summary.get('wrote_glossary')),
+            'backup_path': summary.get('backup_path') or '',
+            'glossary_path': summary.get('glossary_path') or '',
+            'candidates_path': summary.get('candidates_path') or '',
+        }
+        if summary.get('dry_run'):
+            status = 'dry_run'
+        elif summary.get('wrote_glossary'):
+            status = 'updated'
+        elif int(summary.get('accepted') or 0) == 0:
+            status = 'no_work'
+        else:
+            status = 'reviewed'
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                candidates=summary.get('candidates_path') or '',
+                glossary=summary.get('glossary_path') or '',
+                backup=summary.get('backup_path') or '',
             ),
         )
 

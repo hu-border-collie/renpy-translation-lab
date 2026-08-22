@@ -1010,4 +1010,5 @@ def build_merge_keywords_cli_command(
         command.append('--yes')
     if no_backup:
         command.append('--no-backup')
+    command.extend(['--output', 'json'])
     return command
