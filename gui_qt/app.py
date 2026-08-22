@@ -11070,8 +11070,6 @@ class MainWindow(QMainWindow):
 
         button = getattr(self, "download_fonts_btn", None)
         if button is not None:
-            # The button doubles as the stop control so the download always
-            # has a user cancellation entry (#297 P3).
             button.setEnabled(True)
             button.setText("停止下载")
         label = getattr(self, "font_install_status_label", None)

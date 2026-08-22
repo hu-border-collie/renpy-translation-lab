@@ -164,6 +164,44 @@ class FontWorkerTests(unittest.TestCase):
         self.assertFalse(emitted[0].ok)
         self.assertEqual(emitted[0].error, "boom")
 
+    def test_worker_spawn_failure_after_cancel_never_falls_back_in_process(self):
+        worker = FontInstallWorker()
+        emitted = []
+        worker.completed.connect(emitted.append)
+
+        def failing_subprocess(**kwargs):
+            worker.request_cancel()
+            raise RuntimeError("spawn failed")
+
+        with mock.patch(
+            "gui_qt.font_worker.run_font_install_in_subprocess",
+            side_effect=failing_subprocess,
+        ) as isolated, mock.patch(
+            "gui_qt.font_worker.run_font_install"
+        ) as inproc:
+            worker.run()
+        isolated.assert_called_once()
+        inproc.assert_not_called()
+        self.assertTrue(emitted[0].cancelled)
+        self.assertFalse(emitted[0].ok)
+
+    def test_worker_spawn_failure_without_cancel_falls_back_in_process(self):
+        worker = FontInstallWorker()
+        emitted = []
+        worker.completed.connect(emitted.append)
+
+        with mock.patch(
+            "gui_qt.font_worker.run_font_install_in_subprocess",
+            side_effect=RuntimeError("spawn failed"),
+        ), mock.patch(
+            "gui_qt.font_worker.run_font_install",
+            return_value=FontInstallResult(True, (Path("a.ttf"),)),
+        ) as inproc:
+            worker.run()
+        inproc.assert_called_once_with()
+        self.assertTrue(emitted[0].ok)
+        self.assertFalse(emitted[0].cancelled)
+
     def test_worker_success_is_not_relabelled_when_cancel_arrives_late(self):
         worker = FontInstallWorker(isolate_process=False)
         emitted = []
@@ -283,7 +321,15 @@ class FontInstallShutdownOwnershipTests(unittest.TestCase):
                     window._shutdown_coordinator.active_labels(),
                 )
 
-                window._request_background_threads_shutdown()
+                settled_events = []
+                window._shutdown_coordinator.settled.connect(
+                    lambda: settled_events.append(True)
+                )
+                # Drive the close path: begin() cancels via the participant.
+                self.assertTrue(
+                    window._shutdown_coordinator.begin(timeout_ms=10_000)
+                )
+                self.assertTrue(window._shutdown_coordinator.in_progress)
                 self.assertTrue(worker.is_cancel_requested())
 
                 # Bounded shutdown without faking completion: the coordinator
@@ -293,6 +339,7 @@ class FontInstallShutdownOwnershipTests(unittest.TestCase):
                 self._app.processEvents()
                 window._shutdown_coordinator.check_now()
                 self.assertFalse(window._shutdown_coordinator.in_progress)
+                self.assertEqual(len(settled_events), 1)
                 self.assertIsNone(window._font_install_worker)
         finally:
             worker.request_cancel()

@@ -142,15 +142,31 @@ class FontInstallWorker(QThread):
                 FontInstallResult(False, error="字体下载已取消。", cancelled=True)
             )
             return
-        if self._isolate_process:
-            try:
-                result = run_font_install_in_subprocess(
-                    should_cancel=self.is_cancel_requested
-                )
-            except Exception:
-                result = run_font_install()
-        else:
-            result = run_font_install()
+        try:
+            result = self._install()
+        except Exception as exc:
+            # The terminal-state contract must hold even if a fallback path
+            # raises: ``completed`` always fires exactly once.
+            result = FontInstallResult(False, error=str(exc))
         if not result.ok and self.is_cancel_requested():
             result = replace(result, cancelled=True)
         self.completed.emit(result)
+
+    def _install(self) -> FontInstallResult:
+        if not self._isolate_process:
+            return run_font_install()
+        try:
+            return run_font_install_in_subprocess(
+                should_cancel=self.is_cancel_requested
+            )
+        except Exception:
+            # Spawn/import failures should not brick font install entirely,
+            # but an interrupted attempt must not fall back to an
+            # uninterruptible in-process install (same as DoctorWorker).
+            if self.is_cancel_requested():
+                return FontInstallResult(
+                    False,
+                    error="字体下载已取消。",
+                    cancelled=True,
+                )
+            return run_font_install()
