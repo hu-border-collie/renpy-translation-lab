@@ -486,6 +486,19 @@ class PlanBuildTests(unittest.TestCase):
         self.assertNotIn('y' * 4100, request.user_prompt)
         self.assertNotEqual(request.prompt_fingerprint, baseline.requests[0].prompt_fingerprint)
 
+    def test_layer_sections_never_glue_after_truncation(self):
+        # Retrieval truncated mid-line by the budget backstop must still end
+        # on a clean section boundary before the analysis header.
+        oversized_retrieval = 'LOCKED TERMS:\n' + ('z' * 5000)
+        build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider=oversized_retrieval,
+            analysis_blocks_provider='PROJECT BRIEF:\nclean brief.\n\n',
+        )
+        user_prompt = build.requests[0].user_prompt
+        self.assertIn('z' * 1400 + '\n\nPROJECT BRIEF:', user_prompt)
+        self.assertIn('\n\nPROJECT BRIEF:\nclean brief.', user_prompt)
+
     def test_block_layout_participates_in_plan_identity(self):
         jobs = _load_json('file_jobs.json')
         for task in jobs[0]['tasks']:

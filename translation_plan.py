@@ -976,9 +976,11 @@ def build_translation_plan(
         # Retrieval/analysis layer texts are embedded verbatim (budgeted by
         # the assembly); required/local/project are canonical renderings the
         # translation_core builders own — user_prompt stays the authoritative
-        # record of the model's input.
-        reference_blocks_text = ''.join(
-            layer.text
+        # record of the model's input. Layers join on a fixed blank-line
+        # separator after stripping trailing newlines, so a truncated
+        # retrieval section can never glue onto the PROJECT BRIEF header.
+        reference_blocks_text = '\n\n'.join(
+            layer.text.rstrip('\n')
             for layer in assembly.layers
             if layer.layer in (CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS)
             and layer.text
