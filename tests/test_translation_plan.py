@@ -435,6 +435,53 @@ class PlanBuildTests(unittest.TestCase):
             set_build.requests[0].user_prompt,
         )
 
+    def test_normalize_map_insertion_order_does_not_change_identity(self):
+        tasks = [{'id': 'u1', 'text': 'The setlist and the encore were great.'}]
+        first = translation_plan.retrieve_lexical_glossary_hits(
+            tasks, normalize_map={'setlist': '曲目单', 'encore': '返场'},
+        )
+        second = translation_plan.retrieve_lexical_glossary_hits(
+            tasks, normalize_map={'encore': '返场', 'setlist': '曲目单'},
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(
+            [hit['source'] for hit in first],
+            ['encore', 'setlist'],
+        )
+        first_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            normalize_map={'setlist': '曲目单', 'encore': '返场'},
+        )
+        second_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            normalize_map={'encore': '返场', 'setlist': '曲目单'},
+        )
+        self.assertEqual(first_build.plan.plan_id, second_build.plan.plan_id)
+        self.assertEqual(
+            first_build.requests[0].user_prompt,
+            second_build.requests[0].user_prompt,
+        )
+
+    def test_analysis_layer_budget_truncates_like_retrieval(self):
+        oversized = 'PROJECT BRIEF:\n' + ('y' * 8000)
+        baseline = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            analysis_blocks_provider=oversized,
+        )
+        request = build.requests[0]
+        analysis = next(
+            layer
+            for layer in request.context_assembly['layers']
+            if layer['layer'] == translation_plan.CONTEXT_LAYER_ANALYSIS
+        )
+        self.assertEqual(analysis['char_limit'], 4000)
+        self.assertTrue(analysis['truncated'])
+        self.assertEqual(analysis['char_used'], 4000)
+        self.assertIn('y' * 3900, request.user_prompt)
+        self.assertNotIn('y' * 4100, request.user_prompt)
+        self.assertNotEqual(request.prompt_fingerprint, baseline.requests[0].prompt_fingerprint)
+
     def test_block_layout_participates_in_plan_identity(self):
         jobs = _load_json('file_jobs.json')
         for task in jobs[0]['tasks']:

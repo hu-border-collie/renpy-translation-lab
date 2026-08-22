@@ -92,6 +92,7 @@
   ],
   "config_fingerprint": "6b13a28e97d87093",
   "context_policy": {
+    "analysis_char_limit": 4000,
     "history_char_limit": 220,
     "include_source_text": true,
     "include_translation_memory": true,
@@ -123,26 +124,26 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "94c400af650cb0ee",
-  "plan_id": "ea126d42d69f27c8",
+  "plan_fingerprint": "bbfeb740e3f1a551",
+  "plan_id": "cb305395100b2feb",
   "request_summaries": [
     {
       "chunk_id": "004851531f-00001",
-      "prompt_fingerprint": "621eaf04961b1e24",
-      "request_fingerprint": "3d19ba37de9b73a8",
-      "request_id": "c73492f1173c65e7"
+      "prompt_fingerprint": "77575fbc1e18e8f0",
+      "request_fingerprint": "6bc6f7303e1fcd46",
+      "request_id": "2a6c7ddd442830bb"
     },
     {
       "chunk_id": "004851531f-00002",
-      "prompt_fingerprint": "3016a10fdb228f24",
-      "request_fingerprint": "180be3491478b4e9",
-      "request_id": "8bbff7435acbe2bb"
+      "prompt_fingerprint": "88e4800fbd8a254b",
+      "request_fingerprint": "0bb78180cbe8c890",
+      "request_id": "6b6c8bf3f4fea97c"
     },
     {
       "chunk_id": "029e98ba77-00001",
-      "prompt_fingerprint": "3808a28cf6572621",
-      "request_fingerprint": "a1a0c0e3917b4d6c",
-      "request_id": "3aeecd419e08d5ec"
+      "prompt_fingerprint": "51331611e20b41b8",
+      "request_fingerprint": "61a1aaee2bc34183",
+      "request_id": "eba04179e4178561"
     }
   ],
   "run_id": "fixture-run",

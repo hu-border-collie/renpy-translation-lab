@@ -184,6 +184,7 @@ class ContextPolicy:
     local_context_after: int = translation_core.CANONICAL_LOCAL_CONTEXT_AFTER
     history_char_limit: int = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
     story_char_limit: int = translation_core.CANONICAL_STORY_CHAR_LIMIT
+    analysis_char_limit: int = translation_core.CANONICAL_ANALYSIS_CHAR_LIMIT
     include_source_text: bool = translation_core.CANONICAL_INCLUDE_SOURCE_TEXT
     include_translation_memory: bool = True
     story_block_suffix: str = translation_core.CANONICAL_STORY_BLOCK_SUFFIX
@@ -194,6 +195,7 @@ class ContextPolicy:
             'local_context_after': int(self.local_context_after),
             'history_char_limit': int(self.history_char_limit),
             'story_char_limit': int(self.story_char_limit),
+            'analysis_char_limit': int(self.analysis_char_limit),
             'include_source_text': bool(self.include_source_text),
             'include_translation_memory': bool(self.include_translation_memory),
             'story_block_suffix': self.story_block_suffix,
@@ -298,7 +300,9 @@ def retrieve_lexical_glossary_hits(target_items, normalize_map=None, preserve_te
         return []
     hits = []
     seen = set()
-    for source, target in (normalize_map or {}).items():
+    # Sorted iteration: mappings with identical content but different
+    # insertion order must yield identical hit order (and prompts).
+    for source, target in sorted((normalize_map or {}).items()):
         if source and source in combined_text and source not in seen:
             hits.append({'source': source, 'target': target, 'kind': 'normalize'})
             seen.add(source)
@@ -491,15 +495,32 @@ def _retrieval_layer(chunk_input, policy):
     )
 
 
-def _analysis_layer(chunk_input):
+def _analysis_layer(chunk_input, policy):
+    """Budget the analysis layer like the retrieval layer (D5 backstop).
+
+    Published Project Analysis briefs have their own upstream budget (batch
+    ``max_brief_chars``); whatever provider text still exceeds the policy
+    limit here is truncated deterministically so no layer enters the prompt
+    unbounded.
+    """
     text = str(chunk_input.analysis_blocks_text or '')
+    limit = policy.analysis_char_limit
+    truncated = False
+    if text and len(text) > limit:
+        text = text[:limit]
+        truncated = True
     return ContextLayerResult(
         layer=CONTEXT_LAYER_ANALYSIS,
         rank=CONTEXT_LAYER_RANKS[CONTEXT_LAYER_ANALYSIS],
         text=text,
         char_used=len(text),
-        char_limit=0,
-        diagnostics={'source': 'published_project_analysis'},
+        char_limit=limit,
+        truncated=truncated,
+        diagnostics={
+            'source': 'published_project_analysis',
+            'budget_mode': 'd5_backstop',
+            'analysis_char_limit': limit,
+        },
     )
 
 
@@ -516,7 +537,7 @@ def assemble_context_layers(chunk_input, context_policy=None):
         _local_layer(chunk_input),
         _project_layer(chunk_input),
         _retrieval_layer(chunk_input, policy),
-        _analysis_layer(chunk_input),
+        _analysis_layer(chunk_input, policy),
     ]
     layers = []
     dropped = []
