@@ -41,7 +41,7 @@
 
 ## 命令说明
 
-普通用户推荐通过 GUI 执行这条流程；Agent、脚本和 CI 可在七个核心命令后追加 `--output json`，获得 `schema_version=1` 的统一结果 envelope：
+普通用户推荐通过 GUI 执行这条流程；Agent、脚本和 CI 可在核心命令（及 revision / keyword / final-review 工作流命令）后追加 `--output json`，获得 `schema_version=1` 的统一结果 envelope：
 
 ```powershell
 python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json --output json
@@ -64,14 +64,14 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 在 `ready` 时退出 `0`，`ready_with_warnings` 退出 `3` 但仍满足写回门禁（`writeback_gate.decision=allow`），`blocked` 退出 `4`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
 
-需要确定性调用时追加 `--non-interactive`。该选项保证核心命令不等待 stdin，并让 `submit / status / download / check / apply / quality-ack / quality-unack` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
+需要确定性调用时追加 `--non-interactive`。该选项保证支持该选项的命令不等待 stdin，并让 `submit / status / download / check / apply / quality-ack / quality-unack` 以及 `preview-revisions / export-keywords / final-review-status / final-review-export / final-review-resume / final-review-ingest-results / final-review-create-revisions` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。`merge-keywords-to-glossary` 的 target 本就是必选参数，`--non-interactive` 下若未同时传 `--yes` 或 `--dry-run` 会直接拒绝交互式逐条确认。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
 
 ```powershell
 python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json --output json --non-interactive --strict-exit-codes
 ```
 
 只需关闭 target 回退时可单独使用 `--require-explicit-target`。默认模式保持现有 latest-manifest 和 submit-build 行为；`doctor / build` 不消费 manifest，不受显式 target 要求影响。
-结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply / quality-ack / quality-unack`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
+结构化输出当前覆盖核心命令（`doctor / build / submit / status / download / check / apply / quality-ack / quality-unack`）、版本资产/复用命令、revision / keyword / final-review 工作流命令；完整清单以 `capabilities` 的 `machine_output` 标记为准，其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
 核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.writeback_gate.decision result.check.quality_gate` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。

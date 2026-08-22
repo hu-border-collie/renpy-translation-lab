@@ -214,6 +214,15 @@ class CliContractTests(unittest.TestCase):
         campaign_done = cli_contract.success_envelope(
             "final-review-status", status="done"
         )
+        ingest_failed = cli_contract.success_envelope(
+            "final-review-ingest-results", status="failed"
+        )
+        ingest_stale = cli_contract.success_envelope(
+            "final-review-ingest-results", status="stale"
+        )
+        ingest_done = cli_contract.success_envelope(
+            "final-review-ingest-results", status="done"
+        )
 
         self.assertEqual(cli_contract.strict_exit_code(preview_ready), cli_contract.EXIT_OK)
         self.assertEqual(
@@ -233,6 +242,15 @@ class CliContractTests(unittest.TestCase):
             cli_contract.EXIT_NEEDS_ACTION,
         )
         self.assertEqual(cli_contract.strict_exit_code(campaign_done), cli_contract.EXIT_OK)
+        self.assertEqual(
+            cli_contract.strict_exit_code(ingest_failed),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(ingest_stale),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(cli_contract.strict_exit_code(ingest_done), cli_contract.EXIT_OK)
 
     def test_parse_result_envelope_accepts_shared_contract(self):
         envelope = cli_contract.success_envelope(

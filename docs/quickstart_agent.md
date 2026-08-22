@@ -201,8 +201,9 @@ python gemini_translate_batch.py schema status
 `capabilities` 与 `schema` 本身就是 JSON 命令，也接受 `--compact / --fields / --output-file`，但不需要也不提供冗余的 `--output json`。
 
 没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪是公开参数，不存在 discovery schema 之外的隐藏 Agent 行为。
-没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的七个
-核心命令和两个版本资产命令；其他子命令以各自 `--help` 和落盘产物为准。
+没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式覆盖上面的核心命令、
+版本资产/复用命令以及 revision / keyword / final-review 工作流命令（完整清单以
+`capabilities` 的 `machine_output` 标记为准）；其他子命令以各自 `--help` 和落盘产物为准。
 
 ## 1. 安装核心依赖
 

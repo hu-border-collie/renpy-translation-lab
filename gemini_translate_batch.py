@@ -17016,14 +17016,22 @@ def dispatch_command(parser, args):
         glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
         dry_run = args.dry_run or args.preview
         interactive = not args.yes and not dry_run
-        if interactive and cli_contract.machine_output_active():
-            raise cli_contract.MachineContractError(
-                'merge-keywords-to-glossary prompts for review in text mode; '
-                'machine output requires --yes or --dry-run.',
-                code_name='INTERACTIVE_REVIEW_UNSUPPORTED',
-                suggested_action='pass_yes_or_dry_run',
-                details={'command': 'merge-keywords-to-glossary'},
+        if interactive and (
+            cli_contract.machine_output_active()
+            or getattr(args, 'non_interactive', False)
+        ):
+            message = (
+                'merge-keywords-to-glossary prompts for review; '
+                'pass --yes or --dry-run to run non-interactively.'
             )
+            if cli_contract.machine_output_active():
+                raise cli_contract.MachineContractError(
+                    message,
+                    code_name='INTERACTIVE_REVIEW_UNSUPPORTED',
+                    suggested_action='pass_yes_or_dry_run',
+                    details={'command': 'merge-keywords-to-glossary'},
+                )
+            raise SystemExit(message)
         summary = keyword_glossary_merge.merge_keywords_to_glossary(
             candidates_path,
             glossary_path,

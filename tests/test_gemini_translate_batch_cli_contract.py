@@ -1092,6 +1092,38 @@ class BatchCliContractTests(unittest.TestCase):
         )
         merge.assert_not_called()
 
+    def test_merge_keywords_non_interactive_text_mode_requires_yes_or_dry_run(self):
+        stderr = io.StringIO()
+        merge = mock.Mock()
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "resolve_keyword_candidates_path",
+                return_value="candidates.jsonl",
+            ),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "merge_keywords_to_glossary",
+                merge,
+            ),
+            contextlib.redirect_stderr(stderr),
+        ):
+            with self.assertRaisesRegex(SystemExit, "--yes or --dry-run"):
+                batch.main(
+                    [
+                        "merge-keywords-to-glossary",
+                        "candidates.jsonl",
+                        "--non-interactive",
+                    ]
+                )
+        merge.assert_not_called()
+
     def test_merge_keywords_machine_mode_runs_non_interactively_with_yes(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
