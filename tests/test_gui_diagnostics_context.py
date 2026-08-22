@@ -81,6 +81,23 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
+    def test_build_cli_commands_includes_revision_keyword_build_sync_commands(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\jobs\manifest.json",
+            manifest={"mode": "translation", "job_name": ""},
+        )
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("订正·构建任务", by_label)
+        self.assertIn("build-revisions", by_label["订正·构建任务"])
+        self.assertIn("订正·同步预览", by_label)
+        self.assertIn("sync-revisions", by_label["订正·同步预览"])
+        self.assertIn("关键词·构建任务", by_label)
+        self.assertIn("build-keywords", by_label["关键词·构建任务"])
+        self.assertIn("关键词·同步提取", by_label)
+        self.assertIn("sync-keywords", by_label["关键词·同步提取"])
+
     def test_build_cli_commands_includes_compare_variants_dry_run(self):
         commands = build_cli_commands(
             python_exe="python",

@@ -154,6 +154,30 @@ class CliContractTests(unittest.TestCase):
         proposal_stale = cli_contract.success_envelope(
             "import-revision-proposals", status="stale"
         )
+        preview_ready = cli_contract.success_envelope(
+            "preview-revisions", status="ready"
+        )
+        preview_warn = cli_contract.success_envelope(
+            "preview-revisions", status="ready_with_warnings"
+        )
+        preview_blocked = cli_contract.success_envelope(
+            "preview-revisions", status="blocked"
+        )
+        sync_ready = cli_contract.success_envelope(
+            "sync-revisions", status="previewed"
+        )
+        sync_no_work = cli_contract.success_envelope(
+            "sync-revisions", status="no_work"
+        )
+        sync_applied = cli_contract.success_envelope(
+            "sync-revisions", status="applied"
+        )
+        sync_partial = cli_contract.success_envelope(
+            "sync-revisions", status="partial"
+        )
+        sync_blocked = cli_contract.success_envelope(
+            "sync-revisions", status="blocked"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -178,6 +202,38 @@ class CliContractTests(unittest.TestCase):
         )
         self.assertEqual(
             cli_contract.strict_exit_code(proposal_stale),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(preview_ready),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(preview_warn),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(preview_blocked),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_ready),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_no_work),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_applied),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_partial),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_blocked),
             cli_contract.EXIT_BLOCKED,
         )
         unknown = cli_contract.success_envelope("check", status="unknown")

@@ -30,6 +30,23 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
+订正流程的关键命令也使用同一 envelope：
+
+```powershell
+python gemini_translate_batch.py build-revisions --output json
+python gemini_translate_batch.py preview-revisions <manifest> --output json
+python gemini_translate_batch.py apply-revisions <manifest> --output json
+python gemini_translate_batch.py sync-revisions --output json
+```
+
+关键词流程的关键命令也使用同一 envelope：
+
+```powershell
+python gemini_translate_batch.py build-keywords --output json
+python gemini_translate_batch.py export-keywords <manifest> --output json
+python gemini_translate_batch.py sync-keywords --output json
+```
+
 P3/P4 的版本资产与译文复用命令也使用同一 envelope：
 
 ```powershell
@@ -110,7 +127,7 @@ ModelProfile 与 ExecutionStrategy。拒绝时使用以下稳定合同：
 python gemini_translate_batch.py status <manifest> --output json --non-interactive --strict-exit-codes
 ```
 
-在 `submit / status / download / check / apply` 中，`--non-interactive` 要求显式传入 manifest 路径或 package 目录：
+在 `submit / status / download / check / apply / preview-revisions / apply-revisions` 中，`--non-interactive` 要求显式传入 manifest 路径或 package 目录：
 
 - 不再读取 `latest_manifest.txt` 或扫描最新 package；
 - `submit` 不再因 target 为空而隐式执行 build；
@@ -173,8 +190,7 @@ python gemini_translate_batch.py schema status
 `capabilities` 与 `schema` 本身就是 JSON 命令，也接受 `--compact / --fields / --output-file`，但不需要也不提供冗余的 `--output json`。
 
 没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪是公开参数，不存在 discovery schema 之外的隐藏 Agent 行为。
-没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的七个
-核心命令和两个版本资产命令；其他子命令以各自 `--help` 和落盘产物为准。
+没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的核心流程、订正流程关键命令、版本资产/复用命令；其余子命令以各自 `--help`、`capabilities` 和落盘产物为准。
 
 ## 1. 安装核心依赖
 

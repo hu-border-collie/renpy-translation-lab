@@ -236,6 +236,22 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         if status in {"blocked", "stale"}:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
+    if command == "preview-revisions":
+        if status in {"ready", "previewed"}:
+            return EXIT_OK
+        if status in {"ready_with_warnings", "warn", "attention"}:
+            return EXIT_NEEDS_ACTION
+        if status in {"blocked"}:
+            return EXIT_BLOCKED
+        return EXIT_INVALID_STATE
+    if command == "sync-revisions":
+        if status in {"ready", "previewed", "applied", "no_op", "no_work"}:
+            return EXIT_OK
+        if status in {"ready_with_warnings", "warn", "attention", "partial"}:
+            return EXIT_NEEDS_ACTION
+        if status in {"blocked", "stale"}:
+            return EXIT_BLOCKED
+        return EXIT_INVALID_STATE
     if command in {"submit", "status"} and status in {
         "failed",
         "cancelled",
