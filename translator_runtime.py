@@ -65,6 +65,7 @@ import prompt_context
 import story_memory
 import sync_translation_preview
 import translation_core
+import translation_plan
 import translation_quality
 from sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
@@ -3239,44 +3240,26 @@ def embed_sync_query_text(query_text):
 def retrieve_sync_glossary_hits(target_items):
     """Return every lexical glossary hit for the current TARGET batch.
 
-    Matches ``normalize_map``, ``preserve_terms`` and ``non_translatable_exact``
-    against the batch text and returns all actual hits. The list is deliberately
-    not truncated by ``SYNC_RAG_TOP_K_TERMS``: that cap applies only to the RAG
-    ``LOCKED TERMS`` reference list, while the lexical injection required by
-    issue #338 must always carry the batch's real hits (otherwise normalize hits
-    could evict non-translatable terms and cause names to be mistranslated).
+    Delegates to the shared implementation (issue #346, D2) with the runtime's
+    configured glossary inputs. The list is deliberately not truncated by
+    ``SYNC_RAG_TOP_K_TERMS``: that cap applies only to the RAG ``LOCKED TERMS``
+    reference list, while the lexical injection required by issue #338 must
+    always carry the batch's real hits (otherwise normalize hits could evict
+    non-translatable terms and cause names to be mistranslated).
     """
-    combined_text = "\n".join(item.get("text", "") for item in target_items if item.get("text"))
-    if not combined_text:
-        return []
-    hits = []
-    seen = set()
-    for source, target in (NORMALIZE_TRANSLATION_MAP or {}).items():
-        if source and source in combined_text and source not in seen:
-            hits.append({"source": source, "target": target, "kind": "normalize"})
-            seen.add(source)
-    for term in PRESERVE_TERMS:
-        if not isinstance(term, str) or not term.strip():
-            continue
-        if term in combined_text and term not in seen:
-            hits.append({"source": term, "target": term, "kind": "preserve"})
-            seen.add(term)
-    for term in NON_TRANSLATABLE_EXACT:
-        if not isinstance(term, str) or not term.strip():
-            continue
-        if term in combined_text and term not in seen:
-            hits.append({"source": term, "target": "", "kind": "non_translatable"})
-            seen.add(term)
-    return hits
-
-
-def _sync_task_text_len(item):
-    text = (item or {}).get("text")
-    return len(text) if isinstance(text, str) else 0
+    return translation_plan.retrieve_lexical_glossary_hits(
+        target_items,
+        normalize_map=NORMALIZE_TRANSLATION_MAP,
+        preserve_terms=PRESERVE_TERMS,
+        non_translatable_exact=NON_TRANSLATABLE_EXACT,
+    )
 
 
 def build_sync_local_context(tasks, start, end, before_limit, after_limit):
     """Build a file-bounded ContextWindow for one sync batch (issue #338).
+
+    Delegates to the shared block-bounded window builder (issue #346, D1) so
+    sync and batch consume the same local-context algorithm.
 
     The window is limited to the current file's pending task sequence (the
     caller passes one file at a time) and stops at translate-block boundaries
@@ -3286,52 +3269,7 @@ def build_sync_local_context(tasks, start, end, before_limit, after_limit):
     applied limits, actual item/character counts, block bounding, and whether
     the budget truncated the context.
     """
-    before = []
-    after = []
-    before_truncated = False
-    after_truncated = False
-    block_bounded_before = False
-    block_bounded_after = False
-
-    if before_limit > 0 and start > 0:
-        batch_block = tasks[start].get("block_name")
-        index = start - 1
-        while index >= 0 and len(before) < before_limit:
-            item = tasks[index]
-            if item.get("block_name") != batch_block:
-                block_bounded_before = True
-                break
-            before.append(item)
-            index -= 1
-        if index >= 0 and len(before) >= before_limit:
-            before_truncated = True
-        before.reverse()
-
-    if after_limit > 0 and end < len(tasks):
-        batch_block = tasks[end - 1].get("block_name")
-        index = end
-        while index < len(tasks) and len(after) < after_limit:
-            item = tasks[index]
-            if item.get("block_name") != batch_block:
-                block_bounded_after = True
-                break
-            after.append(item)
-            index += 1
-        if index < len(tasks) and len(after) >= after_limit:
-            after_truncated = True
-
-    diagnostics = {
-        "context_before_limit": before_limit,
-        "context_after_limit": after_limit,
-        "context_before_items": len(before),
-        "context_after_items": len(after),
-        "context_before_chars": sum(_sync_task_text_len(item) for item in before),
-        "context_after_chars": sum(_sync_task_text_len(item) for item in after),
-        "context_truncated": before_truncated or after_truncated,
-        "block_bounded_before": block_bounded_before,
-        "block_bounded_after": block_bounded_after,
-    }
-    return translation_core.ContextWindow(before, after), diagnostics
+    return translation_plan.build_local_context_window(tasks, start, end, before_limit, after_limit)
 
 
 def format_sync_glossary_hits_block(hits, empty_label="(none)"):

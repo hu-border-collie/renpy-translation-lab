@@ -1,0 +1,132 @@
+{
+  "artifacts": {},
+  "chunk_policy": {
+    "max_chars": 18000,
+    "max_items": 60
+  },
+  "chunks": [
+    {
+      "chunk_id": "004851531f-00001",
+      "chunk_index": 1,
+      "context_window_spec": {
+        "block_bounded_after": false,
+        "block_bounded_before": false,
+        "context_after_chars": 0,
+        "context_after_items": 0,
+        "context_after_limit": 10,
+        "context_before_chars": 0,
+        "context_before_items": 0,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter01/dialogue.rpy",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "line_numbers": [
+        4,
+        5,
+        6,
+        7,
+        11,
+        12
+      ],
+      "source_char_count": 314,
+      "unit_ids": [
+        "chapter01/dialogue.rpy:chapter01_start:1:2fc92d42",
+        "chapter01/dialogue.rpy:chapter01_start:2:76c75e96",
+        "chapter01/dialogue.rpy:chapter01_start:3:b4ff32ae",
+        "chapter01/dialogue.rpy:chapter01_start:4:97290b97",
+        "chapter01/dialogue.rpy:chapter01_hall:1:5a148e37",
+        "chapter01/dialogue.rpy:chapter01_hall:2:312652f9"
+      ]
+    },
+    {
+      "chunk_id": "029e98ba77-00001",
+      "chunk_index": 1,
+      "context_window_spec": {
+        "block_bounded_after": false,
+        "block_bounded_before": false,
+        "context_after_chars": 0,
+        "context_after_items": 0,
+        "context_after_limit": 10,
+        "context_before_chars": 0,
+        "context_before_items": 0,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter02/strings.rpy",
+      "file_rel_path": "chapter02/strings.rpy",
+      "line_numbers": [
+        4,
+        7,
+        10
+      ],
+      "source_char_count": 37,
+      "unit_ids": [
+        "chapter02/strings.rpy:strings:1:946ed705",
+        "chapter02/strings.rpy:strings:2:31fbef16",
+        "chapter02/strings.rpy:strings:3:d649170f"
+      ]
+    }
+  ],
+  "config_fingerprint": "6b13a28e97d87093",
+  "context_policy": {
+    "history_char_limit": 220,
+    "include_source_text": true,
+    "include_translation_memory": true,
+    "local_context_after": 10,
+    "local_context_before": 30,
+    "story_block_suffix": "\n\n",
+    "story_char_limit": 1200
+  },
+  "execution_strategy": "sync",
+  "model_profile_snapshot": {
+    "adapter": "litellm",
+    "base_url": "https://fixture.example.invalid/v1",
+    "capability_overrides": {},
+    "credential_ref": {
+      "env_name": "",
+      "kind": "env",
+      "name": "FIXTURE_MODEL_KEY"
+    },
+    "embedding_profile_id": "",
+    "extra_headers": {},
+    "id": "primary",
+    "label": "Fixture Primary",
+    "model": "fixture-model-alpha",
+    "models": [
+      "fixture-model-alpha"
+    ],
+    "params": {
+      "temperature": 0.2
+    },
+    "provider": "openai_compatible"
+  },
+  "plan_fingerprint": "1f27b73cba4333e6",
+  "plan_id": "fec63f7755db8e24",
+  "request_summaries": [
+    {
+      "chunk_id": "004851531f-00001",
+      "prompt_fingerprint": "bc8215f7ce888643",
+      "request_fingerprint": "fa9a718f0b66584f",
+      "request_id": "f8d1cad1c6cf73b9"
+    },
+    {
+      "chunk_id": "029e98ba77-00001",
+      "prompt_fingerprint": "1390defd9ec27f34",
+      "request_fingerprint": "3c1a15a297f5edac",
+      "request_id": "9caa9a1dc9070561"
+    }
+  ],
+  "run_id": "fixture-run",
+  "schema_version": 1,
+  "source_identity": {
+    "adapter_version": "8.5.2",
+    "engine": "renpy",
+    "file_digests": {
+      "chapter01/dialogue.rpy": "137614ec373b9aca5b571c4918fd69e6002b3d94421334a45afb6cbf835fca38",
+      "chapter02/strings.rpy": "2e43952c413866f0707e9dcbfa79983324d0d0be4d5a140a63d1de8b0521897c"
+    },
+    "project_identity_digest": "a4bf6402f0f91dc1d5597582612c4b21125d776777c155295c2546e4714e4a79",
+    "source_snapshot_fingerprint": "f10658642b3c98ec2472c5fcf0274454c1cdf79aa2337573dbfcd0f4d3dd705b"
+  }
+}

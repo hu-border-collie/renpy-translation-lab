@@ -819,6 +819,74 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('- Hello Alice => \u4f60\u597d Alice', block)
         self.assertIn('- Goodbye => \u518d\u89c1', block)
 
+    def test_canonical_system_instruction_merges_sync_rules_into_batch_base(self):
+        instruction = translation_core.build_canonical_translation_system_instruction(
+            ['Dawn Chorus'],
+            macro_setting='A college story.',
+        )
+        # Batch base contract.
+        self.assertIn('Translate only TARGET lines into Simplified Chinese.', instruction)
+        self.assertIn('Setting:\nA college story.', instruction)
+        self.assertIn('Keep these terms unchanged: Dawn Chorus', instruction)
+        # Sync-only rules merged in (issue #346, D3).
+        self.assertIn('Keep all person names in English; do not translate names.', instruction)
+        self.assertIn('No markdown, no Pinyin, no explanations.', instruction)
+        # Dedupe guard: the merged rule must not duplicate the batch wording.
+        self.assertEqual(instruction.count('do not localize, reorder, or partially translate'), 1)
+
+    def test_canonical_user_prompt_freezes_d5_defaults(self):
+        units = translation_core.units_from_items(
+            [
+                {'id': 'script.rpy:a:1:aa', 'text': 'Hello Alice', 'speaker_id': 'e'},
+                {'id': 'script.rpy:a:2:bb', 'text': '你好'},
+            ],
+            translation_core.MODE_TRANSLATION,
+        )
+        prompt = translation_core.build_canonical_translation_user_prompt(
+            translation_core.ContextWindow(['Previous line'], ['Next line']),
+            units,
+            reference_blocks_text='LOCKED TERMS:\n- Keep unchanged: Dawn Chorus\n\n',
+            lexical_glossary_text='- Preserve: Dawn Chorus',
+        )
+        self.assertIn('Existing glossary entries:\n- Preserve: Dawn Chorus\n\n', prompt)
+        self.assertIn('LOCKED TERMS:\n- Keep unchanged: Dawn Chorus\n\n', prompt)
+        self.assertIn('CONTEXT BEFORE:\n- Previous line\n\n', prompt)
+        self.assertIn('CONTEXT AFTER:\n- Next line\n\n', prompt)
+        self.assertTrue(prompt.endswith('Return the result now.'))
+        # TARGET payload uses compact separators (D5) with speaker fields.
+        self.assertIn(
+            '"id":"script.rpy:a:1:aa","text":"Hello Alice","speaker_id":"e"',
+            prompt,
+        )
+        self.assertNotIn('"id": ', prompt)
+
+    def test_canonical_user_prompt_omits_empty_sections(self):
+        prompt = translation_core.build_canonical_translation_user_prompt(
+            None,
+            [{'id': 'u1', 'text': 'Hello'}],
+        )
+        self.assertNotIn('Existing glossary entries', prompt)
+        self.assertNotIn('LOCKED TERMS', prompt)
+        self.assertIn('CONTEXT BEFORE:\n(none)\n\n', prompt)
+        self.assertIn('TARGET:\n[{"id":"u1","text":"Hello"}]', prompt)
+
+    def test_shared_chunking_helper_defaults_and_file_hash_key(self):
+        self.assertEqual(translation_core.CANONICAL_CHUNK_MAX_ITEMS, 60)
+        self.assertEqual(translation_core.CANONICAL_CHUNK_MAX_CHARS, 18000)
+        self.assertEqual(translation_core.CANONICAL_STORY_CHAR_LIMIT, 1200)
+        self.assertTrue(translation_core.CANONICAL_INCLUDE_SOURCE_TEXT)
+        self.assertEqual(
+            translation_core.file_hash_key('chapter01/dialogue.rpy'),
+            hashlib.sha1(b'chapter01/dialogue.rpy').hexdigest()[:10],
+        )
+        # The legacy batch iterator keeps identical semantics via delegation.
+        tasks = [{'text': 'x' * 25} for _ in range(5)]
+        self.assertEqual(
+            list(batch_mod.iter_translation_chunk_ranges(tasks)),
+            list(translation_core.iter_translation_chunk_ranges(tasks, 60, 18000)),
+        )
+        self.assertEqual(batch_mod.hash_key('demo'), translation_core.file_hash_key('demo'))
+
 
 
 if __name__ == '__main__':

@@ -1,0 +1,7 @@
+{
+  "target_language": "zh-CN",
+  "source_language": "en",
+  "execution": {
+    "temperature": 0.2
+  }
+}

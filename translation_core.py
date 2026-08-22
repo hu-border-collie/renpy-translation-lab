@@ -770,6 +770,125 @@ def build_sync_translation_prompt(
     )
 
 
+# --- Canonical translation contract (issue #346, decisions D3-D6) -------------
+#
+# The canonical prompt below is the single semantic contract both execution
+# strategies (sync and gemini_batch) must send to the model. It merges the
+# former batch-only system/user builders with the sync-only rules (English
+# person names, no markdown/Pinyin) so prompt drift between the paths becomes
+# visible as a plan diff instead of living inside one executor. The legacy
+# builders above stay as compatibility shims for existing manifests.
+
+CANONICAL_CHUNK_MAX_ITEMS = 60       # D4-A
+CANONICAL_CHUNK_MAX_CHARS = 18000    # D4-A
+CANONICAL_LOCAL_CONTEXT_BEFORE = 30  # D1 window limits (sync/batch already agree)
+CANONICAL_LOCAL_CONTEXT_AFTER = 10   # D1
+CANONICAL_HISTORY_CHAR_LIMIT = 220   # D5
+CANONICAL_STORY_CHAR_LIMIT = 1200    # D5
+CANONICAL_INCLUDE_SOURCE_TEXT = True  # D5
+CANONICAL_STORY_BLOCK_SUFFIX = '\n\n'  # D5 (batch form)
+
+
+def file_hash_key(text):
+    """Short stable content key for file paths (legacy batch chunk-key form)."""
+    return hashlib.sha1(str(text).encode('utf-8')).hexdigest()[:10]
+
+
+def translation_text_char_count(task):
+    text = task.get('text', '') if isinstance(task, dict) else ''
+    return len(text) if isinstance(text, str) else len(str(text))
+
+
+def iter_translation_chunk_ranges(tasks, max_items=CANONICAL_CHUNK_MAX_ITEMS, max_chars=CANONICAL_CHUNK_MAX_CHARS):
+    """Yield ``(start, end)`` task ranges shared by sync and batch chunking.
+
+    The first item of a range is always accepted so a single oversized task
+    still forms its own chunk. Extracted from the former batch-only iterator
+    so both execution strategies derive identical translation-unit grouping
+    (issue #346, D4).
+    """
+    total = len(tasks)
+    start = 0
+    while start < total:
+        end = start
+        current_chars = 0
+        while end < total and (end - start) < max_items:
+            item_chars = translation_text_char_count(tasks[end])
+            if end > start and current_chars + item_chars > max_chars:
+                break
+            current_chars += item_chars
+            end += 1
+        if end == start:
+            end = start + 1
+        yield start, end
+        start = end
+
+
+def build_canonical_translation_system_instruction(preserve_terms, macro_setting=''):
+    glossary = ', '.join(str(term) for term in preserve_terms or [])
+    return (
+        'Setting:\n'
+        f'{macro_setting or ""}\n\n'
+        'Task:\n'
+        'Translate only TARGET lines into Simplified Chinese. CONTEXT lines are reference only.\n'
+        f'Keep these terms unchanged: {glossary}\n'
+        'If a TARGET contains one of those terms, copy that exact source substring verbatim into the translation, '
+        'including honorifics, apostrophes, numbers, and spacing; do not localize, reorder, or partially translate it.\n'
+        "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
+        'Keep all person names in English; do not translate names.\n'
+        "Every bracketed Ren'Py interpolation such as [Gil_name!t], [Main], or [Parker_last!t] "
+        'must be copied exactly; never replace it with a literal visible name.\n'
+        'Return one result for every TARGET id even when the text is hard to translate; never omit an item.\n'
+        'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'
+        'Output plain Chinese text. No markdown, no Pinyin, no explanations.\n'
+        'Return one JSON object with a translations array. Preserve every id exactly. Item count must match. '
+        'translation must contain only the translated Chinese text.'
+    )
+
+
+def build_canonical_translation_user_prompt(
+    context_window,
+    units,
+    reference_blocks_text='',
+    lexical_glossary_text='',
+):
+    """Build the canonical per-request user prompt (issue #346, D3/D5).
+
+    ``lexical_glossary_text`` carries the rendered lexical glossary hits of the
+    current chunk (issue #338 wording, D2: injected whenever hits exist, never
+    gated on RAG being enabled). ``reference_blocks_text`` is the pre-rendered
+    retrieval/analysis reference section; callers render it with
+    :func:`build_reference_blocks` using the D5 policy values so the assembled
+    context layer accounting stays byte-identical to the embedded text. The
+    TARGET payload always uses compact JSON separators (D5).
+    """
+    context_window = context_window or ContextWindow()
+    units = units_from_items(units, MODE_TRANSLATION)
+    target_payload = json.dumps(
+        [translation_target_payload_item(unit) for unit in units],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    )
+    glossary_block = ''
+    if isinstance(lexical_glossary_text, str) and lexical_glossary_text.strip():
+        glossary_block = f'Existing glossary entries:\n{lexical_glossary_text.strip()}\n\n'
+    reference_section = ''
+    if isinstance(reference_blocks_text, str) and reference_blocks_text.strip():
+        reference_section = reference_blocks_text
+        if not reference_section.endswith('\n\n'):
+            reference_section += '\n\n'
+    return ''.join(
+        [
+            glossary_block,
+            reference_section,
+            f'CONTEXT BEFORE:\n{format_context_block(context_window.before, "(none)")}\n\n',
+            f'TARGET:\n{target_payload}\n\n',
+            f'CONTEXT AFTER:\n{format_context_block(context_window.after, "(none)")}\n\n',
+            'Return the result now.',
+        ]
+    )
+
+
 def build_revision_system_instruction(preserve_terms, macro_setting=''):
     glossary = ', '.join(str(term) for term in preserve_terms or [])
     return (
