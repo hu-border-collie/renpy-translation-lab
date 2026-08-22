@@ -3,34 +3,29 @@
 
 A :class:`TranslationPlan` captures the semantic contract the model must see —
 translation units, chunk grouping, prompts, response schema, and assembled
-context — derived deterministically from a fixed source snapshot, config
-snapshot, and model profile. Executors (the sync runtime and the Gemini batch
-builder, wired in #346 P2/P3) consume the plan instead of assembling their own
-prompts; the transport layer may only add envelopes, job ids, and scheduling
-metadata on top of :class:`TranslationRequest`.
+context. Executors (the sync runtime and the Gemini batch builder, wired in
+#346 P2/P3) consume the plan instead of assembling their own prompts; the
+transport layer may only add envelopes, job ids, and scheduling metadata on
+top of :class:`TranslationRequest`.
 
-Purity constraints (enforced by tests):
+Hard constraints (enforced by tests):
 
 * no optional SDK imports, no network access, no credential values — profile
   snapshots pass through :func:`redact_sensitive` before entering a plan;
 * identical inputs rebuild byte-identical plans: every id and fingerprint is
-  content-derived via :func:`canonical_json`, never time- or randomness-based;
-* ``run_id`` is an audit label only and is excluded from ``plan_id`` and
-  ``plan_fingerprint``.
-
-Context assembly follows the fixed six-layer model from issue #346. Five
-content layers are accounted per request (required, local, project, retrieval,
-analysis); the sixth (budget/trimming) is the assembly-level accounting itself:
-deterministic ordering by rank, duplicate dropping, per-layer character
-budgets, and keep/drop diagnostics. Retrieved content (RAG history, story
-memory, source index, published project analysis) is supplied by callers as
-pre-retrieved bundles — P1 ships the assembly contract; the pluggable
-providers for #341 attach at that seam.
+  content-derived via :func:`canonical_json`, never time- or randomness-based,
+  and unordered inputs (sets) are canonicalized before hashing;
+* ``run_id`` is an audit label only; retrieved content is captured by
+  ``prompt_fingerprint``, not by ``plan_id``;
+* the canonical prompt is built from the budgeted layer texts kept by
+  :func:`assemble_context_layers` — layer accounting and the embedded prompt
+  text can never disagree.
 """
 
 from dataclasses import dataclass, field
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 
 import model_profile
@@ -59,19 +54,61 @@ CONTEXT_LAYER_RANKS = {
     CONTEXT_LAYER_BUDGET: 6,
 }
 
-_SENSITIVE_KEY_TOKENS = (
-    'api_key',
+# Keys are normalized (lowercased, '-'/'_'/' ' stripped) before substring
+# matching so header spellings like ``X-Api-Key`` are caught. ``token`` alone
+# matches exactly: a substring match would redact legitimate keys such as
+# ``max_output_tokens`` / ``usage_tokens``.
+_SENSITIVE_KEY_SUBSTRINGS = (
     'apikey',
     'authorization',
-    'auth_token',
-    'access_token',
+    'authsecret',
+    'accesstoken',
+    'authtoken',
+    'refreshtoken',
+    'idtoken',
     'secret',
     'password',
-    'credential_value',
+    'credentialvalue',
     'bearer',
 )
+_SENSITIVE_KEY_EXACT = frozenset({'token'})
 _REDACTED_KEY_ALLOWLIST = ('credential_ref', 'credential_refs')
 REDACTED_VALUE = '[redacted]'
+
+
+def _normalize_sensitive_key(key):
+    return re.sub(r'[-_ ]', '', str(key).lower())
+
+
+def _is_sensitive_key(key):
+    if str(key) in _REDACTED_KEY_ALLOWLIST:
+        return False
+    normalized = _normalize_sensitive_key(key)
+    if normalized in _SENSITIVE_KEY_EXACT:
+        return True
+    return any(marker in normalized for marker in _SENSITIVE_KEY_SUBSTRINGS)
+
+
+def redact_sensitive(value):
+    """Recursively replace credential-shaped values with a redaction marker.
+
+    Keys whose normalized name carries API key, authorization, token, secret,
+    or password markers have their values replaced wholesale — including
+    header spellings like ``X-Api-Key``. ``credential_ref`` objects pass
+    through: they hold lookup references (slot ids, env var names), never
+    credential values (see ``model_profile.CredentialRef``).
+    """
+    if isinstance(value, Mapping):
+        redacted = {}
+        for key, item in value.items():
+            if _is_sensitive_key(key):
+                redacted[str(key)] = REDACTED_VALUE
+            else:
+                redacted[str(key)] = redact_sensitive(item)
+        return redacted
+    if isinstance(value, (list, tuple)):
+        return [redact_sensitive(item) for item in value]
+    return value
 
 CONTEXT_TOKEN_ESTIMATE_METHOD = 'char_upper_bound'
 
@@ -103,32 +140,26 @@ def short_fingerprint(text):
     return sha256_hex(text)[:16]
 
 
-def _is_sensitive_key(key):
-    if str(key) in _REDACTED_KEY_ALLOWLIST:
-        return False
-    lowered = str(key).lower()
-    return any(token in lowered for token in _SENSITIVE_KEY_TOKENS)
+def _canonical_term_sequence(terms):
+    """Deterministic sequence for term iterables of any collection type.
 
-
-def redact_sensitive(value):
-    """Recursively replace credential-shaped values with a redaction marker.
-
-    Keys containing API key, authorization, token, secret, or password markers
-    have their values replaced wholesale. ``credential_ref`` objects pass
-    through: they hold lookup references (slot ids, env var names), never
-    credential values (see ``model_profile.CredentialRef``).
+    Lists and tuples keep their given order (deduplicated); ``set`` /
+    ``frozenset`` are sorted, because set iteration order is
+    ``PYTHONHASHSEED``-dependent and plan ids must be reproducible across
+    processes.
     """
-    if isinstance(value, Mapping):
-        redacted = {}
-        for key, item in value.items():
-            if _is_sensitive_key(key):
-                redacted[str(key)] = REDACTED_VALUE
-            else:
-                redacted[str(key)] = redact_sensitive(item)
-        return redacted
-    if isinstance(value, (list, tuple)):
-        return [redact_sensitive(item) for item in value]
-    return value
+    items = list(terms or [])
+    if isinstance(terms, (set, frozenset)):
+        items.sort()
+    seen = set()
+    ordered = []
+    for item in items:
+        marker = repr(item)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        ordered.append(item)
+    return ordered
 
 
 # --- Chunking policy and stable ids (D4) --------------------------------------
@@ -257,7 +288,8 @@ def retrieve_lexical_glossary_hits(target_items, normalize_map=None, preserve_te
     Matches ``normalize_map`` (existing mappings), ``preserve_terms``, and
     ``non_translatable_exact`` against the combined chunk text, deduplicated by
     source term and never truncated (issue #338): normalize hits must not evict
-    non-translatable terms, otherwise names could be mistranslated.
+    non-translatable terms, otherwise names could be mistranslated. Unordered
+    collections are canonicalized first so hit order is process-stable.
     """
     combined_text = '\n'.join(
         item.get('text', '') for item in target_items or [] if item.get('text')
@@ -270,13 +302,13 @@ def retrieve_lexical_glossary_hits(target_items, normalize_map=None, preserve_te
         if source and source in combined_text and source not in seen:
             hits.append({'source': source, 'target': target, 'kind': 'normalize'})
             seen.add(source)
-    for term in preserve_terms or []:
+    for term in _canonical_term_sequence(preserve_terms):
         if not isinstance(term, str) or not term.strip():
             continue
         if term in combined_text and term not in seen:
             hits.append({'source': term, 'target': term, 'kind': 'preserve'})
             seen.add(term)
-    for term in non_translatable_exact or []:
+    for term in _canonical_term_sequence(non_translatable_exact):
         if not isinstance(term, str) or not term.strip():
             continue
         if term in combined_text and term not in seen:
@@ -428,6 +460,14 @@ def _project_layer(chunk_input):
 
 
 def _retrieval_layer(chunk_input, policy):
+    """Budget the retrieval layer as a D5 backstop, not a re-render.
+
+    Providers normally render through :func:`render_reference_blocks`, which
+    already applies the per-section history/story limits. Whatever text still
+    exceeds the combined D5 envelope here is truncated deterministically so
+    the layer's accounting matches what the canonical prompt embeds (the
+    prompt is built from the kept layer texts).
+    """
     text = str(chunk_input.retrieval_blocks_text or '')
     limit = policy.history_char_limit + policy.story_char_limit
     truncated = False
@@ -435,7 +475,7 @@ def _retrieval_layer(chunk_input, policy):
         text = text[:limit]
         truncated = True
     diagnostics = {
-        'rendered_by': 'translation_core.build_reference_blocks',
+        'budget_mode': 'd5_combined_backstop',
         'history_char_limit': policy.history_char_limit,
         'story_char_limit': policy.story_char_limit,
         'include_source_text': policy.include_source_text,
@@ -748,6 +788,10 @@ def _unit_semantic_entry(unit):
         'speaker_name': unit.speaker_name,
         'file_rel_path': unit.file_rel_path,
         'line': unit.line,
+        # block_name drives the D1 local-context window; it must participate
+        # in plan identity or two jobs differing only in block layout would
+        # share a plan_id while their prompts diverge.
+        'block_name': str(unit.metadata.get('block_name', '') if isinstance(unit.metadata, Mapping) else ''),
     }
 
 
@@ -807,6 +851,8 @@ def build_translation_plan(
     config_fingerprint = short_fingerprint(
         canonical_json(redact_sensitive(dict(config_snapshot or {})))
     )
+    preserve_terms = _canonical_term_sequence(preserve_terms)
+    non_translatable_exact = _canonical_term_sequence(non_translatable_exact)
 
     # Pass 1: derive unit grouping and the plan identity payload.
     chunk_specs = []
@@ -849,9 +895,9 @@ def build_translation_plan(
         'chunk_policy': chunk_policy.to_dict(),
         'context_policy': context_policy.to_dict(),
         'prompt_inputs': {
-            'preserve_terms': [str(term) for term in preserve_terms or []],
+            'preserve_terms': [str(term) for term in preserve_terms],
             'normalize_map': dict(normalize_map or {}),
-            'non_translatable_exact': [str(term) for term in non_translatable_exact or []],
+            'non_translatable_exact': [str(term) for term in non_translatable_exact],
             'macro_setting': str(macro_setting or ''),
         },
         'units': unit_entries,
@@ -900,9 +946,16 @@ def build_translation_plan(
             preserve_terms,
             macro_setting=str(macro_setting or ''),
         )
-        reference_blocks_text = ''
-        if retrieval_text or analysis_text:
-            reference_blocks_text = retrieval_text + analysis_text
+        # The canonical prompt embeds exactly the budgeted layer texts the
+        # assembly kept, so layer accounting and the prompt can never diverge
+        # (an oversized provider text is truncated before it reaches the
+        # model, and the truncation is visible in both places).
+        reference_blocks_text = ''.join(
+            layer.text
+            for layer in assembly.layers
+            if layer.layer in (CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS)
+            and layer.text
+        )
         user_prompt = translation_core.build_canonical_translation_user_prompt(
             context_window,
             target_units,

@@ -2,14 +2,14 @@
   "artifacts": {},
   "chunk_policy": {
     "max_chars": 18000,
-    "max_items": 60
+    "max_items": 4
   },
   "chunks": [
     {
       "chunk_id": "004851531f-00001",
       "chunk_index": 1,
       "context_window_spec": {
-        "block_bounded_after": false,
+        "block_bounded_after": true,
         "block_bounded_before": false,
         "context_after_chars": 0,
         "context_after_items": 0,
@@ -22,19 +22,41 @@
       "file_path": "game/chapter01/dialogue.rpy",
       "file_rel_path": "chapter01/dialogue.rpy",
       "line_numbers": [
-        4,
         5,
         6,
         7,
-        11,
-        12
+        8
       ],
-      "source_char_count": 314,
+      "source_char_count": 216,
       "unit_ids": [
         "chapter01/dialogue.rpy:chapter01_start:1:2fc92d42",
         "chapter01/dialogue.rpy:chapter01_start:2:76c75e96",
         "chapter01/dialogue.rpy:chapter01_start:3:b4ff32ae",
-        "chapter01/dialogue.rpy:chapter01_start:4:97290b97",
+        "chapter01/dialogue.rpy:chapter01_start:4:97290b97"
+      ]
+    },
+    {
+      "chunk_id": "004851531f-00002",
+      "chunk_index": 2,
+      "context_window_spec": {
+        "block_bounded_after": false,
+        "block_bounded_before": true,
+        "context_after_chars": 0,
+        "context_after_items": 0,
+        "context_after_limit": 10,
+        "context_before_chars": 0,
+        "context_before_items": 0,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter01/dialogue.rpy",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "line_numbers": [
+        12,
+        13
+      ],
+      "source_char_count": 98,
+      "unit_ids": [
         "chapter01/dialogue.rpy:chapter01_hall:1:5a148e37",
         "chapter01/dialogue.rpy:chapter01_hall:2:312652f9"
       ]
@@ -101,20 +123,26 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "1f27b73cba4333e6",
-  "plan_id": "fec63f7755db8e24",
+  "plan_fingerprint": "94c400af650cb0ee",
+  "plan_id": "ea126d42d69f27c8",
   "request_summaries": [
     {
       "chunk_id": "004851531f-00001",
-      "prompt_fingerprint": "bc8215f7ce888643",
-      "request_fingerprint": "fa9a718f0b66584f",
-      "request_id": "f8d1cad1c6cf73b9"
+      "prompt_fingerprint": "621eaf04961b1e24",
+      "request_fingerprint": "3d19ba37de9b73a8",
+      "request_id": "c73492f1173c65e7"
+    },
+    {
+      "chunk_id": "004851531f-00002",
+      "prompt_fingerprint": "3016a10fdb228f24",
+      "request_fingerprint": "180be3491478b4e9",
+      "request_id": "8bbff7435acbe2bb"
     },
     {
       "chunk_id": "029e98ba77-00001",
-      "prompt_fingerprint": "1390defd9ec27f34",
-      "request_fingerprint": "3c1a15a297f5edac",
-      "request_id": "9caa9a1dc9070561"
+      "prompt_fingerprint": "3808a28cf6572621",
+      "request_fingerprint": "a1a0c0e3917b4d6c",
+      "request_id": "3aeecd419e08d5ec"
     }
   ],
   "run_id": "fixture-run",

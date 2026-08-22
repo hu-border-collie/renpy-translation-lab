@@ -6,7 +6,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_start:1:2fc92d42",
         "text": "Hey [Gil_name!t], did you finish the Dawn Chorus setlist?",
-        "line": 4,
+        "line": 5,
         "speaker_id": "g",
         "speaker_name": "Gil",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
@@ -14,7 +14,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_start:2:76c75e96",
         "text": "Almost. {i}Almost{/i} is the operative word, Gil.",
-        "line": 5,
+        "line": 6,
         "speaker_id": "p",
         "speaker_name": "Parker",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
@@ -22,7 +22,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_start:3:b4ff32ae",
         "text": "Mrs. Parker will flip if we're late to rehearsal again.",
-        "line": 6,
+        "line": 7,
         "speaker_id": "g",
         "speaker_name": "Gil",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
@@ -30,7 +30,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_start:4:97290b97",
         "text": "Relax. I kept the B-side as the encore, like you asked.",
-        "line": 7,
+        "line": 8,
         "speaker_id": "p",
         "speaker_name": "Parker",
         "block_name": "chapter01/dialogue.rpy::chapter01_start"
@@ -38,7 +38,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_hall:1:5a148e37",
         "text": "You two. Practice room, five minutes, or the setlist is cut.",
-        "line": 11,
+        "line": 12,
         "speaker_id": "m",
         "speaker_name": "Mrs. Parker",
         "block_name": "chapter01/dialogue.rpy::chapter01_hall"
@@ -46,7 +46,7 @@
       {
         "id": "chapter01/dialogue.rpy:chapter01_hall:2:312652f9",
         "text": "On it! Come on, [Parker_last!t], move!",
-        "line": 12,
+        "line": 13,
         "speaker_id": "g",
         "speaker_name": "Gil",
         "block_name": "chapter01/dialogue.rpy::chapter01_hall"

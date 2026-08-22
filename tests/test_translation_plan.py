@@ -61,6 +61,10 @@ def build_fixture_plan(strategy, **overrides):
         config_snapshot=_load_json('config_snapshot.json'),
         model_profile_snapshot=_load_json('model_profile.json'),
         run_id='fixture-run',
+        # Shrink item budget so chapter01 splits across its two labels and the
+        # frozen golden plans exercise the D1 block boundary (the production
+        # D4 default 60/18000 is asserted in ChunkingTests).
+        chunk_policy=translation_plan.ChunkPolicy(max_items=4),
         preserve_terms=glossary['preserve_terms'],
         normalize_map=glossary['normalize_map'],
         non_translatable_exact=glossary['non_translatable_exact'],
@@ -105,6 +109,21 @@ class CanonicalJsonTests(unittest.TestCase):
         second = translation_plan.canonical_json({'y': [3, 1], 'x': {'a': 1, 'b': 2}})
         self.assertEqual(first, second)
 
+    def test_canonical_term_sequence_sorts_sets_and_keeps_list_order(self):
+        self.assertEqual(
+            translation_plan._canonical_term_sequence({'b', 'a'}),
+            ['a', 'b'],
+        )
+        self.assertEqual(
+            translation_plan._canonical_term_sequence(frozenset({'z', 'a'})),
+            ['a', 'z'],
+        )
+        self.assertEqual(
+            translation_plan._canonical_term_sequence(['x', 'x', 'y']),
+            ['x', 'y'],
+        )
+        self.assertEqual(translation_plan._canonical_term_sequence(None), [])
+
 
 class RedactionTests(unittest.TestCase):
     def test_replaces_credential_values_recursively(self):
@@ -132,6 +151,28 @@ class RedactionTests(unittest.TestCase):
         }
         redacted = translation_plan.redact_sensitive(payload)
         self.assertEqual(redacted['credential_ref']['name'], 'FIXTURE_MODEL_KEY')
+
+    def test_header_spellings_and_generic_token_redact(self):
+        payload = {
+            'extra_headers': {
+                'X-Api-Key': 'secret-a',
+                'x-api-key': 'secret-b',
+                'token': 'secret-c',
+                'AUTH_TOKEN': 'secret-d',
+                'X-Trace-Id': 'keep-me',
+            },
+            'generation': {'max_output_tokens': 8192, 'temperature': 0.2},
+        }
+        redacted = translation_plan.redact_sensitive(payload)
+        headers = redacted['extra_headers']
+        self.assertEqual(headers['X-Api-Key'], translation_plan.REDACTED_VALUE)
+        self.assertEqual(headers['x-api-key'], translation_plan.REDACTED_VALUE)
+        self.assertEqual(headers['token'], translation_plan.REDACTED_VALUE)
+        self.assertEqual(headers['AUTH_TOKEN'], translation_plan.REDACTED_VALUE)
+        self.assertEqual(headers['X-Trace-Id'], 'keep-me')
+        # Exact-only matching for `token` must not redact legitimate token
+        # count keys.
+        self.assertEqual(redacted['generation']['max_output_tokens'], 8192)
 
 
 class ChunkingTests(unittest.TestCase):
@@ -347,6 +388,94 @@ class PlanBuildTests(unittest.TestCase):
         self.assertNotIn('super-secret', rendered)
         self.assertIn(translation_plan.REDACTED_VALUE, rendered)
 
+    def test_retrieval_budget_truncation_reaches_the_user_prompt(self):
+        oversized = 'LOCKED TERMS:\n' + ('x' * 5000)
+        baseline = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        oversized_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider=oversized,
+        )
+        request = oversized_build.requests[0]
+        retrieval = next(
+            layer['char_used']
+            for layer in request.context_assembly['layers']
+            if layer['layer'] == translation_plan.CONTEXT_LAYER_RETRIEVAL
+        )
+        truncated = next(
+            layer['truncated']
+            for layer in request.context_assembly['layers']
+            if layer['layer'] == translation_plan.CONTEXT_LAYER_RETRIEVAL
+        )
+        self.assertTrue(truncated)
+        self.assertEqual(retrieval, 220 + 1200)
+        # The embedded prompt carries the budgeted text, not the provider's
+        # full blob, and the truncation moves the fingerprint.
+        self.assertIn('x' * 1400, request.user_prompt)
+        self.assertNotIn('x' * 1500, request.user_prompt)
+        self.assertNotEqual(request.prompt_fingerprint, baseline.requests[0].prompt_fingerprint)
+        self.assertNotEqual(
+            oversized_build.plan.plan_fingerprint,
+            baseline.plan.plan_fingerprint,
+        )
+
+    def test_unordered_term_collections_yield_stable_identity(self):
+        list_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            preserve_terms=['Dawn Chorus', 'Mrs. Parker'],
+            non_translatable_exact=['B-side'],
+        )
+        set_build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            preserve_terms={'Dawn Chorus', 'Mrs. Parker'},
+            non_translatable_exact=frozenset({'B-side'}),
+        )
+        self.assertEqual(list_build.plan.plan_id, set_build.plan.plan_id)
+        self.assertEqual(
+            list_build.requests[0].user_prompt,
+            set_build.requests[0].user_prompt,
+        )
+
+    def test_block_layout_participates_in_plan_identity(self):
+        jobs = _load_json('file_jobs.json')
+        for task in jobs[0]['tasks']:
+            if task['block_name'].endswith('chapter01_start'):
+                task['block_name'] = task['block_name'].replace(
+                    'chapter01_start', 'chapter01_renamed'
+                )
+        identity = _fixture_source_identity()
+        glossary = _load_json('glossary.json')
+        renamed_build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+            source_identity=identity,
+            config_snapshot=_load_json('config_snapshot.json'),
+            model_profile_snapshot=_load_json('model_profile.json'),
+            preserve_terms=glossary['preserve_terms'],
+            normalize_map=glossary['normalize_map'],
+            non_translatable_exact=glossary['non_translatable_exact'],
+        )
+        baseline = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        self.assertNotEqual(renamed_build.plan.plan_id, baseline.plan.plan_id)
+
+    def test_retrieved_content_changes_prompts_but_not_plan_id(self):
+        first = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider='LOCKED TERMS:\n- alpha\n\n',
+            analysis_blocks_provider='PROJECT BRIEF:\nfirst brief.\n\n',
+        )
+        second = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider='LOCKED TERMS:\n- beta\n\n',
+            analysis_blocks_provider='PROJECT BRIEF:\nsecond brief.\n\n',
+        )
+        self.assertEqual(first.plan.plan_id, second.plan.plan_id)
+        self.assertNotEqual(first.plan.plan_fingerprint, second.plan.plan_fingerprint)
+        for first_request, second_request in zip(first.requests, second.requests):
+            self.assertNotEqual(
+                first_request.prompt_fingerprint,
+                second_request.prompt_fingerprint,
+            )
+
 
 class ContextAssemblyTests(unittest.TestCase):
     def test_layers_are_ordered_by_rank(self):
@@ -399,18 +528,19 @@ class ContextAssemblyTests(unittest.TestCase):
 
     def test_local_layer_records_block_bounded_diagnostics(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
-        local = next(
-            layer
-            for request in build.requests
-            for layer in request.context_assembly['layers']
-            if layer['layer'] == translation_plan.CONTEXT_LAYER_LOCAL
-        )
-        self.assertEqual(local['diagnostics']['algorithm'], 'block_bounded_window')
-        # chapter01 chunk 1 spans chapter01_start only; the hall block bounds it.
-        self.assertTrue(
-            local['diagnostics']['block_bounded_after']
-            or local['diagnostics']['context_after_items'] == 0
-        )
+        dialogue_chunks = [
+            chunk for chunk in build.plan.chunks
+            if chunk.file_rel_path == 'chapter01/dialogue.rpy'
+        ]
+        # max_items=4 splits chapter01 across its two labels; each side of
+        # the split stops at the translate-block boundary (D1).
+        self.assertEqual(len(dialogue_chunks), 2)
+        first_spec = dialogue_chunks[0].context_window_spec
+        second_spec = dialogue_chunks[1].context_window_spec
+        self.assertEqual(first_spec['block_bounded_after'], True)
+        self.assertEqual(first_spec['context_after_items'], 0)
+        self.assertEqual(second_spec['block_bounded_before'], True)
+        self.assertEqual(second_spec['context_before_items'], 0)
 
 
 class GoldenPlanTests(unittest.TestCase):

@@ -772,12 +772,10 @@ def build_sync_translation_prompt(
 
 # --- Canonical translation contract (issue #346, decisions D3-D6) -------------
 #
-# The canonical prompt below is the single semantic contract both execution
-# strategies (sync and gemini_batch) must send to the model. It merges the
-# former batch-only system/user builders with the sync-only rules (English
-# person names, no markdown/Pinyin) so prompt drift between the paths becomes
-# visible as a plan diff instead of living inside one executor. The legacy
-# builders above stay as compatibility shims for existing manifests.
+# The single semantic contract both execution strategies must send to the
+# model. The legacy build_translation_* / build_sync_translation_prompt
+# builders above remain as compatibility shims; new executor wiring must not
+# call them.
 
 CANONICAL_CHUNK_MAX_ITEMS = 60       # D4-A
 CANONICAL_CHUNK_MAX_CHARS = 18000    # D4-A

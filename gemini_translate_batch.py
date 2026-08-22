@@ -3189,7 +3189,6 @@ def task_text_char_count(task):
 
 
 def iter_translation_chunk_ranges(tasks):
-    # Shared chunking algorithm (issue #346 D4); batch passes its own limits.
     yield from translation_core.iter_translation_chunk_ranges(
         tasks,
         max_items=BATCH_TARGET_SIZE,

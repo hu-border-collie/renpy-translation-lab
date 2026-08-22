@@ -10,8 +10,9 @@ P0 golden fixture 骨架 + P1 期望快照，用于冻结 Sync / Gemini Batch �
   `[Gil_name!t]` 插值、`{i}` 标签，以及术语命中：Dawn Chorus / Mrs. Parker /
   setlist / B-side）。
 - `inputs/file_jobs.json` — 从 `game/` 手工推导的 tasks（id 格式
-  `file:label:idx:sha256(text)[:8]`，内容派生、与源文件一一对应）。计划构建器
-  消费的是这个文件；`.rpy` 是溯源与 P4 端到端测试的素材。
+  `file:label:idx:sha256(text)[:8]`，内容派生；`line` 为与源文件 1-based 行号
+  对应的 0-based 内部行号，与 `translation_core` 的 `TranslationUnit.line`
+  约定一致）。计划构建器消费的是这个文件；`.rpy` 是溯源与 P4 端到端测试的素材。
 - `inputs/glossary.json` — D2 词法术语三件套（preserve/normalize/non-translatable）。
 - `inputs/macro_setting.txt` — 项目层 Macro 文本。
 - `inputs/retrieval_blocks.txt` / `inputs/analysis_blocks.txt` — 检索层与分析层的
@@ -21,6 +22,10 @@ P0 golden fixture 骨架 + P1 期望快照，用于冻结 Sync / Gemini Batch �
   序列化形态；不含任何凭据值，credential 仅引用环境变量名）。
 - `expected/plan.sync.json` / `expected/plan.gemini_batch.json` — 冻结的期望 plan
   （`translation_plan.build_translation_plan` 的 `to_dict()` 输出）。
+
+注意：golden 构建使用缩小的 `ChunkPolicy(max_items=4)`，让 chapter01 跨两个
+label 分块、冻结的 `context_window_spec` 真正锁住 D1 block 边界；生产 D4 默认
+（60/18000）由 `ChunkingTests` 单独断言。
 
 ## 再生成期望快照
 
