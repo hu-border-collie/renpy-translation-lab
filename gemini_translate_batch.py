@@ -16978,6 +16978,9 @@ def dispatch_command(parser, args):
         candidates_path = keyword_glossary_merge.resolve_keyword_candidates_path(args.target)
         glossary_path = args.glossary.strip() if args.glossary else legacy.GLOSSARY_FILE
         dry_run = args.dry_run or args.preview
+        machine_output = (
+            str(getattr(args, 'output', 'text') or 'text') == 'json'
+        )
         return keyword_glossary_merge.merge_keywords_to_glossary(
             candidates_path,
             glossary_path,
@@ -16985,7 +16988,7 @@ def dispatch_command(parser, args):
             min_confidence=max(0.0, float(args.min_confidence or 0.0)),
             accept_confidence=args.accept_confidence,
             overwrite=args.overwrite,
-            interactive=not args.yes and not dry_run,
+            interactive=(not machine_output) and (not args.yes) and not dry_run,
             backup=not args.no_backup,
             allow_history_review=bool(args.yes),
         )

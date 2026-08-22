@@ -788,6 +788,50 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertTrue(envelope["result"]["dry_run"])
         self.assertFalse(envelope["result"]["wrote_glossary"])
 
+    def test_merge_keywords_machine_mode_forces_non_interactive(self):
+        summary = batch.keyword_glossary_merge.MergeSummary(
+            candidates_read=1,
+            accepted=0,
+            glossary_path="C:/jobs/demo/glossary.json",
+            candidates_path="C:/jobs/demo/candidates.jsonl",
+            dry_run=True,
+            wrote_glossary=False,
+        )
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "resolve_keyword_candidates_path",
+                return_value="candidates.jsonl",
+            ),
+            mock.patch.object(
+                batch.keyword_glossary_merge,
+                "merge_keywords_to_glossary",
+                return_value=summary,
+            ) as merge,
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "merge-keywords-to-glossary",
+                    "C:/jobs/demo/candidates.jsonl",
+                    "--output",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse(merge.call_args.kwargs["interactive"])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "merge-keywords-to-glossary")
+        self.assertTrue(payload["ok"])
+
     def test_merge_keywords_machine_cli_returns_json_envelope(self):
         summary = batch.keyword_glossary_merge.MergeSummary(
             candidates_read=1,
