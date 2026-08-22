@@ -30,6 +30,13 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
+关键词合并命令也使用同一 envelope：
+
+```powershell
+python gemini_translate_batch.py merge-keywords-to-glossary <candidates.jsonl> --dry-run --output json
+python gemini_translate_batch.py merge-keywords-to-glossary <candidates.jsonl> --yes --output json
+```
+
 P3/P4 的版本资产与译文复用命令也使用同一 envelope：
 
 ```powershell
@@ -173,8 +180,7 @@ python gemini_translate_batch.py schema status
 `capabilities` 与 `schema` 本身就是 JSON 命令，也接受 `--compact / --fields / --output-file`，但不需要也不提供冗余的 `--output json`。
 
 没有单独提供 `commands` 命令，因为 `capabilities.commands` 已覆盖同一用途。输出裁剪是公开参数，不存在 discovery schema 之外的隐藏 Agent 行为。
-没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的七个
-核心命令和两个版本资产命令；其他子命令以各自 `--help` 和落盘产物为准。
+没有 `--output json` 时仍使用原有人类可读文本。当前结构化模式承诺覆盖上面的核心流程、关键词合并命令和版本资产/复用命令；其余子命令以各自 `--help`、`capabilities` 和落盘产物为准。
 
 ## 1. 安装核心依赖
 

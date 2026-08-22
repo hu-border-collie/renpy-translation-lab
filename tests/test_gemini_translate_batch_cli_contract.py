@@ -35,6 +35,8 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "reuse.json", "manifest.json"]
         if command == "import-revision-proposals":
             return [command, "proposals.jsonl"]
+        if command == "merge-keywords-to-glossary":
+            return [command, "candidates.jsonl"]
         return [command]
 
     def test_core_commands_accept_json_output_after_subcommand(self):
@@ -718,6 +720,105 @@ class BatchCliContractTests(unittest.TestCase):
             ["apply-revisions", "C:/jobs/demo/manifest.json", "--output", "json"]
         )
         self.assertEqual(args.output, "json")
+
+    def test_merge_keywords_to_glossary_is_registered_for_machine_output(self):
+        self.assertIn("merge-keywords-to-glossary", batch.MACHINE_OUTPUT_COMMANDS)
+        args = batch.build_arg_parser().parse_args(
+            [
+                "merge-keywords-to-glossary",
+                "C:/jobs/demo/candidates.jsonl",
+                "--yes",
+                "--output",
+                "json",
+            ]
+        )
+        self.assertEqual(args.output, "json")
+
+    def test_machine_result_builder_covers_merge_keywords_to_glossary(self):
+        args = SimpleNamespace(target="")
+        summary = batch.keyword_glossary_merge.MergeSummary(
+            candidates_read=4,
+            accepted=2,
+            skipped_duplicate=1,
+            skipped_low_confidence=0,
+            skipped_empty=0,
+            skipped_user=1,
+            overwritten=1,
+            backup_path="C:/jobs/demo/glossary.backup.json",
+            glossary_path="C:/jobs/demo/glossary.json",
+            candidates_path="C:/jobs/demo/candidates.jsonl",
+            dry_run=False,
+            wrote_glossary=True,
+        )
+        envelope = batch.build_machine_success_envelope(
+            "merge-keywords-to-glossary",
+            summary,
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "updated")
+        self.assertEqual(envelope["result"]["accepted"], 2)
+        self.assertEqual(envelope["result"]["overwritten"], 1)
+        self.assertEqual(
+            envelope["artifacts"]["glossary"],
+            "C:/jobs/demo/glossary.json",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["backup"],
+            "C:/jobs/demo/glossary.backup.json",
+        )
+
+    def test_machine_result_builder_covers_merge_keywords_dry_run(self):
+        args = SimpleNamespace(target="")
+        summary = batch.keyword_glossary_merge.MergeSummary(
+            candidates_read=2,
+            accepted=1,
+            glossary_path="C:/jobs/demo/glossary.json",
+            candidates_path="C:/jobs/demo/candidates.jsonl",
+            dry_run=True,
+            wrote_glossary=False,
+        )
+        envelope = batch.build_machine_success_envelope(
+            "merge-keywords-to-glossary",
+            summary,
+            args,
+        )
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "dry_run")
+        self.assertTrue(envelope["result"]["dry_run"])
+        self.assertFalse(envelope["result"]["wrote_glossary"])
+
+    def test_merge_keywords_machine_cli_returns_json_envelope(self):
+        summary = batch.keyword_glossary_merge.MergeSummary(
+            candidates_read=1,
+            accepted=0,
+            glossary_path="C:/jobs/demo/glossary.json",
+            candidates_path="C:/jobs/demo/candidates.jsonl",
+            dry_run=True,
+            wrote_glossary=False,
+        )
+        stdout = io.StringIO()
+
+        with (
+            mock.patch.object(batch, "dispatch_command", return_value=summary),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(
+                [
+                    "merge-keywords-to-glossary",
+                    "C:/jobs/demo/candidates.jsonl",
+                    "--dry-run",
+                    "--output",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["command"], "merge-keywords-to-glossary")
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "dry_run")
+        self.assertEqual(payload["result"]["candidates_read"], 1)
 
     def test_proposal_import_machine_envelope_exposes_status_actions_and_artifacts(self):
         args = SimpleNamespace(command="import-revision-proposals")
