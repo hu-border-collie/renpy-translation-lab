@@ -118,6 +118,12 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'check',
         'apply',
         'apply-revisions',
+        'final-review-build',
+        'final-review-status',
+        'final-review-export',
+        'final-review-resume',
+        'final-review-ingest-results',
+        'final-review-create-revisions',
         'export-revision-corpus',
         'import-revision-proposals',
         'export-project-snapshot',
@@ -15621,6 +15627,7 @@ def build_arg_parser():
             '(not recommended; results may be incomplete).'
         ),
     )
+    add_machine_output_argument(final_review_build_parser)
 
     final_review_status_parser = subparsers.add_parser(
         'final-review-status',
@@ -15637,6 +15644,7 @@ def build_arg_parser():
         action='store_true',
         help='Print machine-readable JSON status.',
     )
+    add_machine_output_argument(final_review_status_parser)
 
     final_review_export_parser = subparsers.add_parser(
         'final-review-export',
@@ -15658,6 +15666,7 @@ def build_arg_parser():
         default='',
         help='Output report Markdown path (default: package report.md).',
     )
+    add_machine_output_argument(final_review_export_parser)
 
     final_review_resume_parser = subparsers.add_parser(
         'final-review-resume',
@@ -15678,6 +15687,7 @@ def build_arg_parser():
         action='store_true',
         help='Re-queue all units, including done units with matching digests.',
     )
+    add_machine_output_argument(final_review_resume_parser)
 
     final_review_ingest_parser = subparsers.add_parser(
         'final-review-ingest-results',
@@ -15709,6 +15719,7 @@ def build_arg_parser():
             'resume (escape hatch / re-parse). Prefer a fresh download or --result.'
         ),
     )
+    add_machine_output_argument(final_review_ingest_parser)
 
     final_review_revisions_parser = subparsers.add_parser(
         'final-review-create-revisions',
@@ -15732,6 +15743,8 @@ def build_arg_parser():
             'already marked selection_state=selected.'
         ),
     )
+    add_machine_output_argument(final_review_revisions_parser)
+
     project_analysis_status_parser = subparsers.add_parser(
         'project-analysis-status',
         help=(
@@ -16420,52 +16433,49 @@ def dispatch_command(parser, args):
         load_batch_settings()
         if command == 'final-review-build':
             print_banner()
-            create_final_review_package(
+            return create_final_review_package(
                 display_name_override=getattr(args, 'display_name', '') or '',
                 skip_prepare=bool(getattr(args, 'skip_prepare', False)),
                 chunk_size=getattr(args, 'chunk_size', 0) or None,
                 allow_pending=bool(getattr(args, 'allow_pending', False)),
             )
-            return
         if command == 'final-review-status':
-            if not getattr(args, 'json', False):
+            machine_output = (
+                str(getattr(args, 'output', 'text') or 'text') == 'json'
+            )
+            if not machine_output and not getattr(args, 'json', False):
                 print_banner()
-            run_final_review_status(
+            return run_final_review_status(
                 getattr(args, 'target', '') or None,
                 as_json=bool(getattr(args, 'json', False)),
             )
-            return
         if command == 'final-review-export':
             print_banner()
-            run_final_review_export(
+            return run_final_review_export(
                 getattr(args, 'target', '') or None,
                 output_jsonl=getattr(args, 'jsonl', '') or '',
                 output_markdown=getattr(args, 'markdown', '') or '',
             )
-            return
         if command == 'final-review-resume':
             print_banner()
-            run_final_review_resume(
+            return run_final_review_resume(
                 getattr(args, 'target', '') or None,
                 force=bool(getattr(args, 'force', False)),
             )
-            return
         if command == 'final-review-ingest-results':
             print_banner()
-            run_final_review_ingest_results(
+            return run_final_review_ingest_results(
                 getattr(args, 'target', '') or None,
                 result_path=getattr(args, 'result', '') or '',
                 allow_stale_results=bool(getattr(args, 'allow_stale_results', False)),
             )
-            return
 
         if command == 'final-review-create-revisions':
             print_banner()
-            run_final_review_create_revisions(
+            return run_final_review_create_revisions(
                 getattr(args, 'target', '') or None,
                 finding_ids=getattr(args, 'finding_id', []) or [],
             )
-            return
     if command in {
         'project-analysis-status',
         'project-analysis-ingest-keywords',
@@ -17114,7 +17124,7 @@ def _machine_manifest_summary(manifest):
 def _load_machine_manifest(command, value, args):
     if isinstance(value, dict):
         return value
-    if command in {'build', 'submit'} and value:
+    if command in {'build', 'final-review-build', 'submit'} and value:
         return load_manifest(value)
     return load_manifest(getattr(args, 'target', '') or None)
 
@@ -17138,11 +17148,17 @@ def build_machine_success_envelope(command, value, args):
             warnings=report.get('warnings') or [],
         )
 
-    if command in {'build', 'submit'} and not value:
+    if command in {'build', 'submit', 'final-review-build'} and not value:
         return cli_contract.success_envelope(
             command,
             status='no_work',
-            result={'reason': 'no_pending_translation_work'},
+            result={
+                'reason': (
+                    'no_pending_final_review_work'
+                    if command == 'final-review-build'
+                    else 'no_pending_translation_work'
+                )
+            },
         )
 
     if command in {'quality-ack', 'quality-unack'}:
@@ -17214,7 +17230,7 @@ def build_machine_success_envelope(command, value, args):
     warnings = list(manifest.get('build_warnings') or [])
     status = 'completed'
 
-    if command == 'build':
+    if command in {'build', 'final-review-build'}:
         status = str(manifest.get('job_state') or 'LOCAL_ONLY')
         result['cost_estimate'] = dict(manifest.get('cost_estimate') or {})
     elif command in {'submit', 'status'}:
@@ -17246,6 +17262,134 @@ def build_machine_success_envelope(command, value, args):
         status = str(
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
+        )
+    elif command == 'final-review-status':
+        payload = dict(value or {})
+        campaign_status = str(payload.get('status') or 'completed')
+        return cli_contract.success_envelope(
+            command,
+            status=campaign_status,
+            result=payload,
+            artifacts=_nonempty_artifacts(
+                manifest=payload.get('manifest_path') or '',
+                package_dir=payload.get('package_dir') or '',
+            ),
+        )
+    elif command == 'final-review-export':
+        payload = dict(value or {})
+        status = dict(payload.get('status') or {})
+        campaign_status = str(status.get('status') or 'completed')
+        result = {
+            'finding_count': int(payload.get('finding_count') or 0),
+            'status': status,
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=campaign_status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                findings_jsonl=payload.get('jsonl_path') or '',
+                report_markdown=payload.get('markdown_path') or '',
+                manifest=status.get('manifest_path') or '',
+                package_dir=status.get('package_dir') or '',
+            ),
+        )
+    elif command == 'final-review-resume':
+        payload = dict(value or {})
+        status = dict(payload.get('status') or {})
+        paths = dict(payload.get('paths') or {})
+        campaign_status = str(status.get('status') or 'completed')
+        result = {
+            'run_count': int(payload.get('run_count') or 0),
+            'skip_count': int(payload.get('skip_count') or 0),
+            'to_run_unit_ids': list(payload.get('to_run_unit_ids') or []),
+            'status': status,
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=campaign_status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=paths.get('manifest') or '',
+                package_dir=paths.get('package_dir') or '',
+                review_units=paths.get('review_units') or '',
+                findings=paths.get('findings') or '',
+                report=paths.get('report') or '',
+            ),
+        )
+    elif command == 'final-review-ingest-results':
+        payload = dict(value or {})
+        summary = dict(payload.get('summary') or {})
+        status = dict(payload.get('status') or {})
+        paths = dict(payload.get('paths') or {})
+        campaign_status = str(status.get('status') or 'completed')
+        result = {
+            'result_rows': int(summary.get('result_rows') or 0),
+            'done_units': int(summary.get('done_units') or 0),
+            'failed_units': int(summary.get('failed_units') or 0),
+            'finding_count': int(summary.get('finding_count') or 0),
+            'status': status,
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=campaign_status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=paths.get('manifest') or '',
+                package_dir=paths.get('package_dir') or '',
+                review_units=paths.get('review_units') or '',
+                findings=paths.get('findings') or '',
+                quality_findings=paths.get('quality_findings') or '',
+                report=paths.get('report') or '',
+            ),
+        )
+    elif command == 'final-review-create-revisions':
+        preview = dict(manifest.get('last_revision_preview') or {})
+        preview_summary = dict(preview.get('summary') or {})
+        result = {
+            'generated_at': preview.get('generated_at') or '',
+            'jsonl_path': preview.get('jsonl_path') or '',
+            'markdown_path': preview.get('markdown_path') or '',
+            'results_path': preview.get('results_path') or '',
+            'results_sha256': preview.get('results_sha256') or '',
+            'quality_findings_path': preview.get('quality_findings_path') or '',
+            'quality_findings_count': int(preview.get('quality_findings_count') or 0),
+            'quality_findings_digest': preview.get('quality_findings_digest') or '',
+            'quality_gate': dict(preview.get('quality_gate') or {}),
+            'writeback_gate': dict(preview.get('writeback_gate') or {}),
+            'check_status': preview.get('check_status') or '',
+            'summary': {
+                'expected_items': int(preview_summary.get('expected_items') or 0),
+                'valid_items': int(preview_summary.get('valid_items') or 0),
+                'failure_items': int(preview_summary.get('failure_items') or 0),
+                'skipped_items': int(preview_summary.get('skipped_items') or 0),
+                'source_mismatch_items': int(
+                    preview_summary.get('source_mismatch_items') or 0
+                ),
+                'recoverable_items': int(
+                    preview_summary.get('recoverable_items') or 0
+                ),
+                'unchanged_items': int(preview_summary.get('unchanged_items') or 0),
+                'already_applied_items': int(
+                    preview_summary.get('already_applied_items') or 0
+                ),
+            },
+        }
+        status = str(
+            preview.get('check_status')
+            or preview_summary.get('check_status')
+            or 'previewed'
+        )
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=manifest.get('_manifest_path'),
+                revision_preview_jsonl=preview.get('jsonl_path') or '',
+                revision_preview_markdown=preview.get('markdown_path') or '',
+                quality_findings=preview.get('quality_findings_path') or '',
+            ),
         )
     elif command == 'export-project-snapshot':
         snapshot = dict(value or {})

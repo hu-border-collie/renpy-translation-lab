@@ -71,7 +71,7 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json -
 ```
 
 只需关闭 target 回退时可单独使用 `--require-explicit-target`。默认模式保持现有 latest-manifest 和 submit-build 行为；`doctor / build` 不消费 manifest，不受显式 target 要求影响。
-结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply / quality-ack / quality-unack`；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
+结构化输出当前覆盖 `doctor / build / submit / status / download / check / apply / final-review-build / final-review-status / final-review-export / final-review-resume / final-review-ingest-results / final-review-create-revisions / quality-ack / quality-unack` 以及版本资产/复用命令；其它命令继续以各自帮助和落盘 JSON/JSONL 为准。
 
 机器发现使用 `capabilities` 与 `schema <command>`；两者在加载项目配置前直接输出 JSON。`capabilities.commands` 已提供完整命令索引，因此不另设重复的 `commands`。单命令 schema 从当前 argparse action 动态生成，包含参数类型、required、repeatable、choices、默认值和帮助文本，避免文档与实际 parser 漂移。
 核心 JSON 命令可用 `--compact` 压缩序列化、用 `--fields status result.check.writeback_gate.decision result.check.quality_gate` 按点路径保留必要字段，或用 `--output-file <path>` 将最终文档原子写入文件并保持 stdout 为空。三者只接受显式 `--output json`；裁剪不影响业务状态和严格退出码，文件结果会在未被投影掉时记录 `artifacts.output_file` 绝对路径。空路径或连续点等非法字段路径会在 workflow 执行前返回 `INVALID_FIELD_PATH` 和退出码 `2`。

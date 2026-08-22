@@ -236,6 +236,21 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         if status in {"blocked", "stale"}:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
+    if command in {
+        "final-review-build",
+        "final-review-status",
+        "final-review-export",
+        "final-review-resume",
+        "final-review-ingest-results",
+        "final-review-create-revisions",
+    }:
+        if status in {"done", "completed", "previewed", "no_work", "local_only"}:
+            return EXIT_OK
+        if status in {"pending", "running", "ready"}:
+            return EXIT_OK
+        if status in {"failed", "stale", "blocked"}:
+            return EXIT_NEEDS_ACTION
+        return EXIT_INVALID_STATE
     if command in {"submit", "status"} and status in {
         "failed",
         "cancelled",
