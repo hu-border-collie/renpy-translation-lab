@@ -1050,6 +1050,64 @@ class BatchCliContractTests(unittest.TestCase):
             "C:/jobs/fr/quality_findings.jsonl",
         )
 
+    def test_final_review_status_machine_mode_wraps_campaign_in_envelope(self):
+        campaign = {
+            "status": "running",
+            "manifest_path": "C:/jobs/fr/manifest.json",
+            "unit_count": 3,
+            "finding_count": 1,
+            "status_counts": {"done": 2, "pending": 1},
+        }
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        seen = {}
+
+        def fake_status(target=None, as_json=False):
+            seen["as_json"] = as_json
+            print("campaign text summary")
+            return dict(campaign)
+
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch, "run_final_review_status", side_effect=fake_status
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "final-review-status",
+                    "C:/jobs/fr/manifest.json",
+                    "--output",
+                    "json",
+                    "--strict-exit-codes",
+                ]
+            )
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(
+            payload["result"]["status_counts"],
+            {"done": 2, "pending": 1},
+        )
+        self.assertEqual(
+            payload["artifacts"]["manifest"],
+            "C:/jobs/fr/manifest.json",
+        )
+        # Machine mode must not depend on the legacy --json flag; text
+        # diagnostics stay on stderr and the envelope reads the handler
+        # return value.
+        self.assertFalse(seen["as_json"])
+        self.assertIn("campaign text summary", stderr.getvalue())
+
     def test_merge_keywords_machine_mode_requires_yes_or_dry_run(self):
         stdout = io.StringIO()
         stderr = io.StringIO()
