@@ -2,7 +2,7 @@
   "schema_version": 1,
   "purpose": "Offline, privacy-safe regression corpus for the first-version mechanical quality rules (issue #364).",
   "provenance": "Samples are sanitized representative cases reconstructed from the public issue #313 / #364 descriptions. They contain no private game script text. After real-project sampling (issue #364 line B), replace or extend these entries with anonymized findings from the calibration report.",
-  "conventions": "Each case maps one first-version reason_code to a positive sample that must report it and a negative sample that must stay silent for it. Optional policy and glossary_map are normalized with translation_quality.normalize_policy, so entries only need to specify deltas from the runtime defaults.",
+  "conventions": "Each case maps one first-version reason_code to a positive sample that must report it and a negative sample that must stay silent for it. Policy deltas are merged via translation_quality.normalize_policy; glossary_map, when present, is passed through to check_subject as a complete map.",
   "cases": [
     {
       "rule_id": "renpy_wait_inside_cjk",
