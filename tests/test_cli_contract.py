@@ -154,6 +154,18 @@ class CliContractTests(unittest.TestCase):
         proposal_stale = cli_contract.success_envelope(
             "import-revision-proposals", status="stale"
         )
+        final_review_done = cli_contract.success_envelope(
+            "final-review-status", status="done"
+        )
+        final_review_failed = cli_contract.success_envelope(
+            "final-review-status", status="failed"
+        )
+        final_review_pending = cli_contract.success_envelope(
+            "final-review-status", status="pending"
+        )
+        final_review_blocked = cli_contract.success_envelope(
+            "final-review-ingest-results", status="blocked"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -179,6 +191,22 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(
             cli_contract.strict_exit_code(proposal_stale),
             cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_done),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_failed),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_pending),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(final_review_blocked),
+            cli_contract.EXIT_NEEDS_ACTION,
         )
         unknown = cli_contract.success_envelope("check", status="unknown")
         unclassified_error = cli_contract.error_envelope(
