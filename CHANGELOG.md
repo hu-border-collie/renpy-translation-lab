@@ -23,6 +23,8 @@
 
 ### 变更
 
+- Gemini Batch 初译构建改为消费 TranslationPlan（#346 P2）：`build_chunks` 通过 `translation_plan.build_translation_plan` 生成 plan 与 requests，`build_batch_request` 只负责把 `TranslationRequest` 包成 Batch envelope；manifest v2 增加 `translation_plan` 块，chunk 与 `requests.jsonl` 写入 `request_id` / `prompt_fingerprint` / `request_fingerprint` 可审计字段。Batch 初译 prompt 切换为 canonical system/user 形态，词法 glossary（`normalize_map` / `preserve_terms` / `non_translatable_exact`）解除 `RAG_ENABLED` 门控且不再按 `RAG_TOP_K_TERMS` 截断，未开启 RAG 时也会注入命中的本地术语。
+
 - 模型任务在 prepare、创建 package 或发送请求前按活动阶段校验 ModelProfile、ExecutionStrategy、能力与凭据引用；不支持的组合返回稳定机器错误。`doctor` 增加只读模型路由诊断，`model_routing.status` 为 `ok` / `attention`，不改变 doctor 退出码。`submit --model` 只覆盖当前 Batch 阶段并保留冻结快照。GUI LiteLLM 连接测试改用与生产请求相同的 profile resolver/backend factory，路由预检失败显示稳定错误码而不是 JSON 能力失败。
 - 同步请求不再用 `sync.model` 覆盖调用方传入的阶段模型。显式 `TaskRoute` / 阶段配置优先，`sync.model` 只作为未单独配置阶段的 primary 回退；一次 run 开始时冻结 `ModelRoutingPlan`，中途改配置或重试不会换 profile。sync 与 translation / keyword / revision / final_review 四类 batch manifest 写入 `model_routing` 快照（仅凭据引用，不含凭据值）。没有 `model_routing` 的旧 manifest 在 probe / resume / execute 时继续使用当时记录的 `model` / `batch_model` / `provider`，不会改用当前运行时模型。
 - GUI 异步任务完成时会比对项目路径、配置 digest 和 LiteLLM 连接参数身份；过期结果只做清理，不再覆盖当前界面。

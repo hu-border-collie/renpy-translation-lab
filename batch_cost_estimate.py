@@ -208,7 +208,17 @@ def estimate_manifest_tokens(manifest, pricing_config=None):
     max_output_tokens = int(settings.get('max_output_tokens') or 0)
 
     summary = manifest.get('summary') if isinstance(manifest.get('summary'), dict) else {}
-    chunk_count = int(summary.get('chunk_count') or 0)
+    translation_plan = manifest.get('translation_plan') or {}
+    planned_chunks = (
+        translation_plan.get('chunks')
+        if isinstance(translation_plan, dict)
+        else None
+    )
+    chunk_count = (
+        int(len(planned_chunks))
+        if isinstance(planned_chunks, list) and planned_chunks
+        else int(summary.get('chunk_count') or 0)
+    )
     if chunk_count <= 0 and isinstance(manifest.get('chunks'), list):
         chunk_count = len(manifest['chunks'])
     # final-review and other request-only packages expose unit_count / request_count

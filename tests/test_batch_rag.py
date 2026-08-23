@@ -190,6 +190,126 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual([chunk['source_char_count'] for chunk in chunks], [12, 10, 4])
         self.assertEqual(chunks[0]['items'][0]['text'], 'x' * 12)
 
+    def test_build_chunks_injects_lexical_glossary_without_rag(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = ['Dawn Chorus']
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Hello Dawn Chorus',
+                            'line': 0,
+                            'start': 0,
+                            'end': 17,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+
+        self.assertTrue(chunks)
+        hits = chunks[0].get('glossary_hits') or []
+        self.assertTrue(any(str(hit.get('source') or '') == 'Dawn Chorus' for hit in hits))
+        self.assertNotIn('story_hits', chunks[0])
+
+    def test_build_chunks_embeds_plan_request_fields(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Target line',
+                            'line': 0,
+                            'start': 0,
+                            'end': 11,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual(len(chunks), 1)
+        chunk = chunks[0]
+        for field in (
+            'request_id',
+            'plan_id',
+            'chunk_id',
+            'system_instruction',
+            'user_prompt',
+            'response_schema',
+            'prompt_fingerprint',
+            'request_fingerprint',
+        ):
+            self.assertTrue(chunk.get(field), field)
+
+        row = batch_mod.build_batch_request(chunk)
+        self.assertEqual(row['key'], chunk['key'])
+        self.assertEqual(row['request_id'], chunk['request_id'])
+        self.assertEqual(row['prompt_fingerprint'], chunk['prompt_fingerprint'])
+        self.assertEqual(row['request_fingerprint'], chunk['request_fingerprint'])
+        self.assertEqual(
+            row['request']['contents'][0]['parts'][0]['text'],
+            chunk['user_prompt'],
+        )
+        self.assertEqual(
+            row['request']['system_instruction']['parts'][0]['text'],
+            chunk['system_instruction'],
+        )
+        self.assertEqual(
+            row['request']['generation_config']['response_json_schema'],
+            chunk['response_schema'],
+        )
+
     def test_format_history_hits_block_shows_source_translation_pair(self):
         block = batch_mod.format_history_hits_block([
             {
