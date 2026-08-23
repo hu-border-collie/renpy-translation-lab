@@ -9,6 +9,7 @@
 ### 新增
 
 - 为核心 Batch 命令增加版本化 JSON 结果 envelope、严格语义退出码、非交互显式 target、能力发现与命令 schema。
+- `sync-revisions` 与 `sync-keywords` 接入同一版本化 JSON envelope：预览/写回分别复用 `preview-revisions` / `apply-revisions` 形状，关键词导出复用 `export-keywords` 的四份报告；sync 包不更新 latest，`manifest_path` 指向本次运行。
 - 增加 Project Analysis 的生成、审查、发布与按场景注入生命周期，以及 report-only 最终审校 campaign。
 - 增加按项目归集 Batch、同步、订正、关键词与分析调用的实际模型用量账本。
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。

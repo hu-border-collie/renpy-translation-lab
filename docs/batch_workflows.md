@@ -160,7 +160,7 @@ python gemini_translate_batch.py sync-revisions --apply
 - `blocked`：没有发生写回且存在阻断（preview 缺失/过期、适配器写回计划不安全，或全部条目被跳过/源不匹配/校验失败，不写 `revision_applied_at`）；
 - `partial`：部分写回、部分跳过/失败（仅真实写回的行计入 applied）。
 
-`build-revisions` 与 `preview-revisions` 支持 `--output json`（`preview-revisions` 的 envelope `status` 复用 `ready / ready_with_warnings / blocked` 门禁结论，`result` 含 `writeback_gate`、`quality_gate` 与 preview 摘要，`artifacts` 给出 preview JSONL/Markdown 与 quality findings 路径）；参数与状态语义见 [Agent / CLI 快速开始](quickstart_agent.md)。
+`build-revisions` 与 `preview-revisions` 支持 `--output json`（`preview-revisions` 的 envelope `status` 复用 `ready / ready_with_warnings / blocked` 门禁结论，`result` 含 `writeback_gate`、`quality_gate` 与 preview 摘要，`artifacts` 给出 preview JSONL/Markdown 与 quality findings 路径）；参数与状态语义见 [Agent / CLI 快速开始](quickstart_agent.md)。`sync-revisions` 同样支持该 envelope：默认只预览时形状与 `preview-revisions` 相同，`--apply` 时与 `apply-revisions` 相同；无源条目时 `status=no_work`、`reason=no_source_items`。sync 包不更新 latest manifest，因此 `result.manifest_path` 来自本次返回值。
 
 `revision_applied_at` 只在 `applied` / `partial` 时写入；`no_op` / `blocked` 不会把 final-review finding 错误标记为已应用。
 
@@ -416,7 +416,7 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 - `--min-confidence` 过滤低置信候选；已有 `source` 默认不覆盖，需 `--overwrite` 才改目标译法。
 - `--dry-run` / `--preview` 只预览 diff；真实写入前会生成 `glossary.json.bak-<timestamp>` 备份（可用 `--no-backup` 关闭）。
 
-`build-keywords`、`export-keywords` 与 `merge-keywords-to-glossary` 都支持 `--output json` 版本化 envelope（`export-keywords` 的 `artifacts` 覆盖四份候选/概要报告；`merge-keywords-to-glossary` 的 `status` 区分 `previewed / merged / no_work`）。注意 `merge-keywords-to-glossary` 的 JSON 模式没有交互通道，必须搭配 `--yes` 或 `--dry-run`，否则返回 `INTERACTIVE_REVIEW_UNSUPPORTED`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
+`build-keywords`、`export-keywords`、`sync-keywords` 与 `merge-keywords-to-glossary` 都支持 `--output json` 版本化 envelope（`export-keywords` / `sync-keywords` 的 `artifacts` 覆盖四份候选/概要报告；`merge-keywords-to-glossary` 的 `status` 区分 `previewed / merged / no_work`）。`sync-keywords` 不读取 latest manifest：`result.manifest_path` 指向本次 sync 包；无源条目时 `status=no_work`、`reason=no_source_items`。注意 `merge-keywords-to-glossary` 的 JSON 模式没有交互通道，必须搭配 `--yes` 或 `--dry-run`，否则返回 `INTERACTIVE_REVIEW_UNSUPPORTED`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
 
 订正 manifest 的 `mode=revision`，关键词 manifest 的 `mode=keyword_extraction`，普通 `check/apply` 会拒绝处理，避免把非翻译结果误写回 `.rpy`。
 

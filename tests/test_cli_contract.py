@@ -252,6 +252,43 @@ class CliContractTests(unittest.TestCase):
         )
         self.assertEqual(cli_contract.strict_exit_code(ingest_done), cli_contract.EXIT_OK)
 
+        sync_preview_warn = cli_contract.success_envelope(
+            "sync-revisions",
+            status="ready_with_warnings",
+            result={"manifest_path": "C:/jobs/sync-rev/manifest.json"},
+        )
+        sync_preview_blocked = cli_contract.success_envelope(
+            "sync-revisions",
+            status="blocked",
+            result={"check_status": "blocked"},
+        )
+        sync_apply_blocked = cli_contract.success_envelope(
+            "sync-revisions",
+            status="blocked",
+            result={"revision_apply_state": "blocked"},
+        )
+        sync_applied = cli_contract.success_envelope(
+            "sync-revisions",
+            status="applied",
+            result={"revision_apply_state": "applied"},
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_preview_warn),
+            cli_contract.EXIT_NEEDS_ACTION,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_preview_blocked),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_apply_blocked),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_applied),
+            cli_contract.EXIT_OK,
+        )
+
     def test_parse_result_envelope_accepts_shared_contract(self):
         envelope = cli_contract.success_envelope(
             "status",

@@ -130,8 +130,10 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'quality-unack',
         'build-revisions',
         'preview-revisions',
+        'sync-revisions',
         'build-keywords',
         'export-keywords',
+        'sync-keywords',
         'merge-keywords-to-glossary',
         'final-review-build',
         'final-review-status',
@@ -13510,13 +13512,16 @@ def sync_keyword_candidates(
         routing_plan=routing_plan,
     )
     print(f"Sync keyword run: {manifest['_package_dir']}")
-    return export_keyword_candidates(
+    export = export_keyword_candidates(
         target=manifest['_manifest_path'],
         output_jsonl=output_jsonl,
         output_markdown=output_markdown,
         output_summary_jsonl=output_summary_jsonl,
         output_summary_markdown=output_summary_markdown,
     )
+    payload = dict(export or {})
+    payload['manifest_path'] = manifest['_manifest_path']
+    return payload
 
 
 def sync_revisions(
@@ -16246,6 +16251,7 @@ def build_arg_parser():
         help='Relative chunk summary Markdown path inside the sync run dir.',
     )
     sync_keyword_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    add_machine_output_argument(sync_keyword_parser)
 
     sync_revision_parser = subparsers.add_parser(
         'sync-revisions',
@@ -16281,6 +16287,7 @@ def build_arg_parser():
         ),
     )
     sync_revision_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    add_machine_output_argument(sync_revision_parser)
 
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
     split_parser.add_argument(
@@ -17073,7 +17080,7 @@ def dispatch_command(parser, args):
         return
 
     if command == 'sync-keywords':
-        sync_keyword_candidates(
+        return sync_keyword_candidates(
             display_name_override=args.display_name,
             skip_prepare=(not args.prepare) or args.skip_prepare,
             chunk_size=args.chunk_size,
@@ -17086,10 +17093,9 @@ def dispatch_command(parser, args):
             output_summary_markdown=args.summary_markdown,
             api_key_index=args.api_key_index,
         )
-        return
 
     if command == 'sync-revisions':
-        sync_revisions(
+        return sync_revisions(
             display_name_override=args.display_name,
             skip_prepare=args.skip_prepare,
             chunk_size=args.chunk_size,
@@ -17101,7 +17107,6 @@ def dispatch_command(parser, args):
             force=args.force,
             api_key_index=args.api_key_index,
         )
-        return
 
     if command == 'split':
         split_manifest(
@@ -17202,7 +17207,13 @@ def build_machine_success_envelope(command, value, args):
 
     if (
         command
-        in {'build-revisions', 'build-keywords', 'final-review-build'}
+        in {
+            'build-revisions',
+            'build-keywords',
+            'final-review-build',
+            'sync-revisions',
+            'sync-keywords',
+        }
         and not value
     ):
         return cli_contract.success_envelope(
@@ -17303,7 +17314,9 @@ def build_machine_success_envelope(command, value, args):
         result['apply'] = dict(manifest.get('apply_summary') or {})
         result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
         status = 'applied' if manifest.get('applied_at') else 'completed'
-    elif command == 'apply-revisions':
+    elif command == 'apply-revisions' or (
+        command == 'sync-revisions' and getattr(args, 'apply', False)
+    ):
         result['revision_apply'] = dict(manifest.get('revision_apply_summary') or {})
         result['revision_apply_state'] = manifest.get('revision_apply_state') or ''
         if manifest.get('revision_apply_blocked_reason'):
@@ -17314,7 +17327,9 @@ def build_machine_success_envelope(command, value, args):
             manifest.get('revision_apply_state')
             or ('applied' if manifest.get('revision_applied_at') else 'completed')
         )
-    elif command in {'preview-revisions', 'final-review-create-revisions'}:
+    elif command in {'preview-revisions', 'final-review-create-revisions'} or (
+        command == 'sync-revisions' and not getattr(args, 'apply', False)
+    ):
         manifest = (
             value
             if isinstance(value, dict)
@@ -17346,11 +17361,15 @@ def build_machine_success_envelope(command, value, args):
                 quality_findings=preview.get('quality_findings_path') or '',
             ),
         )
-    elif command == 'export-keywords':
+    elif command in {'export-keywords', 'sync-keywords'}:
         export = dict(value or {})
-        keyword_manifest = load_manifest(getattr(args, 'target', '') or None)
+        if command == 'export-keywords':
+            keyword_manifest = load_manifest(getattr(args, 'target', '') or None)
+            manifest_path = keyword_manifest.get('_manifest_path') or ''
+        else:
+            manifest_path = str(export.get('manifest_path') or '')
         result = {
-            'manifest_path': keyword_manifest.get('_manifest_path') or '',
+            'manifest_path': manifest_path,
             'jsonl_path': export.get('jsonl_path') or '',
             'markdown_path': export.get('markdown_path') or '',
             'summary_jsonl_path': export.get('summary_jsonl_path') or '',

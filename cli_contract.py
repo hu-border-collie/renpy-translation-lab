@@ -230,6 +230,20 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         if status in {"block", "blocked"}:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
+    if command == "sync-revisions":
+        result = envelope.get("result")
+        apply_state = (
+            result.get("revision_apply_state") if isinstance(result, Mapping) else ""
+        )
+        if apply_state:
+            return EXIT_OK
+        if status in {"safe", "ready"}:
+            return EXIT_OK
+        if status in {"warn", "ready_with_warnings"}:
+            return EXIT_NEEDS_ACTION
+        if status in {"block", "blocked"}:
+            return EXIT_BLOCKED
+        return EXIT_INVALID_STATE
     if command in {"final-review-status", "final-review-ingest-results"}:
         if status == "failed":
             return EXIT_BLOCKED

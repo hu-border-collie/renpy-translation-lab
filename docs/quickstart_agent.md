@@ -46,8 +46,10 @@ Revision、keyword 与 final-review 工作流命令同样使用该 envelope：
 ```powershell
 python gemini_translate_batch.py build-revisions --output json
 python gemini_translate_batch.py preview-revisions <manifest> --output json
+python gemini_translate_batch.py sync-revisions --output json
 python gemini_translate_batch.py build-keywords --output json
 python gemini_translate_batch.py export-keywords <manifest> --output json
+python gemini_translate_batch.py sync-keywords --output json
 python gemini_translate_batch.py merge-keywords-to-glossary <candidates> --yes --output json
 python gemini_translate_batch.py final-review-build --output json
 python gemini_translate_batch.py final-review-status <manifest> --output json
@@ -61,6 +63,13 @@ python gemini_translate_batch.py final-review-create-revisions <manifest> --outp
 
 - `preview-revisions` 与 `final-review-create-revisions` 的 `status` 使用与 `check` 相同的
   `ready / ready_with_warnings / blocked` 门禁结论；严格模式下同样映射为 `0 / 3 / 4`。
+- `sync-revisions` 默认（只预览）复用 `preview-revisions` 的 envelope 与严格退出码；
+  `--apply` 时复用 `apply-revisions` 的 `revision_apply_state` 形状，严格模式成功仍退出 `0`。
+  这两个 sync 命令会新建 package，不要求显式 target，也不写入 `latest_manifest.txt`；
+  `result.manifest_path` 指向本次 sync 包。无源条目时 `status=no_work`、
+  `result.reason=no_source_items`。
+- `sync-keywords` 的 envelope 与 `export-keywords` 相同（四份候选/概要报告），但
+  `manifest_path` 来自本次返回值，不会读取 latest manifest。
 - `final-review-status` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`）；
   严格模式下 `failed` 退出 `4`、`stale` 退出 `3`。`final-review-status --json` 仍输出未版本化的
   裸 JSON，仅为兼容保留，新代码请使用 `--output json`。
