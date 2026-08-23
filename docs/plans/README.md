@@ -25,7 +25,7 @@
   P2–P5 继续按本文边界推进。
 - [#347 设计 P0：耐久同步执行器、崩溃恢复与统一安全链路](issue-347-durable-sync-executor-plan.md)：
   基于 `main@ed07a99` 冻结 Run/Request/Attempt 状态机、SQLite 事务边界、
-  `outcome_unknown` 恢复语义、usage 去重、统一 result/check/preview/apply 接缝、
+  `outcome_unknown` 恢复语义、usage 去重、共享 result/check 门禁、durable Sync preview/apply 与 Batch direct apply 接缝、
   CLI JSON 合同、fault-injection 矩阵及与 #346/#341/#348 的所有权边界。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
   A1 离线语料与 A3 校准报告工具的使用方法，以及 B 线真实项目统计、

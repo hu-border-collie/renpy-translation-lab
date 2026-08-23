@@ -22,14 +22,15 @@
    且 Provider 没有幂等键或结果查询能力，该 attempt 进入 `outcome_unknown`；普通 resume 不自动重调，
    以免重复调用或计费。用户只能先对账，或显式派生新 run 并接受可能重复计费。
 4. **`TranslationPlan` 与 `TranslationRequest` 是只读输入**。执行器不重建 prompt、上下文、
-   chunk 或 schema；动态定点补偿/拆分只能通过 #346 冻结的派生 request builder 产生，并记录 lineage。
+   chunk 或 schema；动态定点补偿/拆分只能通过 #346 拥有的纯派生 request builder 产生，并记录 lineage。
+   当前基线尚无该 helper，#346 必须在 #347 P2 前先落一个纯核心切片；scheduler 不得复制 ID/payload 规则。
 5. **resume 只继续同一冻结合同**。plan、source snapshot、resolved profile、关键配置或持久化请求
    fingerprint 不兼容时拒绝原地 resume；原 run 保持可查看，后续操作是派生新 run，不覆盖历史。
 6. **usage 以 attempt 为去重单位**。attempt 事务先写 usage outbox；再幂等投递到现有
    [`model_usage_ledger.py`](../../model_usage_ledger.py)。崩溃后重复投递不会重复累计。
-7. **执行器没有项目写回权限**。它只生成统一 result 产物；后续必须依次经过
-   `check -> preview/diff -> apply`。任何 `--force` 都不能绕过 stale check、source snapshot、
-   adapter/writeback plan、结构或项目配置提升的质量 blocker。
+7. **执行器没有项目写回权限**。它只生成统一 result 产物；durable Sync 必须经过
+   `check -> bound preview/diff -> apply`。Gemini Batch translation 保持现行 `check -> apply`，
+   两者共享 `writeback_gate`、source snapshot、adapter 和 `--force` 不可绕过谓词，而不是强制共享一条 CLI 序列。
 8. **#347 冻结服务和机器合同，#348 决定最终产品信息架构**。本 issue 提供
    `start/resume/status/cancel/derive` 服务与兼容 CLI 命令；统一翻译页、配置迁移、最终命令别名和文案归 #348。
 
@@ -42,7 +43,7 @@
 - 崩溃恢复、幂等 resume、动态补偿/拆分 lineage、attempt/time/cost 上限；
 - attempt 级结果与 usage 的原子提交、usage outbox 和统一 result 导出；
 - `start/resume/status/cancel/derive` 服务层及版本化 CLI JSON 合同；
-- 与统一 check、preview、apply 的接口和 fault-injection 验收矩阵。
+- 与统一 result/check 门禁、durable Sync preview/apply 的接口和 fault-injection 验收矩阵。
 
 ### 1.2 本设计不负责
 
@@ -89,6 +90,7 @@
 10. usage 先进入同事务 outbox，再投递外部 ledger；重复投递只能得到 duplicate，不能增加 calls/tokens/cost。
 11. result、check、preview、apply 的 artifact hash 和 source identity 逐层绑定；任何下游重建都不能修改执行明细。
 12. manifest、日志、事件和 JSON 输出不含凭据值、敏感 header 或完整 prompt；完整 prompt 只存在受保护的 plan/request artifact 和本地数据库中。
+13. 任一 run 进入 `completed`、`completed_with_errors`、`failed` 或 `cancelled` 时，所有 active leaf 都必须是终态；不得遗留 `pending`、`in_flight` 或 `retryable_failed`，终态 run 的模型调度永远为零。
 
 ## 3. 稳定 ID、Plan 引用与 freshness
 
@@ -97,7 +99,7 @@
 | ID | 规则 | 说明 |
 |---|---|---|
 | `plan_id` / `plan_fingerprint` | 直接复用 #346，不在 #347 重算 | `plan_id` 是构建身份；resume/check 以更完整的 `plan_fingerprint` 和逐 request fingerprint 为准 |
-| `run_id` | 创建时一次生成 `sync-run-v1-<UTC>-<uuid4hex>`，写入后永不改变 | 同一 plan 的不同执行必须有不同 run；可选 `client_token` 唯一约束使 start 重试幂等 |
+| `run_id` | 无 token 时生成 `sync-run-v1-<UTC>-<uuid4hex>`；有 token 时由 project identity + token digest 派生稳定 `sync-run-v1-token-<hash>` | 写入后永不改变；相同非空 token 定位同一 run，输入 digest 不同则返回 conflict |
 | root `request_id` | 直接复用 `TranslationRequest.request_id`，数据库主键作用域为 run | 同一 plan 跨 run 保持相同，便于安全复用判断 |
 | 定点 request | `<parent_id>--M-<sha256(canonical(sorted missing ids))[:12]>` | 相同父 request 和缺项集合得到相同 ID；不得包含已 accepted ID |
 | split request | 复用 #346 D7：`<parent_id>--L` / `--R`，递归追加 `L/R` | children 保持原顺序、并集等于父 expected IDs、交集为空 |
@@ -106,6 +108,8 @@
 | `event_seq` | 数据库自增整数 | 只表达单 run 的提交顺序，不用墙钟排序证明因果 |
 
 16 hex 的既有 plan/request fingerprint 是 #346 v1 合同；#347 不擅自扩位。run/attempt 的随机或哈希部分使用更长身份，避免生命周期记录碰撞。
+
+上述 `--M-` / `--L` / `--R` 只冻结 ID 结果，不授权 #347 自行实现 builder。#346 的纯 helper 必须同时生成完整 derived `TranslationRequest`、fingerprint 和 lineage-safe ID；#347 P2 的 fake scheduler 与后续生产 scheduler 都调用同一个 helper。
 
 ### 3.2 Run 冻结快照
 
@@ -144,7 +148,13 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 - 源结果不是 late/ignored、outcome unknown 或人工强制接受；
 - 当前 adapter validation 仍通过。
 
-`outcome_unknown` 永不自动复用。若用户显式选择重调 unknown request，新 run 要记录 `duplicate_billing_risk_acknowledged=true`。无法证明等价的结果一律重新执行；“大概没变”不能作为复用依据。
+`outcome_unknown` 永不自动复用；derive 对 unknown IDs 只允许以下三个互斥结果：
+
+1. 默认 `retry_unknown=false` 且未显式排除 unknown：拒绝 derive，返回 `SYNC_RUN_OUTCOME_UNKNOWN`，原 run 和 expected set 不变；
+2. 用户显式确认可能重复计费：在新 run 为这些 IDs 创建全新 request/attempt，并记录 `duplicate_billing_risk_acknowledged=true`；
+3. 用户显式创建范围化 scope：新 plan/package 的 expected IDs 排除所选 unknown IDs，记录 `excluded_unknown_ids` 和来源 run，并作为新 scope 完整运行 check。
+
+“无法证明等价就重新执行”只适用于候选为 succeeded、但未通过复用等价谓词的结果；不适用于 unknown、late 或 ignored 行。不得默认留下缺口，也不得静默重调 unknown。
 
 ## 4. 状态机与合法转换
 
@@ -158,9 +168,9 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | `running` | 可调度或正等待退避/worker；进程退出不会自动改状态 | `cancel_requested`、`completed`、`completed_with_errors`、`failed` |
 | `cancel_requested` | 取消意图已耐久；禁止新 dispatch，等待 in-flight 收口 | `cancelled` |
 | `cancelled` | 取消终态；可保留此前 accepted 结果供查看/派生 | 无 |
-| `completed` | 所有必需 ID 都有唯一 accepted winner，无 terminal/unknown/cancelled leaf | 无 |
-| `completed_with_errors` | scheduler 已静止且至少有可用结果，但仍有 terminal/unknown leaf | 无 |
-| `failed` | run 级不变量/本地耐久性失败，或无任何可用结果且已无可调度工作 | 无 |
+| `completed` | 所有必需 ID 都有唯一 accepted winner，无 terminal/unknown/cancelled leaf，也无可调度状态 | 无 |
+| `completed_with_errors` | scheduler 已静止且至少有可用结果，但仍有 terminal/unknown leaf；其余 active leaf 已被明确终结 | 无 |
+| `failed` | run 级不变量/本地耐久性失败，或无任何可用结果且所有 active leaf 已终结 | 无 |
 
 重复 `cancel`、对终态 `resume`、重复 finalization 都是幂等 no-op，不创造自环事件。进程崩溃只使 lease 过期，不直接改变 run 状态；恢复判断由下一次 resume 执行。
 
@@ -183,8 +193,8 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 
 | 状态 | 合法下一状态 | 说明 |
 |---|---|---|
-| `prepared` | `dispatched`、`cancelled` | attempt 行和预算 reservation 已提交，尚未声明开始外部调用 |
-| `dispatched` | `succeeded`、`retryable_failed`、`terminal_failed`、`cancel_requested`、`outcome_unknown` | 标记必须在网络调用前提交；崩溃恢复保守处理 |
+| `prepared` | `dispatched`、`cancelled`、`terminal_failed` | attempt 行和预算 reservation 已提交，尚未声明开始外部调用；run-level guard 可在释放 reservation 后直接终结 |
+| `dispatched` | `succeeded`、`retryable_failed`、`terminal_failed`、`cancel_requested`、`outcome_unknown`、`late_succeeded_ignored`、`late_failed_ignored` | 标记必须在网络调用前提交；崩溃恢复保守处理；late 转换只允许 T3/T4 guard 失败时发生 |
 | `cancel_requested` | `cancelled`、`late_succeeded_ignored`、`late_failed_ignored`、`outcome_unknown` | 已尽力调用 backend cancel，但不能假设成功 |
 | `succeeded` | 无 | receipt、usage outbox、contract diagnostics 已原子提交 |
 | `retryable_failed` | 无 | request 决定是否产生下一 attempt；旧 attempt 不复用 |
@@ -224,17 +234,20 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 ### 5.3 最小表与约束
 
 - `schema_meta(version, created_by)`；
-- `runs(run_id PK, client_token UNIQUE, status, revision, plan_id, plan_fingerprint,
+- `runs(run_id PK, client_token_digest NULL, status, revision, plan_id, plan_fingerprint,
   source/profile/config/policy digests, derived_from_run_id, budget fields, timestamps)`；
 - `plans(run_id PK/FK, canonical_json, payload_sha256)`；
 - `requests(run_id, request_id, root_request_id, parent_request_id, lineage_kind,
   lineage_depth, status, expected_ids_json, payload_json, prompt/request fingerprint,
   attempt_count, next_eligible_at, PK(run_id, request_id))`；
 - `attempts(attempt_id PK, run_id/request_id FK, ordinal, status, provider/model/profile,
-  credential_identity, dispatch/finish times, error category, response/normalized payload,
+  credential_identity, claim_owner_token, claim_cancel_epoch, dispatch/finish times,
+  error category, response/normalized payload,
   contract diagnostics, usage metadata, UNIQUE(run_id, request_id, ordinal))`；
 - `item_results(run_id, item_id, winner_attempt_id, translation payload/digest,
   validation diagnostics, PK(run_id, item_id))`；
+- `late_receipts(receipt_id PK, run_id, attempt_id, observed_owner_token/cancel_epoch,
+  response/error/usage payload, ignored_reason, received_at)`；
 - `usage_outbox(usage_event_id PK, attempt_id UNIQUE, record_json, delivered_at, delivery_error)`；
 - `events(event_seq INTEGER PK AUTOINCREMENT, run_id, entity_type/id, old/new status,
   event_type, safe_details_json, committed_at)`；
@@ -243,6 +256,8 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
   UNIQUE(run_id, kind))`。
 
 所有 payload JSON 使用 canonical serialization；schema migration 只向前，未知较新版本拒绝写入但可给出升级建议。数据库连接启用 `busy_timeout`；只有 scheduler writer 能变更 request/attempt，cancel 通过短事务写取消意图。
+
+`client_token` 省略、空白或空字符串时规范化为 SQL `NULL`，语义始终是“创建新 run”。只有非空 token 的 digest 参与稳定 run path/ID；bootstrap 由 `<log_dir>/sync_runs/.start.lock` 串行化，相同 digest 因确定性目录只能打开同一个 run。相同 token 但 plan/policy 输入 digest 不同返回 `SYNC_RUN_CLIENT_TOKEN_CONFLICT`，不能误当旧 run。token 原文不落盘；若后续增加项目级 run registry，唯一性必须是 `WHERE client_token_digest IS NOT NULL` 的 partial index，绝不能把 `""` 当唯一键。
 
 `runs` 行就是权威 run manifest，`plans` 行就是与之同事务提交的 `TranslationPlan` payload/引用；磁盘上的 `run_manifest.json` 和 `translation_plan.json` 只是 hash-bound 物化视图。因而“首次调用前原子写入 manifest 与 plan 引用”由 T0 的单个数据库事务满足，而不是依赖两个 JSON 文件碰巧同时 replace。
 
@@ -253,14 +268,14 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | T0 bootstrap | 插入 run、完整 plan、全部 root requests、`run_created` 事件 | 事务前无可执行 run；事务后首次调用所需合同齐全 |
 | T1 claim | 校验 lease/cancel/budget，reserve token/cost，插入 `prepared` attempt，将 request 置 `in_flight` | prepared 可安全继续 dispatch 或在 cancel 时取消 |
 | T2 dispatch intent | attempt `prepared -> dispatched`、dispatch timestamp/event | orphaned dispatched 必须 reconcile/unknown，不能盲重试 |
-| T3 successful receipt | 保存原始/规范化响应、contract diagnostics、accepted winners、usage outbox；attempt/request 状态和 event 一起提交 | 提交后即为权威成功；summary/export 可任意重建 |
-| T4 failed receipt | 保存分类、safe error、usage（若有）、下一退避时间或 terminal 决策、释放 reservation | resume 只按已提交决定继续 |
+| T3 successful receipt | 先校验 lease owner token、claim 时的 cancel epoch 和 attempt 状态；匹配时保存原始/规范化响应、contract diagnostics、accepted winners、usage outbox，并同事务转换 attempt/request/event | 提交后即为权威成功；summary/export 可任意重建；guard 失败则只走 late receipt |
+| T4 failed receipt | 使用与 T3 相同的 owner/epoch/status guard；匹配时保存分类、safe error、usage（若有）、下一退避时间或 terminal 决策、释放 reservation | resume 只按已提交决定继续；guard 失败不改 request/run 结果 |
 | T5 derive/split | 父 request 置 `superseded`，插入所有 children 与 lineage events | 不会出现半棵 lineage |
-| T6 cancel | run 置 `cancel_requested`，pending/retryable request 置 `cancelled`，in-flight attempt 置 `cancel_requested` | 此后 scheduler 禁止创建 attempt |
+| T6 cancel | 首次取消把 run 置 `cancel_requested` 并递增一次 epoch；pending/retryable request 置 `cancelled`；`prepared` attempt/request 直接置 `cancelled`；只有 `dispatched` attempt 置 `cancel_requested` | 此后 scheduler 禁止创建 attempt；prepared 从未调用 Provider |
 | T7 outbox ack | usage ledger 已幂等写入后标 `delivered_at` | 任一侧崩溃都可重放，ledger 去重 |
 | T8 finalize | 由明细验证终态，记录 run 终态和 result artifact generation | artifacts 可在事务外原子重建；run 终态不依赖文件存在 |
 
-不可把网络调用放在长 SQLite 事务里。T2 提交后释放 DB 锁，再调用 Provider；T3/T4 使用短事务接收结果。调度器在 T3/T4 失败时立即停止新 dispatch，并将本地耐久故障作为 run 级错误处理。
+不可把网络调用放在长 SQLite 事务里。T2 提交后释放 DB 锁，再调用 Provider；T3/T4 使用短事务接收结果。两者必须在写 winner 前同事务重读 `leases.owner_token`、attempt claim 时保存的 `cancel_epoch`，并确认 attempt 仍为 `dispatched`（正常收口）或 `cancel_requested`（只能 late/cancel 收口）。owner/epoch/status 任一不匹配时，追加 `late_receipts` 与 usage outbox；若 attempt 尚未终态可转 `late_*_ignored`，若已是 `outcome_unknown` 等终态则保持原状态，只追加 ignored audit，绝不写 winner 或改变 request/run 成功。调度器在 T3/T4 本地提交失败时立即停止新 dispatch，并将本地耐久故障作为 run 级错误处理。
 
 ## 6. 关键崩溃窗口与恢复语义
 
@@ -287,21 +302,25 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 ### 7.1 Resume 算法
 
 1. 只读打开 DB，验证 schema、`quick_check`、plan/request payload hash；
-2. `BEGIN IMMEDIATE` 获取/续约单 writer lease；活跃 lease 存在时返回可重试的 `RUN_BUSY`，不启动第二个 scheduler；
-3. 检查 run 是否终态；终态 resume 返回当前 snapshot，`changed=false`；
-4. 对过期 lease 遗留的 `prepared/dispatched/cancel_requested` attempt 做恢复：prepared 可继续，dispatched 先 reconcile，否则 unknown；
-5. 重放 usage outbox、重建 summary/artifact 投影；这些审计收口不因 live source stale 而跳过；
-6. 重新验证 source/profile/config freshness；不兼容时释放 lease并返回 `FRESHNESS_MISMATCH`，不改变历史结果；
-7. 若 run 已 cancel requested，执行取消收口；否则只选 eligible request 调度；
-8. 达到终态/静止态后计算 `completed`、`completed_with_errors` 或 `failed`，原子 finalization；
+2. `BEGIN IMMEDIATE` 获取/续约单 writer lease；活跃 lease 存在时返回可重试的 `SYNC_RUN_BUSY`，不启动第二个 scheduler；
+3. **阶段 A：crash closeout（终态或 stale run 也执行）**：
+   - 对过期 owner 遗留的 `dispatched` / `cancel_requested` 只做 Provider reconciliation；可证明的既有结果作为历史 receipt 收口，无查询能力则转 `outcome_unknown`；这是恢复已发生调用，不是新调度；
+   - `prepared` 绝不能在此阶段 dispatch；cancel requested 时直接取消，终态 run 若仍有 prepared 则报告不变量损坏；
+   - 重放 usage outbox，重建 summary/result/manifest artifact 投影并 checkpoint；
+4. closeout 后重新读取 run。终态 resume 返回当前 snapshot；没有修复时 `changed=false`，补投 outbox、补 artifact 或追加 recovery receipt/event 时 `changed=true`；终态只禁止模型调度，不禁止幂等审计修复；
+5. 若 run 为 `cancel_requested`，完成 T6 收口并返回，不做 freshness 后的新调用；
+6. **阶段 B：scheduling** 前重新验证 source/profile/config freshness；不兼容时释放 lease并返回 `SYNC_RUN_FRESHNESS_MISMATCH`。阶段 A 已提交的历史 closeout/物化修复保留并在 error details 报告，但不替换 plan、不 dispatch prepared、不产生新模型调用；
+7. freshness 通过后，才允许把既有 `prepared` 继续到 T2，并只选择 eligible `pending` / `retryable_failed` request 调度；
+8. 达到终态/静止态后，把因 run-level cap 不可再调度的 active leaf 原子终结，再计算 `completed`、`completed_with_errors` 或 `failed`；
 9. 原子导出 result/manifest，checkpoint WAL，释放 lease。
 
-同一 resume 被重复调用、进程在任何步骤被杀、或两个进程竞争时，Provider 调用次数都只能由已提交的新 attempt 数解释。`status` 默认严格只读，不顺便抢 lease或修状态。
+同一 resume 被重复调用、进程在任何步骤被杀、或两个进程竞争时，Provider 调用次数都只能由通过 freshness 后已提交的 T2 解释。`status` 默认严格只读，不顺便抢 lease或修状态；需要 closeout 时返回 `next_action=resume`。
 
 ### 7.2 取消
 
-- `cancel(run_id)` 幂等提交取消意图和递增 `cancel_epoch`；scheduler 每次 T1 前检查 epoch；
-- pending/retryable request 当场转 `cancelled`；in-flight attempt 转 `cancel_requested` 并调用 backend best-effort cancel；
+- 第一次 `cancel(run_id)` 提交取消意图、递增一次 `cancel_epoch` 并写一个事件；重复 cancel 返回同一 snapshot、`changed=false`，不再增加 epoch、revision 或事件；scheduler 每次 T1/T2 前检查 epoch；
+- pending/retryable request 当场转 `cancelled`；`prepared` attempt 与对应 request 同事务直接转 `cancelled`，不调用 backend，也不会进入 unknown/late；
+- `dispatched` attempt 才转 `cancel_requested` 并调用 backend best-effort cancel；对应 request 保持 `in_flight`，直到 attempt 在同一 receipt 事务落到 cancelled、outcome unknown 或 late/ignored 后再转 request `cancelled` / `outcome_unknown`；
 - GUI/CLI 的“关闭/停止本地 worker”与“取消 run”必须是两个动作：关闭只释放/等待 lease，run 仍可 resume；取消是不可逆业务终态；
 - 若 worker 已死，cancel 可在 lease 过期后把 orphaned dispatched attempt 标 unknown，并将 run 收口为 `cancelled`；
 - cancel 后任何响应都只能进入 `late_succeeded_ignored` / `late_failed_ignored`，不能恢复 request 或把 run 标成功。
@@ -362,7 +381,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 - `max_unknown_billing_attempts`：默认 0 个可自动越过，出现 unknown 即要求人工决定；
 - profile/provider concurrency 和全局 `max_in_flight`，默认保守值由 #347 内部常量给出，#348 再决定用户配置表面。
 
-没有可信 pricing 时，设置硬 cost cap 必须 preflight 失败或使用明确标注的保守上界，不能把未知成本当 0。达到任一上限后停止产生 attempt；有部分结果则 run 为 `completed_with_errors`，无可用结果则 `failed`。
+没有可信 pricing 时，设置硬 cost cap 必须 preflight 失败或使用明确标注的保守上界，不能把未知成本当 0。per-request/root cap 只把受影响 leaf 转 `terminal_failed`；run-level attempt/time/cost/unknown-billing guard 触发后立刻停止新 T1，等待已 dispatched attempt 按正常/unknown/late 规则收口，再把其余 `pending` / `retryable_failed` active leaf，以及尚未 dispatch 的 `prepared` attempt/request，同事务释放 reservation 并转为 `terminal_failed`，使用稳定原因码（如 `run_budget_exhausted.cost`、`run_budget_exhausted.time`、`run_guard.unknown_billing`）。有部分结果则 run 为 `completed_with_errors`，无可用结果则 `failed`，`next_action=derive`；终态 snapshot 不得显示 stranded pending/retryable/in-flight。扩大预算或确认 unknown 风险只能派生新 run，不能让原终态 run 重新调度。
 
 ## 9. 调度、并发和背压
 
@@ -370,10 +389,10 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 - 调度器按 plan 顺序 + `next_eligible_at` 稳定排序，最多预取 `max_in_flight`，DB 即持久队列，不另建无界内存队列；
 - 同时应用 run、Provider/profile 和 credential 级 semaphore/rate limiter；capability/profile 给出的上限优先于用户较大值；
 - T1 在同一事务检查 cancel、lease、run/request 状态、attempt/root/run/cost 上限并做 reservation；
-- worker 返回后必须先完成 T3/T4，再释放并发位；commit 失败立即打开全局 dispatch circuit breaker；
-- heartbeat 只证明 scheduler owner 活跃，不证明某个远端调用结果；lease 过期绝不能把 dispatched attempt 变回 pending。
+- worker 返回后必须先通过 T3/T4 的 owner-token、claim-epoch、attempt-status guard，再释放并发位；guard 失败只追加 late receipt/usage，commit 失败立即打开全局 dispatch circuit breaker；
+- heartbeat 只证明 scheduler owner 活跃，不证明某个远端调用结果；lease 过期绝不能把 dispatched attempt 变回 pending。生产 worker 在 Provider I/O 期间使用独立 heartbeat 线程；lease TTL 必须大于 heartbeat interval + scheduler grace。若实现不能提供独立 heartbeat，则 TTL 至少为冻结的最大 attempt timeout + cancel/commit grace，避免仍在合法网络等待的 owner 被过早夺租。
 
-## 10. 统一 result、check、preview、apply 接口
+## 10. 统一 result/check 门禁与策略特有 preview/apply 接口
 
 ```text
 TranslationPlan + frozen requests
@@ -386,17 +405,20 @@ TranslationPlan + frozen requests
               |
               v
         check (fresh fingerprint + structural/quality gates)
-              |
-              v
-       preview/diff (bound writeback plan + source snapshot)
-              |
-              v
-        explicit idempotent apply (atomic project writeback)
+              | writeback_gate=allow
+              +-------------------------------+
+              |                               |
+              v                               v
+ durable Sync bound preview/diff      Gemini Batch translation
+              |                       existing direct apply preflight
+              v                               |
+ durable Sync explicit apply                  v
+              +----------> shared source/adapter/--force predicates
 ```
 
 ### 10.1 执行器输出边界
 
-终态导出按 root request/plan 顺序生成统一 result 行。字段以 #346 P3/P4 最终 schema 为准，但必须保留当前兼容语义：
+终态导出按 root request/plan 顺序生成统一 result 行。基线合同就是当前 [`gemini_translate_batch.py`](../../gemini_translate_batch.py) 和现行 Sync 文档已经使用的 result-row 字段角色；#347 拥有“DB 明细 -> 该合同”的 durable exporter adapter，#346 P3/P4 只需把 plan/request ID 与 fingerprint 接入生产行，不必另交一份新 result codec 才能解锁 #347 P3。字段必须保留当前兼容语义：
 
 - `run_id`、`plan_id`、root `request_id`、`chunk_id`、request/prompt fingerprint；
 - `response`：首轮 Provider 原始响应的安全序列化；
@@ -406,7 +428,7 @@ TranslationPlan + frozen requests
 - `contract_diagnostics`、accepted/unresolved IDs、late/unknown/cancel flags；
 - 每行和整个 artifact 的 schema version/hash。
 
-执行器不得复制 `collect_result_actions`、placeholder 校验或 adapter writeback 语义。统一 result codec 应由 #346 先冻结，#347 只实现 DB 明细到该 codec 的适配。
+执行器不得复制 `collect_result_actions`、placeholder 校验或 adapter writeback 语义。#347 exporter 只适配/版本化既有 result-row contract；#346 的生产接线负责提供 plan/request fingerprint 字段，两者共同走现有 check 读取边界。
 
 ### 10.2 Check 与部分失败
 
@@ -415,15 +437,16 @@ TranslationPlan + frozen requests
 - 若用户明确只交付成功部分，必须创建一个新的**范围化派生 package/run**，记录 excluded IDs、来源 run 和人工选择，再对新 scope 完整运行 check；不能用 `--force` 或 acknowledgement 修改原 check 的结构结果；
 - check fingerprint 绑定 run manifest、result hash、target shape、plan/request fingerprint、source identity、质量规则/策略/glossary digest；results 或 manifest 变化后旧 check 自动 stale。
 
-### 10.3 Preview 与 Apply
+### 10.3 Durable Sync Preview 与两种 Apply 路径
 
-- preview 只接受最近一次与当前 artifacts 完全匹配、`writeback_gate.decision=allow` 的 check；
-- preview manifest 绑定 run/plan/result/check fingerprint、source snapshot、adapter version/writeback plan、diff/候选文件 hash、质量 finding；
-- apply 前再次验证所有绑定和 live source，先全量验证再第一次写；项目多文件写回继续复用 `atomic_write_many_lines` journal；
-- apply 以 writeback operation/preview fingerprint 为幂等键：目标已经等于候选内容时返回 `already_applied`，不重复写进度、RAG 或 usage；目标既非 source 也非 preview 时拒绝；
-- `--force` 最多允许显式重试已应用命令，不能跳过 stale check/source/structure/quality blocker。
+- durable Sync preview 只接受最近一次与当前 artifacts 完全匹配、`writeback_gate.decision=allow` 的 check；
+- durable Sync preview manifest 绑定 run/plan/result/check fingerprint、source snapshot、adapter version/writeback plan、diff/候选文件 hash、质量 finding；
+- durable Sync apply 前再次验证所有绑定和 live source，先全量验证再第一次写；项目多文件写回继续复用 `atomic_write_many_lines` journal；
+- durable Sync apply 以 writeback operation/preview fingerprint 为幂等键：目标已经等于候选内容时返回 `already_applied`，不重复写进度、RAG 或 usage；目标既非 source 也非 preview 时拒绝；
+- Gemini Batch translation 保持现行 `check -> apply`，不因 #347 新增 mandatory preview 命令；其 apply 继续要求 fresh check、`writeback_gate=allow` 和 apply-time source/adapter revalidation；
+- 两种路径的共享测试断言 gate/fingerprint/source/adapter/`--force` 谓词，不断言所有策略拥有同一 CLI 步骤；`--force` 不能跳过 stale check/source/structure/quality blocker。
 
-当前 Sync 的 `create_sync_preview` 同时生成 preview 和质量 finding，而 Batch 使用独立 check。#346 P3/P4 应先冻结统一 result/check 接缝；#347 集成 PR 再把 durable result 接入，不在 scheduler 内 import GUI 或重写两套门禁。
+当前 Sync 的 `create_sync_preview` 同时生成 preview 和质量 finding，而 Batch 使用独立 check。#346 P3/P4 先把生产 Sync 请求绑定 plan/request fingerprint；#347 P5 再把 durable result 接入共享 check 谓词和 Sync bound preview，不在 scheduler 内 import GUI、不复制 check/apply 语义，也不改变 Batch translation 的现行命令序列。
 
 ## 11. 服务层与 CLI JSON 合同
 
@@ -432,28 +455,38 @@ TranslationPlan + frozen requests
 建议公共入口位于新的 `sync_run_service.py`，对 GUI/CLI 暴露纯 Python 数据对象：
 
 ```python
-start(plan_build, *, policy, client_token="") -> RunSnapshot
+start(plan_build, *, policy, client_token=None) -> RunSnapshot
 resume(run_id, *, policy_overrides=None) -> RunSnapshot
 status(run_id) -> RunSnapshot
 cancel(run_id, *, reason="user") -> RunSnapshot
-derive(run_id, current_plan_build, *, reuse_policy, retry_unknown=False) -> RunSnapshot
+derive(
+    run_id,
+    current_plan_build,
+    *,
+    reuse_policy,
+    retry_unknown=False,
+    ack_duplicate_billing_risk=False,
+    exclude_unknown=False,
+) -> RunSnapshot
 ```
 
-`start`/`resume` 默认前台运行到终态、取消或本地 worker 被优雅停止；优雅停止不等同 cancel，run 保持 `running` 且 `next_action=resume`。服务对象不读取 GUI state，不调用 `sys.exit`，错误使用稳定 code/category 和 safe details。
+`client_token=None`（以及入口规范化后的空字符串）总是新 run；非空 token 才启用 start 幂等，且同 token 输入不一致时拒绝。`retry_unknown=true` 必须同时有 `ack_duplicate_billing_risk=true`，并与 `exclude_unknown=true` 互斥；否则按 §3.4 拒绝或创建范围化新 run。`start`/`resume` 默认前台运行到终态、取消或本地 worker 被优雅停止；优雅停止不等同 cancel，run 保持 `running` 且 `next_action=resume`。服务对象不读取 GUI state，不调用 `sys.exit`，错误使用稳定 code/category 和 safe details。
 
 ### 11.2 CLI 命令
 
 为符合仓库现有 flat subcommand 与 #296 机器输出合同，#347 首期建议增加：
 
 ```text
-sync-start
+sync-start [--client-token TOKEN]
 sync-resume RUN
 sync-status RUN|--latest
 sync-cancel RUN
-sync-derive RUN
+sync-derive RUN [--retry-unknown --ack-duplicate-billing-risk | --exclude-unknown]
 ```
 
-每个命令支持现行 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact` 和 `--output-file`。为满足 issue 的 `--json` 验收，`--json` 必须是 `--output json` 的完全等价别名，二者使用同一个 parser destination 和 envelope；#348 可再提供统一 `translate start/resume/...` 别名并保留映射。
+每个新 `sync-*` 命令支持现行 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact` 和 `--output-file`。为满足 issue 的 `--json` 验收，只在这些新命令上增加 `--json`：它与 `--output json` 使用同一个 parser destination 和 schema-v1 envelope，因此 `--json --compact` 合法。不得修改 `final-review-status`、`project-analysis-status`、`usage-import`、`usage-report` 等既有命令的 legacy `--json` 语义；#348 可再提供统一 `translate start/resume/...` 别名并保留映射。
+
+`RUN` 选择器不允许隐式 cwd/latest。`--non-interactive` 必须显式给出 `RUN` 或命令明确支持的 `--latest`。`sync-status --latest` 只枚举目录名匹配 `sync-run-v1-*`、含可读 `state.sqlite3`、且 DB 内 `runs.run_id` 与目录一致的 durable run；现有 `YYYYMMDDThhmmss.uuuuuuZ` Sync preview 目录没有 state DB，必须忽略。latest 以 DB `created_at` 排序；没有候选或无法唯一判定时返回 `SYNC_RUN_NOT_FOUND`。
 
 机器模式 stdout 只输出一个 [`cli_contract.py`](../../cli_contract.py) schema-v1 envelope；进度写 stderr 或受控日志。顶层键固定为 `schema_version`、`command`、`ok`、`status`、`result`、`artifacts`、`warnings`、`error`；下面是 `result` 的稳定主体：
 
@@ -476,12 +509,14 @@ sync-derive RUN
   },
   "progress": {
     "requests": {
-      "total": 10,
+      "total": 12,
+      "active_leaf_total": 10,
       "pending": 3,
       "in_flight": 1,
       "succeeded": 5,
       "retryable_failed": 1,
       "terminal_failed": 0,
+      "superseded": 2,
       "outcome_unknown": 0,
       "cancelled": 0
     },
@@ -502,9 +537,24 @@ sync-derive RUN
 }
 ```
 
+`requests.total` 统计 root + derived 的所有 request 行，必须严格等于八个状态 bucket 之和；`active_leaf_total = total - superseded`，用于区分仍代表交付范围的 leaf 与只保留 lineage/accepted 历史的父 request。终态 run 的 `pending`、`in_flight`、`retryable_failed` 必须全为 0。
+
 Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`、`requests`、`manifest`、`results`、`result_sha256`。不返回 prompt、response 正文、credential ref 细节或原始异常。
 
-稳定错误 code 至少包括：`SYNC_RUN_NOT_FOUND`、`SYNC_RUN_BUSY`、`SYNC_RUN_FRESHNESS_MISMATCH`、`SYNC_RUN_STORAGE_ERROR`、`SYNC_RUN_SCHEMA_UNSUPPORTED`、`SYNC_RUN_BUDGET_EXHAUSTED`、`SYNC_RUN_OUTCOME_UNKNOWN`。重复 cancel 和终态 resume 返回成功 snapshot，不应变成错误。
+稳定错误 code 至少包括：`SYNC_RUN_NOT_FOUND`、`SYNC_RUN_BUSY`、`SYNC_RUN_FRESHNESS_MISMATCH`、`SYNC_RUN_CLIENT_TOKEN_CONFLICT`、`SYNC_RUN_STORAGE_ERROR`、`SYNC_RUN_SCHEMA_UNSUPPORTED`、`SYNC_RUN_BUDGET_EXHAUSTED`、`SYNC_RUN_OUTCOME_UNKNOWN`。重复 cancel 和终态 resume 返回成功 snapshot，不应变成错误。
+
+`ok` 表示命令合同是否成功执行，不等于 run 完整成功；成功 snapshot 的 envelope `status` 必须等于 `result.run_status`。`--strict-exit-codes` 对新命令冻结如下：
+
+| 结果 | `ok` / `error.retryable` | strict exit |
+|---|---|---|
+| `planned` / `running` / `cancel_requested` / `completed` | `true` / 不适用 | `EXIT_OK=0` |
+| `completed_with_errors` | `true` / 不适用 | `EXIT_NEEDS_ACTION=3` |
+| `cancelled` / `failed` | `true` / 不适用 | `EXIT_BLOCKED=4` |
+| `SYNC_RUN_NOT_FOUND`、`SYNC_RUN_FRESHNESS_MISMATCH`、`SYNC_RUN_CLIENT_TOKEN_CONFLICT`、`SYNC_RUN_SCHEMA_UNSUPPORTED`、invalid-state refusal | `false` / `false` | `EXIT_INVALID_STATE=5` |
+| start/pre-dispatch `SYNC_RUN_BUDGET_EXHAUSTED`、`SYNC_RUN_STORAGE_ERROR` | `false` / `false` | `EXIT_BLOCKED=4` |
+| `SYNC_RUN_BUSY` | `false` / `true` | `EXIT_RETRYABLE=6` |
+
+`SYNC_RUN_OUTCOME_UNKNOWN` 只在 `sync-derive` 发现 unknown 且用户既未确认重调风险、也未显式排除时作为 `ok=false` / `EXIT_INVALID_STATE=5`；`sync-status` 或终态 resume 仅把 unknown 数量作为成功 snapshot 字段，并通过 `completed_with_errors -> EXIT_NEEDS_ACTION` 表达。执行期间命中预算后按 §8.4 返回成功的终态 snapshot；`SYNC_RUN_BUDGET_EXHAUSTED` 仅用于 start/pre-dispatch 无可执行预算等命令级拒绝。
 
 ## 12. Fault-injection 测试矩阵
 
@@ -514,8 +564,8 @@ Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`�
 |---|---|---|
 | F01 | T0 提交前强杀 | 不存在可 resume run；Provider 调用 0 |
 | F02 | T0 后、首 dispatch 前强杀 | resume 执行全部 request；每个 root 一次 |
-| F03 | T1 prepared 后强杀 | resume 复用该 attempt id，调用一次 |
-| F04 | T2 dispatch intent 后、fake send 前强杀 | request 进入 unknown 或由幂等 Provider reconcile；普通 resume 不新增 attempt |
+| F03 | T1 prepared 后强杀 | freshness 通过才复用该 attempt id 并调用一次；stale 时保持 prepared、调用 0 |
+| F04 | T2 dispatch intent 后、fake send 前强杀 | request 进入 unknown 或由幂等 Provider reconcile；普通 resume 不新增 attempt；unknown guard 触发时其余 leaf 被明确终结 |
 | F05 | Provider 已计数成功、T3 前强杀 | 无查询能力时 unknown；显式派生前显示 duplicate billing 风险 |
 | F06 | T3 commit 后、summary 更新前强杀 | resume 不调用该 request；accepted/usage/summary 正确重建 |
 | F07 | T3 后、ledger flush 前强杀 | outbox 重放一次；ledger inserted=1 |
@@ -525,24 +575,28 @@ Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`�
 | F11 | invalid JSON/截断且整批无进展 | 只在允许分类下创建 L/R；父和 children 原子出现 |
 | F12 | 部分有效 + missing IDs | accepted ID 不重调；只创建稳定 `--M-...` child |
 | F13 | split T5 任一语句前后强杀 | DB 中不存在半棵 lineage；root attempt cap 不被 children 放大 |
-| F14 | 多 in-flight 时 cancel | cancel 后 dispatch count 不增长；pending cancelled；迟到成功 ignored |
-| F15 | 重复 cancel/status/resume | revision/事件不产生无意义重复；Provider 调用数不变 |
-| F16 | 两个进程同时 resume | 一个取得 lease；另一个 `RUN_BUSY`；无重复 dispatch |
-| F17 | worker 无 heartbeat/过期 lease | prepared 可恢复；dispatched 不回 pending，按 reconciliation/unknown 处理 |
+| F14 | prepared + dispatched 并存时 cancel | prepared 直接 cancelled、Provider cancel 0；dispatched 才 cancel_requested；cancel 后无新 dispatch，迟到成功 ignored |
+| F15 | 重复 cancel/status/resume | 第二次 cancel `changed=false` 且 epoch/revision/event 不增长；终态 resume 可修 outbox/artifact 但 Provider 调用数不变 |
+| F16 | 两个进程同时 resume | 一个取得 lease；另一个 `SYNC_RUN_BUSY` / retryable / exit 6；无重复 dispatch |
+| F17 | worker I/O 时 lease 过期/owner 被替换 | dispatched 不回 pending；旧 worker T3/T4 guard 失败，只写 late receipt/usage，不写 winner |
 | F18 | response receipt 时磁盘满/permission error | circuit breaker 停止新调用；相关 attempt 不自动重调 |
-| F19 | result JSONL replace 后、artifact DB 更新前强杀 | 重导出字节/hash 相同；check 只消费完整 artifact |
-| F20 | source snapshot、adapter、profile、config 分别变化 | status 可看；原地 resume 拒绝；derive 新 run 成功 |
-| F21 | cost reservation 临界并发 | 并发 T1 后 reservation 总和不越 cap；未知 pricing 按 preflight 策略失败 |
+| F19 | result JSONL replace 后、artifact DB 更新前强杀 | 终态 resume `changed=true` 并重导出相同字节/hash；check 只消费完整 artifact |
+| F20 | source snapshot、adapter、profile、config 分别变化 | closeout/outbox 可修；prepared 不 dispatch；scheduling 以 `SYNC_RUN_FRESHNESS_MISMATCH` 拒绝；derive 新 run 成功 |
+| F21 | cost reservation 临界并发/任一 run cap 触发 | reservation 总和不越 cap；未知 pricing preflight 失败；剩余 pending/retryable/prepared 原子 terminal_failed 并释放 reservation，终态无 stranded leaf |
 | F22 | completed_with_errors 直接 check/apply | 原 scope gate deny；范围化派生后重新 check 才可能 allow |
 | F23 | 同一 run 多次 export/check/preview/apply | usage 不重复、result hash 不变、已应用文件不重复写 |
 | F24 | cancel 后 late response 带 usage | winner 不变、run 仍 cancelled；usage 只记一次并标 late |
 | F25 | DB/manifest/plan/request/result 任一被篡改 | integrity/fingerprint 阻断，不调用模型、不写项目 |
+| F26 | start token 省略/空/重复/冲突 | 省略或空值各建新 run；同非空 token + 同输入返回同 run；不同输入返回 client-token conflict |
+| F27 | derive 遇到 unknown | 默认拒绝；ack 后重调并记风险；exclude 后生成新 scoped expected set，三者互斥 |
+| F28 | CLI selector/progress/strict exit | `--latest` 忽略 legacy preview；request bucket 可加总；状态和 error code 严格命中 §11.2 exit 表 |
+| F29 | Durable Sync 与 Gemini Batch 安全路径 | Sync 要求 check + bound preview + apply；Batch 保持 check + apply；两者共享 gate/source/adapter/force 谓词 |
 
 Provider 验收分三层：
 
 1. CI：fake Gemini、fake LiteLLM built-in、fake custom OpenAI-compatible adapter 跑完整矩阵；
 2. 可选本地 smoke：三类真实 Provider 各跑最小 plan 和可控中断，不在 CI 使用凭据；
-3. 与 #346 P4 golden fixture 集成：Sync 与 Gemini Batch 规范化请求一致，durable Sync 产物通过同一 result/check/preview/apply 套件。
+3. 与 #346 P4 golden fixture 集成：Sync 与 Gemini Batch 规范化请求一致；durable Sync 与 Batch 产物通过同一 result/check gate 测试，另分别验证 Sync bound preview/apply 与 Batch direct apply 序列。
 
 ## 13. 分阶段 PR 计划与预计文件
 
@@ -552,10 +606,10 @@ P0 即本文，只改计划/索引；#346 P2 正在另一工作树实施，本�
 |---|---|---|---|
 | P0 | 本设计、状态机、存储/崩溃语义、测试矩阵 | 文档链接与 diff 通过 | `docs/plans/issue-347-durable-sync-executor-plan.md`、plans 索引 |
 | P1 | 纯状态/SQLite store/schema migration/event/lease/投影 | 无网络、无生产入口；转换表和事务单测全过 | 新增 `sync_run_store.py`、`sync_run_contracts.py`、`tests/test_sync_run_store.py`、fixtures |
-| P2 | fake-provider scheduler、预算 reservation、退避、取消、lineage、fault harness | 不接普通 Sync；F01–F21 通过 | 新增 `durable_sync_executor.py`、`sync_retry_policy.py`、`tests/test_durable_sync_executor.py`、subprocess fixture |
-| P3 | attempt usage outbox 与统一 result exporter | 等 #346 result codec 冻结；usage 重放和 result golden 通过 | 新增 `sync_result_export.py`，修改 `model_usage_ledger.py` 及对应测试 |
+| P2 | fake-provider scheduler、预算 reservation、退避、取消、lineage、fault harness | 先消费 #346-owned pure derived-request helper；不接普通 Sync；F01–F21/F26–F27 通过 | 新增 `durable_sync_executor.py`、`sync_retry_policy.py`、`tests/test_durable_sync_executor.py`、subprocess fixture；不复制 `translation_plan.py` ID 逻辑 |
+| P3 | attempt usage outbox 与 durable result exporter adapter | 直接适配既有 Batch/Sync result-row 字段角色，不等待新的 #346 result codec；usage 重放和 result golden 通过 | 新增 `sync_result_export.py`，修改 `model_usage_ledger.py` 及对应测试 |
 | P4 | 生产 `TranslationPlan`/backend 接线和服务层 | **必须基于 #346 P3/P4 合并点**；不再走 legacy prompt/chunk builder | 新增 `sync_run_service.py`；消费 #346 API，按最终接缝修改 `translator_runtime.py`、`sync_model_backend.py` 及测试，不回改 plan builder |
-| P5 | CLI JSON 命令、check/preview/apply 集成 | CLI 合同、partial gate、重复 apply 验收通过 | 修改 `gemini_translate_batch.py`、`cli_contract.py`（仅必要扩展）、`sync_translation_preview.py`、CLI/preview/gate 测试、现行 workflow 文档，并同步 GUI“诊断与运行日志”的命令参考/user copy 测试；不改页面布局 |
+| P5 | CLI JSON、共享 check gate、durable Sync preview/apply 集成 | F22–F25/F28–F29、partial gate、重复 apply 验收通过；不得给 Batch translation 增加 mandatory preview | 修改 `gemini_translate_batch.py`、`cli_contract.py`（仅必要扩展）、`sync_translation_preview.py`、CLI/preview/gate 测试、现行 workflow 文档，并同步 GUI“诊断与运行日志”的命令参考/user copy 测试；不改页面布局 |
 | P6 | 三 Provider 中断 smoke 与 #348 handoff | #347 后端验收；统一页面和配置仍留 #348 | provider smoke 脚本、脱敏诊断与 handoff 文档；不在本阶段实现统一 GUI |
 
 每阶段先跑针对性测试；P3 起跑完整 CLI，P4/P5 跑 CLI + GUI + quality gates。不得把依赖升级、#341 context provider 或 #348 Settings 重构混入 #347 PR。
@@ -564,9 +618,9 @@ P0 即本文，只改计划/索引；#346 P2 正在另一工作树实施，本�
 
 ### #346 P3/P4：共享语义合同与安全接缝
 
-- **拥有**：`translation_plan.py`、canonical request/result codec、Sync 消费 plan、system instruction backend 接缝、plan/source/profile fingerprint，以及 Sync/Batch 黄金等价；
+- **拥有**：`translation_plan.py`、root/derived request builder、Sync 消费 plan、system instruction backend 接缝、plan/source/profile fingerprint，以及 Sync/Batch 请求黄金等价；
 - #347 把持久化请求当不可变 payload，不能在 scheduler 中重建 prompt/schema/chunk；
-- P3/P4 合并前，#347 最多开发纯 store/fake scheduler，不得接 `translator_runtime.py` 或临时复制 result/check 逻辑。
+- #346 须在 #347 P2 前先提供纯 derived-request helper；P3/P4 合并前，#347 最多开发 store/fake scheduler/result adapter，不得接 `translator_runtime.py` 或临时复制 result/check 逻辑。
 
 ### #341：上下文与 Embedding
 
@@ -576,7 +630,7 @@ P0 即本文，只改计划/索引；#346 P2 正在另一工作树实施，本�
 
 ### #347：耐久执行生命周期
 
-- **拥有**：run DB/schema、state/event/lease、attempt scheduler、retry/cancel/late/unknown、预算、usage outbox、result exporter adapter、服务和机器状态合同；
+- **拥有**：run DB/schema、state/event/lease、attempt scheduler、retry/cancel/late/unknown、预算、usage outbox、基于既有 result-row contract 的 durable exporter adapter、服务和机器状态合同；
 - 对共享文件的修改必须在 #346 P3/P4 后小范围接线，不能接管 prompt、context 或项目写回语义。
 
 ### #348：产品化与迁移
@@ -598,7 +652,7 @@ P0 即本文，只改计划/索引；#346 P2 正在另一工作树实施，本�
 - 多次 resume/status/apply、usage 去重：F07/F08/F15/F23；
 - source/profile/config 改变：F20/F25；
 - Gemini、LiteLLM 内置、自定义 OpenAI-compatible：三层 Provider 验收；
-- 与 Batch 同一安全链：P3/P5 和 F22/F23，执行器自身永无写回权限。
+- 与 Batch 共享安全谓词而不强制同一命令序列：P3/P5 和 F22/F23/F29，执行器自身永无写回权限。
 
 ## 16. 后续实现门禁
 
