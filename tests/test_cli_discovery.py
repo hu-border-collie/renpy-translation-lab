@@ -77,6 +77,14 @@ class CliDiscoveryTests(unittest.TestCase):
         self.assertTrue(commands["status"]["requires_explicit_target_in_agent_mode"])
         self.assertFalse(commands["build"]["requires_explicit_target_in_agent_mode"])
         self.assertFalse(commands["split"]["supports_json"])
+        self.assertTrue(commands["sync-keywords"]["supports_json"])
+        self.assertTrue(commands["sync-revisions"]["supports_json"])
+        self.assertFalse(
+            commands["sync-keywords"]["requires_explicit_target_in_agent_mode"]
+        )
+        self.assertFalse(
+            commands["sync-revisions"]["requires_explicit_target_in_agent_mode"]
+        )
 
     def test_schema_exports_live_argument_contract(self):
         stdout = io.StringIO()

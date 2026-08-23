@@ -733,8 +733,10 @@ class BatchCliContractTests(unittest.TestCase):
         expected = {
             "build-revisions",
             "preview-revisions",
+            "sync-revisions",
             "build-keywords",
             "export-keywords",
+            "sync-keywords",
             "merge-keywords-to-glossary",
             "final-review-build",
             "final-review-status",
@@ -868,6 +870,58 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertNotIn("final_review_source", plain["result"])
 
+    def test_sync_revisions_machine_envelope_reuses_preview_and_apply_shapes(self):
+        preview_manifest = {
+            "_manifest_path": "C:/jobs/sync-rev/manifest.json",
+            "last_revision_preview": {
+                "jsonl_path": "C:/jobs/sync-rev/revision_preview.jsonl",
+                "markdown_path": "C:/jobs/sync-rev/revision_preview.md",
+                "quality_findings_path": "C:/jobs/sync-rev/quality_findings.jsonl",
+                "quality_findings_count": 1,
+                "check_status": "ready",
+                "writeback_gate": {"can_apply": True},
+                "quality_gate": {"has_warnings": False},
+                "summary": {"preview_entry_count": 2},
+            },
+        }
+        preview = batch.build_machine_success_envelope(
+            "sync-revisions",
+            dict(preview_manifest),
+            SimpleNamespace(apply=False),
+        )
+        self.assertTrue(preview["ok"])
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(
+            preview["result"]["manifest_path"],
+            "C:/jobs/sync-rev/manifest.json",
+        )
+        self.assertTrue(preview["result"]["writeback_gate"]["can_apply"])
+        self.assertEqual(
+            preview["artifacts"]["revision_preview_jsonl"],
+            "C:/jobs/sync-rev/revision_preview.jsonl",
+        )
+        self.assertNotIn("revision_apply_state", preview["result"])
+
+        applied = {
+            "_manifest_path": "C:/jobs/sync-rev/manifest.json",
+            "revision_apply_state": "applied",
+            "revision_applied_at": "2026-08-23T00:00:00",
+            "revision_apply_summary": {"applied_files": 1},
+            "last_revision_preview": preview_manifest["last_revision_preview"],
+        }
+        apply_envelope = batch.build_machine_success_envelope(
+            "sync-revisions",
+            dict(applied),
+            SimpleNamespace(apply=True),
+        )
+        self.assertTrue(apply_envelope["ok"])
+        self.assertEqual(apply_envelope["status"], "applied")
+        self.assertEqual(apply_envelope["result"]["revision_apply_state"], "applied")
+        self.assertEqual(
+            apply_envelope["result"]["revision_apply"]["applied_files"],
+            1,
+        )
+
     def test_keyword_export_machine_envelope_lists_review_artifacts(self):
         args = SimpleNamespace(target="C:/jobs/kw/manifest.json")
         keyword_manifest = {"_manifest_path": "C:/jobs/kw/manifest.json"}
@@ -903,6 +957,67 @@ class BatchCliContractTests(unittest.TestCase):
             envelope["artifacts"]["keyword_chunk_summaries"],
             "C:/jobs/kw/keyword_chunk_summaries.jsonl",
         )
+
+    def test_sync_keywords_machine_envelope_uses_returned_manifest_path(self):
+        args = SimpleNamespace()
+        export = {
+            "manifest_path": "C:/jobs/sync-kw/manifest.json",
+            "jsonl_path": "C:/jobs/sync-kw/keyword_candidates.jsonl",
+            "markdown_path": "C:/jobs/sync-kw/keyword_candidates.md",
+            "summary_jsonl_path": "C:/jobs/sync-kw/keyword_chunk_summaries.jsonl",
+            "summary_markdown_path": "C:/jobs/sync-kw/keyword_chunk_summaries.md",
+            "summary": {"candidate_count_deduped": 3},
+            "history_evidence": {"occurrence_count": 1},
+        }
+        with mock.patch.object(batch, "load_manifest") as load_manifest:
+            envelope = batch.build_machine_success_envelope(
+                "sync-keywords",
+                dict(export),
+                args,
+            )
+        load_manifest.assert_not_called()
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "completed")
+        self.assertEqual(
+            envelope["result"]["manifest_path"],
+            "C:/jobs/sync-kw/manifest.json",
+        )
+        self.assertEqual(
+            envelope["result"]["summary"]["candidate_count_deduped"],
+            3,
+        )
+        self.assertEqual(
+            envelope["artifacts"]["keyword_candidates"],
+            "C:/jobs/sync-kw/keyword_candidates.jsonl",
+        )
+
+    def test_sync_commands_return_dispatch_payload_for_machine_envelope(self):
+        parser = batch.build_arg_parser()
+        keyword_payload = {"manifest_path": "C:/jobs/sync-kw/manifest.json"}
+        revision_payload = {"_manifest_path": "C:/jobs/sync-rev/manifest.json"}
+        with mock.patch.object(
+            batch, "sync_keyword_candidates", return_value=keyword_payload
+        ) as sync_keywords:
+            args = parser.parse_args(["sync-keywords", "--output", "json"])
+            self.assertIs(batch.dispatch_command(parser, args), keyword_payload)
+            sync_keywords.assert_called_once()
+        with mock.patch.object(
+            batch, "sync_revisions", return_value=revision_payload
+        ) as sync_revisions:
+            args = parser.parse_args(["sync-revisions", "--apply", "--output", "json"])
+            self.assertIs(batch.dispatch_command(parser, args), revision_payload)
+            sync_revisions.assert_called_once_with(
+                display_name_override="",
+                skip_prepare=False,
+                chunk_size=0,
+                limit=0,
+                offset=0,
+                output_jsonl="",
+                output_markdown="",
+                apply=True,
+                force=False,
+                api_key_index=None,
+            )
 
     def test_keyword_merge_machine_envelope_reports_preview_merge_and_no_work(self):
         args = SimpleNamespace(target="candidates.jsonl")
@@ -1345,6 +1460,22 @@ class BatchCliContractTests(unittest.TestCase):
             envelope["result"]["reason"],
             "no_pending_translation_work",
         )
+        load_manifest.assert_not_called()
+
+    def test_sync_commands_without_source_items_do_not_load_latest_manifest(self):
+        args = SimpleNamespace(target="", apply=False)
+
+        with mock.patch.object(batch, "load_manifest") as load_manifest:
+            for command in ("sync-revisions", "sync-keywords"):
+                with self.subTest(command=command):
+                    envelope = batch.build_machine_success_envelope(
+                        command, None, args
+                    )
+                    self.assertEqual(envelope["status"], "no_work")
+                    self.assertEqual(
+                        envelope["result"]["reason"],
+                        "no_source_items",
+                    )
         load_manifest.assert_not_called()
 
     def test_doctor_json_keeps_stdout_parseable_and_moves_text_to_stderr(self):
