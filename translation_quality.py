@@ -248,10 +248,19 @@ SPEAKER_HINT_SUFFIXES: tuple[str, ...] = tuple(
     )
 )
 
+DEFAULT_RULE_DISPOSITIONS: dict[str, str] = {
+    key: (
+        DISPOSITION_OFF
+        if key in {'english_suffix_adjacent', 'suspicious_english_residue'}
+        else DISPOSITION_WARNING
+    )
+    for key in RULE_KEYS
+}
+
 DEFAULT_POLICY: dict[str, Any] = {
     'schema_version': QUALITY_RULE_SCHEMA_VERSION,
     'enabled': True,
-    'rules': {key: DISPOSITION_WARNING for key in RULE_KEYS},
+    'rules': dict(DEFAULT_RULE_DISPOSITIONS),
     'allowed_latin_tokens': list(DEFAULT_ALLOWED_LATIN_TOKENS),
     'garbled_phrases': [],
 }
@@ -295,7 +304,7 @@ def normalize_policy(configured: Any) -> dict[str, Any]:
     policy = {
         'schema_version': QUALITY_RULE_SCHEMA_VERSION,
         'enabled': True,
-        'rules': {key: DISPOSITION_WARNING for key in RULE_KEYS},
+        'rules': dict(DEFAULT_RULE_DISPOSITIONS),
         'allowed_latin_tokens': list(DEFAULT_ALLOWED_LATIN_TOKENS),
         'garbled_phrases': [],
     }

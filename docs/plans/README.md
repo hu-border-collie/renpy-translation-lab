@@ -28,8 +28,9 @@
   `outcome_unknown` 恢复语义、usage 去重、共享 result/check 门禁、durable Sync preview/apply 与 Batch direct apply 接缝、
   CLI JSON 合同、fault-injection 矩阵及与 #346/#341/#348 的所有权边界。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
-  A1 离线语料与 A3 校准报告工具的使用方法，以及 B 线真实项目统计、
-  抽样标注、A2 调参与重跑对比的执行步骤。
+  A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤；
+  三项目聚合统计、人工标注和 A2 前后对比见
+  [真实项目机械质量校准基线](quality_calibration_baseline.md)。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。

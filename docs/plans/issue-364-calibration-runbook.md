@@ -1,8 +1,8 @@
 # #364 真实项目质量规则校准执行手册
 
-> **状态：进行中。** A1（离线回归语料）已随 PR #381 合入 main；
-> A3（校准报告工具）就绪；A2 的白名单/disposition 取值与 B 线的真实项目
-> 统计、人工标注、重跑验证仍待真实项目数据。
+> **状态：已完成（2026-08-23）。** A1（离线回归语料）、A3（校准报告工具）
+> 和真实项目 B 线均已完成；A2 根据三项目标注把两条高噪声语言规则默认设为
+> `off`。聚合基线和风险见 [真实项目机械质量校准基线](quality_calibration_baseline.md)。
 > 以 issue #364 正文、当前 checkout 和 `scripts/quality_calibration_report.py --help` 为准。
 
 文档地图：[规划与设计草案](README.md) · [项目文档](../README.md) ·
@@ -86,3 +86,5 @@ python scripts/quality_calibration_report.py /path/to/quality_findings.jsonl \
 | 真实样本 fixture 可离线运行且不含私有文本 | A1 + 本手册第 7 步 |
 | 重跑后误报下降且正例仍报告 | 两份基线报告对比 |
 | 质量报告作为回归基线 | `docs/plans/quality_calibration_baseline.md` 或等价路径 |
+
+上述验收项已由 2026-08-23 基线完成；私有 findings 和恢复沙箱不进入仓库。

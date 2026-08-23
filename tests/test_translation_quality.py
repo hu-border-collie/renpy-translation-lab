@@ -25,13 +25,18 @@ def subject(**overrides):
 
 
 class QualityPolicyTests(unittest.TestCase):
-    def test_normalize_policy_defaults_all_rules_to_warning(self):
+    def test_normalize_policy_defaults_high_noise_language_rules_to_off(self):
         policy = quality.normalize_policy(None)
 
         self.assertTrue(policy['enabled'])
-        self.assertEqual(
-            set(policy['rules'].values()),
-            {quality.DISPOSITION_WARNING},
+        self.assertEqual(policy['rules']['english_suffix_adjacent'], quality.DISPOSITION_OFF)
+        self.assertEqual(policy['rules']['suspicious_english_residue'], quality.DISPOSITION_OFF)
+        self.assertTrue(
+            all(
+                disposition == quality.DISPOSITION_WARNING
+                for rule, disposition in policy['rules'].items()
+                if rule not in {'english_suffix_adjacent', 'suspicious_english_residue'}
+            )
         )
         self.assertIn('Ren\'Py', policy['allowed_latin_tokens'])
 
@@ -70,6 +75,13 @@ class QualityPolicyTests(unittest.TestCase):
         )
 
         self.assertNotEqual(quality.policy_digest(base), quality.policy_digest(changed))
+
+    def test_example_config_matches_calibrated_default_dispositions(self):
+        example_path = Path(__file__).parents[1] / 'translator_config.example.json'
+        with example_path.open('r', encoding='utf-8') as handle:
+            configured = json.load(handle)['batch']['quality_gate']['rules']
+
+        self.assertEqual(configured, quality.DEFAULT_RULE_DISPOSITIONS)
 
     def test_effective_policy_prefers_manifest_snapshot(self):
         manifest_policy = quality.normalize_policy(
@@ -116,18 +128,34 @@ class QualityRuleTests(unittest.TestCase):
                 )
 
     def test_english_suffix_adjacent_reports_ping_and_s(self):
+        policy = quality.normalize_policy(
+            {'rules': {'english_suffix_adjacent': 'warning'}}
+        )
         for translation in ('迷踪步ping', '残片s'):
             with self.subTest(translation=translation):
-                findings = quality.check_subject(subject(translation=translation))
+                findings = quality.check_subject(
+                    subject(translation=translation),
+                    policy=policy,
+                )
                 self.assertIn(
                     quality.REASON_ENGLISH_SUFFIX_ADJACENT,
                     {finding['reason_code'] for finding in findings},
                 )
 
+    def test_calibrated_default_suppresses_proper_name_language_noise(self):
+        findings = quality.check_subject(subject(translation='Aster走了过来'))
+        codes = {finding['reason_code'] for finding in findings}
+
+        self.assertNotIn(quality.REASON_ENGLISH_SUFFIX_ADJACENT, codes)
+        self.assertNotIn(quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE, codes)
+        self.assertIn(quality.REASON_CJK_LATIN_SPACING, codes)
+
     def test_suspicious_english_residue_excludes_allowlisted_tokens(self):
         allowed = quality.check_subject(
             subject(translation='当前HP为100'),
-            policy=quality.normalize_policy(None),
+            policy=quality.normalize_policy(
+                {'rules': {'suspicious_english_residue': 'warning'}}
+            ),
         )
         self.assertNotIn(
             quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE,
@@ -136,7 +164,12 @@ class QualityRuleTests(unittest.TestCase):
 
         flagged = quality.check_subject(
             subject(translation='迷踪步ping'),
-            policy=quality.normalize_policy({'allowed_latin_tokens': []}),
+            policy=quality.normalize_policy(
+                {
+                    'rules': {'suspicious_english_residue': 'warning'},
+                    'allowed_latin_tokens': [],
+                }
+            ),
         )
         self.assertIn(
             quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE,
@@ -156,7 +189,12 @@ class QualityRuleTests(unittest.TestCase):
 
     def test_markup_stripped_evidence_spans_still_point_at_original_text(self):
         translation = '中文{w}iPhone'
-        findings = quality.check_subject(subject(translation=translation))
+        findings = quality.check_subject(
+            subject(translation=translation),
+            policy=quality.normalize_policy(
+                {'rules': {'suspicious_english_residue': 'warning'}}
+            ),
+        )
 
         residue = [
             finding
@@ -178,7 +216,12 @@ class QualityRuleTests(unittest.TestCase):
                 )
 
     def test_english_suffix_adjacent_honors_allowlist(self):
-        policy = quality.normalize_policy({'allowed_latin_tokens': ['cos']})
+        policy = quality.normalize_policy(
+            {
+                'rules': {'english_suffix_adjacent': 'warning'},
+                'allowed_latin_tokens': ['cos'],
+            }
+        )
         findings = quality.check_subject(
             subject(translation='中文cos'),
             policy=policy,
