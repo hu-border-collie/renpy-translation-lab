@@ -117,6 +117,16 @@ REVISION_PROPOSAL_COPY = {
     "dialog_title": "选择润色提案 JSONL",
     "corpus_dialog_title": "选择配套语料 manifest（没有则取消）",
     "running": "正在校验提案并生成订正预览。",
+    "result_title": "润色提案候选",
+    "select_action": "筛选并生成订正预览",
+    "selection_hint": "只会把明确勾选的有效候选交给订正预览；无效、过期、冲突和无需修改项不能写回。",
+    "selection_dialog_title": "筛选并选择润色候选",
+    "selection_valid_only": "只看有效候选",
+    "selection_select_all": "全选当前有效",
+    "selection_clear": "清空选择",
+    "selection_confirm": "生成订正预览",
+    "selection_running": "正在确认润色候选并生成订正预览。",
+    "selection_stale": "项目或提案文件已变化，候选会话已过期；请重新导入当前项目。",
 }
 
 REVISION_CORPUS_COPY = {

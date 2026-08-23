@@ -9,6 +9,7 @@ from unittest import mock
 import gemini_translate_batch as batch
 import revision_corpus
 import revision_proposals as proposals
+import revision_selection
 
 
 class RevisionProposalContractTests(unittest.TestCase):
@@ -528,6 +529,137 @@ class RevisionProposalImportTests(unittest.TestCase):
         written = self.rpy.read_text(encoding="utf-8")
         self.assertIn('new "第一处"', written)
         self.assertIn('new "只改第二处"', written)
+
+    def test_stage_selection_persists_candidates_without_preview_or_writeback(self):
+        before = self.rpy.read_bytes()
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(self._proposal())),
+            stage=True,
+        )
+
+        self.assertEqual(result["status"], "staged")
+        self.assertNotIn("manifest", result["paths"])
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["selectable_count"], 1)
+        self.assertTrue(Path(result["paths"]["staged_selection"]).is_file())
+        self.assertEqual(self.rpy.read_bytes(), before)
+
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(
+            [candidate["identity_v2"] for candidate in stage["candidates"]],
+            [self._proposal()["identity_v2"]],
+        )
+        self.assertEqual(
+            len(revision_selection.filter_candidates(stage, valid_only=True)),
+            1,
+        )
+
+    def test_confirmed_stage_selection_generates_preview_and_binds_selection(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        identity = stage["candidates"][0]["identity_v2"]
+        request = revision_selection.make_selection_request(stage, [identity])
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "previewed")
+        self.assertTrue(Path(result["paths"]["manifest"]).is_file())
+        proposal_state = result["manifest"]["proposal_import"]
+        self.assertEqual(proposal_state["selected_identity_v2"], [identity])
+        self.assertEqual(
+            proposal_state["staged_selection_digest"],
+            stage["staged_selection_digest"],
+        )
+        self.assertTrue(proposal_state["selection_sha256"])
+        self.assertEqual(self.rpy.read_text(encoding="utf-8").count("您好"), 0)
+        selection_path.write_text(json.dumps({"changed": True}), encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "selection changed"):
+            batch.apply_revisions(result["paths"]["manifest"], force=True)
+
+    def test_confirmed_stage_selection_is_stale_after_source_change(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "源文件发生变化 {name}"\n',
+            encoding="utf-8",
+        )
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "stale")
+        self.assertNotIn("manifest", result["paths"])
+
+    def test_confirmed_stage_selection_is_stale_after_project_switch(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        batch.legacy.BASE_DIR = str(self.root / "other-game")
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "stale")
+        self.assertTrue(
+            any(
+                item["code"] == "PROJECT_IDENTITY_STALE"
+                for item in result["diagnostics"]
+            )
+        )
+
+    def test_stage_duplicate_identity_marks_all_occurrences_as_conflict(self):
+        row = self._proposal()
+        staged = batch.import_revision_proposals(
+            str(self._write_proposal(row)),
+            stage=True,
+        )
+        duplicate_path = self.root / "duplicate.jsonl"
+        duplicate_path.write_text(
+            json.dumps(row, ensure_ascii=False) + "\n" + json.dumps(row, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        duplicate = batch.import_revision_proposals(str(duplicate_path), stage=True)
+
+        self.assertEqual(duplicate["conflict_count"], 2)
+        self.assertEqual(duplicate["selectable_count"], 0)
+        self.assertEqual(
+            {candidate["status"] for candidate in duplicate["candidates"]},
+            {revision_selection.STATUS_CONFLICT},
+        )
+        self.assertEqual(staged["status"], "staged")
 
 
 if __name__ == "__main__":

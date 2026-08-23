@@ -494,6 +494,38 @@ def build_cli_commands(
                     ),
                 )
             )
+            staged_selection_path = str(
+                (
+                    proposal_import.get("staged_selection_path")
+                    if isinstance(proposal_import, dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            selection_path = str(
+                (
+                    proposal_import.get("selection_path")
+                    if isinstance(proposal_import, dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if staged_selection_path and selection_path:
+                commands.append(
+                    DiagnosticsCommand(
+                        label="确认润色候选并生成预览",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            [
+                                "confirm-revision-proposals",
+                                staged_selection_path,
+                                "--selection-file",
+                                selection_path,
+                            ],
+                        ),
+                    )
+                )
         if not manifest.get("submit_disabled"):
             commands.extend(
                 build_cloud_job_commands(

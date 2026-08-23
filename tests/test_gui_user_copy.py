@@ -6,6 +6,7 @@ from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,
     LITELLM_CACHE_COPY,
     REVISION_CORPUS_COPY,
+    REVISION_PROPOSAL_COPY,
     check_status_label,
     doctor_mode_label,
     format_bootstrap_fact,
@@ -21,6 +22,11 @@ from gui_qt.user_copy import (
 
 
 class GuiUserCopyTests(unittest.TestCase):
+    def test_revision_proposal_copy_covers_staged_selection_actions(self):
+        self.assertIn("明确勾选", REVISION_PROPOSAL_COPY["selection_hint"])
+        self.assertEqual(REVISION_PROPOSAL_COPY["selection_select_all"], "全选当前有效")
+        self.assertEqual(REVISION_PROPOSAL_COPY["selection_clear"], "清空选择")
+
     def test_revision_corpus_copy_explains_read_only_gates_and_actions(self):
         self.assertIn("只读", REVISION_CORPUS_COPY["tooltip"])
         self.assertIn("环境检查", REVISION_CORPUS_COPY["gate_doctor"])

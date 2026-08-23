@@ -35,6 +35,8 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "reuse.json", "manifest.json"]
         if command == "import-revision-proposals":
             return [command, "proposals.jsonl"]
+        if command == "confirm-revision-proposals":
+            return [command, "staged_selection.json", "--selection-file", "selection.json"]
         if command == "merge-keywords-to-glossary":
             return [command, "candidates.jsonl"]
         if command in {
@@ -1386,6 +1388,57 @@ class BatchCliContractTests(unittest.TestCase):
             "C:/jobs/import/report.json",
         )
 
+    def test_staged_selection_machine_envelope_exposes_candidates_and_artifacts(self):
+        args = SimpleNamespace(command="import-revision-proposals", stage=True)
+        envelope = batch.build_machine_success_envelope(
+            "import-revision-proposals",
+            {
+                "status": "staged",
+                "stage": {"kind": "revision_proposal_staged_selection"},
+                "candidate_count": 2,
+                "selectable_count": 1,
+                "invalid_count": 1,
+                "candidates": [{"identity_v2": "occ-1", "status": "valid"}],
+                "paths": {
+                    "staged_selection": "C:/jobs/import/staged_selection.json",
+                    "staged_selection_report": "C:/jobs/import/report.json",
+                },
+            },
+            args,
+        )
+
+        self.assertEqual(envelope["status"], "staged")
+        self.assertEqual(envelope["result"]["selectable_count"], 1)
+        self.assertEqual(envelope["result"]["candidates"][0]["identity_v2"], "occ-1")
+        self.assertEqual(
+            envelope["artifacts"]["staged_selection"],
+            "C:/jobs/import/staged_selection.json",
+        )
+
+    def test_confirm_selection_machine_envelope_exposes_preview_artifacts(self):
+        args = SimpleNamespace(command="confirm-revision-proposals")
+        envelope = batch.build_machine_success_envelope(
+            "confirm-revision-proposals",
+            {
+                "status": "previewed",
+                "selected_count": 1,
+                "selection_digest": "digest",
+                "paths": {
+                    "manifest": "C:/jobs/confirmed/manifest.json",
+                    "revision_preview_jsonl": "C:/jobs/confirmed/revision_preview.jsonl",
+                },
+            },
+            args,
+        )
+
+        self.assertEqual(envelope["status"], "previewed")
+        self.assertEqual(envelope["result"]["selected_count"], 1)
+        self.assertEqual(envelope["result"]["selection_digest"], "digest")
+        self.assertEqual(
+            envelope["artifacts"]["manifest"],
+            "C:/jobs/confirmed/manifest.json",
+        )
+
     def test_quality_ack_machine_envelope_is_stable_and_reports_no_work(self):
         listed_args = SimpleNamespace(finding_ids=[], all_findings=False)
         listed = batch.build_machine_success_envelope(
@@ -2041,6 +2094,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"status": "previewed", "paths": {}},
                             )
                         )
+                    elif command == "confirm-revision-proposals":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "confirm_revision_proposals",
+                                return_value={"status": "no_op", "paths": {}},
+                            )
+                        )
                     elif command == "export-project-snapshot":
                         handler_patches.append(
                             mock.patch.object(
@@ -2121,6 +2182,13 @@ class BatchCliContractTests(unittest.TestCase):
                             argv = ["export-revision-corpus"]
                         elif command == "import-revision-proposals":
                             argv = ["import-revision-proposals", "proposals.jsonl"]
+                        elif command == "confirm-revision-proposals":
+                            argv = [
+                                "confirm-revision-proposals",
+                                "staged_selection.json",
+                                "--selection-file",
+                                "selection.json",
+                            ]
                         elif command == "export-project-snapshot":
                             argv = ["export-project-snapshot", "--version-id", "test-version"]
                         elif command == "reconcile-project-snapshots":
@@ -2163,6 +2231,7 @@ class BatchCliContractTests(unittest.TestCase):
                 if command in {
                     "export-revision-corpus",
                     "import-revision-proposals",
+                    "confirm-revision-proposals",
                     "export-project-snapshot",
                     "reconcile-project-snapshots",
                     "build-translation-records",

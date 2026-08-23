@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 
+import cli_contract
+
 from .revision_report import summarize_revision_preview_output
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
@@ -21,7 +23,12 @@ from .translation_workflow import (
     extract_manifest_path,
     manifest_path_for_package,
 )
-from .user_copy import format_job_state_fact, format_manifest_path_fact, job_state_label
+from .user_copy import (
+    REVISION_PROPOSAL_COPY,
+    format_job_state_fact,
+    format_manifest_path_fact,
+    job_state_label,
+)
 
 
 def extract_created_revision_package_path(output: str) -> str:
@@ -257,12 +264,22 @@ class RevisionBatchWorkflow:
 
 
 class RevisionProposalImportWorkflow:
-    """One-step local proposal import that stops at the revision preview gate."""
+    """Import proposals, optionally stopping at a shared staged-selection artifact."""
 
-    def __init__(self, proposal_path: str, corpus_manifest_path: str = ""):
+    def __init__(
+        self,
+        proposal_path: str,
+        corpus_manifest_path: str = "",
+        *,
+        stage: bool = False,
+        operation_identity: str = "",
+    ):
         self.proposal_path = proposal_path
         self.corpus_manifest_path = corpus_manifest_path
+        self.stage = bool(stage)
+        self.operation_identity = str(operation_identity or "")
         self.manifest_path = ""
+        self.stage_result: dict[str, object] | None = None
         self._pending = True
 
     def current_step(self) -> WorkflowStep | None:
@@ -271,15 +288,26 @@ class RevisionProposalImportWorkflow:
         args = ["import-revision-proposals", self.proposal_path]
         if self.corpus_manifest_path:
             args.extend(["--corpus-manifest", self.corpus_manifest_path])
+        if self.stage:
+            args.append("--stage")
+            if self.operation_identity:
+                args.extend(["--operation-identity", self.operation_identity])
+            args = [*args, "--strict-exit-codes", "--output", "json", "--non-interactive"]
         return WorkflowStep(
             key="import-revision-proposals",
             args=args,
             heading="正在导入润色提案",
-            message="正在校验身份、快照和格式，并生成安全订正预览。",
+            message=(
+                "正在校验身份、快照和格式，并准备候选会话。"
+                if self.stage
+                else "正在校验身份、快照和格式，并生成安全订正预览。"
+            ),
         )
 
     def complete_current_step(self, exit_code: int, output: str) -> WorkflowUpdate:
         self._pending = False
+        if self.stage:
+            return self._complete_staged_import(exit_code, output)
         self.manifest_path = _extract_line_value(output, "Manifest:")
         status = _extract_line_value(output, "Revision proposal import status:")
         facts = self._facts()
@@ -304,7 +332,188 @@ class RevisionProposalImportWorkflow:
             facts=facts,
         )
 
+    def _complete_staged_import(self, exit_code: int, output: str) -> WorkflowUpdate:
+        try:
+            envelope = cli_contract.parse_result_envelope(output)
+        except ValueError:
+            return WorkflowUpdate(
+                status="failed",
+                heading="润色提案导入结果不可识别",
+                message="导入没有返回可识别的机器结果；请查看诊断日志后重试。",
+                facts=[],
+            )
+        result = envelope.get("result")
+        result_map = result if isinstance(result, dict) else {}
+        artifacts = envelope.get("artifacts")
+        artifact_map = artifacts if isinstance(artifacts, dict) else {}
+        self.stage_result = {
+            **result_map,
+            "status": str(envelope.get("status") or ""),
+            "ok": envelope.get("ok") is True,
+            "paths": dict(artifact_map),
+            "candidates": list(result_map.get("candidates") or []),
+        }
+        if exit_code != 0 or envelope.get("ok") is not True:
+            error = envelope.get("error")
+            error_map = error if isinstance(error, dict) else {}
+            code = str(error_map.get("code") or "UNKNOWN_ERROR")
+            return WorkflowUpdate(
+                status="failed",
+                heading="润色提案导入失败",
+                message="导入没有完成；请根据诊断报告修正提案后重试。",
+                facts=[f"错误码：{code}"],
+            )
+        facts = [
+            f"候选总数：{int(result_map.get('candidate_count') or 0)}",
+            f"有效候选：{int(result_map.get('selectable_count') or 0)}",
+            f"初始选择：{int(result_map.get('selected_count') or 0)}",
+            f"未选择：{int(result_map.get('unselected_count') or 0)}",
+            f"无需修改：{int(result_map.get('no_op_count') or 0)}",
+            f"无效：{int(result_map.get('invalid_count') or 0)}",
+            f"过期：{int(result_map.get('stale_count') or 0)}",
+            f"冲突：{int(result_map.get('conflict_count') or 0)}",
+        ]
+        if artifact_map.get("staged_selection"):
+            facts.append(f"候选会话：{artifact_map['staged_selection']}")
+        session_status = str(result_map.get("session_status") or "")
+        if session_status == "stale":
+            return WorkflowUpdate(
+                status="warning",
+                heading="润色提案已导入，但会话已过期",
+                message=REVISION_PROPOSAL_COPY["selection_stale"],
+                facts=facts,
+            )
+        if int(result_map.get("selectable_count") or 0) <= 0:
+            return WorkflowUpdate(
+                status="done",
+                heading="润色提案已导入，但没有有效候选",
+                message="无效、过期或冲突候选不能进入订正预览。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="润色提案已导入",
+            message="请筛选并明确勾选有效候选；确认后才会生成订正预览。",
+            facts=facts,
+        )
+
     def _facts(self) -> list[str]:
         if self.manifest_path:
             return [format_manifest_path_fact(self.manifest_path)]
         return []
+
+    def stale_update(self) -> WorkflowUpdate:
+        """Discard a late import result after the project identity changed."""
+        self._pending = False
+        self.stage_result = None
+        self.manifest_path = ""
+        return WorkflowUpdate(
+            status="stale",
+            heading="润色提案导入会话已过期",
+            message="项目或提案文件已变化，迟到结果已丢弃；请重新导入当前项目。",
+            facts=[],
+        )
+
+
+class RevisionProposalConfirmWorkflow:
+    """Confirm a serialized staged selection and run the existing preview gate."""
+
+    def __init__(
+        self,
+        staged_selection_path: str,
+        selection_path: str,
+        *,
+        operation_identity: str = "",
+    ):
+        self.staged_selection_path = staged_selection_path
+        self.selection_path = selection_path
+        self.operation_identity = str(operation_identity or "")
+        self.manifest_path = ""
+        self.result: dict[str, object] | None = None
+        self._pending = True
+
+    def current_step(self) -> WorkflowStep | None:
+        if not self._pending:
+            return None
+        return WorkflowStep(
+            key="confirm-revision-proposals",
+            args=[
+                "confirm-revision-proposals",
+                self.staged_selection_path,
+                "--selection-file",
+                self.selection_path,
+                "--strict-exit-codes",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+            heading="正在确认润色候选",
+            message=REVISION_PROPOSAL_COPY["selection_running"],
+        )
+
+    def complete_current_step(self, exit_code: int, output: str) -> WorkflowUpdate:
+        self._pending = False
+        try:
+            envelope = cli_contract.parse_result_envelope(output)
+        except ValueError:
+            return WorkflowUpdate(
+                status="failed",
+                heading="订正预览结果不可识别",
+                message="确认没有返回可识别的机器结果；请查看诊断日志后重试。",
+                facts=[],
+            )
+        result = envelope.get("result")
+        result_map = result if isinstance(result, dict) else {}
+        artifacts = envelope.get("artifacts")
+        artifact_map = artifacts if isinstance(artifacts, dict) else {}
+        self.result = {**result_map, "status": envelope.get("status") or "", "paths": dict(artifact_map)}
+        self.manifest_path = str(
+            artifact_map.get("manifest") or result_map.get("manifest_path") or ""
+        )
+        facts = [
+            f"选中候选：{int(result_map.get('selected_count') or 0)}",
+        ]
+        if self.manifest_path:
+            facts.insert(0, format_manifest_path_fact(self.manifest_path))
+        if exit_code != 0 or envelope.get("ok") is not True:
+            error = envelope.get("error")
+            error_map = error if isinstance(error, dict) else {}
+            facts.append(f"错误码：{error_map.get('code') or 'UNKNOWN_ERROR'}")
+            return WorkflowUpdate(
+                status="failed",
+                heading="所选润色候选未通过安全校验",
+                message="没有修改任何 .rpy；请重新导入或查看诊断报告。",
+                facts=facts,
+            )
+        status = str(envelope.get("status") or "")
+        if status in {"stale", "blocked", "partial"}:
+            return WorkflowUpdate(
+                status="failed",
+                heading="所选润色候选已过期或被阻止",
+                message="没有修改任何 .rpy；请重新导入当前语料并重新确认。",
+                facts=facts,
+            )
+        if status == "no_op":
+            return WorkflowUpdate(
+                status="done",
+                heading="所选润色候选无需写回",
+                message="确认的候选没有产生译文变化。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="所选润色候选预览已生成",
+            message="请检查订正预览；确认后可使用“写回订正”。",
+            facts=facts,
+        )
+
+    def stale_update(self) -> WorkflowUpdate:
+        self._pending = False
+        self.result = None
+        self.manifest_path = ""
+        return WorkflowUpdate(
+            status="stale",
+            heading="润色候选会话已过期",
+            message="项目或提案文件已变化，迟到结果已丢弃；请重新导入当前项目。",
+            facts=[],
+        )

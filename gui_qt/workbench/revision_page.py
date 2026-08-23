@@ -184,6 +184,39 @@ class RevisionPage(QFrame):
         self.corpus_result.setVisible(False)
         self.task_layout.root.addWidget(self.corpus_result)
 
+        self.proposal_result = QFrame(self.content_page)
+        self.proposal_result.setObjectName("revision_proposal_result")
+        self.proposal_result.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
+        proposal_layout = QGridLayout(self.proposal_result)
+        proposal_layout.setContentsMargins(12, 8, 12, 8)
+        proposal_layout.setHorizontalSpacing(10)
+        proposal_layout.setVerticalSpacing(4)
+        self.proposal_result_title = QLabel(REVISION_PROPOSAL_COPY["result_title"])
+        self.proposal_result_title.setObjectName("revision_proposal_result_title")
+        proposal_layout.addWidget(self.proposal_result_title, 0, 0, 1, 2)
+        self.proposal_result_summary = QLabel("")
+        self.proposal_result_summary.setObjectName("revision_proposal_result_summary")
+        self.proposal_result_summary.setWordWrap(True)
+        proposal_layout.addWidget(self.proposal_result_summary, 1, 0, 1, 2)
+        self.proposal_result_session = QLabel("")
+        self.proposal_result_session.setObjectName("revision_proposal_result_session")
+        self.proposal_result_session.setWordWrap(True)
+        self.proposal_result_session.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        proposal_layout.addWidget(self.proposal_result_session, 2, 0, 1, 2)
+        self.select_proposals_btn = QPushButton(REVISION_PROPOSAL_COPY["select_action"])
+        self.select_proposals_btn.setObjectName("revision_select_proposals_btn")
+        self.select_proposals_btn.setEnabled(False)
+        self.select_proposals_btn.clicked.connect(self._trigger_select_proposals)
+        proposal_layout.addWidget(self.select_proposals_btn, 3, 0)
+        proposal_layout.setColumnStretch(1, 1)
+        self.proposal_result.setVisible(False)
+        self.task_layout.root.addWidget(self.proposal_result)
+
         self.status_section = self.task_layout.add_status_section(
             TASK_PROJECT_GATE_COPY["status_section_title"]
         )
@@ -285,6 +318,44 @@ class RevisionPage(QFrame):
         """Return the last result for the coordinator's session snapshot."""
         return getattr(self, "_corpus_export_result", None)
 
+    def set_proposal_stage_result(self, result: dict[str, object] | None) -> None:
+        """Render the structured staged-selection summary without parsing stdout."""
+        self._proposal_stage_result = result
+        if result is None:
+            self.proposal_result.setVisible(False)
+            self.proposal_result_summary.setText("")
+            self.proposal_result_session.setText("")
+            self.select_proposals_btn.setEnabled(False)
+            self.task_layout.reflow()
+            self.updateGeometry()
+            return
+
+        self.proposal_result.setVisible(True)
+        self.proposal_result_summary.setText(
+            " · ".join(
+                (
+                    f"候选 {int(result.get('candidate_count') or 0)}",
+                    f"有效 {int(result.get('selectable_count') or 0)}",
+                    f"未选择 {int(result.get('unselected_count') or 0)}",
+                    f"无需修改 {int(result.get('no_op_count') or 0)}",
+                    f"无效 {int(result.get('invalid_count') or 0)}",
+                    f"过期 {int(result.get('stale_count') or 0)}",
+                    f"冲突 {int(result.get('conflict_count') or 0)}",
+                )
+            )
+        )
+        paths = result.get("paths") if isinstance(result, dict) else {}
+        stage_path = paths.get("staged_selection") if isinstance(paths, dict) else ""
+        self.proposal_result_session.setText(f"候选会话：{stage_path or '未记录'}")
+        self.select_proposals_btn.setEnabled(
+            int(result.get("selectable_count") or 0) > 0
+        )
+        self.task_layout.reflow()
+        self.updateGeometry()
+
+    def proposal_stage_result(self) -> dict[str, object] | None:
+        """Return the staged candidate summary for the coordinator/session."""
+        return getattr(self, "_proposal_stage_result", None)
 
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""
@@ -327,6 +398,11 @@ class RevisionPage(QFrame):
         self.set_corpus_export_result(
             getattr(session, "revision_corpus_export_result", None)
         )
+        self.set_proposal_stage_result(
+            getattr(session, "revision_proposal_stage_result", None)
+            if mode == WorkMode.REVISION
+            else None
+        )
 
     def set_task_running(self, running: bool) -> None:
         self._running = running
@@ -339,6 +415,7 @@ class RevisionPage(QFrame):
             self.review_findings_btn.setEnabled(False)
             self.export_corpus_btn.setEnabled(False)
             self.import_proposals_btn.setEnabled(False)
+            self.select_proposals_btn.setEnabled(False)
 
     def set_controls(
         self,
@@ -352,6 +429,7 @@ class RevisionPage(QFrame):
         findings_enabled: bool = False,
         export_enabled: bool = False,
         export_tooltip: str = "",
+        selection_enabled: bool = False,
     ) -> None:
         self.start_btn.setEnabled(start_enabled and not self._running)
         self.resume_btn.setVisible(resume_visible)
@@ -368,6 +446,11 @@ class RevisionPage(QFrame):
             export_tooltip or REVISION_CORPUS_COPY["tooltip"]
         )
         self.import_proposals_btn.setEnabled(start_enabled and not self._running)
+        self.select_proposals_btn.setEnabled(
+            selection_enabled
+            and self._active_mode == WorkMode.REVISION
+            and not self._running
+        )
         self.result_hint.setText(result_message)
         self.task_layout.reflow()
         self.updateGeometry()
@@ -377,6 +460,7 @@ class RevisionPage(QFrame):
         self.status_section.set_status("", "", "", [])
         self.status_section.set_progress(None)
         self.set_corpus_export_result(None)
+        self.set_proposal_stage_result(None)
         final_review = self._active_mode == WorkMode.FINAL_REVIEW
         self.set_controls(
             start_enabled=False,
@@ -433,6 +517,14 @@ class RevisionPage(QFrame):
             and self._actions.action is not None
         ):
             self._actions.action("export_revision_corpus")
+
+    def _trigger_select_proposals(self) -> None:
+        if (
+            not self._running
+            and self.select_proposals_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("select_revision_proposals")
 
     def _trigger_open_corpus_output(self) -> None:
         if (
