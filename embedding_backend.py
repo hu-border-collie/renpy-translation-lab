@@ -199,6 +199,25 @@ def _metadata_to_json(value: object) -> object:
     return value
 
 
+def validate_safe_metadata(
+    value: Mapping[str, object],
+    *,
+    field_name: str = 'metadata',
+) -> dict[str, object]:
+    """Return detached JSON metadata after recursive credential-shape checks.
+
+    Provider adapters use this before configuration data participates in an
+    endpoint identity. Credential-shaped fields are rejected rather than
+    redacted so secrets can never influence a persisted fingerprint.
+    """
+
+    frozen = _validate_metadata_mapping(value, field_name)
+    normalized = _metadata_to_json(frozen)
+    if not isinstance(normalized, dict):  # pragma: no cover - mapping guaranteed above
+        raise EmbeddingContractError(f'{field_name} must be an object')
+    return normalized
+
+
 def _task_type(value: object, field_name: str = 'task_type') -> EmbeddingTaskType:
     if isinstance(value, EmbeddingTaskType):
         return value
@@ -443,6 +462,8 @@ class EmbeddingBackend(Protocol):
 
 class CompatibilityCode(str, Enum):
     COMPATIBLE = 'compatible'
+    STORE_IDENTITY_MISSING = 'store_identity_missing'
+    STORE_IDENTITY_INVALID = 'store_identity_invalid'
     STORE_TASK_NOT_DOCUMENT = 'store_task_not_document'
     QUERY_TASK_NOT_QUERY = 'query_task_not_query'
     BACKEND_MISMATCH = 'backend_mismatch'
@@ -550,4 +571,43 @@ def check_store_query_compatibility(
             'Embedding identity mismatch; do not compare these vectors. '
             f'Rebuild the store with the selected query backend configuration ({fields}).'
         ),
+    )
+
+
+def check_persisted_store_query_compatibility(
+    store_identity_payload: object,
+    query_identity: EmbeddingIdentity,
+) -> EmbeddingCompatibilityReport:
+    """Fail closed when persisted store identity is absent, corrupt, or incompatible.
+
+    Invalid persisted fields are deliberately not echoed into the report, so
+    the diagnostic is safe to expose through logs or future doctor/GUI paths.
+    """
+
+    if not isinstance(query_identity, EmbeddingIdentity):
+        raise EmbeddingContractError('query_identity must be an EmbeddingIdentity')
+    if store_identity_payload is None:
+        mismatch = CompatibilityMismatch(
+            CompatibilityCode.STORE_IDENTITY_MISSING,
+            'embedding_identity',
+            'missing',
+            'required',
+        )
+    else:
+        try:
+            store_identity = EmbeddingIdentity.from_dict(store_identity_payload)
+        except (EmbeddingContractError, TypeError, ValueError):
+            mismatch = CompatibilityMismatch(
+                CompatibilityCode.STORE_IDENTITY_INVALID,
+                'embedding_identity',
+                'invalid',
+                'valid',
+            )
+        else:
+            return check_store_query_compatibility(store_identity, query_identity)
+    return EmbeddingCompatibilityReport(
+        compatible=False,
+        mismatches=(mismatch,),
+        action='rebuild_store',
+        message='Embedding store identity is unavailable; rebuild the store before retrieval.',
     )
