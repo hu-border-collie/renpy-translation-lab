@@ -133,3 +133,19 @@ def litellm_connection_identity(
             ),
         }
     )
+
+
+def revision_corpus_export_identity(*, game_root: object) -> str:
+    """Digest the project owner of one read-only corpus export.
+
+    The export scanner and its result are project-scoped.  Binding the
+    operation to the normalized game root lets the GUI discard a late result
+    after a project switch without reimplementing the scanner in the GUI.
+    """
+
+    return canonical_digest(
+        {
+            "operation": "export-revision-corpus",
+            "game_root": str(game_root or "").strip(),
+        }
+    )

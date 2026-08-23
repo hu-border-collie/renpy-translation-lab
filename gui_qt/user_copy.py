@@ -119,6 +119,29 @@ REVISION_PROPOSAL_COPY = {
     "running": "正在校验提案并生成订正预览。",
 }
 
+REVISION_CORPUS_COPY = {
+    "action": "导出润色语料",
+    "tooltip": (
+        "只读导出原文与当前译文的稳定 identity 语料；不会修改 .rpy。"
+        "需要当前项目已通过环境检查且存在可导出的译文。"
+    ),
+    "running": "正在导出润色语料；扫描期间不会修改游戏脚本。",
+    "gate_no_project": "请先选择项目。",
+    "gate_doctor": "请先完成并通过当前项目的环境检查。",
+    "gate_no_translations": "当前没有可导出的已有译文；请先准备或确认 TL 翻译文件。",
+    "gate_running": "已有任务正在运行，请等待任务结束后再导出。",
+    "gate_wrong_mode": "请在订正页的批量模式中导出润色语料。",
+    "result_title": "润色语料导出结果",
+    "open_output_dir": "打开输出目录",
+    "copy_paths": "复制路径",
+    "empty_result": "没有可导出的润色译文。",
+    "success_message": "语料已生成；可交给人工或 Agent 通读和起草提案。",
+    "source_changed_message": "语料已生成，但扫描期间源文件发生变化；请重新导出以获得一致快照。",
+    "missing_artifact_message": "CLI 返回的导出 artifact 不完整；请查看运行日志并重试。",
+    "invalid_result_message": "导出没有返回可识别的机器结果；请查看运行日志并重试。",
+    "stale_message": "项目已切换，刚才的导出结果已丢弃；请在当前项目重新导出。",
+}
+
 USAGE_LEDGER_COPY = {
     "empty": "模型用量：当前项目暂无实际响应记录",
     "load_error": "模型用量账本读取失败，统计暂不可用",

@@ -1,9 +1,12 @@
 """Persistent revision page for the workbench stack (#176 P4)."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGridLayout,
+    QLabel,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -12,7 +15,12 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
-from ..user_copy import REVISION_PROPOSAL_COPY, TASK_PROJECT_GATE_COPY
+from ..revision_corpus_report import RevisionCorpusExportResult
+from ..user_copy import (
+    REVISION_CORPUS_COPY,
+    REVISION_PROPOSAL_COPY,
+    TASK_PROJECT_GATE_COPY,
+)
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -76,6 +84,13 @@ class RevisionPage(QFrame):
         self.start_btn.clicked.connect(self._trigger_start)
         self.actions.add_action(self.start_btn, min_width=120)
 
+        self.export_corpus_btn = QPushButton(REVISION_CORPUS_COPY["action"])
+        self.export_corpus_btn.setObjectName("revision_export_corpus_btn")
+        self.export_corpus_btn.setEnabled(False)
+        self.export_corpus_btn.setToolTip(REVISION_CORPUS_COPY["tooltip"])
+        self.export_corpus_btn.clicked.connect(self._trigger_export_corpus)
+        self.actions.add_action(self.export_corpus_btn, min_width=128)
+
         self.import_proposals_btn = QPushButton(REVISION_PROPOSAL_COPY["action"])
         self.import_proposals_btn.setObjectName("revision_import_proposals_btn")
         self.import_proposals_btn.setEnabled(False)
@@ -113,6 +128,61 @@ class RevisionPage(QFrame):
         self.result_hint = self.task_layout.add_result_hint(
             "生成预览后，可在此确认订正结果并安全写回。"
         )
+
+        self.corpus_result = QFrame(self.content_page)
+        self.corpus_result.setObjectName("revision_corpus_result")
+        self.corpus_result.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Minimum,
+        )
+        corpus_layout = QGridLayout(self.corpus_result)
+        corpus_layout.setContentsMargins(12, 10, 12, 10)
+        corpus_layout.setHorizontalSpacing(10)
+        corpus_layout.setVerticalSpacing(5)
+        self.corpus_result_title = QLabel(REVISION_CORPUS_COPY["result_title"])
+        self.corpus_result_title.setObjectName("revision_corpus_result_title")
+        corpus_layout.addWidget(self.corpus_result_title, 0, 0, 1, 2)
+
+        self.corpus_result_summary = QLabel("")
+        self.corpus_result_summary.setObjectName("revision_corpus_result_summary")
+        self.corpus_result_summary.setWordWrap(True)
+        corpus_layout.addWidget(self.corpus_result_summary, 1, 0, 1, 2)
+
+        self.corpus_result_created_at = QLabel("")
+        self.corpus_result_created_at.setObjectName(
+            "revision_corpus_result_created_at"
+        )
+        self.corpus_result_created_at.setWordWrap(True)
+        corpus_layout.addWidget(self.corpus_result_created_at, 2, 0, 1, 2)
+
+        self.corpus_result_paths = QLabel("")
+        self.corpus_result_paths.setObjectName("revision_corpus_result_paths")
+        self.corpus_result_paths.setWordWrap(True)
+        self.corpus_result_paths.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        corpus_layout.addWidget(self.corpus_result_paths, 3, 0, 1, 2)
+
+        corpus_actions = QFrame(self.corpus_result)
+        corpus_actions_layout = QGridLayout(corpus_actions)
+        corpus_actions_layout.setContentsMargins(0, 2, 0, 0)
+        corpus_actions_layout.setHorizontalSpacing(8)
+        self.corpus_open_output_btn = QPushButton(
+            REVISION_CORPUS_COPY["open_output_dir"]
+        )
+        self.corpus_open_output_btn.setObjectName("revision_corpus_open_output_btn")
+        self.corpus_open_output_btn.setEnabled(False)
+        self.corpus_open_output_btn.clicked.connect(self._trigger_open_corpus_output)
+        corpus_actions_layout.addWidget(self.corpus_open_output_btn, 0, 0)
+        self.corpus_copy_paths_btn = QPushButton(REVISION_CORPUS_COPY["copy_paths"])
+        self.corpus_copy_paths_btn.setObjectName("revision_corpus_copy_paths_btn")
+        self.corpus_copy_paths_btn.setEnabled(False)
+        self.corpus_copy_paths_btn.clicked.connect(self._trigger_copy_corpus_paths)
+        corpus_actions_layout.addWidget(self.corpus_copy_paths_btn, 0, 1)
+        corpus_actions_layout.setColumnStretch(2, 1)
+        corpus_layout.addWidget(corpus_actions, 4, 0, 1, 2)
+        self.corpus_result.setVisible(False)
+        self.task_layout.root.addWidget(self.corpus_result)
 
         self.status_section = self.task_layout.add_status_section(
             TASK_PROJECT_GATE_COPY["status_section_title"]
@@ -173,6 +243,48 @@ class RevisionPage(QFrame):
         )
         self.status_section.set_details(getattr(summary, "findings", None))
 
+    def set_corpus_export_result(
+        self,
+        result: RevisionCorpusExportResult | None,
+    ) -> None:
+        """Render the structured corpus artifact result independently of writeback."""
+        self._corpus_export_result = result
+        if result is None:
+            self.corpus_result.setVisible(False)
+            self.corpus_result_summary.setText("")
+            self.corpus_result_created_at.setText("")
+            self.corpus_result_paths.setText("")
+            self.corpus_open_output_btn.setEnabled(False)
+            self.corpus_copy_paths_btn.setEnabled(False)
+            self.task_layout.reflow()
+            self.updateGeometry()
+            return
+
+        self.corpus_result.setVisible(True)
+        self.corpus_result_summary.setText(
+            f"条目数：{result.item_count} · 文件数：{result.file_count}"
+        )
+        self.corpus_result_created_at.setText(
+            f"生成时间：{result.created_at or '未读取（请检查 manifest）'}"
+        )
+        self.corpus_result_paths.setText(
+            "\n".join(
+                (
+                    f"JSONL：{result.jsonl_path}",
+                    f"Markdown：{result.markdown_path}",
+                    f"manifest：{result.manifest_path}",
+                )
+            )
+        )
+        self.corpus_open_output_btn.setEnabled(bool(result.output_dir))
+        self.corpus_copy_paths_btn.setEnabled(result.has_paths)
+        self.task_layout.reflow()
+        self.updateGeometry()
+
+    def corpus_export_result(self) -> RevisionCorpusExportResult | None:
+        """Return the last result for the coordinator's session snapshot."""
+        return getattr(self, "_corpus_export_result", None)
+
 
     def workflow_status_snapshot(self) -> tuple[str, str, str, list[str]]:
         """Return (status, heading, message, facts) for session freeze."""
@@ -211,7 +323,10 @@ class RevisionPage(QFrame):
             if final_review
             else "生成预览后，可在此确认订正结果并安全写回。"
         )
-        del session
+        self.export_corpus_btn.setVisible(mode == WorkMode.REVISION)
+        self.set_corpus_export_result(
+            getattr(session, "revision_corpus_export_result", None)
+        )
 
     def set_task_running(self, running: bool) -> None:
         self._running = running
@@ -222,6 +337,7 @@ class RevisionPage(QFrame):
             self.resume_btn.setEnabled(False)
             self.writeback_btn.setEnabled(False)
             self.review_findings_btn.setEnabled(False)
+            self.export_corpus_btn.setEnabled(False)
             self.import_proposals_btn.setEnabled(False)
 
     def set_controls(
@@ -234,6 +350,8 @@ class RevisionPage(QFrame):
         writeback_enabled: bool,
         result_message: str,
         findings_enabled: bool = False,
+        export_enabled: bool = False,
+        export_tooltip: str = "",
     ) -> None:
         self.start_btn.setEnabled(start_enabled and not self._running)
         self.resume_btn.setVisible(resume_visible)
@@ -241,6 +359,14 @@ class RevisionPage(QFrame):
         self.resume_btn.setEnabled(resume_enabled and not self._running)
         self.writeback_btn.setEnabled(writeback_enabled and not self._running)
         self.review_findings_btn.setEnabled(findings_enabled and not self._running)
+        self.export_corpus_btn.setEnabled(
+            export_enabled
+            and self._active_mode == WorkMode.REVISION
+            and not self._running
+        )
+        self.export_corpus_btn.setToolTip(
+            export_tooltip or REVISION_CORPUS_COPY["tooltip"]
+        )
         self.import_proposals_btn.setEnabled(start_enabled and not self._running)
         self.result_hint.setText(result_message)
         self.task_layout.reflow()
@@ -250,6 +376,7 @@ class RevisionPage(QFrame):
         self.set_task_running(False)
         self.status_section.set_status("", "", "", [])
         self.status_section.set_progress(None)
+        self.set_corpus_export_result(None)
         final_review = self._active_mode == WorkMode.FINAL_REVIEW
         self.set_controls(
             start_enabled=False,
@@ -258,6 +385,8 @@ class RevisionPage(QFrame):
             resume_label="继续审查" if final_review else "继续订正",
             writeback_enabled=False,
             result_message="项目已切换；请先完成环境检查并重新生成订正预览。",
+            export_enabled=False,
+            export_tooltip=REVISION_CORPUS_COPY["gate_no_project"],
         )
 
     def _trigger_mode_change(self) -> None:
@@ -296,6 +425,28 @@ class RevisionPage(QFrame):
             and self._actions.action is not None
         ):
             self._actions.action("import_revision_proposals")
+
+    def _trigger_export_corpus(self) -> None:
+        if (
+            not self._running
+            and self.export_corpus_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("export_revision_corpus")
+
+    def _trigger_open_corpus_output(self) -> None:
+        if (
+            self.corpus_open_output_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("open_revision_corpus_output")
+
+    def _trigger_copy_corpus_paths(self) -> None:
+        if (
+            self.corpus_copy_paths_btn.isEnabled()
+            and self._actions.action is not None
+        ):
+            self._actions.action("copy_revision_corpus_paths")
 
     def _trigger_writeback(self) -> None:
         if (

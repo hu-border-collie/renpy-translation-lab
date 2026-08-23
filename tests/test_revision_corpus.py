@@ -517,6 +517,7 @@ class RevisionCorpusExportTests(unittest.TestCase):
         self.assertTrue(envelope["ok"])
         self.assertEqual(envelope["command"], "export-revision-corpus")
         self.assertEqual(envelope["status"], "completed")
+        self.assertEqual(envelope["result"]["output_dir"], "C:/out")
         self.assertEqual(envelope["result"]["item_count"], 5)
         self.assertEqual(envelope["result"]["file_count"], 2)
         self.assertEqual(
@@ -526,6 +527,10 @@ class RevisionCorpusExportTests(unittest.TestCase):
         self.assertEqual(
             envelope["artifacts"]["corpus_manifest"],
             "C:/out/revision_corpus_manifest.json",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["corpus_markdown"],
+            "C:/out/revision_corpus.md",
         )
 
     def test_end_to_end_cli_export(self):
