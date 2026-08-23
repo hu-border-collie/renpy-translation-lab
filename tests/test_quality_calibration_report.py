@@ -143,6 +143,47 @@ class QualityCalibrationReportTests(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         self.assertIn("file not found", stderr.getvalue())
 
+    def test_main_unwritable_output_returns_error_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_findings(Path(tmp) / "quality_findings.jsonl")
+            missing_dir_output = Path(tmp) / "missing-dir" / "calibration.md"
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                exit_code = report.main([str(path), "-o", str(missing_dir_output)])
+
+        self.assertEqual(exit_code, 2)
+        self.assertIn("could not write calibration report", stderr.getvalue())
+
+    def test_output_file_uses_lf_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_findings(Path(tmp) / "quality_findings.jsonl")
+            output = Path(tmp) / "calibration.md"
+
+            exit_code = report.main([str(path), "-o", str(output)])
+            data = output.read_bytes()
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn(b"\r\n", data)
+        self.assertNotIn(b"\r", data)
+        self.assertTrue(data.endswith(b"\n"))
+
+    def test_pinned_generated_at_makes_reruns_byte_identical(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_findings(Path(tmp) / "quality_findings.jsonl")
+            first = Path(tmp) / "first.md"
+            second = Path(tmp) / "second.md"
+            argv = [str(path), "--generated-at", "2026-01-01T00:00:00+00:00"]
+
+            self.assertEqual(report.main([*argv, "-o", str(first)]), 0)
+            self.assertEqual(report.main([*argv, "-o", str(second)]), 0)
+
+            first_bytes = first.read_bytes()
+            second_bytes = second.read_bytes()
+
+        self.assertIn(b"- Generated: 2026-01-01T00:00:00+00:00", first_bytes)
+        self.assertEqual(first_bytes, second_bytes)
+
     def test_load_report_findings_rejects_malformed_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "quality_findings.jsonl"

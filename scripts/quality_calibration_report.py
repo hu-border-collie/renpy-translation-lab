@@ -14,6 +14,10 @@ Usage::
 
 Rows are loaded with ``translation_quality.load_findings(strict=True)`` so a
 malformed report fails loudly instead of silently skewing the baseline.
+
+Baseline files are written with LF line endings on every platform, and
+``--generated-at`` pins the header timestamp so reruns (or runs on different
+machines) stay byte-identical for diffing.
 """
 
 from __future__ import annotations
@@ -226,6 +230,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SAMPLE_LIMIT,
         help=f"Maximum sample rows per reason code (default: {DEFAULT_SAMPLE_LIMIT})",
     )
+    parser.add_argument(
+        "--generated-at",
+        default=None,
+        help=(
+            "Pin the header timestamp (e.g. reuse the value from an earlier"
+            " baseline) so reruns are byte-identical; defaults to current UTC time"
+        ),
+    )
     return parser
 
 
@@ -240,10 +252,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             findings,
             source_path=args.findings,
             sample_limit=args.sample_limit,
+            generated_at=args.generated_at,
         )
         if args.output:
             output_path = Path(args.output)
-            output_path.write_text(markdown, encoding="utf-8")
+            try:
+                output_path.write_text(
+                    markdown, encoding="utf-8", newline="\n"
+                )
+            except OSError as exc:
+                raise CalibrationReportError(
+                    f"could not write calibration report: {output_path}: {exc}"
+                ) from exc
             print(f"Calibration report written to: {output_path}")
         else:
             sys.stdout.write(markdown)

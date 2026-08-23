@@ -41,6 +41,10 @@ python scripts/quality_calibration_report.py /path/to/quality_findings.jsonl \
 脚本以 `translation_quality.load_findings(strict=True)` 读取，报告文件格式
 损坏会直接报错，避免静默产出失真的基线。
 
+基线文件始终以 LF 换行写出；生成要提交或跨机器对比的基线时，用
+`--generated-at` 固定头部时间戳（可沿用上一版基线的取值），保证重跑字节
+一致，两版基线 diff 只反映 findings 变化。
+
 ## B 线：真实项目执行步骤
 
 1. 在真实项目包上运行 `check`，从标准输出或 manifest 的
