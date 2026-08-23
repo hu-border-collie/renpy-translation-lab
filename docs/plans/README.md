@@ -21,8 +21,12 @@
   本文继续作为 reconciliation、coverage 下游门禁和后续引擎阶段的合同基线。
   当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
 - [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](issue-346-implementation-plan.md)：
-  基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；P0–P4 不依赖 #341，P5 与 #341
-  联动收口。决策表 D1–D7 需在 issue #346 内定稿后方可进入 P1 编码。
+  基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；D1–D7 已冻结，P1 纯核心已合并，
+  P2–P5 继续按本文边界推进。
+- [#347 设计 P0：耐久同步执行器、崩溃恢复与统一安全链路](issue-347-durable-sync-executor-plan.md)：
+  基于 `main@ed07a99` 冻结 Run/Request/Attempt 状态机、SQLite 事务边界、
+  `outcome_unknown` 恢复语义、usage 去重、统一 result/check/preview/apply 接缝、
+  CLI JSON 合同、fault-injection 矩阵及与 #346/#341/#348 的所有权边界。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
   A1 离线语料与 A3 校准报告工具的使用方法，以及 B 线真实项目统计、
   抽样标注、A2 调参与重跑对比的执行步骤。
