@@ -15,6 +15,9 @@ python -m unittest tests.test_quality_real_samples -v
 
 覆盖范围与 `translation_quality.ALL_REASON_CODES` 强制一致，新增首版规则时测试会提醒补样本。
 
+真实项目校准基线的数量统计用 `scripts/quality_calibration_report.py` 生成，完整执行流程见
+[#364 校准执行手册](../../../docs/plans/issue-364-calibration-runbook.md)。
+
 ## 格式
 
 `samples.json` 的 `cases` 每个元素：
