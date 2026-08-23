@@ -1015,8 +1015,13 @@ def build_translation_plan(
             mode=translation_core.MODE_TRANSLATION,
         )
         request_id = build_request_id(plan_id, chunk_id, expected_ids)
-        generation = dict(generation_config) if generation_config is not None else default_generation_config()
-        transport = dict(transport_metadata or {})
+        # Credential-shaped values are redacted before they can enter the
+        # request at all: serialized requests, logs, and fingerprints only
+        # ever see the redaction marker.
+        generation = redact_sensitive(
+            dict(generation_config) if generation_config is not None else default_generation_config()
+        )
+        transport = redact_sensitive(dict(transport_metadata or {}))
         if strategy == STRATEGY_GEMINI_BATCH:
             transport.setdefault('batch_key', chunk_id)
         elif strategy == STRATEGY_SYNC:

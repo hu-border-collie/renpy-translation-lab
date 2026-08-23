@@ -436,6 +436,32 @@ class PlanBuildTests(unittest.TestCase):
         self.assertNotIn('super-secret', rendered)
         self.assertIn(translation_plan.REDACTED_VALUE, rendered)
 
+    def test_request_redacts_credential_shaped_transport_metadata(self):
+        build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            transport_metadata={
+                'sync_stage': 'initial_translation',
+                'Authorization': 'Bearer transport-secret',
+                'x-api-key': 'transport-key',
+            },
+            generation_config={'temperature': 0.2, 'api_key': 'gen-secret'},
+        )
+        request = build.requests[0]
+        self.assertEqual(
+            request.transport_metadata['Authorization'],
+            translation_plan.REDACTED_VALUE,
+        )
+        self.assertEqual(
+            request.transport_metadata['x-api-key'],
+            translation_plan.REDACTED_VALUE,
+        )
+        self.assertEqual(request.transport_metadata['sync_stage'], 'initial_translation')
+        self.assertEqual(request.generation_config['api_key'], translation_plan.REDACTED_VALUE)
+        self.assertEqual(request.generation_config['temperature'], 0.2)
+        rendered = translation_plan.canonical_json(request.to_dict())
+        self.assertNotIn('transport-secret', rendered)
+        self.assertNotIn('gen-secret', rendered)
+
     def test_retrieval_budget_truncation_reaches_the_user_prompt(self):
         oversized = 'LOCKED TERMS:\n' + ('x' * 5000)
         baseline = build_fixture_plan(translation_plan.STRATEGY_SYNC)
