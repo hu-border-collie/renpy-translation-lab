@@ -190,6 +190,261 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual([chunk['source_char_count'] for chunk in chunks], [12, 10, 4])
         self.assertEqual(chunks[0]['items'][0]['text'], 'x' * 12)
 
+    def test_build_chunks_injects_lexical_glossary_without_rag(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = ['Dawn Chorus']
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Hello Dawn Chorus',
+                            'line': 0,
+                            'start': 0,
+                            'end': 17,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+
+        self.assertTrue(chunks)
+        hits = chunks[0].get('glossary_hits') or []
+        self.assertTrue(any(str(hit.get('source') or '') == 'Dawn Chorus' for hit in hits))
+        self.assertNotIn('story_hits', chunks[0])
+        user_prompt = str(chunks[0].get('user_prompt') or '')
+        self.assertIn('Existing glossary entries:', user_prompt)
+        self.assertIn('Preserve: Dawn Chorus', user_prompt)
+        self.assertNotIn('LOCKED TERMS:', user_prompt)
+
+    def test_build_chunks_lexical_glossary_covers_normalize_and_non_translatable(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        old_normalize_map = dict(batch_mod.legacy.NORMALIZE_TRANSLATION_MAP or {})
+        old_non_translatable = set(getattr(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', set()) or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = ['Mrs. Parker']
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {'setlist': '曲目单'}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Dawn Chorus'}
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Dawn Chorus setlist and Mrs. Parker',
+                            'line': 0,
+                            'start': 0,
+                            'end': 36,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = old_normalize_map
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = old_non_translatable
+
+        self.assertEqual(len(chunks), 1)
+        hits = chunks[0].get('glossary_hits') or []
+        pushed = {(hit.get('source'), hit.get('kind')) for hit in hits}
+        self.assertIn(('setlist', 'normalize'), pushed)
+        self.assertIn(('Dawn Chorus', 'non_translatable'), pushed)
+        self.assertIn(('Mrs. Parker', 'preserve'), pushed)
+        user_prompt = str(chunks[0].get('user_prompt') or '')
+        self.assertIn('Existing mapping: setlist -> 曲目单', user_prompt)
+        self.assertIn('Non-translatable: Dawn Chorus', user_prompt)
+        self.assertIn('Preserve: Mrs. Parker', user_prompt)
+        self.assertNotIn('LOCKED TERMS:', user_prompt)
+
+    def test_build_chunks_embeds_plan_request_fields(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Target line',
+                            'line': 0,
+                            'start': 0,
+                            'end': 11,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual(len(chunks), 1)
+        chunk = chunks[0]
+        for field in (
+            'request_id',
+            'plan_id',
+            'chunk_id',
+            'system_instruction',
+            'user_prompt',
+            'response_schema',
+            'prompt_fingerprint',
+            'request_fingerprint',
+        ):
+            self.assertTrue(chunk.get(field), field)
+
+        row = batch_mod.build_batch_request(chunk)
+        self.assertEqual(row['key'], chunk['key'])
+        self.assertEqual(row['request_id'], chunk['request_id'])
+        self.assertEqual(row['prompt_fingerprint'], chunk['prompt_fingerprint'])
+        self.assertEqual(row['request_fingerprint'], chunk['request_fingerprint'])
+        self.assertEqual(
+            row['request']['contents'][0]['parts'][0]['text'],
+            chunk['user_prompt'],
+        )
+        self.assertEqual(
+            row['request']['system_instruction']['parts'][0]['text'],
+            chunk['system_instruction'],
+        )
+        self.assertEqual(
+            row['request']['generation_config']['response_json_schema'],
+            chunk['response_schema'],
+        )
+
+    def test_build_retry_subchunk_rebuilds_canonical_plan_request(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        old_normalize_map = dict(batch_mod.legacy.NORMALIZE_TRANSLATION_MAP or {})
+        old_non_translatable = set(getattr(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', set()) or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = []
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Dawn Chorus'}
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Dawn Chorus',
+                            'line': 0,
+                            'start': 0,
+                            'end': 12,
+                            'block_name': 'script.rpy::start',
+                        },
+                        {
+                            'id': 'script.rpy:2:0',
+                            'text': 'Second line',
+                            'line': 1,
+                            'start': 0,
+                            'end': 11,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+            parent = chunks[0]
+            subchunk = batch_mod.build_retry_subchunk(parent, 0, 1, 1)
+            row = batch_mod.build_batch_request(subchunk)
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = old_normalize_map
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = old_non_translatable
+
+        self.assertTrue(batch_mod._chunk_has_plan_request(subchunk))
+        self.assertNotEqual(subchunk['request_id'], parent['request_id'])
+        self.assertEqual(row['request_id'], subchunk['request_id'])
+        system_text = row['request']['system_instruction']['parts'][0]['text']
+        self.assertIn('Keep all person names in English; do not translate names.', system_text)
+        self.assertIn('No markdown, no Pinyin, no explanations.', system_text)
+        user_prompt = row['request']['contents'][0]['parts'][0]['text']
+        self.assertIn('Non-translatable: Dawn Chorus', user_prompt)
+        self.assertIn('TARGET:', user_prompt)
+
     def test_format_history_hits_block_shows_source_translation_pair(self):
         block = batch_mod.format_history_hits_block([
             {
