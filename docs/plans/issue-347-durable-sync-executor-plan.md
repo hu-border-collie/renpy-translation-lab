@@ -91,6 +91,7 @@
 11. result、check、preview、apply 的 artifact hash 和 source identity 逐层绑定；任何下游重建都不能修改执行明细。
 12. manifest、日志、事件和 JSON 输出不含凭据值、敏感 header 或完整 prompt；完整 prompt 只存在受保护的 plan/request artifact 和本地数据库中。
 13. 任一 run 进入 `completed`、`completed_with_errors`、`failed` 或 `cancelled` 时，所有 active leaf 都必须是终态；不得遗留 `pending`、`in_flight` 或 `retryable_failed`，终态 run 的模型调度永远为零。
+14. `superseded` request 不得拥有 active attempt；父 request 转 `superseded` 前，触发派生的 attempt 必须在同一事务先转为终态，或其最近一次 attempt 本来已是终态。
 
 ## 3. 稳定 ID、Plan 引用与 freshness
 
@@ -196,7 +197,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | `prepared` | `dispatched`、`cancelled`、`terminal_failed` | attempt 行和预算 reservation 已提交，尚未声明开始外部调用；run-level guard 可在释放 reservation 后直接终结 |
 | `dispatched` | `succeeded`、`retryable_failed`、`terminal_failed`、`cancel_requested`、`outcome_unknown`、`late_succeeded_ignored`、`late_failed_ignored` | 标记必须在网络调用前提交；崩溃恢复保守处理；late 转换只允许 T3/T4 guard 失败时发生 |
 | `cancel_requested` | `cancelled`、`late_succeeded_ignored`、`late_failed_ignored`、`outcome_unknown` | 已尽力调用 backend cancel，但不能假设成功 |
-| `succeeded` | 无 | receipt、usage outbox、contract diagnostics 已原子提交 |
+| `succeeded` | 无 | receipt、usage outbox、contract diagnostics 已原子提交；表示本次调用已可靠收口，可对应完整 request，也可对应“部分 accepted + 父 request superseded” |
 | `retryable_failed` | 无 | request 决定是否产生下一 attempt；旧 attempt 不复用 |
 | `terminal_failed` | 无 | 保存安全分类/原因码，不保存敏感异常全文 |
 | `cancelled` | 无 | Provider/本地任务确认未产生可接受结果 |
@@ -204,6 +205,8 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | `late_succeeded_ignored` / `late_failed_ignored` | 无 | 只作审计和可能的 usage 记账，不参与结果 winner 或 run 成功 |
 
 `prepared -> dispatched` 与真正发送网络字节不能组成跨系统原子事务。崩溃后只要看到 orphaned `dispatched`，就先尝试 Provider reconciliation；没有查询能力时必须进入 `outcome_unknown`，不能假设“没发出”而自动重试。
+
+Attempt 描述一次 Provider 调用的收口，Request 描述该工作节点是否仍代表 active delivery scope，所以二者无需共享 `superseded` 枚举。部分成功的 T3/T5 组合事务必须按一个原子边界提交：attempt `dispatched -> succeeded`、accepted item winners、父 request `in_flight -> superseded`、全部 targeted children 与 lineage events；完全无 accepted item 的 split 只能从最近 attempt 已落为 `retryable_failed` / `terminal_failed` 的父 request 派生。不得先发布 superseded 父节点，再留一个仍 dispatched 的 attempt。
 
 ## 5. 持久化介质与事务设计
 
@@ -223,7 +226,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
   state.sqlite3                 # 唯一事实源；运行中可能有 -wal / -shm
   translation_plan.json        # immutable、hash-bound 导出
   requests.jsonl               # root + derived request 的脱敏审计投影，不含 payload/prompt/source/response
-  run_manifest.json            # DB 的可重建物化视图
+  run_manifest.json            # DB 的脱敏、字段白名单物化视图
   results.jsonl                # 终态统一 result，按 plan/root 顺序稳定输出
   results.jsonl.sha256
   events.jsonl                 # 可选终态审计导出；事实源仍是 events 表
@@ -232,6 +235,8 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 目录必须在所选项目的受控 `log_dir` 内，路径经过 containment 校验；不得放入共享网络盘执行。运行中备份需包含 DB、`-wal`、`-shm`，或先由服务执行 checkpoint；终态执行 `wal_checkpoint(TRUNCATE)` 后再发布 artifacts。
 
 `requests.jsonl` 不是 `requests.payload_json` 的逐字导出，只允许包含 request/root/parent ID、lineage kind/depth、状态、expected item 的计数/摘要、request/prompt fingerprint、attempt 计数与安全诊断码；不得包含完整 payload、prompt、source/context 文本、response、credential ref/header 或原始异常。`state.sqlite3` 和 `translation_plan.json` 属于受保护的本地 plan/request artifact，继承 run 目录的最小权限，不能作为普通诊断附件分发。
+
+`run_manifest.json` 只允许物化：schema version、run/plan ID 与 fingerprint、run status/revision/timestamps、source/profile/config/policy digest、进度/预算/usage 聚合、取消/freshness 标志、artifact 相对路径/hash 和安全 reason code。禁止从 `plans.canonical_json`、`requests.payload_json`、attempt response/debug error 复制 prompt、source/context、翻译正文、credential/header 或原始异常。`events.jsonl` 使用同一敏感字段 denylist；完整 plan/request 内容仍只在上述受保护 artifact/DB 中。
 
 ### 5.3 最小表与约束
 
@@ -270,9 +275,9 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | T0 bootstrap | 插入 run、完整 plan、全部 root requests、`run_created` 事件 | 事务前无可执行 run；事务后首次调用所需合同齐全 |
 | T1 claim | 校验 lease/cancel/budget，reserve token/cost，插入 `prepared` attempt，将 request 置 `in_flight` | prepared 可安全继续 dispatch 或在 cancel 时取消 |
 | T2 dispatch intent | attempt `prepared -> dispatched`、dispatch timestamp/event | orphaned dispatched 必须 reconcile/unknown，不能盲重试 |
-| T3 successful receipt | 先校验 lease owner token、claim 时的 cancel epoch 和 attempt 状态；匹配时保存原始/规范化响应、contract diagnostics、accepted winners、usage outbox，并同事务转换 attempt/request/event | 提交后即为权威成功；summary/export 可任意重建；guard 失败则只走 late receipt |
+| T3 successful receipt | 先校验 lease owner token、claim 时的 cancel epoch 和 attempt 状态；匹配时保存原始/规范化响应、contract diagnostics、accepted winners、usage outbox，并同事务转换 attempt/request/event；部分成功同时执行 T5 | 完整成功时 attempt/request 都 succeeded；部分成功时 attempt succeeded、父 request superseded、children 原子插入；guard 失败则只走 late receipt |
 | T4 failed receipt | 使用与 T3 相同的 owner/epoch/status guard；匹配时保存分类、safe error、usage（若有）、下一退避时间或 terminal 决策、释放 reservation | resume 只按已提交决定继续；guard 失败不改 request/run 结果 |
-| T5 derive/split | 父 request 置 `superseded`，插入所有 children 与 lineage events | 不会出现半棵 lineage |
+| T5 derive/split | 确认父节点没有 active attempt；若由部分 T3 触发，则同事务先把 attempt 置 `succeeded`，再把父 request 置 `superseded` 并插入全部 children/lineage events | 不会出现半棵 lineage，也不会出现 superseded request + dispatched attempt |
 | T6a cancel intent | 任意 caller 用短事务校验 run 非终态，首次取消把 run 置 `cancel_requested`、递增一次 epoch 并写一个事件；不改 request/attempt | 与 T1/T3/T4 由 SQLite writer lock 排出唯一提交顺序；意图先提交则后续 claim/receipt guard 必须看见新 epoch |
 | T6b cancel closeout | 当前 lease owner 把 pending/retryable request 置 `cancelled`；`prepared` attempt/request 直接置 `cancelled`；只有 `dispatched` attempt 置 `cancel_requested` | 此后禁止创建 attempt；prepared 从未调用 Provider；无第二个 request/attempt writer |
 | T7 outbox ack | usage ledger 已幂等写入后标 `delivered_at` | 任一侧崩溃都可重放，ledger 去重 |
@@ -581,8 +586,8 @@ Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`�
 | F09 | rate limit/timeout/5xx | 按持久化 backoff 重试；重启不重抽 jitter；达到 cap 停止 |
 | F10 | auth/config/unsupported | 0 次重试、0 个 split child，错误分类稳定 |
 | F11 | invalid JSON/截断且整批无进展 | 只在允许分类下创建 L/R；父和 children 原子出现 |
-| F12 | 部分有效 + missing IDs | accepted ID 不重调；只创建稳定 `--M-...` child |
-| F13 | split T5 任一语句前后强杀 | DB 中不存在半棵 lineage；root attempt cap 不被 children 放大 |
+| F12 | 部分有效 + missing IDs | attempt succeeded、父 request superseded、accepted winners 与稳定 `--M-...` child 同事务出现；accepted ID 不重调 |
+| F13 | split T5 任一语句前后强杀 | DB 中不存在半棵 lineage或 superseded + active attempt；root attempt cap 不被 children 放大 |
 | F14 | prepared + dispatched 并存及 cancel 与 T1/T3 交错 | T6a 只写 intent；lease owner 的 T6b 将 prepared 直接 cancelled、Provider cancel 0，dispatched 才 cancel_requested；intent 先于 T1/T3 时 claim 被拒绝/receipt ignored，intent 后提交时按先前事实收口；cancel 后无新 dispatch |
 | F15 | 重复 cancel/status/resume | 第二次 cancel `changed=false` 且 epoch/revision/event 不增长；终态 resume 可修 outbox/artifact 但 Provider 调用数不变 |
 | F16 | 两个进程同时 resume | 一个取得 lease；另一个 `SYNC_RUN_BUSY` / retryable / exit 6；无重复 dispatch |
@@ -599,7 +604,7 @@ Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`�
 | F27 | derive 遇到 unknown | 默认拒绝；ack 后重调并记风险；exclude 后生成新 scoped expected set，三者互斥 |
 | F28 | CLI selector/progress/strict exit | `--latest` 忽略 legacy preview；request bucket 可加总；状态和 error code 严格命中 §11.2 exit 表 |
 | F29 | Durable Sync 与 Gemini Batch 安全路径 | Sync 要求 check + bound preview + apply；Batch 保持 check + apply；两者共享 gate/source/adapter/force 谓词 |
-| F30 | run path 与 requests 审计导出 | 无 token `run_id` 匹配 `sync-run-v1-YYYYMMDDThhmmss.ffffffZ-<uuid4hex>` 且 Windows/POSIX 可创建；`requests.jsonl` 不含 payload/prompt/source/response/credential/raw error canary |
+| F30 | run path 与审计物化脱敏 | 无 token `run_id` 匹配 `sync-run-v1-YYYYMMDDThhmmss.ffffffZ-<uuid4hex>` 且 Windows/POSIX 可创建；`requests.jsonl`、`run_manifest.json`、`events.jsonl` 不含 payload/prompt/source/context/response/credential/header/raw error canary |
 
 Provider 验收分三层：
 
