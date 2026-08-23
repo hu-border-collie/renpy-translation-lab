@@ -166,8 +166,8 @@
       "rules": {
         "renpy_wait_inside_cjk": "warning",
         "unclosed_delimiters": "warning",
-        "english_suffix_adjacent": "warning",
-        "suspicious_english_residue": "warning",
+        "english_suffix_adjacent": "off",
+        "suspicious_english_residue": "off",
         "cjk_latin_spacing": "warning",
         "halfwidth_punctuation": "warning",
         "ascii_ellipsis": "warning",

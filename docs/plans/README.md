@@ -24,8 +24,9 @@
   基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；P0–P4 不依赖 #341，P5 与 #341
   联动收口。决策表 D1–D7 需在 issue #346 内定稿后方可进入 P1 编码。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
-  A1 离线语料与 A3 校准报告工具的使用方法，以及 B 线真实项目统计、
-  抽样标注、A2 调参与重跑对比的执行步骤。
+  A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤；
+  三项目聚合统计、人工标注和 A2 前后对比见
+  [真实项目机械质量校准基线](quality_calibration_baseline.md)。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。
