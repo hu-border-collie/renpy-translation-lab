@@ -754,6 +754,30 @@ QFrame#task_status_section {
     border-radius: 10px;
 }
 
+QFrame#revision_corpus_result {
+    background-color: ${bg_surface_alt};
+    border: 1px solid ${border_light};
+    border-radius: 10px;
+}
+
+QLabel#revision_corpus_result_title {
+    color: ${fg_primary};
+    font-size: 12px;
+    font-weight: 700;
+}
+
+QLabel#revision_corpus_result_summary,
+QLabel#revision_corpus_result_created_at {
+    color: ${fg_body};
+    font-size: 12px;
+}
+
+QLabel#revision_corpus_result_paths {
+    color: ${fg_mono};
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 11px;
+}
+
 QLabel#global_project_bar_label {
     color: ${fg_muted};
     font-size: 12px;

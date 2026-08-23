@@ -345,6 +345,7 @@ from .user_copy import (
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
+    REVISION_CORPUS_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
@@ -363,7 +364,10 @@ from .operation_identity import (
     context_library_config_digest,
     is_current_identity,
     litellm_connection_identity,
+    revision_corpus_export_identity,
 )
+from .revision_corpus_report import RevisionCorpusExportResult
+from .revision_corpus_workflow import RevisionCorpusExportWorkflow
 from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
 from .project_analysis_workflow import (
     ProjectAnalysisWorkflow,
@@ -648,6 +652,7 @@ class MainWindow(QMainWindow):
         self._compare_variants_names = ""
         self._compare_variants_temp_file = ""
         self._keyword_merge_candidates_path = ""
+        self._revision_corpus_export_result: RevisionCorpusExportResult | None = None
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -670,6 +675,7 @@ class MainWindow(QMainWindow):
         self._retired_doctor_workers: set[DoctorWorker] = set()
         self._last_doctor_report: dict | None = None
         self._last_doctor_report_game_root = ""
+        self._revision_corpus_doctor_report_stale = False
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -9145,6 +9151,9 @@ class MainWindow(QMainWindow):
             workflow_message=wf_message,
             workflow_facts=wf_facts,
             writeback_summary=getattr(self, "_writeback_summary", None),
+            revision_corpus_export_result=getattr(
+                self, "_revision_corpus_export_result", None
+            ),
         )
 
     def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
@@ -9163,6 +9172,9 @@ class MainWindow(QMainWindow):
             "facts": list(session.workflow_facts),
         }
         self._pending_restore_writeback_summary = session.writeback_summary
+        self._revision_corpus_export_result = getattr(
+            session, "revision_corpus_export_result", None
+        )
 
     def _apply_session_workflow_ui(self, payload: dict[str, object] | None) -> bool:
         """Re-paint progress labels from a frozen session; return True if applied."""
@@ -9301,6 +9313,7 @@ class MainWindow(QMainWindow):
             self._workflow = None
             self._workflow_step_output_lines = []
             self._writeback_manifest_path = ""
+            self._revision_corpus_export_result = None
             if hasattr(self, "_clear_completed_manifest_snapshot"):
                 self._clear_completed_manifest_snapshot()
             else:
@@ -9730,10 +9743,145 @@ class MainWindow(QMainWindow):
         self._final_review_findings_cache = result
         return result
 
+    def _revision_corpus_has_exportable_translations(
+        self,
+        report: Mapping[str, object] | None,
+    ) -> bool:
+        """Use the latest doctor artifact to gate an empty corpus before launch."""
+        if not isinstance(report, Mapping):
+            return False
+
+        # This count comes from the latest doctor scan; old/new lines alone also
+        # occur in blank templates and are not a safe substitute.
+        if "translated_task_count" in report:
+            try:
+                return int(report.get("translated_task_count") or 0) > 0
+            except (TypeError, ValueError):
+                return False
+
+        return False
+
+    def _mark_revision_corpus_doctor_report_stale(self) -> None:
+        """Invalidate the cached translation count after a write-capable job."""
+        self._revision_corpus_doctor_report_stale = True
+
+    def _revision_corpus_export_preflight(self) -> tuple[bool, str]:
+        """Return whether the read-only corpus export may be started."""
+        if self._current_work_mode() != WorkMode.REVISION:
+            return False, REVISION_CORPUS_COPY["gate_wrong_mode"]
+        if bool(getattr(self, "_task_running", False)) or self._cli_runner_is_active():
+            return False, REVISION_CORPUS_COPY["gate_running"]
+
+        state = getattr(self, "state", None)
+        game_root = state.get_game_root() if state is not None else None
+        if game_root is None:
+            return False, REVISION_CORPUS_COPY["gate_no_project"]
+        if not self._doctor_check_completed or not self._doctor_allows_translate_action():
+            return False, REVISION_CORPUS_COPY["gate_doctor"]
+        if getattr(self, "_revision_corpus_doctor_report_stale", False):
+            return False, REVISION_CORPUS_COPY["gate_doctor_stale"]
+
+        report = getattr(self, "_last_doctor_report", None)
+        reported_root = str(getattr(self, "_last_doctor_report_game_root", "") or "")
+        if reported_root and canonical_abs_path(reported_root).casefold() != canonical_abs_path(
+            str(game_root)
+        ).casefold():
+            return False, REVISION_CORPUS_COPY["gate_doctor"]
+        if not self._revision_corpus_has_exportable_translations(report):
+            return False, REVISION_CORPUS_COPY["gate_no_translations"]
+        return True, ""
+
+    def _current_revision_corpus_export_identity(self) -> str:
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        return revision_corpus_export_identity(game_root=game_root)
+
+    def _on_export_revision_corpus(self) -> None:
+        allowed, reason = self._revision_corpus_export_preflight()
+        if not allowed:
+            message_box_information(self, "暂时无法导出润色语料", reason)
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+
+        self._revision_corpus_export_result = None
+        page = getattr(self, "revision_page", None)
+        if page is not None:
+            page.set_corpus_export_result(None)
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._begin_translation_workflow(
+            RevisionCorpusExportWorkflow(
+                operation_identity=self._current_revision_corpus_export_identity()
+            ),
+            log_heading=REVISION_CORPUS_COPY["running"],
+            status_tab=1,
+        )
+
+    def _revision_corpus_result_for_action(self) -> RevisionCorpusExportResult | None:
+        result = getattr(self, "_revision_corpus_export_result", None)
+        if result is not None:
+            return result
+        page = getattr(self, "revision_page", None)
+        getter = getattr(page, "corpus_export_result", None)
+        return getter() if callable(getter) else None
+
+    def _on_open_revision_corpus_output(self) -> None:
+        result = self._revision_corpus_result_for_action()
+        output_dir = str(result.output_dir if result is not None else "").strip()
+        if not output_dir:
+            message_box_information(
+                self,
+                "输出目录不可用",
+                "导出结果没有记录输出目录；请重新导出润色语料。",
+            )
+            return
+        path = Path(output_dir)
+        if not path.is_dir():
+            message_box_warning(
+                self,
+                "输出目录不可用",
+                "输出目录不存在或已被移动；请重新导出润色语料后再打开。",
+            )
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            message_box_warning(
+                self,
+                "无法打开输出目录",
+                "系统未能打开该目录；可点击「复制路径」后手动打开。",
+            )
+
+    def _on_copy_revision_corpus_paths(self) -> None:
+        result = self._revision_corpus_result_for_action()
+        if result is None or not result.has_paths:
+            message_box_information(
+                self,
+                "没有可复制的路径",
+                "当前没有可用的导出 artifact；请先完成一次导出。",
+            )
+            return
+        paths = "\n".join(
+            (
+                f"输出目录：{result.output_dir}",
+                f"JSONL：{result.jsonl_path}",
+                f"Markdown：{result.markdown_path}",
+                f"manifest：{result.manifest_path}",
+            )
+        )
+        self._copy_to_clipboard(paths, kind="path")
+
     def _on_final_review_page_action(self, action: str) -> None:
         """Start manual finding selection only for a completed review campaign."""
         if action == "open_doctor":
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
+            return
+        if action == "export_revision_corpus":
+            self._on_export_revision_corpus()
+            return
+        if action == "open_revision_corpus_output":
+            self._on_open_revision_corpus_output()
+            return
+        if action == "copy_revision_corpus_paths":
+            self._on_copy_revision_corpus_paths()
             return
         if action == "import_revision_proposals":
             if bool(getattr(self, "_task_running", False)):
@@ -9819,6 +9967,20 @@ class MainWindow(QMainWindow):
         if running is None:
             running = self._task_page_running_chrome()
         summary = self._current_writeback_summary()
+        if mode == WorkMode.REVISION:
+            export_enabled, export_tooltip = (
+                (False, REVISION_CORPUS_COPY["gate_running"])
+                if running
+                else self._revision_corpus_export_preflight()
+            )
+            corpus_result = getattr(self, "_revision_corpus_export_result", None)
+        else:
+            export_enabled = False
+            export_tooltip = REVISION_CORPUS_COPY["gate_wrong_mode"]
+            corpus_result = None
+        if callable(getattr(page, "corpus_export_result", None)):
+            if page.corpus_export_result() is not corpus_result:
+                page.set_corpus_export_result(corpus_result)
         findings_enabled = False
         review_status_message = ""
         if mode == WorkMode.FINAL_REVIEW:
@@ -9865,6 +10027,8 @@ class MainWindow(QMainWindow):
             resume_label=self.resume_btn.text(),
             writeback_enabled=summary.can_apply,
             findings_enabled=findings_enabled,
+            export_enabled=export_enabled,
+            export_tooltip=export_tooltip,
             result_message=result_message,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
@@ -10707,11 +10871,13 @@ class MainWindow(QMainWindow):
             revision_page.reset_project()
         self._workflow = None
         self._workflow_step_output_lines = []
+        self._revision_corpus_export_result = None
         self._clear_completed_manifest_snapshot()
         self._doctor_check_completed = False
         self._doctor_summary_status = ""
         self._last_doctor_report = None
         self._last_doctor_report_game_root = ""
+        self._revision_corpus_doctor_report_stale = False
         self._set_doctor_summary(stale_summary())
         spec = work_mode_spec(self._current_work_mode())
         if spec.is_bootstrap:
@@ -11791,6 +11957,7 @@ class MainWindow(QMainWindow):
         if result.ok and result.report is not None:
             self._last_doctor_report = result.report
             self._last_doctor_report_game_root = self.state.get_game_root() or ""
+            self._revision_corpus_doctor_report_stale = False
             summary = summarize_doctor_report(
                 result.report,
                 exit_code=0,
@@ -11833,6 +12000,7 @@ class MainWindow(QMainWindow):
             self._doctor_check_completed = False
             self._last_doctor_report = None
             self._last_doctor_report_game_root = ""
+            self._revision_corpus_doctor_report_stale = True
             self.statusBar().showMessage("项目检查失败。", 6000)
 
         self._set_doctor_summary(summary)
@@ -12834,6 +13002,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._repair_output_lines = []
@@ -12951,6 +13120,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
         self._show_workbench_log_drawer()
@@ -12988,6 +13158,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         workflow = SyncTranslationWorkflow.apply_existing(manifest_path)
@@ -13038,6 +13209,7 @@ class MainWindow(QMainWindow):
             message_box_information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_revision_output_lines = []
@@ -14046,10 +14218,25 @@ class MainWindow(QMainWindow):
         step_key = current_step.key if current_step else ""
 
         restore_latest_manifest_path = getattr(self._workflow, "restore_latest_manifest_path", "")
-        update = self._workflow.complete_current_step(exit_code, step_output)
-
+        workflow = self._workflow
         is_sync_translation_workflow = isinstance(self._workflow, SyncTranslationWorkflow)
         is_project_analysis_workflow = isinstance(self._workflow, ProjectAnalysisWorkflow)
+        is_revision_corpus_export_workflow = isinstance(
+            self._workflow,
+            RevisionCorpusExportWorkflow,
+        )
+        if is_revision_corpus_export_workflow and not is_current_identity(
+            workflow.operation_identity,
+            self._current_revision_corpus_export_identity(),
+        ):
+            update = workflow.stale_update()
+        else:
+            update = workflow.complete_current_step(exit_code, step_output)
+        if is_revision_corpus_export_workflow:
+            self._revision_corpus_export_result = workflow.result
+            page = getattr(self, "revision_page", None)
+            if page is not None:
+                page.set_corpus_export_result(workflow.result)
         if is_sync_translation_workflow and step_key == "preview" and exit_code == 0:
             preview_count_match = re.search(r"^Preview files:\s*(\d+)\s*$", step_output, re.MULTILINE)
             preview_count = int(preview_count_match.group(1)) if preview_count_match else 0
@@ -14100,6 +14287,7 @@ class MainWindow(QMainWindow):
             )
         archive_completed = (
             not is_project_analysis_workflow
+            and not is_revision_corpus_export_workflow
             and not update.should_continue
             and update.status == "done"
         )
@@ -14138,6 +14326,8 @@ class MainWindow(QMainWindow):
             message = (
                 "项目分析失败，请查看诊断与运行日志。"
                 if is_project_analysis_workflow
+                else "润色语料导出失败，请查看诊断与运行日志。"
+                if is_revision_corpus_export_workflow
                 else "翻译任务失败，请查看诊断日志。"
             )
             self.statusBar().showMessage(message, 8000)
@@ -14150,7 +14340,7 @@ class MainWindow(QMainWindow):
         else:
             message = (
                 update.heading
-                if is_project_analysis_workflow
+                if is_project_analysis_workflow or is_revision_corpus_export_workflow
                 else "翻译任务流程完成。"
             )
             self.statusBar().showMessage(message, 6000)
