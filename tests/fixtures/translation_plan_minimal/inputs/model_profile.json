@@ -1,0 +1,22 @@
+{
+  "id": "primary",
+  "label": "Fixture Primary",
+  "adapter": "litellm",
+  "provider": "openai_compatible",
+  "model": "fixture-model-alpha",
+  "credential_ref": {
+    "kind": "env",
+    "name": "FIXTURE_MODEL_KEY",
+    "env_name": ""
+  },
+  "models": [
+    "fixture-model-alpha"
+  ],
+  "base_url": "https://fixture.example.invalid/v1",
+  "extra_headers": {},
+  "capability_overrides": {},
+  "params": {
+    "temperature": 0.2
+  },
+  "embedding_profile_id": ""
+}

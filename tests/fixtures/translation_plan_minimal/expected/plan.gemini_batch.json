@@ -1,0 +1,161 @@
+{
+  "artifacts": {},
+  "chunk_policy": {
+    "max_chars": 18000,
+    "max_items": 3
+  },
+  "chunks": [
+    {
+      "chunk_id": "004851531f-00001",
+      "chunk_index": 1,
+      "context_window_spec": {
+        "block_bounded_after": true,
+        "block_bounded_before": false,
+        "context_after_chars": 55,
+        "context_after_items": 1,
+        "context_after_limit": 10,
+        "context_before_chars": 0,
+        "context_before_items": 0,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter01/dialogue.rpy",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "line_numbers": [
+        6,
+        7,
+        8
+      ],
+      "source_char_count": 161,
+      "unit_ids": [
+        "chapter01/dialogue.rpy:chapter01_start:1:10a68e16",
+        "chapter01/dialogue.rpy:chapter01_start:2:c4d75441",
+        "chapter01/dialogue.rpy:chapter01_start:3:39f88feb"
+      ]
+    },
+    {
+      "chunk_id": "004851531f-00002",
+      "chunk_index": 2,
+      "context_window_spec": {
+        "block_bounded_after": false,
+        "block_bounded_before": false,
+        "context_after_chars": 0,
+        "context_after_items": 0,
+        "context_after_limit": 10,
+        "context_before_chars": 161,
+        "context_before_items": 3,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter01/dialogue.rpy",
+      "file_rel_path": "chapter01/dialogue.rpy",
+      "line_numbers": [
+        9,
+        13,
+        14
+      ],
+      "source_char_count": 153,
+      "unit_ids": [
+        "chapter01/dialogue.rpy:chapter01_start:4:23a766ca",
+        "chapter01/dialogue.rpy:chapter01_hall:1:aa916e5f",
+        "chapter01/dialogue.rpy:chapter01_hall:2:e0e4d9f7"
+      ]
+    },
+    {
+      "chunk_id": "029e98ba77-00001",
+      "chunk_index": 1,
+      "context_window_spec": {
+        "block_bounded_after": false,
+        "block_bounded_before": false,
+        "context_after_chars": 0,
+        "context_after_items": 0,
+        "context_after_limit": 10,
+        "context_before_chars": 0,
+        "context_before_items": 0,
+        "context_before_limit": 30,
+        "context_truncated": false
+      },
+      "file_path": "game/chapter02/strings.rpy",
+      "file_rel_path": "chapter02/strings.rpy",
+      "line_numbers": [
+        4,
+        7,
+        10
+      ],
+      "source_char_count": 37,
+      "unit_ids": [
+        "chapter02/strings.rpy:strings:1:602b26d9",
+        "chapter02/strings.rpy:strings:2:2e026239",
+        "chapter02/strings.rpy:strings:3:23abf38c"
+      ]
+    }
+  ],
+  "config_fingerprint": "6b13a28e97d87093",
+  "context_policy": {
+    "analysis_char_limit": 4000,
+    "history_char_limit": 220,
+    "include_source_text": true,
+    "include_translation_memory": true,
+    "local_context_after": 10,
+    "local_context_before": 30,
+    "story_block_suffix": "\n\n",
+    "story_char_limit": 1200
+  },
+  "execution_strategy": "gemini_batch",
+  "model_profile_snapshot": {
+    "adapter": "litellm",
+    "base_url": "https://fixture.example.invalid/v1",
+    "capability_overrides": {},
+    "credential_ref": {
+      "env_name": "",
+      "kind": "env",
+      "name": "FIXTURE_MODEL_KEY"
+    },
+    "embedding_profile_id": "",
+    "extra_headers": {},
+    "id": "primary",
+    "label": "Fixture Primary",
+    "model": "fixture-model-alpha",
+    "models": [
+      "fixture-model-alpha"
+    ],
+    "params": {
+      "temperature": 0.2
+    },
+    "provider": "openai_compatible"
+  },
+  "plan_fingerprint": "36d2ede9501212f1",
+  "plan_id": "c24ba960433436e9",
+  "request_summaries": [
+    {
+      "chunk_id": "004851531f-00001",
+      "prompt_fingerprint": "e14597acfc6111bf",
+      "request_fingerprint": "f4480a0ef639a161",
+      "request_id": "a7c2c56c7f4895b8"
+    },
+    {
+      "chunk_id": "004851531f-00002",
+      "prompt_fingerprint": "926854780f0e1ea7",
+      "request_fingerprint": "436c542dfa3c5b0c",
+      "request_id": "3f25ef73cef53e3d"
+    },
+    {
+      "chunk_id": "029e98ba77-00001",
+      "prompt_fingerprint": "00756b8992768dfe",
+      "request_fingerprint": "61a3213074a32c59",
+      "request_id": "cb535eddb76a5755"
+    }
+  ],
+  "run_id": "fixture-run",
+  "schema_version": 1,
+  "source_identity": {
+    "adapter_version": "8.5.2",
+    "engine": "renpy",
+    "file_digests": {
+      "chapter01/dialogue.rpy": "137614ec373b9aca5b571c4918fd69e6002b3d94421334a45afb6cbf835fca38",
+      "chapter02/strings.rpy": "2e43952c413866f0707e9dcbfa79983324d0d0be4d5a140a63d1de8b0521897c"
+    },
+    "project_identity_digest": "a4bf6402f0f91dc1d5597582612c4b21125d776777c155295c2546e4714e4a79",
+    "source_snapshot_fingerprint": "f10658642b3c98ec2472c5fcf0274454c1cdf79aa2337573dbfcd0f4d3dd705b"
+  }
+}

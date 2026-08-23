@@ -1105,7 +1105,7 @@ def guess_project_slug():
 
 
 def hash_key(text):
-    return hashlib.sha1(text.encode('utf-8')).hexdigest()[:10]
+    return translation_core.file_hash_key(text)
 
 
 def get_default_rag_store_dir():
@@ -3213,26 +3213,15 @@ def build_batch_request(chunk, model=None):
     }
 
 def task_text_char_count(task):
-    text = task.get('text', '') if isinstance(task, dict) else ''
-    return len(text) if isinstance(text, str) else len(str(text))
+    return translation_core.translation_text_char_count(task)
 
 
 def iter_translation_chunk_ranges(tasks):
-    total = len(tasks)
-    start = 0
-    while start < total:
-        end = start
-        current_chars = 0
-        while end < total and (end - start) < BATCH_TARGET_SIZE:
-            item_chars = task_text_char_count(tasks[end])
-            if end > start and current_chars + item_chars > BATCH_TARGET_CHARS:
-                break
-            current_chars += item_chars
-            end += 1
-        if end == start:
-            end = start + 1
-        yield start, end
-        start = end
+    yield from translation_core.iter_translation_chunk_ranges(
+        tasks,
+        max_items=BATCH_TARGET_SIZE,
+        max_chars=BATCH_TARGET_CHARS,
+    )
 
 
 def count_translation_chunks(file_jobs):

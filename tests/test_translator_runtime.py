@@ -2178,6 +2178,77 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertIn('- Existing mapping: Aether Seal -> \u4e59\u592a\u5c01\u5370', prompt)
         self.assertIn('- Non-translatable: Ebon', prompt)
 
+    def test_sync_locked_terms_top_k_prefix_follows_sorted_hit_order(self):
+        old_rag = runtime.SYNC_RAG_ENABLED
+        old_top_k = runtime.SYNC_RAG_TOP_K_TERMS
+        old_normalize = runtime.NORMALIZE_TRANSLATION_MAP
+        old_use_memory = runtime.USE_TRANSLATION_MEMORY
+        old_story_memory = runtime.SYNC_STORY_MEMORY_ENABLED
+        captured = {}
+        try:
+            # The RAG LOCKED TERMS list is a prefix of the lexical hits,
+            # which the shared implementation (#346 D2) orders by sorted key.
+            # With top_k smaller than the hit count the kept *set* is the
+            # alphabetically-first hits — pin that so the ordering contract
+            # stays explicit instead of silently drifting.
+            runtime.SYNC_RAG_ENABLED = True
+            runtime.SYNC_RAG_TOP_K_TERMS = 1
+            runtime.NORMALIZE_TRANSLATION_MAP = {
+                'setlist': '\u66f2\u76ee\u5355',
+                'encore': '\u8fd4\u573a',
+            }
+            runtime.USE_TRANSLATION_MEMORY = True
+            runtime.SYNC_STORY_MEMORY_ENABLED = False
+
+            def fake_sdk(prompt, items, **_kwargs):
+                captured['prompt'] = prompt
+                return translation_core.validate_model_response(
+                    {
+                        'translations': [
+                            {'id': 'file:0:1', 'translation': '\u4f60\u597d'},
+                        ]
+                    },
+                    expected_units=items,
+                )
+
+            with (
+                mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_sdk),
+                mock.patch.object(
+                    runtime,
+                    'retrieve_sync_history_hits',
+                    return_value=([], {}),
+                ),
+                mock.patch.object(
+                    runtime,
+                    'validate_translation',
+                    return_value=(True, 'OK'),
+                ),
+            ):
+                runtime.process_batch(
+                    [
+                        {
+                            'id': 'file:0:1',
+                            'text': 'The setlist and the encore were both great.',
+                            'progress_entry': 'task:0:1',
+                        }
+                    ],
+                    {},
+                )
+        finally:
+            runtime.SYNC_RAG_ENABLED = old_rag
+            runtime.SYNC_RAG_TOP_K_TERMS = old_top_k
+            runtime.NORMALIZE_TRANSLATION_MAP = old_normalize
+            runtime.USE_TRANSLATION_MEMORY = old_use_memory
+            runtime.SYNC_STORY_MEMORY_ENABLED = old_story_memory
+
+        prompt = captured.get('prompt') or ''
+        self.assertIn('LOCKED TERMS:', prompt)
+        self.assertIn('- encore -> \u8fd4\u573a', prompt)
+        self.assertNotIn('- setlist ->', prompt)
+        # The always-injected lexical block still carries both hits.
+        self.assertIn('- Existing mapping: setlist -> \u66f2\u76ee\u5355', prompt)
+        self.assertIn('- Existing mapping: encore -> \u8fd4\u573a', prompt)
+
     def test_sync_process_batch_injects_loaded_macro_by_default(self):
         old_macro = runtime.SYNC_MACRO_SETTING
         old_use_memory = runtime.USE_TRANSLATION_MEMORY
