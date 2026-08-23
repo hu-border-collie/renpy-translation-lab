@@ -131,6 +131,45 @@ class BatchCostEstimateTests(unittest.TestCase):
             self.assertEqual(tokens['chunk_count'], 2)
             self.assertEqual(tokens['estimated_output_tokens_max'], 2000)
 
+    def test_estimate_prefers_summary_chunk_count_over_stale_plan_chunks(self):
+        # Split/retry manifests copy the parent translation_plan for lineage.
+        # The estimate must size this package by summary.chunk_count, not by
+        # the parent plan's full chunk list, or --max-cost would be wrong.
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            jsonl_path = os.path.join(tmp_dir, 'requests.jsonl')
+            with open(jsonl_path, 'w', encoding='utf-8') as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            'key': 'chunk-00001',
+                            'request': {
+                                'contents': [
+                                    {'role': 'user', 'parts': [{'text': 'abcd'}]},
+                                ],
+                            },
+                        },
+                        ensure_ascii=False,
+                    )
+                    + '\n'
+                )
+
+            manifest = {
+                'batch_model': 'gemini-3.1-flash-lite',
+                'input_jsonl_path': jsonl_path,
+                'settings': {'max_output_tokens': 1000},
+                'summary': {'chunk_count': 2},
+                'translation_plan': {
+                    'chunks': [
+                        {'chunk_id': f'chunk-{index:05d}'}
+                        for index in range(10)
+                    ],
+                },
+            }
+            tokens = batch_cost_estimate.estimate_manifest_tokens(manifest)
+
+        self.assertEqual(tokens['chunk_count'], 2)
+        self.assertEqual(tokens['estimated_output_tokens_max'], 2000)
+
     def test_ensure_manifest_cost_estimate_exits_when_jsonl_missing(self):
         manifest = {
             'input_jsonl_path': 'missing.jsonl',

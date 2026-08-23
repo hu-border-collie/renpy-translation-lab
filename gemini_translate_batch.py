@@ -1859,6 +1859,34 @@ def retrieve_glossary_hits(target_items):
     )
 
 
+def retrieve_revision_glossary_hits(target_items):
+    """Return the legacy RAG-gated, top-k-capped glossary hits for revision.
+
+    Revision packages keep their pre-#346 contract: no RAG means no LOCKED
+    TERMS, and RAG top-k still caps the reference list. Only the translation
+    plan path (issue #346 P2/D2) deliberately uses the unbounded lexical
+    helper above.
+    """
+    if not RAG_ENABLED:
+        return []
+    combined_text = '\n'.join(item.get('text', '') for item in target_items if item.get('text'))
+    if not combined_text:
+        return []
+    hits = []
+    seen = set()
+    for source, target in (legacy.NORMALIZE_TRANSLATION_MAP or {}).items():
+        if source and source in combined_text and source not in seen:
+            hits.append({'source': source, 'target': target, 'kind': 'normalize'})
+            seen.add(source)
+    for term in legacy.PRESERVE_TERMS:
+        if not isinstance(term, str) or not term.strip():
+            continue
+        if term in combined_text and term not in seen:
+            hits.append({'source': term, 'target': term, 'kind': 'preserve'})
+            seen.add(term)
+    return hits[:RAG_TOP_K_TERMS]
+
+
 def format_glossary_hits_block(hits, empty_label='(none)'):
     return prompt_context.format_glossary_hits_block(hits, empty_label)
 
@@ -3287,6 +3315,47 @@ def count_translation_chunks(file_jobs):
     return total_chunks
 
 
+def _batch_plan_context_policy():
+    """Return the D1/D5 context policy used by Batch plan requests."""
+    return translation_plan.ContextPolicy(
+        local_context_before=BATCH_CONTEXT_BEFORE,
+        local_context_after=BATCH_CONTEXT_AFTER,
+        # The retrieval layer backstop is history+story in the shared
+        # policy. Batch can additionally inject Source Index reference text
+        # (top_k * char_limit), so add that budget to the backstop;
+        # section-level limits are already applied by the providers.
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT + get_source_index_char_budget(),
+        story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+        # Project analysis injects both the global brief and local
+        # label/route summaries; keep the backstop large enough for all
+        # three sections instead of only max_brief_chars.
+        analysis_char_limit=(
+            PROJECT_ANALYSIS_MAX_BRIEF_CHARS
+            + PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS
+            + PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS
+        ),
+        include_source_text=True,
+        include_translation_memory=True,
+        story_block_suffix='\n\n',
+    )
+
+
+def _batch_plan_generation_config():
+    """D6 generation metadata shared by plan requests (response schema is added
+    by :func:`build_batch_request` per chunk).
+    """
+    config = {
+        'temperature': BATCH_TEMPERATURE,
+        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
+        'response_mime_type': 'application/json',
+    }
+    if BATCH_THINKING_LEVEL and is_gemini_3_model(BATCH_MODEL):
+        config['thinking_config'] = {
+            'thinking_level': BATCH_THINKING_LEVEL.upper(),
+        }
+    return config
+
+
 def _batch_plan_source_identity(file_jobs):
     """Build the P1 source identity from the adapter snapshot when available."""
     snapshot = getattr(file_jobs, 'adapter_snapshot', None)
@@ -3366,6 +3435,135 @@ def _render_batch_analysis_reference_text(project_context):
         blocks.append(f'PROJECT LOCAL CONTEXT:\n{local_context}\n\n')
     return ''.join(blocks)
 
+
+def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
+    """Build a canonical, lineage-bearing TranslationRequest for a retry subchunk.
+
+    This keeps issue #346 P2's contract for split/item-scoped retries: the
+    subchunk still sends the canonical system/user prompt (D3/D5), the local
+    glossary still follows D2, and the request id is a deterministic child of
+    the parent plan id and subchunk key (D7-style lineage). Legacy chunks
+    without plan fields still use the legacy retry prompt path.
+    """
+    file_rel_path = str(subchunk.get('file_rel_path') or '')
+    file_path = str(subchunk.get('file_path') or '')
+    target_items = list(subchunk.get('items') or [])
+    target_units = translation_core.units_from_items(
+        target_items,
+        translation_core.MODE_TRANSLATION,
+        file_rel_path=file_rel_path,
+        file_path=file_path,
+    )
+    expected_ids = [unit.id for unit in target_units]
+    context_window = translation_core.ContextWindow(
+        subchunk.get('context_past') or [],
+        subchunk.get('context_future') or [],
+    )
+    lexical_hits = retrieve_glossary_hits(target_items)
+    context_past = list(subchunk.get('context_past') or [])
+    context_future = list(subchunk.get('context_future') or [])
+    history_hits, _rag_stats = (
+        retrieve_history_hits(target_items, context_past)
+        if RAG_ENABLED
+        else ([], {'enabled': False})
+    )
+    source_hits, _source_index_stats = (
+        retrieve_source_hits(target_items, context_past)
+        if SOURCE_INDEX_ENABLED
+        else ([], {})
+    )
+    story_hits = (
+        retrieve_batch_story_hits(
+            file_rel_path,
+            target_items,
+            context_past,
+            context_future,
+        )
+        if STORY_MEMORY_ENABLED
+        else None
+    )
+    retrieval_text = _render_batch_retrieval_reference_text(history_hits, story_hits, source_hits)
+    project_context = load_injectable_project_context_for_prompts(
+        file_rel_path,
+        [unit.display_line_number for unit in target_units],
+    )
+    analysis_text = _render_batch_analysis_reference_text(project_context)
+    chunk_input = translation_plan.ChunkContextInput(
+        file_rel_path=file_rel_path,
+        target_items=target_items,
+        target_units=target_units,
+        context_window=context_window,
+        local_context_diagnostics={
+            'retry_subchunk': True,
+            'parent_key': str(parent_chunk.get('key') or ''),
+        },
+        macro_setting=BATCH_MACRO_SETTING,
+        lexical_glossary_hits=lexical_hits,
+        retrieval_blocks_text=retrieval_text,
+        analysis_blocks_text=analysis_text,
+    )
+    assembly = translation_plan.assemble_context_layers(chunk_input, _batch_plan_context_policy())
+    reference_blocks_text = '\n\n'.join(
+        layer.text.rstrip('\n')
+        for layer in assembly.layers
+        if layer.layer
+        in (translation_plan.CONTEXT_LAYER_RETRIEVAL, translation_plan.CONTEXT_LAYER_ANALYSIS)
+        and layer.text
+    )
+    system_instruction = translation_core.build_canonical_translation_system_instruction(
+        legacy.PRESERVE_TERMS,
+        macro_setting=BATCH_MACRO_SETTING,
+    )
+    user_prompt = translation_core.build_canonical_translation_user_prompt(
+        context_window,
+        target_units,
+        reference_blocks_text=reference_blocks_text,
+        lexical_glossary_text=translation_plan.render_lexical_glossary_text(lexical_hits),
+    )
+    plan_id = str(parent_chunk.get('plan_id') or '')
+    if not plan_id:
+        plan_id = translation_plan.short_fingerprint(
+            translation_plan.canonical_json({'retry_of': str(parent_chunk.get('key') or '')})
+        )
+    chunk_id = str(subchunk.get('key') or '')
+    request = translation_plan.TranslationRequest(
+        request_id=translation_plan.build_request_id(plan_id, chunk_id, expected_ids),
+        plan_id=plan_id,
+        chunk_id=chunk_id,
+        system_instruction=system_instruction,
+        user_prompt=user_prompt,
+        response_schema=translation_core.build_response_json_schema(
+            target_units,
+            mode=translation_core.MODE_TRANSLATION,
+        ),
+        expected_ids=expected_ids,
+        capability_requirements={
+            'structured_output': True,
+            'context_budget_tokens': translation_plan.estimate_context_tokens(
+                system_instruction,
+                user_prompt,
+            ),
+            'estimate_method': translation_plan.CONTEXT_TOKEN_ESTIMATE_METHOD,
+        },
+        generation_config=translation_plan.redact_sensitive(_batch_plan_generation_config()),
+        transport_metadata=translation_plan.redact_sensitive(
+            {
+                'batch_key': chunk_id,
+                'retry_parent_key': str(parent_chunk.get('key') or ''),
+                'retry_item_start': subchunk.get('retry_item_start'),
+                'retry_item_end': subchunk.get('retry_item_end'),
+                'retry_item_ids': list(subchunk.get('retry_item_ids') or []),
+            }
+        ),
+        context_assembly=assembly.to_dict(),
+    )
+    request.prompt_fingerprint = translation_plan.short_fingerprint(
+        translation_plan.canonical_json(request.semantic_payload())
+    )
+    request.request_fingerprint = translation_plan.short_fingerprint(
+        translation_plan.canonical_json(request.audit_payload())
+    )
+    return request
 
 def _build_batch_translation_plan(file_jobs, routing_plan=None):
     """Build the issue #346 P2 plan for Gemini Batch and its legacy chunks.
@@ -3448,15 +3646,7 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             else None
         )
 
-    batch_generation_config = {
-        'temperature': BATCH_TEMPERATURE,
-        'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
-        'response_mime_type': 'application/json',
-    }
-    if BATCH_THINKING_LEVEL and is_gemini_3_model(BATCH_MODEL):
-        batch_generation_config['thinking_config'] = {
-            'thinking_level': BATCH_THINKING_LEVEL.upper(),
-        }
+    batch_generation_config = _batch_plan_generation_config()
     plan_build = translation_plan.build_translation_plan(
         file_jobs,
         execution_strategy=model_profile.ExecutionStrategy.GEMINI_BATCH.value,
@@ -3469,16 +3659,7 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             max_items=BATCH_TARGET_SIZE,
             max_chars=BATCH_TARGET_CHARS,
         ),
-        context_policy=translation_plan.ContextPolicy(
-            local_context_before=BATCH_CONTEXT_BEFORE,
-            local_context_after=BATCH_CONTEXT_AFTER,
-            history_char_limit=RAG_HISTORY_CHAR_LIMIT,
-            story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
-            analysis_char_limit=PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
-            include_source_text=True,
-            include_translation_memory=True,
-            story_block_suffix='\n\n',
-        ),
+        context_policy=_batch_plan_context_policy(),
         preserve_terms=legacy.PRESERVE_TERMS,
         normalize_map=legacy.NORMALIZE_TRANSLATION_MAP,
         non_translatable_exact=getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
@@ -4636,7 +4817,7 @@ def build_revision_chunks(file_jobs, chunk_size=None):
             )
             context_past_items = items[max(0, start - BATCH_CONTEXT_BEFORE):start]
             context_future_items = items[end:min(total, end + BATCH_CONTEXT_AFTER)]
-            glossary_hits = retrieve_glossary_hits(target_items) if RAG_ENABLED else []
+            glossary_hits = retrieve_revision_glossary_hits(target_items)
             history_hits, rag_stats = retrieve_history_hits(
                 target_items,
                 [item.get('source', '') for item in context_past_items],
@@ -6181,26 +6362,48 @@ def build_retry_subchunk(chunk, start, end, sub_index):
         context_future = (copy.deepcopy(items[end:min(len(items), end + BATCH_CONTEXT_AFTER)]) + context_future)[:BATCH_CONTEXT_AFTER]
     subchunk['context_past'] = context_past
     subchunk['context_future'] = context_future
-    # The subchunk has new items and a new key; a P2 plan request from the
-    # parent would no longer match. Drop plan-rendered fields so
-    # build_batch_request regenerates a legacy prompt for the subchunk instead
-    # of reusing a stale TranslationRequest.
-    for plan_field in (
-        'request_id',
-        'plan_id',
-        'chunk_id',
-        'system_instruction',
-        'user_prompt',
-        'response_schema',
-        'expected_ids',
-        'capability_requirements',
-        'generation_config',
-        'transport_metadata',
-        'context_assembly',
-        'prompt_fingerprint',
-        'request_fingerprint',
-    ):
-        subchunk.pop(plan_field, None)
+    if _chunk_has_plan_request(chunk):
+        # The parent was built through TranslationPlan. Rebuild a derived
+        # canonical request for the subchunk instead of falling back to the
+        # legacy builders; the derived request uses the parent plan_id and
+        # carries deterministic retry lineage in transport metadata.
+        plan_request = _build_retry_subchunk_plan_request(chunk, subchunk)
+        subchunk.update(
+            {
+                'request_id': plan_request.request_id,
+                'plan_id': plan_request.plan_id,
+                'chunk_id': plan_request.chunk_id,
+                'system_instruction': plan_request.system_instruction,
+                'user_prompt': plan_request.user_prompt,
+                'response_schema': plan_request.response_schema,
+                'expected_ids': plan_request.expected_ids,
+                'capability_requirements': plan_request.capability_requirements,
+                'generation_config': plan_request.generation_config,
+                'transport_metadata': plan_request.transport_metadata,
+                'context_assembly': plan_request.context_assembly,
+                'prompt_fingerprint': plan_request.prompt_fingerprint,
+                'request_fingerprint': plan_request.request_fingerprint,
+            }
+        )
+    else:
+        # Old manifests have no plan fields; their retry subchunks keep using
+        # the legacy builders via build_batch_request.
+        for plan_field in (
+            'request_id',
+            'plan_id',
+            'chunk_id',
+            'system_instruction',
+            'user_prompt',
+            'response_schema',
+            'expected_ids',
+            'capability_requirements',
+            'generation_config',
+            'transport_metadata',
+            'context_assembly',
+            'prompt_fingerprint',
+            'request_fingerprint',
+        ):
+            subchunk.pop(plan_field, None)
     return subchunk
 
 
