@@ -96,7 +96,8 @@ doctor -> build -> submit -> status -> download -> check -> apply
 存在可导出的译文时，点击「导出润色语料」即可生成只读的 JSONL、Markdown 与
 `revision_corpus_manifest.json`。结果区会显示条目/文件数量、生成时间和三类 artifact
 路径，也可打开输出目录或复制路径；导出不会修改 `.rpy`。没有项目、检查未通过、没有
-可导出译文或已有任务运行时，入口会在点击前禁用。
+可导出译文或已有任务运行时，入口会在点击前禁用；刚完成翻译或写回后，请重新运行
+环境检查以刷新当前译文计数。
 
 如需导入人工或 Agent 润色建议，打开左侧「订正」，点击「导入润色提案」并选择
 schema v1 JSONL。GUI 会在本地校验 occurrence identity、语料/项目快照、当前译文、

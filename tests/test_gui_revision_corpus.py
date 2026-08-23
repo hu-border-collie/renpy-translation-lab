@@ -305,6 +305,16 @@ class RevisionCorpusPreflightTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertEqual(message, "")
 
+    def test_stale_doctor_count_requires_recheck_after_translation_write(self) -> None:
+        window = self._window()
+        window._last_doctor_report = {"translated_task_count": 0}
+        window._revision_corpus_doctor_report_stale = True
+
+        allowed, message = window._revision_corpus_export_preflight()
+
+        self.assertFalse(allowed)
+        self.assertIn("重新运行环境检查", message)
+
     def test_blank_template_counts_do_not_enable_export(self) -> None:
         window = self._window()
         window._last_doctor_report = {

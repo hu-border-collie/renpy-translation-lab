@@ -675,6 +675,7 @@ class MainWindow(QMainWindow):
         self._retired_doctor_workers: set[DoctorWorker] = set()
         self._last_doctor_report: dict | None = None
         self._last_doctor_report_game_root = ""
+        self._revision_corpus_doctor_report_stale = False
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
@@ -9750,20 +9751,19 @@ class MainWindow(QMainWindow):
         if not isinstance(report, Mapping):
             return False
 
-        # Doctor's adapter-backed progress count is the strongest available
-        # preflight signal.  It avoids a second GUI-side Ren'Py scan while still
-        # distinguishing an existing TL directory from actual translated units.
+        # This count comes from the latest doctor scan; old/new lines alone also
+        # occur in blank templates and are not a safe substitute.
         if "translated_task_count" in report:
             try:
                 return int(report.get("translated_task_count") or 0) > 0
             except (TypeError, ValueError):
                 return False
 
-        # Do not infer historical translations from old/new line counters:
-        # blank TL templates contain those pairs too.  Full doctor reports
-        # always provide translated_task_count; an older/incomplete artifact
-        # must conservatively keep the export action gated.
         return False
+
+    def _mark_revision_corpus_doctor_report_stale(self) -> None:
+        """Invalidate the cached translation count after a write-capable job."""
+        self._revision_corpus_doctor_report_stale = True
 
     def _revision_corpus_export_preflight(self) -> tuple[bool, str]:
         """Return whether the read-only corpus export may be started."""
@@ -9778,6 +9778,8 @@ class MainWindow(QMainWindow):
             return False, REVISION_CORPUS_COPY["gate_no_project"]
         if not self._doctor_check_completed or not self._doctor_allows_translate_action():
             return False, REVISION_CORPUS_COPY["gate_doctor"]
+        if getattr(self, "_revision_corpus_doctor_report_stale", False):
+            return False, REVISION_CORPUS_COPY["gate_doctor_stale"]
 
         report = getattr(self, "_last_doctor_report", None)
         reported_root = str(getattr(self, "_last_doctor_report_game_root", "") or "")
@@ -10875,6 +10877,7 @@ class MainWindow(QMainWindow):
         self._doctor_summary_status = ""
         self._last_doctor_report = None
         self._last_doctor_report_game_root = ""
+        self._revision_corpus_doctor_report_stale = False
         self._set_doctor_summary(stale_summary())
         spec = work_mode_spec(self._current_work_mode())
         if spec.is_bootstrap:
@@ -11954,6 +11957,7 @@ class MainWindow(QMainWindow):
         if result.ok and result.report is not None:
             self._last_doctor_report = result.report
             self._last_doctor_report_game_root = self.state.get_game_root() or ""
+            self._revision_corpus_doctor_report_stale = False
             summary = summarize_doctor_report(
                 result.report,
                 exit_code=0,
@@ -11996,6 +12000,7 @@ class MainWindow(QMainWindow):
             self._doctor_check_completed = False
             self._last_doctor_report = None
             self._last_doctor_report_game_root = ""
+            self._revision_corpus_doctor_report_stale = True
             self.statusBar().showMessage("项目检查失败。", 6000)
 
         self._set_doctor_summary(summary)
@@ -12997,6 +13002,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._repair_output_lines = []
@@ -13114,6 +13120,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         manifest_path = self._writeback_manifest_path
         self._clear_log_view()
         self._show_workbench_log_drawer()
@@ -13151,6 +13158,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         workflow = SyncTranslationWorkflow.apply_existing(manifest_path)
@@ -13201,6 +13209,7 @@ class MainWindow(QMainWindow):
             message_box_information(self, "无法写回订正", "没有可写回的订正任务记录。")
             return
 
+        self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_revision_output_lines = []

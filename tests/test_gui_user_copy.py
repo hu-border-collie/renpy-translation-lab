@@ -24,6 +24,7 @@ class GuiUserCopyTests(unittest.TestCase):
     def test_revision_corpus_copy_explains_read_only_gates_and_actions(self):
         self.assertIn("只读", REVISION_CORPUS_COPY["tooltip"])
         self.assertIn("环境检查", REVISION_CORPUS_COPY["gate_doctor"])
+        self.assertIn("重新运行环境检查", REVISION_CORPUS_COPY["gate_doctor_stale"])
         self.assertIn("打开输出目录", REVISION_CORPUS_COPY["open_output_dir"])
         self.assertIn("复制路径", REVISION_CORPUS_COPY["copy_paths"])
 

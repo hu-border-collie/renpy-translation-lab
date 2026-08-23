@@ -7,6 +7,7 @@ from .revision_corpus_report import (
     summarize_revision_corpus_output,
 )
 from .translation_workflow import WorkflowStep, WorkflowUpdate
+from .user_copy import REVISION_CORPUS_COPY
 
 
 class RevisionCorpusExportWorkflow:
@@ -55,6 +56,6 @@ class RevisionCorpusExportWorkflow:
         return WorkflowUpdate(
             status="stale",
             heading="导出结果已过期",
-            message="项目已切换，刚才的导出结果已丢弃；请在当前项目重新导出。",
+            message=REVISION_CORPUS_COPY["stale_message"],
             facts=[],
         )
