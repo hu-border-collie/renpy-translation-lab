@@ -257,7 +257,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 - `artifacts(run_id, kind, relative_path, sha256, schema_version, created_at,
   UNIQUE(run_id, kind))`。
 
-所有 payload JSON 使用 canonical serialization；schema migration 只向前，未知较新版本拒绝写入但可给出升级建议。数据库连接启用 `busy_timeout`；只有 scheduler writer 能变更 request/attempt，cancel 通过短事务写取消意图。
+所有 payload JSON 使用 canonical serialization；schema migration 只向前，未知较新版本拒绝写入但可给出升级建议。数据库连接启用 `busy_timeout`。只有持有当前 run lease 的 scheduler writer 能变更 request/attempt；不持 lease 的 `cancel` caller 只可用短 `BEGIN IMMEDIATE` 事务写 run 级取消意图/epoch/event，request/attempt closeout 仍由 lease owner 执行。
 
 `client_token` 省略、空白或空字符串时规范化为 SQL `NULL`，语义始终是“创建新 run”。只有非空 token 的 digest 参与稳定 run path/ID；bootstrap 由 `<log_dir>/sync_runs/.start.lock` 串行化，相同 digest 因确定性目录只能打开同一个 run。相同 token 但 plan/policy 输入 digest 不同返回 `SYNC_RUN_CLIENT_TOKEN_CONFLICT`，不能误当旧 run。token 原文不落盘；若后续增加项目级 run registry，唯一性必须是 `WHERE client_token_digest IS NOT NULL` 的 partial index，绝不能把 `""` 当唯一键。
 
@@ -273,7 +273,8 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 | T3 successful receipt | 先校验 lease owner token、claim 时的 cancel epoch 和 attempt 状态；匹配时保存原始/规范化响应、contract diagnostics、accepted winners、usage outbox，并同事务转换 attempt/request/event | 提交后即为权威成功；summary/export 可任意重建；guard 失败则只走 late receipt |
 | T4 failed receipt | 使用与 T3 相同的 owner/epoch/status guard；匹配时保存分类、safe error、usage（若有）、下一退避时间或 terminal 决策、释放 reservation | resume 只按已提交决定继续；guard 失败不改 request/run 结果 |
 | T5 derive/split | 父 request 置 `superseded`，插入所有 children 与 lineage events | 不会出现半棵 lineage |
-| T6 cancel | 首次取消把 run 置 `cancel_requested` 并递增一次 epoch；pending/retryable request 置 `cancelled`；`prepared` attempt/request 直接置 `cancelled`；只有 `dispatched` attempt 置 `cancel_requested` | 此后 scheduler 禁止创建 attempt；prepared 从未调用 Provider |
+| T6a cancel intent | 任意 caller 用短事务校验 run 非终态，首次取消把 run 置 `cancel_requested`、递增一次 epoch 并写一个事件；不改 request/attempt | 与 T1/T3/T4 由 SQLite writer lock 排出唯一提交顺序；意图先提交则后续 claim/receipt guard 必须看见新 epoch |
+| T6b cancel closeout | 当前 lease owner 把 pending/retryable request 置 `cancelled`；`prepared` attempt/request 直接置 `cancelled`；只有 `dispatched` attempt 置 `cancel_requested` | 此后禁止创建 attempt；prepared 从未调用 Provider；无第二个 request/attempt writer |
 | T7 outbox ack | usage ledger 已幂等写入后标 `delivered_at` | 任一侧崩溃都可重放，ledger 去重 |
 | T8 finalize | 由明细验证终态，记录 run 终态和 result artifact generation | artifacts 可在事务外原子重建；run 终态不依赖文件存在 |
 
@@ -310,7 +311,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
    - `prepared` 绝不能在此阶段 dispatch；cancel requested 时直接取消，终态 run 若仍有 prepared 则报告不变量损坏；
    - 重放 usage outbox，重建 summary/result/manifest artifact 投影并 checkpoint；
 4. closeout 后重新读取 run。终态 resume 返回当前 snapshot；没有修复时 `changed=false`，补投 outbox、补 artifact 或追加 recovery receipt/event 时 `changed=true`；终态只禁止模型调度，不禁止幂等审计修复；
-5. 若 run 为 `cancel_requested`，完成 T6 收口并返回，不做 freshness 后的新调用；
+5. 若 run 为 `cancel_requested`，由当前 lease owner 完成 T6b 收口并返回，不做 freshness 后的新调用；
 6. **阶段 B：scheduling** 前重新验证 source/profile/config freshness；不兼容时释放 lease并返回 `SYNC_RUN_FRESHNESS_MISMATCH`。阶段 A 已提交的历史 closeout/物化修复保留并在 error details 报告，但不替换 plan、不 dispatch prepared、不产生新模型调用；
 7. freshness 通过后，才允许把既有 `prepared` 继续到 T2，并只选择 eligible `pending` / `retryable_failed` request 调度；
 8. 达到终态/静止态后，把因 run-level cap 不可再调度的 active leaf 原子终结，再计算 `completed`、`completed_with_errors` 或 `failed`；
@@ -320,9 +321,11 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 
 ### 7.2 取消
 
-- 第一次 `cancel(run_id)` 提交取消意图、递增一次 `cancel_epoch` 并写一个事件；重复 cancel 返回同一 snapshot、`changed=false`，不再增加 epoch、revision 或事件；scheduler 每次 T1/T2 前检查 epoch；
-- pending/retryable request 当场转 `cancelled`；`prepared` attempt 与对应 request 同事务直接转 `cancelled`，不调用 backend，也不会进入 unknown/late；
-- `dispatched` attempt 才转 `cancel_requested` 并调用 backend best-effort cancel；对应 request 保持 `in_flight`，直到 attempt 在同一 receipt 事务落到 cancelled、outcome unknown 或 late/ignored 后再转 request `cancelled` / `outcome_unknown`；
+- 第一次 `cancel(run_id)` 通过 T6a 提交取消意图、递增一次 `cancel_epoch` 并写一个事件；重复 cancel 返回同一 snapshot、`changed=false`，不再增加 epoch、revision 或事件；scheduler 每次 T1/T2 前检查 epoch；
+- T6a 不要求抢占活跃 lease，也不直接改 request/attempt：若已有 scheduler owner，它在 heartbeat/调度边界观察新 epoch 并执行 T6b；若没有活跃 owner，cancel service 可获取 lease 后以 closeout scheduler 身份执行 T6b。未取得 lease 的 caller 可立即返回耐久的 `cancel_requested` snapshot，不伪报已完成取消；
+- T6b 中 pending/retryable request 转 `cancelled`；`prepared` attempt 与对应 request 同事务直接转 `cancelled`，不调用 backend，也不会进入 unknown/late；
+- `dispatched` attempt 才由 T6b 转 `cancel_requested` 并调用 backend best-effort cancel；对应 request 保持 `in_flight`，直到 attempt 在同一 receipt 事务落到 cancelled、outcome unknown 或 late/ignored 后再转 request `cancelled` / `outcome_unknown`；
+- T6a 与 T1/T3/T4 都是短 `BEGIN IMMEDIATE` 事务：T1/T3 先提交时其 claim/receipt 是取消前事实，T6b 随后按已提交状态收口；T6a 先提交时，后续 T1 必须拒绝，旧 T3/T4 因 claim epoch 不匹配只能走 late/ignored。不存在两个事务同时改 request/attempt；
 - GUI/CLI 的“关闭/停止本地 worker”与“取消 run”必须是两个动作：关闭只释放/等待 lease，run 仍可 resume；取消是不可逆业务终态；
 - 若 worker 已死，cancel 可在 lease 过期后把 orphaned dispatched attempt 标 unknown，并将 run 收口为 `cancelled`；
 - cancel 后任何响应都只能进入 `late_succeeded_ignored` / `late_failed_ignored`，不能恢复 request 或把 run 标成功。
@@ -394,6 +397,7 @@ resume 不重新组装 prompt。即使旧 request payload 仍可执行，只要 
 - 同时应用 run、Provider/profile 和 credential 级 semaphore/rate limiter；capability/profile 给出的上限优先于用户较大值；
 - T1 在同一事务检查 cancel、lease、run/request 状态、attempt/root/run/cost 上限并做 reservation；
 - worker 返回后必须先通过 T3/T4 的 owner-token、claim-epoch、attempt-status guard，再释放并发位；guard 失败只追加 late receipt/usage，commit 失败立即打开全局 dispatch circuit breaker；
+- cancel intent writer 只改 run/epoch/event；request/attempt 的 T6b 转换与 T1–T5/T8 一样只由当前 lease owner 执行。scheduler 的 heartbeat/下一调度边界必须检查 epoch 并优先 closeout，不能在活跃 lease 外另起一个 cancel writer；
 - heartbeat 只证明 scheduler owner 活跃，不证明某个远端调用结果；lease 过期绝不能把 dispatched attempt 变回 pending。生产 worker 在 Provider I/O 期间使用独立 heartbeat 线程；lease TTL 必须大于 heartbeat interval + scheduler grace。若实现不能提供独立 heartbeat，则 TTL 至少为冻结的最大 attempt timeout + cancel/commit grace，避免仍在合法网络等待的 owner 被过早夺租。
 
 ## 10. 统一 result/check 门禁与策略特有 preview/apply 接口
@@ -579,7 +583,7 @@ Artifacts 使用 envelope 顶层 `artifacts`：`run_dir`、`state_db`、`plan`�
 | F11 | invalid JSON/截断且整批无进展 | 只在允许分类下创建 L/R；父和 children 原子出现 |
 | F12 | 部分有效 + missing IDs | accepted ID 不重调；只创建稳定 `--M-...` child |
 | F13 | split T5 任一语句前后强杀 | DB 中不存在半棵 lineage；root attempt cap 不被 children 放大 |
-| F14 | prepared + dispatched 并存时 cancel | prepared 直接 cancelled、Provider cancel 0；dispatched 才 cancel_requested；cancel 后无新 dispatch，迟到成功 ignored |
+| F14 | prepared + dispatched 并存及 cancel 与 T1/T3 交错 | T6a 只写 intent；lease owner 的 T6b 将 prepared 直接 cancelled、Provider cancel 0，dispatched 才 cancel_requested；intent 先于 T1/T3 时 claim 被拒绝/receipt ignored，intent 后提交时按先前事实收口；cancel 后无新 dispatch |
 | F15 | 重复 cancel/status/resume | 第二次 cancel `changed=false` 且 epoch/revision/event 不增长；终态 resume 可修 outbox/artifact 但 Provider 调用数不变 |
 | F16 | 两个进程同时 resume | 一个取得 lease；另一个 `SYNC_RUN_BUSY` / retryable / exit 6；无重复 dispatch |
 | F17 | worker I/O 时 lease 过期/owner 被替换 | dispatched 不回 pending；旧 worker T3/T4 guard 失败，只写 late receipt/usage，不写 winner |
