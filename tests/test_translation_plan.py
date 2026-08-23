@@ -626,13 +626,18 @@ class ContextAssemblyTests(unittest.TestCase):
             analysis_blocks_text='',
         )
         assembly = translation_plan.assemble_context_layers(chunk_input)
-        empty_layers = [layer for layer in assembly.layers if not layer.text]
-        # Required/local/project render non-empty for real chunks; with no
-        # units and no providers the empty-text layers collapse to the first
-        # occurrence and later ones are dropped with a recorded reason.
-        self.assertLessEqual(len(assembly.layers), 5)
+        # With no units and no providers, the project layer renders the first
+        # empty text (kept) and retrieval/analysis duplicate it (dropped).
+        # Removing the duplicate-drop logic must fail these assertions.
+        self.assertEqual(len(assembly.layers), 3)
+        self.assertTrue(assembly.dropped)
+        self.assertEqual(
+            {item['layer'] for item in assembly.dropped},
+            {translation_plan.CONTEXT_LAYER_RETRIEVAL, translation_plan.CONTEXT_LAYER_ANALYSIS},
+        )
         for dropped in assembly.dropped:
             self.assertEqual(dropped['reason'], 'duplicate_text')
+            self.assertEqual(dropped['char_used'], 0)
 
     def test_local_layer_records_block_bounded_diagnostics(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)

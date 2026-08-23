@@ -17,12 +17,13 @@ Hard constraints (enforced by tests):
   and unordered inputs (sets) are canonicalized before hashing;
 * ``run_id`` is an audit label only; retrieved content is captured by
   ``prompt_fingerprint``, not by ``plan_id``;
-* retrieval and analysis layer texts are embedded in the canonical prompt
-  verbatim after budgeting, so those layers' accounting matches the prompt
-  byte-for-byte; the required/local/project layers are canonical renderings
-  owned by the ``translation_core`` prompt builders and are accounted in the
-  assembly for budget and diagnostics only — the request's ``user_prompt``
-  stays the authoritative record of what the model sees.
+* retrieval and analysis layer texts are budgeted, newline-normalized, and
+  joined on a fixed blank-line separator; their ``char_used`` counts exactly
+  the bytes the canonical prompt embeds. The required/local/project layers
+  are canonical renderings owned by the ``translation_core`` prompt builders
+  and are accounted in the assembly for budget and diagnostics only — the
+  request's ``user_prompt`` stays the authoritative record of what the model
+  sees.
 """
 
 from dataclasses import dataclass, field
@@ -47,14 +48,12 @@ CONTEXT_LAYER_LOCAL = 'local'
 CONTEXT_LAYER_PROJECT = 'project'
 CONTEXT_LAYER_RETRIEVAL = 'retrieval'
 CONTEXT_LAYER_ANALYSIS = 'analysis'
-CONTEXT_LAYER_BUDGET = 'budget'
 CONTEXT_LAYER_RANKS = {
     CONTEXT_LAYER_REQUIRED: 1,
     CONTEXT_LAYER_LOCAL: 2,
     CONTEXT_LAYER_PROJECT: 3,
     CONTEXT_LAYER_RETRIEVAL: 4,
     CONTEXT_LAYER_ANALYSIS: 5,
-    CONTEXT_LAYER_BUDGET: 6,
 }
 
 # Keys are normalized (lowercased, '-'/'_'/' ' stripped) before matching so
@@ -355,7 +354,7 @@ def render_lexical_glossary_text(hits):
     return '\n'.join(lines)
 
 
-# --- Context assembly (six layers, deterministic ordering and budgets) --------
+# --- Context assembly (five content layers, deterministic order and budgets) --
 
 
 @dataclass
@@ -482,9 +481,10 @@ def _retrieval_layer(chunk_input, policy):
 
     Providers normally render through :func:`render_reference_blocks`, which
     already applies the per-section history/story limits. Whatever text still
-    exceeds the combined D5 envelope here is truncated deterministically so
-    the layer's accounting matches what the canonical prompt embeds (the
-    prompt is built from the kept layer texts).
+    exceeds the combined D5 envelope here is truncated deterministically,
+    then trailing newlines are stripped so ``char_used`` counts exactly the
+    bytes the canonical prompt embeds (layers join on a fixed blank-line
+    separator).
     """
     text = str(chunk_input.retrieval_blocks_text or '')
     limit = policy.history_char_limit + policy.story_char_limit
@@ -492,6 +492,7 @@ def _retrieval_layer(chunk_input, policy):
     if text and len(text) > limit:
         text = text[:limit]
         truncated = True
+    text = text.rstrip('\n')
     diagnostics = {
         'budget_mode': 'd5_combined_backstop',
         'history_char_limit': policy.history_char_limit,
@@ -514,8 +515,9 @@ def _analysis_layer(chunk_input, policy):
 
     Published Project Analysis briefs have their own upstream budget (batch
     ``max_brief_chars``); whatever provider text still exceeds the policy
-    limit here is truncated deterministically so no layer enters the prompt
-    unbounded.
+    limit here is truncated deterministically and trailing newlines are
+    stripped, so no layer enters the prompt unbounded and ``char_used``
+    counts the embedded bytes.
     """
     text = str(chunk_input.analysis_blocks_text or '')
     limit = policy.analysis_char_limit
@@ -523,6 +525,7 @@ def _analysis_layer(chunk_input, policy):
     if text and len(text) > limit:
         text = text[:limit]
         truncated = True
+    text = text.rstrip('\n')
     return ContextLayerResult(
         layer=CONTEXT_LAYER_ANALYSIS,
         rank=CONTEXT_LAYER_RANKS[CONTEXT_LAYER_ANALYSIS],
@@ -542,8 +545,9 @@ def assemble_context_layers(chunk_input, context_policy=None):
     """Assemble the five content layers in fixed rank order (issue #346).
 
     Identical layer texts are dropped deterministically (later rank loses) and
-    recorded in the drop log; per-layer character budgets and truncation flags
-    feed the sixth (budget) layer's accounting.
+    recorded in the drop log; per-layer character budgets and truncation
+    flags are accounted at the assembly level via ``total_char_used`` and
+    ``dropped``.
     """
     policy = context_policy or ContextPolicy()
     results = [

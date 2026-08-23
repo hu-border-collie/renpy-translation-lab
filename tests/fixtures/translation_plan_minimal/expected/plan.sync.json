@@ -124,25 +124,25 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "872bbbc7aa330c5b",
+  "plan_fingerprint": "b2b6ed61ce8e4b6d",
   "plan_id": "b718a000d7b28fc8",
   "request_summaries": [
     {
       "chunk_id": "004851531f-00001",
-      "prompt_fingerprint": "05b50b65da84b6fa",
-      "request_fingerprint": "14f82763cbaf89f1",
+      "prompt_fingerprint": "e14597acfc6111bf",
+      "request_fingerprint": "834db6c7a8fd6618",
       "request_id": "0ad090eade0fba5d"
     },
     {
       "chunk_id": "004851531f-00002",
-      "prompt_fingerprint": "4508daee3de4cd63",
-      "request_fingerprint": "ede670c9765072e8",
+      "prompt_fingerprint": "926854780f0e1ea7",
+      "request_fingerprint": "f04d56049df22ea0",
       "request_id": "6e7dcbcfed5d4edb"
     },
     {
       "chunk_id": "029e98ba77-00001",
-      "prompt_fingerprint": "af431f0d8cae99d7",
-      "request_fingerprint": "4fbc18ac3c7c8aae",
+      "prompt_fingerprint": "00756b8992768dfe",
+      "request_fingerprint": "74043d88587073ed",
       "request_id": "8080ab948435b217"
     }
   ],
