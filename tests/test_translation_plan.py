@@ -745,6 +745,53 @@ class ContextAssemblyTests(unittest.TestCase):
         )
 
 
+class DerivedRequestTests(unittest.TestCase):
+    def test_d7_child_is_deterministic_and_does_not_mutate_parent_plan(self):
+        build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        parent = build.requests[0]
+        parent_plan = translation_plan.canonical_json(build.plan.to_dict())
+        parent_request = translation_plan.canonical_json(parent.to_dict())
+        item = _load_json('file_jobs.json')[0]['tasks'][0]
+        kwargs = dict(
+            lineage_suffix='--L',
+            file_rel_path='chapter01/dialogue.rpy',
+            context_window=translation_core.ContextWindow(),
+            preserve_terms=_load_json('glossary.json')['preserve_terms'],
+            normalize_map=_load_json('glossary.json')['normalize_map'],
+            non_translatable_exact=(
+                _load_json('glossary.json')['non_translatable_exact']
+            ),
+            macro_setting=_load_text('macro_setting.txt').strip(),
+            retrieval_blocks_text=_load_text('retrieval_blocks.txt'),
+            analysis_blocks_text=_load_text('analysis_blocks.txt'),
+            lineage_kind='split',
+        )
+
+        first = translation_plan.derive_translation_request(
+            parent, [item], **kwargs
+        )
+        second = translation_plan.derive_translation_request(
+            parent, [item], **kwargs
+        )
+
+        self.assertEqual(first.to_dict(), second.to_dict())
+        self.assertEqual(first.request_id, f'{parent.request_id}--L')
+        self.assertEqual(first.plan_id, parent.plan_id)
+        self.assertEqual(first.expected_ids, [str(item['id'])])
+        self.assertEqual(
+            first.transport_metadata['retry_parent_request_id'],
+            parent.request_id,
+        )
+        self.assertEqual(
+            translation_plan.canonical_json(build.plan.to_dict()),
+            parent_plan,
+        )
+        self.assertEqual(
+            translation_plan.canonical_json(parent.to_dict()),
+            parent_request,
+        )
+
+
 class GoldenPlanTests(unittest.TestCase):
     def test_sync_plan_matches_frozen_golden(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)

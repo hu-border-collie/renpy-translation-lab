@@ -46,8 +46,8 @@
         "requires_key": true
       }
     ],
-    "chunk_size": 40,
-    "max_source_chars": 12000,
+    "chunk_size": 60,
+    "max_source_chars": 18000,
     "max_output_tokens": 24576,
     "timeout_seconds": 120,
     "context_before": 30,
@@ -70,7 +70,7 @@
     "story_memory": {
       "enabled": false,
       "graph_file": "",
-      "max_context_chars": 800,
+      "max_context_chars": 1200,
       "top_k_relations": 4,
       "top_k_terms": 8,
       "include_scene_summary": true

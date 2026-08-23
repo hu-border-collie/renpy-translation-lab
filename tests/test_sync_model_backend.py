@@ -91,6 +91,27 @@ class SyncModelBackendTests(unittest.TestCase):
             },
         )
 
+    def test_gemini_adapter_passes_canonical_system_instruction(self):
+        client = _Client(_Response())
+        backend = GeminiSyncBackend(
+            client,
+            serialize_response=lambda response: {},
+            extract_text=lambda payload: "",
+            extract_finish_reason=lambda payload: "",
+        )
+
+        backend.generate(SyncGenerationRequest(
+            "gemini-test",
+            "user prompt",
+            {"system_instruction": "canonical rules"},
+        ))
+
+        self.assertEqual(
+            client.models.calls[0]["config"]["system_instruction"],
+            "canonical rules",
+        )
+        self.assertEqual(client.models.calls[0]["contents"], "user prompt")
+
     def test_gemini_adapter_keeps_named_schema_and_removes_internal_mode_hint(self):
         schema = {
             "type": "object",

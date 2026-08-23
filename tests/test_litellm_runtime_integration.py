@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 import model_profile as mp
+import translation_plan
 import translator_runtime as runtime
 
 
@@ -96,6 +97,48 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(request.model, "openai/test")
         self.assertEqual(request.config["timeout"], 45)
         self.assertEqual(result, [{"id": "a", "translation": "你好"}])
+
+    def test_runtime_sends_plan_system_and_user_prompts_to_litellm(self):
+        fake_result = type("Result", (), {
+            "parsed": None,
+            "response_text": '{"translations":[{"id":"a","translation":"你好"}]}',
+            "response_payload": {},
+            "finish_reason": "stop",
+            "usage_metadata": {},
+            "request_metadata": {},
+            "provider": "litellm",
+            "model": "openai/test",
+            "execution_mode": "sync",
+        })()
+        fake_backend = mock.Mock()
+        fake_backend.generate.return_value = fake_result
+        items = [{"id": "a", "text": "Hello"}]
+        request = translation_plan.TranslationRequest(
+            request_id="req-1",
+            plan_id="plan-1",
+            chunk_id="chunk-1",
+            system_instruction="canonical system",
+            user_prompt="canonical user",
+            response_schema=runtime.build_response_json_schema(items),
+            expected_ids=["a"],
+            generation_config={"temperature": 0.2},
+        )
+
+        with (
+            mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+            mock.patch.object(runtime, "get_current_model", return_value="openai/test"),
+            mock.patch("litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
+        ):
+            runtime.call_gemini_sdk(
+                "legacy prompt",
+                items,
+                translation_request=request,
+            )
+
+        sent = fake_backend.generate.call_args.args[0]
+        self.assertEqual(sent.contents, "canonical user")
+        self.assertEqual(sent.config["system_instruction"], "canonical system")
+        self.assertEqual(sent.config["response_json_schema"], request.response_schema)
 
     def test_sync_settings_default_to_gemini_and_accept_litellm(self):
         previous = runtime.SYNC_BACKEND

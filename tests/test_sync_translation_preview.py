@@ -289,6 +289,27 @@ class SyncTranslationPreviewTests(unittest.TestCase):
 
             self.assertEqual(target.read_text(encoding="utf-8"), source)
             manifest = preview.load_sync_preview(manifest_path)
+            self.assertEqual(
+                manifest["translation_plan"]["execution_strategy"],
+                "sync",
+            )
+            self.assertEqual(
+                manifest["plan_fingerprint"],
+                manifest["translation_plan"]["plan_fingerprint"],
+            )
+            self.assertEqual(
+                manifest["request_ids"],
+                [
+                    item["request_id"]
+                    for item in manifest["translation_plan"]["request_summaries"]
+                ],
+            )
+            self.assertEqual(
+                manifest["translation_plan"]["source_identity"]["file_digests"][
+                    "script.rpy"
+                ],
+                manifest["files"][0]["source_sha256"],
+            )
             proposed = Path(manifest_path).parent / manifest["files"][0]["preview_path"]
             self.assertEqual(proposed.read_text(encoding="utf-8"), '    "你好"\n')
             coverage_dir = Path(manifest_path).parent / "coverage"
@@ -301,6 +322,22 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     "coverage_review_template.json",
                 },
             )
+
+            stored = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+            stored["request_ids"] = ["tampered-request"]
+            # Even if an editor recomputes the unkeyed preview fingerprint,
+            # the plan/request binding is independently revalidated at apply.
+            stored["preview_fingerprint"] = preview._fingerprint(stored)
+            Path(manifest_path).write_text(
+                json.dumps(stored, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "request ids do not match"):
+                preview.prepare_sync_preview_apply(
+                    manifest_path,
+                    active_project_root=root,
+                    active_tl_dir=tl_dir,
+                )
 
     def test_apply_revalidates_then_writes_and_marks_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -74,7 +74,9 @@ class GuiSettingsSchemaTests(unittest.TestCase):
     def test_read_advanced_settings_uses_defaults_for_missing_config(self):
         values = read_advanced_settings({})
 
-        self.assertEqual(values["sync_chunk_size"], 40)
+        self.assertEqual(values["sync_chunk_size"], 60)
+        self.assertEqual(values["sync_max_source_chars"], 18000)
+        self.assertEqual(values["sync_story_memory_max_context_chars"], 1200)
         self.assertEqual(values["sync_timeout_seconds"], 120)
         self.assertEqual(values["sync_context_before"], 30)
         self.assertEqual(values["sync_context_after"], 10)

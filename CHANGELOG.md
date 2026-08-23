@@ -23,6 +23,7 @@
 
 ### 变更
 
+- 普通 Sync 初译改为消费共享 TranslationPlan（#346 P3）：默认 chunk 对齐为 60/18000，Sync/Gemini Batch 共用 canonical system/user prompt、响应 schema、ContextAssembler 与稳定 request/prompt/plan fingerprint；Gemini、LiteLLM 和自定义 OpenAI-compatible Provider 均显式传递 system instruction。缺项/无效响应只生成带 `--T` / `--L` / `--R` lineage 的确定性派生请求，不修改原 plan；sync preview manifest 绑定 plan、request IDs、逐文件 source digest 与既有 adapter writeback/source snapshot 门禁。旧显式 Sync 分块配置与无 plan 的旧 preview manifest 保持兼容。
 - Gemini Batch 初译构建改为消费 TranslationPlan（#346 P2）：`build_chunks` 通过 `translation_plan.build_translation_plan` 生成 plan 与 requests，`build_batch_request` 只负责把 `TranslationRequest` 包成 Batch envelope；manifest v2 增加 `translation_plan` 块，chunk 与 `requests.jsonl` 写入 `request_id` / `prompt_fingerprint` / `request_fingerprint` 可审计字段。Batch 初译 prompt 切换为 canonical system/user 形态，词法 glossary（`normalize_map` / `preserve_terms` / `non_translatable_exact`）解除 `RAG_ENABLED` 门控且不再按 `RAG_TOP_K_TERMS` 截断，未开启 RAG 时也会注入命中的本地术语。
 
 - 模型任务在 prepare、创建 package 或发送请求前按活动阶段校验 ModelProfile、ExecutionStrategy、能力与凭据引用；不支持的组合返回稳定机器错误。`doctor` 增加只读模型路由诊断，`model_routing.status` 为 `ok` / `attention`，不改变 doctor 退出码。`submit --model` 只覆盖当前 Batch 阶段并保留冻结快照。GUI LiteLLM 连接测试改用与生产请求相同的 profile resolver/backend factory，路由预检失败显示稳定错误码而不是 JSON 能力失败。

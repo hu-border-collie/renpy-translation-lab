@@ -11,17 +11,22 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 import zlib
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+import model_profile
 import prompt_context
 import rag_memory
 import story_memory
 import translation_core
+import translation_plan
 import translator_runtime as runtime
+from engine_adapters.contracts import SourceDocument
 
 
 GOLDEN_BATCH_FIXTURE_DIR = Path(__file__).parent / 'fixtures' / 'golden_batch_minimal'
@@ -117,6 +122,140 @@ def _restore_translator_runtime_state(snapshot):
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
+        content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'
+        digest = hashlib.sha256(content).hexdigest()
+        document = SourceDocument(
+            file_rel_path='script.rpy',
+            file_path='C:/fixture/script.rpy',
+            size=len(content),
+            sha256=digest,
+            content=content,
+        )
+        project = types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='project-snapshot',
+            source_documents=(document,),
+        )
+        snapshot = types.SimpleNamespace(project=project)
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': document.file_path,
+            'tasks': [
+                {
+                    'id': 'script:1:4',
+                    'text': 'Encore tonight.',
+                    'line': 1,
+                    'speaker_id': 'e',
+                    'speaker_name': 'Eileen',
+                    'block_name': 'start',
+                },
+                {
+                    'id': 'script:2:4',
+                    'text': 'Keep [Gil_name!t].',
+                    'line': 2,
+                    'block_name': 'start',
+                },
+            ],
+        }]
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+            sync_models=('gemini-2.5-flash',),
+        )
+        glossary = {
+            'Encore': '返场',
+        }
+        preserve = ['[Gil_name!t]']
+        non_translatable = {'Eileen'}
+        batch_jobs = batch_mod.TranslationFileJobs(
+            file_jobs,
+            adapter_snapshot=snapshot,
+        )
+
+        patches = (
+            mock.patch.object(runtime, 'MAX_ITEMS', 60),
+            mock.patch.object(runtime, 'MAX_CHARS', 18000),
+            mock.patch.object(runtime, 'SYNC_CONTEXT_BEFORE', 30),
+            mock.patch.object(runtime, 'SYNC_CONTEXT_AFTER', 10),
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', False),
+            mock.patch.object(runtime, 'SYNC_STORY_MEMORY_ENABLED', False),
+            mock.patch.object(runtime, 'SYNC_MACRO_SETTING', 'Use a warm stage tone.'),
+            mock.patch.object(runtime, 'NORMALIZE_TRANSLATION_MAP', glossary),
+            mock.patch.object(runtime, 'PRESERVE_TERMS', preserve),
+            mock.patch.object(runtime, 'NON_TRANSLATABLE_EXACT', non_translatable),
+            mock.patch.object(batch_mod, 'BATCH_TARGET_SIZE', 60),
+            mock.patch.object(batch_mod, 'BATCH_TARGET_CHARS', 18000),
+            mock.patch.object(batch_mod, 'BATCH_CONTEXT_BEFORE', 30),
+            mock.patch.object(batch_mod, 'BATCH_CONTEXT_AFTER', 10),
+            mock.patch.object(batch_mod, 'RAG_ENABLED', False),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_ENABLED', False),
+            mock.patch.object(batch_mod, 'STORY_MEMORY_ENABLED', False),
+            mock.patch.object(batch_mod, 'PROJECT_ANALYSIS_ENABLED', False),
+            mock.patch.object(batch_mod, 'BATCH_MACRO_SETTING', 'Use a warm stage tone.'),
+            mock.patch.object(batch_mod.legacy, 'NORMALIZE_TRANSLATION_MAP', glossary),
+            mock.patch.object(batch_mod.legacy, 'PRESERVE_TERMS', preserve),
+            mock.patch.object(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', non_translatable),
+            mock.patch.object(
+                batch_mod,
+                'load_injectable_project_context_for_prompts',
+                return_value={},
+            ),
+        )
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            sync_build, _captures = runtime.build_sync_translation_plan(
+                file_jobs, snapshot, routing, run_id='run-a'
+            )
+            sync_repeat, _captures = runtime.build_sync_translation_plan(
+                file_jobs, snapshot, routing, run_id='run-b'
+            )
+            batch_build = batch_mod._build_batch_translation_plan(
+                batch_jobs,
+                routing_plan=routing,
+            )['plan_build']
+
+        self.assertEqual(sync_build.plan.plan_fingerprint, sync_repeat.plan.plan_fingerprint)
+        self.assertEqual(
+            [request.request_id for request in sync_build.requests],
+            [request.request_id for request in sync_repeat.requests],
+        )
+        self.assertEqual(len(sync_build.requests), len(batch_build.requests))
+        sync_request = sync_build.requests[0]
+        batch_request = batch_build.requests[0]
+        self.assertEqual(sync_request.system_instruction, batch_request.system_instruction)
+        self.assertEqual(sync_request.user_prompt, batch_request.user_prompt)
+        self.assertEqual(sync_request.response_schema, batch_request.response_schema)
+        self.assertEqual(sync_request.expected_ids, batch_request.expected_ids)
+        self.assertEqual(
+            [
+                (layer['layer'], layer['char_used'], layer['truncated'])
+                for layer in sync_request.context_assembly['layers']
+            ],
+            [
+                (layer['layer'], layer['char_used'], layer['truncated'])
+                for layer in batch_request.context_assembly['layers']
+            ],
+        )
+        self.assertEqual(
+            sync_request.transport_metadata['sync_stage'],
+            'initial_translation',
+        )
+        self.assertEqual(
+            batch_request.transport_metadata['batch_key'],
+            batch_request.chunk_id,
+        )
+        self.assertNotEqual(
+            sync_request.generation_config['max_output_tokens'],
+            batch_request.generation_config['max_output_tokens'],
+        )
+        self.assertNotEqual(
+            sync_request.request_fingerprint,
+            batch_request.request_fingerprint,
+        )
+
     def test_batch_module_import_has_no_stdout_or_directory_side_effects(self):
         sentinel_stdout = io.StringIO()
         module_name = 'gemini_translate_batch'
@@ -1749,6 +1888,86 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 translation_core.CONTRACT_MISSING_EXPECTED_ID: 2,
             },
         }])
+
+    def test_plan_backed_split_uses_deterministic_child_request_lineage(self):
+        batch = [
+            {
+                'id': f'file:{index}:1',
+                'text': text,
+                'file_rel_path': 'script.rpy',
+                'line': index,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': f'task:{index}:1',
+            }
+            for index, text in enumerate(('Hello', 'World'))
+        ]
+        context_window = translation_core.ContextWindow()
+        plan_build = translation_plan.build_translation_plan(
+            [{
+                'file_rel_path': 'script.rpy',
+                'file_path': 'script.rpy',
+                'tasks': batch,
+            }],
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+            preserve_terms=[],
+            normalize_map={},
+            non_translatable_exact=set(),
+        )
+        parent = plan_build.requests[0]
+        original_plan = translation_plan.canonical_json(plan_build.plan.to_dict())
+        seen_request_ids = []
+
+        def fake_call(_prompt, items, **kwargs):
+            seen_request_ids.append(kwargs['translation_request'].request_id)
+            translations = []
+            if len(items) == 1:
+                translations = [{
+                    'id': items[0]['id'],
+                    'translation': '你好',
+                }]
+            return translation_core.validate_model_response(
+                {'translations': translations},
+                expected_units=items,
+            )
+
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                {},
+                contract_diagnostics=diagnostics,
+                translation_request=parent,
+                request_context={
+                    'context_window': context_window,
+                    'context_policy': translation_plan.ContextPolicy(),
+                    'preserve_terms': [],
+                    'normalize_map': {},
+                    'non_translatable_exact': set(),
+                    'macro_setting': '',
+                },
+            )
+
+        self.assertEqual(successful, ['task:0:1', 'task:1:1'])
+        self.assertEqual(seen_request_ids, [
+            parent.request_id,
+            f'{parent.request_id}--L',
+            f'{parent.request_id}--R',
+        ])
+        self.assertEqual(
+            diagnostics['retry_lineage'][0]['child_request_ids'],
+            [f'{parent.request_id}--L', f'{parent.request_id}--R'],
+        )
+        self.assertEqual(
+            translation_plan.canonical_json(plan_build.plan.to_dict()),
+            original_plan,
+        )
 
     def test_authentication_failure_is_not_retried_or_split(self):
         batch = [

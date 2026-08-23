@@ -210,8 +210,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 
 默认切块策略：
 
-- 同步翻译默认每个 chunk 最多 40 条、`max_source_chars=12000`。
-- 普通 Batch 翻译默认每个 chunk 最多 60 条、`max_source_chars=18000`。
+- 同步与普通 Batch 初译通过共享 `TranslationPlan` 固定分块，默认每个 chunk 最多 60 条、`max_source_chars=18000`；旧配置中的显式 `sync.chunk_size` / `sync.max_source_chars` 仍会被读取。
 - 两种模式都会继续按源文本长度提前切块，避免单个请求输出过长。
 
 当前模型选择说明：
