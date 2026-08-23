@@ -995,15 +995,29 @@ class BatchCliContractTests(unittest.TestCase):
         parser = batch.build_arg_parser()
         keyword_payload = {"manifest_path": "C:/jobs/sync-kw/manifest.json"}
         revision_payload = {"_manifest_path": "C:/jobs/sync-rev/manifest.json"}
-        with mock.patch.object(
-            batch, "sync_keyword_candidates", return_value=keyword_payload
-        ) as sync_keywords:
+        with (
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch, "sync_keyword_candidates", return_value=keyword_payload
+            ) as sync_keywords,
+        ):
             args = parser.parse_args(["sync-keywords", "--output", "json"])
             self.assertIs(batch.dispatch_command(parser, args), keyword_payload)
             sync_keywords.assert_called_once()
-        with mock.patch.object(
-            batch, "sync_revisions", return_value=revision_payload
-        ) as sync_revisions:
+        with (
+            mock.patch.object(batch.legacy, "load_config"),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch, "sync_revisions", return_value=revision_payload
+            ) as sync_revisions,
+        ):
             args = parser.parse_args(["sync-revisions", "--apply", "--output", "json"])
             self.assertIs(batch.dispatch_command(parser, args), revision_payload)
             sync_revisions.assert_called_once_with(
