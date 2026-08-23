@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import re
+from types import MappingProxyType
 from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
@@ -55,25 +56,37 @@ class EmbeddingContractError(ValueError):
 
 
 class EmbeddingBackendError(RuntimeError):
-    """Provider adapter failure expressed with a stable category."""
+    """Provider adapter failure with a closed, credential-safe public string.
+
+    Adapters classify raw SDK exceptions but must not attach provider bodies,
+    URLs, request headers, or codes to this cross-layer error.  This keeps
+    ``str(exc)`` safe for logs and future doctor/GUI diagnostics.
+    """
 
     def __init__(
         self,
         category: EmbeddingErrorCategory,
-        message: str,
         *,
         retryable: bool = False,
-        provider_code: str = '',
     ) -> None:
         if not isinstance(category, EmbeddingErrorCategory):
             raise EmbeddingContractError('category must be an EmbeddingErrorCategory')
-        clean_message = str(message).strip()
-        if not clean_message:
-            raise EmbeddingContractError('embedding error message must not be empty')
-        super().__init__(clean_message)
         self.category = category
         self.retryable = bool(retryable)
-        self.provider_code = str(provider_code).strip()
+        super().__init__(_SAFE_ERROR_MESSAGES[category])
+
+
+_SAFE_ERROR_MESSAGES = {
+    EmbeddingErrorCategory.INVALID_REQUEST: 'embedding request was rejected',
+    EmbeddingErrorCategory.AUTHENTICATION: 'embedding authentication failed',
+    EmbeddingErrorCategory.PERMISSION: 'embedding permission denied',
+    EmbeddingErrorCategory.RATE_LIMIT: 'embedding request was rate limited',
+    EmbeddingErrorCategory.TIMEOUT: 'embedding request timed out',
+    EmbeddingErrorCategory.UNAVAILABLE: 'embedding service temporarily unavailable',
+    EmbeddingErrorCategory.CANCELLED: 'embedding request was cancelled',
+    EmbeddingErrorCategory.INVALID_RESPONSE: 'embedding provider returned an invalid response',
+    EmbeddingErrorCategory.PROVIDER_ERROR: 'embedding provider request failed',
+}
 
 
 def canonical_json(value: object) -> str:
@@ -144,7 +157,7 @@ def _credential_shaped_key(key: object) -> bool:
 
 
 def _validate_metadata(value: object, path: str = 'metadata') -> object:
-    """Validate and normalize JSON metadata, rejecting credential-shaped keys."""
+    """Validate and recursively freeze JSON metadata after credential checks."""
 
     if isinstance(value, Mapping):
         normalized: dict[str, object] = {}
@@ -155,9 +168,9 @@ def _validate_metadata(value: object, path: str = 'metadata') -> object:
                     f'{path}.{key} is credential-shaped and must not enter embedding metadata'
                 )
             normalized[key] = _validate_metadata(item, f'{path}.{key}')
-        return normalized
+        return MappingProxyType(normalized)
     if isinstance(value, (list, tuple)):
-        return [_validate_metadata(item, f'{path}[]') for item in value]
+        return tuple(_validate_metadata(item, f'{path}[]') for item in value)
     if value is None or isinstance(value, (str, int, bool)):
         return value
     if isinstance(value, float):
@@ -167,12 +180,23 @@ def _validate_metadata(value: object, path: str = 'metadata') -> object:
     raise EmbeddingContractError(f'{path} must contain only JSON-compatible values')
 
 
-def _validate_metadata_mapping(value: object, path: str = 'metadata') -> dict[str, object]:
+def _validate_metadata_mapping(value: object, path: str = 'metadata') -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise EmbeddingContractError(f'{path} must be an object')
     normalized = _validate_metadata(value, path)
-    # The Mapping check above fixes the recursive validator's return shape.
-    return dict(normalized)
+    if not isinstance(normalized, Mapping):  # pragma: no cover - narrowed by the input check
+        raise EmbeddingContractError(f'{path} must be an object')
+    return normalized
+
+
+def _metadata_to_json(value: object) -> object:
+    """Return a detached mutable JSON shape from recursively frozen metadata."""
+
+    if isinstance(value, Mapping):
+        return {str(key): _metadata_to_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_metadata_to_json(item) for item in value]
+    return value
 
 
 def _task_type(value: object, field_name: str = 'task_type') -> EmbeddingTaskType:
@@ -236,7 +260,11 @@ class EmbeddingIdentity:
         if not isinstance(payload, Mapping):
             raise EmbeddingContractError('embedding identity must be an object')
         version = payload.get('schema_version')
-        if version != EMBEDDING_IDENTITY_SCHEMA_VERSION:
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != EMBEDDING_IDENTITY_SCHEMA_VERSION
+        ):
             raise EmbeddingContractError(f'unsupported embedding identity schema_version: {version!r}')
         identity = cls(
             backend=payload.get('backend'),
@@ -246,7 +274,9 @@ class EmbeddingIdentity:
             output_dimension=payload.get('output_dimension'),
         )
         claimed = payload.get('fingerprint')
-        if claimed is not None and claimed != identity.fingerprint:
+        if not isinstance(claimed, str) or not claimed.strip():
+            raise EmbeddingContractError('embedding identity fingerprint is required')
+        if claimed != identity.fingerprint:
             raise EmbeddingContractError('embedding identity fingerprint does not match its fields')
         return identity
 
@@ -286,7 +316,7 @@ class EmbeddingBatchRequest:
             'identity': self.identity.to_dict(),
             'inputs': list(self.inputs),
             'timeout_seconds': self.timeout_seconds,
-            'metadata': dict(self.metadata),
+            'metadata': _metadata_to_json(self.metadata),
         }
 
     @property
@@ -323,7 +353,7 @@ class EmbeddingUsage:
         return {
             'input_tokens': self.input_tokens,
             'total_tokens': self.total_tokens,
-            'metadata': dict(self.metadata),
+            'metadata': _metadata_to_json(self.metadata),
         }
 
 
@@ -378,7 +408,7 @@ class EmbeddingBatchResult:
             'request_fingerprint': self.request_fingerprint,
             'vectors': [list(vector) for vector in self.vectors],
             'usage': self.usage.to_dict(),
-            'metadata': dict(self.metadata),
+            'metadata': _metadata_to_json(self.metadata),
         }
 
 

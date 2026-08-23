@@ -1,13 +1,15 @@
 # Issue #341：Provider-neutral Embedding 纯核心
 
+状态：core v1 合同已冻结、尚未接入生产路径 · Issue #341 · 基线 `main@ed07a99`（2026-08-23）
+
 本阶段只冻结可独立合并的核心合同，不接入生产调用路径，也不改变现有 Gemini 行为。实现位于 `embedding_backend.py`，不依赖 Provider SDK、LiteLLM、PySide6、凭据或网络。
 
 ## 核心合同
 
-- `EmbeddingBackend` 是最小同步 protocol：adapter 接收一个已校验的 `EmbeddingBatchRequest`，返回 `EmbeddingBatchResult`，失败时映射为带稳定 `EmbeddingErrorCategory` 的 `EmbeddingBackendError`。
+- `EmbeddingBackend` 是最小同步 protocol：adapter 接收一个已校验的 `EmbeddingBatchRequest`，返回 `EmbeddingBatchResult`，失败时映射为带稳定 `EmbeddingErrorCategory` 的 `EmbeddingBackendError`。公开错误字符串按类别封闭映射，不携带 Provider 原始响应、URL、header 或错误码。
 - `EmbeddingTaskType` 只表达跨 Provider 的 `document` / `query` 语义。后续 Gemini adapter 负责映射到 `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`；OpenAI-compatible adapter 可在 API 不支持 task 参数时仅保留该语义用于 identity。
 - `EmbeddingIdentity` 固定 `backend`、`provider`、`model`、`task_type` 和 `output_dimension`，并提供包含 schema version 的规范 JSON 与无凭据 SHA-256 fingerprint。store 应完整保存 document identity 的 `to_dict()`，不能只保存 model 名称。
-- batch request 固定 identity、输入顺序、有限正 timeout 和安全 metadata；result 绑定 request fingerprint，并校验向量数、每条维度、有限数值与 usage metadata。
+- batch request 固定 identity、输入顺序、有限正 timeout 和安全 metadata；metadata 会在入口校验后递归冻结，防止事后注入凭据或改变 fingerprint；result 绑定 request fingerprint，并校验向量数、每条维度、有限数值与 usage metadata。
 - metadata 中任何 credential-shaped key（包括嵌套的 API key、authorization、secret、password、credential ref、单数 token 等）都会在入口被拒绝，不会脱敏后继续参与持久化或指纹。
 
 ## Store / query 兼容性

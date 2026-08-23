@@ -52,6 +52,23 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(embedding.EmbeddingContractError, 'fingerprint'):
             embedding.EmbeddingIdentity.from_dict(payload)
 
+    def test_from_dict_requires_persisted_fingerprint(self):
+        for fingerprint in (None, '', '   '):
+            with self.subTest(fingerprint=fingerprint):
+                payload = identity().to_dict()
+                if fingerprint is None:
+                    payload.pop('fingerprint')
+                else:
+                    payload['fingerprint'] = fingerprint
+                with self.assertRaisesRegex(embedding.EmbeddingContractError, 'required'):
+                    embedding.EmbeddingIdentity.from_dict(payload)
+
+    def test_from_dict_rejects_boolean_schema_version(self):
+        payload = identity().to_dict()
+        payload['schema_version'] = True
+        with self.assertRaisesRegex(embedding.EmbeddingContractError, 'schema_version'):
+            embedding.EmbeddingIdentity.from_dict(payload)
+
     def test_rejects_empty_model_and_invalid_dimension(self):
         with self.assertRaisesRegex(embedding.EmbeddingContractError, 'model'):
             identity(model='  ')
@@ -131,6 +148,44 @@ class RequestResultTests(unittest.TestCase):
         request = self.request(inputs=('one',))
         with self.assertRaisesRegex(embedding.EmbeddingContractError, 'metadata must be an object'):
             self.result(request, metadata=('not', 'an', 'object'))
+
+    def test_metadata_is_recursively_immutable_and_fingerprint_stays_stable(self):
+        source = {
+            'nested': {'trace_id': 'trace-1'},
+            'items': [{'kind': 'safe'}],
+        }
+        request = self.request(metadata=source)
+        fingerprint = request.fingerprint
+
+        with self.assertRaises(TypeError):
+            request.metadata['new'] = 'value'
+        with self.assertRaises(TypeError):
+            request.metadata['nested']['api_key'] = 'injected'
+        with self.assertRaises(AttributeError):
+            request.metadata['items'].append({'api_key': 'injected'})
+        with self.assertRaises(TypeError):
+            request.metadata['items'][0]['api_key'] = 'injected'
+
+        source['nested']['trace_id'] = 'changed-outside'
+        source['items'].append({'api_key': 'changed-outside'})
+        self.assertEqual(request.metadata['nested']['trace_id'], 'trace-1')
+        self.assertEqual(len(request.metadata['items']), 1)
+        self.assertEqual(request.fingerprint, fingerprint)
+        self.assertEqual(
+            request.to_dict()['metadata'],
+            {'nested': {'trace_id': 'trace-1'}, 'items': [{'kind': 'safe'}]},
+        )
+
+    def test_usage_and_result_metadata_are_recursively_immutable(self):
+        usage = embedding.EmbeddingUsage(metadata={'nested': {'count': 1}})
+        request = self.request(inputs=('one',))
+        result = self.result(request, usage=usage, metadata={'nested': {'attempt': 1}})
+        with self.assertRaises(TypeError):
+            usage.metadata['nested']['count'] = 2
+        with self.assertRaises(TypeError):
+            result.metadata['nested']['attempt'] = 2
+        self.assertEqual(usage.to_dict()['metadata'], {'nested': {'count': 1}})
+        self.assertEqual(result.to_dict()['metadata'], {'nested': {'attempt': 1}})
 
     def test_rejects_vector_dimension_and_non_finite_values(self):
         request = self.request(inputs=('one',))
@@ -214,13 +269,16 @@ class ErrorAndProtocolTests(unittest.TestCase):
     def test_backend_error_exposes_stable_category(self):
         error = embedding.EmbeddingBackendError(
             embedding.EmbeddingErrorCategory.RATE_LIMIT,
-            'quota exceeded',
             retryable=True,
-            provider_code='429',
         )
         self.assertEqual(error.category.value, 'rate_limit')
         self.assertTrue(error.retryable)
-        self.assertEqual(error.provider_code, '429')
+        self.assertEqual(str(error), 'embedding request was rate limited')
+        self.assertNotIn('quota', str(error))
+
+    def test_backend_error_rejects_unstable_category(self):
+        with self.assertRaisesRegex(embedding.EmbeddingContractError, 'category'):
+            embedding.EmbeddingBackendError('rate_limit')
 
     def test_runtime_protocol_accepts_minimal_backend(self):
         class FakeBackend:
