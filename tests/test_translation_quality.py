@@ -142,6 +142,14 @@ class QualityRuleTests(unittest.TestCase):
                     {finding['reason_code'] for finding in findings},
                 )
 
+    def test_calibrated_default_suppresses_proper_name_language_noise(self):
+        findings = quality.check_subject(subject(translation='Aster走了过来'))
+        codes = {finding['reason_code'] for finding in findings}
+
+        self.assertNotIn(quality.REASON_ENGLISH_SUFFIX_ADJACENT, codes)
+        self.assertNotIn(quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE, codes)
+        self.assertIn(quality.REASON_CJK_LATIN_SPACING, codes)
+
     def test_suspicious_english_residue_excludes_allowlisted_tokens(self):
         allowed = quality.check_subject(
             subject(translation='当前HP为100'),

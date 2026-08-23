@@ -91,13 +91,21 @@
         }
       },
       "negative": {
-        "name": "proper name ending like a suffix stays quiet by default",
+        "name": "project allowlisted abbreviation ending in s does not look like a suffix",
         "subject": {
           "item_id": "issue-364/english-suffix/negative",
           "file_rel_path": "chapter01/dialogue.rpy",
           "line_number": 32,
           "source": "",
-          "translation": "Aster走了过来"
+          "translation": "中文cos"
+        },
+        "policy": {
+          "rules": {
+            "english_suffix_adjacent": "warning"
+          },
+          "allowed_latin_tokens": [
+            "cos"
+          ]
         }
       }
     },
@@ -120,13 +128,18 @@
         }
       },
       "negative": {
-        "name": "proper name does not create default residue noise",
+        "name": "default allowlisted acronym is not visible residue",
         "subject": {
           "item_id": "issue-364/english-residue/negative",
           "file_rel_path": "chapter01/dialogue.rpy",
           "line_number": 42,
           "source": "",
-          "translation": "Aster 已经离开了"
+          "translation": "当前HP为100"
+        },
+        "policy": {
+          "rules": {
+            "suspicious_english_residue": "warning"
+          }
         }
       }
     },
