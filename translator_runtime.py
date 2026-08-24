@@ -32,7 +32,7 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines, sha256_text
+from atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 import cli_contract
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -40,6 +40,7 @@ from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.writeback import (
     WritebackPlanError,
     render_writeback_plan,
+    source_snapshot_fingerprint,
 )
 from gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -97,8 +98,8 @@ DEFAULT_CONTEXT_STORAGE_LOCATION = "tool"
 DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
 # First entry is the rotation/fallback default (cost-efficient lite).
 DEFAULT_MODELS = default_model_rotation_list()
-DEFAULT_MAX_CHARS = 12000
-DEFAULT_MAX_ITEMS = 40
+DEFAULT_MAX_CHARS = translation_core.CANONICAL_CHUNK_MAX_CHARS
+DEFAULT_MAX_ITEMS = translation_core.CANONICAL_CHUNK_MAX_ITEMS
 DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
 DEFAULT_SYNC_BACKEND = "gemini"
 DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
@@ -116,7 +117,7 @@ DEFAULT_SYNC_RAG_TOP_K_TERMS = 8
 DEFAULT_SYNC_RAG_MIN_SIMILARITY = 0.72
 DEFAULT_SYNC_RAG_SEGMENT_LINES = 4
 DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT = 220
-DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = 800
+DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = translation_core.CANONICAL_STORY_CHAR_LIMIT
 DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
 DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS = 8
 
@@ -994,7 +995,7 @@ def load_sync_story_memory_settings(config):
     SYNC_STORY_MEMORY_ENABLED = _coerce_bool(story_config.get("enabled"), False)
     SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = _coerce_positive_int(
         story_config.get("max_context_chars"),
-        800,
+        DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
     )
     SYNC_STORY_MEMORY_TOP_K_RELATIONS = _coerce_positive_int(
         story_config.get("top_k_relations"),
@@ -4388,6 +4389,295 @@ def build_prompt(
         non_translatable_terms=non_translatable_terms,
     )
 
+
+def _sync_plan_context_policy():
+    """Return the shared context policy while honoring legacy Sync overrides."""
+    return translation_plan.ContextPolicy(
+        local_context_before=SYNC_CONTEXT_BEFORE,
+        local_context_after=SYNC_CONTEXT_AFTER,
+        history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_source_text=True,
+        include_translation_memory=SYNC_RAG_ENABLED,
+        story_block_suffix='\n\n',
+    )
+
+
+def _sync_plan_generation_config():
+    """Record D6 Sync generation differences in request identity."""
+    return {
+        'temperature': translation_plan.CANONICAL_TEMPERATURE,
+        'max_output_tokens': SYNC_MAX_OUTPUT_TOKENS,
+        'timeout': SYNC_TIMEOUT_SECONDS,
+        'response_mime_type': 'application/json',
+    }
+
+
+def _sync_plan_story_graph_identity():
+    """Return a portable, non-sensitive identity for the configured graph."""
+    configured = str(SYNC_STORY_MEMORY_GRAPH_FILE or '').strip()
+    if not configured:
+        return {'scope': 'unset', 'path': '', 'sha256': ''}
+    absolute = os.path.realpath(os.path.abspath(configured))
+    project_root = os.path.realpath(os.path.abspath(BASE_DIR or os.curdir))
+    try:
+        relative = os.path.relpath(absolute, project_root)
+    except ValueError:
+        relative = ''
+    inside_project = bool(
+        relative
+        and relative != os.pardir
+        and not relative.startswith(os.pardir + os.sep)
+        and not os.path.isabs(relative)
+    )
+    path_identity = (
+        relative.replace('\\', '/')
+        if inside_project
+        else os.path.basename(absolute)
+    )
+    try:
+        content_digest = file_sha256(absolute) if os.path.isfile(absolute) else ''
+    except OSError:
+        content_digest = ''
+    return {
+        'scope': 'project' if inside_project else 'external',
+        'path': path_identity,
+        'sha256': content_digest,
+    }
+
+
+def _sync_plan_config_snapshot():
+    """Return the non-sensitive existing Sync settings that define a plan."""
+    return {
+        'target_language': PREP_LANGUAGE,
+        'sync': {
+            'backend': SYNC_BACKEND,
+            'max_items': MAX_ITEMS,
+            'max_source_chars': MAX_CHARS,
+            'context_before': SYNC_CONTEXT_BEFORE,
+            'context_after': SYNC_CONTEXT_AFTER,
+            'rag_enabled': SYNC_RAG_ENABLED,
+            'story_memory': {
+                'enabled': SYNC_STORY_MEMORY_ENABLED,
+                'graph_file': _sync_plan_story_graph_identity(),
+                'max_context_chars': SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+                'top_k_relations': SYNC_STORY_MEMORY_TOP_K_RELATIONS,
+                'top_k_terms': SYNC_STORY_MEMORY_TOP_K_TERMS,
+                'include_scene_summary': (
+                    SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+                ),
+            },
+            'macro_fingerprint': SYNC_MACRO_FINGERPRINT,
+        },
+    }
+
+
+def _sync_plan_source_identity(adapter_snapshot):
+    project = adapter_snapshot.project
+    documents = tuple(project.source_documents or ())
+    return translation_plan.SourceIdentity(
+        engine=str(project.engine or ''),
+        adapter_version=str(project.adapter_version or ''),
+        project_identity_digest=str(project.project_snapshot_fingerprint or ''),
+        source_snapshot_fingerprint=(
+            source_snapshot_fingerprint(documents) if documents else ''
+        ),
+        file_digests={
+            str(document.file_rel_path or '').replace('\\', '/'): str(
+                document.sha256 or ''
+            )
+            for document in documents
+        },
+    )
+
+
+def _render_sync_retrieval_reference_text(history_hits, story_hits):
+    """Render the shared retrieval layer without the lexical glossary block."""
+    blocks = []
+    if history_hits:
+        blocks.append(
+            'RETRIEVED MEMORY:\n'
+            f'{prompt_context.format_history_hits_block(history_hits, char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT, include_source_text=True)}\n\n'
+        )
+    if story_memory.has_story_hits(story_hits):
+        blocks.append(
+            'STORY MEMORY:\n'
+            f'{story_memory.format_story_hits_block(story_hits, SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
+        )
+    return ''.join(blocks)
+
+
+def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, run_id=''):
+    """Build the ordinary Sync initial-translation plan and retrieval captures."""
+    route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    profile = model_profile.profile_for_route(routing_plan, route)
+    captures = []
+    context_policy = _sync_plan_context_policy()
+    preserve_terms = list(PRESERVE_TERMS)
+    normalize_map = dict(NORMALIZE_TRANSLATION_MAP)
+    non_translatable_exact = set(NON_TRANSLATABLE_EXACT)
+    macro_setting = str(SYNC_MACRO_SETTING or '')
+    retrieval_enabled = SYNC_RAG_ENABLED or SYNC_STORY_MEMORY_ENABLED
+    capabilities = routing_plan.capabilities.get(route.profile_id)
+    budget = (
+        capabilities.context_budget_tokens
+        if capabilities is not None
+        else None
+    )
+    if (
+        file_jobs
+        and budget is None
+        and (MAX_ITEMS >= DEFAULT_MAX_ITEMS or MAX_CHARS >= DEFAULT_MAX_CHARS)
+    ):
+        print(
+            'Warning: the selected model profile does not declare '
+            'context_budget_tokens; Sync cannot preflight the current '
+            f'{MAX_ITEMS}/{MAX_CHARS} chunk against provider context/output '
+            'limits. If requests are rejected or truncated, lower '
+            'translator_config.json sync.chunk_size and/or '
+            'sync.max_source_chars.',
+            flush=True,
+        )
+
+    def build_plan(retrieval_blocks_provider):
+        return translation_plan.build_translation_plan(
+            file_jobs,
+            execution_strategy=model_profile.ExecutionStrategy.SYNC.value,
+            source_identity=_sync_plan_source_identity(adapter_snapshot),
+            config_snapshot=_sync_plan_config_snapshot(),
+            model_profile_snapshot=profile,
+            run_id=run_id,
+            chunk_policy=translation_plan.ChunkPolicy(
+                max_items=MAX_ITEMS,
+                max_chars=MAX_CHARS,
+            ),
+            context_policy=context_policy,
+            preserve_terms=preserve_terms,
+            normalize_map=normalize_map,
+            non_translatable_exact=non_translatable_exact,
+            macro_setting=macro_setting,
+            retrieval_blocks_provider=retrieval_blocks_provider,
+            generation_config=_sync_plan_generation_config(),
+        )
+
+    def validate_budget(plan_build, *, phase):
+        if budget is None:
+            return
+        oversized = [
+            request
+            for request in plan_build.requests
+            if int(request.capability_requirements.get('context_budget_tokens') or 0)
+            > int(budget)
+        ]
+        if not oversized:
+            return
+        estimated = oversized[0].capability_requirements.get(
+            'context_budget_tokens'
+        )
+        raise ValueError(
+            'Sync TranslationPlan exceeds the selected model context budget: '
+            f'request={oversized[0].request_id}, '
+            f'estimated={estimated}, budget={budget}, '
+            f'chunk_size={MAX_ITEMS}, max_source_chars={MAX_CHARS}, '
+            f'phase={phase}. '
+            'Lower translator_config.json sync.chunk_size and/or '
+            'sync.max_source_chars, or select a model profile with a larger '
+            'context budget.'
+        )
+
+    if file_jobs and retrieval_enabled and budget is not None:
+        # This first pass uses the same fixed chunks, prompt, local context,
+        # and char-upper-bound estimator without invoking a remote/local
+        # retrieval provider. It catches obviously impossible combinations
+        # before query embedding cost; the materialized pass below remains
+        # authoritative for retrieved context near the budget boundary.
+        preflight_build = build_plan(None)
+        validate_budget(preflight_build, phase='pre-retrieval')
+
+    if file_jobs and retrieval_enabled:
+        print(
+            'Preparing Sync TranslationPlan context: retrieval for all fixed '
+            'chunks runs before the first model request.',
+            flush=True,
+        )
+
+    def retrieval_provider(chunk_input):
+        history_hits, rag_stats = (
+            retrieve_sync_history_hits(chunk_input.target_items)
+            if SYNC_RAG_ENABLED
+            else ([], {'enabled': False})
+        )
+        story_hits = (
+            retrieve_sync_story_hits(chunk_input.target_items)
+            if SYNC_STORY_MEMORY_ENABLED
+            else None
+        )
+        text = translation_plan.normalize_context_provider_text(
+            _render_sync_retrieval_reference_text(history_hits, story_hits)
+        )
+        if rag_stats.get('hit_count'):
+            print(
+                f"  Sync RAG memory hits: {rag_stats['hit_count']}",
+                flush=True,
+            )
+        captures.append({
+            'file_rel_path': chunk_input.file_rel_path,
+            'expected_ids': [unit.id for unit in chunk_input.target_units],
+            'context_window': chunk_input.context_window,
+            'local_context_diagnostics': dict(
+                chunk_input.local_context_diagnostics or {}
+            ),
+            'retrieval_blocks_text': text,
+            'analysis_blocks_text': '',
+            'rag_stats': dict(rag_stats or {}),
+            'history_hit_count': len(history_hits),
+            'story_memory_applied': story_memory.has_story_hits(story_hits),
+            'context_policy': context_policy,
+            'preserve_terms': preserve_terms,
+            'normalize_map': normalize_map,
+            'non_translatable_exact': non_translatable_exact,
+            'macro_setting': macro_setting,
+        })
+        return text
+
+    plan_build = build_plan(retrieval_provider)
+    if len(captures) != len(plan_build.requests):
+        raise RuntimeError(
+            'Sync TranslationPlan retrieval capture count does not match its '
+            f'requests: captures={len(captures)}, '
+            f'requests={len(plan_build.requests)}.'
+        )
+    for index, (plan_chunk, request, capture) in enumerate(zip(
+        plan_build.plan.chunks,
+        plan_build.requests,
+        captures,
+    )):
+        if (
+            str(capture.get('file_rel_path') or '') != plan_chunk.file_rel_path
+            or list(capture.get('expected_ids') or []) != request.expected_ids
+        ):
+            raise RuntimeError(
+                'Sync TranslationPlan retrieval capture identity mismatch: '
+                f'index={index}, request={request.request_id}.'
+            )
+    validate_budget(plan_build, phase='materialized-context')
+    if retrieval_enabled:
+        history_hit_count = sum(
+            int((item.get('rag_stats') or {}).get('hit_count') or 0)
+            for item in captures
+        )
+        story_chunk_count = sum(
+            1 for item in captures if item.get('story_memory_applied')
+        )
+        print(
+            'Sync TranslationPlan context frozen: '
+            f'retrieval_chunks={len(captures)}, '
+            f'history_hits={history_hit_count}, '
+            f'story_chunks={story_chunk_count}.',
+            flush=True,
+        )
+    return plan_build, captures
+
 def get_nested(source, *candidates):
     for candidate in candidates:
         if source is None:
@@ -4548,6 +4838,7 @@ def call_gemini_sdk(
     return_contract=False,
     route=None,
     plan=None,
+    translation_request=None,
 ):
     """Calls the explicitly configured synchronous backend."""
     if plan is None or route is None:
@@ -4560,13 +4851,28 @@ def call_gemini_sdk(
         )
     profile = model_profile.profile_for_route(plan, route)
     model_name = profile.model
-    generation_config = {
-        "temperature": 0.2,
-        "max_output_tokens": SYNC_MAX_OUTPUT_TOKENS,
-        "timeout": SYNC_TIMEOUT_SECONDS,
+    if translation_request is not None and not isinstance(
+        translation_request,
+        translation_plan.TranslationRequest,
+    ):
+        raise TypeError('translation_request must be a TranslationRequest')
+    generation_config = dict(
+        translation_request.generation_config
+        if translation_request is not None
+        else _sync_plan_generation_config()
+    )
+    generation_config.update({
         "response_mime_type": "application/json",
-        "response_json_schema": build_response_json_schema(items),
-    }
+        "response_json_schema": (
+            translation_request.response_schema
+            if translation_request is not None
+            else build_response_json_schema(items)
+        ),
+    })
+    if translation_request is not None:
+        generation_config['system_instruction'] = (
+            translation_request.system_instruction
+        )
     generation_config = filter_gemini_generation_config(model_name, generation_config)
 
     backend = model_profile.build_sync_backend(
@@ -4575,7 +4881,11 @@ def call_gemini_sdk(
     )
     request = SyncGenerationRequest(
             model=model_name,
-            contents=prompt,
+            contents=(
+                translation_request.user_prompt
+                if translation_request is not None
+                else prompt
+            ),
             config=generation_config,
         )
     result = backend.generate(request)
@@ -4604,11 +4914,22 @@ def call_gemini_sdk(
                 source={
                     'kind': 'sync_translation_response',
                     'item_ids': item_ids,
+                    'request_id': (
+                        translation_request.request_id
+                        if translation_request is not None
+                        else ''
+                    ),
                 },
                 response_diagnostics=output_diagnostics,
                 request_metadata=dict(
                     getattr(result, 'request_metadata', None) or {}
-                ),
+                ) | ({
+                    'request_id': translation_request.request_id,
+                    'plan_id': translation_request.plan_id,
+                    'chunk_id': translation_request.chunk_id,
+                    'prompt_fingerprint': translation_request.prompt_fingerprint,
+                    'request_fingerprint': translation_request.request_fingerprint,
+                } if translation_request is not None else {}),
             )
             if usage_buffer is not None:
                 usage_buffer.append(record)
@@ -4670,40 +4991,45 @@ def process_batch(
     return_contract=False,
     route=None,
     plan=None,
+    translation_request=None,
 ):
     # Local glossary matches are lexical and must not depend on the RAG
     # switch: normalize_map / preserve / non-translatable hits always reach
     # the prompt for the current TARGET batch (issue #338).
-    glossary_hits = retrieve_sync_glossary_hits(batch)
-    normalize_map = {
-        str(hit.get('source') or ''): str(hit.get('target') or '')
-        for hit in glossary_hits
-        if hit.get('kind') == 'normalize' and hit.get('source')
-    }
-    non_translatable_terms = [
-        str(hit.get('source') or '')
-        for hit in glossary_hits
-        if hit.get('kind') == 'non_translatable' and hit.get('source')
-    ]
-    # The lexical injection above is always complete; only the RAG-enabled
-    # LOCKED TERMS reference list keeps the configured top_k budget so RAG-on
-    # prompts do not grow unbounded with a large glossary.
-    locked_glossary_hits = (
-        glossary_hits[: max(1, SYNC_RAG_TOP_K_TERMS)] if SYNC_RAG_ENABLED else []
-    )
-    history_hits, rag_stats = retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
-    story_hits = retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
-    if rag_stats.get("hit_count"):
-        print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
-    prompt = build_prompt(
-        batch,
-        glossary_hits=locked_glossary_hits,
-        history_hits=history_hits,
-        story_hits=story_hits,
-        context_window=context_window,
-        normalize_map=normalize_map,
-        non_translatable_terms=non_translatable_terms,
-    )
+    if translation_request is None:
+        glossary_hits = retrieve_sync_glossary_hits(batch)
+        normalize_map = {
+            str(hit.get('source') or ''): str(hit.get('target') or '')
+            for hit in glossary_hits
+            if hit.get('kind') == 'normalize' and hit.get('source')
+        }
+        non_translatable_terms = [
+            str(hit.get('source') or '')
+            for hit in glossary_hits
+            if hit.get('kind') == 'non_translatable' and hit.get('source')
+        ]
+        locked_glossary_hits = (
+            glossary_hits[: max(1, SYNC_RAG_TOP_K_TERMS)] if SYNC_RAG_ENABLED else []
+        )
+        history_hits, rag_stats = (
+            retrieve_sync_history_hits(batch) if SYNC_RAG_ENABLED else ([], {})
+        )
+        story_hits = (
+            retrieve_sync_story_hits(batch) if SYNC_STORY_MEMORY_ENABLED else None
+        )
+        if rag_stats.get("hit_count"):
+            print(f"  Sync RAG memory hits: {rag_stats['hit_count']}", flush=True)
+        prompt = build_prompt(
+            batch,
+            glossary_hits=locked_glossary_hits,
+            history_hits=history_hits,
+            story_hits=story_hits,
+            context_window=context_window,
+            normalize_map=normalize_map,
+            non_translatable_terms=non_translatable_terms,
+        )
+    else:
+        prompt = translation_request.user_prompt
 
     # Call API (SDK handles connection details)
     contract = call_gemini_sdk(
@@ -4715,6 +5041,7 @@ def process_batch(
         return_contract=True,
         route=route,
         plan=plan,
+        translation_request=translation_request,
     )
     if isinstance(contract, list):
         # Compatibility for injected/test callables that still return the
@@ -4929,6 +5256,30 @@ def print_sync_usage_summary(records):
         print(line)
 
 
+def derive_sync_retry_request(parent_request, batch, request_context, suffix, kind):
+    """Build one D7 child request while leaving the initial plan immutable."""
+    context = dict(request_context or {})
+    return translation_plan.derive_translation_request(
+        parent_request,
+        batch,
+        lineage_suffix=suffix,
+        file_rel_path=str((batch[0] if batch else {}).get('file_rel_path') or ''),
+        file_path=str((batch[0] if batch else {}).get('file_path') or ''),
+        context_window=context.get('context_window'),
+        local_context_diagnostics=context.get('local_context_diagnostics'),
+        context_policy=context.get('context_policy') or _sync_plan_context_policy(),
+        preserve_terms=context.get('preserve_terms', PRESERVE_TERMS),
+        normalize_map=context.get('normalize_map', NORMALIZE_TRANSLATION_MAP),
+        non_translatable_exact=context.get(
+            'non_translatable_exact', NON_TRANSLATABLE_EXACT
+        ),
+        macro_setting=context.get('macro_setting', SYNC_MACRO_SETTING),
+        retrieval_blocks_text=context.get('retrieval_blocks_text', ''),
+        analysis_blocks_text=context.get('analysis_blocks_text', ''),
+        lineage_kind=kind,
+    )
+
+
 def process_batch_with_retry(
     batch,
     replacements,
@@ -4943,6 +5294,8 @@ def process_batch_with_retry(
     context_window=None,
     route=None,
     plan=None,
+    translation_request=None,
+    request_context=None,
 ):
     if contract_diagnostics is not None and retry_kind == 'first_pass':
         original_ids = [
@@ -4984,6 +5337,7 @@ def process_batch_with_retry(
                 return_contract=True,
                 route=route,
                 plan=plan,
+                translation_request=translation_request,
             )
             _record_sync_contract_report(
                 contract_diagnostics,
@@ -5037,7 +5391,7 @@ def process_batch_with_retry(
                     contract_diagnostics.get('targeted_retry_items', 0)
                     + len(targeted_batch)
                 )
-                contract_diagnostics.setdefault('retry_lineage', []).append({
+                lineage_entry = {
                     'kind': 'targeted',
                     'depth': retry_depth + 1,
                     'item_ids': [
@@ -5045,11 +5399,33 @@ def process_batch_with_retry(
                         for item in targeted_batch
                     ],
                     'reason_counts': outcome['contract'].reason_counts(),
-                })
+                }
+                if translation_request is not None:
+                    lineage_entry['parent_request_id'] = (
+                        translation_request.request_id
+                    )
+                contract_diagnostics.setdefault('retry_lineage', []).append(
+                    lineage_entry
+                )
             print(
                 f"  > Targeted retry for {len(targeted_batch)}/{len(batch)} items...",
                 flush=True,
             )
+            child_request = (
+                derive_sync_retry_request(
+                    translation_request,
+                    targeted_batch,
+                    request_context,
+                    '--T',
+                    'targeted',
+                )
+                if translation_request is not None
+                else None
+            )
+            if contract_diagnostics is not None and child_request is not None:
+                contract_diagnostics['retry_lineage'][-1]['request_id'] = (
+                    child_request.request_id
+                )
             retried = process_batch_with_retry(
                 targeted_batch,
                 replacements,
@@ -5067,6 +5443,8 @@ def process_batch_with_retry(
                 context_window=context_window,
                 route=route,
                 plan=plan,
+                translation_request=child_request,
+                request_context=request_context,
             )
             return successful + retried
 
@@ -5146,7 +5524,29 @@ def process_batch_with_retry(
         left_batch = batch[:mid]
         right_batch = batch[mid:]
         if contract_diagnostics is not None:
-            contract_diagnostics.setdefault('retry_lineage', []).append({
+            left_request = (
+                derive_sync_retry_request(
+                    translation_request,
+                    left_batch,
+                    request_context,
+                    '--L',
+                    'split',
+                )
+                if translation_request is not None
+                else None
+            )
+            right_request = (
+                derive_sync_retry_request(
+                    translation_request,
+                    right_batch,
+                    request_context,
+                    '--R',
+                    'split',
+                )
+                if translation_request is not None
+                else None
+            )
+            lineage_entry = {
                 'kind': 'split',
                 'depth': retry_depth + 1,
                 'item_ids': [
@@ -5164,7 +5564,29 @@ def process_batch_with_retry(
                     split_reason_counts
                     or {error_reason_code or 'request_or_contract_failure': 1}
                 ),
-            })
+            }
+            if translation_request is not None:
+                lineage_entry['parent_request_id'] = translation_request.request_id
+                lineage_entry['child_request_ids'] = [
+                    left_request.request_id,
+                    right_request.request_id,
+                ]
+            contract_diagnostics.setdefault('retry_lineage', []).append(
+                lineage_entry
+            )
+        else:
+            left_request = (
+                derive_sync_retry_request(
+                    translation_request, left_batch, request_context, '--L', 'split'
+                )
+                if translation_request is not None else None
+            )
+            right_request = (
+                derive_sync_retry_request(
+                    translation_request, right_batch, request_context, '--R', 'split'
+                )
+                if translation_request is not None else None
+            )
         r1 = process_batch_with_retry(
             left_batch, replacements, retry_depth + 1,
             usage_run_id=usage_run_id,
@@ -5174,10 +5596,11 @@ def process_batch_with_retry(
             contract_diagnostics=contract_diagnostics,
             contract_failures=contract_failures,
             retry_kind='split_retry',
-            # Split children no longer line up with the original local context
-            # window, so it is intentionally omitted (issue #338).
+            # D7 children retain the original plan chunk's surrounding context.
             route=route,
             plan=plan,
+            translation_request=left_request,
+            request_context=request_context,
         )
         r2 = process_batch_with_retry(
             right_batch, replacements, retry_depth + 1,
@@ -5188,9 +5611,10 @@ def process_batch_with_retry(
             contract_diagnostics=contract_diagnostics,
             contract_failures=contract_failures,
             retry_kind='split_retry',
-            # See the split-left call above: context window is not reused.
             route=route,
             plan=plan,
+            translation_request=right_request,
+            request_context=request_context,
         )
         return r1 + r2
 
@@ -5852,13 +6276,12 @@ def run_translation(*, prepare=False):
         contract_failures = []
         contract_diagnostics = new_sync_contract_diagnostics()
         attempted_file_contexts = []
+        pending_jobs = []
         for document in source_documents:
-            file_path = document.file_path
-            filename = os.path.basename(file_path)
             progress_key = document.file_rel_path
-            print(f"\nProcessing: {filename}")
-
-            completed_entries = set(_normalize_progress_entries(global_progress.get(progress_key, [])))
+            completed_entries = set(
+                _normalize_progress_entries(global_progress.get(progress_key, []))
+            )
             tasks = []
             for raw_task in adapter_snapshot.pending_tasks_by_file.get(
                 progress_key,
@@ -5867,13 +6290,60 @@ def run_translation(*, prepare=False):
                 task = dict(raw_task)
                 if is_non_translatable(task["text"]):
                     continue
-                progress_entry = task.get("progress_entry") or _progress_entry_for_task(task)
-                if progress_entry in completed_entries or _progress_line_entry(task["line"]) in completed_entries:
-                    if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task["text"]):
+                progress_entry = (
+                    task.get("progress_entry") or _progress_entry_for_task(task)
+                )
+                if (
+                    progress_entry in completed_entries
+                    or _progress_line_entry(task["line"]) in completed_entries
+                ):
+                    if (
+                        not FORCE_RETRANSLATE_ENGLISH
+                        or not is_english_like(task["text"])
+                    ):
                         continue
                 task["progress_entry"] = _progress_entry_for_task(task)
                 task["file_rel_path"] = progress_key
+                task["file_path"] = document.file_path
                 tasks.append(task)
+            if tasks:
+                pending_jobs.append({
+                    'file_rel_path': progress_key,
+                    'file_path': document.file_path,
+                    'tasks': tasks,
+                })
+
+        sync_plan_build, sync_plan_captures = build_sync_translation_plan(
+            pending_jobs,
+            adapter_snapshot,
+            routing_plan,
+            run_id=usage_run_id,
+        )
+        plan_records_by_file = {}
+        for index, request in enumerate(sync_plan_build.requests):
+            plan_chunk = sync_plan_build.plan.chunks[index]
+            capture = sync_plan_captures[index]
+            plan_records_by_file.setdefault(plan_chunk.file_rel_path, []).append(
+                (plan_chunk, request, capture)
+            )
+        pending_jobs_by_file = {
+            str(job.get('file_rel_path') or ''): job for job in pending_jobs
+        }
+        print(
+            'Sync TranslationPlan: '
+            f'id={sync_plan_build.plan.plan_id}, '
+            f'fingerprint={sync_plan_build.plan.plan_fingerprint}, '
+            f'requests={len(sync_plan_build.requests)}'
+        )
+        for document in source_documents:
+            file_path = document.file_path
+            filename = os.path.basename(file_path)
+            progress_key = document.file_rel_path
+            print(f"\nProcessing: {filename}")
+
+            tasks = list(
+                (pending_jobs_by_file.get(progress_key) or {}).get('tasks') or []
+            )
 
             if not tasks:
                 print("  No new lines to translate.")
@@ -5883,49 +6353,34 @@ def run_translation(*, prepare=False):
 
             replacements = {}
             successful_entries = []
-            batch = []
-            batch_start = 0
-            current_batch_chars = 0
             file_context_batches = []
-            for batch_index, task in enumerate(tasks):
-                task_len = len(task["text"])
-                if batch and (
-                    len(batch) >= MAX_ITEMS or current_batch_chars + task_len > MAX_CHARS
-                ):
-                    context_window, context_stats = build_sync_local_context(
-                        tasks,
-                        batch_start,
-                        batch_index,
-                        SYNC_CONTEXT_BEFORE,
-                        SYNC_CONTEXT_AFTER,
+            task_by_id = {
+                _sync_contract_item_id(task.get('id')): task for task in tasks
+            }
+            for plan_chunk, translation_request, request_context in (
+                plan_records_by_file.get(progress_key) or []
+            ):
+                batch = [
+                    task_by_id[item_id]
+                    for item_id in translation_request.expected_ids
+                    if item_id in task_by_id
+                ]
+                if len(batch) != len(translation_request.expected_ids):
+                    raise RuntimeError(
+                        'Sync TranslationPlan no longer matches pending tasks for '
+                        f'{progress_key}: request={translation_request.request_id}.'
                     )
-                    file_context_batches.append(context_stats)
-                    successful_entries.extend(process_batch_with_retry(
-                        batch,
-                        replacements,
-                        usage_run_id=usage_run_id,
-                        translation_validator=validate_sync_translation,
-                        usage_buffer=usage_buffer,
-                        usage_operation_id=usage_operation_id,
-                        contract_diagnostics=contract_diagnostics,
-                        contract_failures=contract_failures,
-                        context_window=context_window,
-                        route=translation_route,
-                        plan=routing_plan,
-                    ))
-                    batch = []
-                    batch_start = batch_index
-                    current_batch_chars = 0
-                batch.append(task)
-                current_batch_chars += task_len
-            if batch:
-                context_window, context_stats = build_sync_local_context(
-                    tasks,
-                    batch_start,
-                    len(tasks),
-                    SYNC_CONTEXT_BEFORE,
-                    SYNC_CONTEXT_AFTER,
-                )
+                context_stats = dict(plan_chunk.context_window_spec or {})
+                context_stats.update({
+                    'request_id': translation_request.request_id,
+                    'chunk_id': translation_request.chunk_id,
+                    'prompt_fingerprint': translation_request.prompt_fingerprint,
+                    'request_fingerprint': translation_request.request_fingerprint,
+                    'context_assembly': dict(
+                        translation_request.context_assembly or {}
+                    ),
+                    'rag_stats': dict(request_context.get('rag_stats') or {}),
+                })
                 file_context_batches.append(context_stats)
                 successful_entries.extend(process_batch_with_retry(
                     batch,
@@ -5936,9 +6391,11 @@ def run_translation(*, prepare=False):
                     usage_operation_id=usage_operation_id,
                     contract_diagnostics=contract_diagnostics,
                     contract_failures=contract_failures,
-                    context_window=context_window,
+                    context_window=request_context.get('context_window'),
                     route=translation_route,
                     plan=routing_plan,
+                    translation_request=translation_request,
+                    request_context=request_context,
                 ))
             # Persist attempted-batch diagnostics even when the file produced
             # no preview (all items rejected or adapter writeback blocked), so
@@ -6068,6 +6525,10 @@ def run_translation(*, prepare=False):
             prompt_context=prompt_context,
             quality_policy=quality_policy,
             glossary_file=GLOSSARY_FILE,
+            translation_plan_payload=sync_plan_build.plan.to_dict(),
+            request_ids=[
+                request.request_id for request in sync_plan_build.requests
+            ],
         )
         try:
             export_coverage_package(

@@ -808,6 +808,11 @@ def _resolve_profile_snapshot(value):
     return redact_sensitive(payload)
 
 
+def normalize_context_provider_text(value):
+    """Normalize provider text exactly once before prompt/fingerprint use."""
+    return str(value or '').replace('\r\n', '\n')
+
+
 def _resolve_text_source(value, chunk_input, label):
     """Accept a constant string or a per-chunk callable, LF-normalized.
 
@@ -823,7 +828,7 @@ def _resolve_text_source(value, chunk_input, label):
         resolved = value
     else:
         raise TypeError(f'{label} must be a string or a callable(chunk_input) -> str')
-    return resolved.replace('\r\n', '\n')
+    return normalize_context_provider_text(resolved)
 
 
 def _unit_semantic_entry(unit):
@@ -1079,3 +1084,124 @@ def build_translation_plan(
     fingerprint_payload.pop('plan_fingerprint')
     plan.plan_fingerprint = short_fingerprint(canonical_json(fingerprint_payload))
     return PlanBuild(plan=plan, requests=requests)
+
+
+def derive_translation_request(
+    parent_request,
+    target_items,
+    *,
+    lineage_suffix,
+    file_rel_path='',
+    file_path='',
+    context_window=None,
+    local_context_diagnostics=None,
+    context_policy=None,
+    preserve_terms=None,
+    normalize_map=None,
+    non_translatable_exact=None,
+    macro_setting='',
+    retrieval_blocks_text='',
+    analysis_blocks_text='',
+    lineage_kind='',
+):
+    """Create a deterministic retry request without changing its parent plan.
+
+    D7 freezes the initial plan chunks.  A targeted retry or response-driven
+    split therefore receives a child request whose identity is derived from
+    the parent's request id plus a stable suffix (for example ``--L`` or
+    ``--R``).  The child re-renders the canonical semantic contract for only
+    its requested units while retaining the parent ``plan_id`` and recording
+    explicit lineage in transport metadata.
+    """
+    if not isinstance(parent_request, TranslationRequest):
+        raise TypeError('parent_request must be a TranslationRequest')
+    suffix = str(lineage_suffix or '').strip()
+    if not suffix or not suffix.startswith('--'):
+        raise ValueError("lineage_suffix must start with '--'")
+    items = list(target_items or [])
+    units = translation_core.units_from_items(
+        items,
+        translation_core.MODE_TRANSLATION,
+        file_rel_path=str(file_rel_path or ''),
+        file_path=str(file_path or ''),
+    )
+    expected_ids = [unit.id for unit in units]
+    policy = context_policy or ContextPolicy()
+    lexical_hits = retrieve_lexical_glossary_hits(
+        items,
+        normalize_map=normalize_map,
+        preserve_terms=preserve_terms,
+        non_translatable_exact=non_translatable_exact,
+    )
+    chunk_input = ChunkContextInput(
+        file_rel_path=str(file_rel_path or ''),
+        target_items=items,
+        target_units=units,
+        context_window=context_window or translation_core.ContextWindow(),
+        local_context_diagnostics=dict(local_context_diagnostics or {}),
+        macro_setting=str(macro_setting or ''),
+        lexical_glossary_hits=lexical_hits,
+        retrieval_blocks_text=normalize_context_provider_text(
+            retrieval_blocks_text
+        ),
+        analysis_blocks_text=normalize_context_provider_text(
+            analysis_blocks_text
+        ),
+    )
+    assembly = assemble_context_layers(chunk_input, policy)
+    reference_blocks_text = '\n\n'.join(
+        layer.text.rstrip('\n')
+        for layer in assembly.layers
+        if layer.layer in (CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS)
+        and layer.text
+    )
+    user_prompt = translation_core.build_canonical_translation_user_prompt(
+        chunk_input.context_window,
+        units,
+        reference_blocks_text=reference_blocks_text,
+        lexical_glossary_text=render_lexical_glossary_text(lexical_hits),
+    )
+    response_schema = translation_core.build_response_json_schema(
+        units,
+        mode=translation_core.MODE_TRANSLATION,
+    )
+    request_id = f'{parent_request.request_id}{suffix}'
+    chunk_id = f'{parent_request.chunk_id}{suffix}'
+    transport = dict(parent_request.transport_metadata or {})
+    transport.update({
+        'retry_parent_request_id': parent_request.request_id,
+        'retry_parent_chunk_id': parent_request.chunk_id,
+        'retry_lineage_kind': str(lineage_kind or 'derived'),
+        'retry_item_ids': expected_ids,
+    })
+    capability_requirements = dict(
+        parent_request.capability_requirements or {}
+    )
+    capability_requirements.setdefault('structured_output', True)
+    capability_requirements.update({
+        'context_budget_tokens': estimate_context_tokens(
+            parent_request.system_instruction,
+            user_prompt,
+        ),
+        'estimate_method': CONTEXT_TOKEN_ESTIMATE_METHOD,
+    })
+    request = TranslationRequest(
+        request_id=request_id,
+        plan_id=parent_request.plan_id,
+        chunk_id=chunk_id,
+        system_instruction=parent_request.system_instruction,
+        user_prompt=user_prompt,
+        response_schema=response_schema,
+        expected_ids=expected_ids,
+        capability_requirements=capability_requirements,
+        generation_config=dict(parent_request.generation_config or {}),
+        transport_metadata=redact_sensitive(transport),
+        context_assembly=assembly.to_dict(),
+    )
+    request.prompt_fingerprint = short_fingerprint(
+        canonical_json(request.semantic_payload())
+    )
+    request.request_fingerprint = short_fingerprint(
+        canonical_json(request.audit_payload())
+    )
+    return request

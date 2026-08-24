@@ -11,17 +11,23 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 import zlib
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
+import model_profile
 import prompt_context
 import rag_memory
 import story_memory
 import translation_core
+import translation_plan
 import translator_runtime as runtime
+from engine_adapters.contracts import SourceDocument
 
 
 GOLDEN_BATCH_FIXTURE_DIR = Path(__file__).parent / 'fixtures' / 'golden_batch_minimal'
@@ -117,6 +123,495 @@ def _restore_translator_runtime_state(snapshot):
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_sync_story_graph_identity_is_portable_and_hides_parent_path(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            identities = []
+            for root_text in (first, second):
+                root = Path(root_text)
+                project_root = root / 'project'
+                project_root.mkdir()
+                graph_file = root / 'private-parent' / 'story_graph.json'
+                graph_file.parent.mkdir()
+                graph_file.write_text('{"schema_version": 1}', encoding='utf-8')
+                with (
+                    mock.patch.object(runtime, 'BASE_DIR', str(project_root)),
+                    mock.patch.object(
+                        runtime,
+                        'SYNC_STORY_MEMORY_GRAPH_FILE',
+                        str(graph_file),
+                    ),
+                ):
+                    identities.append(runtime._sync_plan_story_graph_identity())
+
+            self.assertEqual(identities[0], identities[1])
+            self.assertEqual(identities[0]['scope'], 'external')
+            self.assertEqual(identities[0]['path'], 'story_graph.json')
+            serialized = translation_plan.canonical_json(identities[0])
+            self.assertNotIn(first, serialized)
+            self.assertNotIn(second, serialized)
+
+    def test_legacy_sync_generation_temperature_remains_point_two(self):
+        self.assertEqual(translation_plan.CANONICAL_TEMPERATURE, 0.2)
+        self.assertEqual(
+            runtime._sync_plan_generation_config()['temperature'],
+            0.2,
+        )
+
+    def test_sync_plan_config_fingerprint_covers_story_memory_settings(self):
+        baseline = runtime._sync_plan_config_snapshot()
+        baseline_fingerprint = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(
+                translation_plan.redact_sensitive(baseline)
+            )
+        )
+        cases = (
+            ('SYNC_STORY_MEMORY_ENABLED', not runtime.SYNC_STORY_MEMORY_ENABLED),
+            ('SYNC_STORY_MEMORY_GRAPH_FILE', 'different-story-graph.json'),
+            (
+                'SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS',
+                runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_TOP_K_RELATIONS',
+                runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_TOP_K_TERMS',
+                runtime.SYNC_STORY_MEMORY_TOP_K_TERMS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY',
+                not runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+            ),
+        )
+        for field, value in cases:
+            with self.subTest(field=field), mock.patch.object(
+                runtime, field, value
+            ):
+                changed = runtime._sync_plan_config_snapshot()
+                changed_fingerprint = translation_plan.short_fingerprint(
+                    translation_plan.canonical_json(
+                        translation_plan.redact_sensitive(changed)
+                    )
+                )
+                self.assertNotEqual(changed_fingerprint, baseline_fingerprint)
+
+    def test_plan_build_logs_sync_rag_hits_for_operator_diagnostics(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{
+                'id': 'script:0:1',
+                'text': 'Encore',
+                'line': 0,
+            }],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        history_hits = [{
+            'source_text': 'Previous encore',
+            'translated_text': '上次返场',
+        }]
+        with (
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', True),
+            mock.patch.object(runtime, 'SYNC_STORY_MEMORY_ENABLED', False),
+            mock.patch.object(
+                runtime,
+                'retrieve_sync_history_hits',
+                return_value=(history_hits, {'enabled': True, 'hit_count': 1}),
+            ),
+            mock.patch('sys.stdout', output := io.StringIO()),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='diagnostic-run',
+            )
+
+        self.assertIn('Sync RAG memory hits: 1', output.getvalue())
+        self.assertIn(
+            'retrieval for all fixed chunks runs before the first model request',
+            output.getvalue(),
+        )
+        self.assertIn(
+            'Sync TranslationPlan context frozen: retrieval_chunks=1, '
+            'history_hits=1, story_chunks=0.',
+            output.getvalue(),
+        )
+
+    def test_sync_plan_budget_error_explains_safe_configuration_options(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{'id': 'script:0:1', 'text': 'Encore', 'line': 0}],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        capabilities = dict(routing.capabilities)
+        capabilities[route.profile_id] = replace(
+            capabilities[route.profile_id],
+            context_limit_tokens=2,
+            context_budget_tokens=1,
+            context_source='user_override',
+        )
+        routing = replace(routing, capabilities=capabilities)
+
+        retrieve = mock.Mock()
+        with (
+            mock.patch.object(runtime, 'MAX_ITEMS', 60),
+            mock.patch.object(runtime, 'MAX_CHARS', 18000),
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', True),
+            mock.patch.object(runtime, 'retrieve_sync_history_hits', retrieve),
+            self.assertRaisesRegex(
+                ValueError,
+                r'budget=1, chunk_size=60, max_source_chars=18000.*'
+                r'sync\.chunk_size.*sync\.max_source_chars.*larger context budget',
+            ),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='small-budget-run',
+            )
+        retrieve.assert_not_called()
+
+    def test_sync_plan_warns_when_default_chunk_has_unknown_model_budget(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{'id': 'script:0:1', 'text': 'Encore', 'line': 0}],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        capabilities = dict(routing.capabilities)
+        capabilities[route.profile_id] = replace(
+            capabilities[route.profile_id],
+            context_limit_tokens=None,
+            context_budget_tokens=None,
+            context_source='',
+        )
+        routing = replace(routing, capabilities=capabilities)
+
+        with (
+            mock.patch.object(runtime, 'MAX_ITEMS', runtime.DEFAULT_MAX_ITEMS),
+            mock.patch.object(runtime, 'MAX_CHARS', runtime.DEFAULT_MAX_CHARS),
+            mock.patch('sys.stdout', output := io.StringIO()),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='unknown-budget-run',
+            )
+
+        warning = output.getvalue()
+        self.assertIn('does not declare context_budget_tokens', warning)
+        self.assertIn('sync.chunk_size', warning)
+        self.assertIn('sync.max_source_chars', warning)
+
+    def test_sync_plan_rejects_reordered_retrieval_captures(self):
+        file_jobs = [
+            {
+                'file_rel_path': f'{name}.rpy',
+                'file_path': f'{name}.rpy',
+                'tasks': [{
+                    'id': f'{name}:0:1',
+                    'text': name,
+                    'line': 0,
+                }],
+            }
+            for name in ('alpha', 'beta')
+        ]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        original_builder = translation_plan.build_translation_plan
+
+        def reorder_requests(*args, **kwargs):
+            plan_build = original_builder(*args, **kwargs)
+            plan_build.requests.reverse()
+            return plan_build
+
+        with (
+            mock.patch.object(
+                translation_plan,
+                'build_translation_plan',
+                side_effect=reorder_requests,
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                'retrieval capture identity mismatch',
+            ),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='reordered-capture-run',
+            )
+
+    def test_call_gemini_sdk_keeps_system_instruction_through_filter(self):
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-3.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        translation_request = translation_plan.TranslationRequest(
+            request_id='request-1',
+            plan_id='plan-1',
+            chunk_id='chunk-1',
+            system_instruction='canonical system rules',
+            user_prompt='canonical user prompt',
+            response_schema=translation_core.build_response_json_schema(
+                [{'id': 'script:0:1', 'text': 'Hello', 'line': 0}],
+                mode=translation_core.MODE_TRANSLATION,
+            ),
+            expected_ids=['script:0:1'],
+            generation_config={
+                'temperature': translation_plan.CANONICAL_TEMPERATURE,
+                'max_output_tokens': 1024,
+            },
+        )
+        sent = []
+
+        def generate(request):
+            sent.append(request)
+            return types.SimpleNamespace(
+                provider='gemini',
+                model=request.model,
+                execution_mode='sync',
+                response_text='',
+                response_payload={},
+                parsed=[{'id': 'script:0:1', 'translation': '你好'}],
+                finish_reason='STOP',
+                usage_metadata={},
+                request_metadata={},
+            )
+
+        backend = types.SimpleNamespace(generate=generate)
+        with mock.patch.object(
+            model_profile,
+            'build_sync_backend',
+            return_value=backend,
+        ):
+            runtime.call_gemini_sdk(
+                '',
+                [{'id': 'script:0:1', 'text': 'Hello', 'line': 0}],
+                route=route,
+                plan=routing,
+                translation_request=translation_request,
+            )
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].contents, 'canonical user prompt')
+        self.assertEqual(
+            sent[0].config['system_instruction'],
+            'canonical system rules',
+        )
+        self.assertNotIn('temperature', sent[0].config)
+
+    def test_sync_retry_preserves_parent_file_path_metadata(self):
+        parent = object()
+        batch = [{
+            'id': 'script:0:1',
+            'text': 'Hello',
+            'file_rel_path': 'chapter/script.rpy',
+            'file_path': 'C:/game/tl/schinese/chapter/script.rpy',
+            'line': 0,
+        }]
+        child = object()
+        with mock.patch.object(
+            translation_plan,
+            'derive_translation_request',
+            return_value=child,
+        ) as derive:
+            result = runtime.derive_sync_retry_request(
+                parent,
+                batch,
+                {},
+                '--T',
+                'targeted_retry',
+            )
+
+        self.assertIs(result, child)
+        self.assertEqual(
+            derive.call_args.kwargs['file_rel_path'],
+            'chapter/script.rpy',
+        )
+        self.assertEqual(
+            derive.call_args.kwargs['file_path'],
+            'C:/game/tl/schinese/chapter/script.rpy',
+        )
+
+    def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
+        content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'
+        digest = hashlib.sha256(content).hexdigest()
+        document = SourceDocument(
+            file_rel_path='script.rpy',
+            file_path='C:/fixture/script.rpy',
+            size=len(content),
+            sha256=digest,
+            content=content,
+        )
+        project = types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='project-snapshot',
+            source_documents=(document,),
+        )
+        snapshot = types.SimpleNamespace(project=project)
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': document.file_path,
+            'tasks': [
+                {
+                    'id': 'script:1:4',
+                    'text': 'Encore tonight.',
+                    'line': 1,
+                    'speaker_id': 'e',
+                    'speaker_name': 'Eileen',
+                    'block_name': 'start',
+                },
+                {
+                    'id': 'script:2:4',
+                    'text': 'Keep [Gil_name!t].',
+                    'line': 2,
+                    'block_name': 'start',
+                },
+            ],
+        }]
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+            sync_models=('gemini-2.5-flash',),
+        )
+        glossary = {
+            'Encore': '返场',
+        }
+        preserve = ['[Gil_name!t]']
+        non_translatable = {'Eileen'}
+        batch_jobs = batch_mod.TranslationFileJobs(
+            file_jobs,
+            adapter_snapshot=snapshot,
+        )
+
+        patches = (
+            mock.patch.object(runtime, 'MAX_ITEMS', 60),
+            mock.patch.object(runtime, 'MAX_CHARS', 18000),
+            mock.patch.object(runtime, 'SYNC_CONTEXT_BEFORE', 30),
+            mock.patch.object(runtime, 'SYNC_CONTEXT_AFTER', 10),
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', False),
+            mock.patch.object(runtime, 'SYNC_STORY_MEMORY_ENABLED', False),
+            mock.patch.object(runtime, 'SYNC_MACRO_SETTING', 'Use a warm stage tone.'),
+            mock.patch.object(runtime, 'NORMALIZE_TRANSLATION_MAP', glossary),
+            mock.patch.object(runtime, 'PRESERVE_TERMS', preserve),
+            mock.patch.object(runtime, 'NON_TRANSLATABLE_EXACT', non_translatable),
+            mock.patch.object(batch_mod, 'BATCH_TARGET_SIZE', 60),
+            mock.patch.object(batch_mod, 'BATCH_TARGET_CHARS', 18000),
+            mock.patch.object(batch_mod, 'BATCH_CONTEXT_BEFORE', 30),
+            mock.patch.object(batch_mod, 'BATCH_CONTEXT_AFTER', 10),
+            mock.patch.object(batch_mod, 'RAG_ENABLED', False),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_ENABLED', False),
+            mock.patch.object(batch_mod, 'STORY_MEMORY_ENABLED', False),
+            mock.patch.object(batch_mod, 'PROJECT_ANALYSIS_ENABLED', False),
+            mock.patch.object(batch_mod, 'BATCH_MACRO_SETTING', 'Use a warm stage tone.'),
+            mock.patch.object(batch_mod.legacy, 'NORMALIZE_TRANSLATION_MAP', glossary),
+            mock.patch.object(batch_mod.legacy, 'PRESERVE_TERMS', preserve),
+            mock.patch.object(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', non_translatable),
+            mock.patch.object(
+                batch_mod,
+                'load_injectable_project_context_for_prompts',
+                return_value={},
+            ),
+        )
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            sync_build, _captures = runtime.build_sync_translation_plan(
+                file_jobs, snapshot, routing, run_id='run-a'
+            )
+            sync_repeat, _captures = runtime.build_sync_translation_plan(
+                file_jobs, snapshot, routing, run_id='run-b'
+            )
+            batch_build = batch_mod._build_batch_translation_plan(
+                batch_jobs,
+                routing_plan=routing,
+            )['plan_build']
+
+        self.assertEqual(sync_build.plan.plan_fingerprint, sync_repeat.plan.plan_fingerprint)
+        self.assertEqual(
+            [request.request_id for request in sync_build.requests],
+            [request.request_id for request in sync_repeat.requests],
+        )
+        self.assertEqual(len(sync_build.requests), len(batch_build.requests))
+        sync_request = sync_build.requests[0]
+        batch_request = batch_build.requests[0]
+        self.assertEqual(sync_request.system_instruction, batch_request.system_instruction)
+        self.assertEqual(sync_request.user_prompt, batch_request.user_prompt)
+        self.assertEqual(sync_request.response_schema, batch_request.response_schema)
+        self.assertEqual(sync_request.expected_ids, batch_request.expected_ids)
+        self.assertEqual(
+            [
+                (layer['layer'], layer['char_used'], layer['truncated'])
+                for layer in sync_request.context_assembly['layers']
+            ],
+            [
+                (layer['layer'], layer['char_used'], layer['truncated'])
+                for layer in batch_request.context_assembly['layers']
+            ],
+        )
+        self.assertEqual(
+            sync_request.transport_metadata['sync_stage'],
+            'initial_translation',
+        )
+        self.assertEqual(
+            batch_request.transport_metadata['batch_key'],
+            batch_request.chunk_id,
+        )
+        self.assertNotEqual(
+            sync_request.generation_config['max_output_tokens'],
+            batch_request.generation_config['max_output_tokens'],
+        )
+        self.assertNotEqual(
+            sync_request.request_fingerprint,
+            batch_request.request_fingerprint,
+        )
+
     def test_batch_module_import_has_no_stdout_or_directory_side_effects(self):
         sentinel_stdout = io.StringIO()
         module_name = 'gemini_translate_batch'
@@ -1750,6 +2245,86 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             },
         }])
 
+    def test_plan_backed_split_uses_deterministic_child_request_lineage(self):
+        batch = [
+            {
+                'id': f'file:{index}:1',
+                'text': text,
+                'file_rel_path': 'script.rpy',
+                'line': index,
+                'start': 1,
+                'end': 8,
+                'prefix': '',
+                'quote': '"',
+                'progress_entry': f'task:{index}:1',
+            }
+            for index, text in enumerate(('Hello', 'World'))
+        ]
+        context_window = translation_core.ContextWindow()
+        plan_build = translation_plan.build_translation_plan(
+            [{
+                'file_rel_path': 'script.rpy',
+                'file_path': 'script.rpy',
+                'tasks': batch,
+            }],
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+            preserve_terms=[],
+            normalize_map={},
+            non_translatable_exact=set(),
+        )
+        parent = plan_build.requests[0]
+        original_plan = translation_plan.canonical_json(plan_build.plan.to_dict())
+        seen_request_ids = []
+
+        def fake_call(_prompt, items, **kwargs):
+            seen_request_ids.append(kwargs['translation_request'].request_id)
+            translations = []
+            if len(items) == 1:
+                translations = [{
+                    'id': items[0]['id'],
+                    'translation': '你好',
+                }]
+            return translation_core.validate_model_response(
+                {'translations': translations},
+                expected_units=items,
+            )
+
+        diagnostics = runtime.new_sync_contract_diagnostics()
+        with (
+            mock.patch.object(runtime, 'call_gemini_sdk', side_effect=fake_call),
+            mock.patch.object(runtime, 'get_random_delay', return_value=0),
+            mock.patch.object(runtime.time, 'sleep'),
+        ):
+            successful = runtime.process_batch_with_retry(
+                batch,
+                {},
+                contract_diagnostics=diagnostics,
+                translation_request=parent,
+                request_context={
+                    'context_window': context_window,
+                    'context_policy': translation_plan.ContextPolicy(),
+                    'preserve_terms': [],
+                    'normalize_map': {},
+                    'non_translatable_exact': set(),
+                    'macro_setting': '',
+                },
+            )
+
+        self.assertEqual(successful, ['task:0:1', 'task:1:1'])
+        self.assertEqual(seen_request_ids, [
+            parent.request_id,
+            f'{parent.request_id}--L',
+            f'{parent.request_id}--R',
+        ])
+        self.assertEqual(
+            diagnostics['retry_lineage'][0]['child_request_ids'],
+            [f'{parent.request_id}--L', f'{parent.request_id}--R'],
+        )
+        self.assertEqual(
+            translation_plan.canonical_json(plan_build.plan.to_dict()),
+            original_plan,
+        )
+
     def test_authentication_failure_is_not_retried_or_split(self):
         batch = [
             {
@@ -2340,6 +2915,65 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         finally:
             runtime.SYNC_MACRO_SETTING = old_macro
             runtime.SYNC_MACRO_FINGERPRINT = old_fingerprint
+
+    def test_sync_apply_updates_rag_store_after_successful_file_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            target = tl_dir / 'a.rpy'
+            source = '    "Hello 1"\n'
+            translated = '    "你好 1"\n'
+            target.write_text(source, encoding='utf-8')
+            manifest_path, _manifest = (
+                runtime.sync_translation_preview.create_sync_preview(
+                    log_dir=root / 'logs',
+                    project_root=root,
+                    tl_dir=tl_dir,
+                    files=[{
+                        'relative_path': 'a.rpy',
+                        'source_text': source,
+                        'source_sha256': hashlib.sha256(
+                            target.read_bytes()
+                        ).hexdigest(),
+                        'preview_text': translated,
+                        'progress_entries': ['id:1'],
+                    }],
+                    prompt_context={
+                        'macro_fingerprint': 'stable-macro',
+                    },
+                )
+            )
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(root)),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(
+                    runtime,
+                    'TRANSLATOR_CONFIG',
+                    str(root / 'translator_config.json'),
+                ),
+                mock.patch.object(runtime, 'GLOSSARY_FILE', ''),
+                mock.patch.object(
+                    runtime,
+                    'SYNC_MACRO_FINGERPRINT',
+                    'stable-macro',
+                ),
+                mock.patch.object(runtime, 'load_config'),
+                mock.patch.object(runtime, 'load_translator_settings'),
+                mock.patch.object(runtime, 'update_progress') as update_progress,
+                mock.patch.object(
+                    runtime,
+                    'maybe_update_sync_rag_store',
+                ) as update_rag,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                applied = runtime.apply_sync_translation_preview(manifest_path)
+
+            self.assertEqual(target.read_text(encoding='utf-8'), translated)
+            self.assertEqual(applied['state'], 'applied')
+            update_progress.assert_called_once_with('a.rpy', ['id:1'])
+            update_rag.assert_called_once_with(str(target), full_file=True)
 
     def test_sync_apply_blocks_when_macro_added_after_preview(self):
         old_macro = runtime.SYNC_MACRO_SETTING

@@ -236,7 +236,7 @@ JSONL 每行是一个对象，支持以下字段：
 
 注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
 
-同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史。
+同步 RAG 启用后，普通 Sync 初译会在不可变 TranslationPlan 构建阶段为全部固定 chunk 完成检索，随后才开始模型调用；因此同一次 preview run 不会在 chunk 之间刷新检索结果。history store 只在用户审查并 apply preview 后按成功写回文件更新，下一次 Sync run 才会读取这些新历史。运行日志会报告 plan 构建阶段的检索 chunk、RAG 命中和 Story Memory 生效 chunk 数；大项目应预期第一次模型调用前存在集中检索等待与 query embedding 消耗。
 
 ## RAG store 写入安全
 
@@ -308,6 +308,8 @@ Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分�
 ## 结构化剧情记忆
 
 Structured Story Memory 是 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。
+
+Sync TranslationPlan 的配置指纹不会记录 Story graph 的绝对机器路径：项目内文件记录 POSIX 风格相对路径，项目外文件只记录 basename 与内容 SHA-256。这样 preview manifest 不暴露用户目录，同一图谱跨机器迁移时也保持稳定；图谱内容变化仍会改变配置指纹。
 
 配置示例见 `translator_config.example.json`：
 

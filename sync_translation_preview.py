@@ -20,10 +20,87 @@ from atomic_io import (
 )
 
 import translation_quality
+import translation_plan
 
 
 SCHEMA = "sync_translation_preview"
 VERSION = 1
+
+
+def _validate_translation_plan_binding(manifest: dict[str, Any]) -> None:
+    """Validate optional P3 plan identity against its preview/writeback data."""
+    payload = manifest.get("translation_plan")
+    if payload is None:
+        return  # Legacy preview manifests remain readable and applicable.
+    if not isinstance(payload, dict):
+        raise ValueError("Sync preview translation_plan must be an object.")
+    if int(payload.get("schema_version") or 0) != translation_plan.PLAN_SCHEMA_VERSION:
+        raise ValueError("Unsupported sync TranslationPlan schema version.")
+    if payload.get("execution_strategy") != translation_plan.STRATEGY_SYNC:
+        raise ValueError("Sync preview is bound to a non-sync TranslationPlan.")
+    fingerprint_payload = dict(payload)
+    fingerprint_payload.pop("run_id", None)
+    fingerprint_payload.pop("plan_fingerprint", None)
+    expected_fingerprint = translation_plan.short_fingerprint(
+        translation_plan.canonical_json(fingerprint_payload)
+    )
+    recorded_fingerprint = str(payload.get("plan_fingerprint") or "")
+    if not recorded_fingerprint or recorded_fingerprint != expected_fingerprint:
+        raise ValueError("Sync TranslationPlan fingerprint is invalid.")
+    if str(manifest.get("plan_fingerprint") or "") != recorded_fingerprint:
+        raise ValueError("Sync preview plan fingerprint does not match its plan.")
+
+    recorded_ids = [str(item) for item in manifest.get("request_ids") or []]
+    planned_ids = [
+        str((item or {}).get("request_id") or "")
+        for item in payload.get("request_summaries") or []
+    ]
+    if recorded_ids != planned_ids:
+        raise ValueError("Sync preview request ids do not match its TranslationPlan.")
+
+    identity = payload.get("source_identity") or {}
+    file_digests: dict[str, str] = {}
+    for raw_path, digest in dict(identity.get("file_digests") or {}).items():
+        normalized_path = _safe_relative_path(raw_path)
+        if normalized_path in file_digests:
+            raise ValueError(
+                "Sync TranslationPlan contains duplicate normalized file digests: "
+                f"file={normalized_path}."
+            )
+        file_digests[normalized_path] = str(digest or "")
+    for entry in manifest.get("files") or []:
+        relative_path = _safe_relative_path(entry.get("relative_path"))
+        if relative_path not in file_digests:
+            raise ValueError(
+                "Sync preview file is missing from its TranslationPlan source "
+                f"digests: file={relative_path}."
+            )
+        if str(entry.get("source_sha256") or "") != file_digests[relative_path]:
+            raise ValueError(
+                "Sync preview source digest does not match its TranslationPlan: "
+                f"file={relative_path}."
+            )
+        writeback_plan = entry.get("writeback_plan")
+        if not isinstance(writeback_plan, dict):
+            continue
+        # WritebackPlan source fingerprints are per-file live snapshots.
+        bindings = (
+            ("engine", "engine"),
+            ("adapter_version", "adapter_version"),
+        )
+        for plan_key, identity_key in bindings:
+            expected = str(identity.get(identity_key) or "")
+            actual = (
+                str(writeback_plan.get(plan_key) or "")
+                if plan_key in writeback_plan
+                else "<missing>"
+            )
+            if actual != expected:
+                raise ValueError(
+                    "Sync preview writeback plan binding mismatch: "
+                    f"file={relative_path}, field={plan_key}, "
+                    f"expected={expected!r}, actual={actual!r}."
+                )
 
 
 def _canonical(path: str | os.PathLike[str]) -> str:
@@ -90,6 +167,9 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         payload["failures"] = manifest.get("failures")
     if "model_contract" in manifest:
         payload["model_contract"] = manifest.get("model_contract")
+    for key in ("translation_plan", "plan_fingerprint", "request_ids"):
+        if key in manifest:
+            payload[key] = manifest.get(key)
     return payload
 
 
@@ -170,6 +250,8 @@ def create_sync_preview(
     prompt_context: dict[str, Any] | None = None,
     quality_policy: dict[str, Any] | None = None,
     glossary_file: str | os.PathLike[str] = "",
+    translation_plan_payload: dict[str, Any] | None = None,
+    request_ids: Iterable[str] = (),
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
@@ -359,6 +441,13 @@ def create_sync_preview(
     }
     if prompt_context is not None:
         manifest["prompt_context"] = dict(prompt_context)
+    if translation_plan_payload is not None:
+        manifest["translation_plan"] = dict(translation_plan_payload)
+        manifest["plan_fingerprint"] = str(
+            translation_plan_payload.get("plan_fingerprint") or ""
+        )
+        manifest["request_ids"] = [str(item) for item in request_ids]
+        _validate_translation_plan_binding(manifest)
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
@@ -393,6 +482,7 @@ def prepare_sync_preview_apply(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate every source and artifact before the first project write."""
     manifest = load_sync_preview(manifest_path)
+    _validate_translation_plan_binding(manifest)
     if manifest.get("state") == "applied":
         raise ValueError("Sync preview has already been applied.")
     if _canonical(manifest.get("project_root", "")) != _canonical(active_project_root):
