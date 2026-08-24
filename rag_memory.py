@@ -8,6 +8,13 @@ import socket
 import stat
 from datetime import datetime
 
+from embedding_backend import (
+    EmbeddingContractError,
+    EmbeddingIdentity,
+    EmbeddingTaskType,
+    check_persisted_store_query_compatibility,
+)
+
 
 LOCK_STALE_AFTER_SECONDS = 60 * 60
 
@@ -64,7 +71,69 @@ class JsonRagStoreLockError(RuntimeError):
     pass
 
 
-class JsonRagStore(object):
+class EmbeddingStoreIdentityError(RuntimeError):
+    """Raised when identity metadata would silently bless existing vectors."""
+
+    action = 'rebuild_store'
+
+    def __init__(self):
+        super().__init__('embedding store identity cannot change; rebuild the store')
+
+
+class _EmbeddingIdentityStoreMixin:
+    def _embedding_record_count(self):
+        raise NotImplementedError
+
+    def set_embedding_identity(self, identity):
+        """Persist a document identity without silently migrating existing vectors."""
+
+        if not isinstance(identity, EmbeddingIdentity):
+            raise EmbeddingContractError('identity must be an EmbeddingIdentity')
+        if identity.task_type is not EmbeddingTaskType.DOCUMENT:
+            raise EmbeddingContractError('store embedding identity must use document task type')
+        with self._locked('set_embedding_identity') as lock_info:
+            self._refresh_from_disk_if_changed()
+            existing_payload = self.metadata.get('embedding_identity')
+            if existing_payload is not None:
+                try:
+                    existing = EmbeddingIdentity.from_dict(existing_payload)
+                except EmbeddingContractError:
+                    existing = None
+                if existing == identity:
+                    return
+            if self._embedding_record_count() > 0:
+                raise EmbeddingStoreIdentityError()
+            self._update_metadata_unlocked(
+                'set_embedding_identity',
+                {'embedding_identity': identity.to_dict()},
+                lock_info,
+            )
+
+    def embedding_compatibility(self, query_identity):
+        """Return a fail-closed, field-level compatibility/rebuild diagnostic."""
+
+        self.load()
+        return check_persisted_store_query_compatibility(
+            self.metadata.get('embedding_identity'),
+            query_identity,
+        )
+
+    @staticmethod
+    def _validate_metadata_updates(updates):
+        if 'embedding_identity' in updates:
+            raise EmbeddingContractError(
+                'embedding_identity must be written with set_embedding_identity'
+            )
+
+
+def _record_has_embedding(record):
+    if not isinstance(record, dict):
+        return False
+    embedding = record.get('embedding')
+    return isinstance(embedding, (list, tuple)) and bool(embedding)
+
+
+class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
     def __init__(self, store_dir):
         self.store_dir = os.path.abspath(store_dir)
         self.metadata_path = os.path.join(self.store_dir, 'metadata.json')
@@ -145,11 +214,15 @@ class JsonRagStore(object):
         self.load()
         return len(self.history)
 
+    def _embedding_record_count(self):
+        return sum(1 for record in self.history.values() if _record_has_embedding(record))
+
     def get_history_record(self, memory_id):
         self.load()
         return self.history.get(memory_id)
 
     def set_metadata(self, **updates):
+        self._validate_metadata_updates(updates)
         with self._locked('set_metadata') as lock_info:
             self._refresh_from_disk_if_changed()
             self._update_metadata_unlocked('set_metadata', updates, lock_info)
@@ -507,6 +580,20 @@ class JsonRagStore(object):
         if top_k > 0:
             return results[:top_k]
         return results
+
+    def search_history_compatible(self, query_vector, query_identity, top_k=4, min_similarity=0.72):
+        """Search only when the persisted document and query identities match."""
+
+        compatibility = self.embedding_compatibility(query_identity)
+        diagnostics = {'embedding_compatibility': compatibility.to_dict()}
+        if not compatibility.compatible:
+            return [], diagnostics
+        return self.search_history(
+            query_vector,
+            top_k=top_k,
+            min_similarity=min_similarity,
+        ), diagnostics
+
     def _sort_key(self, record):
         quality_state = record.get('quality_state') or ''
         quality_rank = {
@@ -523,7 +610,7 @@ class JsonSourceIndexStoreLockError(RuntimeError):
     pass
 
 
-class JsonSourceIndexStore(object):
+class JsonSourceIndexStore(_EmbeddingIdentityStoreMixin, object):
     def __init__(self, store_dir):
         self.store_dir = os.path.abspath(store_dir)
         self.metadata_path = os.path.join(self.store_dir, 'source_metadata.json')
@@ -606,11 +693,15 @@ class JsonSourceIndexStore(object):
         self.load()
         return len(self.segments)
 
+    def _embedding_record_count(self):
+        return sum(1 for record in self.segments.values() if _record_has_embedding(record))
+
     def get_segment(self, source_id):
         self.load()
         return self.segments.get(source_id)
 
     def set_metadata(self, **updates):
+        self._validate_metadata_updates(updates)
         with self._locked('set_metadata') as lock_info:
             self._refresh_from_disk_if_changed()
             self._update_metadata_unlocked('set_metadata', updates, lock_info)
@@ -1048,3 +1139,31 @@ class JsonSourceIndexStore(object):
         if return_diagnostics:
             return results, diagnostics
         return results
+
+    def search_segments_compatible(
+        self,
+        query_vector,
+        query_identity,
+        top_k=4,
+        min_similarity=0.72,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+    ):
+        """Search only when store metadata identifies the same vector space."""
+
+        compatibility = self.embedding_compatibility(query_identity)
+        diagnostics = {'embedding_compatibility': compatibility.to_dict()}
+        if not compatibility.compatible:
+            return [], diagnostics
+        results, search_diagnostics = self.search_segments(
+            query_vector,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            embedding_model=embedding_model,
+            embedding_task_type=embedding_task_type,
+            embedding_dim=embedding_dim,
+            return_diagnostics=True,
+        )
+        diagnostics.update(search_diagnostics)
+        return results, diagnostics
