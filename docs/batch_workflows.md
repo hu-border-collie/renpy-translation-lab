@@ -419,6 +419,10 @@ python gemini_translate_batch.py export-reuse-results \
   结果导出」；`export-reuse-results` 只写 Batch 包内的结果 JSONL，之后仍必须
   `check` → `apply`。细节见
   [P4 译文复用候选与人工确认](engine_adapter.md#p4-译文复用候选与人工确认)。
+- 2026-08-24 已在两部真实 Ren'Py 项目副本上跑通上述离线命令与写回闸门（含
+  `apply --force` 不能绕过 `deny`）；实测摘要见
+  [真实项目门禁实测](engine_adapter.md#真实项目门禁实测-2026-08-24)。不把历史
+  Batch 包套到已经漂移的源树上冻结译文记录。
 
 ## 关键词提取流程
 
