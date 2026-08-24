@@ -5149,10 +5149,10 @@ def _collect_revision_proposal_live_context():
 
 
 def _revision_proposal_project_identity():
-    return {
-        'game_root': os.path.abspath(str(legacy.BASE_DIR or '')) if legacy.BASE_DIR else '',
-        'tl_dir': os.path.abspath(str(legacy.TL_DIR or '')) if legacy.TL_DIR else '',
-    }
+    return revision_selection.project_identity_from_paths(
+        game_root=legacy.BASE_DIR,
+        tl_dir=legacy.TL_DIR,
+    )
 
 
 def _proposal_import_diagnostics_from_candidates(candidates):
@@ -5210,6 +5210,35 @@ def _write_selection_stage_report(package_dir, report):
     }
 
 
+def _write_selection_confirmation_report(package_dir, report):
+    """Write a refusal/outcome report without mutating the immutable stage audit."""
+
+    json_path = os.path.join(package_dir, 'selection_confirmation_report.json')
+    markdown_path = os.path.join(package_dir, 'selection_confirmation_report.md')
+    atomic_write_json(json_path, report, ensure_ascii=False, indent=2)
+    lines = [
+        '# Revision Proposal Selection Confirmation',
+        '',
+        f"- Status: {report.get('status') or 'unknown'}",
+        f"- Staged selection: {report.get('staged_selection_path') or ''}",
+        f"- Selection request: {report.get('selection_path') or ''}",
+        '',
+    ]
+    diagnostics = list(report.get('diagnostics') or [])
+    if diagnostics:
+        lines.extend(['## Diagnostics', ''])
+        for item in diagnostics:
+            lines.append(
+                f"- `{item.get('code') or 'UNKNOWN'}` row {item.get('row') or '-'}: "
+                f"{item.get('message') or ''}"
+            )
+    atomic_write_text(markdown_path, '\n'.join(lines) + '\n')
+    return {
+        'selection_confirmation_report': json_path,
+        'selection_confirmation_report_markdown': markdown_path,
+    }
+
+
 def _stage_revision_proposals(
     *,
     proposal_path,
@@ -5256,6 +5285,16 @@ def _stage_revision_proposals(
     stage_path = os.path.join(package_dir, 'staged_selection.json')
     revision_selection.write_staged_selection(stage_path, stage)
     summary = dict(stage.get('summary') or {})
+    session = dict(stage.get('session') or {})
+    session_status = str(session.get('session_status') or '').strip()
+    if session_status not in {'ready', 'stale', 'no_valid_candidates'}:
+        session_status = (
+            'stale'
+            if summary.get('session_stale')
+            else 'ready'
+            if summary.get('selectable_count')
+            else 'no_valid_candidates'
+        )
     diagnostics = _proposal_import_diagnostics_from_candidates(
         stage.get('candidates') or []
     )
@@ -5263,13 +5302,7 @@ def _stage_revision_proposals(
         'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
         'kind': 'revision_proposal_import',
         'status': 'staged',
-        'session_status': (
-            'stale'
-            if summary.get('stale_count')
-            else 'ready'
-            if summary.get('selectable_count')
-            else 'no_valid_candidates'
-        ),
+        'session_status': session_status,
         'proposal_path': proposal_path,
         'corpus_manifest_path': resolved_corpus_manifest,
         'operation_identity': (stage.get('session') or {}).get('operation_identity') or '',
@@ -5290,7 +5323,7 @@ def _stage_revision_proposals(
         'candidates': list(stage.get('candidates') or []),
         'suggested_action': (
             're_export_corpus_and_regenerate_proposals'
-            if summary.get('stale_count')
+            if session_status == 'stale'
             else 'select_valid_candidates'
             if summary.get('selectable_count')
             else 'fix_proposal_diagnostics'
@@ -5600,7 +5633,7 @@ def _staged_selection_confirmation_outcome(
         'diagnostics': [dict(item) for item in diagnostics or []],
         'suggested_action': suggested_action,
     }
-    report_paths = _write_selection_stage_report(package_dir, report)
+    report_paths = _write_selection_confirmation_report(package_dir, report)
     return {
         **report,
         'paths': {
@@ -5613,15 +5646,7 @@ def _staged_selection_confirmation_outcome(
 
 
 def _same_revision_project_identity(expected, actual):
-    for key in ('game_root', 'tl_dir'):
-        expected_value = str((expected or {}).get(key) or '').strip()
-        actual_value = str((actual or {}).get(key) or '').strip()
-        if expected_value and (
-            os.path.normcase(os.path.abspath(expected_value))
-            != os.path.normcase(os.path.abspath(actual_value))
-        ):
-            return False
-    return True
+    return revision_selection.project_identities_match(expected, actual)
 
 
 def confirm_revision_proposals(staged_selection_path, selection_path):
@@ -18309,7 +18334,9 @@ def build_machine_success_envelope(command, value, args):
             'selection_digest': imported.get('selection_digest') or '',
             'selected_identity_v2': list(imported.get('selected_identity_v2') or []),
         }
-        if getattr(args, 'stage', False) or command == 'import-revision-proposals' and imported.get('stage'):
+        if command == 'import-revision-proposals' and (
+            getattr(args, 'stage', False) or imported.get('stage')
+        ):
             result['candidates'] = list(imported.get('candidates') or [])
         return cli_contract.success_envelope(
             command,
@@ -18323,6 +18350,8 @@ def build_machine_success_envelope(command, value, args):
                 'import_report_markdown': paths.get('import_report_markdown') or '',
                 'staged_selection_report': paths.get('staged_selection_report') or '',
                 'staged_selection_report_markdown': paths.get('staged_selection_report_markdown') or '',
+                'selection_confirmation_report': paths.get('selection_confirmation_report') or '',
+                'selection_confirmation_report_markdown': paths.get('selection_confirmation_report_markdown') or '',
                 'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',
                 'revision_preview_markdown': paths.get('revision_preview_markdown') or '',
             },

@@ -302,8 +302,9 @@ Markdown、`revision_corpus_manifest.json` 路径和 manifest 中的生成时间
 
 导出语料和导入提案都不会直接修改 `.rpy`。导出或导入期间切换项目、提案文件变化或
 收到迟到结果时，旧结果会被丢弃；请在当前项目重新操作。导入完成后，订正页会显示候选
-总数、有效/未选择/无效/过期/冲突计数和候选会话路径，并打开可复用的 staged-selection
-表格。表格支持按 reason、文件、状态筛选，以及“只看有效候选”“全选当前有效”“清空选择”；
+总数、有效/未选择/无效/过期/冲突计数和候选会话路径；仅当 `session_status=ready` 且存在
+有效候选时自动打开可复用的 staged-selection 表格，否则停留在摘要并显示下一步提示。表格
+支持按 reason、文件、状态筛选，以及“只看有效候选”“当前筛选中全选有效”“清空选择”；
 原文相同的条目仍通过各自 `identity_v2` 区分。只有明确点击“生成订正预览”后写出的
 `revision_proposal_selection.json` 才会交给 CLI 的 `confirm-revision-proposals`，无效、
 过期、冲突和 no-op 候选不能勾选或进入写回。项目/源快照或 operation identity 变化会

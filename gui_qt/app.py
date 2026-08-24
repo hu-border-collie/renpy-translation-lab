@@ -9817,6 +9817,16 @@ class MainWindow(QMainWindow):
     ) -> str:
         """Compute the GUI owner identity for one staged proposal session."""
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        runtime_game_root = str(game_root or "")
+        tl_dir = ""
+        snapshotter = getattr(self, "_snapshot_runtime_config_for_job", None)
+        if callable(snapshotter):
+            runtime_config = snapshotter(persist_corrected_game_root=False)
+            if runtime_config is not None:
+                runtime_game_root = str(
+                    getattr(runtime_config, "base_dir", "") or runtime_game_root
+                )
+                tl_dir = str(getattr(runtime_config, "tl_dir", "") or "")
         proposal_sha256 = ""
         corpus_manifest_sha256 = ""
         try:
@@ -9830,7 +9840,10 @@ class MainWindow(QMainWindow):
             proposal_sha256 = ""
             corpus_manifest_sha256 = ""
         return revision_selection.operation_identity(
-            project_identity={"game_root": str(game_root or "")},
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=runtime_game_root,
+                tl_dir=tl_dir,
+            ),
             proposal_path=proposal_path,
             proposal_sha256=proposal_sha256,
             corpus_manifest_path=corpus_manifest_path,
@@ -9918,6 +9931,16 @@ class MainWindow(QMainWindow):
         result = getattr(self, "_revision_proposal_stage_result", None)
         if not isinstance(result, dict):
             return
+        if (
+            str(result.get("session_status") or "") != "ready"
+            or int(result.get("selectable_count") or 0) <= 0
+        ):
+            message_box_information(
+                self,
+                "当前没有可选择候选",
+                "请先处理摘要中的过期、无效或冲突提案，再重新导入当前语料。",
+            )
+            return
         paths = result.get("paths")
         paths = paths if isinstance(paths, dict) else {}
         stage_path = str(paths.get("staged_selection") or "").strip()
@@ -9984,6 +10007,22 @@ class MainWindow(QMainWindow):
             ),
             log_heading=REVISION_PROPOSAL_COPY["selection_running"],
             status_tab=1,
+        )
+
+    def _refresh_writeback_from_revision_manifest(self, manifest_path: str) -> None:
+        """Load a confirmed revision manifest fully before deriving writeback UI."""
+
+        try:
+            manifest = self.state.load_manifest_file(manifest_path, lite=False)
+        except ValueError as exc:
+            self._append_log(f"[GUI] 无法读取订正预览 manifest：{exc}\n")
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+            )
+            return
+        self._refresh_writeback_from_latest_manifest(
+            latest_manifest=manifest_path,
+            manifest=manifest,
         )
 
     def _on_final_review_page_action(self, action: str) -> None:
@@ -14479,7 +14518,7 @@ class MainWindow(QMainWindow):
             and workflow.manifest_path
         ):
             self._writeback_manifest_path = workflow.manifest_path
-            self._refresh_writeback_from_latest_manifest()
+            self._refresh_writeback_from_revision_manifest(workflow.manifest_path)
         archive_completed = (
             not is_project_analysis_workflow
             and not is_revision_corpus_export_workflow
@@ -14506,7 +14545,8 @@ class MainWindow(QMainWindow):
         if (
             is_revision_proposal_import_workflow
             and workflow.stage_result is not None
-            and update.status in {"done", "warning"}
+            and update.status == "done"
+            and workflow.can_open_selection()
         ):
             QTimer.singleShot(0, self._open_revision_proposal_selection)
         finish_spec = work_mode_spec(self._current_work_mode())

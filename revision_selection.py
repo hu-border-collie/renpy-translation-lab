@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -79,6 +80,44 @@ def canonical_digest(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def normalize_project_path(value: object) -> str:
+    """Normalize one project path for CLI/GUI identity comparisons."""
+
+    text = str(value or "").strip()
+    return os.path.normcase(os.path.abspath(text)) if text else ""
+
+
+def normalize_project_identity(
+    project_identity: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Return the canonical game-root/TL-directory project identity."""
+
+    values = project_identity or {}
+    return {
+        "game_root": normalize_project_path(values.get("game_root")),
+        "tl_dir": normalize_project_path(values.get("tl_dir")),
+    }
+
+
+def project_identity_from_paths(
+    *,
+    game_root: object = "",
+    tl_dir: object = "",
+) -> dict[str, str]:
+    """Build the canonical project identity used by both CLI and GUI."""
+
+    return normalize_project_identity({"game_root": game_root, "tl_dir": tl_dir})
+
+
+def project_identities_match(
+    expected: Mapping[str, Any] | None,
+    actual: Mapping[str, Any] | None,
+) -> bool:
+    """Compare project identities using the shared path normalization rules."""
+
+    return normalize_project_identity(expected) == normalize_project_identity(actual)
+
+
 def operation_identity(
     *,
     project_identity: Mapping[str, Any] | None,
@@ -94,18 +133,15 @@ def operation_identity(
     switch or after the proposal/companion manifest has been replaced.
     """
 
-    normalized_project = {
-        str(key): str(value or "").strip()
-        for key, value in (project_identity or {}).items()
-    }
+    normalized_project = normalize_project_identity(project_identity)
     return canonical_digest(
         {
             "operation": "revision-proposal-selection",
             "project_identity": normalized_project,
-            "proposal_path": os.path.normcase(os.path.abspath(str(proposal_path or ""))),
+            "proposal_path": normalize_project_path(proposal_path),
             "proposal_sha256": str(proposal_sha256 or ""),
             "corpus_manifest_path": (
-                os.path.normcase(os.path.abspath(str(corpus_manifest_path)))
+                normalize_project_path(corpus_manifest_path)
                 if str(corpus_manifest_path or "").strip()
                 else ""
             ),
@@ -138,8 +174,10 @@ def _row_number(row: Mapping[str, Any]) -> int:
         return 0
 
 
-def _compact(value: object) -> str:
-    return "".join(str(value or "").split())
+def compact_text(value: object) -> str:
+    """Match the revision preview's whitespace comparison semantics."""
+
+    return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
 def _candidate_row(
@@ -157,7 +195,7 @@ def _candidate_row(
         status == STATUS_VALID
         and isinstance(proposed, str)
         and isinstance(current, str)
-        and _compact(proposed) == _compact(current)
+        and compact_text(proposed) == compact_text(current)
     )
     if no_op:
         status = STATUS_NO_OP
@@ -274,6 +312,10 @@ def build_candidates(
         if _row_number(row)
     }
     global_diagnostics = [item for item in diagnostics if not int(item.get("row") or 0)]
+    session_stale = any(
+        diagnostic_status([str(item.get("code") or "")]) == STATUS_STALE
+        for item in global_diagnostics
+    )
     candidates: list[dict[str, Any]] = []
     for index, raw in enumerate(rows, start=1):
         row = dict(raw)
@@ -313,6 +355,7 @@ def build_candidates(
         "invalid_count": sum(item["status"] == STATUS_INVALID for item in candidates),
         "stale_count": sum(item["status"] == STATUS_STALE for item in candidates),
         "conflict_count": sum(item["status"] == STATUS_CONFLICT for item in candidates),
+        "session_stale": session_stale,
     }
     return candidates, summary
 
@@ -347,16 +390,17 @@ def build_staged_selection(
 ) -> dict[str, Any]:
     """Build a replayable staged-selection document without previewing."""
 
+    normalized_project_identity = normalize_project_identity(project_identity)
     candidates, summary = build_candidates(
         rows,
         live_items,
         live_snapshot_digest=live_snapshot_digest,
-        live_project_identity=project_identity,
+        live_project_identity=normalized_project_identity,
         corpus_manifest=corpus_manifest,
         extra_diagnostics=extra_diagnostics,
     )
     operation_id = str(operation_id or "").strip() or operation_identity(
-        project_identity=project_identity,
+        project_identity=normalized_project_identity,
         proposal_path=proposal_path,
         proposal_sha256=proposal_sha256,
         corpus_manifest_path=corpus_manifest_path,
@@ -367,7 +411,7 @@ def build_staged_selection(
         "kind": STAGED_SELECTION_KIND,
         "session": {
             "operation_identity": operation_id,
-            "project_identity": dict(project_identity),
+            "project_identity": normalized_project_identity,
             "proposal_path": os.path.abspath(str(proposal_path or "")),
             "proposal_sha256": str(proposal_sha256 or ""),
             "corpus_manifest_path": os.path.abspath(str(corpus_manifest_path))
@@ -376,6 +420,13 @@ def build_staged_selection(
             "corpus_manifest_sha256": str(corpus_manifest_sha256 or ""),
             "live_snapshot_digest": str(live_snapshot_digest or ""),
             "source_file_digests": dict(sorted((source_file_digests or {}).items())),
+            "session_status": (
+                "stale"
+                if summary.get("session_stale")
+                else "ready"
+                if summary.get("selectable_count")
+                else "no_valid_candidates"
+            ),
         },
         "candidates": candidates,
         "summary": summary,
@@ -472,7 +523,7 @@ def validate_staged_selection(stage: Mapping[str, Any]) -> None:
         if not isinstance(candidate, Mapping):
             raise ValueError("staged selection candidate must be an object")
         identity = str(candidate.get("identity_v2") or "").strip()
-        if not identity:
+        if not identity and candidate.get("selectable"):
             raise ValueError("staged selection candidate identity_v2 is required")
         candidate_key = str(candidate.get("candidate_key") or "").strip()
         if not candidate_key:

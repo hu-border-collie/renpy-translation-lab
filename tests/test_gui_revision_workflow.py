@@ -217,6 +217,7 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
                 "selectable_count": 1,
                 "selected_count": 0,
                 "unselected_count": 1,
+                "session_status": "ready",
                 "invalid_count": 1,
                 "stale_count": 0,
                 "conflict_count": 0,
@@ -230,6 +231,24 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "done")
         self.assertEqual(workflow.stage_result["candidates"][0]["identity_v2"], "occ-1")
         self.assertIn("明确勾选", update.message)
+        self.assertTrue(workflow.can_open_selection())
+
+    def test_staged_import_does_not_auto_open_without_ready_session(self):
+        for session_status, selectable_count in (
+            ("stale", 1),
+            ("no_valid_candidates", 0),
+        ):
+            workflow = RevisionProposalImportWorkflow(
+                r"C:\review\proposals.jsonl",
+                stage=True,
+                operation_identity="operation-1",
+            )
+            workflow.stage_result = {
+                "status": "staged",
+                "session_status": session_status,
+                "selectable_count": selectable_count,
+            }
+            self.assertFalse(workflow.can_open_selection())
 
     def test_confirm_workflow_requests_serialized_selection_and_reports_preview(self):
         workflow = RevisionProposalConfirmWorkflow(

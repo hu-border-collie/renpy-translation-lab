@@ -348,7 +348,8 @@ class RevisionPage(QFrame):
         stage_path = paths.get("staged_selection") if isinstance(paths, dict) else ""
         self.proposal_result_session.setText(f"候选会话：{stage_path or '未记录'}")
         self.select_proposals_btn.setEnabled(
-            int(result.get("selectable_count") or 0) > 0
+            str(result.get("session_status") or "") == "ready"
+            and int(result.get("selectable_count") or 0) > 0
         )
         self.task_layout.reflow()
         self.updateGeometry()
@@ -446,10 +447,14 @@ class RevisionPage(QFrame):
             export_tooltip or REVISION_CORPUS_COPY["tooltip"]
         )
         self.import_proposals_btn.setEnabled(start_enabled and not self._running)
+        stage_result = self.proposal_stage_result()
         self.select_proposals_btn.setEnabled(
             selection_enabled
             and self._active_mode == WorkMode.REVISION
             and not self._running
+            and isinstance(stage_result, dict)
+            and str(stage_result.get("session_status") or "") == "ready"
+            and int(stage_result.get("selectable_count") or 0) > 0
         )
         self.result_hint.setText(result_message)
         self.task_layout.reflow()

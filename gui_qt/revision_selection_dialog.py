@@ -216,11 +216,17 @@ class RevisionProposalSelectionDialog(QDialog):
         self._sync_accept_enabled()
 
     def _select_all_valid(self) -> None:
-        self._selection_cache = {
+        visible_identities = {
             str(candidate.get("identity_v2") or "")
-            for candidate in self.stage.get("candidates") or []
+            for candidate in self._filtered_candidates()
             if candidate.get("selectable")
         }
+        self._selection_cache = {
+            identity
+            for identity in self.selected_identity_v2()
+            if identity not in visible_identities
+        }
+        self._selection_cache.update(visible_identities)
         self.table.blockSignals(True)
         try:
             for row in range(self.table.rowCount()):

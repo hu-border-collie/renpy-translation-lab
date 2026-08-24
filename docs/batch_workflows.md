@@ -313,9 +313,11 @@ python gemini_translate_batch.py confirm-revision-proposals `
 `--stage` 只读取并冻结候选，不生成 revision preview；它会写出版本化的
 `staged_selection.json`，其中包含每行的 `identity_v2`、原文/现译/建议、reason、
 文件、`valid/selectable`、`status`（`valid`、`no_op`、`invalid`、`stale`、
-`conflict`）、诊断、初始 `selected` hint、proposal/corpus/source digest、项目和
-operation identity。重复原文依靠 occurrence identity 区分，重复提案 identity 会把
-相关候选标为 conflict。GUI 的筛选与“全选有效/清空选择”只产生一个共享核心可读的
+`conflict`）、诊断、初始 `selected` hint、proposal/corpus/source digest、规范化的
+`project_identity.game_root/tl_dir` 和 operation identity。重复原文依靠 occurrence identity
+区分，重复提案 identity 会把相关候选标为 conflict。`session_status=stale` 只表示项目、
+语料或源快照等全局边界失效；单行 stale 保留在候选状态中，不会阻止仍有效的其他候选。
+GUI 的筛选与“当前筛选中全选有效/清空选择”只产生一个共享核心可读的
 `revision_proposal_selection.json`；只有其中 `confirmed=true` 且 identity 集合仍属于
 有效候选时，`confirm-revision-proposals` 才会重新校验当前项目并调用现有
 `preview-revisions` 合同。项目切换、提案/语料重新导入、任一源文件变化或 digest
@@ -368,6 +370,8 @@ diagnostics、artifacts 和 `suggested_action`；严格退出码下 `partial` �
 `blocked/stale` 为“阻断”。
 只有 `previewed/no_op` manifest 能进入 `apply-revisions`，`--force` 不能绕过此闸门，
 也不能绕过 preview/result hash、项目身份、源快照或 adapter writeback 校验。
+确认失败或 stale 的结果写入独立的 `selection_confirmation_report.json/.md`，不会覆盖
+原始 staged-selection 审计报告。
 
 ## 项目版本快照与只读 reconciliation
 

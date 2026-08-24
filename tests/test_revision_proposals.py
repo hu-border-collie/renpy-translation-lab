@@ -174,6 +174,34 @@ class RevisionProposalContractTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "imported")
 
+    def test_shared_project_identity_normalizes_paths_for_cli_and_gui(self):
+        project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\..\work",
+            tl_dir=r"C:\Demo\work\game\tl\schinese\.",
+        )
+        equivalent = revision_selection.project_identity_from_paths(
+            game_root=r"c:\demo\work",
+            tl_dir=r"c:\demo\work\game\tl\schinese",
+        )
+        self.assertEqual(project, equivalent)
+        self.assertTrue(revision_selection.project_identities_match(project, equivalent))
+        self.assertEqual(
+            revision_selection.operation_identity(
+                project_identity=project,
+                proposal_path=r"C:\Demo\work\proposals.jsonl",
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=r"C:\Demo\work\corpus.json",
+                corpus_manifest_sha256="b" * 64,
+            ),
+            revision_selection.operation_identity(
+                project_identity=equivalent,
+                proposal_path=r"c:\demo\work\.\proposals.jsonl",
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=r"c:\demo\work\corpus.json",
+                corpus_manifest_sha256="b" * 64,
+            ),
+        )
+
     def test_corpus_snapshot_mismatch_is_stale(self):
         result = proposals.validate(
             [self.row(corpus_snapshot_digest="b" * 64)],
@@ -556,9 +584,98 @@ class RevisionProposalImportTests(unittest.TestCase):
             1,
         )
 
+    def test_stage_missing_identity_is_reported_as_invalid_candidate(self):
+        row = self._proposal()
+        row.update(occurrence_id="", identity_v2="")
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(row)),
+            stage=True,
+        )
+
+        self.assertEqual(result["status"], "staged")
+        self.assertEqual(result["invalid_count"], 1)
+        self.assertEqual(result["selectable_count"], 0)
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(stage["candidates"][0]["identity_v2"], "")
+        self.assertEqual(
+            stage["candidates"][0]["status"],
+            revision_selection.STATUS_INVALID,
+        )
+
+    def test_stage_whitespace_translation_change_remains_selectable(self):
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "你好世界"\n',
+            encoding="utf-8",
+        )
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(self._proposal(proposed="你好 世界"))),
+            stage=True,
+        )
+
+        self.assertEqual(result["selectable_count"], 1)
+        self.assertEqual(result["no_op_count"], 0)
+
+    def test_stage_row_level_stale_keeps_ready_session_for_other_candidates(self):
+        live = {
+            "valid-id": {
+                "id": "valid-id",
+                "file_rel_path": "chapter.rpy",
+                "source": "Hello {name}",
+                "current_translation": "你好 {name}",
+            },
+            "occ-2": {
+                "id": "occ-2",
+                "file_rel_path": "other.rpy",
+                "source": "Other",
+                "current_translation": "当前译文",
+            },
+        }
+        valid = self._proposal()
+        live[valid["occurrence_id"]] = live.pop("valid-id")
+        live[valid["occurrence_id"]]["id"] = valid["occurrence_id"]
+        stale = dict(valid)
+        stale.update(
+            occurrence_id="occ-2",
+            identity_v2="occ-2",
+            file_rel_path="other.rpy",
+            source="Other",
+            current_translation="旧译文",
+            proposed_translation="新译文",
+            snapshot_digest=revision_corpus.item_snapshot_digest("Other", "旧译文"),
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[valid, stale],
+            live_items=live,
+            live_snapshot_digest=valid["corpus_snapshot_digest"],
+            project_identity={"game_root": self.root, "tl_dir": self.tl_dir},
+            proposal_path="C:/demo/proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="operation-1",
+        )
+
+        self.assertEqual(stage["session"]["session_status"], "ready")
+        self.assertEqual(stage["summary"]["selectable_count"], 1)
+        self.assertEqual(stage["summary"]["stale_count"], 1)
+
     def test_confirmed_stage_selection_generates_preview_and_binds_selection(self):
         proposal_path = self._write_proposal(self._proposal())
-        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        expected_identity = revision_selection.operation_identity(
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=self.root,
+                tl_dir=self.tl_dir,
+            ),
+            proposal_path=str(proposal_path),
+            proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+        )
+        staged = batch.import_revision_proposals(
+            str(proposal_path),
+            stage=True,
+            operation_identity=expected_identity,
+        )
         stage = revision_selection.load_staged_selection(
             staged["paths"]["staged_selection"]
         )
@@ -580,6 +697,7 @@ class RevisionProposalImportTests(unittest.TestCase):
             proposal_state["staged_selection_digest"],
             stage["staged_selection_digest"],
         )
+        self.assertEqual(proposal_state["operation_identity"], expected_identity)
         self.assertTrue(proposal_state["selection_sha256"])
         self.assertEqual(self.rpy.read_text(encoding="utf-8").count("您好"), 0)
         selection_path.write_text(json.dumps({"changed": True}), encoding="utf-8")
@@ -589,6 +707,8 @@ class RevisionProposalImportTests(unittest.TestCase):
     def test_confirmed_stage_selection_is_stale_after_source_change(self):
         proposal_path = self._write_proposal(self._proposal())
         staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage_report = Path(staged["paths"]["staged_selection_report"])
+        original_stage_report = stage_report.read_bytes()
         stage = revision_selection.load_staged_selection(
             staged["paths"]["staged_selection"]
         )
@@ -612,6 +732,8 @@ class RevisionProposalImportTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "stale")
         self.assertNotIn("manifest", result["paths"])
+        self.assertTrue(Path(result["paths"]["selection_confirmation_report"]).is_file())
+        self.assertEqual(stage_report.read_bytes(), original_stage_report)
 
     def test_confirmed_stage_selection_is_stale_after_project_switch(self):
         proposal_path = self._write_proposal(self._proposal())

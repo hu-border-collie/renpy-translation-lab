@@ -282,6 +282,17 @@ class RevisionProposalImportWorkflow:
         self.stage_result: dict[str, object] | None = None
         self._pending = True
 
+    def can_open_selection(self) -> bool:
+        """Return whether a staged import is ready for the selection dialog."""
+
+        result = self.stage_result
+        return bool(
+            self.stage
+            and isinstance(result, dict)
+            and str(result.get("session_status") or "") == "ready"
+            and int(result.get("selectable_count") or 0) > 0
+        )
+
     def current_step(self) -> WorkflowStep | None:
         if not self._pending:
             return None
