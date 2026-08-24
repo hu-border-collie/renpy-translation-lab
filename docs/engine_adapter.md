@@ -3,11 +3,17 @@
 文档地图：[docs/README.md](README.md)
 
 当前已交付 #265 的 P1 与 P2，并由 #330 实现 P3 的只读项目版本快照与
-reconciliation：同步翻译预览、普通 Batch translation build，以及 revision
-preview/apply 通过 `RenPyAdapter` 的 relocation、validation 和声明式 writeback plan；
-公共层重新校验 plan 后，仍由既有 workflow 执行 check→apply、路径约束、事务恢复和
-atomic write。P3 在这条写回路径之外保存 source-only occurrence 证据并比较两个版本，
-不会复用译文、确认 lineage 或修改游戏文件。
+reconciliation，由 #354 / PR #358 实现 P4 译文复用候选与人工确认：同步翻译预览、
+普通 Batch translation build，以及 revision preview/apply 通过 `RenPyAdapter` 的
+relocation、validation 和声明式 writeback plan；公共层重新校验 plan 后，仍由既有
+workflow 执行 check→apply、路径约束、事务恢复和 atomic write。P3 在这条写回路径
+之外保存 source-only occurrence 证据并比较两个版本，不会复用译文、确认 lineage
+或修改游戏文件。P4 的唯一写回入口是把已接受候选写入 Batch 结果 JSONL，之后仍走
+`check` → `apply`。
+
+2026-08-24 已在两部真实 Ren'Py 项目的副本上完成 P1–P4 门禁实测；摘要见
+[真实项目门禁实测（2026-08-24）](#真实项目门禁实测-2026-08-24)。P5 TyranoScript
+V600+ 验证 adapter 与 P6 产品化仍未交付。
 
 ## 当前边界
 
@@ -207,6 +213,57 @@ digest）变化时，`validate_reuse_freshness()` 会把候选标记为 `stale`�
 通道；reference-only 候选即使接受也只保留旧译文供参考，不会计入可写回的复用。
 
 P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交互属 P6）。
+
+## 真实项目门禁实测（2026-08-24）
+
+#265 约定 P5 开工前须在真实 Ren'Py 项目上验证 adapter、coverage review、版本快照
+与安全写回。本次只使用项目**副本**，不修改生产 `work/` / `build/`，也不调用翻译
+模型。下文不引用游戏原文、角色台词或本机路径。
+
+### 项目 A：已完成初译的中型 TL 树
+
+对应 2026-08-05 那部约 2.1 万行初译项目的当前工作树。
+
+- 现场 `export-project-snapshot` 得到约 2.21 万 occurrence。
+- coverage 自动状态为 `attention`（Ren'Py 仍只能从 TL 推断 catalog provenance，
+  与 P1 合同一致）。
+- 分类：已译 22047、待译 63、明确排除 572；unknown / unsupported / parse_error
+  均为 0。与初译当时「待译 21307」对照，可以区分「已经译完」和「解析器没有识别
+  出条目」。
+- 独立 Agent coverage review 可冻结进快照，`review_policy_satisfied=true`。
+- 剩余 translatable 主要是专名呼语，以及说话人名字仍为拉丁字母、对白已是目标
+  语言的 speaker-label 单元（仍被标成待译，属于分类偏严，不是漏扫）。
+- 用初译 Batch 包对**润色后**的副本跑 `check`：`writeback_gate.decision=deny`，
+  约 7264 条结构阻断（源文本不匹配为主，另有少量重定位失败与格式校验失败）。
+- 清单若仍指向生产 TL 路径，公共层按路径逃逸拒绝。
+- 副本上 `apply --force` 不能绕过 `deny` / `block`。
+
+2026-08-05 该项目上的 `check=safe` 后成功 apply，仍作为 P2 成功路径的历史记录。
+
+### 项目 B：已完成汉化、有相邻官方版本归档的大型 TL 树
+
+- 旧版 snapshot 115399 occurrence，新版 115878。
+- `reconcile-project-snapshots`：旧项全部 `locator_exact`，新增 479，删除 /
+  移动 / 原文小改 / 歧义均为 0。重复原文没有被哈希合并。
+- 两侧 coverage 均为 `block`。旧版即有 unknown 816、unsupported 812、
+  parse_error 33；版本增量里这些未解决结构只增加了个位数。这是提取覆盖问题，
+  不是 reconciliation 误报。
+- 历史已下载 Batch 包不能直接 `build-translation-records`：部分 unit 身份或原文
+  与归档快照不一致，合同正确地拒绝冻结。P4 冻结要求 snapshot 与 Batch 描述同一
+  份源。
+- 改用与旧版快照同源的现场译文，按单文件冻结 443 条记录后：复用候选中
+  `exact_reuse` 覆盖全部 locator 匹配项（其中 443 条带译文记录）；导入 5 条
+  接受、1 条拒绝；`export-reuse-results` 只写入目标 Batch 包的结果 JSONL；
+  目标副本 `check=allow` 后 apply 成功写回 1 文件 / 1 行。
+- 对同一清单改源后再 `apply`，以及 `apply --force`，均被拒绝。
+
+### 对 P5 的含义
+
+P1–P4 的真实项目门禁已满足，可以按「一阶段一个子 issue / PR」开 P5。下列问题
+不阻挡 TyranoScript adapter，应另开 follow-up，而不是扩写 P5：
+
+1. speaker-label 在对白已是目标语言时仍标 translatable；
+2. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。

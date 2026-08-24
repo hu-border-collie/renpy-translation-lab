@@ -44,7 +44,7 @@
 
 - [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
 - [同步翻译工作流](sync_workflow.md)：同步 CLI 的 preview → 人工审查 → 显式 apply、配置、供应商与安全边界。
-- [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md)：P1 扫描边界、candidate / occurrence、coverage/review 产物与只读安全范围。
+- [Ren'Py Engine Adapter 与覆盖审计](engine_adapter.md)：P1 扫描边界、candidate / occurrence、coverage/review 产物、P3/P4 快照与复用，以及 2026-08-24 真实项目门禁实测。
 - [实际模型用量账本](model_usage_ledger.md)：按当前项目、任务、阶段、provider 与模型归集 Batch / 同步实际调用，并说明离线补录、成本和未知值语义。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。
 - [环境检查智能建议机制](doctor_recommendations.md)：建议等级、必需/可选并列、workflow_state。
