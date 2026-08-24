@@ -12,7 +12,7 @@ workflow 执行 check→apply、路径约束、事务恢复和 atomic write。P3
 `check` → `apply`。
 
 2026-08-24 已在两部真实 Ren'Py 项目的副本上完成 P1–P4 门禁实测；摘要见
-[真实项目门禁实测（2026-08-24）](#真实项目门禁实测-2026-08-24)。P5 TyranoScript
+[真实项目门禁实测 2026-08-24](#真实项目门禁实测-2026-08-24)。P5 TyranoScript
 V600+ 验证 adapter 与 P6 产品化仍未交付。
 
 ## 当前边界
@@ -214,7 +214,7 @@ digest）变化时，`validate_reuse_freshness()` 会把候选标记为 `stale`�
 
 P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交互属 P6）。
 
-## 真实项目门禁实测（2026-08-24）
+## 真实项目门禁实测 2026-08-24
 
 #265 约定 P5 开工前须在真实 Ren'Py 项目上验证 adapter、coverage review、版本快照
 与安全写回。本次只使用项目**副本**，不修改生产 `work/` / `build/`，也不调用翻译
