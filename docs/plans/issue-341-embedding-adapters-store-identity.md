@@ -26,6 +26,9 @@ Published Project Analysis 注入，也不修改 GUI Project Analysis 订正页�
   timeout 放入 Google GenAI HTTP options。
 - OpenAI-compatible adapter 支持 LiteLLM callable 或已配置的
   `embeddings.create` callable。API 不支持 task 参数时，task 仍保留在 identity。
+- LiteLLM 的 OpenAI 官方缺省会固定并显式传递 `https://api.openai.com/v1`；
+  其它 Provider、环境变量或预配置 transport 隐式提供的 endpoint 无法安全核验，
+  必须显式声明，否则 adapter 在构造阶段 fail closed。
 - 所有响应都经过 `EmbeddingBatchResult` 与 `validate_embedding_result`，因此数量、
   维度、非有限数和 request binding 漂移统一归类为 `invalid_response`。
 - Provider 异常只按 status/type 分类为稳定错误；公开异常不包含原始错误文本、
@@ -43,6 +46,10 @@ configuration URL 会直接被拒绝，避免秘密影响 metadata 或 fingerpri
 新 store 应在写入第一条向量前调用 `set_embedding_identity(document_identity)`。
 查询使用 `search_history_compatible` 或 `search_segments_compatible`，它们先按字段
 比较 backend/provider/model/task type/dimension，再决定是否计算相似度。
+
+通用 `set_metadata` 不接受 `embedding_identity`，避免绕过上述非空 store 防护。
+旧 store 只有纯文本记录而没有任何非空 embedding 时可以安全附加 identity；只要
+存在一个非空向量，就必须沿用完全相同的 identity 或显式重建。
 
 旧 store 没有完整 identity，或 identity fingerprint 损坏时，查询返回空命中和
 字段级 diagnostics，action 固定为 `rebuild_store`。已有向量的 store 不能通过

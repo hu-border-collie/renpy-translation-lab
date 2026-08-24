@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 import hashlib
+import math
 import re
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,6 +31,9 @@ from embedding_backend import (
 
 
 _PROVIDER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_OPENAI_COMPATIBLE_OFFICIAL_ENDPOINTS = {
+    "openai": "https://api.openai.com/v1",
+}
 _RETRYABLE_CATEGORIES = frozenset(
     {
         EmbeddingErrorCategory.RATE_LIMIT,
@@ -129,6 +133,36 @@ def build_provider_identity(
     return f"{provider_id}@sha256:{digest}"
 
 
+def _resolve_openai_compatible_endpoint(
+    *,
+    provider: str,
+    endpoint: str | None,
+    transport_kind: str,
+) -> tuple[str, str]:
+    """Resolve and pin the endpoint used by transport and provider identity.
+
+    LiteLLM's OpenAI default is safe only when the adapter explicitly passes
+    the official base URL, preventing environment variables from changing the
+    actual endpoint behind a stable identity. Other providers and preconfigured
+    OpenAI clients must declare their endpoint because it cannot be inferred
+    without reading transport/environment state that may contain credentials.
+    """
+
+    provider_id = _required_provider_id(provider)
+    explicit = str(endpoint or "").strip()
+    if explicit:
+        return provider_id, _canonical_endpoint(
+            explicit,
+            default_endpoint=f"{provider_id}-default",
+        )
+    official = _OPENAI_COMPATIBLE_OFFICIAL_ENDPOINTS.get(provider_id)
+    if transport_kind == "litellm" and official:
+        return provider_id, official
+    raise EmbeddingContractError(
+        "explicit embedding endpoint is required for this provider/transport"
+    )
+
+
 def _field(value: object, name: str, default: object = None) -> object:
     if isinstance(value, Mapping):
         return value.get(name, default)
@@ -136,7 +170,7 @@ def _field(value: object, name: str, default: object = None) -> object:
 
 
 def _status_code(exc: BaseException) -> int | None:
-    for name in ("status_code", "status", "http_status"):
+    for name in ("status_code", "code", "status", "http_status"):
         value = getattr(exc, name, None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
@@ -196,12 +230,19 @@ def _gemini_usage(response: object, embeddings: Sequence[object]) -> EmbeddingUs
     usage = _usage(response)
     if usage.input_tokens is not None or usage.total_tokens is not None:
         return usage
-    token_counts = [_field(_field(item, "statistics"), "token_count") for item in embeddings]
+    raw_token_counts = [_field(_field(item, "statistics"), "token_count") for item in embeddings]
+    token_counts: list[int] = []
+    for count in raw_token_counts:
+        if isinstance(count, bool) or not isinstance(count, (int, float)):
+            token_counts = []
+            break
+        numeric = float(count)
+        if not math.isfinite(numeric) or numeric < 0 or not numeric.is_integer():
+            token_counts = []
+            break
+        token_counts.append(int(numeric))
     input_tokens = None
-    if token_counts and all(
-        isinstance(count, int) and not isinstance(count, bool) and count >= 0
-        for count in token_counts
-    ):
+    if token_counts and len(token_counts) == len(raw_token_counts):
         input_tokens = sum(token_counts)
     metadata: dict[str, object] = {}
     billable_characters = _field(_field(response, "metadata"), "billable_character_count")
@@ -329,18 +370,23 @@ class OpenAICompatibleEmbeddingAdapter:
             raise EmbeddingContractError("transport must be callable")
         if transport_kind not in {"litellm", "openai_client"}:
             raise EmbeddingContractError("transport_kind must be litellm or openai_client")
+        provider_id, resolved_endpoint = _resolve_openai_compatible_endpoint(
+            provider=provider,
+            endpoint=endpoint,
+            transport_kind=transport_kind,
+        )
         self._transport = transport
         self._transport_kind = transport_kind
         self._model = str(model or "").strip()
         self._output_dimension = output_dimension
-        self._endpoint = str(endpoint or "").strip() or None
+        self._endpoint = resolved_endpoint
         self._api_key = api_key
         self._request_headers = dict(request_headers or {})
         self._provider_identity = build_provider_identity(
             backend=self.backend,
-            provider=provider,
-            endpoint=endpoint,
-            default_endpoint=f"{str(provider or '').strip().lower()}-default",
+            provider=provider_id,
+            endpoint=resolved_endpoint,
+            default_endpoint=f"{provider_id}-default",
             configuration=identity_configuration,
         )
         self.identity(EmbeddingTaskType.DOCUMENT)
