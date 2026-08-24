@@ -123,6 +123,13 @@ def _restore_translator_runtime_state(snapshot):
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_legacy_sync_generation_temperature_remains_point_two(self):
+        self.assertEqual(translation_plan.CANONICAL_TEMPERATURE, 0.2)
+        self.assertEqual(
+            runtime._sync_plan_generation_config()['temperature'],
+            0.2,
+        )
+
     def test_sync_plan_config_fingerprint_covers_story_memory_settings(self):
         baseline = runtime._sync_plan_config_snapshot()
         baseline_fingerprint = translation_plan.short_fingerprint(
@@ -255,6 +262,114 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 routing,
                 run_id='small-budget-run',
             )
+
+    def test_sync_plan_rejects_reordered_retrieval_captures(self):
+        file_jobs = [
+            {
+                'file_rel_path': f'{name}.rpy',
+                'file_path': f'{name}.rpy',
+                'tasks': [{
+                    'id': f'{name}:0:1',
+                    'text': name,
+                    'line': 0,
+                }],
+            }
+            for name in ('alpha', 'beta')
+        ]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        original_builder = translation_plan.build_translation_plan
+
+        def reorder_requests(*args, **kwargs):
+            plan_build = original_builder(*args, **kwargs)
+            plan_build.requests.reverse()
+            return plan_build
+
+        with (
+            mock.patch.object(
+                translation_plan,
+                'build_translation_plan',
+                side_effect=reorder_requests,
+            ),
+            self.assertRaisesRegex(
+                RuntimeError,
+                'retrieval capture identity mismatch',
+            ),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='reordered-capture-run',
+            )
+
+    def test_call_gemini_sdk_keeps_system_instruction_through_filter(self):
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-3.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        translation_request = translation_plan.TranslationRequest(
+            request_id='request-1',
+            plan_id='plan-1',
+            chunk_id='chunk-1',
+            system_instruction='canonical system rules',
+            user_prompt='canonical user prompt',
+            response_schema=translation_core.build_response_json_schema(
+                [{'id': 'script:0:1', 'text': 'Hello', 'line': 0}],
+                mode=translation_core.MODE_TRANSLATION,
+            ),
+            expected_ids=['script:0:1'],
+            generation_config={
+                'temperature': translation_plan.CANONICAL_TEMPERATURE,
+                'max_output_tokens': 1024,
+            },
+        )
+        sent = []
+
+        def generate(request):
+            sent.append(request)
+            return types.SimpleNamespace(
+                provider='gemini',
+                model=request.model,
+                execution_mode='sync',
+                response_text='',
+                response_payload={},
+                parsed=[{'id': 'script:0:1', 'translation': '你好'}],
+                finish_reason='STOP',
+                usage_metadata={},
+                request_metadata={},
+            )
+
+        backend = types.SimpleNamespace(generate=generate)
+        with mock.patch.object(
+            model_profile,
+            'build_sync_backend',
+            return_value=backend,
+        ):
+            runtime.call_gemini_sdk(
+                '',
+                [{'id': 'script:0:1', 'text': 'Hello', 'line': 0}],
+                route=route,
+                plan=routing,
+                translation_request=translation_request,
+            )
+
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0].contents, 'canonical user prompt')
+        self.assertEqual(
+            sent[0].config['system_instruction'],
+            'canonical system rules',
+        )
+        self.assertNotIn('temperature', sent[0].config)
 
     def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
         content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'

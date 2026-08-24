@@ -4510,6 +4510,8 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
                 flush=True,
             )
         captures.append({
+            'file_rel_path': chunk_input.file_rel_path,
+            'expected_ids': [unit.id for unit in chunk_input.target_units],
             'context_window': chunk_input.context_window,
             'local_context_diagnostics': dict(
                 chunk_input.local_context_diagnostics or {}
@@ -4546,6 +4548,25 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         retrieval_blocks_provider=retrieval_provider,
         generation_config=_sync_plan_generation_config(),
     )
+    if len(captures) != len(plan_build.requests):
+        raise RuntimeError(
+            'Sync TranslationPlan retrieval capture count does not match its '
+            f'requests: captures={len(captures)}, '
+            f'requests={len(plan_build.requests)}.'
+        )
+    for index, (plan_chunk, request, capture) in enumerate(zip(
+        plan_build.plan.chunks,
+        plan_build.requests,
+        captures,
+    )):
+        if (
+            str(capture.get('file_rel_path') or '') != plan_chunk.file_rel_path
+            or list(capture.get('expected_ids') or []) != request.expected_ids
+        ):
+            raise RuntimeError(
+                'Sync TranslationPlan retrieval capture identity mismatch: '
+                f'index={index}, request={request.request_id}.'
+            )
     capabilities = routing_plan.capabilities.get(route.profile_id)
     budget = (
         capabilities.context_budget_tokens
@@ -6231,11 +6252,7 @@ def run_translation(*, prepare=False):
         plan_records_by_file = {}
         for index, request in enumerate(sync_plan_build.requests):
             plan_chunk = sync_plan_build.plan.chunks[index]
-            capture = (
-                sync_plan_captures[index]
-                if index < len(sync_plan_captures)
-                else {}
-            )
+            capture = sync_plan_captures[index]
             plan_records_by_file.setdefault(plan_chunk.file_rel_path, []).append(
                 (plan_chunk, request, capture)
             )
