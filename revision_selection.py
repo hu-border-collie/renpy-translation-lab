@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import ntpath
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -84,15 +83,9 @@ def canonical_digest(value: object) -> str:
 def normalize_project_path(value: object) -> str:
     """Normalize one project path for CLI/GUI identity comparisons."""
 
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    # The contract is serialized and may be resumed by another front end.
-    # Keep Windows paths canonical even when a Linux test runner is checking a
-    # session produced from a Windows-style project export.
-    if ntpath.splitdrive(text)[0] or "\\" in text:
-        return ntpath.normcase(ntpath.abspath(text))
-    return os.path.normcase(os.path.abspath(text))
+    # Keep the staged-selection contract on the same path semantics as the
+    # proposal validator, including Windows-style paths on non-Windows CI.
+    return revision_proposals.normalize_project_path(value)
 
 
 def normalize_project_identity(

@@ -6,6 +6,7 @@ files; callers must hand candidates to the existing revision preview/apply gates
 from __future__ import annotations
 
 import json
+import ntpath
 import os
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
@@ -106,10 +107,21 @@ def diagnostics_are_stale(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
+def normalize_project_path(value: Any) -> str:
+    """Normalize project paths consistently across CLI, GUI, and platforms."""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if ntpath.splitdrive(text)[0] or "\\" in text:
+        return ntpath.normcase(ntpath.abspath(text))
+    return os.path.normcase(os.path.abspath(text))
+
+
 def _normalized_project_path(value: Any) -> str:
     """Normalize a project path for local identity comparisons."""
-    text = str(value or "").strip()
-    return os.path.normcase(os.path.abspath(text)) if text else ""
+
+    return normalize_project_path(value)
 
 
 def _normalized_relative_path(value: Any) -> str:

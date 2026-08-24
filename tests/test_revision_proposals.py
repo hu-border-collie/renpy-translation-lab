@@ -202,6 +202,23 @@ class RevisionProposalContractTests(unittest.TestCase):
             ),
         )
 
+    def test_staged_selection_reuses_project_path_normalization_for_validation(self):
+        project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo",
+            tl_dir=r"C:\Demo\game\tl\schinese",
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[self.row()],
+            live_items=self.live,
+            live_snapshot_digest=self.corpus_digest,
+            project_identity=project,
+            proposal_path=r"C:\Demo\proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="operation-identity-normalization",
+        )
+        self.assertEqual(stage["summary"]["selectable_count"], 1)
+        self.assertEqual(stage["candidates"][0]["status"], revision_selection.STATUS_VALID)
+
     def test_corpus_snapshot_mismatch_is_stale(self):
         result = proposals.validate(
             [self.row(corpus_snapshot_digest="b" * 64)],
