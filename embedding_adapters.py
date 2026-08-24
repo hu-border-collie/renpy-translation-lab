@@ -375,6 +375,10 @@ class OpenAICompatibleEmbeddingAdapter:
             endpoint=endpoint,
             transport_kind=transport_kind,
         )
+        if transport_kind == "openai_client" and (api_key is not None or bool(request_headers)):
+            raise EmbeddingContractError(
+                "api_key and request_headers must be configured on the OpenAI client transport"
+            )
         self._transport = transport
         self._transport_kind = transport_kind
         self._model = str(model or "").strip()

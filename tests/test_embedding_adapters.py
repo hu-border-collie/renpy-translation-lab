@@ -238,6 +238,28 @@ class EmbeddingAdapterTests(unittest.TestCase):
             custom.identity(EmbeddingTaskType.DOCUMENT).provider,
         )
 
+    def test_openai_client_rejects_ignored_auth_overrides(self):
+        cases = (
+            {"api_key": "fake-client-key"},
+            {"request_headers": {"X-Test-Authorization": "fake-header-value"}},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=tuple(overrides)):
+                with self.assertRaises(EmbeddingContractError) as raised:
+                    OpenAICompatibleEmbeddingAdapter(
+                        transport=lambda **_kwargs: {"data": []},
+                        transport_kind="openai_client",
+                        model="embed-model",
+                        output_dimension=2,
+                        provider="openai",
+                        endpoint="https://client.example.test/v1",
+                        **overrides,
+                    )
+                public = str(raised.exception)
+                self.assertIn("configured on the OpenAI client transport", public)
+                self.assertNotIn("fake-client-key", public)
+                self.assertNotIn("fake-header-value", public)
+
     def test_count_dimension_and_non_finite_drift_are_invalid_response(self):
         bad_payloads = (
             {"data": [{"index": 0, "embedding": [1, 0]}]},

@@ -29,6 +29,8 @@ Published Project Analysis 注入，也不修改 GUI Project Analysis 订正页�
 - LiteLLM 的 OpenAI 官方缺省会固定并显式传递 `https://api.openai.com/v1`；
   其它 Provider、环境变量或预配置 transport 隐式提供的 endpoint 无法安全核验，
   必须显式声明，否则 adapter 在构造阶段 fail closed。
+- `openai_client` transport 视为已配置 client；adapter 不接受会被 client API
+  静默忽略的 `api_key` / `request_headers` 覆盖，调用方必须在 client 上配置它们。
 - 所有响应都经过 `EmbeddingBatchResult` 与 `validate_embedding_result`，因此数量、
   维度、非有限数和 request binding 漂移统一归类为 `invalid_response`。
 - Provider 异常只按 status/type 分类为稳定错误；公开异常不包含原始错误文本、
