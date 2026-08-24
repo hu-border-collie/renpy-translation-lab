@@ -105,6 +105,8 @@ Ren'Py 标签变量和 adapter 写回计划，然后先生成共享 staged-selec
 不会修改 `.rpy`。结果区会显示有效、未选择、无效、过期、冲突计数，筛选表支持按 reason、
 文件和状态过滤，并只能勾选有效候选。明确确认后才会写出选择 JSON 并生成订正预览；
 项目切换、提案重新导入或源文件变化会使旧候选会话过期。
+CLI 与 GUI 会把相对 `tl_dir` 按同一 `game_root` 解析为 canonical project identity，
+所以同一项目的相对/绝对路径表示可以继续接续 staged session。
 只有候选会话 `session_status=ready` 且存在有效可选项时才会自动打开选择对话框；
 stale、无有效候选或 blocked 状态会停留在摘要并提示重新导入或修正提案。
 若配套 `revision_corpus_manifest.json` 不在 proposal 同目录，可在随后出现的可选文件

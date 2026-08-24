@@ -5623,11 +5623,15 @@ def _staged_selection_confirmation_outcome(
 ):
     """Return a machine-contract-friendly confirmation refusal."""
 
-    package_dir = os.path.dirname(os.path.abspath(stage_path))
+    package_dir = create_batch_package_dir(
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_"
+        f"{guess_project_slug()}_revision_proposals_selection_confirmation"
+    )
     report = {
         'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
         'kind': 'revision_proposal_selection_confirmation',
         'status': status,
+        'output_dir': package_dir,
         'staged_selection_path': os.path.abspath(stage_path),
         'selection_path': os.path.abspath(selection_path),
         'diagnostics': [dict(item) for item in diagnostics or []],
@@ -18350,6 +18354,7 @@ def build_machine_success_envelope(command, value, args):
                 'import_report_markdown': paths.get('import_report_markdown') or '',
                 'staged_selection_report': paths.get('staged_selection_report') or '',
                 'staged_selection_report_markdown': paths.get('staged_selection_report_markdown') or '',
+                'selection_confirmation_output_dir': paths.get('output_dir') or '',
                 'selection_confirmation_report': paths.get('selection_confirmation_report') or '',
                 'selection_confirmation_report_markdown': paths.get('selection_confirmation_report_markdown') or '',
                 'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',

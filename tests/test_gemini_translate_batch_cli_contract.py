@@ -1424,6 +1424,7 @@ class BatchCliContractTests(unittest.TestCase):
                 "selected_count": 1,
                 "selection_digest": "digest",
                 "paths": {
+                    "output_dir": "C:/jobs/confirmed",
                     "manifest": "C:/jobs/confirmed/manifest.json",
                     "revision_preview_jsonl": "C:/jobs/confirmed/revision_preview.jsonl",
                 },
@@ -1437,6 +1438,10 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(
             envelope["artifacts"]["manifest"],
             "C:/jobs/confirmed/manifest.json",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["selection_confirmation_output_dir"],
+            "C:/jobs/confirmed",
         )
 
     def test_quality_ack_machine_envelope_is_stable_and_reports_no_work(self):

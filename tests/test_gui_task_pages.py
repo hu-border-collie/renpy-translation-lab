@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import gemini_translate_batch as batch
+
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
@@ -825,7 +827,7 @@ class GuiTaskPageTests(unittest.TestCase):
         )
         runtime_config = SimpleNamespace(
             base_dir=r"C:\Games\Demo\work\.",
-            tl_dir=r"C:\Games\Demo\work\game\tl\schinese\.",
+            tl_dir=r"game\tl\schinese",
         )
         self.window._snapshot_runtime_config_for_job = mock.Mock(
             return_value=runtime_config

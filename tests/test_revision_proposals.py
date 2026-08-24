@@ -219,6 +219,58 @@ class RevisionProposalContractTests(unittest.TestCase):
         self.assertEqual(stage["summary"]["selectable_count"], 1)
         self.assertEqual(stage["candidates"][0]["status"], revision_selection.STATUS_VALID)
 
+    def test_project_identity_resolves_relative_tl_dir_for_windows_and_posix_forms(self):
+        windows_relative = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\.",
+            tl_dir=r"game\tl\schinese",
+        )
+        windows_absolute = revision_selection.project_identity_from_paths(
+            game_root=r"c:/demo/work",
+            tl_dir=r"C:\Demo\work\game\tl\schinese",
+        )
+        self.assertEqual(windows_relative, windows_absolute)
+
+        posix_relative = revision_selection.project_identity_from_paths(
+            game_root="/tmp/demo/work/.",
+            tl_dir="game/tl/schinese",
+        )
+        posix_absolute = revision_selection.project_identity_from_paths(
+            game_root="/tmp/demo/work",
+            tl_dir="/tmp/demo/work/game/tl/schinese",
+        )
+        self.assertEqual(posix_relative, posix_absolute)
+
+    def test_cli_and_gui_share_relative_tl_operation_identity(self):
+        proposal_path = r"C:\exports\proposals.jsonl"
+        corpus_path = r"C:\exports\revision_corpus_manifest.json"
+        with (
+            mock.patch.object(batch.legacy, "BASE_DIR", r"C:\Demo\work"),
+            mock.patch.object(batch.legacy, "TL_DIR", r"game\tl\schinese"),
+        ):
+            cli_project = batch._revision_proposal_project_identity()
+
+        gui_project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\.",
+            tl_dir=r"C:\Demo\work\game\tl\schinese",
+        )
+        self.assertTrue(revision_selection.project_identities_match(cli_project, gui_project))
+        self.assertEqual(
+            revision_selection.operation_identity(
+                project_identity=cli_project,
+                proposal_path=proposal_path,
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=corpus_path,
+                corpus_manifest_sha256="b" * 64,
+            ),
+            revision_selection.operation_identity(
+                project_identity=gui_project,
+                proposal_path=proposal_path,
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=corpus_path,
+                corpus_manifest_sha256="b" * 64,
+            ),
+        )
+
     def test_corpus_snapshot_mismatch_is_stale(self):
         result = proposals.validate(
             [self.row(corpus_snapshot_digest="b" * 64)],
@@ -750,7 +802,97 @@ class RevisionProposalImportTests(unittest.TestCase):
         self.assertEqual(result["status"], "stale")
         self.assertNotIn("manifest", result["paths"])
         self.assertTrue(Path(result["paths"]["selection_confirmation_report"]).is_file())
+        self.assertNotEqual(
+            Path(result["paths"]["output_dir"]).resolve(),
+            stage_report.parent.resolve(),
+        )
         self.assertEqual(stage_report.read_bytes(), original_stage_report)
+
+    def test_confirmation_report_for_copied_readonly_stage_uses_output_package(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "只读输入测试"\n',
+            encoding="utf-8",
+        )
+
+        input_dir = self.root / "readonly-input"
+        input_dir.mkdir()
+        copied_stage = input_dir / "staged_selection.json"
+        copied_selection = input_dir / "selection.json"
+        copied_stage.write_bytes(Path(staged["paths"]["staged_selection"]).read_bytes())
+        copied_selection.write_bytes(selection_path.read_bytes())
+        try:
+            input_dir.chmod(0o555)
+            result = batch.confirm_revision_proposals(
+                str(copied_stage),
+                str(copied_selection),
+            )
+        finally:
+            input_dir.chmod(0o755)
+
+        output_dir = Path(result["paths"]["output_dir"]).resolve()
+        self.assertEqual(result["status"], "stale")
+        self.assertNotEqual(output_dir, input_dir.resolve())
+        self.assertTrue(output_dir.is_relative_to(Path(batch.BATCH_JOBS_DIR).resolve()))
+        self.assertTrue(Path(result["paths"]["selection_confirmation_report"]).is_file())
+        self.assertFalse((input_dir / "selection_confirmation_report.json").exists())
+
+    def test_relative_tl_identity_is_stale_after_game_root_switch(self):
+        proposal_path = self._write_proposal(self._proposal())
+        live_context = batch._collect_revision_proposal_live_context()
+        project = revision_selection.project_identity_from_paths(
+            game_root=self.root,
+            tl_dir="game/tl/schinese",
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[self._proposal()],
+            live_items=live_context["live_items"],
+            live_snapshot_digest=live_context["live_snapshot_digest"],
+            project_identity=project,
+            proposal_path=str(proposal_path),
+            proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+            source_file_digests=live_context["digests_before"],
+            operation_id=revision_selection.operation_identity(
+                project_identity=project,
+                proposal_path=str(proposal_path),
+                proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+            ),
+        )
+        stage_path = self.root / "relative-stage.json"
+        revision_selection.write_staged_selection(str(stage_path), stage)
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "relative-selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.assertTrue(
+            batch._same_revision_project_identity(
+                stage["session"]["project_identity"],
+                batch._revision_proposal_project_identity(),
+            )
+        )
+
+        batch.legacy.BASE_DIR = str(self.root / "other-game")
+        result = batch.confirm_revision_proposals(str(stage_path), str(selection_path))
+
+        self.assertEqual(result["status"], "stale")
+        self.assertIn(
+            "PROJECT_IDENTITY_STALE",
+            {item["code"] for item in result["diagnostics"]},
+        )
 
     def test_confirmed_stage_selection_is_stale_after_project_switch(self):
         proposal_path = self._write_proposal(self._proposal())

@@ -107,21 +107,68 @@ def diagnostics_are_stale(diagnostics: Sequence[Mapping[str, Any]]) -> bool:
     )
 
 
-def normalize_project_path(value: Any) -> str:
-    """Normalize project paths consistently across CLI, GUI, and platforms."""
+def _uses_windows_path_syntax(value: str) -> bool:
+    return bool(
+        ntpath.splitdrive(value)[0]
+        or value.startswith("\\\\")
+        or (os.name == "nt" and "\\" in value)
+    )
+
+
+def normalize_project_path(value: Any, *, base_dir: Any = "") -> str:
+    """Normalize a project path against the shared game-root semantics.
+
+    ``tl_dir`` may be serialized as either an absolute path or a path relative
+    to ``game_root``.  The path flavour is selected from the supplied values so
+    Windows exports remain deterministic when validated on a non-Windows host.
+    """
 
     text = str(value or "").strip()
+    base = str(base_dir or "").strip()
     if not text:
         return ""
-    if ntpath.splitdrive(text)[0] or "\\" in text:
+    if _uses_windows_path_syntax(text) or _uses_windows_path_syntax(base):
+        if base and not ntpath.isabs(text):
+            text = ntpath.join(normalize_project_path(base), text)
         return ntpath.normcase(ntpath.abspath(text))
+    text = text.replace("\\", "/")
+    if base and not os.path.isabs(text):
+        text = os.path.join(base.replace("\\", "/"), text)
     return os.path.normcase(os.path.abspath(text))
 
 
-def _normalized_project_path(value: Any) -> str:
-    """Normalize a project path for local identity comparisons."""
+def normalize_project_identity(
+    project_identity: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    """Return one canonical game-root/TL-directory project identity."""
 
-    return normalize_project_path(value)
+    values = project_identity or {}
+    game_root = normalize_project_path(
+        values.get("game_root") or values.get("base_dir")
+    )
+    return {
+        "game_root": game_root,
+        "tl_dir": normalize_project_path(values.get("tl_dir"), base_dir=game_root),
+    }
+
+
+def project_identity_from_paths(
+    *,
+    game_root: Any = "",
+    tl_dir: Any = "",
+) -> dict[str, str]:
+    """Build the canonical identity shared by CLI, GUI, and validation."""
+
+    return normalize_project_identity({"game_root": game_root, "tl_dir": tl_dir})
+
+
+def project_identities_match(
+    expected: Mapping[str, Any] | None,
+    actual: Mapping[str, Any] | None,
+) -> bool:
+    """Compare project identities after resolving TL paths from game roots."""
+
+    return normalize_project_identity(expected) == normalize_project_identity(actual)
 
 
 def _normalized_relative_path(value: Any) -> str:
@@ -147,13 +194,22 @@ def validate(
     selected: list[dict[str, Any]] = []
     seen: dict[str, Mapping[str, Any]] = {}
     requested_selected_count = sum(row.get("selected") is True for row in rows)
-    live_tl_dir = _normalized_project_path(
-        (live_project_identity or {}).get("tl_dir")
-    )
+    live_identity = normalize_project_identity(live_project_identity)
+    live_tl_dir = live_identity["tl_dir"]
     manifest_project = (corpus_manifest or {}).get("project") or {}
-    manifest_tl_dir = _normalized_project_path(
-        manifest_project.get("tl_dir") if isinstance(manifest_project, Mapping) else ""
+    if not isinstance(manifest_project, Mapping):
+        manifest_project = {}
+    manifest_identity = normalize_project_identity(
+        {
+            "game_root": (
+                manifest_project.get("game_root")
+                or manifest_project.get("base_dir")
+                or live_identity.get("game_root")
+            ),
+            "tl_dir": manifest_project.get("tl_dir"),
+        }
     )
+    manifest_tl_dir = manifest_identity["tl_dir"]
     manifest_source = (corpus_manifest or {}).get("source") or {}
     if not isinstance(manifest_source, Mapping):
         manifest_source = {}
@@ -190,9 +246,19 @@ def validate(
             diagnostics.append(_diag("INVALID_SELECTED_DISPOSITION", row, "selected proposal has a non-accepting disposition"))
             continue
         row_project = row.get("project_identity")
-        row_tl_dir = _normalized_project_path(
-            row_project.get("tl_dir") if isinstance(row_project, Mapping) else ""
+        if not isinstance(row_project, Mapping):
+            row_project = {}
+        row_identity = normalize_project_identity(
+            {
+                "game_root": (
+                    row_project.get("game_root")
+                    or row_project.get("base_dir")
+                    or live_identity.get("game_root")
+                ),
+                "tl_dir": row_project.get("tl_dir"),
+            }
         )
+        row_tl_dir = row_identity["tl_dir"]
         if not corpus_manifest and not row_tl_dir:
             diagnostics.append(_diag("MISSING_PROJECT_IDENTITY", row, "project_identity.tl_dir or a companion corpus manifest is required"))
             continue

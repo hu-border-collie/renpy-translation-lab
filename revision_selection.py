@@ -80,12 +80,12 @@ def canonical_digest(value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def normalize_project_path(value: object) -> str:
+def normalize_project_path(value: object, *, base_dir: object = "") -> str:
     """Normalize one project path for CLI/GUI identity comparisons."""
 
     # Keep the staged-selection contract on the same path semantics as the
     # proposal validator, including Windows-style paths on non-Windows CI.
-    return revision_proposals.normalize_project_path(value)
+    return revision_proposals.normalize_project_path(value, base_dir=base_dir)
 
 
 def normalize_project_identity(
@@ -93,11 +93,7 @@ def normalize_project_identity(
 ) -> dict[str, str]:
     """Return the canonical game-root/TL-directory project identity."""
 
-    values = project_identity or {}
-    return {
-        "game_root": normalize_project_path(values.get("game_root")),
-        "tl_dir": normalize_project_path(values.get("tl_dir")),
-    }
+    return revision_proposals.normalize_project_identity(project_identity)
 
 
 def project_identity_from_paths(
@@ -107,7 +103,10 @@ def project_identity_from_paths(
 ) -> dict[str, str]:
     """Build the canonical project identity used by both CLI and GUI."""
 
-    return normalize_project_identity({"game_root": game_root, "tl_dir": tl_dir})
+    return revision_proposals.project_identity_from_paths(
+        game_root=game_root,
+        tl_dir=tl_dir,
+    )
 
 
 def project_identities_match(
@@ -116,7 +115,7 @@ def project_identities_match(
 ) -> bool:
     """Compare project identities using the shared path normalization rules."""
 
-    return normalize_project_identity(expected) == normalize_project_identity(actual)
+    return revision_proposals.project_identities_match(expected, actual)
 
 
 def operation_identity(

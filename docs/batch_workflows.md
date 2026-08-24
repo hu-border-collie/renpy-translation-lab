@@ -317,6 +317,9 @@ python gemini_translate_batch.py confirm-revision-proposals `
 `project_identity.game_root/tl_dir` 和 operation identity。重复原文依靠 occurrence identity
 区分，重复提案 identity 会把相关候选标为 conflict。`session_status=stale` 只表示项目、
 语料或源快照等全局边界失效；单行 stale 保留在候选状态中，不会阻止仍有效的其他候选。
+其中 `tl_dir` 若为相对路径，会按同一 `game_root` 解析后再规范化；CLI 的
+`legacy.BASE_DIR/TL_DIR`、GUI 的 runtime config 以及 proposal validator 因而得到相同
+的 canonical project identity，项目切换仍会使两端的旧 session stale。
 GUI 的筛选与“当前筛选中全选有效/清空选择”只产生一个共享核心可读的
 `revision_proposal_selection.json`；只有其中 `confirmed=true` 且 identity 集合仍属于
 有效候选时，`confirm-revision-proposals` 才会重新校验当前项目并调用现有
@@ -371,7 +374,9 @@ diagnostics、artifacts 和 `suggested_action`；严格退出码下 `partial` �
 只有 `previewed/no_op` manifest 能进入 `apply-revisions`，`--force` 不能绕过此闸门，
 也不能绕过 preview/result hash、项目身份、源快照或 adapter writeback 校验。
 确认失败或 stale 的结果写入独立的 `selection_confirmation_report.json/.md`，不会覆盖
-原始 staged-selection 审计报告。
+原始 staged-selection 审计报告。报告写入新的 batch package/output 目录，并在
+machine envelope 的 artifacts 中返回该目录和报告路径；即使 stage/selection 是复制到
+只读位置的输入，也不会向输入目录写文件。
 
 ## 项目版本快照与只读 reconciliation
 

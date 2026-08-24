@@ -309,6 +309,9 @@ Markdown、`revision_corpus_manifest.json` 路径和 manifest 中的生成时间
 `revision_proposal_selection.json` 才会交给 CLI 的 `confirm-revision-proposals`，无效、
 过期、冲突和 no-op 候选不能勾选或进入写回。项目/源快照或 operation identity 变化会
 使旧 staged session 失效，迟到结果不会覆盖当前页。
+相对 `tl_dir` 会基于当前 `game_root` 解析；CLI legacy runtime、GUI runtime config 与
+候选校验使用同一 canonical identity。stale/no-op/blocked 的确认报告会写入独立的
+batch package/output 目录，不会向只读或复制来的 staged-selection 输入目录写回。
 
 **订正预览**
 
