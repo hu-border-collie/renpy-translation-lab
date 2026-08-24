@@ -2846,6 +2846,65 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             runtime.SYNC_MACRO_SETTING = old_macro
             runtime.SYNC_MACRO_FINGERPRINT = old_fingerprint
 
+    def test_sync_apply_updates_rag_store_after_successful_file_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            target = tl_dir / 'a.rpy'
+            source = '    "Hello 1"\n'
+            translated = '    "你好 1"\n'
+            target.write_text(source, encoding='utf-8')
+            manifest_path, _manifest = (
+                runtime.sync_translation_preview.create_sync_preview(
+                    log_dir=root / 'logs',
+                    project_root=root,
+                    tl_dir=tl_dir,
+                    files=[{
+                        'relative_path': 'a.rpy',
+                        'source_text': source,
+                        'source_sha256': hashlib.sha256(
+                            target.read_bytes()
+                        ).hexdigest(),
+                        'preview_text': translated,
+                        'progress_entries': ['id:1'],
+                    }],
+                    prompt_context={
+                        'macro_fingerprint': 'stable-macro',
+                    },
+                )
+            )
+
+            with (
+                mock.patch.object(runtime, 'BASE_DIR', str(root)),
+                mock.patch.object(runtime, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(
+                    runtime,
+                    'TRANSLATOR_CONFIG',
+                    str(root / 'translator_config.json'),
+                ),
+                mock.patch.object(runtime, 'GLOSSARY_FILE', ''),
+                mock.patch.object(
+                    runtime,
+                    'SYNC_MACRO_FINGERPRINT',
+                    'stable-macro',
+                ),
+                mock.patch.object(runtime, 'load_config'),
+                mock.patch.object(runtime, 'load_translator_settings'),
+                mock.patch.object(runtime, 'update_progress') as update_progress,
+                mock.patch.object(
+                    runtime,
+                    'maybe_update_sync_rag_store',
+                ) as update_rag,
+                mock.patch('sys.stdout', io.StringIO()),
+            ):
+                applied = runtime.apply_sync_translation_preview(manifest_path)
+
+            self.assertEqual(target.read_text(encoding='utf-8'), translated)
+            self.assertEqual(applied['state'], 'applied')
+            update_progress.assert_called_once_with('a.rpy', ['id:1'])
+            update_rag.assert_called_once_with(str(target), full_file=True)
+
     def test_sync_apply_blocks_when_macro_added_after_preview(self):
         old_macro = runtime.SYNC_MACRO_SETTING
         old_fingerprint = runtime.SYNC_MACRO_FINGERPRINT
