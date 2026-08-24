@@ -284,9 +284,14 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 mock.patch.object(runtime, "load_glossary"),
                 mock.patch.object(runtime, "load_progress", return_value={}),
                 mock.patch.object(runtime, "process_batch_with_retry", side_effect=translate_batch),
+                mock.patch.object(
+                    runtime,
+                    "maybe_update_sync_rag_store",
+                ) as update_rag,
             ):
                 manifest_path = runtime.run_translation()
 
+            update_rag.assert_not_called()
             self.assertEqual(target.read_text(encoding="utf-8"), source)
             manifest = preview.load_sync_preview(manifest_path)
             self.assertEqual(

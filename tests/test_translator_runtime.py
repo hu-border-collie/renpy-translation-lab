@@ -122,6 +122,88 @@ def _restore_translator_runtime_state(snapshot):
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_sync_plan_config_fingerprint_covers_story_memory_settings(self):
+        baseline = runtime._sync_plan_config_snapshot()
+        baseline_fingerprint = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(
+                translation_plan.redact_sensitive(baseline)
+            )
+        )
+        cases = (
+            ('SYNC_STORY_MEMORY_ENABLED', not runtime.SYNC_STORY_MEMORY_ENABLED),
+            ('SYNC_STORY_MEMORY_GRAPH_FILE', 'different-story-graph.json'),
+            (
+                'SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS',
+                runtime.SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_TOP_K_RELATIONS',
+                runtime.SYNC_STORY_MEMORY_TOP_K_RELATIONS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_TOP_K_TERMS',
+                runtime.SYNC_STORY_MEMORY_TOP_K_TERMS + 1,
+            ),
+            (
+                'SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY',
+                not runtime.SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY,
+            ),
+        )
+        for field, value in cases:
+            with self.subTest(field=field), mock.patch.object(
+                runtime, field, value
+            ):
+                changed = runtime._sync_plan_config_snapshot()
+                changed_fingerprint = translation_plan.short_fingerprint(
+                    translation_plan.canonical_json(
+                        translation_plan.redact_sensitive(changed)
+                    )
+                )
+                self.assertNotEqual(changed_fingerprint, baseline_fingerprint)
+
+    def test_plan_build_logs_sync_rag_hits_for_operator_diagnostics(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{
+                'id': 'script:0:1',
+                'text': 'Encore',
+                'line': 0,
+            }],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        history_hits = [{
+            'source_text': 'Previous encore',
+            'translated_text': '上次返场',
+        }]
+        with (
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', True),
+            mock.patch.object(runtime, 'SYNC_STORY_MEMORY_ENABLED', False),
+            mock.patch.object(
+                runtime,
+                'retrieve_sync_history_hits',
+                return_value=(history_hits, {'enabled': True, 'hit_count': 1}),
+            ),
+            mock.patch('sys.stdout', output := io.StringIO()),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='diagnostic-run',
+            )
+
+        self.assertIn('Sync RAG memory hits: 1', output.getvalue())
+
     def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
         content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'
         digest = hashlib.sha256(content).hexdigest()

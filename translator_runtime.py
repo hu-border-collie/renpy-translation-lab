@@ -4424,7 +4424,16 @@ def _sync_plan_config_snapshot():
             'context_before': SYNC_CONTEXT_BEFORE,
             'context_after': SYNC_CONTEXT_AFTER,
             'rag_enabled': SYNC_RAG_ENABLED,
-            'story_memory_enabled': SYNC_STORY_MEMORY_ENABLED,
+            'story_memory': {
+                'enabled': SYNC_STORY_MEMORY_ENABLED,
+                'graph_file': SYNC_STORY_MEMORY_GRAPH_FILE,
+                'max_context_chars': SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+                'top_k_relations': SYNC_STORY_MEMORY_TOP_K_RELATIONS,
+                'top_k_terms': SYNC_STORY_MEMORY_TOP_K_TERMS,
+                'include_scene_summary': (
+                    SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
+                ),
+            },
             'macro_fingerprint': SYNC_MACRO_FINGERPRINT,
         },
     }
@@ -4485,7 +4494,14 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             if SYNC_STORY_MEMORY_ENABLED
             else None
         )
-        text = _render_sync_retrieval_reference_text(history_hits, story_hits)
+        text = translation_plan.normalize_context_provider_text(
+            _render_sync_retrieval_reference_text(history_hits, story_hits)
+        )
+        if rag_stats.get('hit_count'):
+            print(
+                f"  Sync RAG memory hits: {rag_stats['hit_count']}",
+                flush=True,
+            )
         captures.append({
             'context_window': chunk_input.context_window,
             'local_context_diagnostics': dict(
@@ -5477,7 +5493,6 @@ def process_batch_with_retry(
             contract_diagnostics=contract_diagnostics,
             contract_failures=contract_failures,
             retry_kind='split_retry',
-            # See the split-left call above.
             route=route,
             plan=plan,
             translation_request=right_request,

@@ -73,11 +73,7 @@ def _validate_translation_plan_binding(manifest: dict[str, Any]) -> None:
         writeback_plan = entry.get("writeback_plan")
         if not isinstance(writeback_plan, dict):
             continue
-        # WritebackPlan project/source fingerprints are scoped differently:
-        # the project identity excludes source content and each file plan uses
-        # only that file's live snapshot.  The plan-level source binding above
-        # therefore compares per-file digests; only adapter identity is a
-        # directly equivalent field across both contracts.
+        # WritebackPlan source fingerprints are per-file live snapshots.
         bindings = (
             ("engine", "engine"),
             ("adapter_version", "adapter_version"),

@@ -749,6 +749,12 @@ class DerivedRequestTests(unittest.TestCase):
     def test_d7_child_is_deterministic_and_does_not_mutate_parent_plan(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
         parent = build.requests[0]
+        parent.capability_requirements.update({
+            'context_budget_tokens': 1,
+            'estimate_method': 'stale-parent-estimate',
+            'response_format': 'named_translation_object',
+            'provider_feature': {'mode': 'strict'},
+        })
         parent_plan = translation_plan.canonical_json(build.plan.to_dict())
         parent_request = translation_plan.canonical_json(parent.to_dict())
         item = _load_json('file_jobs.json')[0]['tasks'][0]
@@ -773,14 +779,47 @@ class DerivedRequestTests(unittest.TestCase):
         second = translation_plan.derive_translation_request(
             parent, [item], **kwargs
         )
+        crlf_kwargs = dict(kwargs)
+        crlf_kwargs['retrieval_blocks_text'] = kwargs[
+            'retrieval_blocks_text'
+        ].replace('\n', '\r\n')
+        crlf_kwargs['analysis_blocks_text'] = kwargs[
+            'analysis_blocks_text'
+        ].replace('\n', '\r\n')
+        crlf = translation_plan.derive_translation_request(
+            parent, [item], **crlf_kwargs
+        )
 
         self.assertEqual(first.to_dict(), second.to_dict())
+        self.assertEqual(first.to_dict(), crlf.to_dict())
         self.assertEqual(first.request_id, f'{parent.request_id}--L')
         self.assertEqual(first.plan_id, parent.plan_id)
         self.assertEqual(first.expected_ids, [str(item['id'])])
         self.assertEqual(
             first.transport_metadata['retry_parent_request_id'],
             parent.request_id,
+        )
+        self.assertEqual(
+            first.capability_requirements['response_format'],
+            'named_translation_object',
+        )
+        self.assertEqual(
+            first.capability_requirements['provider_feature'],
+            {'mode': 'strict'},
+        )
+        self.assertNotEqual(
+            first.capability_requirements['context_budget_tokens'],
+            1,
+        )
+        self.assertEqual(
+            first.capability_requirements['estimate_method'],
+            translation_plan.CONTEXT_TOKEN_ESTIMATE_METHOD,
+        )
+        self.assertEqual(
+            translation_plan.TranslationRequest.from_dict(
+                first.to_dict()
+            ).capability_requirements,
+            first.capability_requirements,
         )
         self.assertEqual(
             translation_plan.canonical_json(build.plan.to_dict()),

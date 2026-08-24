@@ -808,6 +808,11 @@ def _resolve_profile_snapshot(value):
     return redact_sensitive(payload)
 
 
+def normalize_context_provider_text(value):
+    """Normalize provider text exactly once before prompt/fingerprint use."""
+    return str(value or '').replace('\r\n', '\n')
+
+
 def _resolve_text_source(value, chunk_input, label):
     """Accept a constant string or a per-chunk callable, LF-normalized.
 
@@ -823,7 +828,7 @@ def _resolve_text_source(value, chunk_input, label):
         resolved = value
     else:
         raise TypeError(f'{label} must be a string or a callable(chunk_input) -> str')
-    return resolved.replace('\r\n', '\n')
+    return normalize_context_provider_text(resolved)
 
 
 def _unit_semantic_entry(unit):
@@ -1136,8 +1141,12 @@ def derive_translation_request(
         local_context_diagnostics=dict(local_context_diagnostics or {}),
         macro_setting=str(macro_setting or ''),
         lexical_glossary_hits=lexical_hits,
-        retrieval_blocks_text=str(retrieval_blocks_text or ''),
-        analysis_blocks_text=str(analysis_blocks_text or ''),
+        retrieval_blocks_text=normalize_context_provider_text(
+            retrieval_blocks_text
+        ),
+        analysis_blocks_text=normalize_context_provider_text(
+            analysis_blocks_text
+        ),
     )
     assembly = assemble_context_layers(chunk_input, policy)
     reference_blocks_text = '\n\n'.join(
@@ -1165,6 +1174,17 @@ def derive_translation_request(
         'retry_lineage_kind': str(lineage_kind or 'derived'),
         'retry_item_ids': expected_ids,
     })
+    capability_requirements = dict(
+        parent_request.capability_requirements or {}
+    )
+    capability_requirements.setdefault('structured_output', True)
+    capability_requirements.update({
+        'context_budget_tokens': estimate_context_tokens(
+            parent_request.system_instruction,
+            user_prompt,
+        ),
+        'estimate_method': CONTEXT_TOKEN_ESTIMATE_METHOD,
+    })
     request = TranslationRequest(
         request_id=request_id,
         plan_id=parent_request.plan_id,
@@ -1173,14 +1193,7 @@ def derive_translation_request(
         user_prompt=user_prompt,
         response_schema=response_schema,
         expected_ids=expected_ids,
-        capability_requirements={
-            'structured_output': True,
-            'context_budget_tokens': estimate_context_tokens(
-                parent_request.system_instruction,
-                user_prompt,
-            ),
-            'estimate_method': CONTEXT_TOKEN_ESTIMATE_METHOD,
-        },
+        capability_requirements=capability_requirements,
         generation_config=dict(parent_request.generation_config or {}),
         transport_metadata=redact_sensitive(transport),
         context_assembly=assembly.to_dict(),
