@@ -247,9 +247,12 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         routing = replace(routing, capabilities=capabilities)
 
+        retrieve = mock.Mock()
         with (
             mock.patch.object(runtime, 'MAX_ITEMS', 60),
             mock.patch.object(runtime, 'MAX_CHARS', 18000),
+            mock.patch.object(runtime, 'SYNC_RAG_ENABLED', True),
+            mock.patch.object(runtime, 'retrieve_sync_history_hits', retrieve),
             self.assertRaisesRegex(
                 ValueError,
                 r'budget=1, chunk_size=60, max_source_chars=18000.*'
@@ -262,6 +265,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 routing,
                 run_id='small-budget-run',
             )
+        retrieve.assert_not_called()
 
     def test_sync_plan_rejects_reordered_retrieval_captures(self):
         file_jobs = [
@@ -370,6 +374,39 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             'canonical system rules',
         )
         self.assertNotIn('temperature', sent[0].config)
+
+    def test_sync_retry_preserves_parent_file_path_metadata(self):
+        parent = object()
+        batch = [{
+            'id': 'script:0:1',
+            'text': 'Hello',
+            'file_rel_path': 'chapter/script.rpy',
+            'file_path': 'C:/game/tl/schinese/chapter/script.rpy',
+            'line': 0,
+        }]
+        child = object()
+        with mock.patch.object(
+            translation_plan,
+            'derive_translation_request',
+            return_value=child,
+        ) as derive:
+            result = runtime.derive_sync_retry_request(
+                parent,
+                batch,
+                {},
+                '--T',
+                'targeted_retry',
+            )
+
+        self.assertIs(result, child)
+        self.assertEqual(
+            derive.call_args.kwargs['file_rel_path'],
+            'chapter/script.rpy',
+        )
+        self.assertEqual(
+            derive.call_args.kwargs['file_path'],
+            'C:/game/tl/schinese/chapter/script.rpy',
+        )
 
     def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
         content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'

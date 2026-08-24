@@ -4483,6 +4483,68 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
     non_translatable_exact = set(NON_TRANSLATABLE_EXACT)
     macro_setting = str(SYNC_MACRO_SETTING or '')
     retrieval_enabled = SYNC_RAG_ENABLED or SYNC_STORY_MEMORY_ENABLED
+    capabilities = routing_plan.capabilities.get(route.profile_id)
+    budget = (
+        capabilities.context_budget_tokens
+        if capabilities is not None
+        else None
+    )
+
+    def build_plan(retrieval_blocks_provider):
+        return translation_plan.build_translation_plan(
+            file_jobs,
+            execution_strategy=model_profile.ExecutionStrategy.SYNC.value,
+            source_identity=_sync_plan_source_identity(adapter_snapshot),
+            config_snapshot=_sync_plan_config_snapshot(),
+            model_profile_snapshot=profile,
+            run_id=run_id,
+            chunk_policy=translation_plan.ChunkPolicy(
+                max_items=MAX_ITEMS,
+                max_chars=MAX_CHARS,
+            ),
+            context_policy=context_policy,
+            preserve_terms=preserve_terms,
+            normalize_map=normalize_map,
+            non_translatable_exact=non_translatable_exact,
+            macro_setting=macro_setting,
+            retrieval_blocks_provider=retrieval_blocks_provider,
+            generation_config=_sync_plan_generation_config(),
+        )
+
+    def validate_budget(plan_build, *, phase):
+        if budget is None:
+            return
+        oversized = [
+            request
+            for request in plan_build.requests
+            if int(request.capability_requirements.get('context_budget_tokens') or 0)
+            > int(budget)
+        ]
+        if not oversized:
+            return
+        estimated = oversized[0].capability_requirements.get(
+            'context_budget_tokens'
+        )
+        raise ValueError(
+            'Sync TranslationPlan exceeds the selected model context budget: '
+            f'request={oversized[0].request_id}, '
+            f'estimated={estimated}, budget={budget}, '
+            f'chunk_size={MAX_ITEMS}, max_source_chars={MAX_CHARS}, '
+            f'phase={phase}. '
+            'Lower translator_config.json sync.chunk_size and/or '
+            'sync.max_source_chars, or select a model profile with a larger '
+            'context budget.'
+        )
+
+    if file_jobs and retrieval_enabled and budget is not None:
+        # This first pass uses the same fixed chunks, prompt, local context,
+        # and char-upper-bound estimator without invoking a remote/local
+        # retrieval provider. It catches obviously impossible combinations
+        # before query embedding cost; the materialized pass below remains
+        # authoritative for retrieved context near the budget boundary.
+        preflight_build = build_plan(None)
+        validate_budget(preflight_build, phase='pre-retrieval')
+
     if file_jobs and retrieval_enabled:
         print(
             'Preparing Sync TranslationPlan context: retrieval for all fixed '
@@ -4529,25 +4591,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         })
         return text
 
-    plan_build = translation_plan.build_translation_plan(
-        file_jobs,
-        execution_strategy=model_profile.ExecutionStrategy.SYNC.value,
-        source_identity=_sync_plan_source_identity(adapter_snapshot),
-        config_snapshot=_sync_plan_config_snapshot(),
-        model_profile_snapshot=profile,
-        run_id=run_id,
-        chunk_policy=translation_plan.ChunkPolicy(
-            max_items=MAX_ITEMS,
-            max_chars=MAX_CHARS,
-        ),
-        context_policy=context_policy,
-        preserve_terms=preserve_terms,
-        normalize_map=normalize_map,
-        non_translatable_exact=non_translatable_exact,
-        macro_setting=macro_setting,
-        retrieval_blocks_provider=retrieval_provider,
-        generation_config=_sync_plan_generation_config(),
-    )
+    plan_build = build_plan(retrieval_provider)
     if len(captures) != len(plan_build.requests):
         raise RuntimeError(
             'Sync TranslationPlan retrieval capture count does not match its '
@@ -4567,32 +4611,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
                 'Sync TranslationPlan retrieval capture identity mismatch: '
                 f'index={index}, request={request.request_id}.'
             )
-    capabilities = routing_plan.capabilities.get(route.profile_id)
-    budget = (
-        capabilities.context_budget_tokens
-        if capabilities is not None
-        else None
-    )
-    if budget is not None:
-        oversized = [
-            request
-            for request in plan_build.requests
-            if int(request.capability_requirements.get('context_budget_tokens') or 0)
-            > int(budget)
-        ]
-        if oversized:
-            estimated = oversized[0].capability_requirements.get(
-                'context_budget_tokens'
-            )
-            raise ValueError(
-                'Sync TranslationPlan exceeds the selected model context budget: '
-                f'request={oversized[0].request_id}, '
-                f'estimated={estimated}, budget={budget}, '
-                f'chunk_size={MAX_ITEMS}, max_source_chars={MAX_CHARS}. '
-                'Lower translator_config.json sync.chunk_size and/or '
-                'sync.max_source_chars, or select a model profile with a larger '
-                'context budget.'
-            )
+    validate_budget(plan_build, phase='materialized-context')
     if retrieval_enabled:
         history_hit_count = sum(
             int((item.get('rag_stats') or {}).get('hit_count') or 0)
@@ -5196,6 +5215,7 @@ def derive_sync_retry_request(parent_request, batch, request_context, suffix, ki
         batch,
         lineage_suffix=suffix,
         file_rel_path=str((batch[0] if batch else {}).get('file_rel_path') or ''),
+        file_path=str((batch[0] if batch else {}).get('file_path') or ''),
         context_window=context.get('context_window'),
         local_context_diagnostics=context.get('local_context_diagnostics'),
         context_policy=context.get('context_policy') or _sync_plan_context_policy(),
@@ -6235,6 +6255,7 @@ def run_translation(*, prepare=False):
                         continue
                 task["progress_entry"] = _progress_entry_for_task(task)
                 task["file_rel_path"] = progress_key
+                task["file_path"] = document.file_path
                 tasks.append(task)
             if tasks:
                 pending_jobs.append({
