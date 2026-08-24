@@ -688,6 +688,62 @@ class RevisionProposalImportTests(unittest.TestCase):
         self.assertEqual(result["selectable_count"], 1)
         self.assertEqual(result["no_op_count"], 0)
 
+    def test_stage_no_op_is_reported_as_no_op_not_invalid(self):
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(
+                self._proposal(
+                    proposed="你好 {name}",
+                )
+            )),
+            stage=True,
+        )
+
+        self.assertEqual(result["no_op_count"], 1)
+        self.assertEqual(result["invalid_count"], 0)
+        self.assertEqual(result["selectable_count"], 0)
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(
+            stage["candidates"][0]["status"],
+            revision_selection.STATUS_NO_OP,
+        )
+
+    def test_staged_selection_uses_identity_v2_as_primary_selection_key(self):
+        row = self._proposal()
+        row.update(
+            occurrence_id="legacy-occurrence",
+            identity_v2="stable-occurrence",
+        )
+        live = batch._collect_revision_proposal_live_context()
+        original_id = self._proposal()["occurrence_id"]
+        live_item = live["live_items"].pop(original_id)
+        live["live_items"]["stable-occurrence"] = {
+            **live_item,
+            "id": "stable-occurrence",
+        }
+        stage = revision_selection.build_staged_selection(
+            rows=[row],
+            live_items=live["live_items"],
+            live_snapshot_digest=live["live_snapshot_digest"],
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=self.root,
+                tl_dir=self.tl_dir,
+            ),
+            proposal_path="C:/demo/proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="identity-v2-primary",
+        )
+
+        self.assertEqual(stage["candidates"][0]["identity_v2"], "stable-occurrence")
+        self.assertEqual(stage["candidates"][0]["status"], revision_selection.STATUS_CONFLICT)
+        self.assertTrue(
+            any(
+                code == "IDENTITY_MISMATCH"
+                for code in stage["candidates"][0]["diagnostic_codes"]
+            )
+        )
+
     def test_stage_row_level_stale_keeps_ready_session_for_other_candidates(self):
         live = {
             "valid-id": {

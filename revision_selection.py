@@ -164,7 +164,9 @@ def diagnostic_status(codes: Sequence[str]) -> str:
 
 
 def _row_identity(row: Mapping[str, Any]) -> str:
-    return str(row.get("occurrence_id") or row.get("identity_v2") or "").strip()
+    """Return the stable identity-v2 key, with legacy occurrence fallback."""
+
+    return str(row.get("identity_v2") or row.get("occurrence_id") or "").strip()
 
 
 def _row_number(row: Mapping[str, Any]) -> int:
@@ -180,6 +182,16 @@ def compact_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _row_is_no_op(row: Mapping[str, Any]) -> bool:
+    proposed = row.get("proposed_translation")
+    current = row.get("current_translation")
+    return (
+        isinstance(proposed, str)
+        and isinstance(current, str)
+        and compact_text(proposed) == compact_text(current)
+    )
+
+
 def _candidate_row(
     row: Mapping[str, Any],
     *,
@@ -191,12 +203,7 @@ def _candidate_row(
     identity = _row_identity(row)
     proposed = row.get("proposed_translation")
     current = row.get("current_translation")
-    no_op = (
-        status == STATUS_VALID
-        and isinstance(proposed, str)
-        and isinstance(current, str)
-        and compact_text(proposed) == compact_text(current)
-    )
+    no_op = status == STATUS_VALID and _row_is_no_op(row)
     if no_op:
         status = STATUS_NO_OP
     selectable = status == STATUS_VALID and bool(identity)
@@ -332,7 +339,7 @@ def build_candidates(
         messages = [str(item.get("message") or "") for item in row_diagnostics]
         status = diagnostic_status(codes)
         if status == STATUS_VALID and row_number not in valid_by_row:
-            status = STATUS_INVALID
+            status = STATUS_NO_OP if _row_is_no_op(row) else STATUS_INVALID
         candidate = _candidate_row(
             row,
             status=status,

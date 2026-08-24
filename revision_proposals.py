@@ -91,7 +91,7 @@ def _diag(code: str, row: Mapping[str, Any] | None, message: str, **details: Any
         "message": message,
         "row": int((row or {}).get("_row_number") or 0),
         "occurrence_id": str(
-            (row or {}).get("occurrence_id") or (row or {}).get("identity_v2") or ""
+            (row or {}).get("identity_v2") or (row or {}).get("occurrence_id") or ""
         ),
     }
     result.update(details)
@@ -226,7 +226,7 @@ def validate(
 
     for raw in rows:
         row = dict(raw)
-        identity = str(row.get("occurrence_id") or row.get("identity_v2") or "").strip()
+        identity = str(row.get("identity_v2") or row.get("occurrence_id") or "").strip()
         occurrence_id = str(row.get("occurrence_id") or "").strip()
         identity_v2 = str(row.get("identity_v2") or "").strip()
         selected_value = row.get("selected")
