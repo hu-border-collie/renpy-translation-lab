@@ -254,7 +254,7 @@ P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交�
 - 改用与旧版快照同源的现场译文，按单文件冻结 443 条记录后：复用候选中
   `exact_reuse` 覆盖全部 locator 匹配项（其中 443 条带译文记录）；导入 5 条
   接受、1 条拒绝；`export-reuse-results` 只写入目标 Batch 包的结果 JSONL；
-  目标副本 `check=allow` 后 apply 成功写回 1 文件 / 1 行。
+  目标副本 `writeback_gate.decision=allow` 后 apply 成功写回 1 文件 / 1 行。
 - 对同一清单改源后再 `apply`，以及 `apply --force`，均被拒绝。
 
 ### 对 P5 的含义
