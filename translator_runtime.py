@@ -32,7 +32,7 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines, sha256_text
+from atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 import cli_contract
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -4413,6 +4413,39 @@ def _sync_plan_generation_config():
     }
 
 
+def _sync_plan_story_graph_identity():
+    """Return a portable, non-sensitive identity for the configured graph."""
+    configured = str(SYNC_STORY_MEMORY_GRAPH_FILE or '').strip()
+    if not configured:
+        return {'scope': 'unset', 'path': '', 'sha256': ''}
+    absolute = os.path.realpath(os.path.abspath(configured))
+    project_root = os.path.realpath(os.path.abspath(BASE_DIR or os.curdir))
+    try:
+        relative = os.path.relpath(absolute, project_root)
+    except ValueError:
+        relative = ''
+    inside_project = bool(
+        relative
+        and relative != os.pardir
+        and not relative.startswith(os.pardir + os.sep)
+        and not os.path.isabs(relative)
+    )
+    path_identity = (
+        relative.replace('\\', '/')
+        if inside_project
+        else os.path.basename(absolute)
+    )
+    try:
+        content_digest = file_sha256(absolute) if os.path.isfile(absolute) else ''
+    except OSError:
+        content_digest = ''
+    return {
+        'scope': 'project' if inside_project else 'external',
+        'path': path_identity,
+        'sha256': content_digest,
+    }
+
+
 def _sync_plan_config_snapshot():
     """Return the non-sensitive existing Sync settings that define a plan."""
     return {
@@ -4426,7 +4459,7 @@ def _sync_plan_config_snapshot():
             'rag_enabled': SYNC_RAG_ENABLED,
             'story_memory': {
                 'enabled': SYNC_STORY_MEMORY_ENABLED,
-                'graph_file': SYNC_STORY_MEMORY_GRAPH_FILE,
+                'graph_file': _sync_plan_story_graph_identity(),
                 'max_context_chars': SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
                 'top_k_relations': SYNC_STORY_MEMORY_TOP_K_RELATIONS,
                 'top_k_terms': SYNC_STORY_MEMORY_TOP_K_TERMS,
@@ -4450,7 +4483,9 @@ def _sync_plan_source_identity(adapter_snapshot):
             source_snapshot_fingerprint(documents) if documents else ''
         ),
         file_digests={
-            str(document.file_rel_path or ''): str(document.sha256 or '')
+            str(document.file_rel_path or '').replace('\\', '/'): str(
+                document.sha256 or ''
+            )
             for document in documents
         },
     )

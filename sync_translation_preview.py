@@ -59,16 +59,26 @@ def _validate_translation_plan_binding(manifest: dict[str, Any]) -> None:
         raise ValueError("Sync preview request ids do not match its TranslationPlan.")
 
     identity = payload.get("source_identity") or {}
-    file_digests = dict(identity.get("file_digests") or {})
-    for entry in manifest.get("files") or []:
-        relative_path = str(entry.get("relative_path") or "")
-        if (
-            relative_path in file_digests
-            and str(entry.get("source_sha256") or "")
-            != str(file_digests.get(relative_path) or "")
-        ):
+    file_digests: dict[str, str] = {}
+    for raw_path, digest in dict(identity.get("file_digests") or {}).items():
+        normalized_path = _safe_relative_path(raw_path)
+        if normalized_path in file_digests:
             raise ValueError(
-                "Sync preview source digest does not match its TranslationPlan."
+                "Sync TranslationPlan contains duplicate normalized file digests: "
+                f"file={normalized_path}."
+            )
+        file_digests[normalized_path] = str(digest or "")
+    for entry in manifest.get("files") or []:
+        relative_path = _safe_relative_path(entry.get("relative_path"))
+        if relative_path not in file_digests:
+            raise ValueError(
+                "Sync preview file is missing from its TranslationPlan source "
+                f"digests: file={relative_path}."
+            )
+        if str(entry.get("source_sha256") or "") != file_digests[relative_path]:
+            raise ValueError(
+                "Sync preview source digest does not match its TranslationPlan: "
+                f"file={relative_path}."
             )
         writeback_plan = entry.get("writeback_plan")
         if not isinstance(writeback_plan, dict):

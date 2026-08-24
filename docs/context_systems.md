@@ -309,6 +309,8 @@ Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分�
 
 Structured Story Memory 是 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。
 
+Sync TranslationPlan 的配置指纹不会记录 Story graph 的绝对机器路径：项目内文件记录 POSIX 风格相对路径，项目外文件只记录 basename 与内容 SHA-256。这样 preview manifest 不暴露用户目录，同一图谱跨机器迁移时也保持稳定；图谱内容变化仍会改变配置指纹。
+
 配置示例见 `translator_config.example.json`：
 
 ```json

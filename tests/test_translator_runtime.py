@@ -123,6 +123,33 @@ def _restore_translator_runtime_state(snapshot):
 
 
 class TranslatorRuntimeRegressionTests(unittest.TestCase):
+    def test_sync_story_graph_identity_is_portable_and_hides_parent_path(self):
+        with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            identities = []
+            for root_text in (first, second):
+                root = Path(root_text)
+                project_root = root / 'project'
+                project_root.mkdir()
+                graph_file = root / 'private-parent' / 'story_graph.json'
+                graph_file.parent.mkdir()
+                graph_file.write_text('{"schema_version": 1}', encoding='utf-8')
+                with (
+                    mock.patch.object(runtime, 'BASE_DIR', str(project_root)),
+                    mock.patch.object(
+                        runtime,
+                        'SYNC_STORY_MEMORY_GRAPH_FILE',
+                        str(graph_file),
+                    ),
+                ):
+                    identities.append(runtime._sync_plan_story_graph_identity())
+
+            self.assertEqual(identities[0], identities[1])
+            self.assertEqual(identities[0]['scope'], 'external')
+            self.assertEqual(identities[0]['path'], 'story_graph.json')
+            serialized = translation_plan.canonical_json(identities[0])
+            self.assertNotIn(first, serialized)
+            self.assertNotIn(second, serialized)
+
     def test_legacy_sync_generation_temperature_remains_point_two(self):
         self.assertEqual(translation_plan.CANONICAL_TEMPERATURE, 0.2)
         self.assertEqual(

@@ -13,6 +13,16 @@ from atomic_io import file_sha256
 
 
 class SyncTranslationPreviewTests(unittest.TestCase):
+    def _refresh_binding_plan_fingerprint(self, manifest):
+        plan_payload = manifest["translation_plan"]
+        fingerprint_payload = dict(plan_payload)
+        fingerprint_payload.pop("run_id")
+        fingerprint_payload.pop("plan_fingerprint")
+        plan_payload["plan_fingerprint"] = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(fingerprint_payload)
+        )
+        manifest["plan_fingerprint"] = plan_payload["plan_fingerprint"]
+
     def _binding_manifest(self, *, writeback_plan):
         plan_payload = {
             "schema_version": translation_plan.PLAN_SCHEMA_VERSION,
@@ -103,6 +113,33 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     preview._validate_translation_plan_binding(
                         self._binding_manifest(writeback_plan=writeback_plan)
                     )
+
+    def test_plan_binding_normalizes_and_requires_source_digest_paths(self):
+        manifest = self._binding_manifest(
+            writeback_plan={"engine": "renpy", "adapter_version": "1.1.0"}
+        )
+        manifest["translation_plan"]["source_identity"]["file_digests"] = {
+            "chapter\\script.rpy": "source-digest"
+        }
+        manifest["files"][0]["relative_path"] = "chapter/script.rpy"
+        self._refresh_binding_plan_fingerprint(manifest)
+        preview._validate_translation_plan_binding(manifest)
+
+        manifest["files"][0]["source_sha256"] = "different"
+        with self.assertRaisesRegex(
+            ValueError,
+            "source digest does not match.*file=chapter/script.rpy",
+        ):
+            preview._validate_translation_plan_binding(manifest)
+
+        manifest["files"][0]["source_sha256"] = "source-digest"
+        manifest["translation_plan"]["source_identity"]["file_digests"] = {}
+        self._refresh_binding_plan_fingerprint(manifest)
+        with self.assertRaisesRegex(
+            ValueError,
+            "missing from its TranslationPlan.*file=chapter/script.rpy",
+        ):
+            preview._validate_translation_plan_binding(manifest)
 
     def test_load_accepts_legacy_preview_without_failures_field(self):
         with tempfile.TemporaryDirectory() as tmp:
