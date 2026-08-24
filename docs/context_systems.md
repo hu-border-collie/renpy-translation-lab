@@ -236,7 +236,7 @@ JSONL 每行是一个对象，支持以下字段：
 
 注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
 
-同步 RAG 启用后，每个成功写回的小批次会更新本地 history store，后续同步批次会在请求前重新检索并注入相关历史。
+同步 RAG 启用后，普通 Sync 初译会在不可变 TranslationPlan 构建阶段为全部固定 chunk 完成检索，随后才开始模型调用；因此同一次 preview run 不会在 chunk 之间刷新检索结果。history store 只在用户审查并 apply preview 后按成功写回文件更新，下一次 Sync run 才会读取这些新历史。运行日志会报告 plan 构建阶段的检索 chunk、RAG 命中和 Story Memory 生效 chunk 数；大项目应预期第一次模型调用前存在集中检索等待与 query embedding 消耗。
 
 ## RAG store 写入安全
 

@@ -79,11 +79,17 @@ def _validate_translation_plan_binding(manifest: dict[str, Any]) -> None:
             ("adapter_version", "adapter_version"),
         )
         for plan_key, identity_key in bindings:
-            if str(writeback_plan.get(plan_key) or "") != str(
-                identity.get(identity_key) or ""
-            ):
+            expected = str(identity.get(identity_key) or "")
+            actual = (
+                str(writeback_plan.get(plan_key) or "")
+                if plan_key in writeback_plan
+                else "<missing>"
+            )
+            if actual != expected:
                 raise ValueError(
-                    "Sync preview writeback plan does not match its TranslationPlan."
+                    "Sync preview writeback plan binding mismatch: "
+                    f"file={relative_path}, field={plan_key}, "
+                    f"expected={expected!r}, actual={actual!r}."
                 )
 
 

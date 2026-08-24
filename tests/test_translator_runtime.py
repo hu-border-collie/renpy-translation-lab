@@ -15,6 +15,7 @@ import types
 import unittest
 import zlib
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
@@ -203,6 +204,57 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             )
 
         self.assertIn('Sync RAG memory hits: 1', output.getvalue())
+        self.assertIn(
+            'retrieval for all fixed chunks runs before the first model request',
+            output.getvalue(),
+        )
+        self.assertIn(
+            'Sync TranslationPlan context frozen: retrieval_chunks=1, '
+            'history_hits=1, story_chunks=0.',
+            output.getvalue(),
+        )
+
+    def test_sync_plan_budget_error_explains_safe_configuration_options(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{'id': 'script:0:1', 'text': 'Encore', 'line': 0}],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        capabilities = dict(routing.capabilities)
+        capabilities[route.profile_id] = replace(
+            capabilities[route.profile_id],
+            context_limit_tokens=2,
+            context_budget_tokens=1,
+            context_source='user_override',
+        )
+        routing = replace(routing, capabilities=capabilities)
+
+        with (
+            mock.patch.object(runtime, 'MAX_ITEMS', 60),
+            mock.patch.object(runtime, 'MAX_CHARS', 18000),
+            self.assertRaisesRegex(
+                ValueError,
+                r'budget=1, chunk_size=60, max_source_chars=18000.*'
+                r'sync\.chunk_size.*sync\.max_source_chars.*larger context budget',
+            ),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='small-budget-run',
+            )
 
     def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
         content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'

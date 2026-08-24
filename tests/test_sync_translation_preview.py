@@ -1,3 +1,4 @@
+import io
 import json
 import tempfile
 import unittest
@@ -5,11 +6,44 @@ from pathlib import Path
 from unittest import mock
 
 import sync_translation_preview as preview
+import translation_plan
 import translator_runtime as runtime
 from atomic_io import file_sha256
 
 
 class SyncTranslationPreviewTests(unittest.TestCase):
+    def _binding_manifest(self, *, writeback_plan):
+        plan_payload = {
+            "schema_version": translation_plan.PLAN_SCHEMA_VERSION,
+            "run_id": "test-run",
+            "execution_strategy": translation_plan.STRATEGY_SYNC,
+            "source_identity": {
+                "engine": "renpy",
+                "adapter_version": "1.1.0",
+                "file_digests": {"script.rpy": "source-digest"},
+            },
+            "request_summaries": [],
+            "plan_fingerprint": "",
+        }
+        fingerprint_payload = dict(plan_payload)
+        fingerprint_payload.pop("run_id")
+        fingerprint_payload.pop("plan_fingerprint")
+        plan_payload["plan_fingerprint"] = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(fingerprint_payload)
+        )
+        return {
+            "translation_plan": plan_payload,
+            "plan_fingerprint": plan_payload["plan_fingerprint"],
+            "request_ids": [],
+            "files": [
+                {
+                    "relative_path": "script.rpy",
+                    "source_sha256": "source-digest",
+                    "writeback_plan": writeback_plan,
+                }
+            ],
+        }
+
     def _create_preview(self, root: Path, names=("a.rpy",)):
         tl_dir = root / "game" / "tl" / "schinese"
         tl_dir.mkdir(parents=True)
@@ -48,6 +82,26 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             report = (manifest_path.parent / "preview.diff").read_text(encoding="utf-8")
             self.assertIn('-    "Hello 1"', report)
             self.assertIn('+    "你好 1"', report)
+
+    def test_plan_binding_reports_missing_and_mismatched_adapter_fields(self):
+        cases = (
+            (
+                {"engine": "renpy"},
+                "file=script.rpy, field=adapter_version, "
+                "expected='1.1.0', actual='<missing>'",
+            ),
+            (
+                {"engine": "custom", "adapter_version": "1.1.0"},
+                "file=script.rpy, field=engine, "
+                "expected='renpy', actual='custom'",
+            ),
+        )
+        for writeback_plan, message in cases:
+            with self.subTest(writeback_plan=writeback_plan):
+                with self.assertRaisesRegex(ValueError, message):
+                    preview._validate_translation_plan_binding(
+                        self._binding_manifest(writeback_plan=writeback_plan)
+                    )
 
     def test_load_accepts_legacy_preview_without_failures_field(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -315,6 +369,16 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 ],
                 manifest["files"][0]["source_sha256"],
             )
+            self.assertEqual(
+                manifest["files"][0]["writeback_plan"]["engine"],
+                manifest["translation_plan"]["source_identity"]["engine"],
+            )
+            self.assertEqual(
+                manifest["files"][0]["writeback_plan"]["adapter_version"],
+                manifest["translation_plan"]["source_identity"][
+                    "adapter_version"
+                ],
+            )
             proposed = Path(manifest_path).parent / manifest["files"][0]["preview_path"]
             self.assertEqual(proposed.read_text(encoding="utf-8"), '    "你好"\n')
             coverage_dir = Path(manifest_path).parent / "coverage"
@@ -343,6 +407,113 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     active_project_root=root,
                     active_tl_dir=tl_dir,
                 )
+
+    def test_runtime_empty_pending_jobs_keeps_no_new_lines_completion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            target = tl_dir / "empty.rpy"
+            target.write_text("# Nothing to translate.\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(runtime, "BASE_DIR", str(root)),
+                mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
+                mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
+                mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+                mock.patch.object(runtime, "MODELS", ["openai/test-model"]),
+                mock.patch.object(runtime, "CURRENT_MODEL_INDEX", 0),
+                mock.patch.object(runtime, "PREP_ENABLED", False),
+                mock.patch.object(runtime, "INCLUDE_FILES", []),
+                mock.patch.object(runtime, "INCLUDE_PREFIXES", []),
+                mock.patch.object(runtime, "SYNC_RAG_ENABLED", True),
+                mock.patch.object(runtime, "load_config"),
+                mock.patch.object(runtime, "load_translator_settings"),
+                mock.patch.object(runtime, "load_glossary"),
+                mock.patch.object(runtime, "load_progress", return_value={}),
+                mock.patch.object(runtime, "process_batch_with_retry") as generate,
+                mock.patch.object(runtime, "retrieve_sync_history_hits") as retrieve,
+                mock.patch("sys.stdout", output := io.StringIO()),
+            ):
+                manifest_path = runtime.run_translation()
+
+            generate.assert_not_called()
+            retrieve.assert_not_called()
+            self.assertIn("No new lines to translate.", output.getvalue())
+            manifest = preview.load_sync_preview(manifest_path)
+            self.assertEqual(manifest["request_ids"], [])
+            self.assertEqual(manifest["translation_plan"]["chunks"], [])
+            self.assertEqual(manifest["summary"]["translated_items"], 0)
+
+    def test_runtime_freezes_all_retrieval_before_model_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            target = tl_dir / "script.rpy"
+            target.write_text('    "Hello"\n    "Again"\n', encoding="utf-8")
+            events = []
+
+            def retrieve_history(_items):
+                events.append("retrieve")
+                return [], {"enabled": True, "hit_count": 0}
+
+            def translate_batch(batch, replacements, **_kwargs):
+                events.append("generate")
+                successful = []
+                for task in batch:
+                    replacements.setdefault(task["line"], []).append(
+                        (
+                            task["start"],
+                            task["end"],
+                            "译文",
+                            task.get("prefix") or "",
+                            task["quote"],
+                        )
+                    )
+                    successful.append(task["progress_entry"])
+                return successful
+
+            with (
+                mock.patch.object(runtime, "BASE_DIR", str(root)),
+                mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
+                mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
+                mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+                mock.patch.object(runtime, "MODELS", ["openai/test-model"]),
+                mock.patch.object(runtime, "CURRENT_MODEL_INDEX", 0),
+                mock.patch.object(runtime, "PREP_ENABLED", False),
+                mock.patch.object(runtime, "INCLUDE_FILES", []),
+                mock.patch.object(runtime, "INCLUDE_PREFIXES", []),
+                mock.patch.object(runtime, "MAX_ITEMS", 1),
+                mock.patch.object(runtime, "MAX_CHARS", 18000),
+                mock.patch.object(runtime, "SYNC_RAG_ENABLED", True),
+                mock.patch.object(runtime, "SYNC_STORY_MEMORY_ENABLED", False),
+                mock.patch.object(runtime, "load_config"),
+                mock.patch.object(runtime, "load_translator_settings"),
+                mock.patch.object(runtime, "load_glossary"),
+                mock.patch.object(runtime, "load_progress", return_value={}),
+                mock.patch.object(
+                    runtime,
+                    "retrieve_sync_history_hits",
+                    side_effect=retrieve_history,
+                ),
+                mock.patch.object(
+                    runtime,
+                    "process_batch_with_retry",
+                    side_effect=translate_batch,
+                ),
+                mock.patch("sys.stdout", output := io.StringIO()),
+            ):
+                runtime.run_translation()
+
+            self.assertEqual(
+                events,
+                ["retrieve", "retrieve", "generate", "generate"],
+            )
+            self.assertIn(
+                "Sync TranslationPlan context frozen: retrieval_chunks=2",
+                output.getvalue(),
+            )
 
     def test_apply_revalidates_then_writes_and_marks_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:

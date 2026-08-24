@@ -435,6 +435,12 @@ class TestRenPyAdapterP2(unittest.TestCase):
         )
 
         self.assertEqual(plan.engine, "renpy")
+        self.assertEqual(plan.adapter_version, adapter.adapter_version)
+        self.assertEqual(plan.to_dict()["engine"], adapter.engine)
+        self.assertEqual(
+            plan.to_dict()["adapter_version"],
+            adapter.adapter_version,
+        )
         self.assertEqual(len(plan.operations), 1)
         operation = plan.operations[0]
         self.assertEqual(operation.kind, "text_span_replace")

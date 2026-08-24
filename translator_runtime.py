@@ -4482,6 +4482,13 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
     normalize_map = dict(NORMALIZE_TRANSLATION_MAP)
     non_translatable_exact = set(NON_TRANSLATABLE_EXACT)
     macro_setting = str(SYNC_MACRO_SETTING or '')
+    retrieval_enabled = SYNC_RAG_ENABLED or SYNC_STORY_MEMORY_ENABLED
+    if file_jobs and retrieval_enabled:
+        print(
+            'Preparing Sync TranslationPlan context: retrieval for all fixed '
+            'chunks runs before the first model request.',
+            flush=True,
+        )
 
     def retrieval_provider(chunk_input):
         history_hits, rag_stats = (
@@ -4553,12 +4560,33 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             > int(budget)
         ]
         if oversized:
+            estimated = oversized[0].capability_requirements.get(
+                'context_budget_tokens'
+            )
             raise ValueError(
                 'Sync TranslationPlan exceeds the selected model context budget: '
                 f'request={oversized[0].request_id}, '
-                f'estimated={oversized[0].capability_requirements.get("context_budget_tokens")}, '
-                f'budget={budget}.'
+                f'estimated={estimated}, budget={budget}, '
+                f'chunk_size={MAX_ITEMS}, max_source_chars={MAX_CHARS}. '
+                'Lower translator_config.json sync.chunk_size and/or '
+                'sync.max_source_chars, or select a model profile with a larger '
+                'context budget.'
             )
+    if retrieval_enabled:
+        history_hit_count = sum(
+            int((item.get('rag_stats') or {}).get('hit_count') or 0)
+            for item in captures
+        )
+        story_chunk_count = sum(
+            1 for item in captures if item.get('story_memory_applied')
+        )
+        print(
+            'Sync TranslationPlan context frozen: '
+            f'retrieval_chunks={len(captures)}, '
+            f'history_hits={history_hit_count}, '
+            f'story_chunks={story_chunk_count}.',
+            flush=True,
+        )
     return plan_build, captures
 
 def get_nested(source, *candidates):

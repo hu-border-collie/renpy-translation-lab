@@ -22,6 +22,10 @@
 
 普通 Sync 初译与 Gemini Batch 初译现在共用 `TranslationPlan`：默认按 60 条 / 18000 原文字符固定 chunk，并从 plan 取得稳定 request identity、分离的 canonical system/user prompt、响应 schema、ContextAssembler 结果和三级 fingerprint。显式写在旧配置中的 `sync.chunk_size` / `sync.max_source_chars` 仍然生效；默认值则已按 #346 D4 与 Batch 对齐。Sync transport 仍保留自己的 `max_output_tokens`、timeout、重试和即时调用语义，这些差异进入 request metadata/fingerprint，不改变模型看到的语义合同。
 
+60/18000 是 #346 D4 冻结的兼容取舍：它保留 Batch 分组，但会让未显式配置的旧 Sync 用户比此前的 40/12000 生成更大的请求。若所选 ModelProfile 声明了较小的 `context_budget_tokens`，Sync 会在模型调用前拒绝超预算 plan，并在错误中给出 request、估算预算、模型预算及当前 `chunk_size` / `max_source_chars`。可在 `translator_config.json` 中调小 `sync.chunk_size` 和/或 `sync.max_source_chars`（旧配置中的较小显式值继续生效），或改用上下文预算更大的模型；preflight 不会静默裁剪或重分原始 plan chunk。
+
+启用 Sync RAG 或 Story Memory 时，构建不可变 TranslationPlan 会在第一次模型调用前，按固定 chunk 顺序完成本次 plan 的全部检索并冻结模型可见上下文。运行日志会先提示这一阶段，并在结束时输出 `retrieval_chunks`、RAG 命中总数与 Story Memory 生效 chunk 数；大项目可能因此出现可见的启动等待，并把 query embedding 额度集中在启动阶段。若启动阶段持续失败，可暂时关闭相应上下文源或缩小 chunk 范围后重试。P3 不引入惰性检索，因为模型调用后再改变 provider 内容会破坏 initial plan 的 prompt fingerprint 与 Sync/Batch 共享语义；分阶段物化/性能优化留给 #346 P4 的 diagnostics 收口或后续独立性能项。
+
 `timeout_seconds` 默认 120 秒，可设为 5–600 秒。它是每一次模型请求的等待上限，不是整次任务的总时限；普通同步翻译、项目分析、同步关键词、同步订正、同步修补和翻译 A/B 对比均读取同一字段。Gemini backend 会把秒转换为 SDK 的毫秒级 `http_options.timeout`，LiteLLM backend 则按秒透传。手工配置超出范围时 runtime 会收敛到最近边界，避免异常值形成无界等待。
 
 选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
@@ -133,7 +137,7 @@ python gemini_translate.py --prepare
 python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 ```
 
-`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、TranslationPlan 指纹/request IDs、plan 的逐文件 source digest、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、plan/预览制品被修改或质量规则/策略版本变化都会阻止写回。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。没有 `translation_plan` 字段的旧 preview manifest 继续走 legacy 校验路径。
+`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、TranslationPlan 指纹/request IDs、plan 的逐文件 source digest、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、plan/预览制品被修改或质量规则/策略版本变化都会阻止写回。当前生产 Sync 路径只注册 Ren'Py adapter；公共 `WritebackPlan` 合同会稳定序列化 `engine` 与 `adapter_version`，apply 会逐文件、逐字段与 TranslationPlan source identity 对照，错误仅报告这些非敏感标识的 expected/actual。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。没有 `translation_plan` 字段的旧 preview manifest 继续走 legacy 校验路径。
 
 `--prepare` 与 `--apply` 不能同时使用。同步 CLI 当前输出面向人类阅读，不提供 Batch 核心命令的 JSON envelope；自动化需要稳定机器合同、远程状态轮询或断点恢复时应改用 Batch。
 
