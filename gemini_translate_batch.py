@@ -62,6 +62,7 @@ import model_usage_ledger
 import prompt_context
 import revision_corpus
 import revision_proposals
+import revision_selection
 import translation_ab_experiment
 import story_memory
 import translation_core
@@ -121,6 +122,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'apply-revisions',
         'export-revision-corpus',
         'import-revision-proposals',
+        'confirm-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'build-translation-records',
@@ -172,6 +174,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'apply-revisions',
         'export-revision-corpus',
         'import-revision-proposals',
+        'confirm-revision-proposals',
         'export-project-snapshot',
         'reconcile-project-snapshots',
         'build-translation-records',
@@ -5117,60 +5120,16 @@ def _proposal_status_from_preview_summary(summary):
     return 'blocked'
 
 
-def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
-    """Import structured proposals into the existing revision preview gate.
-
-    The command is local-only and never writes ``.rpy``.  Invalid structural or
-    stale input produces an auditable report but no revision manifest.  Valid
-    candidates are encoded as ordinary revision results and immediately
-    previewed by ``preview_revisions``.
-    """
-    proposal_path = os.path.abspath(str(proposal_path or '').strip())
-    if not proposal_path or not os.path.isfile(proposal_path):
-        raise cli_contract.MachineContractError(
-            f'Proposal JSONL not found: {proposal_path or "(missing)"}',
-            code_name='PROPOSAL_FILE_NOT_FOUND',
-            suggested_action='pass_existing_proposal_jsonl',
-            semantic_exit_code=cli_contract.EXIT_USAGE,
-        )
-    try:
-        rows = revision_proposals.load_jsonl(proposal_path)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise cli_contract.MachineContractError(
-            f'Invalid proposal JSONL: {exc}',
-            code_name='PROPOSAL_JSONL_INVALID',
-            suggested_action='fix_proposal_jsonl',
-            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-        ) from exc
-    if not rows:
-        raise cli_contract.MachineContractError(
-            'Proposal JSONL contains no proposal rows.',
-            code_name='NO_PROPOSAL_ROWS',
-            suggested_action='provide_non_empty_proposal_jsonl',
-            semantic_exit_code=cli_contract.EXIT_USAGE,
-        )
-    resolved_corpus_manifest = revision_proposals.find_corpus_manifest(
-        proposal_path,
-        corpus_manifest_path,
-    )
-    corpus_manifest = None
-    if resolved_corpus_manifest:
-        try:
-            corpus_manifest = revision_proposals.load_corpus_manifest(
-                resolved_corpus_manifest
-            )
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-            raise cli_contract.MachineContractError(
-                f'Invalid revision corpus manifest: {exc}',
-                code_name='CORPUS_MANIFEST_INVALID',
-                suggested_action='pass_matching_revision_corpus_manifest',
-                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-            ) from exc
+def _collect_revision_proposal_live_context():
+    """Collect the live revision scan and both source snapshot boundaries."""
 
     file_paths = list(collect_files_to_process())
     file_path_map = {rel_path: file_path for rel_path, file_path in file_paths}
     digests_before = revision_corpus.collect_file_digests(file_path_map)
-    live_jobs = collect_revision_file_jobs(file_paths=file_paths, include_empty_files=True)
+    live_jobs = collect_revision_file_jobs(
+        file_paths=file_paths,
+        include_empty_files=True,
+    )
     digests_after = revision_corpus.collect_file_digests(file_path_map)
     live_snapshot_digest = revision_corpus.aggregate_digest(digests_before)
     live_items = {
@@ -5178,57 +5137,223 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         for job in live_jobs
         for item in (job.get('items') or [])
     }
-    validation = revision_proposals.validate(
-        rows,
-        live_items,
-        live_snapshot_digest=live_snapshot_digest,
-        live_project_identity={'tl_dir': legacy.TL_DIR},
-        corpus_manifest=corpus_manifest,
+    return {
+        'file_paths': file_paths,
+        'file_path_map': file_path_map,
+        'digests_before': digests_before,
+        'digests_after': digests_after,
+        'live_snapshot_digest': live_snapshot_digest,
+        'live_items': live_items,
+        'live_jobs': live_jobs,
+    }
+
+
+def _revision_proposal_project_identity():
+    return revision_selection.project_identity_from_paths(
+        game_root=legacy.BASE_DIR,
+        tl_dir=legacy.TL_DIR,
     )
-    diagnostics = [dict(item) for item in validation.diagnostics]
-    if digests_before != digests_after:
-        diagnostics.append({
+
+
+def _proposal_import_diagnostics_from_candidates(candidates):
+    diagnostics = []
+    seen = set()
+    for candidate in candidates or []:
+        row = int(candidate.get('row') or 0)
+        occurrence_id = str(candidate.get('identity_v2') or '')
+        codes = list(candidate.get('diagnostic_codes') or [])
+        messages = list(candidate.get('diagnostic_messages') or [])
+        for index, code in enumerate(codes):
+            key = (row, occurrence_id, str(code))
+            if key in seen:
+                continue
+            seen.add(key)
+            diagnostics.append({
+                'code': str(code),
+                'message': str(messages[index] if index < len(messages) else ''),
+                'row': row,
+                'occurrence_id': occurrence_id,
+            })
+    return diagnostics
+
+
+def _write_selection_stage_report(package_dir, report):
+    json_path = os.path.join(package_dir, 'staged_selection_report.json')
+    markdown_path = os.path.join(package_dir, 'staged_selection_report.md')
+    atomic_write_json(json_path, report, ensure_ascii=False, indent=2)
+    lines = [
+        '# Revision Proposal Staged Selection',
+        '',
+        f"- Status: {report.get('status') or 'unknown'}",
+        f"- Input rows: {report.get('input_count', 0)}",
+        f"- Valid candidates: {report.get('valid_count', 0)}",
+        f"- Initially selected: {report.get('selected_count', 0)}",
+        f"- Unselected: {report.get('unselected_count', 0)}",
+        f"- Invalid: {report.get('invalid_count', 0)}",
+        f"- Stale: {report.get('stale_count', 0)}",
+        f"- Conflict: {report.get('conflict_count', 0)}",
+        f"- No-op: {report.get('no_op_count', 0)}",
+        '',
+    ]
+    diagnostics = list(report.get('diagnostics') or [])
+    if diagnostics:
+        lines.extend(['## Diagnostics', ''])
+        for item in diagnostics:
+            lines.append(
+                f"- `{item.get('code') or 'UNKNOWN'}` row {item.get('row') or '-'}: "
+                f"{item.get('message') or ''}"
+            )
+    atomic_write_text(markdown_path, '\n'.join(lines) + '\n')
+    return {
+        'staged_selection_report': json_path,
+        'staged_selection_report_markdown': markdown_path,
+    }
+
+
+def _write_selection_confirmation_report(package_dir, report):
+    """Write a refusal/outcome report without mutating the immutable stage audit."""
+
+    json_path = os.path.join(package_dir, 'selection_confirmation_report.json')
+    markdown_path = os.path.join(package_dir, 'selection_confirmation_report.md')
+    atomic_write_json(json_path, report, ensure_ascii=False, indent=2)
+    lines = [
+        '# Revision Proposal Selection Confirmation',
+        '',
+        f"- Status: {report.get('status') or 'unknown'}",
+        f"- Staged selection: {report.get('staged_selection_path') or ''}",
+        f"- Selection request: {report.get('selection_path') or ''}",
+        '',
+    ]
+    diagnostics = list(report.get('diagnostics') or [])
+    if diagnostics:
+        lines.extend(['## Diagnostics', ''])
+        for item in diagnostics:
+            lines.append(
+                f"- `{item.get('code') or 'UNKNOWN'}` row {item.get('row') or '-'}: "
+                f"{item.get('message') or ''}"
+            )
+    atomic_write_text(markdown_path, '\n'.join(lines) + '\n')
+    return {
+        'selection_confirmation_report': json_path,
+        'selection_confirmation_report_markdown': markdown_path,
+    }
+
+
+def _stage_revision_proposals(
+    *,
+    proposal_path,
+    resolved_corpus_manifest,
+    corpus_manifest,
+    rows,
+    live_context,
+    operation_identity='',
+):
+    """Persist a candidate session without creating a revision preview."""
+
+    package_dir = create_batch_package_dir(
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{guess_project_slug()}_revision_proposals_stage"
+    )
+    proposal_sha256 = _sha256_file(proposal_path)
+    corpus_manifest_sha256 = (
+        _sha256_file(resolved_corpus_manifest)
+        if resolved_corpus_manifest and os.path.isfile(resolved_corpus_manifest)
+        else ''
+    )
+    extra_diagnostics = []
+    if live_context['digests_before'] != live_context['digests_after']:
+        extra_diagnostics.append({
             'code': 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
             'message': 'live project files changed while proposals were being imported',
             'row': 0,
             'occurrence_id': '',
         })
-    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    package_dir = create_batch_package_dir(
-        f'{stamp}_{guess_project_slug()}_revision_proposals'
+    project_identity = _revision_proposal_project_identity()
+    stage = revision_selection.build_staged_selection(
+        rows=rows,
+        live_items=live_context['live_items'],
+        live_snapshot_digest=live_context['live_snapshot_digest'],
+        project_identity=project_identity,
+        proposal_path=proposal_path,
+        proposal_sha256=proposal_sha256,
+        corpus_manifest_path=resolved_corpus_manifest,
+        corpus_manifest_sha256=corpus_manifest_sha256,
+        corpus_manifest=corpus_manifest,
+        source_file_digests=live_context['digests_before'],
+        operation_id=operation_identity,
+        extra_diagnostics=extra_diagnostics,
     )
-    status = validation.status
-    if revision_proposals.diagnostics_are_stale(diagnostics):
-        status = 'stale'
-    elif diagnostics:
-        status = 'blocked'
+    stage_path = os.path.join(package_dir, 'staged_selection.json')
+    revision_selection.write_staged_selection(stage_path, stage)
+    summary = dict(stage.get('summary') or {})
+    session = dict(stage.get('session') or {})
+    session_status = str(session.get('session_status') or '').strip()
+    if session_status not in {'ready', 'stale', 'no_valid_candidates'}:
+        session_status = (
+            'stale'
+            if summary.get('session_stale')
+            else 'ready'
+            if summary.get('selectable_count')
+            else 'no_valid_candidates'
+        )
+    diagnostics = _proposal_import_diagnostics_from_candidates(
+        stage.get('candidates') or []
+    )
     report = {
         'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
         'kind': 'revision_proposal_import',
-        'status': status,
+        'status': 'staged',
+        'session_status': session_status,
         'proposal_path': proposal_path,
         'corpus_manifest_path': resolved_corpus_manifest,
-        'live_snapshot_digest': live_snapshot_digest,
-        'input_count': validation.input_count,
-        'requested_selected_count': validation.requested_selected_count,
-        'selected_count': validation.selected_count,
-        'candidate_count': len(validation.proposals),
+        'operation_identity': (stage.get('session') or {}).get('operation_identity') or '',
+        'staged_selection_digest': stage.get('staged_selection_digest') or '',
+        'live_snapshot_digest': live_context['live_snapshot_digest'],
+        'input_count': len(rows),
+        'requested_selected_count': sum(row.get('selected') is True for row in rows),
+        'candidate_count': len(stage.get('candidates') or []),
+        'valid_count': int(summary.get('valid_count') or 0),
+        'selectable_count': int(summary.get('selectable_count') or 0),
+        'selected_count': int(summary.get('selected_count') or 0),
+        'unselected_count': int(summary.get('unselected_count') or 0),
+        'no_op_count': int(summary.get('no_op_count') or 0),
+        'invalid_count': int(summary.get('invalid_count') or 0),
+        'stale_count': int(summary.get('stale_count') or 0),
+        'conflict_count': int(summary.get('conflict_count') or 0),
         'diagnostics': diagnostics,
+        'candidates': list(stage.get('candidates') or []),
         'suggested_action': (
             're_export_corpus_and_regenerate_proposals'
-            if status == 'stale'
+            if session_status == 'stale'
+            else 'select_valid_candidates'
+            if summary.get('selectable_count')
             else 'fix_proposal_diagnostics'
-            if status == 'blocked'
-            else 'no_writeback_needed'
-            if status == 'no_op'
-            else 'inspect_revision_preview'
         ),
     }
-    artifacts = _write_proposal_import_report(package_dir, report)
-    if diagnostics or not validation.proposals:
-        print(f'Revision proposal import status: {status}')
-        print(f'Import report: {artifacts["import_report"]}')
-        return {**report, 'paths': {'output_dir': package_dir, **artifacts}}
+    report_paths = _write_selection_stage_report(package_dir, report)
+    return {
+        **report,
+        'stage': stage,
+        'paths': {
+            'output_dir': package_dir,
+            'staged_selection': stage_path,
+            **report_paths,
+        },
+    }
+
+
+def _build_revision_proposal_preview_package(
+    *,
+    proposal_path,
+    resolved_corpus_manifest,
+    live_snapshot_digest,
+    live_jobs,
+    validation,
+    package_dir,
+    report,
+    artifacts,
+    proposal_state_extra=None,
+):
+    """Build and preview a standard revision package for confirmed candidates."""
 
     selected_by_identity = {
         str(row['identity_v2']): row for row in validation.proposals
@@ -5265,6 +5390,8 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             }]},
         })
     atomic_write_jsonl(results_path, result_rows, ensure_ascii=False)
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    extra_state = dict(proposal_state_extra or {})
     manifest = {
         'version': 2,
         'manifest_version': 2,
@@ -5315,6 +5442,7 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             'corpus_manifest_path': resolved_corpus_manifest,
             'corpus_snapshot_digest': live_snapshot_digest,
             'report_path': artifacts['import_report'],
+            **extra_state,
         },
     }
     manifest_path = os.path.join(package_dir, 'manifest.json')
@@ -5336,8 +5464,6 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
         previewed,
         update_latest=final_status in {'previewed', 'no_op'},
     )
-    print(f'Revision proposal import status: {final_status}')
-    print(f'Manifest: {manifest_path}')
     return {
         **report,
         'manifest': previewed,
@@ -5349,6 +5475,391 @@ def import_revision_proposals(proposal_path, *, corpus_manifest_path=''):
             **artifacts,
         },
     }
+
+
+def import_revision_proposals(
+    proposal_path,
+    *,
+    corpus_manifest_path='',
+    stage=False,
+    operation_identity='',
+):
+    """Import structured proposals into the existing revision preview gate.
+
+    The command is local-only and never writes ``.rpy``.  Invalid structural or
+    stale input produces an auditable report but no revision manifest.  Valid
+    candidates are encoded as ordinary revision results and immediately
+    previewed by ``preview_revisions``.
+    """
+    proposal_path = os.path.abspath(str(proposal_path or '').strip())
+    if not proposal_path or not os.path.isfile(proposal_path):
+        raise cli_contract.MachineContractError(
+            f'Proposal JSONL not found: {proposal_path or "(missing)"}',
+            code_name='PROPOSAL_FILE_NOT_FOUND',
+            suggested_action='pass_existing_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    try:
+        rows = revision_proposals.load_jsonl(proposal_path)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Invalid proposal JSONL: {exc}',
+            code_name='PROPOSAL_JSONL_INVALID',
+            suggested_action='fix_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        ) from exc
+    if not rows:
+        raise cli_contract.MachineContractError(
+            'Proposal JSONL contains no proposal rows.',
+            code_name='NO_PROPOSAL_ROWS',
+            suggested_action='provide_non_empty_proposal_jsonl',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    resolved_corpus_manifest = revision_proposals.find_corpus_manifest(
+        proposal_path,
+        corpus_manifest_path,
+    )
+    corpus_manifest = None
+    if resolved_corpus_manifest:
+        try:
+            corpus_manifest = revision_proposals.load_corpus_manifest(
+                resolved_corpus_manifest
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise cli_contract.MachineContractError(
+                f'Invalid revision corpus manifest: {exc}',
+                code_name='CORPUS_MANIFEST_INVALID',
+                suggested_action='pass_matching_revision_corpus_manifest',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            ) from exc
+
+    live_context = _collect_revision_proposal_live_context()
+    live_jobs = live_context['live_jobs']
+    live_items = live_context['live_items']
+    live_snapshot_digest = live_context['live_snapshot_digest']
+    validation = revision_proposals.validate(
+        rows,
+        live_items,
+        live_snapshot_digest=live_snapshot_digest,
+        live_project_identity=_revision_proposal_project_identity(),
+        corpus_manifest=corpus_manifest,
+    )
+    diagnostics = [dict(item) for item in validation.diagnostics]
+    if live_context['digests_before'] != live_context['digests_after']:
+        diagnostics.append({
+            'code': 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
+            'message': 'live project files changed while proposals were being imported',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    if stage:
+        return _stage_revision_proposals(
+            proposal_path=proposal_path,
+            resolved_corpus_manifest=resolved_corpus_manifest,
+            corpus_manifest=corpus_manifest,
+            rows=rows,
+            live_context=live_context,
+            operation_identity=operation_identity,
+        )
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+    package_dir = create_batch_package_dir(
+        f'{stamp}_{guess_project_slug()}_revision_proposals'
+    )
+    status = validation.status
+    if revision_proposals.diagnostics_are_stale(diagnostics):
+        status = 'stale'
+    elif diagnostics:
+        status = 'blocked'
+    report = {
+        'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
+        'kind': 'revision_proposal_import',
+        'status': status,
+        'proposal_path': proposal_path,
+        'corpus_manifest_path': resolved_corpus_manifest,
+        'live_snapshot_digest': live_snapshot_digest,
+        'input_count': validation.input_count,
+        'requested_selected_count': validation.requested_selected_count,
+        'selected_count': validation.selected_count,
+        'candidate_count': len(validation.proposals),
+        'diagnostics': diagnostics,
+        'suggested_action': (
+            're_export_corpus_and_regenerate_proposals'
+            if status == 'stale'
+            else 'fix_proposal_diagnostics'
+            if status == 'blocked'
+            else 'no_writeback_needed'
+            if status == 'no_op'
+            else 'inspect_revision_preview'
+        ),
+    }
+    artifacts = _write_proposal_import_report(package_dir, report)
+    if diagnostics or not validation.proposals:
+        print(f'Revision proposal import status: {status}')
+        print(f'Import report: {artifacts["import_report"]}')
+        return {**report, 'paths': {'output_dir': package_dir, **artifacts}}
+
+    result = _build_revision_proposal_preview_package(
+        proposal_path=proposal_path,
+        resolved_corpus_manifest=resolved_corpus_manifest,
+        live_snapshot_digest=live_snapshot_digest,
+        live_jobs=live_jobs,
+        validation=validation,
+        package_dir=package_dir,
+        report=report,
+        artifacts=artifacts,
+    )
+    print(f"Revision proposal import status: {result['status']}")
+    print(f"Manifest: {result['paths']['manifest']}")
+    return result
+
+
+def _staged_selection_confirmation_outcome(
+    *,
+    stage_path,
+    selection_path,
+    status,
+    suggested_action,
+    diagnostics,
+):
+    """Return a machine-contract-friendly confirmation refusal."""
+
+    package_dir = create_batch_package_dir(
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_"
+        f"{guess_project_slug()}_revision_proposals_selection_confirmation"
+    )
+    report = {
+        'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
+        'kind': 'revision_proposal_selection_confirmation',
+        'status': status,
+        'output_dir': package_dir,
+        'staged_selection_path': os.path.abspath(stage_path),
+        'selection_path': os.path.abspath(selection_path),
+        'diagnostics': [dict(item) for item in diagnostics or []],
+        'suggested_action': suggested_action,
+    }
+    report_paths = _write_selection_confirmation_report(package_dir, report)
+    return {
+        **report,
+        'paths': {
+            'output_dir': package_dir,
+            'staged_selection': os.path.abspath(stage_path),
+            'selection': os.path.abspath(selection_path),
+            **report_paths,
+        },
+    }
+
+
+def _same_revision_project_identity(expected, actual):
+    return revision_selection.project_identities_match(expected, actual)
+
+
+def confirm_revision_proposals(staged_selection_path, selection_path):
+    """Confirm a staged selection and hand it to the existing preview gate."""
+
+    stage_path = os.path.abspath(str(staged_selection_path or '').strip())
+    request_path = os.path.abspath(str(selection_path or '').strip())
+    try:
+        stage = revision_selection.load_staged_selection(stage_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Invalid staged selection: {exc}',
+            code_name='STAGED_SELECTION_INVALID',
+            suggested_action='reimport_revision_proposals_for_new_stage',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        ) from exc
+    try:
+        request = revision_selection.load_selection_request(request_path)
+        selected_ids = revision_selection.validate_selection_request(stage, request)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Invalid revision proposal selection: {exc}',
+            code_name='SELECTION_REQUEST_INVALID',
+            suggested_action='confirm_current_staged_candidates',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        ) from exc
+
+    session = dict(stage.get('session') or {})
+    proposal_path = os.path.abspath(str(session.get('proposal_path') or ''))
+    resolved_corpus_manifest = os.path.abspath(
+        str(session.get('corpus_manifest_path') or '')
+    ) if str(session.get('corpus_manifest_path') or '').strip() else ''
+    diagnostics = []
+    if not proposal_path or not os.path.isfile(proposal_path):
+        diagnostics.append({
+            'code': 'PROPOSAL_FILE_STALE',
+            'message': 'the original proposal JSONL is missing',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    elif _sha256_file(proposal_path) != str(session.get('proposal_sha256') or ''):
+        diagnostics.append({
+            'code': 'PROPOSAL_FILE_STALE',
+            'message': 'the original proposal JSONL changed after staging',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    if resolved_corpus_manifest:
+        if not os.path.isfile(resolved_corpus_manifest):
+            diagnostics.append({
+                'code': 'CORPUS_MANIFEST_STALE',
+                'message': 'the companion corpus manifest is missing',
+                'row': 0,
+                'occurrence_id': '',
+            })
+        elif _sha256_file(resolved_corpus_manifest) != str(
+            session.get('corpus_manifest_sha256') or ''
+        ):
+            diagnostics.append({
+                'code': 'CORPUS_MANIFEST_STALE',
+                'message': 'the companion corpus manifest changed after staging',
+                'row': 0,
+                'occurrence_id': '',
+            })
+    current_project = _revision_proposal_project_identity()
+    if not _same_revision_project_identity(
+        session.get('project_identity'),
+        current_project,
+    ):
+        diagnostics.append({
+            'code': 'PROJECT_IDENTITY_STALE',
+            'message': 'the current project does not match the staged selection',
+            'row': 0,
+            'occurrence_id': '',
+        })
+
+    live_context = _collect_revision_proposal_live_context()
+    if live_context['digests_before'] != live_context['digests_after']:
+        diagnostics.append({
+            'code': 'LIVE_SOURCE_CHANGED_DURING_IMPORT',
+            'message': 'live project files changed while the selection was being confirmed',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    if dict(session.get('source_file_digests') or {}) != live_context['digests_before']:
+        diagnostics.append({
+            'code': 'SOURCE_SNAPSHOT_STALE',
+            'message': 'source files changed after the staged selection was created',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    if str(session.get('live_snapshot_digest') or '') != live_context['live_snapshot_digest']:
+        diagnostics.append({
+            'code': 'CORPUS_SNAPSHOT_STALE',
+            'message': 'the live project snapshot does not match the staged selection',
+            'row': 0,
+            'occurrence_id': '',
+        })
+    if diagnostics:
+        return _staged_selection_confirmation_outcome(
+            stage_path=stage_path,
+            selection_path=request_path,
+            status='stale',
+            suggested_action='reimport_revision_proposals_for_new_stage',
+            diagnostics=diagnostics,
+        )
+
+    corpus_manifest = None
+    if resolved_corpus_manifest:
+        try:
+            corpus_manifest = revision_proposals.load_corpus_manifest(
+                resolved_corpus_manifest
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise cli_contract.MachineContractError(
+                f'Invalid revision corpus manifest: {exc}',
+                code_name='CORPUS_MANIFEST_INVALID',
+                suggested_action='pass_matching_revision_corpus_manifest',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            ) from exc
+
+    candidate_map = {
+        str(candidate.get('identity_v2') or ''): candidate
+        for candidate in stage.get('candidates') or []
+    }
+    selected_rows = []
+    for identity in selected_ids:
+        candidate = candidate_map[identity]
+        row = dict(candidate.get('proposal') or {})
+        row['_row_number'] = int(candidate.get('row') or 0)
+        row['selected'] = True
+        disposition = str(row.get('disposition') or '').strip().lower()
+        if disposition not in revision_proposals.SELECTED_DISPOSITIONS:
+            row['disposition'] = 'selected'
+        selected_rows.append(row)
+
+    if not selected_rows:
+        return _staged_selection_confirmation_outcome(
+            stage_path=stage_path,
+            selection_path=request_path,
+            status='no_op',
+            suggested_action='select_valid_candidates',
+            diagnostics=[],
+        )
+
+    validation = revision_proposals.validate(
+        selected_rows,
+        live_context['live_items'],
+        live_snapshot_digest=live_context['live_snapshot_digest'],
+        live_project_identity=current_project,
+        corpus_manifest=corpus_manifest,
+    )
+    if validation.diagnostics or not validation.proposals:
+        return _staged_selection_confirmation_outcome(
+            stage_path=stage_path,
+            selection_path=request_path,
+            status=(
+                'stale'
+                if revision_proposals.diagnostics_are_stale(validation.diagnostics)
+                else 'blocked'
+            ),
+            suggested_action='reimport_revision_proposals_for_new_stage',
+            diagnostics=validation.diagnostics,
+        )
+
+    package_dir = create_batch_package_dir(
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{guess_project_slug()}_revision_proposals_confirmed"
+    )
+    report = {
+        'schema_version': revision_proposals.IMPORT_REPORT_SCHEMA_VERSION,
+        'kind': 'revision_proposal_import',
+        'status': 'confirmed',
+        'proposal_path': proposal_path,
+        'corpus_manifest_path': resolved_corpus_manifest,
+        'live_snapshot_digest': live_context['live_snapshot_digest'],
+        'input_count': len(stage.get('candidates') or []),
+        'requested_selected_count': len(selected_ids),
+        'selected_count': len(validation.proposals),
+        'candidate_count': len(stage.get('candidates') or []),
+        'selected_identity_v2': selected_ids,
+        'staged_selection_digest': stage.get('staged_selection_digest') or '',
+        'selection_digest': request.get('selection_digest') or '',
+        'operation_identity': session.get('operation_identity') or '',
+        'diagnostics': [],
+        'suggested_action': 'inspect_revision_preview',
+    }
+    artifacts = _write_proposal_import_report(package_dir, report)
+    result = _build_revision_proposal_preview_package(
+        proposal_path=proposal_path,
+        resolved_corpus_manifest=resolved_corpus_manifest,
+        live_snapshot_digest=live_context['live_snapshot_digest'],
+        live_jobs=live_context['live_jobs'],
+        validation=validation,
+        package_dir=package_dir,
+        report=report,
+        artifacts=artifacts,
+        proposal_state_extra={
+            'operation_identity': session.get('operation_identity') or '',
+            'staged_selection_path': stage_path,
+            'staged_selection_digest': stage.get('staged_selection_digest') or '',
+            'selection_path': request_path,
+            'selection_digest': request.get('selection_digest') or '',
+            'selection_sha256': _sha256_file(request_path),
+            'selected_identity_v2': selected_ids,
+        },
+    )
+    print(f"Revision proposal selection status: {result['status']}")
+    print(f"Manifest: {result['paths']['manifest']}")
+    return result
 
 
 def _flatten_revision_items(file_jobs):
@@ -9906,6 +10417,16 @@ def _require_valid_revision_preview(manifest):
             'proposal_import_not_eligible',
             'proposal import is blocked, partial, stale, or not previewed; re-import valid proposals.',
         )
+    if isinstance(proposal_import, dict):
+        selection_path = str(proposal_import.get('selection_path') or '').strip()
+        selection_sha256 = str(proposal_import.get('selection_sha256') or '').strip()
+        if selection_path and selection_sha256:
+            if not os.path.isfile(selection_path) or _sha256_file(selection_path) != selection_sha256:
+                _mark_revision_apply_blocked(
+                    manifest,
+                    'selection_changed',
+                    'revision proposal selection changed since preview; run confirm-revision-proposals again.',
+                )
     preview = manifest.get('last_revision_preview')
     if (
         not isinstance(preview, dict)
@@ -15835,7 +16356,38 @@ def build_arg_parser():
             'when present.'
         ),
     )
+    import_revision_proposals_parser.add_argument(
+        '--stage',
+        action='store_true',
+        help=(
+            'Only validate and persist a staged-selection artifact; do not generate '
+            'a revision preview until confirm-revision-proposals is called.'
+        ),
+    )
+    import_revision_proposals_parser.add_argument(
+        '--operation-identity',
+        default='',
+        help='Optional caller-owned operation identity to bind to a staged session.',
+    )
     add_machine_output_argument(import_revision_proposals_parser)
+
+    confirm_revision_proposals_parser = subparsers.add_parser(
+        'confirm-revision-proposals',
+        help=(
+            'Confirm an immutable staged proposal selection and generate the existing '
+            'revision preview; never writes .rpy.'
+        ),
+    )
+    confirm_revision_proposals_parser.add_argument(
+        'staged_selection',
+        help='staged_selection.json produced by import-revision-proposals --stage.',
+    )
+    confirm_revision_proposals_parser.add_argument(
+        '--selection-file',
+        required=True,
+        help='Explicit revision_proposal_selection JSON confirmation artifact.',
+    )
+    add_machine_output_argument(confirm_revision_proposals_parser)
 
     export_project_snapshot_parser = subparsers.add_parser(
         'export-project-snapshot',
@@ -17314,6 +17866,20 @@ def dispatch_command(parser, args):
         return import_revision_proposals(
             args.proposal,
             corpus_manifest_path=args.corpus_manifest,
+            stage=bool(getattr(args, 'stage', False)),
+            operation_identity=getattr(args, 'operation_identity', '') or '',
+        )
+
+    if command == 'confirm-revision-proposals':
+        # Confirmation is still local-only.  The core rechecks the staged
+        # session, current project/source snapshots, and the ordinary preview
+        # gates before any apply command can become eligible.
+        legacy.load_translator_settings(persist_corrected_game_root=False)
+        legacy.load_glossary()
+        load_batch_settings()
+        return confirm_revision_proposals(
+            args.staged_selection,
+            args.selection_file,
         )
 
     if command in {'usage-import', 'usage-report'}:
@@ -17746,6 +18312,56 @@ def build_machine_success_envelope(command, value, args):
             ),
         )
 
+    if command in {'import-revision-proposals', 'confirm-revision-proposals'}:
+        imported = dict(value or {})
+        paths = dict(imported.get('paths') or {})
+        result = {
+            'input_count': int(imported.get('input_count') or 0),
+            'requested_selected_count': int(
+                imported.get('requested_selected_count') or 0
+            ),
+            'selected_count': int(imported.get('selected_count') or 0),
+            'candidate_count': int(imported.get('candidate_count') or 0),
+            'valid_count': int(imported.get('valid_count') or 0),
+            'selectable_count': int(imported.get('selectable_count') or 0),
+            'unselected_count': int(imported.get('unselected_count') or 0),
+            'invalid_count': int(imported.get('invalid_count') or 0),
+            'stale_count': int(imported.get('stale_count') or 0),
+            'conflict_count': int(imported.get('conflict_count') or 0),
+            'no_op_count': int(imported.get('no_op_count') or 0),
+            'diagnostics': list(imported.get('diagnostics') or []),
+            'preview_summary': dict(imported.get('preview_summary') or {}),
+            'suggested_action': imported.get('suggested_action') or '',
+            'session_status': imported.get('session_status') or '',
+            'operation_identity': imported.get('operation_identity') or '',
+            'staged_selection_digest': imported.get('staged_selection_digest') or '',
+            'selection_digest': imported.get('selection_digest') or '',
+            'selected_identity_v2': list(imported.get('selected_identity_v2') or []),
+        }
+        if command == 'import-revision-proposals' and (
+            getattr(args, 'stage', False) or imported.get('stage')
+        ):
+            result['candidates'] = list(imported.get('candidates') or [])
+        return cli_contract.success_envelope(
+            command,
+            status=str(imported.get('status') or 'blocked'),
+            result=result,
+            artifacts={
+                'manifest': paths.get('manifest') or '',
+                'staged_selection': paths.get('staged_selection') or '',
+                'selection': paths.get('selection') or '',
+                'import_report': paths.get('import_report') or '',
+                'import_report_markdown': paths.get('import_report_markdown') or '',
+                'staged_selection_report': paths.get('staged_selection_report') or '',
+                'staged_selection_report_markdown': paths.get('staged_selection_report_markdown') or '',
+                'selection_confirmation_output_dir': paths.get('output_dir') or '',
+                'selection_confirmation_report': paths.get('selection_confirmation_report') or '',
+                'selection_confirmation_report_markdown': paths.get('selection_confirmation_report_markdown') or '',
+                'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',
+                'revision_preview_markdown': paths.get('revision_preview_markdown') or '',
+            },
+        )
+
     manifest = _load_machine_manifest(command, value, args)
     result = _machine_manifest_summary(manifest)
     artifacts = _nonempty_artifacts(
@@ -18128,33 +18744,6 @@ def build_machine_success_envelope(command, value, args):
                 'corpus_markdown': paths.get('markdown') or '',
             },
         )
-    elif command == 'import-revision-proposals':
-        imported = dict(value or {})
-        paths = dict(imported.get('paths') or {})
-        result = {
-            'input_count': int(imported.get('input_count') or 0),
-            'requested_selected_count': int(
-                imported.get('requested_selected_count') or 0
-            ),
-            'selected_count': int(imported.get('selected_count') or 0),
-            'candidate_count': int(imported.get('candidate_count') or 0),
-            'diagnostics': list(imported.get('diagnostics') or []),
-            'preview_summary': dict(imported.get('preview_summary') or {}),
-            'suggested_action': imported.get('suggested_action') or '',
-        }
-        return cli_contract.success_envelope(
-            command,
-            status=str(imported.get('status') or 'blocked'),
-            result=result,
-            artifacts={
-                'manifest': paths.get('manifest') or '',
-                'import_report': paths.get('import_report') or '',
-                'import_report_markdown': paths.get('import_report_markdown') or '',
-                'revision_preview_jsonl': paths.get('revision_preview_jsonl') or '',
-                'revision_preview_markdown': paths.get('revision_preview_markdown') or '',
-            },
-        )
-
     return cli_contract.success_envelope(
         command,
         status=status,

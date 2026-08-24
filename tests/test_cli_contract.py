@@ -154,6 +154,12 @@ class CliContractTests(unittest.TestCase):
         proposal_stale = cli_contract.success_envelope(
             "import-revision-proposals", status="stale"
         )
+        proposal_staged = cli_contract.success_envelope(
+            "import-revision-proposals", status="staged"
+        )
+        proposal_confirmed = cli_contract.success_envelope(
+            "confirm-revision-proposals", status="previewed"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -180,6 +186,8 @@ class CliContractTests(unittest.TestCase):
             cli_contract.strict_exit_code(proposal_stale),
             cli_contract.EXIT_BLOCKED,
         )
+        self.assertEqual(cli_contract.strict_exit_code(proposal_staged), 0)
+        self.assertEqual(cli_contract.strict_exit_code(proposal_confirmed), 0)
         unknown = cli_contract.success_envelope("check", status="unknown")
         unclassified_error = cli_contract.error_envelope(
             "apply",

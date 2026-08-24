@@ -28,6 +28,7 @@ class WorkbenchModeSession:
     workflow_facts: list[str] = field(default_factory=list)
     writeback_summary: Any | None = None  # WritebackSummary | None
     revision_corpus_export_result: Any | None = None
+    revision_proposal_stage_result: dict[str, object] | None = None
 
     def is_empty(self) -> bool:
         return (
@@ -41,6 +42,7 @@ class WorkbenchModeSession:
             and not self.workflow_facts
             and self.writeback_summary is None
             and self.revision_corpus_export_result is None
+            and self.revision_proposal_stage_result is None
         )
 
     def has_workflow_ui(self) -> bool:

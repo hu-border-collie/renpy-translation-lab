@@ -9,6 +9,7 @@ from unittest import mock
 import gemini_translate_batch as batch
 import revision_corpus
 import revision_proposals as proposals
+import revision_selection
 
 
 class RevisionProposalContractTests(unittest.TestCase):
@@ -172,6 +173,103 @@ class RevisionProposalContractTests(unittest.TestCase):
             live_snapshot_digest=self.corpus_digest,
         )
         self.assertEqual(result.status, "imported")
+
+    def test_shared_project_identity_normalizes_paths_for_cli_and_gui(self):
+        project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\..\work",
+            tl_dir=r"C:\Demo\work\game\tl\schinese\.",
+        )
+        equivalent = revision_selection.project_identity_from_paths(
+            game_root=r"c:\demo\work",
+            tl_dir=r"c:\demo\work\game\tl\schinese",
+        )
+        self.assertEqual(project, equivalent)
+        self.assertTrue(revision_selection.project_identities_match(project, equivalent))
+        self.assertEqual(
+            revision_selection.operation_identity(
+                project_identity=project,
+                proposal_path=r"C:\Demo\work\proposals.jsonl",
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=r"C:\Demo\work\corpus.json",
+                corpus_manifest_sha256="b" * 64,
+            ),
+            revision_selection.operation_identity(
+                project_identity=equivalent,
+                proposal_path=r"c:\demo\work\.\proposals.jsonl",
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=r"c:\demo\work\corpus.json",
+                corpus_manifest_sha256="b" * 64,
+            ),
+        )
+
+    def test_staged_selection_reuses_project_path_normalization_for_validation(self):
+        project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo",
+            tl_dir=r"C:\Demo\game\tl\schinese",
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[self.row()],
+            live_items=self.live,
+            live_snapshot_digest=self.corpus_digest,
+            project_identity=project,
+            proposal_path=r"C:\Demo\proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="operation-identity-normalization",
+        )
+        self.assertEqual(stage["summary"]["selectable_count"], 1)
+        self.assertEqual(stage["candidates"][0]["status"], revision_selection.STATUS_VALID)
+
+    def test_project_identity_resolves_relative_tl_dir_for_windows_and_posix_forms(self):
+        windows_relative = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\.",
+            tl_dir=r"game\tl\schinese",
+        )
+        windows_absolute = revision_selection.project_identity_from_paths(
+            game_root=r"c:/demo/work",
+            tl_dir=r"C:\Demo\work\game\tl\schinese",
+        )
+        self.assertEqual(windows_relative, windows_absolute)
+
+        posix_relative = revision_selection.project_identity_from_paths(
+            game_root="/tmp/demo/work/.",
+            tl_dir="game/tl/schinese",
+        )
+        posix_absolute = revision_selection.project_identity_from_paths(
+            game_root="/tmp/demo/work",
+            tl_dir="/tmp/demo/work/game/tl/schinese",
+        )
+        self.assertEqual(posix_relative, posix_absolute)
+
+    def test_cli_and_gui_share_relative_tl_operation_identity(self):
+        proposal_path = r"C:\exports\proposals.jsonl"
+        corpus_path = r"C:\exports\revision_corpus_manifest.json"
+        with (
+            mock.patch.object(batch.legacy, "BASE_DIR", r"C:\Demo\work"),
+            mock.patch.object(batch.legacy, "TL_DIR", r"game\tl\schinese"),
+        ):
+            cli_project = batch._revision_proposal_project_identity()
+
+        gui_project = revision_selection.project_identity_from_paths(
+            game_root=r"C:\Demo\work\.",
+            tl_dir=r"C:\Demo\work\game\tl\schinese",
+        )
+        self.assertTrue(revision_selection.project_identities_match(cli_project, gui_project))
+        self.assertEqual(
+            revision_selection.operation_identity(
+                project_identity=cli_project,
+                proposal_path=proposal_path,
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=corpus_path,
+                corpus_manifest_sha256="b" * 64,
+            ),
+            revision_selection.operation_identity(
+                project_identity=gui_project,
+                proposal_path=proposal_path,
+                proposal_sha256="a" * 64,
+                corpus_manifest_path=corpus_path,
+                corpus_manifest_sha256="b" * 64,
+            ),
+        )
 
     def test_corpus_snapshot_mismatch_is_stale(self):
         result = proposals.validate(
@@ -528,6 +626,377 @@ class RevisionProposalImportTests(unittest.TestCase):
         written = self.rpy.read_text(encoding="utf-8")
         self.assertIn('new "第一处"', written)
         self.assertIn('new "只改第二处"', written)
+
+    def test_stage_selection_persists_candidates_without_preview_or_writeback(self):
+        before = self.rpy.read_bytes()
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(self._proposal())),
+            stage=True,
+        )
+
+        self.assertEqual(result["status"], "staged")
+        self.assertNotIn("manifest", result["paths"])
+        self.assertEqual(result["candidate_count"], 1)
+        self.assertEqual(result["selectable_count"], 1)
+        self.assertTrue(Path(result["paths"]["staged_selection"]).is_file())
+        self.assertEqual(self.rpy.read_bytes(), before)
+
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(
+            [candidate["identity_v2"] for candidate in stage["candidates"]],
+            [self._proposal()["identity_v2"]],
+        )
+        self.assertEqual(
+            len(revision_selection.filter_candidates(stage, valid_only=True)),
+            1,
+        )
+
+    def test_stage_missing_identity_is_reported_as_invalid_candidate(self):
+        row = self._proposal()
+        row.update(occurrence_id="", identity_v2="")
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(row)),
+            stage=True,
+        )
+
+        self.assertEqual(result["status"], "staged")
+        self.assertEqual(result["invalid_count"], 1)
+        self.assertEqual(result["selectable_count"], 0)
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(stage["candidates"][0]["identity_v2"], "")
+        self.assertEqual(
+            stage["candidates"][0]["status"],
+            revision_selection.STATUS_INVALID,
+        )
+
+    def test_stage_whitespace_translation_change_remains_selectable(self):
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "你好世界"\n',
+            encoding="utf-8",
+        )
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(self._proposal(proposed="你好 世界"))),
+            stage=True,
+        )
+
+        self.assertEqual(result["selectable_count"], 1)
+        self.assertEqual(result["no_op_count"], 0)
+
+    def test_stage_no_op_is_reported_as_no_op_not_invalid(self):
+        result = batch.import_revision_proposals(
+            str(self._write_proposal(
+                self._proposal(
+                    proposed="你好 {name}",
+                )
+            )),
+            stage=True,
+        )
+
+        self.assertEqual(result["no_op_count"], 1)
+        self.assertEqual(result["invalid_count"], 0)
+        self.assertEqual(result["selectable_count"], 0)
+        stage = revision_selection.load_staged_selection(
+            result["paths"]["staged_selection"]
+        )
+        self.assertEqual(
+            stage["candidates"][0]["status"],
+            revision_selection.STATUS_NO_OP,
+        )
+
+    def test_staged_selection_uses_identity_v2_as_primary_selection_key(self):
+        row = self._proposal()
+        row.update(
+            occurrence_id="legacy-occurrence",
+            identity_v2="stable-occurrence",
+        )
+        live = batch._collect_revision_proposal_live_context()
+        original_id = self._proposal()["occurrence_id"]
+        live_item = live["live_items"].pop(original_id)
+        live["live_items"]["stable-occurrence"] = {
+            **live_item,
+            "id": "stable-occurrence",
+        }
+        stage = revision_selection.build_staged_selection(
+            rows=[row],
+            live_items=live["live_items"],
+            live_snapshot_digest=live["live_snapshot_digest"],
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=self.root,
+                tl_dir=self.tl_dir,
+            ),
+            proposal_path="C:/demo/proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="identity-v2-primary",
+        )
+
+        self.assertEqual(stage["candidates"][0]["identity_v2"], "stable-occurrence")
+        self.assertEqual(stage["candidates"][0]["status"], revision_selection.STATUS_CONFLICT)
+        self.assertTrue(
+            any(
+                code == "IDENTITY_MISMATCH"
+                for code in stage["candidates"][0]["diagnostic_codes"]
+            )
+        )
+
+    def test_stage_row_level_stale_keeps_ready_session_for_other_candidates(self):
+        live = {
+            "valid-id": {
+                "id": "valid-id",
+                "file_rel_path": "chapter.rpy",
+                "source": "Hello {name}",
+                "current_translation": "你好 {name}",
+            },
+            "occ-2": {
+                "id": "occ-2",
+                "file_rel_path": "other.rpy",
+                "source": "Other",
+                "current_translation": "当前译文",
+            },
+        }
+        valid = self._proposal()
+        live[valid["occurrence_id"]] = live.pop("valid-id")
+        live[valid["occurrence_id"]]["id"] = valid["occurrence_id"]
+        stale = dict(valid)
+        stale.update(
+            occurrence_id="occ-2",
+            identity_v2="occ-2",
+            file_rel_path="other.rpy",
+            source="Other",
+            current_translation="旧译文",
+            proposed_translation="新译文",
+            snapshot_digest=revision_corpus.item_snapshot_digest("Other", "旧译文"),
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[valid, stale],
+            live_items=live,
+            live_snapshot_digest=valid["corpus_snapshot_digest"],
+            project_identity={"game_root": self.root, "tl_dir": self.tl_dir},
+            proposal_path="C:/demo/proposals.jsonl",
+            proposal_sha256="b" * 64,
+            operation_id="operation-1",
+        )
+
+        self.assertEqual(stage["session"]["session_status"], "ready")
+        self.assertEqual(stage["summary"]["selectable_count"], 1)
+        self.assertEqual(stage["summary"]["stale_count"], 1)
+
+    def test_confirmed_stage_selection_generates_preview_and_binds_selection(self):
+        proposal_path = self._write_proposal(self._proposal())
+        expected_identity = revision_selection.operation_identity(
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=self.root,
+                tl_dir=self.tl_dir,
+            ),
+            proposal_path=str(proposal_path),
+            proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+        )
+        staged = batch.import_revision_proposals(
+            str(proposal_path),
+            stage=True,
+            operation_identity=expected_identity,
+        )
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        identity = stage["candidates"][0]["identity_v2"]
+        request = revision_selection.make_selection_request(stage, [identity])
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "previewed")
+        self.assertTrue(Path(result["paths"]["manifest"]).is_file())
+        proposal_state = result["manifest"]["proposal_import"]
+        self.assertEqual(proposal_state["selected_identity_v2"], [identity])
+        self.assertEqual(
+            proposal_state["staged_selection_digest"],
+            stage["staged_selection_digest"],
+        )
+        self.assertEqual(proposal_state["operation_identity"], expected_identity)
+        self.assertTrue(proposal_state["selection_sha256"])
+        self.assertEqual(self.rpy.read_text(encoding="utf-8").count("您好"), 0)
+        selection_path.write_text(json.dumps({"changed": True}), encoding="utf-8")
+        with self.assertRaisesRegex(SystemExit, "selection changed"):
+            batch.apply_revisions(result["paths"]["manifest"], force=True)
+
+    def test_confirmed_stage_selection_is_stale_after_source_change(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage_report = Path(staged["paths"]["staged_selection_report"])
+        original_stage_report = stage_report.read_bytes()
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "源文件发生变化 {name}"\n',
+            encoding="utf-8",
+        )
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "stale")
+        self.assertNotIn("manifest", result["paths"])
+        self.assertTrue(Path(result["paths"]["selection_confirmation_report"]).is_file())
+        self.assertNotEqual(
+            Path(result["paths"]["output_dir"]).resolve(),
+            stage_report.parent.resolve(),
+        )
+        self.assertEqual(stage_report.read_bytes(), original_stage_report)
+
+    def test_confirmation_report_for_copied_readonly_stage_uses_output_package(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.rpy.write_text(
+            'translate schinese demo:\n'
+            '    old "Hello {name}"\n'
+            '    new "只读输入测试"\n',
+            encoding="utf-8",
+        )
+
+        input_dir = self.root / "readonly-input"
+        input_dir.mkdir()
+        copied_stage = input_dir / "staged_selection.json"
+        copied_selection = input_dir / "selection.json"
+        copied_stage.write_bytes(Path(staged["paths"]["staged_selection"]).read_bytes())
+        copied_selection.write_bytes(selection_path.read_bytes())
+        try:
+            input_dir.chmod(0o555)
+            result = batch.confirm_revision_proposals(
+                str(copied_stage),
+                str(copied_selection),
+            )
+        finally:
+            input_dir.chmod(0o755)
+
+        output_dir = Path(result["paths"]["output_dir"]).resolve()
+        self.assertEqual(result["status"], "stale")
+        self.assertNotEqual(output_dir, input_dir.resolve())
+        self.assertTrue(output_dir.is_relative_to(Path(batch.BATCH_JOBS_DIR).resolve()))
+        self.assertTrue(Path(result["paths"]["selection_confirmation_report"]).is_file())
+        self.assertFalse((input_dir / "selection_confirmation_report.json").exists())
+
+    def test_relative_tl_identity_is_stale_after_game_root_switch(self):
+        proposal_path = self._write_proposal(self._proposal())
+        live_context = batch._collect_revision_proposal_live_context()
+        project = revision_selection.project_identity_from_paths(
+            game_root=self.root,
+            tl_dir="game/tl/schinese",
+        )
+        stage = revision_selection.build_staged_selection(
+            rows=[self._proposal()],
+            live_items=live_context["live_items"],
+            live_snapshot_digest=live_context["live_snapshot_digest"],
+            project_identity=project,
+            proposal_path=str(proposal_path),
+            proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+            source_file_digests=live_context["digests_before"],
+            operation_id=revision_selection.operation_identity(
+                project_identity=project,
+                proposal_path=str(proposal_path),
+                proposal_sha256=revision_selection.file_sha256(str(proposal_path)),
+            ),
+        )
+        stage_path = self.root / "relative-stage.json"
+        revision_selection.write_staged_selection(str(stage_path), stage)
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "relative-selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        self.assertTrue(
+            batch._same_revision_project_identity(
+                stage["session"]["project_identity"],
+                batch._revision_proposal_project_identity(),
+            )
+        )
+
+        batch.legacy.BASE_DIR = str(self.root / "other-game")
+        result = batch.confirm_revision_proposals(str(stage_path), str(selection_path))
+
+        self.assertEqual(result["status"], "stale")
+        self.assertIn(
+            "PROJECT_IDENTITY_STALE",
+            {item["code"] for item in result["diagnostics"]},
+        )
+
+    def test_confirmed_stage_selection_is_stale_after_project_switch(self):
+        proposal_path = self._write_proposal(self._proposal())
+        staged = batch.import_revision_proposals(str(proposal_path), stage=True)
+        stage = revision_selection.load_staged_selection(
+            staged["paths"]["staged_selection"]
+        )
+        request = revision_selection.make_selection_request(
+            stage,
+            [stage["candidates"][0]["identity_v2"]],
+        )
+        selection_path = self.root / "selection.json"
+        revision_selection.write_selection_request(str(selection_path), request)
+        batch.legacy.BASE_DIR = str(self.root / "other-game")
+
+        result = batch.confirm_revision_proposals(
+            staged["paths"]["staged_selection"],
+            str(selection_path),
+        )
+
+        self.assertEqual(result["status"], "stale")
+        self.assertTrue(
+            any(
+                item["code"] == "PROJECT_IDENTITY_STALE"
+                for item in result["diagnostics"]
+            )
+        )
+
+    def test_stage_duplicate_identity_marks_all_occurrences_as_conflict(self):
+        row = self._proposal()
+        staged = batch.import_revision_proposals(
+            str(self._write_proposal(row)),
+            stage=True,
+        )
+        duplicate_path = self.root / "duplicate.jsonl"
+        duplicate_path.write_text(
+            json.dumps(row, ensure_ascii=False) + "\n" + json.dumps(row, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        duplicate = batch.import_revision_proposals(str(duplicate_path), stage=True)
+
+        self.assertEqual(duplicate["conflict_count"], 2)
+        self.assertEqual(duplicate["selectable_count"], 0)
+        self.assertEqual(
+            {candidate["status"] for candidate in duplicate["candidates"]},
+            {revision_selection.STATUS_CONFLICT},
+        )
+        self.assertEqual(staged["status"], "staged")
 
 
 if __name__ == "__main__":

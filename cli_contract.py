@@ -256,8 +256,8 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         if status == "attention":
             return EXIT_NEEDS_ACTION
         return EXIT_INVALID_STATE
-    if command == "import-revision-proposals":
-        if status in {"previewed", "no_op", "imported"}:
+    if command in {"import-revision-proposals", "confirm-revision-proposals"}:
+        if status in {"previewed", "no_op", "imported", "staged"}:
             return EXIT_OK
         if status == "partial":
             return EXIT_NEEDS_ACTION

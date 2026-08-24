@@ -300,9 +300,18 @@ Markdown、`revision_corpus_manifest.json` 路径和 manifest 中的生成时间
 可导出的译文或已有任务运行时，入口会在点击前禁用并说明下一步。如果刚完成翻译或写回，
 请重新运行环境检查以刷新当前译文计数。
 
-导出语料和导入提案都不会直接修改 `.rpy`。导出期间切换项目或收到迟到结果时，旧结果
-会被丢弃；请在当前项目重新导出。当前 GUI 切片不提供导入后候选勾选或筛选；提案中的
-`selected` 字段仍由现有 CLI 导入合同决定，staged selection 属于后续共享核心工作。
+导出语料和导入提案都不会直接修改 `.rpy`。导出或导入期间切换项目、提案文件变化或
+收到迟到结果时，旧结果会被丢弃；请在当前项目重新操作。导入完成后，订正页会显示候选
+总数、有效/未选择/无效/过期/冲突计数和候选会话路径；仅当 `session_status=ready` 且存在
+有效候选时自动打开可复用的 staged-selection 表格，否则停留在摘要并显示下一步提示。表格
+支持按 reason、文件、状态筛选，以及“只看有效候选”“当前筛选中全选有效”“清空选择”；
+原文相同的条目仍通过各自 `identity_v2` 区分。只有明确点击“生成订正预览”后写出的
+`revision_proposal_selection.json` 才会交给 CLI 的 `confirm-revision-proposals`，无效、
+过期、冲突和 no-op 候选不能勾选或进入写回。项目/源快照或 operation identity 变化会
+使旧 staged session 失效，迟到结果不会覆盖当前页。
+相对 `tl_dir` 会基于当前 `game_root` 解析；CLI legacy runtime、GUI runtime config 与
+候选校验使用同一 canonical identity。stale/no-op/blocked 的确认报告会写入独立的
+batch package/output 目录，不会向只读或复制来的 staged-selection 输入目录写回。
 
 **订正预览**
 

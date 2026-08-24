@@ -1,7 +1,9 @@
 import unittest
+import json
 
 from gui_qt.revision_workflow import (
     RevisionBatchWorkflow,
+    RevisionProposalConfirmWorkflow,
     RevisionProposalImportWorkflow,
     extract_created_revision_package_path,
 )
@@ -184,6 +186,115 @@ class GuiRevisionWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(update.status, "failed")
         self.assertIn("未通过安全校验", update.heading)
+
+    def test_staged_proposal_import_uses_machine_contract_and_exposes_candidates(self):
+        workflow = RevisionProposalImportWorkflow(
+            r"C:\review\proposals.jsonl",
+            stage=True,
+            operation_identity="operation-1",
+        )
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "import-revision-proposals",
+                r"C:\review\proposals.jsonl",
+                "--stage",
+                "--operation-identity",
+                "operation-1",
+                "--strict-exit-codes",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        output = {
+            "schema_version": 1,
+            "command": "import-revision-proposals",
+            "ok": True,
+            "status": "staged",
+            "result": {
+                "candidate_count": 2,
+                "selectable_count": 1,
+                "selected_count": 0,
+                "unselected_count": 1,
+                "session_status": "ready",
+                "invalid_count": 1,
+                "stale_count": 0,
+                "conflict_count": 0,
+                "candidates": [{"identity_v2": "occ-1", "status": "valid"}],
+            },
+            "artifacts": {"staged_selection": r"C:\jobs\staged_selection.json"},
+            "warnings": [],
+            "error": None,
+        }
+        update = workflow.complete_current_step(0, json.dumps(output))
+        self.assertEqual(update.status, "done")
+        self.assertEqual(workflow.stage_result["candidates"][0]["identity_v2"], "occ-1")
+        self.assertIn("明确勾选", update.message)
+        self.assertTrue(workflow.can_open_selection())
+
+    def test_staged_import_does_not_auto_open_without_ready_session(self):
+        for session_status, selectable_count in (
+            ("stale", 1),
+            ("no_valid_candidates", 0),
+        ):
+            workflow = RevisionProposalImportWorkflow(
+                r"C:\review\proposals.jsonl",
+                stage=True,
+                operation_identity="operation-1",
+            )
+            workflow.stage_result = {
+                "status": "staged",
+                "session_status": session_status,
+                "selectable_count": selectable_count,
+            }
+            self.assertFalse(workflow.can_open_selection())
+
+    def test_confirm_workflow_requests_serialized_selection_and_reports_preview(self):
+        workflow = RevisionProposalConfirmWorkflow(
+            r"C:\jobs\staged_selection.json",
+            r"C:\jobs\selection.json",
+            operation_identity="operation-1",
+        )
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "confirm-revision-proposals",
+                r"C:\jobs\staged_selection.json",
+                "--selection-file",
+                r"C:\jobs\selection.json",
+                "--strict-exit-codes",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        output = {
+            "schema_version": 1,
+            "command": "confirm-revision-proposals",
+            "ok": True,
+            "status": "previewed",
+            "result": {"selected_count": 1},
+            "artifacts": {"manifest": r"C:\jobs\confirmed\manifest.json"},
+            "warnings": [],
+            "error": None,
+        }
+        update = workflow.complete_current_step(0, json.dumps(output))
+        self.assertEqual(update.status, "done")
+        self.assertEqual(workflow.manifest_path, r"C:\jobs\confirmed\manifest.json")
+        self.assertIn("预览已生成", update.heading)
+
+    def test_staged_import_discards_late_result_after_project_switch(self):
+        workflow = RevisionProposalImportWorkflow(
+            r"C:\review\proposals.jsonl",
+            stage=True,
+            operation_identity="operation-1",
+        )
+        workflow.stage_result = {"candidate_count": 1}
+        update = workflow.stale_update()
+        self.assertEqual(update.status, "stale")
+        self.assertIsNone(workflow.stage_result)
+        self.assertIsNone(workflow.current_step())
 
 
 if __name__ == "__main__":

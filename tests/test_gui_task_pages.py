@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import gemini_translate_batch as batch
+
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
@@ -31,6 +33,7 @@ from gui_qt.work_modes import (
     workbench_nav_spec,
 )
 from gui_qt.user_copy import PROJECT_ANALYSIS_COPY, REVISION_PROPOSAL_COPY
+import revision_selection
 from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
@@ -817,6 +820,71 @@ class GuiTaskPageTests(unittest.TestCase):
         set_summary.assert_called_once()
         clear_log.assert_called_once_with()
         show_log.assert_called_once_with()
+
+    def test_revision_proposal_operation_identity_uses_shared_project_paths(self) -> None:
+        self.window.state.get_game_root = mock.Mock(
+            return_value=Path(r"C:\Games\Demo\work")
+        )
+        runtime_config = SimpleNamespace(
+            base_dir=r"C:\Games\Demo\work\.",
+            tl_dir=r"game\tl\schinese",
+        )
+        self.window._snapshot_runtime_config_for_job = mock.Mock(
+            return_value=runtime_config
+        )
+
+        actual = self.window._current_revision_proposal_operation_identity(
+            r"C:\exports\proposals.jsonl",
+            r"C:\exports\revision_corpus_manifest.json",
+        )
+        expected = revision_selection.operation_identity(
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=r"c:\games\demo\work",
+                tl_dir=r"c:\games\demo\work\game\tl\schinese",
+            ),
+            proposal_path=r"c:\exports\proposals.jsonl",
+            proposal_sha256="",
+            corpus_manifest_path=r"c:\exports\revision_corpus_manifest.json",
+            corpus_manifest_sha256="",
+        )
+
+        self.assertEqual(actual, expected)
+        self.window._snapshot_runtime_config_for_job.assert_called_once_with(
+            persist_corrected_game_root=False
+        )
+
+    def test_confirmed_revision_manifest_uses_full_reader_for_writeback(self) -> None:
+        from gui_qt.work_modes import WorkMode
+
+        manifest_path = r"C:\dummy\confirmed\manifest.json"
+        manifest = {
+            "proposal_import": {
+                "status": "previewed",
+                "writeback_eligible": True,
+            },
+            "last_revision_preview": {
+                "summary": {
+                    "valid_items": 1,
+                    "pending_files": 1,
+                    "pending_lines": 1,
+                    "failure_items": 0,
+                    "writeback_gate": {"decision": "allow"},
+                }
+            },
+        }
+        self.window._current_work_mode = lambda: WorkMode.REVISION
+        self.window.state.load_manifest_file = mock.Mock(return_value=manifest)
+        self.window._set_writeback_summary = mock.Mock()
+        self.window._append_log = mock.Mock()
+
+        self.window._refresh_writeback_from_revision_manifest(manifest_path)
+
+        self.window.state.load_manifest_file.assert_called_once_with(
+            manifest_path,
+            lite=False,
+        )
+        summary = self.window._set_writeback_summary.call_args.args[0]
+        self.assertTrue(summary.can_apply)
 
     def test_revision_page_mode_selector_and_running_lock(self) -> None:
         self.window._set_work_mode(WorkMode.REVISION, refresh_manifest_writeback=False)

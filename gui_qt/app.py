@@ -84,6 +84,7 @@ from PySide6.QtWidgets import (
 from project_version import __version__
 import cli_contract
 import model_usage_ledger
+import revision_selection
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
@@ -346,6 +347,7 @@ from .user_copy import (
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
     REVISION_CORPUS_COPY,
+    REVISION_PROPOSAL_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
@@ -355,6 +357,11 @@ from .user_copy import (
 )
 from .final_review_dialog import FinalReviewFindingsDialog
 from .final_review_workflow import FinalReviewWorkflow
+from .revision_selection_dialog import RevisionProposalSelectionDialog
+from .revision_workflow import (
+    RevisionProposalConfirmWorkflow,
+    RevisionProposalImportWorkflow,
+)
 from .context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
@@ -653,6 +660,7 @@ class MainWindow(QMainWindow):
         self._compare_variants_temp_file = ""
         self._keyword_merge_candidates_path = ""
         self._revision_corpus_export_result: RevisionCorpusExportResult | None = None
+        self._revision_proposal_stage_result: dict[str, object] | None = None
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
@@ -9154,6 +9162,9 @@ class MainWindow(QMainWindow):
             revision_corpus_export_result=getattr(
                 self, "_revision_corpus_export_result", None
             ),
+            revision_proposal_stage_result=getattr(
+                self, "_revision_proposal_stage_result", None
+            ),
         )
 
     def _restore_mode_session(self, session: WorkbenchModeSession) -> None:
@@ -9174,6 +9185,9 @@ class MainWindow(QMainWindow):
         self._pending_restore_writeback_summary = session.writeback_summary
         self._revision_corpus_export_result = getattr(
             session, "revision_corpus_export_result", None
+        )
+        self._revision_proposal_stage_result = getattr(
+            session, "revision_proposal_stage_result", None
         )
 
     def _apply_session_workflow_ui(self, payload: dict[str, object] | None) -> bool:
@@ -9314,6 +9328,7 @@ class MainWindow(QMainWindow):
             self._workflow_step_output_lines = []
             self._writeback_manifest_path = ""
             self._revision_corpus_export_result = None
+            self._revision_proposal_stage_result = None
             if hasattr(self, "_clear_completed_manifest_snapshot"):
                 self._clear_completed_manifest_snapshot()
             else:
@@ -9795,6 +9810,46 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         return revision_corpus_export_identity(game_root=game_root)
 
+    def _current_revision_proposal_operation_identity(
+        self,
+        proposal_path: str,
+        corpus_manifest_path: str = "",
+    ) -> str:
+        """Compute the GUI owner identity for one staged proposal session."""
+        game_root = self.state.get_game_root() if hasattr(self, "state") else None
+        runtime_game_root = str(game_root or "")
+        tl_dir = ""
+        snapshotter = getattr(self, "_snapshot_runtime_config_for_job", None)
+        if callable(snapshotter):
+            runtime_config = snapshotter(persist_corrected_game_root=False)
+            if runtime_config is not None:
+                runtime_game_root = str(
+                    getattr(runtime_config, "base_dir", "") or runtime_game_root
+                )
+                tl_dir = str(getattr(runtime_config, "tl_dir", "") or "")
+        proposal_sha256 = ""
+        corpus_manifest_sha256 = ""
+        try:
+            if proposal_path and Path(proposal_path).is_file():
+                proposal_sha256 = revision_selection.file_sha256(proposal_path)
+            if corpus_manifest_path and Path(corpus_manifest_path).is_file():
+                corpus_manifest_sha256 = revision_selection.file_sha256(corpus_manifest_path)
+        except OSError:
+            # The CLI will return a structured missing/stale-artifact result;
+            # the identity still binds the operation to its selected paths.
+            proposal_sha256 = ""
+            corpus_manifest_sha256 = ""
+        return revision_selection.operation_identity(
+            project_identity=revision_selection.project_identity_from_paths(
+                game_root=runtime_game_root,
+                tl_dir=tl_dir,
+            ),
+            proposal_path=proposal_path,
+            proposal_sha256=proposal_sha256,
+            corpus_manifest_path=corpus_manifest_path,
+            corpus_manifest_sha256=corpus_manifest_sha256,
+        )
+
     def _on_export_revision_corpus(self) -> None:
         allowed, reason = self._revision_corpus_export_preflight()
         if not allowed:
@@ -9869,6 +9924,107 @@ class MainWindow(QMainWindow):
         )
         self._copy_to_clipboard(paths, kind="path")
 
+    def _open_revision_proposal_selection(self) -> None:
+        """Open the shared staged candidate view and launch explicit confirmation."""
+        if bool(getattr(self, "_task_running", False)):
+            return
+        result = getattr(self, "_revision_proposal_stage_result", None)
+        if not isinstance(result, dict):
+            return
+        if (
+            str(result.get("session_status") or "") != "ready"
+            or int(result.get("selectable_count") or 0) <= 0
+        ):
+            message_box_information(
+                self,
+                "当前没有可选择候选",
+                "请先处理摘要中的过期、无效或冲突提案，再重新导入当前语料。",
+            )
+            return
+        paths = result.get("paths")
+        paths = paths if isinstance(paths, dict) else {}
+        stage_path = str(paths.get("staged_selection") or "").strip()
+        if not stage_path:
+            message_box_warning(
+                self,
+                "候选会话不可用",
+                "导入结果没有记录 staged-selection 文件；请重新导入润色提案。",
+            )
+            return
+        try:
+            stage = revision_selection.load_staged_selection(stage_path)
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            message_box_warning(
+                self,
+                "候选会话不可用",
+                f"无法读取候选会话：{exc}\n请重新导入润色提案。",
+            )
+            return
+        session = stage.get("session") if isinstance(stage, dict) else {}
+        session = session if isinstance(session, dict) else {}
+        current_identity = self._current_revision_proposal_operation_identity(
+            str(session.get("proposal_path") or ""),
+            str(session.get("corpus_manifest_path") or ""),
+        )
+        if not is_current_identity(
+            str(session.get("operation_identity") or ""),
+            current_identity,
+        ):
+            message_box_information(
+                self,
+                "候选会话已过期",
+                "项目或提案文件已变化；请重新导入当前项目后再选择。",
+            )
+            self._revision_proposal_stage_result = None
+            page = getattr(self, "revision_page", None)
+            if page is not None:
+                page.set_proposal_stage_result(None)
+            return
+
+        dialog = RevisionProposalSelectionDialog(stage, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            request = dialog.selection_request()
+            selection_path = str(
+                Path(stage_path).with_name("revision_proposal_selection.json")
+            )
+            revision_selection.write_selection_request(selection_path, request)
+        except (OSError, ValueError) as exc:
+            message_box_warning(self, "无法保存候选选择", str(exc))
+            return
+
+        self._set_writeback_summary(
+            idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+        )
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._begin_translation_workflow(
+            RevisionProposalConfirmWorkflow(
+                stage_path,
+                selection_path,
+                operation_identity=str(session.get("operation_identity") or ""),
+            ),
+            log_heading=REVISION_PROPOSAL_COPY["selection_running"],
+            status_tab=1,
+        )
+
+    def _refresh_writeback_from_revision_manifest(self, manifest_path: str) -> None:
+        """Load a confirmed revision manifest fully before deriving writeback UI."""
+
+        try:
+            manifest = self.state.load_manifest_file(manifest_path, lite=False)
+        except ValueError as exc:
+            self._append_log(f"[GUI] 无法读取订正预览 manifest：{exc}\n")
+            self._set_writeback_summary(
+                idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+            )
+            return
+        self._refresh_writeback_from_latest_manifest(
+            latest_manifest=manifest_path,
+            manifest=manifest,
+        )
+
     def _on_final_review_page_action(self, action: str) -> None:
         """Start manual finding selection only for a completed review campaign."""
         if action == "open_doctor":
@@ -9888,7 +10044,6 @@ class MainWindow(QMainWindow):
                 return
             if not self._confirm_unsaved_config_before_workflow():
                 return
-            from .revision_workflow import RevisionProposalImportWorkflow
             from .user_copy import REVISION_PROPOSAL_COPY
 
             selected, _filter = QFileDialog.getOpenFileName(
@@ -9903,7 +10058,9 @@ class MainWindow(QMainWindow):
             companion_manifest = Path(selected).with_name(
                 "revision_corpus_manifest.json"
             )
-            if not companion_manifest.is_file():
+            if companion_manifest.is_file():
+                corpus_manifest_path = str(companion_manifest)
+            else:
                 corpus_manifest_path, _filter = QFileDialog.getOpenFileName(
                     self,
                     REVISION_PROPOSAL_COPY["corpus_dialog_title"],
@@ -9913,13 +10070,29 @@ class MainWindow(QMainWindow):
             self._set_writeback_summary(
                 idle_writeback_summary_for_work_mode(WorkMode.REVISION)
             )
+            operation_identity = self._current_revision_proposal_operation_identity(
+                selected,
+                corpus_manifest_path,
+            )
+            self._revision_proposal_stage_result = None
+            page = getattr(self, "revision_page", None)
+            if page is not None:
+                page.set_proposal_stage_result(None)
             self._clear_log_view()
             self._show_workbench_log_drawer()
             self._begin_translation_workflow(
-                RevisionProposalImportWorkflow(selected, corpus_manifest_path),
+                RevisionProposalImportWorkflow(
+                    selected,
+                    corpus_manifest_path,
+                    stage=True,
+                    operation_identity=operation_identity,
+                ),
                 log_heading=REVISION_PROPOSAL_COPY["running"],
                 status_tab=1,
             )
+            return
+        if action == "select_revision_proposals":
+            self._open_revision_proposal_selection()
             return
         if action != "select_final_review_findings":
             return
@@ -9981,6 +10154,14 @@ class MainWindow(QMainWindow):
         if callable(getattr(page, "corpus_export_result", None)):
             if page.corpus_export_result() is not corpus_result:
                 page.set_corpus_export_result(corpus_result)
+        proposal_stage_result = (
+            getattr(self, "_revision_proposal_stage_result", None)
+            if mode == WorkMode.REVISION
+            else None
+        )
+        if callable(getattr(page, "proposal_stage_result", None)):
+            if page.proposal_stage_result() is not proposal_stage_result:
+                page.set_proposal_stage_result(proposal_stage_result)
         findings_enabled = False
         review_status_message = ""
         if mode == WorkMode.FINAL_REVIEW:
@@ -10029,6 +10210,10 @@ class MainWindow(QMainWindow):
             findings_enabled=findings_enabled,
             export_enabled=export_enabled,
             export_tooltip=export_tooltip,
+            selection_enabled=(
+                proposal_stage_result is not None
+                and int(proposal_stage_result.get("selectable_count") or 0) > 0
+            ),
             result_message=result_message,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
@@ -10872,6 +11057,7 @@ class MainWindow(QMainWindow):
         self._workflow = None
         self._workflow_step_output_lines = []
         self._revision_corpus_export_result = None
+        self._revision_proposal_stage_result = None
         self._clear_completed_manifest_snapshot()
         self._doctor_check_completed = False
         self._doctor_summary_status = ""
@@ -14225,9 +14411,45 @@ class MainWindow(QMainWindow):
             self._workflow,
             RevisionCorpusExportWorkflow,
         )
+        is_revision_proposal_import_workflow = isinstance(
+            self._workflow,
+            RevisionProposalImportWorkflow,
+        )
+        is_revision_proposal_confirm_workflow = isinstance(
+            self._workflow,
+            RevisionProposalConfirmWorkflow,
+        )
+        is_revision_proposal_workflow = (
+            is_revision_proposal_import_workflow
+            or is_revision_proposal_confirm_workflow
+        )
+        current_operation_identity = ""
+        if is_revision_proposal_import_workflow:
+            current_operation_identity = self._current_revision_proposal_operation_identity(
+                workflow.proposal_path,
+                workflow.corpus_manifest_path,
+            )
+        elif is_revision_proposal_confirm_workflow:
+            try:
+                staged = revision_selection.load_staged_selection(
+                    workflow.staged_selection_path
+                )
+                session = staged.get("session") if isinstance(staged, dict) else {}
+                session = session if isinstance(session, dict) else {}
+                current_operation_identity = self._current_revision_proposal_operation_identity(
+                    str(session.get("proposal_path") or ""),
+                    str(session.get("corpus_manifest_path") or ""),
+                )
+            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+                current_operation_identity = ""
         if is_revision_corpus_export_workflow and not is_current_identity(
             workflow.operation_identity,
             self._current_revision_corpus_export_identity(),
+        ):
+            update = workflow.stale_update()
+        elif is_revision_proposal_workflow and not is_current_identity(
+            workflow.operation_identity,
+            current_operation_identity,
         ):
             update = workflow.stale_update()
         else:
@@ -14237,6 +14459,11 @@ class MainWindow(QMainWindow):
             page = getattr(self, "revision_page", None)
             if page is not None:
                 page.set_corpus_export_result(workflow.result)
+        if is_revision_proposal_import_workflow:
+            self._revision_proposal_stage_result = workflow.stage_result
+            page = getattr(self, "revision_page", None)
+            if page is not None:
+                page.set_proposal_stage_result(workflow.stage_result)
         if is_sync_translation_workflow and step_key == "preview" and exit_code == 0:
             preview_count_match = re.search(r"^Preview files:\s*(\d+)\s*$", step_output, re.MULTILINE)
             preview_count = int(preview_count_match.group(1)) if preview_count_match else 0
@@ -14285,9 +14512,17 @@ class MainWindow(QMainWindow):
                 exit_code,
                 manifest_path,
             )
+        if (
+            is_revision_proposal_confirm_workflow
+            and update.status == "done"
+            and workflow.manifest_path
+        ):
+            self._writeback_manifest_path = workflow.manifest_path
+            self._refresh_writeback_from_revision_manifest(workflow.manifest_path)
         archive_completed = (
             not is_project_analysis_workflow
             and not is_revision_corpus_export_workflow
+            and not is_revision_proposal_workflow
             and not update.should_continue
             and update.status == "done"
         )
@@ -14307,6 +14542,13 @@ class MainWindow(QMainWindow):
         self._active_command = ""
         self._workflow = None
         self._set_task_running(False)
+        if (
+            is_revision_proposal_import_workflow
+            and workflow.stage_result is not None
+            and update.status == "done"
+            and workflow.can_open_selection()
+        ):
+            QTimer.singleShot(0, self._open_revision_proposal_selection)
         finish_spec = work_mode_spec(self._current_work_mode())
         if is_project_analysis_workflow:
             self._refresh_context_library_panel(running=False)
@@ -14328,6 +14570,8 @@ class MainWindow(QMainWindow):
                 if is_project_analysis_workflow
                 else "润色语料导出失败，请查看诊断与运行日志。"
                 if is_revision_corpus_export_workflow
+                else "润色提案候选处理失败，请查看诊断与运行日志。"
+                if is_revision_proposal_workflow
                 else "翻译任务失败，请查看诊断日志。"
             )
             self.statusBar().showMessage(message, 8000)
@@ -14341,6 +14585,7 @@ class MainWindow(QMainWindow):
             message = (
                 update.heading
                 if is_project_analysis_workflow or is_revision_corpus_export_workflow
+                or is_revision_proposal_workflow
                 else "翻译任务流程完成。"
             )
             self.statusBar().showMessage(message, 6000)
