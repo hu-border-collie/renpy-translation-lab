@@ -2,6 +2,7 @@ import io
 import json
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
@@ -415,8 +416,10 @@ class SyncTranslationPreviewTests(unittest.TestCase):
             tl_dir.mkdir(parents=True)
             target = tl_dir / "empty.rpy"
             target.write_text("# Nothing to translate.\n", encoding="utf-8")
-
-            with (
+            generate = mock.Mock()
+            retrieve = mock.Mock()
+            output = io.StringIO()
+            patches = (
                 mock.patch.object(runtime, "BASE_DIR", str(root)),
                 mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
                 mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
@@ -431,10 +434,13 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                 mock.patch.object(runtime, "load_translator_settings"),
                 mock.patch.object(runtime, "load_glossary"),
                 mock.patch.object(runtime, "load_progress", return_value={}),
-                mock.patch.object(runtime, "process_batch_with_retry") as generate,
-                mock.patch.object(runtime, "retrieve_sync_history_hits") as retrieve,
-                mock.patch("sys.stdout", output := io.StringIO()),
-            ):
+                mock.patch.object(runtime, "process_batch_with_retry", generate),
+                mock.patch.object(runtime, "retrieve_sync_history_hits", retrieve),
+                mock.patch("sys.stdout", output),
+            )
+            with ExitStack() as stack:
+                for patcher in patches:
+                    stack.enter_context(patcher)
                 manifest_path = runtime.run_translation()
 
             generate.assert_not_called()
@@ -473,8 +479,8 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     )
                     successful.append(task["progress_entry"])
                 return successful
-
-            with (
+            output = io.StringIO()
+            patches = (
                 mock.patch.object(runtime, "BASE_DIR", str(root)),
                 mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
                 mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
@@ -502,8 +508,11 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     "process_batch_with_retry",
                     side_effect=translate_batch,
                 ),
-                mock.patch("sys.stdout", output := io.StringIO()),
-            ):
+                mock.patch("sys.stdout", output),
+            )
+            with ExitStack() as stack:
+                for patcher in patches:
+                    stack.enter_context(patcher)
                 runtime.run_translation()
 
             self.assertEqual(
