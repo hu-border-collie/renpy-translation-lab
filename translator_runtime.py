@@ -4524,6 +4524,20 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         if capabilities is not None
         else None
     )
+    if (
+        file_jobs
+        and budget is None
+        and (MAX_ITEMS >= DEFAULT_MAX_ITEMS or MAX_CHARS >= DEFAULT_MAX_CHARS)
+    ):
+        print(
+            'Warning: the selected model profile does not declare '
+            'context_budget_tokens; Sync cannot preflight the current '
+            f'{MAX_ITEMS}/{MAX_CHARS} chunk against provider context/output '
+            'limits. If requests are rejected or truncated, lower '
+            'translator_config.json sync.chunk_size and/or '
+            'sync.max_source_chars.',
+            flush=True,
+        )
 
     def build_plan(retrieval_blocks_provider):
         return translation_plan.build_translation_plan(

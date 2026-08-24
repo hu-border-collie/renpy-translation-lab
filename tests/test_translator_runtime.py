@@ -294,6 +294,49 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             )
         retrieve.assert_not_called()
 
+    def test_sync_plan_warns_when_default_chunk_has_unknown_model_budget(self):
+        file_jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [{'id': 'script:0:1', 'text': 'Encore', 'line': 0}],
+        }]
+        snapshot = types.SimpleNamespace(project=types.SimpleNamespace(
+            engine='renpy',
+            adapter_version='fixture-adapter',
+            project_snapshot_fingerprint='fixture-project',
+            source_documents=(),
+        ))
+        routing = model_profile.resolve_routing_plan_from_runtime(
+            sync_backend='gemini',
+            sync_model='gemini-2.5-flash',
+        )
+        route = routing.routes[model_profile.STAGE_TRANSLATION]
+        capabilities = dict(routing.capabilities)
+        capabilities[route.profile_id] = replace(
+            capabilities[route.profile_id],
+            context_limit_tokens=None,
+            context_budget_tokens=None,
+            context_source='',
+        )
+        routing = replace(routing, capabilities=capabilities)
+
+        with (
+            mock.patch.object(runtime, 'MAX_ITEMS', runtime.DEFAULT_MAX_ITEMS),
+            mock.patch.object(runtime, 'MAX_CHARS', runtime.DEFAULT_MAX_CHARS),
+            mock.patch('sys.stdout', output := io.StringIO()),
+        ):
+            runtime.build_sync_translation_plan(
+                file_jobs,
+                snapshot,
+                routing,
+                run_id='unknown-budget-run',
+            )
+
+        warning = output.getvalue()
+        self.assertIn('does not declare context_budget_tokens', warning)
+        self.assertIn('sync.chunk_size', warning)
+        self.assertIn('sync.max_source_chars', warning)
+
     def test_sync_plan_rejects_reordered_retrieval_captures(self):
         file_jobs = [
             {
