@@ -18009,7 +18009,7 @@ def run_durable_sync_command(args):
                 'No pending translations are available for durable Sync.',
                 code_name='SYNC_RUN_NO_WORK',
                 suggested_action='inspect_project_scope',
-                details={'semantic_exit_code': cli_contract.EXIT_INVALID_STATE},
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
             )
         snapshot = service.start(
             context.plan_build,

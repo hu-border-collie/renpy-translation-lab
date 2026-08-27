@@ -10,13 +10,21 @@ from unittest import mock
 
 from durable_sync_executor import ProviderFailure, ProviderOutcome
 from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import ErrorCategory, ErrorCode, RunStatus, SyncRunError
+from sync_run_contracts import (
+    ErrorCategory,
+    ErrorCode,
+    LineageKind,
+    RunStatus,
+    SyncRunError,
+    build_run_id,
+)
 from sync_run_service import (
     ProductionSyncBackendAdapter,
     SyncRunService,
     build_production_sync_run_service,
     find_latest_run,
 )
+from sync_run_store import SyncRunStore
 
 
 def plan_build():
@@ -159,6 +167,94 @@ class ServiceTests(unittest.TestCase):
             encoding='utf-8'
         )
         self.assertIn(source['run_id'], manifest)
+
+    def test_derive_lineage_refusal_never_redispatches_reusable_items(self):
+        current = plan_build()
+        current['requests'][0]['expected_ids'] = ['item-1', 'item-2']
+        source, _created = SyncRunStore.bootstrap(
+            self.root,
+            build_run_id(),
+            plan=current['plan'],
+            requests=current['requests'],
+        )
+        owner = 'source-builder'
+        source.acquire_lease(owner_token=owner)
+        child = child_builder(
+            current['requests'][0],
+            ['item-2'],
+            '--M-000000000000',
+            LineageKind.MISSING_IDS,
+        )
+        attempt_id = source.prepare_attempt(request_id='req-1', owner_token=owner)
+        source.dispatch_attempt(attempt_id=attempt_id, owner_token=owner)
+        source.record_success(
+            attempt_id=attempt_id,
+            owner_token=owner,
+            accepted_items={'item-1': {'translation': '一'}},
+            derived_requests=[child],
+        )
+        child_attempt_id = source.prepare_attempt(
+            request_id=child['request_id'],
+            owner_token=owner,
+        )
+        source.dispatch_attempt(attempt_id=child_attempt_id, owner_token=owner)
+        source.record_failure(
+            attempt_id=child_attempt_id,
+            owner_token=owner,
+            error_category=ErrorCategory.AUTHENTICATION,
+            error_reason_code='bad_credential',
+        )
+        source.finalize_run(owner_token=owner)
+        source.release_lease(owner_token=owner)
+
+        with (
+            mock.patch.object(
+                SyncRunStore,
+                'lineage_budget_reason',
+                return_value='root.max_derived_requests_exhausted',
+            ),
+            self.assertRaises(SyncRunError) as raised,
+        ):
+            self.service.derive(source.run_id, current)
+
+        self.assertEqual(
+            raised.exception.code,
+            ErrorCode.SYNC_RUN_BUDGET_EXHAUSTED,
+        )
+        self.assertEqual(self.backend.calls, 0)
+        target = SyncRunStore(self.root, raised.exception.safe_details['run_id'])
+        self.assertEqual(target.get_run()['status'], RunStatus.FAILED.value)
+        self.assertEqual(target.list_attempts(), [])
+
+    def test_exclude_unknown_conflict_is_structured(self):
+        current = plan_build()
+        source, _created = SyncRunStore.bootstrap(
+            self.root,
+            build_run_id(),
+            plan=current['plan'],
+            requests=current['requests'],
+        )
+        owner = 'unknown-builder'
+        source.acquire_lease(owner_token=owner)
+        attempt_id = source.prepare_attempt(request_id='req-1', owner_token=owner)
+        source.dispatch_attempt(attempt_id=attempt_id, owner_token=owner)
+        source.mark_outcome_unknown(attempt_id=attempt_id, owner_token=owner)
+        source.finalize_run(owner_token=owner)
+        source.release_lease(owner_token=owner)
+
+        with self.assertRaises(SyncRunError) as raised:
+            self.service.derive(
+                source.run_id,
+                current,
+                exclude_unknown=True,
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+        )
+        self.assertEqual(raised.exception.safe_details['unknown_count'], 1)
+        self.assertEqual(self.backend.calls, 0)
 
     def test_latest_ignores_legacy_preview_directory(self):
         started = self.service.start(plan_build())

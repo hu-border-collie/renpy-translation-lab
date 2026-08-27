@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
+from sync_run_contracts import ErrorCode, SyncRunError
 
 
 class BatchCliContractTests(unittest.TestCase):
@@ -129,6 +130,38 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertNotIn('Traceback', stderr.getvalue())
         service.assert_not_called()
+
+    def test_sync_derive_excluded_unknown_has_stable_error_envelope(self):
+        service = mock.Mock()
+        service.derive.side_effect = SyncRunError(
+            ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+            'exclude_unknown requires a scoped plan without unknown IDs',
+            safe_details={'unknown_count': 1},
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                batch,
+                '_durable_sync_production_service',
+                return_value=(service, SimpleNamespace(plan_build={})),
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main([
+                'sync-derive',
+                'sync-run-v1-00000000-0000-0000-0000-000000000000',
+                '--exclude-unknown',
+                '--json',
+                '--strict-exit-codes',
+            ])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload['error']['code'], 'SYNC_RUN_OUTCOME_UNKNOWN')
+        self.assertEqual(payload['error']['details']['unknown_count'], 1)
+        self.assertNotIn('Traceback', stderr.getvalue())
 
     def test_core_commands_expose_output_trimming_arguments(self):
         parser = batch.build_arg_parser()

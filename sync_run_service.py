@@ -293,8 +293,15 @@ class SyncRunService:
                 },
             )
         if exclude_unknown and current_ids & unknown_ids:
-            raise ValueError(
-                'exclude_unknown requires a current scoped plan that omits every unknown ID'
+            conflicting_ids = sorted(current_ids & unknown_ids)
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+                'exclude_unknown requires a current scoped plan that omits every unknown ID',
+                safe_details={
+                    'run_id': run_id,
+                    'unknown_count': len(conflicting_ids),
+                    'unknown_item_ids': conflicting_ids[:20],
+                },
             )
 
         frozen_policy = (
@@ -429,7 +436,21 @@ class SyncRunService:
                             policy=policy.to_dict(),
                         )
                         if reason:
-                            continue
+                            target.stop_run_dispatch(
+                                owner_token=owner,
+                                reason_code=reason,
+                            )
+                            raise SyncRunError(
+                                ErrorCode.SYNC_RUN_BUDGET_EXHAUSTED,
+                                'derived run cannot preserve reusable results within '
+                                'the frozen lineage budget',
+                                safe_details={
+                                    'run_id': target.run_id,
+                                    'source_run_id': source.run_id,
+                                    'request_id': request_id,
+                                    'reason_code': reason,
+                                },
+                            )
                         children = [
                             child_builder(
                                 current,
