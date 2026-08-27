@@ -212,6 +212,20 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
 
     command = str(envelope.get("command") or "")
     status = str(envelope.get("status") or "").strip().lower()
+    if command in {
+        "sync-start",
+        "sync-resume",
+        "sync-status",
+        "sync-cancel",
+        "sync-derive",
+    }:
+        if status in {"planned", "running", "cancel_requested", "completed"}:
+            return EXIT_OK
+        if status == "completed_with_errors":
+            return EXIT_NEEDS_ACTION
+        if status in {"cancelled", "failed"}:
+            return EXIT_BLOCKED
+        return EXIT_INVALID_STATE
     if command == "check":
         if status in {"safe", "ready"}:
             return EXIT_OK

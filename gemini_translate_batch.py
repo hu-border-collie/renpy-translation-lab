@@ -65,6 +65,7 @@ import revision_proposals
 import revision_selection
 import translation_ab_experiment
 import story_memory
+import sync_translation_preview
 import translation_core
 import translation_plan
 import translation_quality
@@ -110,6 +111,9 @@ PROJECT_REUSE_DIR = os.path.join(LOG_DIR, 'translation_reuse')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
 SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
+DURABLE_SYNC_COMMANDS = frozenset(
+    {'sync-start', 'sync-resume', 'sync-status', 'sync-cancel', 'sync-derive'}
+)
 MACHINE_OUTPUT_COMMANDS = frozenset(
     {
         'doctor',
@@ -144,6 +148,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'final-review-resume',
         'final-review-ingest-results',
         'final-review-create-revisions',
+        *DURABLE_SYNC_COMMANDS,
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset(
@@ -2509,6 +2514,8 @@ def build_check_fingerprint(manifest):
         'result': file_content_fingerprint(result_path),
         'target_shape': manifest_target_shape(manifest),
     }
+    if isinstance(manifest.get('durable_sync_source'), dict):
+        payload['durable_sync_source'] = dict(manifest['durable_sync_source'])
     payload['fingerprint_sha256'] = stable_json_sha256(payload)
     return payload
 
@@ -11827,7 +11834,305 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
     return summary
 
 
+def _resolve_durable_sync_store(target):
+    """Return a durable store for an explicit RUN selector/path, else ``None``."""
+    from sync_run_contracts import validate_run_id
+    from sync_run_store import SyncRunStore
+
+    raw = str(target or '').strip()
+    if not raw:
+        return None
+    if validate_run_id(raw):
+        return SyncRunStore(_durable_sync_root_dir(), raw)
+    candidate = Path(raw).resolve()
+    if candidate.is_file() and candidate.name == 'state.sqlite3':
+        candidate = candidate.parent
+    if not candidate.is_dir() or not validate_run_id(candidate.name):
+        return None
+    root = Path(_durable_sync_root_dir()).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise cli_contract.MachineContractError(
+            'Durable Sync run path must stay inside the active project log directory.',
+            code_name='SYNC_RUN_PATH_OUTSIDE_PROJECT',
+            suggested_action='pass_active_project_run_id',
+        )
+    return SyncRunStore(root, candidate.name)
+
+
+def _verified_store_artifact(store, kind):
+    row = store.get_artifact(kind=kind)
+    if row is None:
+        raise cli_contract.MachineContractError(
+            f'Durable Sync artifact is missing: {kind}.',
+            code_name='SYNC_RUN_ARTIFACT_MISSING',
+            suggested_action='resume_run',
+            details={'run_id': store.run_id, 'artifact': kind},
+        )
+    path = store.resolve_artifact_path(row['relative_path'])
+    if not path.is_file() or file_sha256(path) != str(row['sha256']):
+        raise cli_contract.MachineContractError(
+            f'Durable Sync artifact failed hash validation: {kind}.',
+            code_name='SYNC_RUN_ARTIFACT_STALE',
+            suggested_action='resume_run',
+            details={'run_id': store.run_id, 'artifact': kind},
+        )
+    return {'path': str(path), 'sha256': str(row['sha256'])}
+
+
+def _build_durable_sync_check_manifest(store):
+    from sync_result_export import export_run_artifacts
+    from sync_run_contracts import RunStatus
+
+    run = store.get_run()
+    if RunStatus(str(run['status'])) not in {
+        RunStatus.CANCELLED,
+        RunStatus.COMPLETED,
+        RunStatus.COMPLETED_WITH_ERRORS,
+        RunStatus.FAILED,
+    }:
+        raise cli_contract.MachineContractError(
+            'Durable Sync check requires a terminal run.',
+            code_name='SYNC_RUN_NOT_TERMINAL',
+            suggested_action='resume_run',
+            details={'run_id': store.run_id, 'run_status': run['status']},
+        )
+    violations = store.verify_integrity()
+    if violations:
+        raise cli_contract.MachineContractError(
+            'Durable Sync run failed integrity verification.',
+            code_name='SYNC_RUN_STORAGE_ERROR',
+            suggested_action='inspect_durable_sync_run',
+            details={'run_id': store.run_id, 'violations': violations[:20]},
+        )
+    export_run_artifacts(store)
+    targets_artifact = _verified_store_artifact(store, 'targets_json')
+    results_artifact = _verified_store_artifact(store, 'results_jsonl')
+    run_manifest_artifact = _verified_store_artifact(store, 'run_manifest_json')
+    try:
+        targets = json.loads(Path(targets_artifact['path']).read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise cli_contract.MachineContractError(
+            f'Durable Sync targets artifact is unreadable: {exc}.',
+            code_name='SYNC_RUN_STORAGE_ERROR',
+            suggested_action='inspect_durable_sync_run',
+        ) from exc
+    plan = store.get_plan()['plan']
+    if (
+        str(targets.get('run_id') or '') != store.run_id
+        or str(targets.get('plan_id') or '') != str(plan.get('plan_id') or '')
+        or str(targets.get('plan_fingerprint') or '')
+        != str(plan.get('plan_fingerprint') or '')
+    ):
+        raise cli_contract.MachineContractError(
+            'Durable Sync targets artifact does not match the frozen run.',
+            code_name='SYNC_RUN_STORAGE_ERROR',
+            suggested_action='inspect_durable_sync_run',
+        )
+    chunks = []
+    for raw_chunk in targets.get('chunks') or []:
+        chunk = dict(raw_chunk)
+        chunk['mode'] = MANIFEST_MODE_TRANSLATION
+        chunks.append(chunk)
+    profile = dict(plan.get('model_profile_snapshot') or {})
+    manifest_path = store.run_dir / 'check_manifest.json'
+    manifest = {
+        'version': 2,
+        'manifest_version': 2,
+        'core_schema_version': 2,
+        'mode': MANIFEST_MODE_TRANSLATION,
+        'execution': 'sync',
+        'durable_sync': True,
+        'created_at': str(run.get('created_at') or ''),
+        'display_name': store.run_id,
+        'batch_model': str(profile.get('model') or profile.get('model_name') or ''),
+        'base_dir': str(targets.get('project_root') or ''),
+        'tl_dir': str(targets.get('tl_dir') or ''),
+        'tl_subdir': legacy.TL_SUBDIR,
+        'target_language': str(targets.get('target_language') or legacy.PREP_LANGUAGE),
+        'glossary_file': str(targets.get('glossary_file') or ''),
+        **batch_non_chinese_rules.manifest_non_chinese_rules_fields(),
+        **translation_quality.manifest_quality_policy_fields(
+            runtime_policy=BATCH_QUALITY_POLICY
+        ),
+        'input_jsonl_path': str(
+            (_verified_store_artifact(store, 'requests_jsonl'))['path']
+        ),
+        'result_jsonl_path': results_artifact['path'],
+        'job_state': str(run['status']),
+        'translation_plan': plan,
+        'settings': {
+            'target_size': int((plan.get('chunk_policy') or {}).get('max_items') or 0),
+            'target_chars': int((plan.get('chunk_policy') or {}).get('max_chars') or 0),
+        },
+        'summary': {
+            'file_count': len(targets.get('files') or {}),
+            'chunk_count': len(chunks),
+            'item_count': sum(len(chunk.get('items') or []) for chunk in chunks),
+        },
+        'files': dict(targets.get('files') or {}),
+        'chunks': chunks,
+        'durable_sync_source': {
+            'run_id': store.run_id,
+            'run_status': str(run['status']),
+            'plan_id': str(plan.get('plan_id') or ''),
+            'plan_fingerprint': str(plan.get('plan_fingerprint') or ''),
+            'run_manifest_sha256': run_manifest_artifact['sha256'],
+            'results_sha256': results_artifact['sha256'],
+            'targets_sha256': targets_artifact['sha256'],
+        },
+        '_manifest_path': str(manifest_path),
+        '_package_dir': str(store.run_dir),
+    }
+    atomic_write_json(
+        manifest_path,
+        {key: value for key, value in manifest.items() if not key.startswith('_')},
+        ensure_ascii=False,
+        indent=2,
+    )
+    return load_manifest(str(manifest_path))
+
+
+def _durable_sync_preview_files(manifest, replacements_by_file, translated_by_file):
+    quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
+    quality_by_file = {}
+    for subject in quality_subjects:
+        quality_by_file.setdefault(str(subject.get('file_rel_path') or ''), []).append(subject)
+    preview_files = []
+    for file_key, replacements in replacements_by_file.items():
+        plan, snapshot = _build_adapter_writeback_plan(
+            manifest,
+            {file_key: replacements},
+        )
+        rendered = _normalize_adapter_rendered_files(
+            render_writeback_plan(plan, snapshot.project.source_documents)
+        )
+        _require_adapter_render_targets({file_key: replacements}, rendered)
+        document = next(
+            item
+            for item in snapshot.project.source_documents
+            if _adapter_render_key(item.file_rel_path) == _adapter_render_key(file_key)
+        )
+        source_text = ''.join(document.lines())
+        preview_text = ''.join(rendered[_adapter_render_key(file_key)])
+        if document.content.startswith(b'\xef\xbb\xbf'):
+            if not source_text.startswith('\ufeff'):
+                source_text = '\ufeff' + source_text
+            if not preview_text.startswith('\ufeff'):
+                preview_text = '\ufeff' + preview_text
+        progress_entries = sorted(translated_by_file.get(file_key) or [])
+        preview_files.append({
+            'relative_path': file_key,
+            'source_text': source_text,
+            'source_sha256': document.sha256,
+            'preview_text': preview_text,
+            'progress_entries': progress_entries,
+            'translated_items': len(progress_entries),
+            'writeback_plan': plan.to_dict(),
+            'quality_subjects': quality_by_file.get(file_key, []),
+        })
+    return preview_files
+
+
+def _create_checked_durable_sync_preview(store, manifest):
+    summary = dict(manifest.get('last_check_summary') or {})
+    gate = dict(summary.get('writeback_gate') or {})
+    if gate.get('decision') != translation_quality.GATE_ALLOW:
+        return ''
+    replacements, translated, failures, recheck = collect_result_actions(
+        manifest,
+        validate_sources=True,
+    )
+    attach_check_contract(manifest, recheck)
+    if failures or (recheck.get('writeback_gate') or {}).get(
+        'decision'
+    ) != translation_quality.GATE_ALLOW:
+        raise cli_contract.MachineContractError(
+            'Durable Sync preview revalidation no longer allows writeback.',
+            code_name='STALE_CHECK',
+            suggested_action='run_check_again',
+        )
+    preview_files = _durable_sync_preview_files(manifest, replacements, translated)
+    bindings = {
+        'run_manifest': _verified_store_artifact(store, 'run_manifest_json'),
+        'results': _verified_store_artifact(store, 'results_jsonl'),
+        'targets': _verified_store_artifact(store, 'targets_json'),
+        'check_manifest': {
+            'path': str(manifest['_manifest_path']),
+            'sha256': file_sha256(manifest['_manifest_path']),
+        },
+        'check_fingerprint': dict(summary.get('check_fingerprint') or {}),
+        'writeback_gate': gate,
+    }
+    plan = store.get_plan()['plan']
+    preview_path, _preview = sync_translation_preview.create_sync_preview(
+        log_dir=store.run_dir,
+        project_root=manifest['base_dir'],
+        tl_dir=manifest['tl_dir'],
+        files=preview_files,
+        failures=(),
+        contract_diagnostics={
+            'final_expected': int(summary.get('expected_items') or 0),
+            'final_valid': int(summary.get('valid_items') or 0),
+            'unresolved_ids': [],
+        },
+        prompt_context={
+            'macro_fingerprint': str(getattr(legacy, 'SYNC_MACRO_FINGERPRINT', '') or '')
+        },
+        quality_policy=BATCH_QUALITY_POLICY,
+        glossary_file=manifest.get('glossary_file') or '',
+        translation_plan_payload=plan,
+        request_ids=[
+            str(row['request_id'])
+            for row in store.list_requests()
+            if row.get('parent_request_id') is None
+        ],
+        durable_check_binding=bindings,
+    )
+    relative = Path(preview_path).resolve().relative_to(store.run_dir.resolve())
+    store.put_artifact(
+        kind='preview_manifest',
+        relative_path=str(relative),
+        sha256_digest=file_sha256(preview_path),
+        schema_version=sync_translation_preview.VERSION,
+    )
+    print(f'Durable Sync preview: {preview_path}')
+    return preview_path
+
+
+def check_durable_sync_results(store):
+    manifest = _build_durable_sync_check_manifest(store)
+    checked = check_results(manifest['_manifest_path'])
+    _create_checked_durable_sync_preview(store, checked)
+    return checked
+
+
+def apply_durable_sync_results(store):
+    violations = store.verify_integrity()
+    if violations:
+        raise cli_contract.MachineContractError(
+            'Durable Sync run failed integrity verification before apply.',
+            code_name='SYNC_RUN_STORAGE_ERROR',
+            suggested_action='inspect_durable_sync_run',
+            details={'run_id': store.run_id, 'violations': violations[:20]},
+        )
+    preview = _verified_store_artifact(store, 'preview_manifest')
+    applied = legacy.apply_sync_translation_preview(preview['path'])
+    relative = Path(preview['path']).resolve().relative_to(store.run_dir.resolve())
+    store.put_artifact(
+        kind='preview_manifest',
+        relative_path=str(relative),
+        sha256_digest=file_sha256(preview['path']),
+        schema_version=sync_translation_preview.VERSION,
+    )
+    return applied
+
+
 def check_results(target=None):
+    durable_store = _resolve_durable_sync_store(target)
+    if durable_store is not None:
+        return check_durable_sync_results(durable_store)
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
     require_manifest_project_match(manifest, 'check')
@@ -11926,6 +12231,11 @@ def check_results(target=None):
 
 
 def apply_results(target=None, force=False):
+    durable_store = _resolve_durable_sync_store(target)
+    if durable_store is not None:
+        # Durable Sync always applies through its bound preview.  ``force``
+        # intentionally cannot bypass check/source/artifact predicates.
+        return apply_durable_sync_results(durable_store)
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
@@ -13692,7 +14002,15 @@ def build_project_analysis_sync_runner(plan, route):
     return _generate
 
 
-def run_sync_request(request_payload, route, plan=None, *, api_key_index=None):
+def run_sync_request(
+    request_payload,
+    route,
+    plan=None,
+    *,
+    api_key_index=None,
+    retry_attempts=None,
+    timeout_seconds=None,
+):
     """Execute one sync request using a frozen TaskRoute.
 
     The model comes from ``plan.profiles[route.profile_id]``. ``SYNC_MODEL``
@@ -13707,7 +14025,9 @@ def run_sync_request(request_payload, route, plan=None, *, api_key_index=None):
     profile = model_profile.profile_for_route(plan, route)
     effective_model = profile.model
     config = dict(request_payload.get('generation_config') or {})
-    config['timeout'] = SYNC_TIMEOUT_SECONDS
+    config['timeout'] = normalize_sync_timeout_seconds(
+        SYNC_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
     system_instruction = request_payload.get('system_instruction')
     if system_instruction:
         config['system_instruction'] = system_instruction
@@ -13728,7 +14048,15 @@ def run_sync_request(request_payload, route, plan=None, *, api_key_index=None):
             contents=request_payload.get('contents') or [],
             config=config,
         )
-        result = _run_sync_backend_with_retry(backend, request)
+        result = _run_sync_backend_with_retry(
+            backend,
+            request,
+            attempts=(
+                DEFAULT_SYNC_RETRY_ATTEMPTS
+                if retry_attempts is None
+                else retry_attempts
+            ),
+        )
         response = _sync_result_to_dict(result)
         response['output_diagnostics'] = model_usage_ledger.response_budget_diagnostics(
             response_text=result.response_text,
@@ -13743,7 +14071,11 @@ def run_sync_request(request_payload, route, plan=None, *, api_key_index=None):
         if api_key_index is None and hasattr(legacy, 'api_key_rotation_attempts')
         else 1
     )
-    attempts = max(DEFAULT_SYNC_RETRY_ATTEMPTS, key_attempts)
+    attempts = (
+        max(DEFAULT_SYNC_RETRY_ATTEMPTS, key_attempts)
+        if retry_attempts is None
+        else max(1, int(retry_attempts))
+    )
     last_error = None
 
     for attempt in range(1, attempts + 1):
@@ -16238,6 +16570,19 @@ def add_machine_output_argument(command_parser):
     return add_json_shaping_arguments(command_parser)
 
 
+def add_durable_sync_output_arguments(command_parser):
+    """Add the schema-v1 machine contract plus #347's local ``--json`` alias."""
+    add_machine_output_argument(command_parser)
+    command_parser.add_argument(
+        '--json',
+        dest='output',
+        action='store_const',
+        const='json',
+        help='Alias for --output json on durable Sync commands.',
+    )
+    return command_parser
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
@@ -16906,6 +17251,69 @@ def build_arg_parser():
     )
     pa_unpublish.add_argument('--store-dir', default='', help='Override analysis store directory.')
 
+    sync_start_parser = subparsers.add_parser(
+        'sync-start',
+        help='Start a durable synchronous translation run from the current project.',
+    )
+    add_durable_sync_output_arguments(sync_start_parser)
+    sync_start_parser.add_argument(
+        '--client-token',
+        default='',
+        metavar='TOKEN',
+        help='Optional caller-owned idempotency token; blank always creates a new run.',
+    )
+
+    sync_resume_parser = subparsers.add_parser(
+        'sync-resume',
+        help='Resume one explicit durable synchronous translation run.',
+    )
+    add_durable_sync_output_arguments(sync_resume_parser)
+    sync_resume_parser.add_argument('run', metavar='RUN', help='Durable Sync run ID.')
+
+    sync_status_parser = subparsers.add_parser(
+        'sync-status',
+        help='Inspect one explicit durable Sync run or the latest valid durable run.',
+    )
+    add_durable_sync_output_arguments(sync_status_parser)
+    sync_status_parser.add_argument(
+        'run', nargs='?', default='', metavar='RUN', help='Durable Sync run ID.'
+    )
+    sync_status_parser.add_argument(
+        '--latest',
+        action='store_true',
+        help='Select the uniquely latest valid durable run in the active project log.',
+    )
+
+    sync_cancel_parser = subparsers.add_parser(
+        'sync-cancel',
+        help='Commit cancellation intent for one explicit durable Sync run.',
+    )
+    add_durable_sync_output_arguments(sync_cancel_parser)
+    sync_cancel_parser.add_argument('run', metavar='RUN', help='Durable Sync run ID.')
+
+    sync_derive_parser = subparsers.add_parser(
+        'sync-derive',
+        help='Create a new run from one terminal durable Sync run and the current plan.',
+    )
+    add_durable_sync_output_arguments(sync_derive_parser)
+    sync_derive_parser.add_argument('run', metavar='RUN', help='Source durable Sync run ID.')
+    unknown_mode = sync_derive_parser.add_mutually_exclusive_group()
+    unknown_mode.add_argument(
+        '--retry-unknown',
+        action='store_true',
+        help='Retry outcome-unknown items in the derived run.',
+    )
+    unknown_mode.add_argument(
+        '--exclude-unknown',
+        action='store_true',
+        help='Require the current scoped plan to omit all outcome-unknown items.',
+    )
+    sync_derive_parser.add_argument(
+        '--ack-duplicate-billing-risk',
+        action='store_true',
+        help='Acknowledge duplicate execution/billing risk required by --retry-unknown.',
+    )
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     add_machine_output_argument(submit_parser)
     submit_parser.add_argument(
@@ -17405,6 +17813,153 @@ def validate_machine_invocation(args):
         )
 
 
+def _durable_sync_root_dir():
+    return os.path.join(str(getattr(legacy, 'LOG_DIR', LOG_DIR)), 'sync_runs')
+
+
+def _durable_sync_store_only_service(*, deliver_usage=False):
+    from sync_run_service import SyncRunService
+
+    return SyncRunService(
+        _durable_sync_root_dir(),
+        freshness_reporter=lambda _store: {
+            'resume_allowed': None,
+            'source': 'not_checked',
+            'profile': 'not_checked',
+            'config': 'not_checked',
+            'reasons': ['freshness_rechecked_before_dispatch'],
+        },
+        game_root=(legacy.BASE_DIR if deliver_usage and legacy.BASE_DIR else None),
+    )
+
+
+def _durable_sync_production_service(*, require_provider):
+    from sync_run_service import build_production_sync_run_service
+
+    context = legacy.prepare_sync_translation_execution_context(
+        require_provider=require_provider,
+        persist_corrected_game_root=True,
+    )
+    load_batch_settings()
+    pricing = batch_cost_estimate.load_pricing_config(
+        _read_translator_config_object()
+    )
+    service = build_production_sync_run_service(
+        _durable_sync_root_dir(),
+        context,
+        game_root=legacy.BASE_DIR or None,
+        pricing_config=pricing,
+    )
+    return service, context
+
+
+def _print_durable_sync_snapshot(snapshot):
+    progress = dict((snapshot or {}).get('progress') or {})
+    items = dict(progress.get('items') or {})
+    requests = dict(progress.get('requests') or {})
+    print(f"Durable Sync run: {snapshot.get('run_id') or '(unknown)'}")
+    print(f"Status: {snapshot.get('run_status') or 'unknown'}")
+    print(
+        'Items: '
+        f"accepted={int(items.get('accepted') or 0)}, "
+        f"unresolved={int(items.get('unresolved') or 0)}, "
+        f"expected={int(items.get('expected') or 0)}"
+    )
+    print(
+        'Requests: '
+        f"total={int(requests.get('total') or 0)}, "
+        f"pending={int(requests.get('pending') or 0)}, "
+        f"in_flight={int(requests.get('in_flight') or 0)}"
+    )
+    print(f"Next action: {snapshot.get('next_action') or 'none'}")
+    run_dir = ((snapshot.get('artifacts') or {}).get('run_dir') or '')
+    if run_dir:
+        print(f'Run directory: {run_dir}')
+
+
+def run_durable_sync_command(args):
+    """Dispatch #347's five durable commands through the pure service API."""
+    from sync_run_contracts import RunStatus
+    from sync_run_service import SyncRunService
+    from sync_run_store import SyncRunStore
+
+    command = str(args.command or '')
+    root_dir = _durable_sync_root_dir()
+    if command == 'sync-status':
+        run_id = str(getattr(args, 'run', '') or '').strip()
+        latest = bool(getattr(args, 'latest', False))
+        if bool(run_id) == latest:
+            raise cli_contract.MachineContractError(
+                'sync-status requires exactly one of RUN or --latest.',
+                code_name='INVALID_RUN_SELECTOR',
+                suggested_action='pass_run_or_latest',
+                details={'semantic_exit_code': cli_contract.EXIT_INVALID_STATE},
+            )
+        snapshot = _durable_sync_store_only_service().status(
+            run_id or None,
+            latest=latest,
+        )
+    elif command == 'sync-start':
+        service, context = _durable_sync_production_service(require_provider=True)
+        if not context.plan_build.requests:
+            raise cli_contract.MachineContractError(
+                'No pending translations are available for durable Sync.',
+                code_name='SYNC_RUN_NO_WORK',
+                suggested_action='inspect_project_scope',
+                details={'semantic_exit_code': cli_contract.EXIT_INVALID_STATE},
+            )
+        snapshot = service.start(
+            context.plan_build,
+            client_token=getattr(args, 'client_token', '') or None,
+        )
+    elif command == 'sync-resume':
+        run_id = str(args.run)
+        store = SyncRunStore(root_dir, run_id)
+        status = RunStatus(str(store.get_run()['status']))
+        if status in {RunStatus.CANCELLED, RunStatus.COMPLETED,
+                      RunStatus.COMPLETED_WITH_ERRORS, RunStatus.FAILED}:
+            legacy.load_translator_settings(persist_corrected_game_root=False)
+            service = _durable_sync_store_only_service(deliver_usage=True)
+        else:
+            service, _context = _durable_sync_production_service(
+                require_provider=True
+            )
+        snapshot = service.resume(run_id)
+    elif command == 'sync-cancel':
+        class _NoDispatchBackend:
+            def send(self, *_args, **_kwargs):
+                raise RuntimeError('cancel closeout must not dispatch')
+
+            def cancel(self, *, attempt):
+                return False
+
+        service = SyncRunService(
+            root_dir,
+            backend_factory=lambda _store: _NoDispatchBackend(),
+            derived_builder_factory=lambda _store: (
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    RuntimeError('cancel closeout must not derive requests')
+                )
+            ),
+        )
+        snapshot = service.cancel(str(args.run))
+    elif command == 'sync-derive':
+        service, context = _durable_sync_production_service(require_provider=True)
+        snapshot = service.derive(
+            str(args.run),
+            context.plan_build,
+            retry_unknown=bool(getattr(args, 'retry_unknown', False)),
+            ack_duplicate_billing_risk=bool(
+                getattr(args, 'ack_duplicate_billing_risk', False)
+            ),
+            exclude_unknown=bool(getattr(args, 'exclude_unknown', False)),
+        )
+    else:
+        raise SystemExit(f'Unknown durable Sync command: {command}')
+    _print_durable_sync_snapshot(snapshot)
+    return snapshot
+
+
 def dispatch_command(parser, args):
     command = args.command
     if command is None:
@@ -17437,6 +17992,9 @@ def dispatch_command(parser, args):
 
     if command in MACHINE_OUTPUT_COMMANDS:
         validate_machine_invocation(args)
+
+    if command in DURABLE_SYNC_COMMANDS:
+        return run_durable_sync_command(args)
 
     if command == 'doctor':
         # doctor is read-only: never persist auto-corrected game_root.
@@ -18221,6 +18779,50 @@ def _load_machine_manifest(command, value, args):
 
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
+
+    if command in DURABLE_SYNC_COMMANDS:
+        snapshot = dict(value or {})
+        raw_artifacts = dict(snapshot.pop('artifacts', {}) or {})
+        artifacts = _nonempty_artifacts(
+            run_dir=raw_artifacts.get('run_dir'),
+            state_db=raw_artifacts.get('state_db'),
+            plan=raw_artifacts.get('plan_json'),
+            requests=raw_artifacts.get('requests_jsonl'),
+            manifest=raw_artifacts.get('run_manifest_json'),
+            results=raw_artifacts.get('results_jsonl'),
+            result_sha256=raw_artifacts.get('results_sha256'),
+            events=raw_artifacts.get('events_jsonl'),
+        )
+        return cli_contract.success_envelope(
+            command,
+            status=str(snapshot.get('run_status') or 'unknown'),
+            result=snapshot,
+            artifacts=artifacts,
+        )
+
+    if (
+        command == 'apply'
+        and isinstance(value, dict)
+        and isinstance(value.get('durable_check_binding'), dict)
+    ):
+        manifest = dict(value)
+        last_result = str(manifest.get('last_apply_result') or 'applied')
+        return cli_contract.success_envelope(
+            command,
+            status=last_result,
+            result={
+                'apply': {
+                    'state': str(manifest.get('state') or ''),
+                    'last_apply_result': last_result,
+                    'applied_files': list(manifest.get('applied_files') or []),
+                    'summary': dict(manifest.get('summary') or {}),
+                },
+            },
+            artifacts=_nonempty_artifacts(
+                manifest=manifest.get('_manifest_path'),
+                quality_findings=manifest.get('last_quality_findings_path'),
+            ),
+        )
 
     if command == 'doctor':
         report = dict(value or {})
@@ -19261,6 +19863,45 @@ def run_machine_command(parser, args):
             return cli_contract.strict_exit_code(emitted)
         return legacy_exit_code
     except Exception as exc:
+        from sync_run_contracts import ErrorCode, SyncRunError
+
+        if isinstance(exc, SyncRunError):
+            invalid_codes = {
+                ErrorCode.SYNC_RUN_NOT_FOUND,
+                ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH,
+                ErrorCode.SYNC_RUN_CLIENT_TOKEN_CONFLICT,
+                ErrorCode.SYNC_RUN_SCHEMA_UNSUPPORTED,
+                ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+            }
+            if exc.code is ErrorCode.SYNC_RUN_BUSY:
+                semantic_exit = cli_contract.EXIT_RETRYABLE
+            elif exc.code in invalid_codes:
+                semantic_exit = cli_contract.EXIT_INVALID_STATE
+            else:
+                semantic_exit = cli_contract.EXIT_BLOCKED
+            envelope = cli_contract.error_envelope(
+                command,
+                code=exc.code.value,
+                message=str(exc),
+                retryable=exc.retryable,
+                suggested_action=(
+                    'retry_later'
+                    if exc.retryable
+                    else 'inspect_durable_sync_run'
+                ),
+                details={
+                    **dict(exc.safe_details),
+                    'semantic_exit_code': semantic_exit,
+                },
+            )
+            emitted = _write_machine_envelope(
+                envelope, args, command_completed=False
+            )
+            if _is_output_file_failure(emitted):
+                return _output_file_failure_exit_code(args)
+            if args.strict_exit_codes:
+                return cli_contract.strict_exit_code(emitted)
+            return 1
         traceback.print_exc(file=sys.stderr)
         message = str(exc) or exc.__class__.__name__
         exception_type = exc.__class__.__name__
@@ -19318,6 +19959,8 @@ def _machine_output_requested(argv):
     """Return whether raw CLI arguments explicitly request JSON output."""
 
     tokens = _machine_option_tokens(argv)
+    if '--json' in tokens and any(token in DURABLE_SYNC_COMMANDS for token in tokens):
+        return True
     for index, token in enumerate(tokens):
         if token == '--output=json':
             return True
@@ -19524,7 +20167,14 @@ def main(argv=None):
             return _output_file_failure_exit_code(args)
     if output == 'json':
         return run_machine_command(parser, args)
-    result = dispatch_command(parser, args)
+    try:
+        result = dispatch_command(parser, args)
+    except Exception as exc:
+        from sync_run_contracts import SyncRunError
+
+        if isinstance(exc, SyncRunError):
+            raise SystemExit(f'{exc.code.value}: {exc}') from exc
+        raise
     if args.command in {'capabilities', 'schema'} and _is_output_file_failure(result):
         return _output_file_failure_exit_code(args)
     return 0

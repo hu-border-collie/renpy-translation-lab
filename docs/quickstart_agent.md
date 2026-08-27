@@ -59,6 +59,26 @@ python gemini_translate_batch.py final-review-ingest-results <manifest> --output
 python gemini_translate_batch.py final-review-create-revisions <manifest> --output json
 ```
 
+需要即时调用但又必须可恢复时，使用耐久 Sync 生命周期；`RUN` 必须来自 start 的
+`result.run_id`，不要从 cwd 推断：
+
+```powershell
+python gemini_translate_batch.py sync-start --json --strict-exit-codes
+python gemini_translate_batch.py sync-status <RUN> --json --strict-exit-codes
+python gemini_translate_batch.py sync-resume <RUN> --json --strict-exit-codes
+python gemini_translate_batch.py sync-cancel <RUN> --json --strict-exit-codes
+python gemini_translate_batch.py sync-derive <RUN> --json --strict-exit-codes
+python gemini_translate_batch.py check <RUN> --output json --strict-exit-codes
+python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
+```
+
+`--json` 只在这五个新 `sync-*` 命令上是 `--output json` 的别名。终态
+`completed` 仍须经过 `check -> bound preview -> apply`；`completed_with_errors`、
+`cancelled`、outcome-unknown 或 stale artifacts 不能直接写回，`--force` 也不能绕过。
+派生含 outcome-unknown 的运行时，只有显式
+`--retry-unknown --ack-duplicate-billing-risk`，或当前 scope 已排除 unknown ID 后使用
+`--exclude-unknown` 才会继续。
+
 注意：
 
 - `preview-revisions` 与 `final-review-create-revisions` 的 `status` 使用与 `check` 相同的

@@ -252,6 +252,7 @@ def create_sync_preview(
     glossary_file: str | os.PathLike[str] = "",
     translation_plan_payload: dict[str, Any] | None = None,
     request_ids: Iterable[str] = (),
+    durable_check_binding: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
@@ -268,6 +269,12 @@ def create_sync_preview(
     ``quality_findings.jsonl`` and summarized by the same ``quality_gate``
     contract as Batch check.
     """
+    if durable_check_binding is not None:
+        gate = dict(durable_check_binding.get('writeback_gate') or {})
+        if gate.get('decision') != translation_quality.GATE_ALLOW:
+            raise ValueError(
+                'Durable Sync preview requires a fresh check with writeback_gate=allow.'
+            )
     created = datetime.now(timezone.utc)
     run_name = created.strftime("%Y%m%dT%H%M%S.%fZ")
     failure_entries = []
@@ -448,6 +455,8 @@ def create_sync_preview(
         )
         manifest["request_ids"] = [str(item) for item in request_ids]
         _validate_translation_plan_binding(manifest)
+    if durable_check_binding is not None:
+        manifest['durable_check_binding'] = dict(durable_check_binding)
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
@@ -483,7 +492,40 @@ def prepare_sync_preview_apply(
     """Validate every source and artifact before the first project write."""
     manifest = load_sync_preview(manifest_path)
     _validate_translation_plan_binding(manifest)
-    if manifest.get("state") == "applied":
+    durable_binding = manifest.get('durable_check_binding')
+    if durable_binding is not None:
+        if not isinstance(durable_binding, dict):
+            raise ValueError('Durable Sync check binding is invalid.')
+        gate = durable_binding.get('writeback_gate')
+        if not isinstance(gate, dict) or gate.get('decision') != translation_quality.GATE_ALLOW:
+            raise ValueError('Durable Sync check did not allow writeback.')
+        for label in ('run_manifest', 'results', 'targets', 'check_manifest'):
+            binding = durable_binding.get(label)
+            if not isinstance(binding, dict):
+                raise ValueError(f'Durable Sync {label} binding is missing.')
+            artifact_path = Path(str(binding.get('path') or '')).resolve()
+            expected_sha = str(binding.get('sha256') or '')
+            if not artifact_path.is_file() or file_sha256(artifact_path) != expected_sha:
+                raise ValueError(
+                    f'Durable Sync {label} changed after the checked preview was generated.'
+                )
+        check_path = Path(
+            str((durable_binding.get('check_manifest') or {}).get('path') or '')
+        )
+        try:
+            check_manifest = json.loads(check_path.read_text(encoding='utf-8-sig'))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f'Durable Sync check manifest is unreadable: {exc}') from exc
+        check_summary = check_manifest.get('last_check_summary') or {}
+        if check_summary.get('check_fingerprint') != durable_binding.get(
+            'check_fingerprint'
+        ):
+            raise ValueError('Durable Sync check fingerprint is stale.')
+        if (check_summary.get('writeback_gate') or {}).get(
+            'decision'
+        ) != translation_quality.GATE_ALLOW:
+            raise ValueError('Durable Sync check no longer allows writeback.')
+    if manifest.get("state") == "applied" and durable_binding is None:
         raise ValueError("Sync preview has already been applied.")
     if _canonical(manifest.get("project_root", "")) != _canonical(active_project_root):
         raise ValueError("Sync preview belongs to a different project.")
@@ -655,7 +697,7 @@ def apply_sync_preview(
         for item in prepared:
             entry = item["entry"]
             applied_paths.append(entry["relative_path"])
-            if on_file_applied is not None:
+            if on_file_applied is not None and not item['already_applied']:
                 on_file_applied(entry)
     except Exception as exc:
         manifest["state"] = "apply_failed"
@@ -664,7 +706,12 @@ def apply_sync_preview(
         raise
 
     manifest["state"] = "applied"
-    manifest["applied_at"] = datetime.now(timezone.utc).isoformat()
+    if writes:
+        manifest["applied_at"] = datetime.now(timezone.utc).isoformat()
+        manifest['last_apply_result'] = 'applied'
+    else:
+        manifest.setdefault('applied_at', datetime.now(timezone.utc).isoformat())
+        manifest['last_apply_result'] = 'already_applied'
     manifest["applied_files"] = applied_paths
     manifest.pop("last_apply_failure", None)
     atomic_write_json(manifest["_manifest_path"], _public_manifest(manifest), ensure_ascii=False, indent=2)

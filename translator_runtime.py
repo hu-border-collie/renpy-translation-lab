@@ -4623,6 +4623,8 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         captures.append({
             'file_rel_path': chunk_input.file_rel_path,
             'expected_ids': [unit.id for unit in chunk_input.target_units],
+            'target_items': [dict(item) for item in chunk_input.target_items],
+            'target_units': list(chunk_input.target_units),
             'context_window': chunk_input.context_window,
             'local_context_diagnostics': dict(
                 chunk_input.local_context_diagnostics or {}
@@ -4677,6 +4679,254 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             flush=True,
         )
     return plan_build, captures
+
+
+@dataclass
+class SyncTranslationExecutionContext:
+    """Current-project inputs needed by the durable Sync executor.
+
+    The frozen :class:`translation_plan.PlanBuild` remains the semantic source
+    of truth.  The additional maps only reconnect its stable item IDs to the
+    live adapter and to #346's derived-request helper after a process restart.
+    """
+
+    plan_build: Any
+    captures: list[dict[str, Any]]
+    routing_plan: Any
+    route: Any
+    adapter: Any
+    adapter_snapshot: Any
+    pending_jobs: list[dict[str, Any]]
+    items_by_id: dict[str, dict[str, Any]]
+    occurrences_by_id: dict[str, Any]
+    request_contexts: dict[str, dict[str, Any]]
+
+    def item_resolver(self, _request, item_ids):
+        resolved = []
+        for item_id in item_ids:
+            key = str(item_id)
+            item = self.items_by_id.get(key)
+            if item is None:
+                raise ValueError(f'Sync TranslationPlan item is no longer available: {key}')
+            resolved.append(dict(item))
+        return resolved
+
+    def _root_request_id(self, request):
+        request_id = str((request or {}).get('request_id') or '')
+        if request_id in self.request_contexts:
+            return request_id
+        candidates = [
+            root_id
+            for root_id in self.request_contexts
+            if request_id.startswith(root_id + '--')
+        ]
+        if not candidates:
+            raise ValueError(
+                f'Sync derived request has no current root context: {request_id}'
+            )
+        return max(candidates, key=len)
+
+    def context_resolver(self, request):
+        capture = self.request_contexts[self._root_request_id(request)]
+        return {
+            'file_rel_path': capture.get('file_rel_path') or '',
+            'file_path': capture.get('file_path') or '',
+            'context_window': capture.get('context_window'),
+            'local_context_diagnostics': dict(
+                capture.get('local_context_diagnostics') or {}
+            ),
+            'context_policy': capture.get('context_policy'),
+            'preserve_terms': list(capture.get('preserve_terms') or []),
+            'normalize_map': dict(capture.get('normalize_map') or {}),
+            'non_translatable_exact': list(
+                capture.get('non_translatable_exact') or []
+            ),
+            'macro_setting': capture.get('macro_setting') or '',
+            'retrieval_blocks_text': capture.get('retrieval_blocks_text') or '',
+            'analysis_blocks_text': capture.get('analysis_blocks_text') or '',
+        }
+
+    def validate_translation(self, item, translated):
+        occurrence = self.occurrences_by_id.get(str((item or {}).get('id') or ''))
+        if occurrence is None:
+            return False, 'common.locator.unresolved'
+        validation = self.adapter.validate_translation(occurrence, str(translated or ''))
+        if validation.status == 'pass':
+            return True, 'OK'
+        return False, ', '.join(validation.reason_codes) or 'adapter.validation.block'
+
+    def validate_reused_translation(self, item_id, payload):
+        translation = payload
+        if isinstance(payload, dict):
+            translation = payload.get('translation')
+        item = self.items_by_id.get(str(item_id))
+        if item is None or not isinstance(translation, str):
+            return False
+        valid, _reason = self.validate_translation(item, translation)
+        return valid
+
+    def durable_targets_payload(self, *, run_id=''):
+        """Return the redacted, offline target shape consumed by check/preview."""
+        chunks = []
+        for index, request in enumerate(self.plan_build.requests):
+            capture = self.captures[index]
+            plan_chunk = self.plan_build.plan.chunks[index]
+            chunks.append({
+                'key': request.chunk_id,
+                'request_id': request.request_id,
+                'plan_id': request.plan_id,
+                'chunk_id': request.chunk_id,
+                'file_rel_path': plan_chunk.file_rel_path,
+                'file_path': plan_chunk.file_path,
+                'chunk_index': plan_chunk.chunk_index,
+                'line_numbers': list(plan_chunk.line_numbers),
+                'source_char_count': plan_chunk.source_char_count,
+                'expected_ids': list(request.expected_ids),
+                'prompt_fingerprint': request.prompt_fingerprint,
+                'request_fingerprint': request.request_fingerprint,
+                'items': [
+                    translation_core.legacy_item_from_unit(
+                        unit, translation_core.MODE_TRANSLATION
+                    )
+                    for unit in capture.get('target_units') or []
+                ],
+            })
+        return {
+            'schema_version': 1,
+            'run_id': str(run_id or ''),
+            'plan_id': self.plan_build.plan.plan_id,
+            'plan_fingerprint': self.plan_build.plan.plan_fingerprint,
+            'project_root': os.path.realpath(os.path.abspath(BASE_DIR)),
+            'tl_dir': os.path.realpath(os.path.abspath(TL_DIR)),
+            'target_language': PREP_LANGUAGE,
+            'glossary_file': str(GLOSSARY_FILE or ''),
+            'files': {
+                str(job['file_rel_path']): {
+                    'path': str(job['file_path']),
+                    'task_count': len(job.get('tasks') or []),
+                }
+                for job in self.pending_jobs
+            },
+            'chunks': chunks,
+        }
+
+
+def prepare_sync_translation_execution_context(
+    *,
+    prepare=False,
+    require_provider=True,
+    persist_corrected_game_root=True,
+    run_id='',
+):
+    """Build the ordinary Sync plan plus restart-safe production adapters.
+
+    This is intentionally the same discovery, filtering, glossary, routing,
+    retrieval and TranslationPlan path used by :func:`run_translation`.
+    Provider calls are not made here.
+    """
+    try:
+        load_config(require_api_key=False)
+    except model_profile.ModelRoutingConfigError as exc:
+        raise model_profile.routing_resolution_error(
+            exc,
+            stage=model_profile.STAGE_TRANSLATION,
+        ) from exc
+    load_translator_settings(
+        persist_corrected_game_root=bool(persist_corrected_game_root)
+    )
+    if require_provider and SYNC_BACKEND == 'gemini':
+        _require_gemini_api_key()
+    load_glossary()
+    routing_plan = freeze_translation_routing_plan()
+    route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    if prepare:
+        run_prepare_steps()
+    elif PREP_ENABLED:
+        print(
+            'Prepare step skipped in durable Sync mode; use --prepare explicitly if needed.'
+        )
+
+    adapter = RenPyAdapter(legacy_module=sys.modules[__name__])
+    adapter_snapshot = build_translation_snapshot(
+        adapter,
+        ProjectDiscoveryRequest(
+            project_root=BASE_DIR,
+            localization_root=TL_DIR,
+            target_language=PREP_LANGUAGE,
+            include_files=tuple(sorted(INCLUDE_FILES)),
+            include_prefixes=tuple(sorted(INCLUDE_PREFIXES)),
+        ),
+    )
+    occurrences_by_id = {
+        occurrence.unit.id: occurrence
+        for occurrence in adapter_snapshot.occurrences
+        if occurrence.unit.id
+    }
+    global_progress = _upgrade_legacy_progress_keys(
+        load_progress(),
+        [document.file_path for document in adapter_snapshot.project.source_documents],
+    )
+    pending_jobs = []
+    for document in adapter_snapshot.project.source_documents:
+        progress_key = document.file_rel_path
+        completed_entries = set(
+            _normalize_progress_entries(global_progress.get(progress_key, []))
+        )
+        tasks = []
+        for raw_task in adapter_snapshot.pending_tasks_by_file.get(progress_key, ()):
+            task = dict(raw_task)
+            if is_non_translatable(task['text']):
+                continue
+            progress_entry = task.get('progress_entry') or _progress_entry_for_task(task)
+            if (
+                progress_entry in completed_entries
+                or _progress_line_entry(task['line']) in completed_entries
+            ):
+                if not FORCE_RETRANSLATE_ENGLISH or not is_english_like(task['text']):
+                    continue
+            task['progress_entry'] = _progress_entry_for_task(task)
+            task['file_rel_path'] = progress_key
+            task['file_path'] = document.file_path
+            tasks.append(task)
+        if tasks:
+            pending_jobs.append({
+                'file_rel_path': progress_key,
+                'file_path': document.file_path,
+                'tasks': tasks,
+            })
+
+    plan_build, captures = build_sync_translation_plan(
+        pending_jobs,
+        adapter_snapshot,
+        routing_plan,
+        run_id=run_id,
+    )
+    items_by_id = {}
+    request_contexts = {}
+    for index, request in enumerate(plan_build.requests):
+        capture = captures[index]
+        plan_chunk = plan_build.plan.chunks[index]
+        capture['file_path'] = plan_chunk.file_path
+        request_contexts[request.request_id] = capture
+        for item in capture.get('target_items') or []:
+            item_id = str(item.get('id') or '')
+            if not item_id or item_id in items_by_id:
+                raise RuntimeError(
+                    f'Sync TranslationPlan has a missing or duplicate item ID: {item_id!r}'
+                )
+            items_by_id[item_id] = dict(item)
+    return SyncTranslationExecutionContext(
+        plan_build=plan_build,
+        captures=captures,
+        routing_plan=routing_plan,
+        route=route,
+        adapter=adapter,
+        adapter_snapshot=adapter_snapshot,
+        pending_jobs=pending_jobs,
+        items_by_id=items_by_id,
+        occurrences_by_id=occurrences_by_id,
+        request_contexts=request_contexts,
+    )
 
 def get_nested(source, *candidates):
     for candidate in candidates:

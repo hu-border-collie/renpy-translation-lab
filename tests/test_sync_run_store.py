@@ -63,6 +63,24 @@ def make_request(request_id='req-1', expected_ids=('item-1', 'item-2')):
     }
 
 
+def make_child_request(
+    *,
+    parent_request_id='req-1',
+    request_id=None,
+    expected_ids=('item-2',),
+    lineage_kind=contracts.LineageKind.MISSING_IDS,
+):
+    request_id = request_id or f'{parent_request_id}--M-' + 'e' * 12
+    child = make_request(request_id=request_id, expected_ids=expected_ids)
+    child['transport_metadata'] = {
+        'retry_parent_request_id': parent_request_id,
+        'retry_parent_chunk_id': 'chunk-1',
+        'retry_lineage_kind': lineage_kind.value,
+        'retry_item_ids': list(expected_ids),
+    }
+    return child
+
+
 def bootstrap_run(root, run_id=None, *, plan=None, requests=None, client_token=None):
     run_id = run_id or build_run_id()
     plan = plan if plan is not None else make_plan()
@@ -115,6 +133,18 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(token_run, build_run_id('my-project-token'))
         self.assertTrue(token_run.startswith('sync-run-v1-token-'))
         self.assertNotIn('my-project-token', token_run)
+
+    def test_malformed_prefixed_run_id_is_rejected(self):
+        self.assertFalse(contracts.validate_run_id('sync-run-v1-garbage'))
+        with self.assertRaises(ValueError):
+            contracts.assert_valid_run_id('sync-run-v1-garbage')
+
+    def test_retry_decision_table_covers_every_error_category(self):
+        self.assertEqual(set(contracts.ERROR_RETRY_DECISIONS), set(ErrorCategory))
+        self.assertEqual(
+            contracts.retry_decision_for(ErrorCategory.TIMEOUT),
+            contracts.RetryDecision.RETRYABLE,
+        )
 
     def test_attempt_id_is_stable(self):
         first = contracts.build_attempt_id('run-1', 'req-1', 1)
@@ -190,25 +220,58 @@ class BootstrapStoreTests(unittest.TestCase):
     def test_token_conflict_detects_different_plan(self):
         run_id = build_run_id('project-token')
         bootstrap_run(self.root, run_id, client_token='project-token')
+        other_request = make_request()
+        other_request['plan_id'] = 'other-plan-999999999999'
         with self.assertRaises(SyncRunError) as ctx:
             bootstrap_run(
                 self.root,
                 run_id,
                 client_token='project-token',
                 plan=make_plan(plan_id='other-plan-999999999999'),
+                requests=[other_request],
             )
         self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_CLIENT_TOKEN_CONFLICT)
+
+    def test_token_conflict_detects_different_policy(self):
+        run_id = build_run_id('project-token')
+        SyncRunStore.bootstrap(
+            self.root,
+            run_id,
+            plan=make_plan(),
+            requests=[make_request()],
+            executor_policy={'max_attempts_per_request': 3},
+            client_token='project-token',
+        )
+        with self.assertRaises(SyncRunError) as ctx:
+            SyncRunStore.bootstrap(
+                self.root,
+                run_id,
+                plan=make_plan(),
+                requests=[make_request()],
+                executor_policy={'max_attempts_per_request': 4},
+                client_token='project-token',
+            )
+        self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_CLIENT_TOKEN_CONFLICT)
+
+    def test_malformed_root_request_is_rejected(self):
+        request = make_request()
+        request['expected_ids'] = ['item-1', 'item-1']
+        with self.assertRaises(ValueError):
+            bootstrap_run(self.root, requests=[request])
 
     def test_schema_newer_version_rejected(self):
         run_id = build_run_id()
         store, _ = bootstrap_run(self.root, run_id)
-        with sqlite3.connect(str(store.db_path)) as conn:
-            conn.execute('DELETE FROM schema_meta')
-            conn.execute(
-                'INSERT INTO schema_meta(version, created_by, created_at) VALUES (?, ?, ?)',
-                (99, 'test', '2026-01-01T00:00:00Z'),
-            )
-            conn.commit()
+        conn = sqlite3.connect(str(store.db_path))
+        try:
+            with conn:
+                conn.execute('DELETE FROM schema_meta')
+                conn.execute(
+                    'INSERT INTO schema_meta(version, created_by, created_at) VALUES (?, ?, ?)',
+                    (99, 'test', '2026-01-01T00:00:00Z'),
+                )
+        finally:
+            conn.close()
         with self.assertRaises(SyncRunError) as ctx:
             store.get_run()
         self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_SCHEMA_UNSUPPORTED)
@@ -244,6 +307,17 @@ class LeaseTests(unittest.TestCase):
                 request_id='req-1',
                 owner_token='no-such-owner',
             )
+        self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_BUSY)
+
+    def test_expired_owner_must_reacquire_before_heartbeat(self):
+        self.store.acquire_lease(owner_token='owner-a', ttl_seconds=0.001)
+        with self.store._tx() as conn:
+            conn.execute(
+                'UPDATE leases SET expires_at = ? WHERE run_id = ?',
+                ('2000-01-01T00:00:00.000000Z', self.store.run_id),
+            )
+        with self.assertRaises(SyncRunError) as ctx:
+            self.store.heartbeat_lease(owner_token='owner-a')
         self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_BUSY)
 
 
@@ -323,13 +397,7 @@ class AttemptLifecycleTests(unittest.TestCase):
 
     def test_partial_success_is_atomic_with_children(self):
         child_ids = ['req-1--M-' + 'e' * 12]
-        child = make_request(request_id=child_ids[0], expected_ids=['item-2'])
-        child.update({
-            'root_request_id': 'req-1',
-            'parent_request_id': 'req-1',
-            'lineage_kind': contracts.LineageKind.MISSING_IDS.value,
-            'lineage_depth': 1,
-        })
+        child = make_child_request(request_id=child_ids[0], expected_ids=['item-2'])
         attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
         self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
         accepted = self.store.record_success(
@@ -347,6 +415,78 @@ class AttemptLifecycleTests(unittest.TestCase):
         winners = {row['item_id'] for row in self.store.list_item_results()}
         self.assertEqual(winners, {'item-1'})
         self.assertEqual(self.store.verify_integrity(), [])
+
+    def test_partial_success_rejects_incomplete_child_coverage_atomically(self):
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        with self.assertRaises(ValueError):
+            self.store.record_success(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+                accepted_items=['item-1'],
+                derived_requests=[],
+            )
+        self.assertEqual(self.store.get_request('req-1')['status'], RequestStatus.IN_FLIGHT.value)
+        self.assertEqual(self.store.list_item_results(), [])
+
+    def test_partial_success_rejects_overlapping_children(self):
+        child_a = make_child_request(
+            request_id='req-1--M-' + 'a' * 12,
+            expected_ids=['item-2'],
+        )
+        child_b = make_child_request(
+            request_id='req-1--M-' + 'b' * 12,
+            expected_ids=['item-2'],
+        )
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        with self.assertRaises(ValueError):
+            self.store.record_success(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+                accepted_items=['item-1'],
+                derived_requests=[child_a, child_b],
+            )
+
+    def test_zero_progress_success_must_be_recorded_as_failure(self):
+        child = make_child_request(expected_ids=['item-1', 'item-2'])
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        with self.assertRaises(ValueError):
+            self.store.record_success(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+                accepted_items=[],
+                derived_requests=[child],
+            )
+
+    def test_takeover_can_dispatch_prepared_attempt(self):
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        with self.store._tx() as conn:
+            conn.execute(
+                'UPDATE leases SET expires_at = ? WHERE run_id = ?',
+                ('2000-01-01T00:00:00.000000Z', self.store.run_id),
+            )
+        self.store.acquire_lease(owner_token='owner-2')
+        attempt = self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-2')
+        self.assertEqual(attempt['claim_owner_token'], 'owner-2')
+
+    def test_takeover_can_close_old_dispatched_attempt_as_unknown(self):
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        with self.store._tx() as conn:
+            conn.execute(
+                'UPDATE leases SET expires_at = ? WHERE run_id = ?',
+                ('2000-01-01T00:00:00.000000Z', self.store.run_id),
+            )
+        self.store.acquire_lease(owner_token='owner-2')
+        self.assertTrue(
+            self.store.mark_outcome_unknown(attempt_id=attempt_id, owner_token='owner-2')
+        )
+        self.assertEqual(
+            self.store.get_request('req-1')['status'],
+            RequestStatus.OUTCOME_UNKNOWN.value,
+        )
 
     def test_finalize_refuses_stranded_active_leaves(self):
         self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
@@ -418,13 +558,33 @@ class CancellationAndLateReceiptTests(unittest.TestCase):
         self.assertFalse(accepted)
 
         request = self.store.get_request('req-1')
-        self.assertEqual(request['status'], RequestStatus.IN_FLIGHT.value)
+        self.assertEqual(request['status'], RequestStatus.CANCELLED.value)
         attempt = self.store.list_attempts(request_id='req-1')[0]
         self.assertEqual(attempt['status'], AttemptStatus.LATE_SUCCEEDED_IGNORED.value)
         late_receipts = self._late_receipts()
         self.assertEqual(len(late_receipts), 1)
         self.assertEqual(self.store.list_item_results(), [])
         self.assertEqual(len(self.store.pending_usage_outbox()), 1)
+        self.assertTrue(self.store.cancel_closeout(owner_token='owner-1'))
+        self.assertEqual(self.store.get_run()['status'], RunStatus.CANCELLED.value)
+
+    def test_cancel_closeout_requires_committed_intent(self):
+        with self.assertRaises(SyncRunError):
+            self.store.cancel_closeout(owner_token='owner-1')
+
+    def test_provider_cancel_confirmation_closes_attempt_and_request(self):
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        self.store.cancel_intent()
+        self.store.cancel_closeout(owner_token='owner-1')
+        self.assertTrue(
+            self.store.confirm_attempt_cancelled(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+            )
+        )
+        self.assertEqual(self.store.get_request('req-1')['status'], RequestStatus.CANCELLED.value)
+        self.assertTrue(self.store.cancel_closeout(owner_token='owner-1'))
 
     def _late_receipts(self):
         with self.store._conn() as conn:
@@ -472,14 +632,32 @@ class ProjectionAndIntegrityTests(unittest.TestCase):
     def test_integrity_detects_event_and_attempt_disagreement(self):
         self.store.acquire_lease(owner_token='owner-1')
         attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
-        with sqlite3.connect(str(self.store.db_path)) as conn:
-            conn.execute(
-                'UPDATE requests SET attempt_count = 99 WHERE run_id = ? AND request_id = ?',
-                (self.store.run_id, 'req-1'),
-            )
-            conn.commit()
+        conn = sqlite3.connect(str(self.store.db_path))
+        try:
+            with conn:
+                conn.execute(
+                    'UPDATE requests SET attempt_count = 99 WHERE run_id = ? AND request_id = ?',
+                    (self.store.run_id, 'req-1'),
+                )
+        finally:
+            conn.close()
         violations = self.store.verify_integrity()
         self.assertTrue(any('attempt_count mismatch' in v for v in violations))
+
+    def test_snapshot_counts_root_item_universe_once_after_derivation(self):
+        self.store.acquire_lease(owner_token='owner-1')
+        child = make_child_request(expected_ids=['item-2'])
+        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        self.store.record_success(
+            attempt_id=attempt_id,
+            owner_token='owner-1',
+            accepted_items=['item-1'],
+            derived_requests=[child],
+        )
+        snapshot = self.store.build_snapshot()
+        self.assertEqual(snapshot['progress']['items']['expected'], 2)
+        self.assertEqual(snapshot['progress']['items']['accepted'], 1)
 
     def test_checkpoint_runs(self):
         self.store.checkpoint()

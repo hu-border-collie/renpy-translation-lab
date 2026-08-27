@@ -143,6 +143,16 @@ class ErrorCategory(str, Enum):
     UNKNOWN_PROVIDER = 'unknown_provider'
 
 
+class RetryDecision(str, Enum):
+    """Frozen v1 scheduling decision for one classified failure."""
+
+    TERMINAL = 'terminal'
+    RETRYABLE = 'retryable'
+    DERIVED = 'derived'
+    POLICY_DEPENDENT = 'policy_dependent'
+    RUN_LEVEL_STOP = 'run_level_stop'
+
+
 class EventType(str, Enum):
     RUN_CREATED = 'run_created'
     RUN_STATUS = 'run_status'
@@ -184,6 +194,9 @@ RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
 REQUEST_TRANSITIONS: dict[RequestStatus, frozenset[RequestStatus]] = {
     RequestStatus.PENDING: frozenset({
         RequestStatus.IN_FLIGHT,
+        RequestStatus.SUCCEEDED,
+        RequestStatus.TERMINAL_FAILED,
+        RequestStatus.SUPERSEDED,
         RequestStatus.CANCELLED,
     }),
     RequestStatus.IN_FLIGHT: frozenset({
@@ -302,9 +315,28 @@ TERMINAL_ERROR_CATEGORIES = frozenset({
 DERIVED_ERROR_CATEGORIES = frozenset({
     ErrorCategory.INVALID_STRUCTURED_RESPONSE,
     ErrorCategory.INCOMPLETE_IDS,
-    ErrorCategory.LOCAL_VALIDATION,
-    ErrorCategory.CONTENT_POLICY,
 })
+
+ERROR_RETRY_DECISIONS: dict[ErrorCategory, RetryDecision] = {
+    ErrorCategory.AUTHENTICATION: RetryDecision.TERMINAL,
+    ErrorCategory.CONFIGURATION: RetryDecision.RUN_LEVEL_STOP,
+    ErrorCategory.MISSING_DEPENDENCY: RetryDecision.RUN_LEVEL_STOP,
+    ErrorCategory.UNSUPPORTED_CAPABILITY: RetryDecision.TERMINAL,
+    ErrorCategory.UNSUPPORTED_REQUEST: RetryDecision.TERMINAL,
+    ErrorCategory.RATE_LIMIT: RetryDecision.RETRYABLE,
+    ErrorCategory.QUOTA_EXHAUSTED: RetryDecision.TERMINAL,
+    ErrorCategory.TIMEOUT: RetryDecision.RETRYABLE,
+    ErrorCategory.TRANSPORT: RetryDecision.RETRYABLE,
+    ErrorCategory.PROVIDER_SERVER: RetryDecision.RETRYABLE,
+    ErrorCategory.INVALID_STRUCTURED_RESPONSE: RetryDecision.DERIVED,
+    ErrorCategory.INCOMPLETE_IDS: RetryDecision.DERIVED,
+    ErrorCategory.CONTENT_POLICY: RetryDecision.TERMINAL,
+    ErrorCategory.LOCAL_VALIDATION: RetryDecision.POLICY_DEPENDENT,
+    ErrorCategory.LOCAL_PERSISTENCE: RetryDecision.RUN_LEVEL_STOP,
+    ErrorCategory.LOCAL_ARTIFACT_WRITE: RetryDecision.RUN_LEVEL_STOP,
+    ErrorCategory.CANCELLED: RetryDecision.TERMINAL,
+    ErrorCategory.UNKNOWN_PROVIDER: RetryDecision.TERMINAL,
+}
 
 #: Attempts that may safely continue/resume without a model call when they
 #: are found in a reopened database.
@@ -316,6 +348,9 @@ REASON_RUN_BUDGET_EXHAUSTED_COST = 'run_budget_exhausted.cost'
 REASON_RUN_BUDGET_EXHAUSTED_TIME = 'run_budget_exhausted.time'
 REASON_RUN_POLICY_ATTEMPTS = 'run_policy.max_attempts'
 REASON_REQUEST_ATTEMPTS_EXHAUSTED = 'request.max_attempts_exhausted'
+REASON_ROOT_ATTEMPTS_EXHAUSTED = 'root.max_attempts_exhausted'
+REASON_LINEAGE_DEPTH_EXHAUSTED = 'root.max_lineage_depth_exhausted'
+REASON_DERIVED_REQUESTS_EXHAUSTED = 'root.max_derived_requests_exhausted'
 
 
 def utcnow_iso() -> str:
@@ -413,25 +448,29 @@ def derive_unknown_ids(accepted_ids: set[str] | list[str] | tuple[str], expected
     return [item_id for item_id in expected if item_id not in accepted]
 
 
+_RUN_ID_RE = re.compile(
+    r'^sync-run-v1-(?:\d{8}T\d{6}\.\d{6}Z-[0-9a-f]{32}|token-[0-9a-f]{64})$'
+)
+
+
 def validate_run_id(run_id: str) -> bool:
     """Return True when ``run_id`` is a path-safe durable-sync run id."""
-    if not isinstance(run_id, str):
-        return False
-    if not run_id.startswith(SYNC_RUN_DIR_PREFIX):
-        return False
-    if '/' in run_id or '\\' in run_id:
-        return False
-    if run_id in ('.', '..'):
-        return False
-    return True
-
-
-_RUN_ID_LOOSE_RE = re.compile(r'^sync-run-v1-[A-Za-z0-9_.-]+$')
+    return isinstance(run_id, str) and _RUN_ID_RE.fullmatch(run_id) is not None
 
 
 def assert_valid_run_id(run_id: str) -> None:
-    if not validate_run_id(run_id) or not _RUN_ID_LOOSE_RE.match(run_id):
+    if not validate_run_id(run_id):
         raise ValueError(f'unsafe or malformed run id: {run_id!r}')
+
+
+def retry_decision_for(error_category: ErrorCategory | str) -> RetryDecision:
+    """Return the frozen default decision for ``error_category``."""
+    category = (
+        error_category
+        if isinstance(error_category, ErrorCategory)
+        else ErrorCategory(str(error_category))
+    )
+    return ERROR_RETRY_DECISIONS[category]
 
 
 def can_transition(status: Enum, next_status: Enum, table: dict[Enum, frozenset[Enum]]) -> bool:

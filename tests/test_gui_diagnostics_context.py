@@ -81,6 +81,25 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
+    def test_command_reference_includes_durable_sync_lifecycle(self):
+        commands = build_cli_commands(
+            python_exe='python',
+            batch_script_path='gemini_translate_batch.py',
+            manifest_path=r'C:\jobs\manifest.json',
+            manifest={'mode': 'translation'},
+        )
+        command_text = '\n'.join(item.command for item in commands)
+        for name in (
+            'sync-start',
+            'sync-resume',
+            'sync-status',
+            'sync-cancel',
+            'sync-derive',
+        ):
+            self.assertIn(name, command_text)
+        self.assertIn('check', command_text)
+        self.assertIn('apply', command_text)
+
     def test_build_cli_commands_includes_compare_variants_dry_run(self):
         commands = build_cli_commands(
             python_exe="python",

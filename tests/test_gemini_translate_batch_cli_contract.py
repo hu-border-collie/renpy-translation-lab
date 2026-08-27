@@ -15,6 +15,10 @@ import gemini_translate_batch as batch
 class BatchCliContractTests(unittest.TestCase):
     @staticmethod
     def _machine_command_argv(command):
+        if command in {'sync-resume', 'sync-cancel', 'sync-derive'}:
+            return [command, 'sync-run-v1-00000000-0000-0000-0000-000000000000']
+        if command == 'sync-status':
+            return [command, '--latest']
         if command == "export-project-snapshot":
             return [command, "--version-id", "test-version"]
         if command == "reconcile-project-snapshots":
@@ -69,6 +73,31 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertTrue(strict_invocation.require_explicit_target)
 
                 self.assertTrue(strict_args.strict_exit_codes)
+
+    def test_durable_sync_json_alias_and_selector_contract(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(['sync-status', '--latest', '--json', '--compact'])
+        self.assertEqual(args.output, 'json')
+        self.assertTrue(args.latest)
+        self.assertTrue(args.compact)
+
+        invalid = parser.parse_args(['sync-status', '--latest', 'sync-run-v1-x'])
+        with self.assertRaisesRegex(
+            batch.cli_contract.MachineContractError,
+            'exactly one',
+        ):
+            batch.run_durable_sync_command(invalid)
+
+        derive = parser.parse_args([
+            'sync-derive',
+            'sync-run-v1-00000000-0000-0000-0000-000000000000',
+            '--retry-unknown',
+            '--ack-duplicate-billing-risk',
+            '--json',
+        ])
+        self.assertTrue(derive.retry_unknown)
+        self.assertTrue(derive.ack_duplicate_billing_risk)
+        self.assertEqual(derive.output, 'json')
 
     def test_core_commands_expose_output_trimming_arguments(self):
         parser = batch.build_arg_parser()
@@ -722,6 +751,31 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(
             envelope["result"]["revision_apply_blocked_reason"],
             "all_items_blocked",
+        )
+
+    def test_durable_apply_machine_result_exposes_idempotent_state(self):
+        manifest = {
+            "_manifest_path": "C:/runs/sync-run/preview/manifest.json",
+            "state": "applied",
+            "last_apply_result": "already_applied",
+            "applied_files": ["script.rpy"],
+            "summary": {"translated_items": 1},
+            "durable_check_binding": {"run_manifest": {"sha256": "a" * 64}},
+        }
+        envelope = batch.build_machine_success_envelope(
+            "apply", manifest, SimpleNamespace(target="sync-run-v1-demo")
+        )
+        self.assertEqual(envelope["status"], "already_applied")
+        self.assertEqual(
+            envelope["result"]["apply"]["last_apply_result"],
+            "already_applied",
+        )
+        self.assertEqual(
+            envelope["result"]["apply"]["applied_files"], ["script.rpy"]
+        )
+        self.assertEqual(
+            envelope["artifacts"]["manifest"],
+            "C:/runs/sync-run/preview/manifest.json",
         )
 
     def test_apply_revisions_is_registered_for_machine_output(self):

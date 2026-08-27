@@ -20,6 +20,7 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    DURABLE_SYNC_COPY,
     USAGE_LEDGER_COPY,
     VERSION_ASSET_COPY,
     format_notice_fact,
@@ -214,6 +215,48 @@ def build_cli_commands(
         DiagnosticsCommand(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['start'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-start']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['status'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-status', '--latest']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['resume'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-resume', '<RUN>']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['cancel'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-cancel', '<RUN>']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['derive'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-derive', '<RUN>']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['check'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['check', '<RUN>']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_COPY['apply'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['apply', '<RUN>']
+            ),
         ),
         DiagnosticsCommand(
             label=VERSION_ASSET_COPY["export_snapshot"],

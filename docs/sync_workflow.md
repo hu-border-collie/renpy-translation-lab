@@ -61,7 +61,7 @@ GUI 的停止操作会使当前 CLI 任务以失败/取消状态收尾；即使�
 
 校验会稳定记录无效 JSON、缺失或重复 ID、未知 ID、缺失字段、字段类型错误、空译文及关键词证据引用未知源 ID 等原因。翻译与订正要求每个请求 ID 恰好出现一次；先返回的有效项会保留，只对缺失或无效 ID 发起定点重试，不会重译已经通过合同的项。关键词没有一对一输出数量，但每个候选必须引用至少一个属于当前请求的证据 ID；非空 `chunk_summary` 也必须通过 `summary_evidence_item_ids` 引用至少一个当前请求 ID。合同失败时会只重试当前关键词 chunk。
 
-普通 Sync 初译的原始 plan chunk 在重试期间保持不变。缺项定点重试生成确定性 `--T` 子请求；无效/不完整响应需要二分时生成 `--L` / `--R` 子请求。子请求保留父 request/plan identity、canonical prompt 与原 chunk 上下文，并在 manifest 的 `model_contract.retry_lineage` 记录父子 request ID；不会重建或篡改最初的 TranslationPlan。完整 checkpoint、租约、取消与恢复执行器仍属于 #347。
+普通 Sync 初译的原始 plan chunk 在重试期间保持不变。缺项定点重试生成确定性子请求；无效/不完整响应需要二分时生成 `--L` / `--R` 子请求。子请求保留父 request/plan identity、canonical prompt 与原 chunk 上下文，不会重建或篡改最初的 TranslationPlan。耐久入口把 request、attempt、重试 lineage、退避截止时间、usage outbox 与结果 winner 持久化到 SQLite；进程中断后由 `sync-resume` 从已提交状态继续。
 
 终端、GUI 与 manifest 都会显示首次/最终完整率、定点重试次数和未解决项。同步翻译中最终有效的条目数，只统计同时通过模型合同和本地 adapter 校验、可以进入安全 preview 的条目；关键词没有预期候选数量，因此明确显示完整请求块数与请求块完整率，而不把 chunk 数描述成候选条目数。重试后仍不完整时任务标为 `partial`，同时保留通过合同的结果：同步翻译只为这些结果生成安全 preview；同步订正和关键词报告也会明确显示部分完成。`partial` 不是质量认可，写回前仍须人工审查。
 
@@ -93,6 +93,31 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 `prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，两者不一致（macro 文件新增、删除或内容变化）即拦截写回——不要强行复用旧预览，应基于当前文件重新生成并审查。未记录 `prompt_context` 的旧 manifest 保持可用。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
 
 ## 预览后写回
+
+### 耐久 Sync（可恢复 CLI）
+
+需要断点恢复、显式取消或机器输出时，使用 Batch 脚本中的耐久入口：
+
+```powershell
+python gemini_translate_batch.py sync-start --json
+python gemini_translate_batch.py sync-status <RUN> --json
+python gemini_translate_batch.py sync-resume <RUN> --json
+python gemini_translate_batch.py sync-cancel <RUN> --json
+python gemini_translate_batch.py sync-derive <RUN> --json
+```
+
+`sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
+
+终态只代表执行器不再调度，并不授权写回。耐久路径固定为：
+
+```powershell
+python gemini_translate_batch.py check <RUN> --output json --strict-exit-codes
+python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
+```
+
+`check` 离线读取冻结的 target shape 与耐久 `results.jsonl`，复用现有结构/质量门禁，并在 `writeback_gate=allow` 时生成绑定 diff。`apply` 只消费该 checked preview；run manifest、results、targets、check manifest、质量配置或源文件任一变化都会拒绝。`--force` 也不能绕过这些绑定。重复 apply 返回 `already_applied`，不会重复写进度或模型用量。
+
+这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
 ### 1. 生成预览
 
@@ -139,7 +164,7 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 
 `--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、TranslationPlan 指纹/request IDs、plan 的逐文件 source digest、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、plan/预览制品被修改或质量规则/策略版本变化都会阻止写回。当前生产 Sync 路径只注册 Ren'Py adapter；公共 `WritebackPlan` 合同会稳定序列化 `engine` 与 `adapter_version`，apply 会逐文件、逐字段与 TranslationPlan source identity 对照，错误仅报告这些非敏感标识的 expected/actual。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。没有 `translation_plan` 字段的旧 preview manifest 继续走 legacy 校验路径。
 
-`--prepare` 与 `--apply` 不能同时使用。同步 CLI 当前输出面向人类阅读，不提供 Batch 核心命令的 JSON envelope；自动化需要稳定机器合同、远程状态轮询或断点恢复时应改用 Batch。
+`--prepare` 与 `--apply` 不能同时使用。旧的 `gemini_translate.py` 预览入口仍面向人类阅读；需要稳定机器合同或断点恢复时使用上面的耐久 `sync-*` 命令。
 
 ## Gemini 与 LiteLLM 数据边界
 
@@ -156,8 +181,8 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 | 调用方式 | 进程内逐批即时请求 | 远程异步 job |
 | 默认写回 | 只生成 preview，显式 `--apply` | `download -> check -> apply` |
 | 安全合同 | sync manifest + 源快照 + 制品哈希 + adapter 计划 | manifest/results identity + 最近一次 `writeback_gate=allow` + 写回前复核 |
-| 状态恢复 | 复用已生成 preview；阻断后重新生成 | `status` / `download` / submit recovery / retry package |
-| 机器输出 | 人类可读文本 | 核心命令支持版本化 JSON envelope |
+| 状态恢复 | 旧入口复用 preview；耐久入口提供 `sync-resume/status/cancel/derive` | `status` / `download` / submit recovery / retry package |
+| 机器输出 | 耐久 `sync-*` 支持版本化 JSON；旧入口为文本 | 核心命令支持版本化 JSON envelope |
 | 费用语义 | 供应商同步计费，无 Batch 折扣 | Gemini Batch 定价；提交前可 `estimate-cost` |
 
 两条路径都不能代替完整游戏 QA。写回后仍应运行 Ren'Py lint、机械质量检查，并进行人工/LLM 语义审校。
