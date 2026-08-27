@@ -139,6 +139,20 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                 self.assertIsNotNone(store.get_artifact(kind='preview_manifest'))
 
                 check_path = Path(checked['_manifest_path'])
+                with self.assertRaises(
+                    batch.cli_contract.MachineContractError,
+                ) as direct_apply:
+                    batch.apply_results(str(check_path), force=True)
+                self.assertEqual(
+                    direct_apply.exception.code_name,
+                    'DURABLE_SYNC_APPLY_REQUIRES_RUN',
+                )
+                self.assertEqual(
+                    direct_apply.exception.details['run_id'],
+                    started['run_id'],
+                )
+                self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
+
                 checked_bytes = check_path.read_bytes()
                 check_path.write_bytes(checked_bytes + b'\n')
                 with self.assertRaisesRegex(SystemExit, 'check_manifest changed'):

@@ -12305,6 +12305,23 @@ def apply_results(target=None, force=False):
         # intentionally cannot bypass check/source/artifact predicates.
         return apply_durable_sync_results(durable_store)
     manifest = load_manifest(target)
+    durable_source = manifest.get('durable_sync_source')
+    if manifest.get('durable_sync') or isinstance(durable_source, dict):
+        raise cli_contract.MachineContractError(
+            'Durable Sync check manifests cannot be applied directly; pass '
+            'the durable run ID or run directory so the bound preview and '
+            'source snapshot are verified.',
+            code_name='DURABLE_SYNC_APPLY_REQUIRES_RUN',
+            suggested_action='pass_durable_sync_run_id',
+            details={
+                'run_id': (
+                    str(durable_source.get('run_id') or '')
+                    if isinstance(durable_source, dict)
+                    else ''
+                ),
+                'manifest_path': str(manifest.get('_manifest_path') or ''),
+            },
+        )
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
         raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
