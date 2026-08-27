@@ -310,6 +310,10 @@ class ProductionBackendAdapterTests(unittest.TestCase):
                 snapshot = service.start(Context.plan_build)
 
             generate.assert_called_once()
+            self.assertEqual(generate.call_args.kwargs['retry_attempts'], 1)
+            self.assertFalse(
+                generate.call_args.kwargs['allow_credential_rotation']
+            )
             target_path = Path(snapshot['artifacts']['targets_json'])
             self.assertTrue(target_path.is_file())
             self.assertIn(snapshot['run_id'], target_path.read_text(encoding='utf-8'))

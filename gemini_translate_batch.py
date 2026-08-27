@@ -14074,13 +14074,16 @@ def run_sync_request(
     *,
     api_key_index=None,
     retry_attempts=None,
+    allow_credential_rotation=True,
     timeout_seconds=None,
 ):
     """Execute one sync request using a frozen TaskRoute.
 
     The model comes from ``plan.profiles[route.profile_id]``. ``SYNC_MODEL``
     is never consulted here; callers must freeze a :class:`ModelRoutingPlan`
-    at run start and pass that snapshot.
+    at run start and pass that snapshot.  Durable callers disable credential
+    rotation because every Provider invocation must have its own persisted
+    attempt boundary.
     """
     route = _require_task_route(route)
     if plan is None:
@@ -14133,7 +14136,11 @@ def run_sync_request(
 
     key_attempts = (
         legacy.api_key_rotation_attempts()
-        if api_key_index is None and hasattr(legacy, 'api_key_rotation_attempts')
+        if (
+            allow_credential_rotation
+            and api_key_index is None
+            and hasattr(legacy, 'api_key_rotation_attempts')
+        )
         else 1
     )
     attempts = (
@@ -14176,6 +14183,7 @@ def run_sync_request(
             if decision.retry_same_request and attempt < attempts:
                 rotated = bool(
                     decision.rotate_credentials
+                    and allow_credential_rotation
                     and api_key_index is None
                     and legacy.rotate_api_key()
                 )

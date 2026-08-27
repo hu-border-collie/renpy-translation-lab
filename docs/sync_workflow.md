@@ -117,6 +117,8 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 
 `check` 离线读取冻结的 target shape 与耐久 `results.jsonl`，复用现有结构/质量门禁，并在 `writeback_gate=allow` 时生成绑定 diff。`apply` 只消费该 checked preview；run manifest、results、targets、check manifest、质量配置或源文件任一变化都会拒绝。`--force` 也不能绕过这些绑定。重复 apply 返回 `already_applied`，不会重复写进度或模型用量。
 
+耐久执行器把一次 attempt 严格绑定为一次 Provider 调用，因此会显式关闭普通 Gemini Sync 在单次调用内部进行的 API Key 轮换，也不会在 adapter 内部隐藏 timeout 重试。鉴权或凭据配置失败会按该 attempt 的稳定分类落库；修正凭据后应使用 `sync-derive` 创建新 run，新 run 可复用旧 run 已成功且仍通过校验的结果。这个限制不影响普通非耐久 Sync 的既有 Key 轮换行为。
+
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
 ### 1. 生成预览

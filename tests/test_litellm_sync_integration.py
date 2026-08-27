@@ -103,6 +103,50 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
         self.assertEqual(request.model, "gemini-explicit")
         self.assertEqual(request.config["timeout"], 45)
 
+    def test_gemini_credential_rotation_can_be_explicitly_disabled(self):
+        route, plan = _explicit_translation_plan(
+            "gemini-explicit",
+            backend="gemini",
+        )
+        fake_backend = mock.Mock()
+        fake_backend.generate.side_effect = RuntimeError("authentication")
+        with (
+            mock.patch.object(batch_mod, "SYNC_BACKEND", "gemini"),
+            mock.patch.object(batch_mod, "create_batch_client", return_value=object()),
+            mock.patch.object(
+                batch_mod.legacy,
+                "api_key_rotation_attempts",
+                return_value=3,
+            ),
+            mock.patch.object(batch_mod.legacy, "rotate_api_key") as rotate,
+            mock.patch.object(
+                batch_mod,
+                "sync_recovery_decision",
+                return_value=type("Decision", (), {
+                    "retry_same_request": True,
+                    "rotate_credentials": True,
+                    "category": "authentication",
+                    "backoff": False,
+                })(),
+            ),
+            mock.patch.object(
+                mp,
+                "build_sync_backend",
+                return_value=fake_backend,
+            ),
+        ):
+            with self.assertRaises(RuntimeError):
+                batch_mod.run_sync_request(
+                    {"contents": []},
+                    route,
+                    plan=plan,
+                    retry_attempts=1,
+                    allow_credential_rotation=False,
+                )
+
+        self.assertEqual(fake_backend.generate.call_count, 1)
+        rotate.assert_not_called()
+
     def test_litellm_rejects_gemini_api_key_index(self):
         route, plan = _explicit_translation_plan("openai/test")
         with (

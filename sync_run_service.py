@@ -701,7 +701,11 @@ def build_production_backend_adapter(
             },
             route,
             plan=routing_plan,
+            # A durable attempt must correspond to exactly one Provider
+            # invocation. Hidden same-attempt key rotation would make crash
+            # recovery and outcome_unknown billing semantics unauditable.
             retry_attempts=1,
+            allow_credential_rotation=False,
             timeout_seconds=timeout_seconds,
         )
 
