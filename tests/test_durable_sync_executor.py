@@ -536,15 +536,15 @@ class ExecutorTests(unittest.TestCase):
 
         def release_later():
             self.assertTrue(backend.started.wait(timeout=1.0))
-            time.sleep(0.25)
+            time.sleep(1.1)
             backend.release.set()
 
         releaser = threading.Thread(target=release_later)
         releaser.start()
         snapshot = self.executor(
-            store, backend, policy, lease_ttl_seconds=0.12
+            store, backend, policy, lease_ttl_seconds=0.5
         ).run()
-        releaser.join(timeout=1.0)
+        releaser.join(timeout=2.0)
         self.assertEqual(snapshot['run_status'], RunStatus.COMPLETED.value)
 
     def test_max_in_flight_is_a_real_bounded_dispatch_limit(self):

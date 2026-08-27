@@ -16,17 +16,26 @@ if str(REPO_ROOT) not in sys.path:
 from sync_run_store import SyncRunStore
 
 
+def _expire_and_exit(store: SyncRunStore, code: int) -> None:
+    with store._tx() as conn:
+        conn.execute(
+            'UPDATE leases SET expires_at = ? WHERE run_id = ?',
+            ('2000-01-01T00:00:00.000000Z', store.run_id),
+        )
+    os._exit(code)
+
+
 def main(argv) -> int:
     root_dir, run_id, mode = argv
     store = SyncRunStore(root_dir, run_id)
     owner = 'abrupt-child-owner'
-    store.acquire_lease(owner_token=owner, ttl_seconds=0.05)
+    store.acquire_lease(owner_token=owner, ttl_seconds=5.0)
     attempt_id = store.prepare_attempt(request_id='req-1', owner_token=owner)
     if mode == 'prepared':
-        os._exit(91)
+        _expire_and_exit(store, 91)
     store.dispatch_attempt(attempt_id=attempt_id, owner_token=owner)
     if mode == 'dispatched':
-        os._exit(92)
+        _expire_and_exit(store, 92)
     if mode == 'committed':
         store.record_success(
             attempt_id=attempt_id,
@@ -37,7 +46,7 @@ def main(argv) -> int:
             },
             usage_metadata={'total_tokens': 1},
         )
-        os._exit(93)
+        _expire_and_exit(store, 93)
     raise ValueError(f'unknown crash mode: {mode}')
 
 
