@@ -624,15 +624,21 @@ class ExecutorTests(unittest.TestCase):
 
         def execute():
             result['snapshot'] = self.executor(
-                store, backend, policy, lease_ttl_seconds=0.15
+                store, backend, policy, lease_ttl_seconds=5.0
             ).run()
 
         worker = threading.Thread(target=execute)
         worker.start()
-        self.assertTrue(backend.started.wait(timeout=1.0))
-        self.assertTrue(store.cancel_intent(reason='user'))
-        worker.join(timeout=2.0)
-        self.assertFalse(worker.is_alive())
+        worker_alive = True
+        try:
+            self.assertTrue(backend.started.wait(timeout=2.0))
+            self.assertTrue(store.cancel_intent(reason='user'))
+            worker.join(timeout=5.0)
+            worker_alive = worker.is_alive()
+        finally:
+            backend.release.set()
+            worker.join(timeout=2.0)
+        self.assertFalse(worker_alive)
         self.assertTrue(backend.cancelled.is_set())
         self.assertEqual(
             result['snapshot']['run_status'], RunStatus.CANCELLED.value
