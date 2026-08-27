@@ -4491,6 +4491,28 @@ def _sync_plan_source_identity(adapter_snapshot):
     )
 
 
+def current_sync_source_identity():
+    """Rebuild the active project's read-only Sync source identity.
+
+    Callers must load the current translator settings first.  This scan does
+    not resolve a model route, require credentials, run prepare commands, or
+    mutate project files, so offline check/apply can use it as a final
+    writeback freshness predicate.
+    """
+    adapter = RenPyAdapter(legacy_module=sys.modules[__name__])
+    snapshot = build_translation_snapshot(
+        adapter,
+        ProjectDiscoveryRequest(
+            project_root=BASE_DIR,
+            localization_root=TL_DIR,
+            target_language=PREP_LANGUAGE,
+            include_files=tuple(sorted(INCLUDE_FILES)),
+            include_prefixes=tuple(sorted(INCLUDE_PREFIXES)),
+        ),
+    )
+    return _sync_plan_source_identity(snapshot).to_dict()
+
+
 def _render_sync_retrieval_reference_text(history_hits, story_hits):
     """Render the shared retrieval layer without the lexical glossary block."""
     blocks = []

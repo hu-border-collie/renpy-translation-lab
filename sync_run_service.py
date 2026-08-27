@@ -637,6 +637,8 @@ class ProductionSyncBackendAdapter:
             for item in report.items:
                 item_id = str(item.get('id') or '')
                 translation = str(item.get('translation') or '')
+                if not translation.strip():
+                    continue
                 source = next(target for target in target_items if str(target.get('id')) == item_id)
                 if self.translation_validator is not None:
                     valid, _reason = self.translation_validator(source, translation)

@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from durable_sync_executor import ProviderOutcome
+from durable_sync_executor import ProviderFailure, ProviderOutcome
 from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import ErrorCode, RunStatus, SyncRunError
+from sync_run_contracts import ErrorCategory, ErrorCode, RunStatus, SyncRunError
 from sync_run_service import (
     ProductionSyncBackendAdapter,
     SyncRunService,
@@ -232,6 +232,32 @@ class ProductionBackendAdapterTests(unittest.TestCase):
         self.assertEqual(calls, [('req-1', 30)])
         self.assertEqual(set(result.accepted_items), {'item-1', 'item-2'})
         self.assertEqual(result.normalized_payload['translations'][0]['id'], 'item-1')
+
+    def test_empty_translation_is_never_accepted_as_success(self):
+        adapter = ProductionSyncBackendAdapter(
+            lambda _request, _timeout: {
+                'parsed': {
+                    'translations': [
+                        {'id': 'item-1', 'translation': '   '}
+                    ]
+                }
+            },
+            lambda _request, _ids: [{'id': 'item-1', 'text': 'one'}],
+            translation_validator=lambda _item, _translation: (True, 'OK'),
+        )
+        request = plan_build()['requests'][0]
+
+        with self.assertRaises(ProviderFailure) as raised:
+            adapter.send(request, attempt={}, timeout_seconds=30)
+
+        self.assertEqual(
+            raised.exception.category,
+            ErrorCategory.INVALID_STRUCTURED_RESPONSE,
+        )
+        self.assertEqual(
+            raised.exception.reason_code,
+            'result_empty_translation',
+        )
 
     def test_production_service_freezes_offline_targets_before_dispatch(self):
         class Context:

@@ -12108,6 +12108,69 @@ def check_durable_sync_results(store):
     return checked
 
 
+def _require_durable_sync_source_fresh(store, preview_manifest):
+    """Block stale writeback while permitting an idempotent repeated apply.
+
+    Every current source digest must match the run's T0 snapshot.  Files bound
+    to the checked preview may instead already match that preview's digest,
+    which is the only expected mutation after a successful first apply.
+    """
+    stored_identity = dict(store.get_plan()['plan'].get('source_identity') or {})
+    current_identity = dict(legacy.current_sync_source_identity() or {})
+    stored_files = {
+        str(path).replace('\\', '/'): str(digest or '')
+        for path, digest in dict(stored_identity.get('file_digests') or {}).items()
+    }
+    current_files = {
+        str(path).replace('\\', '/'): str(digest or '')
+        for path, digest in dict(current_identity.get('file_digests') or {}).items()
+    }
+    preview_files = {
+        str(entry.get('relative_path') or '').replace('\\', '/'): str(
+            entry.get('preview_sha256') or ''
+        )
+        for entry in preview_manifest.get('files') or []
+        if isinstance(entry, dict)
+    }
+    missing_paths = sorted(set(stored_files) - set(current_files))
+    added_paths = sorted(set(current_files) - set(stored_files))
+    changed_paths = sorted(
+        path
+        for path in set(stored_files) & set(current_files)
+        if current_files[path]
+        not in {stored_files[path], preview_files.get(path, '')}
+    )
+    runtime_changed = any(
+        str(current_identity.get(field) or '')
+        != str(stored_identity.get(field) or '')
+        for field in ('engine', 'adapter_version')
+    )
+    if not (missing_paths or added_paths or changed_paths or runtime_changed):
+        return
+
+    reasons = []
+    if missing_paths:
+        reasons.append('source_files_missing')
+    if added_paths:
+        reasons.append('source_files_added')
+    if changed_paths:
+        reasons.append('source_files_changed')
+    if runtime_changed:
+        reasons.append('source_adapter_changed')
+    raise cli_contract.MachineContractError(
+        'Durable Sync source snapshot changed after this run was created.',
+        code_name='SYNC_RUN_FRESHNESS_MISMATCH',
+        suggested_action='derive_new_sync_run',
+        details={
+            'run_id': store.run_id,
+            'reasons': reasons,
+            'paths': sorted(
+                set(missing_paths + added_paths + changed_paths)
+            )[:20],
+        },
+    )
+
+
 def apply_durable_sync_results(store):
     violations = store.verify_integrity()
     if violations:
@@ -12118,6 +12181,8 @@ def apply_durable_sync_results(store):
             details={'run_id': store.run_id, 'violations': violations[:20]},
         )
     preview = _verified_store_artifact(store, 'preview_manifest')
+    preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
+    _require_durable_sync_source_fresh(store, preview_manifest)
     applied = legacy.apply_sync_translation_preview(preview['path'])
     relative = Path(preview['path']).resolve().relative_to(store.run_dir.resolve())
     store.put_artifact(
@@ -17799,6 +17864,33 @@ def validate_machine_invocation(args):
     """Enforce opt-in deterministic invocation rules before workflow setup."""
 
     command = str(getattr(args, 'command', '') or '')
+    if command == 'sync-derive':
+        retry_unknown = bool(getattr(args, 'retry_unknown', False))
+        acknowledge = bool(
+            getattr(args, 'ack_duplicate_billing_risk', False)
+        )
+        exclude_unknown = bool(getattr(args, 'exclude_unknown', False))
+        invalid_reason = ''
+        if retry_unknown and exclude_unknown:
+            invalid_reason = (
+                '--retry-unknown and --exclude-unknown are mutually exclusive'
+            )
+        elif retry_unknown and not acknowledge:
+            invalid_reason = (
+                '--retry-unknown requires --ack-duplicate-billing-risk'
+            )
+        elif acknowledge and not retry_unknown:
+            invalid_reason = (
+                '--ack-duplicate-billing-risk is only valid with --retry-unknown'
+            )
+        if invalid_reason:
+            raise cli_contract.MachineContractError(
+                invalid_reason + '.',
+                code_name='INVALID_DERIVE_OPTIONS',
+                suggested_action='fix_derive_options',
+                semantic_exit_code=cli_contract.EXIT_USAGE,
+                details={'command': command},
+            )
     require_target = bool(
         getattr(args, 'non_interactive', False)
         or getattr(args, 'require_explicit_target', False)

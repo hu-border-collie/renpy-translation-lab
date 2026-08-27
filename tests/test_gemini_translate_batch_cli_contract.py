@@ -99,6 +99,32 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertTrue(derive.ack_duplicate_billing_risk)
         self.assertEqual(derive.output, 'json')
 
+    def test_sync_derive_invalid_ack_option_has_usage_envelope(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(batch, '_durable_sync_production_service') as service,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main([
+                'sync-derive',
+                'sync-run-v1-00000000-0000-0000-0000-000000000000',
+                '--ack-duplicate-billing-risk',
+                '--json',
+                '--strict-exit-codes',
+            ])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload['error']['code'], 'INVALID_DERIVE_OPTIONS')
+        self.assertEqual(
+            payload['error']['suggested_action'],
+            'fix_derive_options',
+        )
+        self.assertNotIn('Traceback', stderr.getvalue())
+        service.assert_not_called()
+
     def test_core_commands_expose_output_trimming_arguments(self):
         parser = batch.build_arg_parser()
 

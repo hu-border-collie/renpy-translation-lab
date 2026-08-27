@@ -43,6 +43,8 @@ class DurableSyncWorkflowTests(unittest.TestCase):
             tl_dir.mkdir(parents=True)
             target = tl_dir / 'script.rpy'
             target.write_text('    "Hello"\n', encoding='utf-8')
+            context_file = tl_dir / 'context.rpy'
+            context_file.write_text('# context v1\n', encoding='utf-8')
             log_dir = root / 'logs'
             run_root = log_dir / 'sync_runs'
             patches = (
@@ -124,6 +126,19 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'check_manifest changed'):
                     batch.apply_results(started['run_id'], force=True)
                 check_path.write_bytes(checked_bytes)
+
+                context_file.write_text('# context v2\n', encoding='utf-8')
+                with self.assertRaisesRegex(
+                    batch.cli_contract.MachineContractError,
+                    'source snapshot changed',
+                ) as stale:
+                    batch.apply_results(started['run_id'], force=True)
+                self.assertEqual(
+                    stale.exception.code_name,
+                    'SYNC_RUN_FRESHNESS_MISMATCH',
+                )
+                self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
+                context_file.write_text('# context v1\n', encoding='utf-8')
 
                 applied = batch.apply_results(started['run_id'], force=True)
                 self.assertEqual(applied['state'], 'applied')
