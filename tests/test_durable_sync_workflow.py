@@ -120,6 +120,24 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                 self.assertIsNotNone(preview_artifact)
                 self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
 
+                blocked = dict(checked)
+                blocked['last_check_summary'] = {
+                    **dict(checked['last_check_summary']),
+                    'writeback_gate': {'decision': 'deny'},
+                }
+                with mock.patch.object(batch, 'check_results', return_value=blocked):
+                    batch.check_durable_sync_results(store)
+                self.assertIsNone(store.get_artifact(kind='preview_manifest'))
+                with self.assertRaisesRegex(
+                    batch.cli_contract.MachineContractError,
+                    'preview_manifest',
+                ):
+                    batch.apply_results(started['run_id'], force=True)
+                self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
+
+                checked = batch.check_durable_sync_results(store)
+                self.assertIsNotNone(store.get_artifact(kind='preview_manifest'))
+
                 check_path = Path(checked['_manifest_path'])
                 checked_bytes = check_path.read_bytes()
                 check_path.write_bytes(checked_bytes + b'\n')

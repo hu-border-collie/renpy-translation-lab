@@ -12102,6 +12102,9 @@ def _create_checked_durable_sync_preview(store, manifest):
 
 
 def check_durable_sync_results(store):
+    # A new check attempt supersedes the prior writeback authorization even if
+    # this check is denied or interrupted before it can create a new preview.
+    store.delete_artifact(kind='preview_manifest')
     manifest = _build_durable_sync_check_manifest(store)
     checked = check_results(manifest['_manifest_path'])
     _create_checked_durable_sync_preview(store, checked)
@@ -17993,7 +17996,7 @@ def run_durable_sync_command(args):
                 'sync-status requires exactly one of RUN or --latest.',
                 code_name='INVALID_RUN_SELECTOR',
                 suggested_action='pass_run_or_latest',
-                details={'semantic_exit_code': cli_contract.EXIT_INVALID_STATE},
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
             )
         snapshot = _durable_sync_store_only_service().status(
             run_id or None,

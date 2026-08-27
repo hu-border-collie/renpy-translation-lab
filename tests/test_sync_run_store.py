@@ -629,9 +629,24 @@ class ProjectionAndIntegrityTests(unittest.TestCase):
         for line in self.store.export_events_jsonl().splitlines():
             self.assertIsInstance(json.loads(line), dict)
 
+    def test_delete_artifact_removes_binding_but_preserves_file(self):
+        artifact_path = self.store.run_dir / 'preview.json'
+        artifact_path.write_text('{}\n', encoding='utf-8')
+        self.store.put_artifact(
+            kind='preview_manifest',
+            relative_path=artifact_path.name,
+            sha256_digest='a' * 64,
+            schema_version=1,
+        )
+
+        self.assertTrue(self.store.delete_artifact(kind='preview_manifest'))
+        self.assertIsNone(self.store.get_artifact(kind='preview_manifest'))
+        self.assertTrue(artifact_path.is_file())
+        self.assertFalse(self.store.delete_artifact(kind='preview_manifest'))
+
     def test_integrity_detects_event_and_attempt_disagreement(self):
         self.store.acquire_lease(owner_token='owner-1')
-        attempt_id = self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+        self.store.prepare_attempt(request_id='req-1', owner_token='owner-1')
         conn = sqlite3.connect(str(self.store.db_path))
         try:
             with conn:

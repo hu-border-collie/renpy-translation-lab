@@ -3385,6 +3385,16 @@ class SyncRunStore:
             ).fetchone()
             return _row_dict(row)
 
+    def delete_artifact(self, *, kind: str) -> bool:
+        """Remove a derived artifact binding while leaving its audit file intact."""
+        with self._tx() as conn:
+            self._load_run_tx(conn, self.run_id)
+            cursor = conn.execute(
+                'DELETE FROM artifacts WHERE run_id = ? AND kind = ?',
+                (self.run_id, str(kind)),
+            )
+            return cursor.rowcount > 0
+
     def checkpoint(self) -> dict:
         """Run a truncating WAL checkpoint and return the PRAGMA result row."""
         with self._conn() as conn:

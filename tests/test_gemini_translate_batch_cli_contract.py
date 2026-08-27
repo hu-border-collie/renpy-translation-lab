@@ -85,8 +85,13 @@ class BatchCliContractTests(unittest.TestCase):
         with self.assertRaisesRegex(
             batch.cli_contract.MachineContractError,
             'exactly one',
-        ):
+        ) as raised:
             batch.run_durable_sync_command(invalid)
+        self.assertEqual(
+            raised.exception.semantic_exit_code,
+            batch.cli_contract.EXIT_INVALID_STATE,
+        )
+        self.assertNotIn('semantic_exit_code', raised.exception.details)
 
         derive = parser.parse_args([
             'sync-derive',
