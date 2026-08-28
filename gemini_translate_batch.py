@@ -12186,7 +12186,10 @@ def apply_durable_sync_results(store):
     preview = _verified_store_artifact(store, 'preview_manifest')
     preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
     _require_durable_sync_source_fresh(store, preview_manifest)
-    applied = legacy.apply_sync_translation_preview(preview['path'])
+    applied = legacy.apply_sync_translation_preview(
+        preview['path'],
+        allow_durable=True,
+    )
     relative = Path(preview['path']).resolve().relative_to(store.run_dir.resolve())
     store.put_artifact(
         kind='preview_manifest',

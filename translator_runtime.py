@@ -6411,8 +6411,12 @@ def collect_tasks(lines, skip_translated=True):
     tasks, _progress = collect_tasks_with_progress(lines, skip_translated=skip_translated)
     return tasks
 
-def apply_sync_translation_preview(manifest_path):
-    """Apply a generated sync preview after validating every source file."""
+def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
+    """Apply a generated sync preview after validating every source file.
+
+    Durable previews additionally require run-store freshness validation, so
+    only the durable Batch entrypoint may opt into applying one here.
+    """
     load_config(require_api_key=False)
     load_translator_settings()
 
@@ -6425,6 +6429,12 @@ def apply_sync_translation_preview(manifest_path):
         manifest = sync_translation_preview.load_sync_preview(manifest_path)
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
+    if manifest.get('durable_check_binding') is not None and not allow_durable:
+        raise SystemExit(
+            'Sync apply blocked: Durable Sync previews must be applied with '
+            '`gemini_translate_batch.py apply <RUN>` so the complete source '
+            'snapshot is revalidated.'
+        )
     prompt_context = manifest.get("prompt_context") or {}
     manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
     # Legacy manifests without prompt_context keep applying; every manifest

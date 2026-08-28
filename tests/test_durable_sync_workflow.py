@@ -136,7 +136,17 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                 self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
 
                 checked = batch.check_durable_sync_results(store)
-                self.assertIsNotNone(store.get_artifact(kind='preview_manifest'))
+                preview_artifact = store.get_artifact(kind='preview_manifest')
+                self.assertIsNotNone(preview_artifact)
+                preview_path = store.resolve_artifact_path(
+                    preview_artifact['relative_path']
+                )
+                with self.assertRaisesRegex(
+                    SystemExit,
+                    'Durable Sync previews must be applied',
+                ):
+                    batch.legacy.apply_sync_translation_preview(preview_path)
+                self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
 
                 check_path = Path(checked['_manifest_path'])
                 with self.assertRaises(
