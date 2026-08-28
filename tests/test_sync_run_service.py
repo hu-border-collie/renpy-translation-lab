@@ -143,6 +143,84 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.backend.calls, 1)
         self.assertFalse(second['changed'])
 
+    def test_terminal_token_reopen_does_not_rebuild_frozen_artifact(self):
+        live_content = {'value': 'frozen\n'}
+        provider_calls = []
+
+        def artifact_provider(_store):
+            provider_calls.append(live_content['value'])
+            return [{
+                'kind': 'targets_json',
+                'relative_path': 'targets.json',
+                'content': live_content['value'],
+                'schema_version': 1,
+            }]
+
+        service = SyncRunService(
+            self.root,
+            backend_factory=lambda _store: self.backend,
+            derived_builder_factory=lambda _store: child_builder,
+            freshness_reporter=lambda _store: dict(self.fresh),
+            run_artifact_provider=artifact_provider,
+            run_artifact_kinds=('targets_json',),
+        )
+        first = service.start(plan_build(), client_token='artifact-token')
+        path = Path(first['artifacts']['targets_json'])
+        calls_after_first = len(provider_calls)
+        live_content['value'] = 'drifted\n'
+
+        second = service.start(plan_build(), client_token='artifact-token')
+
+        self.assertEqual(second['run_id'], first['run_id'])
+        self.assertEqual(len(provider_calls), calls_after_first)
+        self.assertEqual(path.read_text(encoding='utf-8'), 'frozen\n')
+
+    def test_resume_checks_freshness_before_preserving_frozen_artifact(self):
+        live_content = {'value': 'frozen\n'}
+        provider_calls = []
+
+        def artifact_provider(_store):
+            provider_calls.append(live_content['value'])
+            return [{
+                'kind': 'targets_json',
+                'relative_path': 'targets.json',
+                'content': live_content['value'],
+                'schema_version': 1,
+            }]
+
+        service = SyncRunService(
+            self.root,
+            backend_factory=lambda _store: self.backend,
+            derived_builder_factory=lambda _store: child_builder,
+            freshness_reporter=lambda _store: dict(self.fresh),
+            run_artifact_provider=artifact_provider,
+            run_artifact_kinds=('targets_json',),
+        )
+        current = plan_build()
+        store, _created = SyncRunStore.bootstrap(
+            self.root,
+            build_run_id(),
+            plan=current['plan'],
+            requests=current['requests'],
+        )
+        service._ensure_run_artifacts(store)
+        path = store.resolve_artifact_path('targets.json')
+        live_content['value'] = 'drifted\n'
+        calls_before_resume = len(provider_calls)
+        self.fresh['resume_allowed'] = False
+
+        with self.assertRaises(SyncRunError) as raised:
+            service.resume(store.run_id)
+
+        self.assertEqual(raised.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+        self.assertEqual(len(provider_calls), calls_before_resume)
+        self.assertEqual(path.read_text(encoding='utf-8'), 'frozen\n')
+
+        self.fresh['resume_allowed'] = True
+        resumed = service.resume(store.run_id)
+        self.assertEqual(resumed['run_status'], RunStatus.COMPLETED.value)
+        self.assertEqual(path.read_text(encoding='utf-8'), 'frozen\n')
+
     def test_missing_token_always_creates_new_run(self):
         first = self.service.start(plan_build())
         second = self.service.start(plan_build(), client_token='   ')

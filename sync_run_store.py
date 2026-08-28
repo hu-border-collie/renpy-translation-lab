@@ -555,7 +555,8 @@ class SyncRunStore:
             'SELECT payload_sha256 FROM plans WHERE run_id = ?', (run_id,)
         ).fetchone()
         request_rows = conn.execute(
-            'SELECT payload_sha256 FROM requests WHERE run_id = ? ORDER BY rowid',
+            'SELECT payload_sha256 FROM requests '
+            'WHERE run_id = ? AND parent_request_id IS NULL ORDER BY rowid',
             (run_id,),
         ).fetchall()
         actual = {

@@ -131,6 +131,7 @@ class SyncRunService:
         pricing_config: Mapping[str, Any] | None = None,
         reuse_validator: ReuseValidator | None = None,
         run_artifact_provider: RunArtifactProvider | None = None,
+        run_artifact_kinds: Sequence[str] = (),
     ):
         self.root_dir = Path(root_dir)
         self.backend_factory = backend_factory
@@ -141,6 +142,9 @@ class SyncRunService:
         self.pricing_config = dict(pricing_config or {})
         self.reuse_validator = reuse_validator or (lambda _item_id, _translation: False)
         self.run_artifact_provider = run_artifact_provider
+        self.run_artifact_kinds = tuple(
+            str(kind).strip() for kind in run_artifact_kinds if str(kind).strip()
+        )
 
     def start(
         self,
@@ -172,7 +176,8 @@ class SyncRunService:
                 'resume_compatibility_fingerprint': _resume_fingerprint(plan),
             },
         )
-        self._ensure_run_artifacts(store)
+        if created:
+            self._ensure_run_artifacts(store)
         before = int(store.get_run()['revision'])
         snapshot = self._execute(store, wait_for_backoff=wait_for_backoff)
         snapshot['changed'] = bool(created or int(snapshot['revision']) != before)
@@ -505,7 +510,6 @@ class SyncRunService:
             )
 
     def _execute(self, store: SyncRunStore, *, wait_for_backoff: bool) -> dict[str, Any]:
-        self._ensure_run_artifacts(store)
         if RunStatus(str(store.get_run()['status'])) in contracts.RUN_TERMINAL_STATES:
             return self._postprocess(store)
         if self.backend_factory is None or self.derived_builder_factory is None:
@@ -524,6 +528,7 @@ class SyncRunService:
                     'reasons': list(report.get('reasons') or []),
                 },
             )
+        self._ensure_run_artifacts(store)
         reservation = (
             self.reservation_factory(store)
             if self.reservation_factory is not None
@@ -549,11 +554,47 @@ class SyncRunService:
     def _ensure_run_artifacts(self, store: SyncRunStore) -> None:
         if self.run_artifact_provider is None:
             return
+        if self.run_artifact_kinds:
+            existing = [
+                store.get_artifact(kind=kind) for kind in self.run_artifact_kinds
+            ]
+            if all(row is not None for row in existing):
+                for kind, row in zip(self.run_artifact_kinds, existing):
+                    path = store.resolve_artifact_path(str(row['relative_path']))
+                    if (
+                        not path.is_file()
+                        or file_sha256(path) != str(row['sha256'])
+                    ):
+                        raise SyncRunError(
+                            ErrorCode.SYNC_RUN_STORAGE_ERROR,
+                            'frozen run artifact failed integrity validation',
+                            safe_details={'run_id': store.run_id, 'kind': kind},
+                        )
+                return
         for artifact in self.run_artifact_provider(store) or ():
             kind = str(artifact.get('kind') or '').strip()
+            if not kind:
+                raise SyncRunError(
+                    ErrorCode.SYNC_RUN_STORAGE_ERROR,
+                    'run artifact provider returned an invalid artifact',
+                    safe_details={'run_id': store.run_id},
+                )
+            existing = store.get_artifact(kind=kind)
+            if existing is not None:
+                path = store.resolve_artifact_path(str(existing['relative_path']))
+                if (
+                    not path.is_file()
+                    or file_sha256(path) != str(existing['sha256'])
+                ):
+                    raise SyncRunError(
+                        ErrorCode.SYNC_RUN_STORAGE_ERROR,
+                        'frozen run artifact failed integrity validation',
+                        safe_details={'run_id': store.run_id, 'kind': kind},
+                    )
+                continue
             relative_path = str(artifact.get('relative_path') or '').strip()
             content = artifact.get('content')
-            if not kind or not relative_path or not isinstance(content, str):
+            if not relative_path or not isinstance(content, str):
                 raise SyncRunError(
                     ErrorCode.SYNC_RUN_STORAGE_ERROR,
                     'run artifact provider returned an invalid artifact',
@@ -834,4 +875,5 @@ def build_production_sync_run_service(
         pricing_config=pricing_config,
         reuse_validator=execution_context.validate_reused_translation,
         run_artifact_provider=run_artifact_provider,
+        run_artifact_kinds=('targets_json',),
     )

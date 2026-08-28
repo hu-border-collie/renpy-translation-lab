@@ -101,6 +101,7 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                     },
                     reuse_validator=context.validate_reused_translation,
                     run_artifact_provider=artifacts,
+                    run_artifact_kinds=('targets_json',),
                 )
                 started = service.start(context.plan_build)
                 store = SyncRunStore(run_root, started['run_id'])

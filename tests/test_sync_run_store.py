@@ -217,6 +217,37 @@ class BootstrapStoreTests(unittest.TestCase):
         self.assertFalse(created2)
         self.assertEqual(store1.get_run()['run_id'], store2.get_run()['run_id'])
 
+    def test_t0_token_reopen_ignores_derived_requests(self):
+        run_id = build_run_id('project-token')
+        store1, _created = bootstrap_run(
+            self.root,
+            run_id,
+            client_token='project-token',
+            requests=[make_request()],
+        )
+        store1.acquire_lease(owner_token='owner-1')
+        attempt_id = store1.prepare_attempt(
+            request_id='req-1', owner_token='owner-1'
+        )
+        store1.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+        store1.record_success(
+            attempt_id=attempt_id,
+            owner_token='owner-1',
+            accepted_items=['item-1'],
+            derived_requests=[make_child_request(expected_ids=['item-2'])],
+        )
+        store1.release_lease(owner_token='owner-1')
+
+        store2, created2 = bootstrap_run(
+            self.root,
+            run_id,
+            client_token='project-token',
+            requests=[make_request()],
+        )
+
+        self.assertFalse(created2)
+        self.assertEqual(len(store2.list_requests()), 2)
+
     def test_token_conflict_detects_different_plan(self):
         run_id = build_run_id('project-token')
         bootstrap_run(self.root, run_id, client_token='project-token')
