@@ -83,6 +83,16 @@ VERSION_ASSET_COPY = {
     "export_reuse_results": "版本资产·导出复用结果",
 }
 
+DURABLE_SYNC_COPY = {
+    "start": "耐久同步翻译·开始",
+    "resume": "耐久同步翻译·继续",
+    "status": "耐久同步翻译·状态",
+    "cancel": "耐久同步翻译·取消",
+    "derive": "耐久同步翻译·派生新运行",
+    "check": "耐久同步翻译·检查并生成差异预览",
+    "apply": "耐久同步翻译·写回已检查预览",
+}
+
 CONTEXT_LIBRARY_COPY = {
     "empty_title": "尚未启用上下文库",
     "empty_body": (

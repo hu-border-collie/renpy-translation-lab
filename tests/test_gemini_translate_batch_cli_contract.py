@@ -10,11 +10,16 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
+from sync_run_contracts import ErrorCode, SyncRunError
 
 
 class BatchCliContractTests(unittest.TestCase):
     @staticmethod
     def _machine_command_argv(command):
+        if command in {'sync-resume', 'sync-cancel', 'sync-derive'}:
+            return [command, 'sync-run-v1-00000000-0000-0000-0000-000000000000']
+        if command == 'sync-status':
+            return [command, '--latest']
         if command == "export-project-snapshot":
             return [command, "--version-id", "test-version"]
         if command == "reconcile-project-snapshots":
@@ -69,6 +74,94 @@ class BatchCliContractTests(unittest.TestCase):
                 self.assertTrue(strict_invocation.require_explicit_target)
 
                 self.assertTrue(strict_args.strict_exit_codes)
+
+    def test_durable_sync_json_alias_and_selector_contract(self):
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(['sync-status', '--latest', '--json', '--compact'])
+        self.assertEqual(args.output, 'json')
+        self.assertTrue(args.latest)
+        self.assertTrue(args.compact)
+
+        invalid = parser.parse_args(['sync-status', '--latest', 'sync-run-v1-x'])
+        with self.assertRaisesRegex(
+            batch.cli_contract.MachineContractError,
+            'exactly one',
+        ) as raised:
+            batch.run_durable_sync_command(invalid)
+        self.assertEqual(
+            raised.exception.semantic_exit_code,
+            batch.cli_contract.EXIT_INVALID_STATE,
+        )
+        self.assertNotIn('semantic_exit_code', raised.exception.details)
+
+        derive = parser.parse_args([
+            'sync-derive',
+            'sync-run-v1-00000000-0000-0000-0000-000000000000',
+            '--retry-unknown',
+            '--ack-duplicate-billing-risk',
+            '--json',
+        ])
+        self.assertTrue(derive.retry_unknown)
+        self.assertTrue(derive.ack_duplicate_billing_risk)
+        self.assertEqual(derive.output, 'json')
+
+    def test_sync_derive_invalid_ack_option_has_usage_envelope(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(batch, '_durable_sync_production_service') as service,
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main([
+                'sync-derive',
+                'sync-run-v1-00000000-0000-0000-0000-000000000000',
+                '--ack-duplicate-billing-risk',
+                '--json',
+                '--strict-exit-codes',
+            ])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+        self.assertEqual(payload['error']['code'], 'INVALID_DERIVE_OPTIONS')
+        self.assertEqual(
+            payload['error']['suggested_action'],
+            'fix_derive_options',
+        )
+        self.assertNotIn('Traceback', stderr.getvalue())
+        service.assert_not_called()
+
+    def test_sync_derive_excluded_unknown_has_stable_error_envelope(self):
+        service = mock.Mock()
+        service.derive.side_effect = SyncRunError(
+            ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+            'exclude_unknown requires a scoped plan without unknown IDs',
+            safe_details={'unknown_count': 1},
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                batch,
+                '_durable_sync_production_service',
+                return_value=(service, SimpleNamespace(plan_build={})),
+            ),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main([
+                'sync-derive',
+                'sync-run-v1-00000000-0000-0000-0000-000000000000',
+                '--exclude-unknown',
+                '--json',
+                '--strict-exit-codes',
+            ])
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertEqual(payload['error']['code'], 'SYNC_RUN_OUTCOME_UNKNOWN')
+        self.assertEqual(payload['error']['details']['unknown_count'], 1)
+        self.assertNotIn('Traceback', stderr.getvalue())
 
     def test_core_commands_expose_output_trimming_arguments(self):
         parser = batch.build_arg_parser()
@@ -722,6 +815,31 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(
             envelope["result"]["revision_apply_blocked_reason"],
             "all_items_blocked",
+        )
+
+    def test_durable_apply_machine_result_exposes_idempotent_state(self):
+        manifest = {
+            "_manifest_path": "C:/runs/sync-run/preview/manifest.json",
+            "state": "applied",
+            "last_apply_result": "already_applied",
+            "applied_files": ["script.rpy"],
+            "summary": {"translated_items": 1},
+            "durable_check_binding": {"run_manifest": {"sha256": "a" * 64}},
+        }
+        envelope = batch.build_machine_success_envelope(
+            "apply", manifest, SimpleNamespace(target="sync-run-v1-demo")
+        )
+        self.assertEqual(envelope["status"], "already_applied")
+        self.assertEqual(
+            envelope["result"]["apply"]["last_apply_result"],
+            "already_applied",
+        )
+        self.assertEqual(
+            envelope["result"]["apply"]["applied_files"], ["script.rpy"]
+        )
+        self.assertEqual(
+            envelope["artifacts"]["manifest"],
+            "C:/runs/sync-run/preview/manifest.json",
         )
 
     def test_apply_revisions_is_registered_for_machine_output(self):

@@ -27,6 +27,9 @@
   基于 `main@ed07a99` 冻结 Run/Request/Attempt 状态机、SQLite 事务边界、
   `outcome_unknown` 恢复语义、usage 去重、共享 result/check 门禁、durable Sync preview/apply 与 Batch direct apply 接缝、
   CLI JSON 合同、fault-injection 矩阵及与 #346/#341/#348 的所有权边界。
+- [#347 → #348 耐久 Sync 产品化交接](issue-347-to-348-handoff.md)：
+  冻结服务/snapshot/CLI/制品接缝、Provider 中断 smoke 与 #348 的 GUI、配置迁移和
+  最终命令别名验收边界。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
   A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤；
   三项目聚合统计、人工标注和 A2 前后对比见
