@@ -646,6 +646,37 @@ class ContextAssemblyTests(unittest.TestCase):
         self.assertTrue(retrieval.truncated)
         self.assertEqual(retrieval.char_used, retrieval.char_limit)
 
+    def test_aggregate_budget_preserves_priority_and_explains_trimming(self):
+        chunk_input = translation_plan.ChunkContextInput(
+            target_units=[],
+            macro_setting='Keep names stable.',
+            retrieval_blocks_text='R' * 40,
+            analysis_blocks_text='A' * 40,
+        )
+        baseline = translation_plan.assemble_context_layers(chunk_input)
+        mandatory_used = sum(
+            layer.char_used
+            for layer in baseline.layers
+            if layer.layer in {'required', 'local', 'project'}
+        )
+        assembly = translation_plan.assemble_context_layers(
+            chunk_input,
+            translation_plan.ContextPolicy(total_char_limit=mandatory_used + 20),
+        )
+        by_layer = {layer.layer: layer for layer in assembly.layers}
+        self.assertEqual(by_layer['retrieval'].char_used, 20)
+        self.assertEqual(by_layer['analysis'].char_used, 0)
+        self.assertTrue(by_layer['retrieval'].truncated)
+        self.assertTrue(by_layer['analysis'].truncated)
+        self.assertEqual(
+            [item['layer'] for item in assembly.dropped],
+            ['retrieval', 'analysis'],
+        )
+        self.assertTrue(all(
+            item['reason'] == 'aggregate_budget_exceeded'
+            for item in assembly.dropped
+        ))
+
     def test_duplicate_layer_texts_are_dropped_with_reason(self):
         chunk_input = translation_plan.ChunkContextInput(
             target_units=[],
@@ -832,6 +863,36 @@ class DerivedRequestTests(unittest.TestCase):
 
 
 class GoldenPlanTests(unittest.TestCase):
+    def test_normalized_sync_and_batch_requests_have_empty_readable_diff(self):
+        sync = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        batch = build_fixture_plan(translation_plan.STRATEGY_GEMINI_BATCH)
+        report = translation_plan.plan_diff(sync.requests, batch.requests)
+        self.assertTrue(report['equivalent'], translation_plan.format_plan_diff(report))
+        self.assertEqual(
+            translation_plan.format_plan_diff(report),
+            'TranslationPlan semantic requests are equivalent (3 requests).',
+        )
+        for sync_request, batch_request in zip(sync.requests, batch.requests):
+            self.assertEqual(
+                translation_plan.canonical_semantic_request(sync_request),
+                translation_plan.canonical_semantic_request(batch_request),
+            )
+            self.assertEqual(
+                sync_request.prompt_fingerprint,
+                batch_request.prompt_fingerprint,
+            )
+
+    def test_plan_diff_names_chunk_and_changed_semantic_field(self):
+        sync = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        batch = build_fixture_plan(translation_plan.STRATEGY_GEMINI_BATCH)
+        batch.requests[0].user_prompt += '\nchanged'
+        report = translation_plan.plan_diff(sync.requests, batch.requests)
+        rendered = translation_plan.format_plan_diff(report)
+        self.assertFalse(report['equivalent'])
+        self.assertIn(sync.requests[0].chunk_id, rendered)
+        self.assertIn('user_prompt', rendered)
+        self.assertIn('+  "user_prompt"', rendered)
+
     def test_sync_plan_matches_frozen_golden(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
         _assert_golden('plan.sync.json', build.plan.to_dict())

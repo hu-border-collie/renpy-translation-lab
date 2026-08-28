@@ -99,7 +99,8 @@
     "local_context_after": 10,
     "local_context_before": 30,
     "story_block_suffix": "\n\n",
-    "story_char_limit": 1200
+    "story_char_limit": 1200,
+    "total_char_limit": 0
   },
   "execution_strategy": "gemini_batch",
   "model_profile_snapshot": {
@@ -124,26 +125,270 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "36d2ede9501212f1",
-  "plan_id": "c24ba960433436e9",
+  "plan_fingerprint": "8b677ab3816175fb",
+  "plan_id": "299f778e5dc44f5d",
   "request_summaries": [
     {
+      "capability_requirements": {
+        "context_budget_tokens": 2038,
+        "estimate_method": "char_upper_bound",
+        "structured_output": true
+      },
       "chunk_id": "004851531f-00001",
+      "context_diagnostics": {
+        "dropped": [],
+        "layers": [
+          {
+            "char_limit": 0,
+            "char_used": 486,
+            "diagnostics": {
+              "file_rel_path": "chapter01/dialogue.rpy",
+              "speakers": [
+                "g",
+                "p"
+              ],
+              "unit_count": 3
+            },
+            "layer": "required",
+            "rank": 1,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 108,
+            "diagnostics": {
+              "algorithm": "block_bounded_window",
+              "block_bounded_after": true,
+              "block_bounded_before": false,
+              "context_after_chars": 55,
+              "context_after_items": 1,
+              "context_after_limit": 10,
+              "context_before_chars": 0,
+              "context_before_items": 0,
+              "context_before_limit": 30,
+              "context_truncated": false
+            },
+            "layer": "local",
+            "rank": 2,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 186,
+            "diagnostics": {
+              "lexical_glossary_hits": 3,
+              "macro_injected": true,
+              "rag_independent": true
+            },
+            "layer": "project",
+            "rank": 3,
+            "truncated": false
+          },
+          {
+            "char_limit": 1420,
+            "char_used": 85,
+            "diagnostics": {
+              "budget_mode": "d5_combined_backstop",
+              "history_char_limit": 220,
+              "include_source_text": true,
+              "story_char_limit": 1200
+            },
+            "layer": "retrieval",
+            "rank": 4,
+            "truncated": false
+          },
+          {
+            "char_limit": 4000,
+            "char_used": 50,
+            "diagnostics": {
+              "analysis_char_limit": 4000,
+              "budget_mode": "d5_backstop",
+              "source": "published_project_analysis"
+            },
+            "layer": "analysis",
+            "rank": 5,
+            "truncated": false
+          }
+        ],
+        "total_char_used": 915
+      },
       "prompt_fingerprint": "e14597acfc6111bf",
       "request_fingerprint": "f4480a0ef639a161",
-      "request_id": "a7c2c56c7f4895b8"
+      "request_id": "62566ff3eedd2d50"
     },
     {
+      "capability_requirements": {
+        "context_budget_tokens": 2145,
+        "estimate_method": "char_upper_bound",
+        "structured_output": true
+      },
       "chunk_id": "004851531f-00002",
+      "context_diagnostics": {
+        "dropped": [],
+        "layers": [
+          {
+            "char_limit": 0,
+            "char_used": 484,
+            "diagnostics": {
+              "file_rel_path": "chapter01/dialogue.rpy",
+              "speakers": [
+                "g",
+                "m",
+                "p"
+              ],
+              "unit_count": 3
+            },
+            "layer": "required",
+            "rank": 1,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 238,
+            "diagnostics": {
+              "algorithm": "block_bounded_window",
+              "block_bounded_after": false,
+              "block_bounded_before": false,
+              "context_after_chars": 0,
+              "context_after_items": 0,
+              "context_after_limit": 10,
+              "context_before_chars": 161,
+              "context_before_items": 3,
+              "context_before_limit": 30,
+              "context_truncated": false
+            },
+            "layer": "local",
+            "rank": 2,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 165,
+            "diagnostics": {
+              "lexical_glossary_hits": 2,
+              "macro_injected": true,
+              "rag_independent": true
+            },
+            "layer": "project",
+            "rank": 3,
+            "truncated": false
+          },
+          {
+            "char_limit": 1420,
+            "char_used": 85,
+            "diagnostics": {
+              "budget_mode": "d5_combined_backstop",
+              "history_char_limit": 220,
+              "include_source_text": true,
+              "story_char_limit": 1200
+            },
+            "layer": "retrieval",
+            "rank": 4,
+            "truncated": false
+          },
+          {
+            "char_limit": 4000,
+            "char_used": 50,
+            "diagnostics": {
+              "analysis_char_limit": 4000,
+              "budget_mode": "d5_backstop",
+              "source": "published_project_analysis"
+            },
+            "layer": "analysis",
+            "rank": 5,
+            "truncated": false
+          }
+        ],
+        "total_char_used": 1022
+      },
       "prompt_fingerprint": "926854780f0e1ea7",
       "request_fingerprint": "436c542dfa3c5b0c",
-      "request_id": "3f25ef73cef53e3d"
+      "request_id": "a4a7a95c9c956b92"
     },
     {
+      "capability_requirements": {
+        "context_budget_tokens": 1648,
+        "estimate_method": "char_upper_bound",
+        "structured_output": true
+      },
       "chunk_id": "029e98ba77-00001",
+      "context_diagnostics": {
+        "dropped": [],
+        "layers": [
+          {
+            "char_limit": 0,
+            "char_used": 218,
+            "diagnostics": {
+              "file_rel_path": "chapter02/strings.rpy",
+              "speakers": [],
+              "unit_count": 3
+            },
+            "layer": "required",
+            "rank": 1,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 45,
+            "diagnostics": {
+              "algorithm": "block_bounded_window",
+              "block_bounded_after": false,
+              "block_bounded_before": false,
+              "context_after_chars": 0,
+              "context_after_items": 0,
+              "context_after_limit": 10,
+              "context_before_chars": 0,
+              "context_before_items": 0,
+              "context_before_limit": 30,
+              "context_truncated": false
+            },
+            "layer": "local",
+            "rank": 2,
+            "truncated": false
+          },
+          {
+            "char_limit": 0,
+            "char_used": 127,
+            "diagnostics": {
+              "lexical_glossary_hits": 1,
+              "macro_injected": true,
+              "rag_independent": true
+            },
+            "layer": "project",
+            "rank": 3,
+            "truncated": false
+          },
+          {
+            "char_limit": 1420,
+            "char_used": 85,
+            "diagnostics": {
+              "budget_mode": "d5_combined_backstop",
+              "history_char_limit": 220,
+              "include_source_text": true,
+              "story_char_limit": 1200
+            },
+            "layer": "retrieval",
+            "rank": 4,
+            "truncated": false
+          },
+          {
+            "char_limit": 4000,
+            "char_used": 50,
+            "diagnostics": {
+              "analysis_char_limit": 4000,
+              "budget_mode": "d5_backstop",
+              "source": "published_project_analysis"
+            },
+            "layer": "analysis",
+            "rank": 5,
+            "truncated": false
+          }
+        ],
+        "total_char_used": 525
+      },
       "prompt_fingerprint": "00756b8992768dfe",
       "request_fingerprint": "61a3213074a32c59",
-      "request_id": "cb535eddb76a5755"
+      "request_id": "01417c3411de278f"
     }
   ],
   "run_id": "fixture-run",

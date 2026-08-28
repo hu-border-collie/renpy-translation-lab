@@ -4513,6 +4513,56 @@ def current_sync_source_identity():
     return _sync_plan_source_identity(snapshot).to_dict()
 
 
+def validate_sync_translation_plan_before_dispatch(plan_build):
+    """Reject ordinary Sync source/adapter/plan drift before provider use."""
+    if plan_build is None or plan_build.plan is None:
+        raise RuntimeError('Sync TranslationPlan is missing before model dispatch.')
+    plan_payload = plan_build.plan.to_dict()
+    translation_plan.validate_plan_fingerprint(plan_payload)
+    reasons = translation_plan.source_identity_differences(
+        plan_payload.get('source_identity') or {},
+        current_sync_source_identity(),
+    )
+    if reasons:
+        raise RuntimeError(
+            'Sync TranslationPlan is stale before model dispatch: '
+            + ', '.join(reasons)
+            + '. Regenerate the preview from the current project.'
+        )
+    summaries = list(plan_payload.get('request_summaries') or [])
+    requests = list(plan_build.requests or [])
+    if len(summaries) != len(requests):
+        raise RuntimeError(
+            'Sync TranslationPlan request summaries no longer match root requests.'
+        )
+    for index, (summary, request) in enumerate(zip(summaries, requests)):
+        semantic_fingerprint = translation_plan.short_fingerprint(
+            translation_plan.canonical_semantic_request(request)
+        )
+        request_fingerprint = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(request.audit_payload())
+        )
+        if (
+            str(summary.get('request_id') or '') != request.request_id
+            or str(summary.get('prompt_fingerprint') or '')
+            != semantic_fingerprint
+            or request.prompt_fingerprint != semantic_fingerprint
+            or str(summary.get('request_fingerprint') or '')
+            != request_fingerprint
+            or request.request_fingerprint != request_fingerprint
+        ):
+            raise RuntimeError(
+                'Sync TranslationPlan request binding is stale before model '
+                f'dispatch: index={index}.'
+            )
+    return {
+        'source': 'fresh',
+        'adapter': 'fresh',
+        'plan': 'fresh',
+        'request_count': len(requests),
+    }
+
+
 def _render_sync_retrieval_reference_text(history_hits, story_hits):
     """Render the shared retrieval layer without the lexical glossary block."""
     blocks = []
@@ -6429,6 +6479,9 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
         manifest = sync_translation_preview.load_sync_preview(manifest_path)
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
+    compatibility = manifest.get('_translation_plan_compatibility') or {}
+    if compatibility.get('mode') == 'legacy':
+        print(f"Warning: {compatibility.get('message')}", file=sys.stderr)
     if manifest.get('durable_check_binding') is not None and not allow_durable:
         raise SystemExit(
             'Sync apply blocked: Durable Sync previews must be applied with '
@@ -6616,6 +6669,15 @@ def run_translation(*, prepare=False):
             f'id={sync_plan_build.plan.plan_id}, '
             f'fingerprint={sync_plan_build.plan.plan_fingerprint}, '
             f'requests={len(sync_plan_build.requests)}'
+        )
+        sync_plan_dispatch_diagnostics = (
+            validate_sync_translation_plan_before_dispatch(sync_plan_build)
+        )
+        print(
+            'Sync TranslationPlan freshness: '
+            f"source={sync_plan_dispatch_diagnostics['source']}, "
+            f"adapter={sync_plan_dispatch_diagnostics['adapter']}, "
+            f"plan={sync_plan_dispatch_diagnostics['plan']}"
         )
         for document in source_documents:
             file_path = document.file_path

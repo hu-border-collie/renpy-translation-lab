@@ -7267,9 +7267,25 @@ class MainWindow(QMainWindow):
             usage_ledger_path or None
         )
         if spec.mode == WorkMode.SYNC_TRANSLATION:
+            sync_preview_path = self.sync_translation_page.preview_manifest_path()
+            sync_preview_mtime = self._diagnostics_manifest_mtime_ns(
+                sync_preview_path or None
+            )
+            sync_preview_manifest = None
+            if sync_preview_path:
+                try:
+                    loaded_preview = json.loads(
+                        Path(sync_preview_path).read_text(encoding="utf-8-sig")
+                    )
+                    if isinstance(loaded_preview, dict):
+                        sync_preview_manifest = loaded_preview
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    sync_preview_manifest = None
             input_key = (
                 "sync",
                 str(self.state.get_sync_script_path()),
+                sync_preview_path,
+                sync_preview_mtime,
                 sys.executable,
                 str(game_root or ""),
                 usage_ledger_mtime,
@@ -7282,6 +7298,8 @@ class MainWindow(QMainWindow):
                 batch_script_path=str(self.state.get_batch_script_path()),
                 game_root=str(game_root or ""),
                 python_exe=sys.executable,
+                preview_manifest_path=sync_preview_path,
+                preview_manifest=sync_preview_manifest,
             )
             self._set_diagnostics_context(context)
             self._diagnostics_refresh_input_key = input_key

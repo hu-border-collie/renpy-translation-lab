@@ -21,6 +21,7 @@ from .batch_workflow_support import (
 )
 from .user_copy import (
     DURABLE_SYNC_COPY,
+    TRANSLATION_PLAN_COPY,
     USAGE_LEDGER_COPY,
     VERSION_ASSET_COPY,
     format_notice_fact,
@@ -135,6 +136,18 @@ def manifest_for_preview(manifest: dict[str, object]) -> dict[str, object]:
         if key in {"chunks", "files"}:
             continue
         preview[key] = value
+
+    plan = manifest.get("translation_plan")
+    if isinstance(plan, dict):
+        preview["translation_plan"] = {
+            "schema_version": plan.get("schema_version"),
+            "plan_id": plan.get("plan_id"),
+            "execution_strategy": plan.get("execution_strategy"),
+            "plan_fingerprint": plan.get("plan_fingerprint"),
+            "source_identity": plan.get("source_identity"),
+            "request_count": len(plan.get("request_summaries") or []),
+            "diagnostics": manifest.get("translation_plan_diagnostics") or {},
+        }
 
     files = manifest.get("files")
     chunks = manifest.get("chunks")
@@ -1008,6 +1021,34 @@ def build_manifest_facts(manifest: dict[str, object], manifest_path: str) -> lis
     if isinstance(mode, str) and mode.strip():
         facts.append(f"任务类型：{manifest_mode_label(mode.strip())}")
 
+    facts.extend(format_translation_plan_facts(manifest))
+
+    return facts
+
+
+def format_translation_plan_facts(manifest: dict[str, object]) -> list[str]:
+    """Render a compact, credential-free plan/request diagnostics summary."""
+    plan = manifest.get("translation_plan")
+    if not isinstance(plan, dict) or not plan:
+        return [TRANSLATION_PLAN_COPY["legacy"]]
+    facts = [TRANSLATION_PLAN_COPY["current"]]
+    fingerprint = str(plan.get("plan_fingerprint") or "")
+    if fingerprint:
+        facts.append(f'{TRANSLATION_PLAN_COPY["fingerprint"]}：{fingerprint}')
+    summaries = list(plan.get("request_summaries") or [])
+    diagnostics = manifest.get("translation_plan_diagnostics")
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    facts.append(
+        f'{TRANSLATION_PLAN_COPY["requests"]}：'
+        f'{int(diagnostics.get("request_count") or len(summaries))}'
+    )
+    truncated = int(diagnostics.get("context_truncated_requests") or 0)
+    dropped = int(diagnostics.get("context_dropped_entries") or 0)
+    if truncated:
+        facts.append(f'{TRANSLATION_PLAN_COPY["context_truncated"]}：{truncated}')
+    if dropped:
+        facts.append(f'{TRANSLATION_PLAN_COPY["context_dropped"]}：{dropped}')
     return facts
 
 
@@ -1059,18 +1100,41 @@ def sync_diagnostics_context(
     batch_script_path: str = "",
     game_root: str | None = None,
     python_exe: str = "python",
+    preview_manifest_path: str = "",
+    preview_manifest: dict[str, object] | None = None,
+    path_exists: Callable[[str], bool] | None = None,
 ) -> DiagnosticsContext:
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
     commands.extend(_usage_report_command(batch_script_path, python_exe))
+    facts = _project_usage_facts(game_root)
+    paths = []
+    preview = ""
+    status = "ready"
+    message = "同步模式会先生成差异预览；以下为可手动运行的同步命令。"
+    if preview_manifest is not None:
+        facts.extend(format_translation_plan_facts(preview_manifest))
+        package_dir = resolve_package_dir(preview_manifest_path, preview_manifest)
+        exists = path_exists or _default_path_exists
+        if preview_manifest_path and exists(preview_manifest_path):
+            paths.append(DiagnosticsPathEntry("同步预览任务记录", preview_manifest_path))
+        report_path = str(preview_manifest.get("report_path") or "")
+        if report_path and package_dir:
+            report_path = join_directory_file(package_dir, report_path)
+            if exists(report_path):
+                paths.append(DiagnosticsPathEntry("同步翻译差异预览", report_path))
+        preview = format_manifest_json_preview(preview_manifest)
+        if not isinstance(preview_manifest.get("translation_plan"), dict):
+            status = "warning"
+            message = TRANSLATION_PLAN_COPY["legacy"]
     return DiagnosticsContext(
-        status="ready",
+        status=status,
         heading="同步翻译上下文",
-        message="同步模式不生成批量任务记录；以下为可手动运行的同步命令。",
-        facts=_project_usage_facts(game_root),
-        paths=[],
+        message=message,
+        facts=facts,
+        paths=paths,
         commands=commands,
-        manifest_json_preview="",
+        manifest_json_preview=preview,
     )
 
 

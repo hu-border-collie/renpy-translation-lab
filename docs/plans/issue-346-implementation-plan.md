@@ -1,11 +1,11 @@
 # #346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同
 
-状态：已定稿决策（D1–D7 已于 2026-08-22 冻结，见 [定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547)）· 基线 `main@fa69d14`（2026-08-21）· 本文是实施计划，不是已合并的设计
+状态：P0–P4 已实现并完成正式出口审计（2026-08-28）；P5 仍等待 #341 · D1–D7 已于 2026-08-22 冻结，见 [定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547) · 历史基线 `main@fa69d14`（2026-08-21）
 关联 issue：<https://github.com/hu-border-collie/renpy-translation-lab/issues/346>
 
 ## 0. 结论
 
-#346 尚无实施代码，建议按五阶段落地。P0–P4 不依赖 #341；P5 与 #341 联动收口。
+#346 的 P0–P3 已由 #378/#380/#390/#394 合入；P4 在 #397 合并后的主干上重新审计并补齐普通 Sync/Batch freshness、规范化请求 diff、diagnostics/legacy/GUI/文档与回归测试。P5 与 #341 联动，仍不在本阶段范围内。
 
 | 阶段 | 内容 | 是否依赖 #341 |
 |---|---|---|

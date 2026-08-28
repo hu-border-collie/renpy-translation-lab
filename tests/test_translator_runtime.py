@@ -585,16 +585,23 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(sync_request.user_prompt, batch_request.user_prompt)
         self.assertEqual(sync_request.response_schema, batch_request.response_schema)
         self.assertEqual(sync_request.expected_ids, batch_request.expected_ids)
-        self.assertEqual(
-            [
-                (layer['layer'], layer['char_used'], layer['truncated'])
-                for layer in sync_request.context_assembly['layers']
-            ],
-            [
-                (layer['layer'], layer['char_used'], layer['truncated'])
-                for layer in batch_request.context_assembly['layers']
-            ],
+        report = translation_plan.plan_diff(
+            sync_build.requests,
+            batch_build.requests,
         )
+        self.assertTrue(report['equivalent'], translation_plan.format_plan_diff(report))
+        self.assertEqual(
+            translation_plan.canonical_semantic_request(sync_request),
+            translation_plan.canonical_semantic_request(batch_request),
+        )
+        self.assertEqual(
+            sync_request.prompt_fingerprint,
+            batch_request.prompt_fingerprint,
+        )
+        self.assertEqual(sync_request.context_assembly, batch_request.context_assembly)
+        self.assertIn('Use a warm stage tone.', sync_request.system_instruction)
+        self.assertIn('Existing mapping: Encore -> 返场', sync_request.user_prompt)
+        self.assertIn('Preserve: [Gil_name!t]', sync_request.user_prompt)
         self.assertEqual(
             sync_request.transport_metadata['sync_stage'],
             'initial_translation',

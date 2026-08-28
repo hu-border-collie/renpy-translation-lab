@@ -2099,6 +2099,27 @@ def remember_latest_manifest(manifest_path):
     atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
 
 
+def translation_plan_compatibility_diagnostic(manifest):
+    """Describe whether a package has the current #346 plan protections."""
+    plan = manifest.get('translation_plan') if isinstance(manifest, dict) else None
+    if isinstance(plan, dict) and plan:
+        return {
+            'code': 'TRANSLATION_PLAN_CURRENT',
+            'mode': 'current',
+            'message': 'TranslationPlan and request bindings are available.',
+        }
+    return {
+        'code': 'TRANSLATION_PLAN_LEGACY_FALLBACK',
+        'mode': 'legacy',
+        'message': (
+            'Legacy package has no TranslationPlan; compatibility mode keeps '
+            'the existing check/apply source and adapter guards, but plan and '
+            'request freshness cannot be verified. Rebuild before submitting '
+            'new model work.'
+        ),
+    }
+
+
 def load_manifest(target=None):
     """Load and validate a JSON manifest or raise a structured contract error.
 
@@ -2151,6 +2172,9 @@ def load_manifest(target=None):
         )
     manifest['_manifest_path'] = manifest_path
     manifest['_package_dir'] = os.path.dirname(manifest_path)
+    manifest['_translation_plan_compatibility'] = (
+        translation_plan_compatibility_diagnostic(manifest)
+    )
     return manifest
 
 
@@ -2252,6 +2276,7 @@ def save_manifest(manifest, update_latest=True):
     data = dict(manifest)
     data.pop('_manifest_path', None)
     data.pop('_package_dir', None)
+    data.pop('_translation_plan_compatibility', None)
     atomic_write_json(manifest_path, data, ensure_ascii=False, indent=2)
     if update_latest:
         remember_latest_manifest(manifest_path)
@@ -2516,6 +2541,14 @@ def build_check_fingerprint(manifest):
     }
     if isinstance(manifest.get('durable_sync_source'), dict):
         payload['durable_sync_source'] = dict(manifest['durable_sync_source'])
+    plan = manifest.get('translation_plan')
+    if isinstance(plan, dict) and plan:
+        payload['translation_plan'] = {
+            'plan_fingerprint': str(plan.get('plan_fingerprint') or ''),
+            'requests': file_content_fingerprint(
+                str(manifest.get('input_jsonl_path') or '')
+            ),
+        }
     payload['fingerprint_sha256'] = stable_json_sha256(payload)
     return payload
 
@@ -3334,7 +3367,10 @@ def _batch_plan_context_policy():
         # policy. Batch can additionally inject Source Index reference text
         # (top_k * char_limit), so add that budget to the backstop;
         # section-level limits are already applied by the providers.
-        history_char_limit=RAG_HISTORY_CHAR_LIMIT + get_source_index_char_budget(),
+        history_char_limit=(
+            RAG_HISTORY_CHAR_LIMIT
+            + (get_source_index_char_budget() if SOURCE_INDEX_ENABLED else 0)
+        ),
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
         # Project analysis injects both the global brief and local
         # label/route summaries; keep the backstop large enough for all
@@ -3343,6 +3379,8 @@ def _batch_plan_context_policy():
             PROJECT_ANALYSIS_MAX_BRIEF_CHARS
             + PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS
             + PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS
+            if PROJECT_ANALYSIS_ENABLED
+            else translation_core.CANONICAL_ANALYSIS_CHAR_LIMIT
         ),
         include_source_text=True,
         include_translation_memory=True,
@@ -3927,6 +3965,27 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             translation_plan_manifest.plan.to_dict()
             if translation_plan_manifest is not None
             else {}
+        ),
+        'translation_plan_diagnostics': (
+            {
+                'code': 'TRANSLATION_PLAN_CURRENT',
+                'mode': 'current',
+                'request_count': len(translation_plan_manifest.requests),
+                'context_truncated_requests': sum(
+                    1
+                    for request in translation_plan_manifest.requests
+                    if any(
+                        bool((layer or {}).get('truncated'))
+                        for layer in (request.context_assembly or {}).get('layers') or []
+                    )
+                ),
+                'context_dropped_entries': sum(
+                    len((request.context_assembly or {}).get('dropped') or [])
+                    for request in translation_plan_manifest.requests
+                ),
+            }
+            if translation_plan_manifest is not None
+            else translation_plan_compatibility_diagnostic({})
         ),
         'settings': {
             'target_size': BATCH_TARGET_SIZE,
@@ -7694,6 +7753,104 @@ def recover_submit_manifest(target=None, verify_remote=True):
     return manifest['_manifest_path']
 
 
+def validate_batch_translation_plan_before_dispatch(manifest, *, operation='submit'):
+    """Validate a persisted Batch plan before any upload or model dispatch.
+
+    Legacy packages remain usable through their historical safeguards and
+    receive an explicit compatibility diagnostic.  Current packages must keep
+    their plan fingerprint, root request rows, source snapshot, and adapter
+    identity intact.
+    """
+    diagnostic = translation_plan_compatibility_diagnostic(manifest)
+    plan = manifest.get('translation_plan')
+    if not isinstance(plan, dict) or not plan:
+        manifest['translation_plan_diagnostics'] = diagnostic
+        print(f"Warning: {diagnostic['message']}", file=sys.stderr)
+        return diagnostic
+    if isinstance(manifest.get('durable_sync_source'), dict):
+        # #397's run-store integrity/freshness and bound-preview chain are the
+        # authority for durable Sync. Do not reinterpret its sync plan as a
+        # Gemini Batch request package here.
+        translation_plan.validate_plan_fingerprint(plan)
+        manifest['translation_plan_diagnostics'] = {
+            **diagnostic,
+            'delegated_guard': 'durable_sync_run_store',
+        }
+        return manifest['translation_plan_diagnostics']
+    try:
+        translation_plan.validate_plan_fingerprint(plan)
+    except ValueError as exc:
+        raise cli_contract.MachineContractError(
+            f'Batch {operation} refused: {exc}',
+            code_name='TRANSLATION_PLAN_STALE',
+            suggested_action='rebuild_batch_package',
+        ) from exc
+    if plan.get('execution_strategy') != translation_plan.STRATEGY_GEMINI_BATCH:
+        raise cli_contract.MachineContractError(
+            f'Batch {operation} refused: manifest TranslationPlan uses another execution strategy.',
+            code_name='TRANSLATION_PLAN_STRATEGY_MISMATCH',
+            suggested_action='rebuild_batch_package',
+        )
+
+    summaries = list(plan.get('request_summaries') or [])
+    chunks = list(manifest.get('chunks') or [])
+    rows = load_request_rows(manifest)
+    if not (len(summaries) == len(chunks) == len(rows)):
+        raise cli_contract.MachineContractError(
+            f'Batch {operation} refused: TranslationPlan, chunks, and requests.jsonl counts differ.',
+            code_name='TRANSLATION_PLAN_REQUEST_BINDING_MISMATCH',
+            suggested_action='rebuild_batch_package',
+        )
+    for index, (summary, chunk, row) in enumerate(zip(summaries, chunks, rows)):
+        expected_row = build_batch_request(
+            chunk,
+            model=str(manifest.get('batch_model') or ''),
+        )
+        bindings = (
+            str(summary.get('request_id') or '') == str(chunk.get('request_id') or ''),
+            str(summary.get('chunk_id') or '') == str(chunk.get('chunk_id') or ''),
+            str(summary.get('prompt_fingerprint') or '')
+            == str(chunk.get('prompt_fingerprint') or ''),
+            str(summary.get('request_fingerprint') or '')
+            == str(chunk.get('request_fingerprint') or ''),
+            stable_json_dumps(row) == stable_json_dumps(expected_row),
+        )
+        if not all(bindings):
+            raise cli_contract.MachineContractError(
+                f'Batch {operation} refused: request binding changed at index {index}.',
+                code_name='TRANSLATION_PLAN_REQUEST_BINDING_MISMATCH',
+                suggested_action='rebuild_batch_package',
+                details={'request_index': index, 'chunk_key': str(chunk.get('key') or '')},
+            )
+
+    current_jobs = collect_pending_file_jobs(
+        include_complete_files=True,
+        include_occurrences=False,
+        include_task_payloads=False,
+    )
+    current_identity = _batch_plan_source_identity(current_jobs).to_dict()
+    reasons = translation_plan.source_identity_differences(
+        plan.get('source_identity') or {},
+        current_identity,
+    )
+    if reasons:
+        raise cli_contract.MachineContractError(
+            f'Batch {operation} refused: source or adapter identity changed after build.',
+            code_name='TRANSLATION_PLAN_SOURCE_STALE',
+            suggested_action='rebuild_batch_package',
+            details={'reasons': reasons},
+        )
+    diagnostic = {
+        **diagnostic,
+        'source': 'fresh',
+        'adapter': 'fresh',
+        'plan': 'fresh',
+        'request_count': len(rows),
+    }
+    manifest['translation_plan_diagnostics'] = diagnostic
+    return diagnostic
+
+
 def submit_manifest(
     target=None,
     display_name_override='',
@@ -7771,6 +7928,9 @@ def submit_manifest(
                 f"estimated max {cost_estimate.get('estimated_cost_max', 0):.4f} {currency} "
                 f'exceeds limit {float(max_cost):.4f} {currency}.'
             )
+
+    validate_batch_translation_plan_before_dispatch(manifest)
+    save_manifest(manifest)
 
     resume_existing_upload = (
         resume_upload
@@ -12207,6 +12367,7 @@ def check_results(target=None):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
     require_manifest_project_match(manifest, 'check')
+    validate_batch_translation_plan_before_dispatch(manifest, operation='check')
     replacements_by_file, _translated, failure_entries, summary = collect_result_actions(
         manifest,
         validate_sources=True,
@@ -12419,6 +12580,11 @@ def apply_results(target=None, force=False):
         )
         save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
         raise SystemExit(f'Apply refused because source revalidation is not safe. Report: {report_path}')
+
+    # Preserve the established check/recheck error contract above, then bind
+    # the persisted plan and request rows again at the final pre-write point.
+    # This remains unconditional: ``--force`` cannot bypass it.
+    validate_batch_translation_plan_before_dispatch(manifest, operation='apply')
 
     writeback_files = []
     if adapter_plan is not None and adapter_snapshot is not None:

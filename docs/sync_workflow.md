@@ -24,7 +24,7 @@
 
 60/18000 是 #346 D4 冻结的兼容取舍：它保留 Batch 分组，但会让未显式配置的旧 Sync 用户比此前的 40/12000 生成更大的请求。若所选 ModelProfile 声明了较小的 `context_budget_tokens`，Sync 会先以相同固定 chunk、canonical prompt、本地上下文和字符上界估算做不调用 embedding/provider 的 preflight；明显超限时会在任何检索和模型调用前拒绝。真实检索上下文物化后还会做一次精确检查，以覆盖接近预算边界的组合。错误会给出 request、估算预算、模型预算、检查阶段及当前 `chunk_size` / `max_source_chars`。若 profile 未声明预算，运行日志会明确警告无法预检 provider 的 context/output 上限。可在 `translator_config.json` 中调小 `sync.chunk_size` 和/或 `sync.max_source_chars`（旧配置中的较小显式值继续生效），或改用上下文预算更大的模型；preflight 不会静默裁剪或重分原始 plan chunk。
 
-启用 Sync RAG 或 Story Memory 时，构建不可变 TranslationPlan 会在第一次模型调用前，按固定 chunk 顺序完成本次 plan 的全部检索并冻结模型可见上下文。运行日志会先提示这一阶段，并在结束时输出 `retrieval_chunks`、RAG 命中总数与 Story Memory 生效 chunk 数；大项目可能因此出现可见的启动等待，并把 query embedding 额度集中在启动阶段。若启动阶段持续失败，可暂时关闭相应上下文源或缩小 chunk 范围后重试。P3 不引入惰性检索，因为模型调用后再改变 provider 内容会破坏 initial plan 的 prompt fingerprint 与 Sync/Batch 共享语义；分阶段物化/性能优化留给 #346 P4 的 diagnostics 收口或后续独立性能项。
+启用 Sync RAG 或 Story Memory 时，构建不可变 TranslationPlan 会在第一次模型调用前，按固定 chunk 顺序完成本次 plan 的全部检索并冻结模型可见上下文。运行日志会先提示这一阶段，并在结束时输出 `retrieval_chunks`、RAG 命中总数与 Story Memory 生效 chunk 数；大项目可能因此出现可见的启动等待，并把 query embedding 额度集中在启动阶段。若启动阶段持续失败，可暂时关闭相应上下文源或缩小 chunk 范围后重试。普通 Sync 在第一次 Provider 调用前还会重扫 source/adapter identity 并校验 plan/root request fingerprint；不匹配时直接拒绝。P3 不引入惰性检索，因为模型调用后再改变 provider 内容会破坏 initial plan 的 prompt fingerprint 与 Sync/Batch 共享语义。
 
 `timeout_seconds` 默认 120 秒，可设为 5–600 秒。它是每一次模型请求的等待上限，不是整次任务的总时限；普通同步翻译、项目分析、同步关键词、同步订正、同步修补和翻译 A/B 对比均读取同一字段。Gemini backend 会把秒转换为 SDK 的毫秒级 `http_options.timeout`，LiteLLM backend 则按秒透传。手工配置超出范围时 runtime 会收敛到最近边界，避免异常值形成无界等待。
 
@@ -89,6 +89,7 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
 - 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断与 block 边界截断标记。
 - manifest 顶层 `translation_plan` / `plan_fingerprint` / `request_ids`：绑定本次初译的共享 plan、稳定请求身份和 prompt/request fingerprint；Gemini、LiteLLM 及自定义 OpenAI-compatible Provider 都接收同一 system/user 分离语义。
+- manifest 顶层 `translation_plan_diagnostics` 及各 request summary：记录规范化请求数、上下文层 rank/预算/裁剪/舍弃原因和 capability 估算；GUI「诊断与运行日志」显示非敏感摘要，完整 plan 留在本地 manifest。
 
 `prompt_context` 与文件级上下文诊断都纳入 manifest 指纹。源文件变化或预览制品被修改会直接使旧 manifest 无法通过写前校验；`--apply` 会把当前 macro 文件指纹与 manifest 记录的指纹比对，两者不一致（macro 文件新增、删除或内容变化）即拦截写回——不要强行复用旧预览，应基于当前文件重新生成并审查。未记录 `prompt_context` 的旧 manifest 保持可用。macro 路径限定在当前项目（`game_root`）内，配置指向项目外时会被忽略。
 
@@ -164,13 +165,13 @@ python gemini_translate.py --prepare
 python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 ```
 
-`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、TranslationPlan 指纹/request IDs、plan 的逐文件 source digest、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、plan/预览制品被修改或质量规则/策略版本变化都会阻止写回。当前生产 Sync 路径只注册 Ren'Py adapter；公共 `WritebackPlan` 合同会稳定序列化 `engine` 与 `adapter_version`，apply 会逐文件、逐字段与 TranslationPlan source identity 对照，错误仅报告这些非敏感标识的 expected/actual。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。没有 `translation_plan` 字段的旧 preview manifest 继续走 legacy 校验路径。
+`--apply` 不会重新调用模型。写回前会重新核对当前项目、TL 目录、TranslationPlan 指纹/request IDs、plan 的逐文件 source digest、每个源文件快照、预览制品哈希、质量 finding 报告哈希和 adapter 计划；项目切换、源文件变化、plan/预览制品被修改或质量规则/策略版本变化都会阻止写回。当前生产 Sync 路径只注册 Ren'Py adapter；公共 `WritebackPlan` 合同会稳定序列化 `engine` 与 `adapter_version`，apply 会逐文件、逐字段与 TranslationPlan source identity 对照，错误仅报告这些非敏感标识的 expected/actual。遇到阻断时不要强行复用旧 manifest，应基于当前文件重新生成并审查预览。没有 `translation_plan` 字段的旧 preview manifest 继续走 legacy 校验路径，并在 CLI/GUI 明确提示：旧 source/artifact/quality/adapter 校验仍生效，但缺少新的 plan/request freshness 绑定。
 
 `--prepare` 与 `--apply` 不能同时使用。旧的 `gemini_translate.py` 预览入口仍面向人类阅读；需要稳定机器合同或断点恢复时使用上面的耐久 `sync-*` 命令。
 
 ## Gemini 与 LiteLLM 数据边界
 
-- **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及启用的 glossary、macro、RAG、Source Index、Story Memory 或 Project Analysis 上下文发送给 Gemini。
+- **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及当前 Sync 已启用的 glossary、macro、RAG 或 Story Memory 上下文发送给 Gemini。Source Index / Published Project Analysis 的普通 Sync 生产接线属于 #341/#346 P5。
 - **LiteLLM 同步**：本工具从本机调用 LiteLLM Python SDK，再按所选 Provider / API Base 访问供应商。本项目不提供自建 LiteLLM 代理；待译文本、提示词和必要上下文会发送到所选供应商。凭据保存在操作系统凭据管理器或环境变量中，不写入 `translator_config.json`。
 - **本地产物**：manifest、diff、模型结果摘要、用量账本与日志保存在本机；它们可能包含私有游戏文本，不应提交到公开仓库或发给无权访问者。
 

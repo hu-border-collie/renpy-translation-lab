@@ -4,6 +4,19 @@
 
 本文档说明 Batch / sync 可选上下文层：RAG history store、Batch source-only index、Structured Story Memory，以及 **Project Analysis（项目分析）** 的产物合同。
 
+## 共享组装与裁剪顺序
+
+Sync 与 Gemini Batch 初译由共享 ContextAssembler 按固定优先级组装：TARGET/结构信息、
+block-bounded 局部前后文、本地 Macro 与词法 glossary、检索上下文、分析上下文。预算不足
+时保留高优先级层，先裁剪/舍弃分析层，再处理检索层；每层的 rank、字符预算、实际使用、
+truncated 标记和舍弃原因进入 request diagnostics。必需层以及本地 Macro/glossary 不会被可选
+检索预算挤掉；若它们本身已超过总预算，诊断会明确报告 mandatory overflow。
+
+本地 `normalize_map`、`preserve_terms`、`non_translatable_exact` 与 Macro 不依赖 RAG 或
+Embedding。关闭 RAG/Embedding 只关闭检索层，不会移除这些项目层上下文，也不会为了词法
+匹配调用 embedding Provider。Source Index 与 Published Project Analysis 在 Sync 的生产接线
+仍属于 #341/#346 P5，本节不表示它们已经在普通 Sync 中启用。
+
 ## 如何选择上下文层
 
 - RAG history store：使用“已有原文 + 已有译文”保持术语、称呼和风格一致。

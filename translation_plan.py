@@ -27,6 +27,7 @@ Hard constraints (enforced by tests):
 """
 
 from dataclasses import dataclass, field
+import difflib
 import hashlib
 import json
 import re
@@ -149,6 +150,137 @@ def short_fingerprint(text):
     return sha256_hex(text)[:16]
 
 
+def canonical_semantic_request(request):
+    """Return the canonical bytes used to compare executor-neutral requests."""
+    if isinstance(request, TranslationRequest):
+        payload = request.semantic_payload()
+    elif isinstance(request, Mapping):
+        payload = {
+            'system_instruction': str(request.get('system_instruction') or ''),
+            'user_prompt': str(request.get('user_prompt') or ''),
+            'response_schema': dict(request.get('response_schema') or {}),
+            'expected_ids': list(request.get('expected_ids') or []),
+            'context_assembly': dict(request.get('context_assembly') or {}),
+        }
+    else:
+        raise TypeError('request must be a TranslationRequest or mapping')
+    return canonical_json(payload)
+
+
+def plan_diff(left_requests, right_requests, *, left_label='sync', right_label='gemini_batch'):
+    """Compare normalized model-visible requests and return a readable report.
+
+    Transport and generation metadata are intentionally excluded.  Request
+    pairs are matched by position because stable request ids include the
+    execution strategy through ``plan_id`` while chunk order is shared.
+    """
+    left = list(left_requests or [])
+    right = list(right_requests or [])
+    entries = []
+    for index in range(max(len(left), len(right))):
+        left_request = left[index] if index < len(left) else None
+        right_request = right[index] if index < len(right) else None
+        left_text = (
+            canonical_semantic_request(left_request) if left_request is not None else ''
+        )
+        right_text = (
+            canonical_semantic_request(right_request) if right_request is not None else ''
+        )
+        if left_text == right_text:
+            continue
+        left_chunk = str(
+            getattr(left_request, 'chunk_id', '')
+            or ((left_request or {}).get('chunk_id') if isinstance(left_request, Mapping) else '')
+            or '<missing>'
+        )
+        right_chunk = str(
+            getattr(right_request, 'chunk_id', '')
+            or ((right_request or {}).get('chunk_id') if isinstance(right_request, Mapping) else '')
+            or '<missing>'
+        )
+        unified = '\n'.join(difflib.unified_diff(
+            json.dumps(json.loads(left_text), ensure_ascii=False, indent=2, sort_keys=True).splitlines(),
+            json.dumps(json.loads(right_text), ensure_ascii=False, indent=2, sort_keys=True).splitlines(),
+            fromfile=f'{left_label}:{left_chunk}',
+            tofile=f'{right_label}:{right_chunk}',
+            lineterm='',
+        ))
+        entries.append({
+            'index': index,
+            'left_chunk_id': left_chunk,
+            'right_chunk_id': right_chunk,
+            'unified_diff': unified,
+        })
+    return {
+        'equivalent': not entries,
+        'left_label': str(left_label),
+        'right_label': str(right_label),
+        'left_request_count': len(left),
+        'right_request_count': len(right),
+        'differences': entries,
+    }
+
+
+def format_plan_diff(report):
+    """Format :func:`plan_diff` output for logs, tests, and review artifacts."""
+    payload = dict(report or {})
+    if payload.get('equivalent'):
+        return (
+            'TranslationPlan semantic requests are equivalent '
+            f"({int(payload.get('left_request_count') or 0)} requests)."
+        )
+    lines = [
+        'TranslationPlan semantic request mismatch: '
+        f"{payload.get('left_label') or 'left'}="
+        f"{int(payload.get('left_request_count') or 0)}, "
+        f"{payload.get('right_label') or 'right'}="
+        f"{int(payload.get('right_request_count') or 0)}."
+    ]
+    for entry in payload.get('differences') or []:
+        lines.append(
+            f"request[{int(entry.get('index') or 0)}] "
+            f"{entry.get('left_chunk_id') or '<missing>'} <> "
+            f"{entry.get('right_chunk_id') or '<missing>'}"
+        )
+        if entry.get('unified_diff'):
+            lines.append(str(entry['unified_diff']))
+    return '\n'.join(lines)
+
+
+def validate_plan_fingerprint(payload):
+    """Validate a persisted plan fingerprint without rebuilding its prompts."""
+    if not isinstance(payload, Mapping):
+        raise ValueError('TranslationPlan must be an object.')
+    if int(payload.get('schema_version') or 0) != PLAN_SCHEMA_VERSION:
+        raise ValueError('Unsupported TranslationPlan schema version.')
+    fingerprint_payload = dict(payload)
+    recorded = str(fingerprint_payload.pop('plan_fingerprint', '') or '')
+    fingerprint_payload.pop('run_id', None)
+    expected = short_fingerprint(canonical_json(fingerprint_payload))
+    if not recorded or recorded != expected:
+        raise ValueError('TranslationPlan fingerprint is invalid or stale.')
+    return recorded
+
+
+def source_identity_differences(expected, actual):
+    """Return stable, non-sensitive source/adapter identity mismatch codes."""
+    expected = dict(expected or {})
+    actual = dict(actual or {})
+    differences = []
+    for field, code in (
+        ('engine', 'engine_changed'),
+        ('adapter_version', 'adapter_version_changed'),
+        ('project_identity_digest', 'project_identity_changed'),
+        ('source_snapshot_fingerprint', 'source_snapshot_changed'),
+        ('file_digests', 'source_file_digests_changed'),
+    ):
+        if canonical_json(expected.get(field) or ({} if field == 'file_digests' else '')) != canonical_json(
+            actual.get(field) or ({} if field == 'file_digests' else '')
+        ):
+            differences.append(code)
+    return differences
+
+
 def _canonical_term_sequence(terms):
     """Deterministic sequence for term iterables of any collection type.
 
@@ -201,6 +333,7 @@ class ContextPolicy:
     include_source_text: bool = translation_core.CANONICAL_INCLUDE_SOURCE_TEXT
     include_translation_memory: bool = True
     story_block_suffix: str = translation_core.CANONICAL_STORY_BLOCK_SUFFIX
+    total_char_limit: int = 0
 
     def to_dict(self):
         return {
@@ -212,6 +345,7 @@ class ContextPolicy:
             'include_source_text': bool(self.include_source_text),
             'include_translation_memory': bool(self.include_translation_memory),
             'story_block_suffix': self.story_block_suffix,
+            'total_char_limit': int(self.total_char_limit),
         }
 
 
@@ -570,6 +704,51 @@ def assemble_context_layers(chunk_input, context_policy=None):
             continue
         seen_texts.add(result.text)
         layers.append(result)
+    total_limit = max(0, int(policy.total_char_limit or 0))
+    if total_limit:
+        mandatory_used = sum(
+            layer.char_used
+            for layer in layers
+            if layer.layer in {
+                CONTEXT_LAYER_REQUIRED,
+                CONTEXT_LAYER_LOCAL,
+                CONTEXT_LAYER_PROJECT,
+            }
+        )
+        remaining = max(0, total_limit - mandatory_used)
+        for layer in layers:
+            if layer.layer not in {
+                CONTEXT_LAYER_RETRIEVAL,
+                CONTEXT_LAYER_ANALYSIS,
+            }:
+                continue
+            original_used = layer.char_used
+            if original_used <= remaining:
+                remaining -= original_used
+                continue
+            layer.text = layer.text[:remaining]
+            layer.char_used = len(layer.text)
+            layer.truncated = True
+            layer.diagnostics = {
+                **dict(layer.diagnostics or {}),
+                'aggregate_budget_reason': 'lower_priority_trimmed',
+                'aggregate_char_limit': total_limit,
+                'char_discarded': original_used - layer.char_used,
+            }
+            dropped.append({
+                'layer': layer.layer,
+                'rank': layer.rank,
+                'reason': 'aggregate_budget_exceeded',
+                'char_used': original_used - layer.char_used,
+            })
+            remaining = 0
+        if mandatory_used > total_limit:
+            dropped.append({
+                'layer': 'budget',
+                'rank': 0,
+                'reason': 'mandatory_layers_exceed_budget',
+                'char_used': mandatory_used - total_limit,
+            })
     return ContextAssembly(
         layers=layers,
         total_char_used=sum(layer.char_used for layer in layers),
@@ -723,6 +902,27 @@ class TranslationRequest:
             'chunk_id': self.chunk_id,
             'prompt_fingerprint': self.prompt_fingerprint,
             'request_fingerprint': self.request_fingerprint,
+            'capability_requirements': dict(self.capability_requirements or {}),
+            'context_diagnostics': {
+                'total_char_used': int(
+                    (self.context_assembly or {}).get('total_char_used') or 0
+                ),
+                'layers': [
+                    {
+                        'layer': str((layer or {}).get('layer') or ''),
+                        'rank': int((layer or {}).get('rank') or 0),
+                        'char_used': int((layer or {}).get('char_used') or 0),
+                        'char_limit': int((layer or {}).get('char_limit') or 0),
+                        'truncated': bool((layer or {}).get('truncated')),
+                        'diagnostics': dict((layer or {}).get('diagnostics') or {}),
+                    }
+                    for layer in (self.context_assembly or {}).get('layers') or []
+                ],
+                'dropped': [
+                    dict(item)
+                    for item in (self.context_assembly or {}).get('dropped') or []
+                ],
+            },
         }
 
 
