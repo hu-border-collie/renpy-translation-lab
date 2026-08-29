@@ -65,7 +65,7 @@ logs/story_memory/story_graph.json
 
 `batch.rag.store_dir`、`batch.source_index.store_dir`、`sync.rag.store_dir`、`sync.source_index.store_dir` 和 `story_memory.graph_file` 仍然可以显式指定；一旦填了具体路径，就优先使用该路径，不再跟随 `context_storage.location`。
 
-Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端。`sync.rag` / `batch.rag` 的 `embedding_backend` 默认为 `gemini`；选择 `openai_compatible` 时必须显式填写 `embedding_model` 和 `embedding_provider`，不得从生成模型推断。Store 会记录 backend/provider/model/task type/dimension identity；query 与 store 不兼容时拒绝混用并建议重建，旧纯文本 store 不会被静默升级。
+Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端。`sync.rag` / `batch.rag` 的 `embedding_backend` 默认为 `gemini`；选择 `openai_compatible` 时必须显式填写 `embedding_model` 和 `embedding_provider`，不得从生成模型推断。明确选择非 Gemini 后端但配置无效时，加载会直接失败，而不是改回 Gemini。`query_task_type` / `document_task_type` 只接受 `RETRIEVAL_QUERY` / `RETRIEVAL_DOCUMENT` 或大小写不敏感的 `query` / `document`；`SEMANTIC_SIMILARITY` 等旧 Gemini native 值会在加载时拒绝。Store 会记录 backend/provider/model/task type/dimension identity；query 与 store 不兼容时拒绝混用并建议重建，旧纯文本 store 不会被静默升级。
 
 ## Project Analysis（项目分析）
 

@@ -59,7 +59,28 @@ _NATIVE_TASK_TYPES = {
     'RETRIEVAL_QUERY': EmbeddingTaskType.QUERY,
     EmbeddingTaskType.DOCUMENT.value: EmbeddingTaskType.DOCUMENT,
     EmbeddingTaskType.QUERY.value: EmbeddingTaskType.QUERY,
+    'DOCUMENT': EmbeddingTaskType.DOCUMENT,
+    'QUERY': EmbeddingTaskType.QUERY,
 }
+_UNSUPPORTED_GEMINI_TASK_TYPES = frozenset(
+    {
+        'SEMANTIC_SIMILARITY',
+        'CLASSIFICATION',
+        'CLUSTERING',
+        'QUESTION_ANSWERING',
+        'FACT_VERIFICATION',
+        'CODE_RETRIEVAL_QUERY',
+    }
+)
+_GEMINI_BACKEND_ALIASES = frozenset(
+    {
+        BACKEND_GEMINI,
+        'google_genai',
+        'google-ai',
+        'google_ai',
+        'google-genai',
+    }
+)
 
 
 class EmbeddingRuntimeError(RuntimeError):
@@ -144,15 +165,36 @@ def semantic_task_type(value: object, default: EmbeddingTaskType | None = None) 
             return default
         raise EmbeddingContractError('embedding task type is required')
     text = str(value).strip()
-    mapped = _NATIVE_TASK_TYPES.get(text)
+    mapped = _NATIVE_TASK_TYPES.get(text) or _NATIVE_TASK_TYPES.get(text.upper().replace('-', '_'))
     if mapped is not None:
         return mapped
-    try:
-        return EmbeddingTaskType(text)
-    except ValueError as exc:
+    unsupported = text.upper().replace('-', '_')
+    if unsupported in _UNSUPPORTED_GEMINI_TASK_TYPES:
         raise EmbeddingContractError(
-            'embedding task type must be document, query, RETRIEVAL_DOCUMENT, or RETRIEVAL_QUERY'
-        ) from exc
+            f'embedding task type {text!r} is not supported; use RETRIEVAL_DOCUMENT or RETRIEVAL_QUERY'
+        )
+    raise EmbeddingContractError(
+        'embedding task type must be document, query, RETRIEVAL_DOCUMENT, or RETRIEVAL_QUERY'
+    )
+
+
+def persist_task_type(value: object, default: str) -> str:
+    """Return the canonical persisted Gemini-native task name."""
+
+    semantic = semantic_task_type(value, default=semantic_task_type(default))
+    if semantic is EmbeddingTaskType.DOCUMENT:
+        return DEFAULT_DOCUMENT_TASK_TYPE
+    return DEFAULT_QUERY_TASK_TYPE
+
+
+def is_explicit_non_gemini_backend(rag_config: Mapping[str, Any] | None) -> bool:
+    """True when the user selected a non-Gemini embedding backend."""
+
+    rag = rag_config if isinstance(rag_config, Mapping) else {}
+    requested = _optional_text(rag.get('embedding_backend')).lower().replace('-', '_')
+    if not requested:
+        return False
+    return requested not in _GEMINI_BACKEND_ALIASES
 
 
 def _optional_text(value: object) -> str:
@@ -253,9 +295,14 @@ def parse_embedding_runtime_settings(
             DEFAULT_TIMEOUT_SECONDS,
         ),
         api_key_env=api_key_env,
-        native_query_task_type=_optional_text(rag.get('query_task_type')) or DEFAULT_QUERY_TASK_TYPE,
-        native_document_task_type=_optional_text(rag.get('document_task_type'))
-        or DEFAULT_DOCUMENT_TASK_TYPE,
+        native_query_task_type=persist_task_type(
+            rag.get('query_task_type'),
+            DEFAULT_QUERY_TASK_TYPE,
+        ),
+        native_document_task_type=persist_task_type(
+            rag.get('document_task_type'),
+            DEFAULT_DOCUMENT_TASK_TYPE,
+        ),
     )
 
 
@@ -313,9 +360,16 @@ def embed_texts(
 ) -> list[list[float]]:
     """Embed one batch through the adapter contract and return raw vectors."""
 
-    texts = [str(item) for item in contents or () if str(item)]
-    if not texts:
+    if not contents:
         return []
+    texts: list[str] = []
+    for index, item in enumerate(contents):
+        text = '' if item is None else str(item)
+        if not text:
+            raise EmbeddingContractError(
+                f'embedding inputs[{index}] must be a non-empty string'
+            )
+        texts.append(text)
     semantic = semantic_task_type(task_type)
     identity = adapter.identity(semantic)
     timeout = (

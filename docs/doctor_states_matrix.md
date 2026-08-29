@@ -69,7 +69,8 @@
 | **`rag_needs_bootstrap`** | `enabled` 开启，且物理库不存在，或历史记录数 `history_records <= 0`。 | **必需准备**：记忆库未就绪。根据 `bootstrap_on_build` 配置，建议手动预建或提示会在 build 时自动暖库。 |
 | **`batch.source_index.enabled`**| 控制是否使用原文上下文索引。 | 原文索引开关。 |
 | **`source_index_needs_bootstrap`** | `enabled` 开启，且物理库不存在，或索引片段数为 0，或索引数少于预期数量。 | **必需准备**：原文索引未建立（`missing`）或建立不完整（`incomplete`）。 |
-| **`embedding_compatible`** | RAG / 原文索引 store 的 document identity 与当前 query backend/provider/model/dimension 比较。 | 不兼容时 **必需准备**：`rebuild_rag_store` / `rebuild_source_index_store`，到「上下文库」重新预建；查询不会混用向量。 |
+| **`embedding_compatible`** | Batch RAG / 原文索引 store 的 document identity 与当前 Batch query backend/provider/model/dimension 比较。仅在对应 Batch 开关启用时计算。 | 不兼容时 **必需准备**：`rebuild_rag_store` / `rebuild_source_index_store`，到「上下文库」重新预建；查询不会混用向量。 |
+| **`sync_embedding_compatible`** | 同一 store 与当前 Sync embedding identity 比较。仅在 Sync RAG / Source Index 启用时计算。 | 不兼容时同样给出 `rebuild_*`；Batch 关闭但 Sync 开启时也会检查。`embedding_load_error` / `sync_embedding_load_error` 记录加载期回退原因（仅 Gemini 解析失败会回退）。 |
 
 ---
 

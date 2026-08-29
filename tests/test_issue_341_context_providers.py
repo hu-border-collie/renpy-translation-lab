@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Sync/Batch Source Index and Published PA provider contract (issue #341)."""
 
+import io
 import tempfile
 import unittest
 from unittest import mock
@@ -178,6 +179,192 @@ class SyncSourceIndexRetrievalTests(unittest.TestCase):
                 runtime.SYNC_SOURCE_INDEX_TOP_K = old['top_k']
                 runtime.SYNC_SOURCE_INDEX_MIN_SIMILARITY = old['min_sim']
                 runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT = old['char_limit']
+
+
+class EmbeddingLoaderRegressionTests(unittest.TestCase):
+    def _batch_embedding_globals(self):
+        return {
+            'RAG_ENABLED': batch_mod.RAG_ENABLED,
+            'RAG_EMBEDDING_MODEL': batch_mod.RAG_EMBEDDING_MODEL,
+            'RAG_EMBEDDING_BACKEND': batch_mod.RAG_EMBEDDING_BACKEND,
+            'RAG_EMBEDDING_PROVIDER': batch_mod.RAG_EMBEDDING_PROVIDER,
+            'RAG_EMBEDDING_ENDPOINT': batch_mod.RAG_EMBEDDING_ENDPOINT,
+            'RAG_EMBEDDING_TIMEOUT_SECONDS': batch_mod.RAG_EMBEDDING_TIMEOUT_SECONDS,
+            'RAG_EMBEDDING_API_KEY_ENV': batch_mod.RAG_EMBEDDING_API_KEY_ENV,
+            'RAG_EMBEDDING_LOAD_ERROR': batch_mod.RAG_EMBEDDING_LOAD_ERROR,
+            'RAG_QUERY_TASK_TYPE': batch_mod.RAG_QUERY_TASK_TYPE,
+            'RAG_DOCUMENT_TASK_TYPE': batch_mod.RAG_DOCUMENT_TASK_TYPE,
+            'RAG_OUTPUT_DIMENSIONALITY': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'SYNC_BACKEND': batch_mod.SYNC_BACKEND,
+            'SYNC_MODEL': batch_mod.SYNC_MODEL,
+            'SYNC_TIMEOUT_SECONDS': batch_mod.SYNC_TIMEOUT_SECONDS,
+        }
+
+    def _restore_batch_embedding_globals(self, snapshot):
+        for key, value in snapshot.items():
+            setattr(batch_mod, key, value)
+
+    def _sync_embedding_globals(self):
+        return {
+            'SYNC_RAG_ENABLED': runtime.SYNC_RAG_ENABLED,
+            'SYNC_RAG_EMBEDDING_MODEL': runtime.SYNC_RAG_EMBEDDING_MODEL,
+            'SYNC_RAG_EMBEDDING_BACKEND': runtime.SYNC_RAG_EMBEDDING_BACKEND,
+            'SYNC_RAG_EMBEDDING_PROVIDER': runtime.SYNC_RAG_EMBEDDING_PROVIDER,
+            'SYNC_RAG_EMBEDDING_ENDPOINT': runtime.SYNC_RAG_EMBEDDING_ENDPOINT,
+            'SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS': runtime.SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS,
+            'SYNC_RAG_EMBEDDING_API_KEY_ENV': runtime.SYNC_RAG_EMBEDDING_API_KEY_ENV,
+            'SYNC_RAG_EMBEDDING_LOAD_ERROR': runtime.SYNC_RAG_EMBEDDING_LOAD_ERROR,
+            'SYNC_RAG_QUERY_TASK_TYPE': runtime.SYNC_RAG_QUERY_TASK_TYPE,
+            'SYNC_RAG_DOCUMENT_TASK_TYPE': runtime.SYNC_RAG_DOCUMENT_TASK_TYPE,
+            'SYNC_RAG_OUTPUT_DIMENSIONALITY': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
+        }
+
+    def _restore_sync_embedding_globals(self, snapshot):
+        for key, value in snapshot.items():
+            setattr(runtime, key, value)
+
+    def test_load_batch_settings_persists_openai_compatible_backend_globals(self):
+        snapshot = self._batch_embedding_globals()
+        try:
+            with mock.patch.object(
+                batch_mod,
+                'load_json_file',
+                side_effect=[
+                    {},
+                    {
+                        'batch': {
+                            'rag': {
+                                'embedding_backend': 'openai_compatible',
+                                'embedding_provider': 'openai',
+                                'embedding_model': 'text-embedding-3-small',
+                                'embedding_timeout_seconds': 12.5,
+                                'output_dimensionality': 1536,
+                            }
+                        }
+                    },
+                ],
+            ), mock.patch(
+                'project_context_settings.apply_project_context_settings_to_config',
+                side_effect=lambda config, root: config,
+            ):
+                batch_mod.load_batch_settings()
+            self.assertEqual(batch_mod.RAG_EMBEDDING_BACKEND, 'openai_compatible')
+            self.assertEqual(batch_mod.RAG_EMBEDDING_PROVIDER, 'openai')
+            self.assertEqual(batch_mod.RAG_EMBEDDING_MODEL, 'text-embedding-3-small')
+            self.assertEqual(batch_mod.RAG_EMBEDDING_TIMEOUT_SECONDS, 12.5)
+            self.assertEqual(batch_mod.RAG_EMBEDDING_LOAD_ERROR, '')
+            settings = batch_mod.current_batch_embedding_settings()
+            self.assertEqual(settings.backend, 'openai_compatible')
+            self.assertEqual(settings.model, 'text-embedding-3-small')
+            self.assertEqual(settings.timeout_seconds, 12.5)
+            self.assertEqual(settings.output_dimension, 1536)
+        finally:
+            self._restore_batch_embedding_globals(snapshot)
+
+    def test_load_batch_settings_fails_loud_for_explicit_non_gemini_misconfig(self):
+        snapshot = self._batch_embedding_globals()
+        try:
+            with mock.patch.object(
+                batch_mod,
+                'load_json_file',
+                side_effect=[
+                    {},
+                    {
+                        'batch': {
+                            'rag': {
+                                'embedding_backend': 'openai_compatible',
+                                'embedding_model': 'text-embedding-3-small',
+                            }
+                        }
+                    },
+                ],
+            ), mock.patch(
+                'project_context_settings.apply_project_context_settings_to_config',
+                side_effect=lambda config, root: config,
+            ):
+                with self.assertRaises(SystemExit) as captured:
+                    batch_mod.load_batch_settings()
+            self.assertIn('invalid batch.rag embedding settings', str(captured.exception))
+            self.assertEqual(
+                batch_mod.RAG_EMBEDDING_BACKEND,
+                snapshot['RAG_EMBEDDING_BACKEND'],
+            )
+        finally:
+            self._restore_batch_embedding_globals(snapshot)
+
+    def test_load_batch_settings_records_gemini_task_type_fallback(self):
+        snapshot = self._batch_embedding_globals()
+        try:
+            with mock.patch.object(
+                batch_mod,
+                'load_json_file',
+                side_effect=[
+                    {},
+                    {
+                        'batch': {
+                            'rag': {
+                                'query_task_type': 'SEMANTIC_SIMILARITY',
+                                'document_task_type': 'document',
+                            }
+                        }
+                    },
+                ],
+            ), mock.patch(
+                'project_context_settings.apply_project_context_settings_to_config',
+                side_effect=lambda config, root: config,
+            ), mock.patch('sys.stdout', io.StringIO()):
+                batch_mod.load_batch_settings()
+            self.assertTrue(batch_mod.RAG_EMBEDDING_LOAD_ERROR)
+            self.assertIn('not supported', batch_mod.RAG_EMBEDDING_LOAD_ERROR)
+            self.assertEqual(batch_mod.RAG_EMBEDDING_BACKEND, 'gemini')
+            self.assertEqual(batch_mod.RAG_QUERY_TASK_TYPE, 'RETRIEVAL_QUERY')
+            self.assertEqual(batch_mod.RAG_DOCUMENT_TASK_TYPE, 'RETRIEVAL_DOCUMENT')
+        finally:
+            self._restore_batch_embedding_globals(snapshot)
+
+    def test_load_sync_rag_settings_persists_openai_compatible_backend(self):
+        snapshot = self._sync_embedding_globals()
+        try:
+            runtime.load_sync_rag_settings(
+                {
+                    'sync': {
+                        'rag': {
+                            'embedding_backend': 'openai_compatible',
+                            'embedding_provider': 'openai',
+                            'embedding_model': 'text-embedding-3-small',
+                            'embedding_timeout_seconds': 9,
+                            'output_dimensionality': 1536,
+                            'query_task_type': 'query',
+                        }
+                    }
+                }
+            )
+            self.assertEqual(runtime.SYNC_RAG_EMBEDDING_BACKEND, 'openai_compatible')
+            self.assertEqual(runtime.SYNC_RAG_EMBEDDING_MODEL, 'text-embedding-3-small')
+            self.assertEqual(runtime.SYNC_RAG_QUERY_TASK_TYPE, 'RETRIEVAL_QUERY')
+            settings = runtime.current_sync_embedding_settings()
+            self.assertEqual(settings.backend, 'openai_compatible')
+            self.assertEqual(settings.timeout_seconds, 9)
+        finally:
+            self._restore_sync_embedding_globals(snapshot)
+
+    def test_load_sync_rag_settings_fails_loud_for_explicit_non_gemini_misconfig(self):
+        snapshot = self._sync_embedding_globals()
+        try:
+            with self.assertRaises(SystemExit) as captured:
+                runtime.load_sync_rag_settings(
+                    {
+                        'sync': {
+                            'rag': {
+                                'embedding_backend': 'openai_compatible',
+                                'embedding_model': 'text-embedding-3-small',
+                            }
+                        }
+                    }
+                )
+            self.assertIn('invalid sync.rag embedding settings', str(captured.exception))
+        finally:
+            self._restore_sync_embedding_globals(snapshot)
 
 
 if __name__ == '__main__':

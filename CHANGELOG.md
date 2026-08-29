@@ -22,6 +22,12 @@
 - 新增执行策略无关的翻译计划纯核心 `translation_plan.py`（#346 P1）：D4 共享 chunking 与稳定 chunk/request ID、D1 block 边界局部上下文、D2 词法术语命中、上下文分层组装（required/local/project/retrieval/analysis 五个内容层，排序、去重与逐层预算/丢弃诊断作为组装级记账）、D3 canonical prompt（Batch system/user 形态合并 Sync 独有规则）、plan/prompt/request 三级内容派生指纹与敏感键脱敏；`tests/fixtures/translation_plan_minimal` 冻结 sync 与 gemini_batch 的等价语义合同（同 chunk 的 `prompt_fingerprint` 一致）。改为委托共享实现的既有函数：batch 的 `iter_translation_chunk_ranges` / `hash_key` / `task_text_char_count`，sync 的 `build_sync_local_context` / `retrieve_sync_glossary_hits`；其余生产路径（sync 内联 40/12000 切块、batch 原始切片上下文、batch 词法术语 RAG 门控）留待 #346 P2/P3 切换。
 - 同步初译 prompt 中词法术语（`normalize_map` 命中）的渲染顺序改为按键排序的稳定顺序（#346 确定性要求）；配置中同批多个命中且插入序非字典序的项目，glossary 行顺序会与旧版不同，词法注入块内容不变（始终全量）。RAG 开启时 `LOCKED TERMS` 参考列表按 `top_k_terms` 取排序后命中前缀，命中数超过 top_k 时保留的术语集合可能与旧版不同（排序后的字典序首个优先保留）。chunking、hash key 与局部上下文的委托保持行为不变。
 
+### 修复
+
+- Batch `load_batch_settings()` 现在会把 `embedding_backend` / provider / endpoint / timeout / API key env 写回模块全局变量；配置 `openai_compatible` 后不再仍走 Gemini adapter。
+- Embedding task type 在加载时按 provider-neutral 合同校验并持久化为 `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`；空 embedding 输入改为立即报错，避免 zip 错位静默丢记录。
+- 明确选择非 Gemini embedding 后端但缺 model/provider 时启动失败；Gemini 解析失败仍可回退，但原因写入 doctor `embedding_load_error`。
+
 ### 变更
 
 - 普通 Sync 初译改为消费共享 TranslationPlan（#346 P3）：默认 chunk 对齐为 60/18000，Sync/Gemini Batch 共用 canonical system/user prompt、响应 schema、ContextAssembler 与稳定 request/prompt/plan fingerprint；Gemini、LiteLLM 和自定义 OpenAI-compatible Provider 均显式传递 system instruction。缺项/无效响应只生成带 `--T` / `--L` / `--R` lineage 的确定性派生请求，不修改原 plan；sync preview manifest 绑定 plan、request IDs、逐文件 source digest 与既有 adapter writeback/source snapshot 门禁。旧显式 Sync 分块配置与无 plan 的旧 preview manifest 保持兼容。

@@ -3,6 +3,7 @@ import unittest
 from gui_qt.doctor_report import (
     cancelled_summary,
     doctor_report_to_parsed,
+    format_context_status_facts,
     format_project_assets_facts,
     format_tl_scan_facts,
     parse_doctor_output,
@@ -184,6 +185,28 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(parsed["counts"]["old_lines"], 10)
         self.assertEqual(parsed["pending"]["task_count"], 5)
         self.assertEqual(parsed["pending"]["file_count"], 2)
+
+    def test_format_context_status_facts_reports_sync_incompatibility(self):
+        facts = format_context_status_facts(
+            {
+                "enabled": False,
+                "sync_enabled": True,
+                "store_exists": True,
+                "history_records": 4,
+                "sync_embedding_backend": "openai_compatible",
+                "sync_embedding_model": "text-embedding-3-small",
+                "sync_embedding_compatible": False,
+                "sync_embedding_load_error": "missing provider",
+            },
+            {"enabled": False},
+        )
+
+        self.assertTrue(any("记忆库：同步已启用，记录数 4" in fact for fact in facts))
+        self.assertTrue(any("openai_compatible / text-embedding-3-small" in fact for fact in facts))
+        self.assertTrue(any("同步记忆库向量身份不兼容，需要重建" in fact for fact in facts))
+        self.assertTrue(any("同步记忆库向量配置异常：missing provider" in fact for fact in facts))
+        self.assertTrue(any("同步翻译：使用记忆库" in fact for fact in facts))
+        self.assertTrue(any("原文索引：未启用" in fact for fact in facts))
 
     def test_format_project_assets_facts_reports_missing_files(self):
         facts = format_project_assets_facts(

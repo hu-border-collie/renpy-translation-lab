@@ -337,6 +337,42 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             doctor_rec.START_INCREMENTAL_BATCH,
         )
 
+    def test_sync_incompatible_rag_store_recommends_rebuild(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 240
+        report["translated_task_count"] = 11800
+        report["counts"] = {
+            "rpy_files": 20,
+            "translate_blocks": 12000,
+            "old_lines": 120,
+            "new_lines": 120,
+        }
+        report["context_status"] = {
+            "rag": {
+                "enabled": False,
+                "sync_enabled": True,
+                "store_exists": True,
+                "history_records": 12,
+                "sync_embedding_compatible": False,
+            },
+            "source_index": {"enabled": False},
+        }
+
+        batch_mod.finalize_doctor_actionable_signals(report)
+
+        self.assertEqual(
+            doctor_rec.doctor_recommendation_codes(report["recommendations"]),
+            [doctor_rec.REBUILD_RAG_STORE],
+        )
+        self.assertTrue(
+            doctor_rec.recommendations_block_workflow_state(report["recommendations"])
+        )
+        self.assertEqual(report["workflow_state"], "")
+
     def test_mostly_complete_project_without_rag_does_not_require_bootstrap(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",

@@ -314,6 +314,7 @@ RAG_EMBEDDING_PROVIDER = ''
 RAG_EMBEDDING_ENDPOINT = ''
 RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_runtime.DEFAULT_TIMEOUT_SECONDS
 RAG_EMBEDDING_API_KEY_ENV = ''
+RAG_EMBEDDING_LOAD_ERROR = ''
 RAG_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
 RAG_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
 RAG_OUTPUT_DIMENSIONALITY = 768
@@ -434,11 +435,7 @@ def read_text_file(path):
 
 
 def normalize_task_type(value, default):
-    if isinstance(value, str):
-        cleaned = value.strip().upper()
-        if cleaned:
-            return cleaned
-    return default
+    return embedding_runtime.persist_task_type(value, default)
 
 
 def normalize_batch_safety_settings(value):
@@ -491,6 +488,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
+    global RAG_EMBEDDING_BACKEND, RAG_EMBEDDING_PROVIDER, RAG_EMBEDDING_ENDPOINT
+    global RAG_EMBEDDING_TIMEOUT_SECONDS, RAG_EMBEDDING_API_KEY_ENV
+    global RAG_EMBEDDING_LOAD_ERROR
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
@@ -663,11 +663,17 @@ def load_batch_settings(*, tolerate_routing_errors=False):
             rag,
             default_model=RAG_EMBEDDING_MODEL or DEFAULT_GEMINI_EMBEDDING_MODEL,
         )
+        RAG_EMBEDDING_LOAD_ERROR = ''
     except EmbeddingContractError as exc:
+        if embedding_runtime.is_explicit_non_gemini_backend(rag):
+            raise SystemExit(
+                f'ERROR: invalid batch.rag embedding settings: {exc}'
+            ) from exc
         print(
             f'Warning: invalid batch.rag embedding settings ({exc}); '
             'using Gemini embedding defaults.'
         )
+        RAG_EMBEDDING_LOAD_ERROR = str(exc)
         embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
             {'embedding_model': RAG_EMBEDDING_MODEL},
             default_model=DEFAULT_GEMINI_EMBEDDING_MODEL,
@@ -679,8 +685,8 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     RAG_EMBEDDING_API_KEY_ENV = embedding_settings.api_key_env
     RAG_EMBEDDING_MODEL = embedding_settings.model
     RAG_OUTPUT_DIMENSIONALITY = embedding_settings.output_dimension
-    RAG_QUERY_TASK_TYPE = normalize_task_type(rag.get('query_task_type'), RAG_QUERY_TASK_TYPE)
-    RAG_DOCUMENT_TASK_TYPE = normalize_task_type(rag.get('document_task_type'), RAG_DOCUMENT_TASK_TYPE)
+    RAG_QUERY_TASK_TYPE = embedding_settings.native_query_task_type
+    RAG_DOCUMENT_TASK_TYPE = embedding_settings.native_document_task_type
     RAG_TOP_K_HISTORY = coerce_positive_int(rag.get('top_k_history'), RAG_TOP_K_HISTORY)
     RAG_TOP_K_TERMS = coerce_positive_int(rag.get('top_k_terms'), RAG_TOP_K_TERMS)
     RAG_MIN_SIMILARITY = coerce_float(rag.get('min_similarity'), RAG_MIN_SIMILARITY)
@@ -15779,7 +15785,7 @@ def _doctor_should_recommend_enabling_rag(report):
 
 
 def _doctor_source_index_needs_bootstrap(source_index):
-    if not source_index.get('enabled'):
+    if not (source_index.get('enabled') or source_index.get('sync_enabled')):
         return ''
     segments = int(source_index.get('source_segments') or 0)
     expected = int(source_index.get('expected_segments') or 0)
@@ -15791,7 +15797,7 @@ def _doctor_source_index_needs_bootstrap(source_index):
 
 
 def _doctor_rag_needs_bootstrap(rag):
-    if not rag.get('enabled'):
+    if not (rag.get('enabled') or rag.get('sync_enabled')):
         return False
     if not rag.get('store_exists'):
         return True
@@ -15900,10 +15906,13 @@ def collect_doctor_recommendations(report):
 
     source_index_status = _doctor_source_index_needs_bootstrap(source_index)
     if (
-        source_index.get('enabled')
+        (source_index.get('enabled') or source_index.get('sync_enabled'))
         and source_index.get('store_exists')
         and int(source_index.get('source_segments') or 0) > 0
-        and source_index.get('embedding_compatible') is False
+        and (
+            source_index.get('embedding_compatible') is False
+            or source_index.get('sync_embedding_compatible') is False
+        )
     ):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.REBUILD_SOURCE_INDEX_STORE)
@@ -15918,10 +15927,13 @@ def collect_doctor_recommendations(report):
         )
 
     if (
-        rag.get('enabled')
+        (rag.get('enabled') or rag.get('sync_enabled'))
         and rag.get('store_exists')
         and int(rag.get('history_records') or 0) > 0
-        and rag.get('embedding_compatible') is False
+        and (
+            rag.get('embedding_compatible') is False
+            or rag.get('sync_embedding_compatible') is False
+        )
     ):
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.REBUILD_RAG_STORE)
@@ -16046,23 +16058,52 @@ def collect_doctor_context_status():
         'embedding_model': embedding_public.get('model'),
         'embedding_compatible': True,
         'embedding_action': 'none',
+        'embedding_load_error': RAG_EMBEDDING_LOAD_ERROR,
+        'sync_enabled': bool(getattr(legacy, 'SYNC_RAG_ENABLED', False)),
+        'sync_embedding_backend': '',
+        'sync_embedding_model': '',
+        'sync_embedding_compatible': True,
+        'sync_embedding_action': 'none',
+        'sync_embedding_load_error': str(
+            getattr(legacy, 'SYNC_RAG_EMBEDDING_LOAD_ERROR', '') or ''
+        ),
     }
-    if RAG_ENABLED:
+    if RAG_ENABLED or rag_status['sync_enabled']:
+        rag_status['store_dir'] = rag_store_dir
         rag_exists = _store_dir_has_context_files(rag_store_dir, ('history.jsonl', 'metadata.json'))
         rag_status['store_exists'] = rag_exists
+        store = None
         if rag_exists:
             store = JsonRagStore(rag_store_dir)
             count, error, metadata = _load_store_count(store, 'count_history')
             rag_status['history_records'] = count
             rag_status['updated_at'] = metadata.get('updated_at', '')
             rag_status['error'] = error
-            compatibility = embedding_runtime.store_compatibility_report(
+            if RAG_ENABLED:
+                compatibility = embedding_runtime.store_compatibility_report(
+                    store,
+                    embedding_settings.query_identity(),
+                )
+                rag_status['embedding_compatible'] = bool(compatibility.compatible)
+                rag_status['embedding_action'] = compatibility.action
+                rag_status['embedding_codes'] = ','.join(compatibility.codes)
+
+    try:
+        sync_settings = legacy.current_sync_embedding_settings()
+        sync_public = sync_settings.public_dict()
+        rag_status['sync_embedding_backend'] = sync_public.get('backend')
+        rag_status['sync_embedding_model'] = sync_public.get('model')
+        if rag_status['sync_enabled'] and rag_status.get('store_exists'):
+            store = JsonRagStore(rag_store_dir)
+            store.load()
+            sync_compat = embedding_runtime.store_compatibility_report(
                 store,
-                embedding_settings.query_identity(),
+                sync_settings.query_identity(),
             )
-            rag_status['embedding_compatible'] = bool(compatibility.compatible)
-            rag_status['embedding_action'] = compatibility.action
-            rag_status['embedding_codes'] = ','.join(compatibility.codes)
+            rag_status['sync_embedding_compatible'] = bool(sync_compat.compatible)
+            rag_status['sync_embedding_action'] = sync_compat.action
+    except Exception:
+        pass
 
     source_index_status = {
         'enabled': SOURCE_INDEX_ENABLED,
@@ -16077,13 +16118,31 @@ def collect_doctor_context_status():
         'embedding_compatible': True,
         'embedding_action': 'none',
         'sync_enabled': bool(getattr(legacy, 'SYNC_SOURCE_INDEX_ENABLED', False)),
+        'sync_embedding_backend': '',
+        'sync_embedding_model': '',
+        'sync_embedding_compatible': True,
+        'sync_embedding_action': 'none',
     }
-    if SOURCE_INDEX_ENABLED:
+    if SOURCE_INDEX_ENABLED or source_index_status['sync_enabled']:
+        source_index_status['store_dir'] = source_index_store_dir
         source_exists = _store_dir_has_context_files(
             source_index_store_dir,
             ('source_segments.jsonl', 'source_metadata.json'),
         )
         source_index_status['store_exists'] = source_exists
+        sync_settings = None
+        if source_index_status['sync_enabled']:
+            try:
+                sync_settings = legacy.current_sync_embedding_settings()
+                sync_public = sync_settings.public_dict()
+                source_index_status['sync_embedding_backend'] = sync_public.get(
+                    'backend'
+                )
+                source_index_status['sync_embedding_model'] = sync_public.get(
+                    'model'
+                )
+            except Exception:
+                sync_settings = None
         if source_exists:
             store = JsonSourceIndexStore(source_index_store_dir)
             count, error, metadata = _load_store_count(store, 'count_segments')
@@ -16098,13 +16157,23 @@ def collect_doctor_context_status():
                 part for part in (error, expected_error) if part
             )
             source_index_status['error'] = combined_error
-            compatibility = embedding_runtime.store_compatibility_report(
-                store,
-                embedding_settings.query_identity(),
-            )
-            source_index_status['embedding_compatible'] = bool(compatibility.compatible)
-            source_index_status['embedding_action'] = compatibility.action
-            source_index_status['embedding_codes'] = ','.join(compatibility.codes)
+            if SOURCE_INDEX_ENABLED:
+                compatibility = embedding_runtime.store_compatibility_report(
+                    store,
+                    embedding_settings.query_identity(),
+                )
+                source_index_status['embedding_compatible'] = bool(compatibility.compatible)
+                source_index_status['embedding_action'] = compatibility.action
+                source_index_status['embedding_codes'] = ','.join(compatibility.codes)
+            if sync_settings is not None:
+                sync_compat = embedding_runtime.store_compatibility_report(
+                    store,
+                    sync_settings.query_identity(),
+                )
+                source_index_status['sync_embedding_compatible'] = bool(
+                    sync_compat.compatible
+                )
+                source_index_status['sync_embedding_action'] = sync_compat.action
 
     try:
         from project_analysis import collect_project_analysis_status
@@ -16723,6 +16792,13 @@ def print_doctor_report(report):
         f"embedding_model={rag_context.get('embedding_model') or ''}, "
         f"embedding_compatible={rag_context.get('embedding_compatible', True)}, "
         f"embedding_action={rag_context.get('embedding_action') or 'none'}, "
+        f"embedding_load_error={rag_context.get('embedding_load_error') or ''}, "
+        f"sync_enabled={rag_context.get('sync_enabled', False)}, "
+        f"sync_embedding_backend={rag_context.get('sync_embedding_backend') or ''}, "
+        f"sync_embedding_model={rag_context.get('sync_embedding_model') or ''}, "
+        f"sync_embedding_compatible={rag_context.get('sync_embedding_compatible', True)}, "
+        f"sync_embedding_action={rag_context.get('sync_embedding_action') or 'none'}, "
+        f"sync_embedding_load_error={rag_context.get('sync_embedding_load_error') or ''}, "
         f"updated_at={rag_context.get('updated_at') or ''}, "
         f"error={rag_context.get('error') or ''}"
     )
@@ -16739,6 +16815,8 @@ def print_doctor_report(report):
         f"embedding_compatible={source_index_context.get('embedding_compatible', True)}, "
         f"embedding_action={source_index_context.get('embedding_action') or 'none'}, "
         f"sync_enabled={source_index_context.get('sync_enabled', False)}, "
+        f"sync_embedding_compatible={source_index_context.get('sync_embedding_compatible', True)}, "
+        f"sync_embedding_action={source_index_context.get('sync_embedding_action') or 'none'}, "
         f"updated_at={source_index_context.get('updated_at') or ''}, "
         f"error={source_index_context.get('error') or ''}"
     )

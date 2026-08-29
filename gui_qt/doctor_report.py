@@ -165,7 +165,9 @@ def format_context_status_facts(
     facts: list[str] = []
 
     if rag_context:
-        if rag_context.get("enabled") is True:
+        batch_enabled = rag_context.get("enabled") is True
+        sync_enabled = rag_context.get("sync_enabled") is True
+        if batch_enabled or sync_enabled:
             records = _int_context_value(rag_context, "history_records")
             bootstrap_on_build = rag_context.get("bootstrap_on_build") is True
             if rag_context.get("store_exists") is not True:
@@ -182,16 +184,32 @@ def format_context_status_facts(
                     detail += "（建议到「上下文库」预建记忆库）"
             else:
                 detail = f"记录数 {records}"
-            facts.append(f"记忆库：已启用，{detail}")
+            if batch_enabled:
+                facts.append(f"记忆库：已启用，{detail}")
+            else:
+                facts.append(f"记忆库：同步已启用，{detail}")
             backend = rag_context.get("embedding_backend")
             model = rag_context.get("embedding_model")
+            if not batch_enabled:
+                backend = rag_context.get("sync_embedding_backend") or backend
+                model = rag_context.get("sync_embedding_model") or model
             if backend or model:
                 facts.append(
                     f"记忆库向量后端：{backend or 'gemini'}"
                     + (f" / {model}" if model else "")
                 )
-            if rag_context.get("embedding_compatible") is False:
+            if batch_enabled and rag_context.get("embedding_compatible") is False:
                 facts.append("记忆库向量身份不兼容，需要重建")
+            if sync_enabled and rag_context.get("sync_embedding_compatible") is False:
+                facts.append("同步记忆库向量身份不兼容，需要重建")
+            load_error = rag_context.get("embedding_load_error")
+            if load_error:
+                facts.append(f"记忆库向量配置异常：{load_error}")
+            sync_load_error = rag_context.get("sync_embedding_load_error")
+            if sync_load_error:
+                facts.append(f"同步记忆库向量配置异常：{sync_load_error}")
+            if sync_enabled:
+                facts.append("同步翻译：使用记忆库")
             if rag_context.get("store_dir"):
                 facts.append(f"记忆库路径：{rag_context['store_dir']}")
             if rag_context.get("error"):
@@ -200,7 +218,9 @@ def format_context_status_facts(
             facts.append("记忆库：未启用")
 
     if source_index_context:
-        if source_index_context.get("enabled") is True:
+        batch_enabled = source_index_context.get("enabled") is True
+        sync_enabled = source_index_context.get("sync_enabled") is True
+        if batch_enabled or sync_enabled:
             segments = _int_context_value(source_index_context, "source_segments")
             expected = _int_context_value(source_index_context, "expected_segments")
             schema_version = source_index_context.get("schema_version")
@@ -215,17 +235,28 @@ def format_context_status_facts(
                 detail = f"片段数 {segments}"
             if schema_version:
                 detail += f"，schema v{schema_version}"
-            facts.append(f"原文索引：已启用，{detail}")
+            if batch_enabled:
+                facts.append(f"原文索引：已启用，{detail}")
+            else:
+                facts.append(f"原文索引：同步已启用，{detail}")
             backend = source_index_context.get("embedding_backend")
             model = source_index_context.get("embedding_model")
+            if not batch_enabled:
+                backend = source_index_context.get("sync_embedding_backend") or backend
+                model = source_index_context.get("sync_embedding_model") or model
             if backend or model:
                 facts.append(
                     f"原文索引向量后端：{backend or 'gemini'}"
                     + (f" / {model}" if model else "")
                 )
-            if source_index_context.get("embedding_compatible") is False:
+            if batch_enabled and source_index_context.get("embedding_compatible") is False:
                 facts.append("原文索引向量身份不兼容，需要重建")
-            if source_index_context.get("sync_enabled") is True:
+            if (
+                sync_enabled
+                and source_index_context.get("sync_embedding_compatible") is False
+            ):
+                facts.append("同步原文索引向量身份不兼容，需要重建")
+            if sync_enabled:
                 facts.append("同步翻译：使用原文索引")
             if source_index_context.get("store_dir"):
                 facts.append(f"原文索引路径：{source_index_context['store_dir']}")

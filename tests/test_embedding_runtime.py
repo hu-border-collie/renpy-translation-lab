@@ -18,7 +18,9 @@ from embedding_runtime import (
     build_embedding_adapter,
     embed_texts,
     ensure_store_document_identity,
+    is_explicit_non_gemini_backend,
     parse_embedding_runtime_settings,
+    persist_task_type,
     public_error_diagnostics,
     semantic_task_type,
 )
@@ -101,6 +103,33 @@ class ParseSettingsTests(unittest.TestCase):
             EmbeddingTaskType.DOCUMENT,
         )
         self.assertEqual(semantic_task_type('query'), EmbeddingTaskType.QUERY)
+        self.assertEqual(semantic_task_type('DOCUMENT'), EmbeddingTaskType.DOCUMENT)
+        self.assertEqual(semantic_task_type('Query'), EmbeddingTaskType.QUERY)
+
+    def test_semantic_task_type_rejects_legacy_gemini_native_names(self):
+        with self.assertRaises(EmbeddingContractError) as captured:
+            semantic_task_type('SEMANTIC_SIMILARITY')
+        self.assertIn('not supported', str(captured.exception))
+        with self.assertRaises(EmbeddingContractError):
+            parse_embedding_runtime_settings({'query_task_type': 'CLASSIFICATION'})
+
+    def test_persist_task_type_canonicalizes_aliases(self):
+        self.assertEqual(persist_task_type('document', 'RETRIEVAL_QUERY'), 'RETRIEVAL_DOCUMENT')
+        self.assertEqual(persist_task_type('QUERY', 'RETRIEVAL_DOCUMENT'), 'RETRIEVAL_QUERY')
+        settings = parse_embedding_runtime_settings(
+            {'query_task_type': 'query', 'document_task_type': 'document'}
+        )
+        self.assertEqual(settings.native_query_task_type, 'RETRIEVAL_QUERY')
+        self.assertEqual(settings.native_document_task_type, 'RETRIEVAL_DOCUMENT')
+
+    def test_explicit_non_gemini_backend_is_detected_from_config(self):
+        self.assertFalse(is_explicit_non_gemini_backend({}))
+        self.assertFalse(is_explicit_non_gemini_backend({'embedding_backend': 'gemini'}))
+        self.assertFalse(is_explicit_non_gemini_backend({'embedding_backend': 'google-genai'}))
+        self.assertTrue(
+            is_explicit_non_gemini_backend({'embedding_backend': 'openai_compatible'})
+        )
+        self.assertTrue(is_explicit_non_gemini_backend({'embedding_backend': 'litellm'}))
 
 
 class AdapterEmbedTests(unittest.TestCase):
@@ -129,6 +158,26 @@ class AdapterEmbedTests(unittest.TestCase):
         self.assertEqual(models.calls[0]['model'], 'gemini-embedding-001')
         self.assertEqual(configs[0]['task_type'], 'RETRIEVAL_QUERY')
         self.assertEqual(configs[0]['output_dimensionality'], 2)
+
+    def test_embed_texts_rejects_empty_input_without_dropping_records(self):
+        settings = parse_embedding_runtime_settings(
+            {'embedding_model': 'gemini-embedding-001', 'output_dimensionality': 2}
+        )
+        models = _GeminiModels(
+            response=SimpleNamespace(
+                embeddings=[SimpleNamespace(values=[1.0, 0.0])],
+            )
+        )
+        adapter = build_embedding_adapter(
+            settings,
+            gemini_client=SimpleNamespace(models=models),
+            gemini_config_factory=lambda **kwargs: SimpleNamespace(**kwargs),
+        )
+        self.assertEqual(embed_texts(adapter, [], 'RETRIEVAL_QUERY'), [])
+        with self.assertRaises(EmbeddingContractError) as captured:
+            embed_texts(adapter, ['hello', ''], 'RETRIEVAL_QUERY')
+        self.assertIn('inputs[1]', str(captured.exception))
+        self.assertEqual(models.calls, [])
 
     def test_openai_compatible_embed_uses_injected_transport(self):
         settings = parse_embedding_runtime_settings(

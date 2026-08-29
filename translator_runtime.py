@@ -220,6 +220,7 @@ SYNC_RAG_EMBEDDING_PROVIDER = ""
 SYNC_RAG_EMBEDDING_ENDPOINT = ""
 SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
 SYNC_RAG_EMBEDDING_API_KEY_ENV = ""
+SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
 SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
 SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
 SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -555,21 +556,7 @@ def _coerce_non_empty_string(value, default):
 
 
 def _normalize_task_type(value, default):
-    allowed = {
-        "SEMANTIC_SIMILARITY",
-        "CLASSIFICATION",
-        "CLUSTERING",
-        "RETRIEVAL_DOCUMENT",
-        "RETRIEVAL_QUERY",
-        "QUESTION_ANSWERING",
-        "FACT_VERIFICATION",
-        "CODE_RETRIEVAL_QUERY",
-    }
-    if isinstance(value, str):
-        normalized = value.strip().upper()
-        if normalized in allowed:
-            return normalized
-    return default
+    return embedding_runtime.persist_task_type(value, default)
 
 
 def _normalize_context_storage_location(value):
@@ -954,7 +941,7 @@ def load_sync_rag_settings(config):
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
     global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
     global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
-    global SYNC_RAG_EMBEDDING_API_KEY_ENV
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY
     global SYNC_RAG_TOP_K_TERMS, SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES
@@ -977,11 +964,17 @@ def load_sync_rag_settings(config):
             rag,
             default_model=DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
         )
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
     except EmbeddingContractError as exc:
+        if embedding_runtime.is_explicit_non_gemini_backend(rag):
+            raise SystemExit(
+                f"ERROR: invalid sync.rag embedding settings: {exc}"
+            ) from exc
         print(
             f"Warning: invalid sync.rag embedding settings ({exc}); "
             "using Gemini embedding defaults."
         )
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = str(exc)
         embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
             {"embedding_model": SYNC_RAG_EMBEDDING_MODEL},
             default_model=DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
@@ -993,14 +986,8 @@ def load_sync_rag_settings(config):
     SYNC_RAG_EMBEDDING_API_KEY_ENV = embedding_settings.api_key_env
     SYNC_RAG_EMBEDDING_MODEL = embedding_settings.model
     SYNC_RAG_OUTPUT_DIMENSIONALITY = embedding_settings.output_dimension
-    SYNC_RAG_QUERY_TASK_TYPE = _normalize_task_type(
-        rag.get("query_task_type"),
-        "RETRIEVAL_QUERY",
-    )
-    SYNC_RAG_DOCUMENT_TASK_TYPE = _normalize_task_type(
-        rag.get("document_task_type"),
-        "RETRIEVAL_DOCUMENT",
-    )
+    SYNC_RAG_QUERY_TASK_TYPE = embedding_settings.native_query_task_type
+    SYNC_RAG_DOCUMENT_TASK_TYPE = embedding_settings.native_document_task_type
     SYNC_RAG_TOP_K_HISTORY = _coerce_positive_int(rag.get("top_k_history"), 4)
     SYNC_RAG_TOP_K_TERMS = _coerce_positive_int(rag.get("top_k_terms"), 8)
     SYNC_RAG_MIN_SIMILARITY = _coerce_float(rag.get("min_similarity"), 0.72)
@@ -1425,6 +1412,7 @@ class RuntimeConfig:
     sync_rag_embedding_endpoint: str = ""
     sync_rag_embedding_timeout_seconds: float = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
     sync_rag_embedding_api_key_env: str = ""
+    sync_rag_embedding_load_error: str = ""
     sync_rag_query_task_type: str = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
     sync_rag_document_task_type: str = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
     sync_rag_output_dimensionality: int = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -1569,6 +1557,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
         sync_rag_embedding_endpoint=SYNC_RAG_EMBEDDING_ENDPOINT,
         sync_rag_embedding_timeout_seconds=SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS,
         sync_rag_embedding_api_key_env=SYNC_RAG_EMBEDDING_API_KEY_ENV,
+        sync_rag_embedding_load_error=SYNC_RAG_EMBEDDING_LOAD_ERROR,
         sync_rag_query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
         sync_rag_document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
         sync_rag_output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
@@ -1612,7 +1601,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
     global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
     global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
-    global SYNC_RAG_EMBEDDING_API_KEY_ENV
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
     global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
@@ -1689,6 +1678,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         SYNC_RAG_EMBEDDING_ENDPOINT = applied.sync_rag_embedding_endpoint
         SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = applied.sync_rag_embedding_timeout_seconds
         SYNC_RAG_EMBEDDING_API_KEY_ENV = applied.sync_rag_embedding_api_key_env
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = applied.sync_rag_embedding_load_error
         SYNC_RAG_QUERY_TASK_TYPE = applied.sync_rag_query_task_type
         SYNC_RAG_DOCUMENT_TASK_TYPE = applied.sync_rag_document_task_type
         SYNC_RAG_OUTPUT_DIMENSIONALITY = applied.sync_rag_output_dimensionality
@@ -1843,7 +1833,7 @@ def _reset_project_settings_to_defaults():
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
     global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
     global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
-    global SYNC_RAG_EMBEDDING_API_KEY_ENV
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
     global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
@@ -1892,6 +1882,7 @@ def _reset_project_settings_to_defaults():
     SYNC_RAG_EMBEDDING_ENDPOINT = ""
     SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
     SYNC_RAG_EMBEDDING_API_KEY_ENV = ""
+    SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
     SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
     SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
     SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -3475,8 +3466,12 @@ def embed_texts(contents, task_type):
         return []
     settings = current_sync_embedding_settings()
     last_error = None
-    api_key_count = len(API_KEYS or [])
-    attempts = max(1, api_key_count if settings.backend == embedding_runtime.BACKEND_GEMINI else 1)
+    key_attempts = api_key_rotation_attempts()
+    attempts = (
+        max(3, key_attempts * 2)
+        if settings.backend == embedding_runtime.BACKEND_GEMINI
+        else 1
+    )
     for attempt in range(1, attempts + 1):
         try:
             adapter = build_live_embedding_adapter(settings)
