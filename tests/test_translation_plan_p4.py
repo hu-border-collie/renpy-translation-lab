@@ -35,6 +35,7 @@ def _batch_manifest(tmp_dir):
         chunks.append({
             'key': request.chunk_id,
             'file_rel_path': plan_chunk.file_rel_path,
+            'file_path': plan_chunk.file_path,
             'items': items_by_file[plan_chunk.file_rel_path][start:end],
             **request.to_dict(),
         })
@@ -53,6 +54,22 @@ def _batch_manifest(tmp_dir):
 
 
 class DispatchFreshnessTests(unittest.TestCase):
+    def _validate_current_batch(self, manifest, build, *, operation='submit'):
+        with (
+            mock.patch.object(batch, 'collect_pending_file_jobs', return_value=[]),
+            mock.patch.object(
+                batch,
+                '_batch_plan_source_identity',
+                return_value=translation_plan.SourceIdentity.from_dict(
+                    build.plan.source_identity
+                ),
+            ),
+        ):
+            return batch.validate_batch_translation_plan_before_dispatch(
+                manifest,
+                operation=operation,
+            )
+
     def test_sync_source_or_adapter_stale_refuses_before_dispatch(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
         current = dict(build.plan.source_identity)
@@ -115,6 +132,225 @@ class DispatchFreshnessTests(unittest.TestCase):
             self.assertEqual(
                 raised.exception.code_name,
                 'TRANSLATION_PLAN_REQUEST_BINDING_MISMATCH',
+            )
+
+    def test_batch_coordinated_chunk_and_jsonl_tamper_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            manifest['chunks'][0]['user_prompt'] += '\ntampered together'
+            path = Path(manifest['input_jsonl_path'])
+            rows = [
+                batch.build_batch_request(chunk, model=manifest['batch_model'])
+                for chunk in manifest['chunks']
+            ]
+            path.write_text(
+                ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows),
+                encoding='utf-8',
+            )
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                self._validate_current_batch(manifest, build)
+            self.assertEqual(
+                raised.exception.code_name,
+                'TRANSLATION_PLAN_REQUEST_BINDING_MISMATCH',
+            )
+
+    def test_batch_adapter_version_stale_is_explicit(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            stale = dict(build.plan.source_identity)
+            stale['adapter_version'] = 'changed-adapter'
+            with (
+                mock.patch.object(batch, 'collect_pending_file_jobs', return_value=[]),
+                mock.patch.object(
+                    batch,
+                    '_batch_plan_source_identity',
+                    return_value=translation_plan.SourceIdentity.from_dict(stale),
+                ),
+            ):
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch.validate_batch_translation_plan_before_dispatch(manifest)
+            self.assertEqual(raised.exception.code_name, 'TRANSLATION_PLAN_SOURCE_STALE')
+            self.assertIn('adapter_version_changed', raised.exception.details['reasons'])
+
+    def test_split_child_plan_is_sliced_signed_and_valid(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            child_chunks = manifest['chunks'][:1]
+            child = {
+                'batch_model': manifest['batch_model'],
+                'chunks': child_chunks,
+                'split_from_manifest': 'parent.json',
+                'input_jsonl_path': str(Path(tmp_dir) / 'split.requests.jsonl'),
+            }
+            batch.copy_split_context_metadata(manifest, child, child_chunks)
+            Path(child['input_jsonl_path']).write_text(
+                json.dumps(
+                    batch.build_batch_request(
+                        child_chunks[0], model=child['batch_model']
+                    ),
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            diagnostics = [
+                self._validate_current_batch(child, build, operation=operation)
+                for operation in ('submit', 'check', 'apply')
+            ]
+            self.assertEqual(len(child['translation_plan']['request_summaries']), 1)
+            self.assertEqual(
+                child['translation_plan']['artifacts']['derivation']['kind'],
+                'split',
+            )
+            self.assertTrue(all(item['plan'] == 'fresh' for item in diagnostics))
+
+    def test_split_manifest_current_plan_children_pass_all_plan_gates(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            manifest.update({
+                'version': 2,
+                'display_name': 'fixture',
+                'settings': {},
+            })
+            manifest_path = Path(tmp_dir) / 'manifest.json'
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            with mock.patch.object(
+                batch,
+                'LATEST_MANIFEST_FILE',
+                str(Path(tmp_dir) / 'latest.txt'),
+            ):
+                children = batch.split_manifest(
+                    str(manifest_path),
+                    max_chunks=1,
+                )
+            self.assertGreater(len(children), 1)
+            for child_path in children:
+                child = batch.load_manifest(child_path)
+                for operation in ('submit', 'check', 'apply'):
+                    diagnostic = self._validate_current_batch(
+                        child,
+                        build,
+                        operation=operation,
+                    )
+                    self.assertEqual(diagnostic['plan'], 'fresh')
+
+    def test_split_child_cannot_resign_tampered_parent_request(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, _build = _batch_manifest(tmp_dir)
+            chunk = manifest['chunks'][0]
+            chunk['user_prompt'] += '\ncoordinated parent tamper'
+            prompt_fingerprint, request_fingerprint = (
+                translation_plan.recompute_request_fingerprints(chunk)
+            )
+            chunk['prompt_fingerprint'] = prompt_fingerprint
+            chunk['request_fingerprint'] = request_fingerprint
+            child = {
+                'chunks': [chunk],
+                'split_from_manifest': 'parent.json',
+            }
+            with self.assertRaisesRegex(ValueError, 'not bound'):
+                batch.copy_split_context_metadata(manifest, child, [chunk])
+
+    def test_retry_child_plan_binds_derived_request_and_is_valid(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            retry_chunk = batch.build_retry_subchunk(
+                manifest['chunks'][0], 0, 1, 1
+            )
+            child = {
+                'batch_model': manifest['batch_model'],
+                'chunks': [retry_chunk],
+                'retry_of_manifest': 'parent.json',
+                'input_jsonl_path': str(Path(tmp_dir) / 'retry.requests.jsonl'),
+            }
+            batch.copy_split_context_metadata(manifest, child, [retry_chunk])
+            Path(child['input_jsonl_path']).write_text(
+                json.dumps(
+                    batch.build_batch_request(
+                        retry_chunk, model=child['batch_model']
+                    ),
+                    ensure_ascii=False,
+                ) + '\n',
+                encoding='utf-8',
+            )
+            diagnostics = [
+                self._validate_current_batch(child, build, operation=operation)
+                for operation in ('submit', 'check', 'apply')
+            ]
+            summary = child['translation_plan']['request_summaries'][0]
+            self.assertEqual(summary['request_id'], retry_chunk['request_id'])
+            self.assertEqual(
+                child['translation_plan']['artifacts']['derivation']['kind'],
+                'retry',
+            )
+            self.assertTrue(all(item['request_count'] == 1 for item in diagnostics))
+
+    def test_apply_force_cannot_bypass_stale_plan_fingerprint(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, _build = _batch_manifest(tmp_dir)
+            manifest.update({
+                '_manifest_path': str(Path(tmp_dir) / 'manifest.json'),
+                '_package_dir': tmp_dir,
+                'applied_at': '2026-08-28T00:00:00',
+                'files': {},
+            })
+            manifest['translation_plan']['artifacts']['tampered'] = True
+
+            def allow_contract(_manifest, summary):
+                summary['writeback_gate'] = {'decision': batch.translation_quality.GATE_ALLOW}
+                return summary
+
+            with (
+                mock.patch.object(batch, 'load_manifest', return_value=manifest),
+                mock.patch.object(batch, 'require_manifest_mode'),
+                mock.patch.object(batch, 'require_manifest_project_match'),
+                mock.patch.object(batch, 'recover_atomic_write_transaction'),
+                mock.patch.object(batch, 'require_safe_check_for_apply'),
+                mock.patch.object(
+                    batch,
+                    'collect_result_actions',
+                    return_value=({}, {}, [], {}),
+                ),
+                mock.patch.object(batch, 'attach_check_contract', side_effect=allow_contract),
+                mock.patch.object(
+                    batch,
+                    '_validate_adapter_writeback_plan',
+                    return_value=(None, None),
+                ),
+            ):
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch.apply_results('manifest.json', force=True)
+            self.assertEqual(raised.exception.code_name, 'TRANSLATION_PLAN_STALE')
+
+    def test_durable_invalid_plan_uses_structured_contract_error(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, _build = _batch_manifest(tmp_dir)
+            manifest['durable_sync_source'] = {'run_id': 'run-1'}
+            manifest['translation_plan']['artifacts']['tampered'] = True
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                batch.validate_batch_translation_plan_before_dispatch(manifest)
+            self.assertEqual(raised.exception.code_name, 'TRANSLATION_PLAN_STALE')
+
+    def test_validation_preserves_context_diagnostic_counts(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest, build = _batch_manifest(tmp_dir)
+            expected = translation_plan.summarize_request_diagnostics(
+                manifest['translation_plan']['request_summaries']
+            )
+            manifest['translation_plan_diagnostics'] = {
+                'code': 'TRANSLATION_PLAN_CURRENT',
+                **expected,
+            }
+            diagnostic = self._validate_current_batch(manifest, build)
+            self.assertEqual(
+                diagnostic['context_truncated_requests'],
+                expected['context_truncated_requests'],
+            )
+            self.assertEqual(
+                diagnostic['context_dropped_entries'],
+                expected['context_dropped_entries'],
             )
 
 

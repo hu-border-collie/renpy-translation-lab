@@ -91,6 +91,25 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         legacy = format_translation_plan_facts({})
         self.assertTrue(any("旧版兼容模式" in fact for fact in legacy))
 
+    def test_translation_plan_facts_derive_missing_context_summary(self):
+        facts = format_translation_plan_facts({
+            "translation_plan": {
+                "plan_fingerprint": "fp-1",
+                "request_summaries": [{
+                    "request_id": "r1",
+                    "context_diagnostics": {
+                        "layers": [{"truncated": True}],
+                        "dropped": [
+                            {"reason": "duplicate_text", "char_used": 0},
+                            {"reason": "aggregate_budget_exceeded", "char_used": 4},
+                        ],
+                    },
+                }],
+            },
+        })
+        self.assertTrue(any("上下文裁剪请求数：1" in fact for fact in facts))
+        self.assertTrue(any("上下文舍弃记录数：1" in fact for fact in facts))
+
     def test_collect_existing_report_paths_only_returns_existing_files(self):
         package_dir = r"C:\logs\batch_jobs\job1"
         paths = {

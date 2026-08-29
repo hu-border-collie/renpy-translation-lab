@@ -17,6 +17,9 @@ Gemini Batch envelope。诊断页显示 plan 指纹、请求数与裁剪摘要�
 `requests.jsonl`、当前 source snapshot 与 adapter/version。任一绑定陈旧或被修改都会要求
 重新 build。缺少 `translation_plan` 的旧包仍可读取并按旧合同 check/apply，但会明确显示
 legacy compatibility：它没有新增的 plan/request freshness 保护，不应继续提交新的模型任务。
+`split` 子包会保存父 plan 的切片并重新签名；`build-retry` 的 D7 派生请求会保存带 lineage
+的 child plan。两者都继续执行相同的 submit/check/apply 请求内容与 freshness 校验，而不是
+复用无法与子包请求一一对应的父 plan summaries。
 
 ## 目标语言与 TL 路径
 

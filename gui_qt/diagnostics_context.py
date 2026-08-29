@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
 import model_usage_ledger
+import translation_plan
 from keyword_glossary_merge import build_merge_keywords_cli_command
 
 from .batch_workflow_support import (
@@ -1039,12 +1040,23 @@ def format_translation_plan_facts(manifest: dict[str, object]) -> list[str]:
     diagnostics = manifest.get("translation_plan_diagnostics")
     if not isinstance(diagnostics, dict):
         diagnostics = {}
+    derived_diagnostics = translation_plan.summarize_request_diagnostics(summaries)
     facts.append(
         f'{TRANSLATION_PLAN_COPY["requests"]}：'
-        f'{int(diagnostics.get("request_count") or len(summaries))}'
+        f'{int(diagnostics.get("request_count", derived_diagnostics["request_count"]))}'
     )
-    truncated = int(diagnostics.get("context_truncated_requests") or 0)
-    dropped = int(diagnostics.get("context_dropped_entries") or 0)
+    truncated = int(
+        diagnostics.get(
+            "context_truncated_requests",
+            derived_diagnostics["context_truncated_requests"],
+        )
+    )
+    dropped = int(
+        diagnostics.get(
+            "context_dropped_entries",
+            derived_diagnostics["context_dropped_entries"],
+        )
+    )
     if truncated:
         facts.append(f'{TRANSLATION_PLAN_COPY["context_truncated"]}：{truncated}')
     if dropped:

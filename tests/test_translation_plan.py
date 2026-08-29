@@ -893,6 +893,25 @@ class GoldenPlanTests(unittest.TestCase):
         self.assertIn('user_prompt', rendered)
         self.assertIn('+  "user_prompt"', rendered)
 
+    def test_plan_diff_reports_missing_request_without_json_error(self):
+        sync = build_fixture_plan(translation_plan.STRATEGY_SYNC)
+        report = translation_plan.plan_diff(sync.requests, sync.requests[:-1])
+        rendered = translation_plan.format_plan_diff(report)
+        self.assertFalse(report['equivalent'])
+        self.assertIn('<missing>', rendered)
+        self.assertIn('missing_request', rendered)
+
+    def test_empty_optional_duplicate_is_not_a_material_drop(self):
+        build = build_fixture_plan(
+            translation_plan.STRATEGY_SYNC,
+            retrieval_blocks_provider='',
+            analysis_blocks_provider='',
+        )
+        diagnostics = translation_plan.summarize_request_diagnostics(
+            build.plan.request_summaries
+        )
+        self.assertEqual(diagnostics['context_dropped_entries'], 0)
+
     def test_sync_plan_matches_frozen_golden(self):
         build = build_fixture_plan(translation_plan.STRATEGY_SYNC)
         _assert_golden('plan.sync.json', build.plan.to_dict())

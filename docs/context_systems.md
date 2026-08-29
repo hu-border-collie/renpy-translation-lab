@@ -7,10 +7,11 @@
 ## 共享组装与裁剪顺序
 
 Sync 与 Gemini Batch 初译由共享 ContextAssembler 按固定优先级组装：TARGET/结构信息、
-block-bounded 局部前后文、本地 Macro 与词法 glossary、检索上下文、分析上下文。预算不足
-时保留高优先级层，先裁剪/舍弃分析层，再处理检索层；每层的 rank、字符预算、实际使用、
-truncated 标记和舍弃原因进入 request diagnostics。必需层以及本地 Macro/glossary 不会被可选
-检索预算挤掉；若它们本身已超过总预算，诊断会明确报告 mandatory overflow。
+block-bounded 局部前后文、本地 Macro 与词法 glossary、检索上下文、分析上下文。现行生产
+策略分别对检索层和分析层应用字符 backstop；每层的 rank、字符预算、实际使用、truncated
+标记和舍弃原因进入 request diagnostics。核心 ContextPolicy 另支持调用方提供总字符预算；
+启用时会保留必需/本地/项目层，再依优先级裁剪检索和分析层，并报告 mandatory overflow。
+普通 Sync/Batch 当前未从模型 profile 自动设置这项总字符预算。
 
 本地 `normalize_map`、`preserve_terms`、`non_translatable_exact` 与 Macro 不依赖 RAG 或
 Embedding。关闭 RAG/Embedding 只关闭检索层，不会移除这些项目层上下文，也不会为了词法

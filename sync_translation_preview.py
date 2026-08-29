@@ -459,27 +459,11 @@ def create_sync_preview(
             translation_plan_payload.get("plan_fingerprint") or ""
         )
         manifest["request_ids"] = [str(item) for item in request_ids]
-        request_summaries = list(
-            translation_plan_payload.get("request_summaries") or []
-        )
         manifest["translation_plan_diagnostics"] = {
             "code": "TRANSLATION_PLAN_CURRENT",
             "mode": "current",
-            "request_count": len(request_summaries),
-            "context_truncated_requests": sum(
-                1
-                for summary in request_summaries
-                if any(
-                    bool((layer or {}).get("truncated"))
-                    for layer in (
-                        (summary.get("context_diagnostics") or {}).get("layers")
-                        or []
-                    )
-                )
-            ),
-            "context_dropped_entries": sum(
-                len((summary.get("context_diagnostics") or {}).get("dropped") or [])
-                for summary in request_summaries
+            **translation_plan.summarize_request_diagnostics(
+                translation_plan_payload.get("request_summaries") or []
             ),
         }
         _validate_translation_plan_binding(manifest)

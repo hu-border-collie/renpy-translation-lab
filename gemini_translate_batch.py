@@ -2120,6 +2120,21 @@ def translation_plan_compatibility_diagnostic(manifest):
     }
 
 
+def merged_translation_plan_diagnostics(manifest, **freshness):
+    """Keep persisted context counters while adding current freshness facts."""
+    existing = manifest.get('translation_plan_diagnostics')
+    if not isinstance(existing, dict):
+        existing = {}
+    plan = manifest.get('translation_plan')
+    summaries = list((plan or {}).get('request_summaries') or []) if isinstance(plan, dict) else []
+    return {
+        **existing,
+        **translation_plan_compatibility_diagnostic(manifest),
+        **translation_plan.summarize_request_diagnostics(summaries),
+        **freshness,
+    }
+
+
 def load_manifest(target=None):
     """Load and validate a JSON manifest or raise a structured contract error.
 
@@ -2906,7 +2921,16 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
     if source_manifest.get('model_routing'):
         part_manifest['model_routing'] = copy.deepcopy(source_manifest.get('model_routing'))
     if source_manifest.get('translation_plan'):
-        part_manifest['translation_plan'] = copy.deepcopy(source_manifest.get('translation_plan'))
+        derivation_kind = 'retry' if part_manifest.get('retry_of_manifest') else 'split'
+        part_manifest['translation_plan'] = translation_plan.derive_translation_plan_payload(
+            source_manifest.get('translation_plan'),
+            part_chunks,
+            derivation_kind=derivation_kind,
+        )
+        part_manifest['translation_plan_diagnostics'] = merged_translation_plan_diagnostics(
+            part_manifest,
+            derivation_kind=derivation_kind,
+        )
     if source_manifest.get('keyword_settings'):
         part_manifest['keyword_settings'] = dict(source_manifest.get('keyword_settings') or {})
     if source_manifest.get('revision_settings'):
@@ -3597,6 +3621,13 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         transport_metadata=translation_plan.redact_sensitive(
             {
                 'batch_key': chunk_id,
+                'retry_parent_request_id': str(
+                    parent_chunk.get('request_id') or ''
+                ),
+                'retry_parent_chunk_id': str(
+                    parent_chunk.get('chunk_id') or parent_chunk.get('key') or ''
+                ),
+                'retry_lineage_kind': 'batch_retry',
                 'retry_parent_key': str(parent_chunk.get('key') or ''),
                 'retry_item_start': subchunk.get('retry_item_start'),
                 'retry_item_end': subchunk.get('retry_item_end'),
@@ -3970,18 +4001,8 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             {
                 'code': 'TRANSLATION_PLAN_CURRENT',
                 'mode': 'current',
-                'request_count': len(translation_plan_manifest.requests),
-                'context_truncated_requests': sum(
-                    1
-                    for request in translation_plan_manifest.requests
-                    if any(
-                        bool((layer or {}).get('truncated'))
-                        for layer in (request.context_assembly or {}).get('layers') or []
-                    )
-                ),
-                'context_dropped_entries': sum(
-                    len((request.context_assembly or {}).get('dropped') or [])
-                    for request in translation_plan_manifest.requests
+                **translation_plan.summarize_request_diagnostics(
+                    translation_plan_manifest.plan.request_summaries
                 ),
             }
             if translation_plan_manifest is not None
@@ -7767,16 +7788,6 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
         manifest['translation_plan_diagnostics'] = diagnostic
         print(f"Warning: {diagnostic['message']}", file=sys.stderr)
         return diagnostic
-    if isinstance(manifest.get('durable_sync_source'), dict):
-        # #397's run-store integrity/freshness and bound-preview chain are the
-        # authority for durable Sync. Do not reinterpret its sync plan as a
-        # Gemini Batch request package here.
-        translation_plan.validate_plan_fingerprint(plan)
-        manifest['translation_plan_diagnostics'] = {
-            **diagnostic,
-            'delegated_guard': 'durable_sync_run_store',
-        }
-        return manifest['translation_plan_diagnostics']
     try:
         translation_plan.validate_plan_fingerprint(plan)
     except ValueError as exc:
@@ -7785,6 +7796,15 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
             code_name='TRANSLATION_PLAN_STALE',
             suggested_action='rebuild_batch_package',
         ) from exc
+    if isinstance(manifest.get('durable_sync_source'), dict):
+        # #397's run-store integrity/freshness and bound-preview chain are the
+        # authority for durable Sync. Do not reinterpret its sync plan as a
+        # Gemini Batch request package here.
+        manifest['translation_plan_diagnostics'] = merged_translation_plan_diagnostics(
+            manifest,
+            delegated_guard='durable_sync_run_store',
+        )
+        return manifest['translation_plan_diagnostics']
     if plan.get('execution_strategy') != translation_plan.STRATEGY_GEMINI_BATCH:
         raise cli_contract.MachineContractError(
             f'Batch {operation} refused: manifest TranslationPlan uses another execution strategy.',
@@ -7802,6 +7822,10 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
             suggested_action='rebuild_batch_package',
         )
     for index, (summary, chunk, row) in enumerate(zip(summaries, chunks, rows)):
+        request = translation_plan.TranslationRequest.from_dict(chunk)
+        semantic_fingerprint, audit_fingerprint = (
+            translation_plan.recompute_request_fingerprints(request)
+        )
         expected_row = build_batch_request(
             chunk,
             model=str(manifest.get('batch_model') or ''),
@@ -7813,6 +7837,11 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
             == str(chunk.get('prompt_fingerprint') or ''),
             str(summary.get('request_fingerprint') or '')
             == str(chunk.get('request_fingerprint') or ''),
+            str(plan.get('plan_id') or '') == request.plan_id,
+            str(summary.get('prompt_fingerprint') or '') == semantic_fingerprint,
+            str(chunk.get('prompt_fingerprint') or '') == semantic_fingerprint,
+            str(summary.get('request_fingerprint') or '') == audit_fingerprint,
+            str(chunk.get('request_fingerprint') or '') == audit_fingerprint,
             stable_json_dumps(row) == stable_json_dumps(expected_row),
         )
         if not all(bindings):
@@ -7840,13 +7869,13 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
             suggested_action='rebuild_batch_package',
             details={'reasons': reasons},
         )
-    diagnostic = {
-        **diagnostic,
-        'source': 'fresh',
-        'adapter': 'fresh',
-        'plan': 'fresh',
-        'request_count': len(rows),
-    }
+    diagnostic = merged_translation_plan_diagnostics(
+        manifest,
+        source='fresh',
+        adapter='fresh',
+        plan='fresh',
+        request_count=len(rows),
+    )
     manifest['translation_plan_diagnostics'] = diagnostic
     return diagnostic
 

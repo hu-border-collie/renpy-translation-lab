@@ -167,6 +167,19 @@ def canonical_semantic_request(request):
     return canonical_json(payload)
 
 
+def recompute_request_fingerprints(request):
+    """Recompute semantic and audit fingerprints without trusting stored fields."""
+    if not isinstance(request, TranslationRequest):
+        request = TranslationRequest.from_dict(request)
+    prompt_fingerprint = short_fingerprint(canonical_semantic_request(request))
+    request_fingerprint = short_fingerprint(canonical_json({
+        'prompt_fingerprint': prompt_fingerprint,
+        'generation_config': dict(request.generation_config or {}),
+        'transport_metadata': dict(request.transport_metadata or {}),
+    }))
+    return prompt_fingerprint, request_fingerprint
+
+
 def plan_diff(left_requests, right_requests, *, left_label='sync', right_label='gemini_batch'):
     """Compare normalized model-visible requests and return a readable report.
 
@@ -181,10 +194,14 @@ def plan_diff(left_requests, right_requests, *, left_label='sync', right_label='
         left_request = left[index] if index < len(left) else None
         right_request = right[index] if index < len(right) else None
         left_text = (
-            canonical_semantic_request(left_request) if left_request is not None else ''
+            canonical_semantic_request(left_request)
+            if left_request is not None
+            else canonical_json({'missing_request': True})
         )
         right_text = (
-            canonical_semantic_request(right_request) if right_request is not None else ''
+            canonical_semantic_request(right_request)
+            if right_request is not None
+            else canonical_json({'missing_request': True})
         )
         if left_text == right_text:
             continue
@@ -260,6 +277,147 @@ def validate_plan_fingerprint(payload):
     if not recorded or recorded != expected:
         raise ValueError('TranslationPlan fingerprint is invalid or stale.')
     return recorded
+
+
+def refresh_plan_fingerprint(payload):
+    """Return a deep-copied plan payload with a freshly computed fingerprint."""
+    refreshed = json.loads(canonical_json(dict(payload or {})))
+    fingerprint_payload = dict(refreshed)
+    fingerprint_payload.pop('plan_fingerprint', None)
+    fingerprint_payload.pop('run_id', None)
+    refreshed['plan_fingerprint'] = short_fingerprint(
+        canonical_json(fingerprint_payload)
+    )
+    return refreshed
+
+
+def is_material_context_drop(entry):
+    """Return whether a drop record represents model-visible context loss."""
+    entry = dict(entry or {})
+    if (
+        entry.get('reason') == 'duplicate_text'
+        and int(entry.get('char_used') or 0) <= 0
+    ):
+        return False
+    return True
+
+
+def summarize_request_diagnostics(request_summaries):
+    """Aggregate stable trim/drop counters from persisted request summaries."""
+    summaries = list(request_summaries or [])
+    return {
+        'request_count': len(summaries),
+        'context_truncated_requests': sum(
+            1
+            for summary in summaries
+            if any(
+                bool((layer or {}).get('truncated'))
+                for layer in (
+                    (summary.get('context_diagnostics') or {}).get('layers') or []
+                )
+            )
+        ),
+        'context_dropped_entries': sum(
+            1
+            for summary in summaries
+            for entry in (
+                (summary.get('context_diagnostics') or {}).get('dropped') or []
+            )
+            if is_material_context_drop(entry)
+        ),
+    }
+
+
+def derive_translation_plan_payload(parent_payload, request_payloads, *, derivation_kind):
+    """Create a signed child-plan view for split or D7-derived requests.
+
+    The parent plan remains immutable.  The child keeps its semantic ``plan_id``
+    and full-project source identity, but binds only the requests that the child
+    package can dispatch. Retry request lineage remains in each request's
+    transport metadata and is also recorded in the plan artifacts.
+    """
+    validate_plan_fingerprint(parent_payload)
+    parent = json.loads(canonical_json(dict(parent_payload or {})))
+    parent_chunks = {
+        str((chunk or {}).get('chunk_id') or ''): dict(chunk or {})
+        for chunk in parent.get('chunks') or []
+    }
+    parent_summaries_by_chunk = {
+        str((summary or {}).get('chunk_id') or ''): dict(summary or {})
+        for summary in parent.get('request_summaries') or []
+    }
+    parent_request_ids = {
+        str((summary or {}).get('request_id') or '')
+        for summary in parent.get('request_summaries') or []
+    }
+    summaries = []
+    chunks = []
+    for index, payload in enumerate(request_payloads or [], start=1):
+        raw = (
+            payload.to_dict()
+            if isinstance(payload, TranslationRequest)
+            else dict(payload or {})
+        )
+        request = TranslationRequest.from_dict(raw)
+        prompt_fingerprint, request_fingerprint = recompute_request_fingerprints(
+            request
+        )
+        if (
+            request.plan_id != str(parent.get('plan_id') or '')
+            or request.prompt_fingerprint != prompt_fingerprint
+            or request.request_fingerprint != request_fingerprint
+        ):
+            raise ValueError('Child TranslationPlan request fingerprint is stale.')
+        parent_summary = parent_summaries_by_chunk.get(request.chunk_id)
+        exact_parent_request = bool(
+            parent_summary
+            and str(parent_summary.get('request_id') or '') == request.request_id
+            and str(parent_summary.get('prompt_fingerprint') or '')
+            == prompt_fingerprint
+            and str(parent_summary.get('request_fingerprint') or '')
+            == request_fingerprint
+        )
+        retry_parent_request_id = str(
+            (request.transport_metadata or {}).get('retry_parent_request_id') or ''
+        )
+        if not exact_parent_request and (
+            str(derivation_kind or '') != 'retry'
+            or retry_parent_request_id not in parent_request_ids
+        ):
+            raise ValueError(
+                'Child TranslationPlan request is not bound to its parent plan.'
+            )
+        summaries.append(request.summary())
+        existing = parent_chunks.get(request.chunk_id)
+        if existing is not None:
+            chunks.append(existing)
+            continue
+        items = list(raw.get('items') or [])
+        chunks.append({
+            'chunk_id': request.chunk_id or str(raw.get('key') or ''),
+            'chunk_index': int(raw.get('chunk_index') or index),
+            'file_rel_path': str(raw.get('file_rel_path') or ''),
+            'file_path': str(raw.get('file_path') or ''),
+            'line_numbers': list(raw.get('line_numbers') or [
+                item.get('line') for item in items if item.get('line') is not None
+            ]),
+            'unit_ids': list(request.expected_ids),
+            'source_char_count': int(raw.get('source_char_count') or sum(
+                len(str(item.get('source', item.get('text', '')) or ''))
+                for item in items
+            )),
+            'context_window_spec': dict(raw.get('context_window_spec') or {}),
+        })
+    artifacts = dict(parent.get('artifacts') or {})
+    artifacts['derivation'] = {
+        'kind': str(derivation_kind or 'child'),
+        'parent_plan_id': str(parent.get('plan_id') or ''),
+        'parent_plan_fingerprint': str(parent.get('plan_fingerprint') or ''),
+    }
+    parent['chunks'] = chunks
+    parent['request_summaries'] = summaries
+    parent['artifacts'] = artifacts
+    return refresh_plan_fingerprint(parent)
 
 
 def source_identity_differences(expected, actual):

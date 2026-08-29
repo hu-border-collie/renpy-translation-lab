@@ -4536,11 +4536,8 @@ def validate_sync_translation_plan_before_dispatch(plan_build):
             'Sync TranslationPlan request summaries no longer match root requests.'
         )
     for index, (summary, request) in enumerate(zip(summaries, requests)):
-        semantic_fingerprint = translation_plan.short_fingerprint(
-            translation_plan.canonical_semantic_request(request)
-        )
-        request_fingerprint = translation_plan.short_fingerprint(
-            translation_plan.canonical_json(request.audit_payload())
+        semantic_fingerprint, request_fingerprint = (
+            translation_plan.recompute_request_fingerprints(request)
         )
         if (
             str(summary.get('request_id') or '') != request.request_id
