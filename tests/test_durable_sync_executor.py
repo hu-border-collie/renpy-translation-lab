@@ -118,14 +118,15 @@ class ScriptedBackend:
 
 
 class BlockingBackend:
-    def __init__(self):
+    def __init__(self, wait_timeout=2.0):
         self.started = threading.Event()
         self.release = threading.Event()
         self.cancelled = threading.Event()
+        self.wait_timeout = float(wait_timeout)
 
     def send(self, request, *, attempt, timeout_seconds):
         self.started.set()
-        if not self.release.wait(timeout=2.0):
+        if not self.release.wait(timeout=self.wait_timeout):
             raise AssertionError('test backend was not released')
         return ProviderOutcome(
             accepted_items=request['expected_ids'],
@@ -532,19 +533,26 @@ class ExecutorTests(unittest.TestCase):
 
     def test_heartbeat_keeps_lease_alive_during_provider_io(self):
         store, policy = self.bootstrap()
-        backend = BlockingBackend()
+        backend = BlockingBackend(wait_timeout=8.0)
+        # Keep I/O longer than TTL so the lease would expire without heartbeats,
+        # but leave enough slack for loaded Windows CI loops.
+        lease_ttl_seconds = 2.0
+        hold_seconds = 4.5
 
         def release_later():
-            self.assertTrue(backend.started.wait(timeout=1.0))
-            time.sleep(1.1)
+            self.assertTrue(backend.started.wait(timeout=2.0))
+            time.sleep(hold_seconds)
             backend.release.set()
 
         releaser = threading.Thread(target=release_later)
         releaser.start()
-        snapshot = self.executor(
-            store, backend, policy, lease_ttl_seconds=0.5
-        ).run()
-        releaser.join(timeout=2.0)
+        try:
+            snapshot = self.executor(
+                store, backend, policy, lease_ttl_seconds=lease_ttl_seconds
+            ).run()
+        finally:
+            backend.release.set()
+            releaser.join(timeout=2.0)
         self.assertEqual(snapshot['run_status'], RunStatus.COMPLETED.value)
 
     def test_max_in_flight_is_a_real_bounded_dispatch_limit(self):
