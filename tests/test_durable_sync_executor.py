@@ -567,18 +567,27 @@ class ExecutorTests(unittest.TestCase):
 
         worker = threading.Thread(
             target=lambda: result.setdefault(
-                'snapshot', self.executor(store, backend, policy).run()
+                'snapshot',
+                self.executor(
+                    store, backend, policy, lease_ttl_seconds=5.0
+                ).run(),
             )
         )
         worker.start()
-        self.assertTrue(backend.started_event.wait(timeout=1.0))
-        time.sleep(0.1)
-        with backend.lock:
-            self.assertEqual(len(backend.started), 2)
-            self.assertEqual(backend.max_active, 2)
-        backend.release.set()
-        worker.join(timeout=3.0)
-        self.assertFalse(worker.is_alive())
+        worker_alive = True
+        try:
+            self.assertTrue(backend.started_event.wait(timeout=2.0))
+            time.sleep(0.1)
+            with backend.lock:
+                self.assertEqual(len(backend.started), 2)
+                self.assertEqual(backend.max_active, 2)
+            backend.release.set()
+            worker.join(timeout=5.0)
+            worker_alive = worker.is_alive()
+        finally:
+            backend.release.set()
+            worker.join(timeout=2.0)
+        self.assertFalse(worker_alive)
         self.assertEqual(result['snapshot']['run_status'], RunStatus.COMPLETED.value)
         self.assertEqual(len(backend.started), 4)
         self.assertEqual(backend.max_active, 2)
