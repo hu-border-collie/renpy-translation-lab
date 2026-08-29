@@ -459,6 +459,8 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
     doctor_rec.CONFIGURE_PROJECT_ANALYSIS_MODEL: "建议：在「设置 · 上下文」配置项目分析模型",
     doctor_rec.CONFIGURE_PROJECT_ANALYSIS_API: "建议：配置 Gemini API Key 后再生成项目分析摘要",
     doctor_rec.BOOTSTRAP_RAG: "建议：先到左侧「上下文库」运行「预建记忆库」，再开始批量翻译",
+    doctor_rec.REBUILD_RAG_STORE: "建议：到「上下文库」重新预建记忆库（当前向量后端不兼容）",
+    doctor_rec.REBUILD_SOURCE_INDEX_STORE: "建议：到「上下文库」重新预建原文索引（当前向量后端不兼容）",
     doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
         "可选准备：记忆库为空；可先到「上下文库」预建记忆库，也可直接「开始翻译」并自动暖库"
     ),
@@ -496,6 +498,8 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
         "可选优化：补译量较大，可在「设置 · 上下文」启用记忆库，再到「上下文库」预建。"
     ),
     doctor_rec.BOOTSTRAP_RAG: "记忆库尚未建立，请先到左侧「上下文库」预建记忆库再开始翻译。",
+    doctor_rec.REBUILD_RAG_STORE: "记忆库向量后端不兼容，请到「上下文库」重新预建记忆库。",
+    doctor_rec.REBUILD_SOURCE_INDEX_STORE: "原文索引向量后端不兼容，请到「上下文库」重新预建原文索引。",
     doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD: (
         "可选准备：记忆库尚未建立；可直接开始翻译自动暖库，也可先到「上下文库」手动预建。"
     ),

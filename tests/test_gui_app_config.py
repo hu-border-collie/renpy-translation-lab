@@ -565,6 +565,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.state = FakeState()
         self.window.rag_enabled_cb = FakeCheckBox(True)
         self.window.source_index_enabled_cb = FakeCheckBox(True)
+        self.window.sync_source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_inject_published_brief_cb = FakeCheckBox(False)
         self.window.bootstrap_on_build_cb = FakeCheckBox(False)
         self.window.context_storage_game_cb = FakeCheckBox(True)
         self.window.sync_model_combo = FakeCombo("gemini-sync")
@@ -602,6 +604,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                 "rag_enabled": True,
                 "source_index_enabled": True,
                 "bootstrap_on_build": False,
+                "sync_source_index_enabled": False,
+                "sync_project_analysis_inject_enabled": False,
                 "project_analysis_enabled": True,
                 "project_analysis_inject_enabled": True,
             },
@@ -674,6 +678,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.state = FakeState()
         self.window.rag_enabled_cb = FakeCheckBox(True)
         self.window.source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_inject_published_brief_cb = FakeCheckBox(False)
         self.window.bootstrap_on_build_cb = FakeCheckBox(False)
         self.window.context_storage_game_cb = FakeCheckBox(True)
         self.window.sync_model_combo = FakeCombo("gemini-sync")
@@ -766,6 +772,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.state = FakeState()
         self.window.rag_enabled_cb = FakeCheckBox(True)
         self.window.source_index_enabled_cb = FakeCheckBox(True)
+        self.window.sync_source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_inject_published_brief_cb = FakeCheckBox(False)
         self.window.bootstrap_on_build_cb = FakeCheckBox(False)
         self.window.context_storage_game_cb = FakeCheckBox(True)
         self.window.sync_model_combo = FakeCombo("gemini-sync")
@@ -889,6 +897,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.state = FakeState()
         self.window.rag_enabled_cb = FakeCheckBox(True)
         self.window.source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_source_index_enabled_cb = FakeCheckBox(False)
+        self.window.sync_inject_published_brief_cb = FakeCheckBox(False)
         self.window.bootstrap_on_build_cb = FakeCheckBox(True)
         self.window.context_storage_game_cb = FakeCheckBox(True)
         self.window.sync_model_combo = FakeCombo("gemini-sync")
@@ -1719,6 +1729,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window.rag_enabled_cb = FakeCheckBox()
         self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_inject_published_brief_cb = FakeCheckBox()
         self.window.bootstrap_on_build_cb = FakeCheckBox()
         self.window.context_storage_game_cb = FakeCheckBox()
         self.window.sync_model_combo = FakeCombo()
@@ -2566,6 +2578,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._updating_batch_thinking_combo = False
         self.window.rag_enabled_cb = FakeCheckBox()
         self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_inject_published_brief_cb = FakeCheckBox()
         self.window.bootstrap_on_build_cb = FakeCheckBox()
         self.window.context_storage_game_cb = FakeCheckBox()
         self.window.theme_combo = FakeCombo()
@@ -2635,6 +2649,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._updating_batch_thinking_combo = False
         self.window.rag_enabled_cb = FakeCheckBox()
         self.window.source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_source_index_enabled_cb = FakeCheckBox()
+        self.window.sync_inject_published_brief_cb = FakeCheckBox()
         self.window.bootstrap_on_build_cb = FakeCheckBox()
         self.window.context_storage_game_cb = FakeCheckBox()
         self.window.theme_combo = FakeCombo()

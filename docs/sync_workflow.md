@@ -171,7 +171,7 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 
 ## Gemini 与 LiteLLM 数据边界
 
-- **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及当前 Sync 已启用的 glossary、macro、RAG 或 Story Memory 上下文发送给 Gemini。Source Index / Published Project Analysis 的普通 Sync 生产接线属于 #341/#346 P5。
+- **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及当前 Sync 已启用的 glossary、macro、RAG、Source Index 或 Published Project Analysis 上下文发送给 Gemini。Embedding 可显式选择 Gemini 或 OpenAI-compatible/LiteLLM 后端；没有 Gemini Key 时，只要配置了其它有效 Embedding backend，同步 RAG / Source Index 仍可工作。
 - **LiteLLM 同步**：本工具从本机调用 LiteLLM Python SDK，再按所选 Provider / API Base 访问供应商。本项目不提供自建 LiteLLM 代理；待译文本、提示词和必要上下文会发送到所选供应商。凭据保存在操作系统凭据管理器或环境变量中，不写入 `translator_config.json`。
 - **本地产物**：manifest、diff、模型结果摘要、用量账本与日志保存在本机；它们可能包含私有游戏文本，不应提交到公开仓库或发给无权访问者。
 

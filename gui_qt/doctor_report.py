@@ -183,6 +183,15 @@ def format_context_status_facts(
             else:
                 detail = f"记录数 {records}"
             facts.append(f"记忆库：已启用，{detail}")
+            backend = rag_context.get("embedding_backend")
+            model = rag_context.get("embedding_model")
+            if backend or model:
+                facts.append(
+                    f"记忆库向量后端：{backend or 'gemini'}"
+                    + (f" / {model}" if model else "")
+                )
+            if rag_context.get("embedding_compatible") is False:
+                facts.append("记忆库向量身份不兼容，需要重建")
             if rag_context.get("store_dir"):
                 facts.append(f"记忆库路径：{rag_context['store_dir']}")
             if rag_context.get("error"):
@@ -207,6 +216,17 @@ def format_context_status_facts(
             if schema_version:
                 detail += f"，schema v{schema_version}"
             facts.append(f"原文索引：已启用，{detail}")
+            backend = source_index_context.get("embedding_backend")
+            model = source_index_context.get("embedding_model")
+            if backend or model:
+                facts.append(
+                    f"原文索引向量后端：{backend or 'gemini'}"
+                    + (f" / {model}" if model else "")
+                )
+            if source_index_context.get("embedding_compatible") is False:
+                facts.append("原文索引向量身份不兼容，需要重建")
+            if source_index_context.get("sync_enabled") is True:
+                facts.append("同步翻译：使用原文索引")
             if source_index_context.get("store_dir"):
                 facts.append(f"原文索引路径：{source_index_context['store_dir']}")
             if source_index_context.get("error"):

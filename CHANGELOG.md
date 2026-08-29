@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 普通 Sync 可按项目开关消费 Source Index（独立 `RELATED PROJECT CONTEXT` 分区）与 fresh published Project Analysis brief；draft/stale/missing 只报告原因、不注入。Embedding 生产路径统一使用 Gemini / OpenAI-compatible adapters，store 记录 identity，不兼容时拒绝混用并建议重建。
 - 为核心 Batch 命令增加版本化 JSON 结果 envelope、严格语义退出码、非交互显式 target、能力发现与命令 schema。
 - `sync-revisions` 与 `sync-keywords` 接入同一版本化 JSON envelope：预览/写回分别复用 `preview-revisions` / `apply-revisions` 形状，关键词导出复用 `export-keywords` 的四份报告；sync 包不更新 latest，`manifest_path` 指向本次运行。
 - 增加 Project Analysis 的生成、审查、发布与按场景注入生命周期，以及 report-only 最终审校 campaign。

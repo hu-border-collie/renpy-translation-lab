@@ -1175,6 +1175,82 @@ def collect_project_analysis_status(
     )
 
 
+def compute_current_project_analysis_fingerprint(
+    base_dir: str | None = None,
+    store_dir: str | os.PathLike[str] | None = None,
+) -> str:
+    """Recompute structure fingerprint from scripts under build-time roots.
+
+    Prefers ``project_identity.script_roots`` persisted by structure builds so
+    custom script roots stay injectable. Falls back to default
+    game/work/original discovery under *base_dir*.
+    """
+
+    from project_analysis_routes import digest_script_paths, discover_script_files
+    from translator_runtime import BASE_DIR as runtime_base_dir
+
+    base = base_dir if base_dir is not None else (runtime_base_dir or None)
+    roots: list[str] = []
+    graph_base = base or ''
+    try:
+        store = resolve_project_analysis_store(store_dir, base_dir=base)
+        manifest = store.load_manifest() or {}
+        identity = manifest.get('project_identity') if isinstance(manifest, dict) else {}
+        if isinstance(identity, dict):
+            stored_identity_base = str(identity.get('base_dir') or '').strip()
+            stored_base = str(identity.get('graph_base') or stored_identity_base).strip()
+            if base and stored_base and os.path.isabs(stored_base) and stored_identity_base:
+                try:
+                    relative_graph_base = os.path.relpath(stored_base, stored_identity_base)
+                except ValueError:
+                    relative_graph_base = ''
+                if relative_graph_base and not relative_graph_base.startswith('..'):
+                    stored_base = os.path.join(base, relative_graph_base)
+            if stored_base:
+                if not os.path.isabs(stored_base) and base:
+                    graph_base = os.path.abspath(os.path.join(base, stored_base))
+                else:
+                    graph_base = stored_base
+            elif base:
+                graph_base = base
+            stored_roots = identity.get('script_roots') or []
+            if isinstance(stored_roots, list):
+                for raw_root in stored_roots:
+                    root = str(raw_root or '').strip()
+                    if not root:
+                        continue
+                    if not os.path.isabs(root):
+                        relocation_base = base or stored_base
+                        if relocation_base:
+                            root = os.path.join(relocation_base, root)
+                    elif base and stored_identity_base:
+                        try:
+                            relative_root = os.path.relpath(root, stored_identity_base)
+                        except ValueError:
+                            relative_root = ''
+                        if relative_root and not relative_root.startswith('..'):
+                            root = os.path.join(base, relative_root)
+                    roots.append(root)
+    except Exception:
+        roots = []
+
+    if not roots:
+        if not base:
+            return ''
+        for rel in ('game', os.path.join('work', 'game'), os.path.join('original', 'game')):
+            candidate = os.path.join(base, rel)
+            if os.path.isdir(candidate):
+                roots.append(candidate)
+        if not roots:
+            roots.append(base)
+        graph_base = base
+
+    paths = discover_script_files(roots)
+    if not paths:
+        return ''
+    return digest_script_paths(paths, base_dir=graph_base or base)
+
+
 def load_injectable_project_brief(
     store_dir: str | os.PathLike[str] | None = None,
     *,

@@ -15,8 +15,8 @@ block-bounded 局部前后文、本地 Macro 与词法 glossary、检索上下�
 
 本地 `normalize_map`、`preserve_terms`、`non_translatable_exact` 与 Macro 不依赖 RAG 或
 Embedding。关闭 RAG/Embedding 只关闭检索层，不会移除这些项目层上下文，也不会为了词法
-匹配调用 embedding Provider。Source Index 与 Published Project Analysis 在 Sync 的生产接线
-仍属于 #341/#346 P5，本节不表示它们已经在普通 Sync 中启用。
+匹配调用 embedding Provider。普通 Sync 可按项目开关消费 Source Index 与已发布的 Project
+Analysis brief；两者默认关闭，draft/stale/missing brief 不会静默注入。
 
 ## 如何选择上下文层
 
@@ -63,7 +63,9 @@ logs/story_memory/story_graph.json
 <GameProject>/translation_context/story_memory/story_graph.json
 ```
 
-`batch.rag.store_dir`、`batch.source_index.store_dir`、`sync.rag.store_dir` 和 `story_memory.graph_file` 仍然可以显式指定；一旦填了具体路径，就优先使用该路径，不再跟随 `context_storage.location`。
+`batch.rag.store_dir`、`batch.source_index.store_dir`、`sync.rag.store_dir`、`sync.source_index.store_dir` 和 `story_memory.graph_file` 仍然可以显式指定；一旦填了具体路径，就优先使用该路径，不再跟随 `context_storage.location`。
+
+Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端。`sync.rag` / `batch.rag` 的 `embedding_backend` 默认为 `gemini`；选择 `openai_compatible` 时必须显式填写 `embedding_model` 和 `embedding_provider`，不得从生成模型推断。Store 会记录 backend/provider/model/task type/dimension identity；query 与 store 不兼容时拒绝混用并建议重建，旧纯文本 store 不会被静默升级。
 
 ## Project Analysis（项目分析）
 
@@ -318,6 +320,8 @@ Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制
 - 每个 chunk 的 `source_index_stats`：查询字符数、命中数、metadata 过滤明细、截断数、store schema version 和 store 路径。
 
 Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分区，只包含 `Source excerpt`，不会混入 `RETRIEVED MEMORY`，也不会携带译文。`batch.source_index.enabled=false` 时不会读取 source store，也不会增加该 prompt 分区。
+
+普通 Sync 使用同一 Source Index Store，不复制第二套索引格式。项目级开关 `sync_source_index_enabled`（配置键 `sync.source_index.enabled`）默认关闭；开启后为 TARGET 构建 source-only query，只注入与当前 embedding identity 完全兼容的命中，并使用独立的 top-k、相似度阈值、单条截断和总字符预算。没有 store、没有命中、检索失败或 identity 不兼容时降级为空命中，并在 prompt/manifest/doctor 中报告原因。
 
 ## 结构化剧情记忆
 

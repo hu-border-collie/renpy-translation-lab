@@ -14,6 +14,8 @@ BOOTSTRAP_SOURCE_INDEX = "bootstrap_source_index"
 BOOTSTRAP_SOURCE_INDEX_INCOMPLETE = "bootstrap_source_index_incomplete"
 BOOTSTRAP_RAG = "bootstrap_rag"
 BOOTSTRAP_RAG_OR_WARM_ON_BUILD = "bootstrap_rag_or_warm_on_build"
+REBUILD_RAG_STORE = "rebuild_rag_store"
+REBUILD_SOURCE_INDEX_STORE = "rebuild_source_index_store"
 ENABLE_RAG_FOR_CONSISTENCY = "enable_rag_for_consistency"
 BUILD_PROJECT_ANALYSIS = "build_project_analysis"
 REFRESH_PROJECT_ANALYSIS = "refresh_project_analysis"
@@ -37,6 +39,8 @@ ALL_CODES = frozenset(
         BOOTSTRAP_SOURCE_INDEX_INCOMPLETE,
         BOOTSTRAP_RAG,
         BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
+        REBUILD_RAG_STORE,
+        REBUILD_SOURCE_INDEX_STORE,
         ENABLE_RAG_FOR_CONSISTENCY,
         BUILD_PROJECT_ANALYSIS,
         REFRESH_PROJECT_ANALYSIS,
@@ -95,6 +99,14 @@ _BOOTSTRAP_SOURCE_INDEX_INCOMPLETE_MESSAGE = (
 _BOOTSTRAP_RAG_MESSAGE = (
     "RAG store is enabled but empty; run bootstrap-rag before batch translation."
 )
+_REBUILD_RAG_STORE_MESSAGE = (
+    "RAG store embedding identity is incompatible; run bootstrap-rag to rebuild "
+    "the store with the selected embedding backend."
+)
+_REBUILD_SOURCE_INDEX_STORE_MESSAGE = (
+    "Source index embedding identity is incompatible; run bootstrap-source-index "
+    "to rebuild the store with the selected embedding backend."
+)
 _BOOTSTRAP_RAG_OR_WARM_MESSAGE = (
     "RAG store is empty; run bootstrap-rag before batch translation, "
     "or start batch translation to warm the store automatically on build."
@@ -144,6 +156,8 @@ _LEGACY_EXACT_MESSAGES: dict[str, str] = {
     _BOOTSTRAP_SOURCE_INDEX_MESSAGE: BOOTSTRAP_SOURCE_INDEX,
     _BOOTSTRAP_SOURCE_INDEX_INCOMPLETE_MESSAGE: BOOTSTRAP_SOURCE_INDEX_INCOMPLETE,
     _BOOTSTRAP_RAG_MESSAGE: BOOTSTRAP_RAG,
+    _REBUILD_RAG_STORE_MESSAGE: REBUILD_RAG_STORE,
+    _REBUILD_SOURCE_INDEX_STORE_MESSAGE: REBUILD_SOURCE_INDEX_STORE,
     _BOOTSTRAP_RAG_OR_WARM_MESSAGE: BOOTSTRAP_RAG_OR_WARM_ON_BUILD,
     _ENABLE_RAG_MESSAGE: ENABLE_RAG_FOR_CONSISTENCY,
     _SUBSTANTIALLY_COMPLETE_MESSAGE: SUBSTANTIALLY_COMPLETE,
@@ -161,6 +175,8 @@ _DETAIL_MESSAGES: dict[str, str] = {
     BOOTSTRAP_SOURCE_INDEX: _BOOTSTRAP_SOURCE_INDEX_MESSAGE,
     BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: _BOOTSTRAP_SOURCE_INDEX_INCOMPLETE_MESSAGE,
     BOOTSTRAP_RAG: _BOOTSTRAP_RAG_MESSAGE,
+    REBUILD_RAG_STORE: _REBUILD_RAG_STORE_MESSAGE,
+    REBUILD_SOURCE_INDEX_STORE: _REBUILD_SOURCE_INDEX_STORE_MESSAGE,
     BOOTSTRAP_RAG_OR_WARM_ON_BUILD: _BOOTSTRAP_RAG_OR_WARM_MESSAGE,
     ENABLE_RAG_FOR_CONSISTENCY: _ENABLE_RAG_MESSAGE,
     BUILD_PROJECT_ANALYSIS: _BUILD_PROJECT_ANALYSIS_MESSAGE,

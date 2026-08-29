@@ -244,7 +244,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertIn(
             'Sync TranslationPlan context frozen: retrieval_chunks=1, '
-            'history_hits=1, story_chunks=0.',
+            'history_hits=1, source_hits=0, story_chunks=0, analysis_chunks=0.',
             output.getvalue(),
         )
 
