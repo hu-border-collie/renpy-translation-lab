@@ -77,6 +77,23 @@ CANDIDATE_REASON_CODES = frozenset(
         "renpy.catalog.provenance_unknown",
         "renpy.catalog.stale",
         "project.extraction_override",
+        # TyranoScript V600+ P5 (#399 / #265 P5)
+        "tyrano.comment",
+        "tyrano.engine_control_structure",
+        "tyrano.character_definition",
+        "tyrano.chara_ptext",
+        "tyrano.text_node",
+        "tyrano.registered_tag_parameter",
+        "tyrano.tag_parameter_not_registered",
+        "tyrano.unregistered_macro_invocation",
+        "tyrano.dynamic_parameter_expression",
+        "tyrano.iscript_boundary_tag",
+        "tyrano.iscript_content",
+        "tyrano.lang_set_control_tag",
+        "tyrano.unterminated_quoted_parameter",
+        "tyrano.official_parser_compensated",
+        "tyrano.unquoted_parameter_sequence",
+        "tyrano.unclosed_inline_tag",
     }
 )
 REVIEW_FINDING_CODES = frozenset(
@@ -98,6 +115,13 @@ REPORT_REASON_CODES = frozenset(
         "renpy.catalog.stale",
         "renpy.catalog.missing_entry",
         "renpy.catalog.duplicate_entry",
+        "tyrano.catalog.provenance_unknown",
+        "tyrano.catalog.stale",
+        "tyrano.catalog.missing_file",
+        "tyrano.catalog.missing_scenario",
+        "tyrano.catalog.missing_row",
+        "tyrano.catalog.empty_translation",
+        "tyrano.catalog.invalid_json",
     }
 )
 
@@ -357,6 +381,17 @@ def build_coverage_report(
         or draft.source_changed_during_scan
         or classification_counts["unknown"]
         or classification_counts["parse_error"]
+        or draft.catalog_freshness == "missing"
+        or any(
+            code in reason_counts
+            for code in {
+                "tyrano.catalog.missing_file",
+                "tyrano.catalog.missing_scenario",
+                "tyrano.catalog.missing_row",
+                "tyrano.catalog.empty_translation",
+                "tyrano.catalog.invalid_json",
+            }
+        )
     ):
         status = "block"
     elif (

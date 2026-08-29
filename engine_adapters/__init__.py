@@ -80,6 +80,13 @@ from .renpy import (
     RenPyTranslationSnapshot,
     build_translation_snapshot,
 )
+from .tyrano import (
+    ADAPTER_VERSION as TYRANO_ADAPTER_VERSION,
+    DEFAULT_TAG_REGISTRY,
+    TyranoAdapter,
+    TyranoTranslationSnapshot,
+    build_translation_snapshot as build_tyrano_translation_snapshot,
+)
 
 __all__ = [
     "CANDIDATE_SCHEMA_VERSION",
@@ -96,6 +103,7 @@ __all__ = [
     "RECONCILIATION_ITEM_SCHEMA_VERSION",
     "RECONCILIATION_SCHEMA_VERSION",
     "RENPY_ADAPTER_VERSION",
+    "TYRANO_ADAPTER_VERSION",
     "UNIT_OCCURRENCE_SCHEMA_VERSION",
     "VALIDATION_SCHEMA_VERSION",
     "WRITEBACK_PLAN_SCHEMA_VERSION",
@@ -121,6 +129,8 @@ __all__ = [
     "ProjectDiscoveryRequest",
     "RenPyAdapter",
     "RenPyTranslationSnapshot",
+    "TyranoAdapter",
+    "TyranoTranslationSnapshot",
     "ReviewValidation",
     "ReconciliationFreshness",
     "ReconciliationItem",
@@ -133,6 +143,7 @@ __all__ = [
     "build_coverage_report",
     "build_review_template",
     "build_translation_snapshot",
+    "build_tyrano_translation_snapshot",
     "build_project_snapshot",
     "build_unit_occurrence_records",
     "create_project_snapshot",
