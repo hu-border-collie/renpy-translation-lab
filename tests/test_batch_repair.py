@@ -244,6 +244,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
             with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
                  mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key']), \
                  mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'validate_batch_translation_plan_before_dispatch'), \
                  mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()), \
                  mock.patch('sys.stdout', stdout):
                 with self.assertRaises(QuotaError):
@@ -320,6 +321,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
             with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
                  mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key-a', 'key-b']), \
                  mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'validate_batch_translation_plan_before_dispatch'), \
                  mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()), \
                  mock.patch.object(batch_mod.legacy, 'rotate_api_key', return_value=True):
                 result = batch_mod.submit_manifest(str(manifest_path))

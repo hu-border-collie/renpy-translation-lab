@@ -813,6 +813,8 @@ class RoutingPreflightIntegrationTests(unittest.TestCase):
                     batch_mod, "create_batch_client",
                     side_effect=RuntimeError("do not upload"),
                 ), mock.patch.object(
+                    batch_mod, "validate_batch_translation_plan_before_dispatch",
+                ), mock.patch.object(
                     batch_mod, "_runtime_keyring_has_credential",
                     return_value=True,
                 ):

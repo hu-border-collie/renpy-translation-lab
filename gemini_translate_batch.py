@@ -7777,16 +7777,25 @@ def recover_submit_manifest(target=None, verify_remote=True):
 def validate_batch_translation_plan_before_dispatch(manifest, *, operation='submit'):
     """Validate a persisted Batch plan before any upload or model dispatch.
 
-    Legacy packages remain usable through their historical safeguards and
-    receive an explicit compatibility diagnostic.  Current packages must keep
-    their plan fingerprint, root request rows, source snapshot, and adapter
-    identity intact.
+    Legacy packages remain readable and may finish their historical
+    check/apply flow with an explicit compatibility diagnostic, but cannot
+    submit new provider work without the current plan/request protections.
+    Current packages must keep their plan fingerprint, root request rows,
+    source snapshot, and adapter identity intact.
     """
     diagnostic = translation_plan_compatibility_diagnostic(manifest)
     plan = manifest.get('translation_plan')
     if not isinstance(plan, dict) or not plan:
         manifest['translation_plan_diagnostics'] = diagnostic
         print(f"Warning: {diagnostic['message']}", file=sys.stderr)
+        if operation == 'submit':
+            raise cli_contract.MachineContractError(
+                'Batch submit refused: legacy package has no TranslationPlan '
+                'or request freshness protection.',
+                code_name='TRANSLATION_PLAN_LEGACY_SUBMIT_BLOCKED',
+                suggested_action='rebuild_batch_package',
+                details={'compatibility': diagnostic},
+            )
         return diagnostic
     try:
         translation_plan.validate_plan_fingerprint(plan)
@@ -7958,6 +7967,8 @@ def submit_manifest(
                 f'exceeds limit {float(max_cost):.4f} {currency}.'
             )
 
+    # Keep recovery/routing/cost errors deterministic, then enforce the plan
+    # gate before provider setup, upload reuse, or job creation.
     validate_batch_translation_plan_before_dispatch(manifest)
     save_manifest(manifest)
 

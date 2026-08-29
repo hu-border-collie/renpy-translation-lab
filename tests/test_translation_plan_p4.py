@@ -356,9 +356,47 @@ class DispatchFreshnessTests(unittest.TestCase):
 
 class CompatibilityDiagnosticsTests(unittest.TestCase):
     def test_legacy_batch_package_is_explicitly_downgraded(self):
-        diagnostic = batch.validate_batch_translation_plan_before_dispatch({})
-        self.assertEqual(diagnostic['mode'], 'legacy')
-        self.assertEqual(diagnostic['code'], 'TRANSLATION_PLAN_LEGACY_FALLBACK')
+        for operation in ('check', 'apply'):
+            with self.subTest(operation=operation):
+                diagnostic = batch.validate_batch_translation_plan_before_dispatch(
+                    {},
+                    operation=operation,
+                )
+                self.assertEqual(diagnostic['mode'], 'legacy')
+                self.assertEqual(
+                    diagnostic['code'],
+                    'TRANSLATION_PLAN_LEGACY_FALLBACK',
+                )
+
+    def test_legacy_batch_submit_is_blocked_before_provider_setup(self):
+        manifest = {'job_name': '', 'submit_disabled': False}
+        with (
+            mock.patch.object(batch, 'load_manifest', return_value=manifest),
+            mock.patch.object(batch, '_manifest_package_dir', return_value='package'),
+            mock.patch.object(
+                batch.batch_submit_recovery,
+                'get_uncertain_submit_state',
+                return_value=None,
+            ),
+            mock.patch.object(batch, 'resolve_manifest_routing_plan'),
+            mock.patch.object(batch, 'require_valid_routing_plan'),
+            mock.patch.object(batch, 'create_batch_client') as create_client,
+        ):
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                batch.submit_manifest('legacy-manifest.json')
+        self.assertEqual(
+            raised.exception.code_name,
+            'TRANSLATION_PLAN_LEGACY_SUBMIT_BLOCKED',
+        )
+        self.assertEqual(
+            raised.exception.suggested_action,
+            'rebuild_batch_package',
+        )
+        self.assertEqual(
+            raised.exception.details['compatibility']['code'],
+            'TRANSLATION_PLAN_LEGACY_FALLBACK',
+        )
+        create_client.assert_not_called()
 
     def test_legacy_sync_preview_loads_with_runtime_only_diagnostic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
