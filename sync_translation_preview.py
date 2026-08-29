@@ -167,7 +167,12 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         payload["failures"] = manifest.get("failures")
     if "model_contract" in manifest:
         payload["model_contract"] = manifest.get("model_contract")
-    for key in ("translation_plan", "plan_fingerprint", "request_ids"):
+    for key in (
+        "translation_plan",
+        "translation_plan_diagnostics",
+        "plan_fingerprint",
+        "request_ids",
+    ):
         if key in manifest:
             payload[key] = manifest.get(key)
     return payload
@@ -454,6 +459,13 @@ def create_sync_preview(
             translation_plan_payload.get("plan_fingerprint") or ""
         )
         manifest["request_ids"] = [str(item) for item in request_ids]
+        manifest["translation_plan_diagnostics"] = {
+            "code": "TRANSLATION_PLAN_CURRENT",
+            "mode": "current",
+            **translation_plan.summarize_request_diagnostics(
+                translation_plan_payload.get("request_summaries") or []
+            ),
+        }
         _validate_translation_plan_binding(manifest)
     if durable_check_binding is not None:
         manifest['durable_check_binding'] = dict(durable_check_binding)
@@ -477,6 +489,22 @@ def load_sync_preview(manifest_path: str | os.PathLike[str]) -> dict[str, Any]:
         raise ValueError("Sync preview manifest files must be a list.")
     if manifest.get("preview_fingerprint") != _fingerprint(manifest):
         raise ValueError("Sync preview manifest changed after preview generation.")
+    if isinstance(manifest.get("translation_plan"), dict):
+        manifest["_translation_plan_compatibility"] = {
+            "code": "TRANSLATION_PLAN_CURRENT",
+            "mode": "current",
+            "message": "TranslationPlan and request bindings are available.",
+        }
+    else:
+        manifest["_translation_plan_compatibility"] = {
+            "code": "TRANSLATION_PLAN_LEGACY_FALLBACK",
+            "mode": "legacy",
+            "message": (
+                "Legacy Sync preview has no TranslationPlan/request binding; "
+                "the historical source, artifact, quality, and adapter checks "
+                "still apply. Regenerate for current plan diagnostics."
+            ),
+        }
     manifest["_manifest_path"] = str(path)
     return manifest
 

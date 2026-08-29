@@ -10,6 +10,7 @@ from gui_qt.diagnostics_context import (
     build_diagnostics_context,
     collect_existing_report_paths,
     format_cli_command,
+    format_translation_plan_facts,
     idle_diagnostics_context,
     join_directory_file,
     manifest_for_preview,
@@ -53,6 +54,61 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("files", preview)
         self.assertNotIn("chunks", preview)
         self.assertIn("_preview_note", preview)
+
+    def test_manifest_preview_compacts_nested_translation_plan(self):
+        preview = manifest_for_preview({
+            "translation_plan": {
+                "schema_version": 1,
+                "plan_id": "plan-1",
+                "plan_fingerprint": "fp-1",
+                "execution_strategy": "gemini_batch",
+                "source_identity": {"engine": "renpy", "adapter_version": "1"},
+                "chunks": [{"large": "x" * 1000}],
+                "request_summaries": [{"request_id": "request-1"}],
+            },
+            "translation_plan_diagnostics": {"request_count": 1},
+        })
+        plan = preview["translation_plan"]
+        self.assertEqual(plan["request_count"], 1)
+        self.assertNotIn("chunks", plan)
+        self.assertNotIn("request_summaries", plan)
+
+    def test_translation_plan_facts_show_current_and_legacy_modes(self):
+        current = format_translation_plan_facts({
+            "translation_plan": {
+                "plan_fingerprint": "fp-1",
+                "request_summaries": [{"request_id": "r1"}],
+            },
+            "translation_plan_diagnostics": {
+                "request_count": 1,
+                "context_truncated_requests": 1,
+                "context_dropped_entries": 2,
+            },
+        })
+        self.assertTrue(any("fp-1" in fact for fact in current))
+        self.assertTrue(any("规范化请求数：1" in fact for fact in current))
+        self.assertTrue(any("上下文裁剪请求数：1" in fact for fact in current))
+        legacy = format_translation_plan_facts({})
+        self.assertTrue(any("旧版兼容模式" in fact for fact in legacy))
+
+    def test_translation_plan_facts_derive_missing_context_summary(self):
+        facts = format_translation_plan_facts({
+            "translation_plan": {
+                "plan_fingerprint": "fp-1",
+                "request_summaries": [{
+                    "request_id": "r1",
+                    "context_diagnostics": {
+                        "layers": [{"truncated": True}],
+                        "dropped": [
+                            {"reason": "duplicate_text", "char_used": 0},
+                            {"reason": "aggregate_budget_exceeded", "char_used": 4},
+                        ],
+                    },
+                }],
+            },
+        })
+        self.assertTrue(any("上下文裁剪请求数：1" in fact for fact in facts))
+        self.assertTrue(any("上下文舍弃记录数：1" in fact for fact in facts))
 
     def test_collect_existing_report_paths_only_returns_existing_files(self):
         package_dir = r"C:\logs\batch_jobs\job1"
@@ -409,6 +465,37 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(len(context.commands), 1)
         self.assertIn("gemini_translate.py", context.commands[0].command)
         self.assertEqual(context.manifest_json_preview, "")
+
+    def test_sync_diagnostics_context_shows_preview_plan_and_paths(self):
+        manifest_path = r"C:\logs\sync_runs\run1\manifest.json"
+        report_path = r"C:\logs\sync_runs\run1\preview.diff"
+        context = sync_diagnostics_context(
+            sync_script_path=r"C:\tools\gemini_translate.py",
+            preview_manifest_path=manifest_path,
+            preview_manifest={
+                "translation_plan": {
+                    "plan_fingerprint": "sync-fp",
+                    "request_summaries": [{"request_id": "r1"}],
+                },
+                "translation_plan_diagnostics": {"request_count": 1},
+                "report_path": "preview.diff",
+            },
+            path_exists=lambda path: path in {manifest_path, report_path},
+        )
+        self.assertEqual(context.status, "ready")
+        self.assertTrue(any("sync-fp" in fact for fact in context.facts))
+        self.assertEqual(len(context.paths), 2)
+        self.assertIn("translation_plan", context.manifest_json_preview)
+
+    def test_sync_diagnostics_context_warns_for_legacy_preview(self):
+        context = sync_diagnostics_context(
+            sync_script_path="gemini_translate.py",
+            preview_manifest_path="manifest.json",
+            preview_manifest={"report_path": "preview.diff"},
+            path_exists=lambda _path: False,
+        )
+        self.assertEqual(context.status, "warning")
+        self.assertIn("旧版兼容模式", context.message)
 
     def test_build_diagnostics_context_ready_with_manifest(self):
         manifest_path = r"C:\logs\batch_jobs\job1\manifest.json"

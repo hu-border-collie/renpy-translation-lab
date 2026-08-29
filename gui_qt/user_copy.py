@@ -93,6 +93,18 @@ DURABLE_SYNC_COPY = {
     "apply": "耐久同步翻译·写回已检查预览",
 }
 
+TRANSLATION_PLAN_COPY = {
+    "current": "翻译计划：已绑定共享 TranslationPlan",
+    "legacy": (
+        "翻译计划：旧版兼容模式；仍执行原有 source/check/adapter 安全校验，"
+        "但没有 plan/request 级 freshness 绑定。建议重新生成任务。"
+    ),
+    "fingerprint": "翻译计划指纹",
+    "requests": "规范化请求数",
+    "context_truncated": "上下文裁剪请求数",
+    "context_dropped": "上下文舍弃记录数",
+}
+
 CONTEXT_LIBRARY_COPY = {
     "empty_title": "尚未启用上下文库",
     "empty_body": (

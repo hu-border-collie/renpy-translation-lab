@@ -230,6 +230,7 @@ class BatchSubmitRecoveryFlowTests(unittest.TestCase):
             with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
                  mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key']), \
                  mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'validate_batch_translation_plan_before_dispatch'), \
                  mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()), \
                  mock.patch('sys.stdout', stdout):
                 result = batch_mod.submit_manifest(str(manifest_path), resume_upload=True)
@@ -266,6 +267,7 @@ class BatchSubmitRecoveryFlowTests(unittest.TestCase):
             with mock.patch.object(batch_mod, 'LATEST_MANIFEST_FILE', str(latest_path)), \
                  mock.patch.object(batch_mod.legacy, 'API_KEYS', ['key']), \
                  mock.patch.object(batch_mod, 'genai_types', fake_types), \
+                 mock.patch.object(batch_mod, 'validate_batch_translation_plan_before_dispatch'), \
                  mock.patch.object(batch_mod, 'create_batch_client', return_value=FakeClient()):
                 batch_mod.submit_manifest(str(manifest_path))
 

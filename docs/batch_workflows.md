@@ -4,6 +4,23 @@
 
 本文档记录 Batch 流程中偏内部或高级的部分。日常入口见根目录 `README.md`。
 
+## TranslationPlan 与请求诊断
+
+普通初译的 `build` 与 Sync 共用同一套 `TranslationPlan`、chunk、canonical
+system/user prompt、response schema 与 ContextAssembler。manifest 的
+`translation_plan` 保存 plan/source/adapter identity、稳定 request ID、prompt/request
+fingerprint 及每个请求的上下文预算、裁剪和舍弃诊断；`requests.jsonl` 只在外层增加
+Gemini Batch envelope。诊断页显示 plan 指纹、请求数与裁剪摘要，完整请求仍只在本地
+产物中查看，不回显凭据。
+
+`submit` 在上传任何 JSONL 或创建云端任务前，会校验 plan fingerprint、manifest chunk、
+`requests.jsonl`、当前 source snapshot 与 adapter/version。任一绑定陈旧或被修改都会要求
+重新 build。缺少 `translation_plan` 的旧包仍可读取并按旧合同 check/apply，但会明确显示
+legacy compatibility：它没有新增的 plan/request freshness 保护，不应继续提交新的模型任务。
+`split` 子包会保存父 plan 的切片并重新签名；`build-retry` 的 D7 派生请求会保存带 lineage
+的 child plan。两者都继续执行相同的 submit/check/apply 请求内容与 freshness 校验，而不是
+复用无法与子包请求一一对应的父 plan summaries。
+
 ## 目标语言与 TL 路径
 
 - 默认目标语言为 `schinese`，对应 TL 路径 `game/tl/schinese`。
@@ -85,10 +102,10 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
 - `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。
 - `probe` 会用同步请求做最小 smoke test；每个被抽样的 request row 必须能对应当前 manifest 中的非空 chunk，否则会在调用 Provider 前拒绝并提示重建 package，避免把过期或损坏的请求误判为成功。
-- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状、质量规则配置和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `writeback_gate` / `quality_gate` / `check_status`（文本模式仍保留 `Safety status` 兼容行），并在包目录写入 `check_failures.jsonl` 与 `quality_findings.jsonl`。
+- `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状、TranslationPlan/request 绑定、质量规则配置和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `writeback_gate` / `quality_gate` / `check_status`（文本模式仍保留 `Safety status` 兼容行），并在包目录写入 `check_failures.jsonl` 与 `quality_findings.jsonl`。
 - `quality-ack` / `quality-unack` 只更新 manifest 里的 `quality_acknowledged_finding_ids` 并重算 `quality_gate.acknowledged_count` / `decision`；确认不写入 `quality_findings.jsonl`，不进入 `check_fingerprint`，也不能解除 blocker。`quality-ack <manifest>` 不带选择参数时列出未确认报警摘要；`--finding <id>` 可重复，或 `--all` 确认全部 warning。重新 `check` 后，匹配不到新 finding 的旧确认自动失效。
 - `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且 `writeback_gate.decision` 必须是 `allow`；未 check、results 变化、manifest item 变化、结构 `warn / block` 或质量规则被配置为 blocker 都会拒绝写回。
-- `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot 校验或 `block`。
+- `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot、adapter/version、plan/request/hash 校验或 `block`。
 - `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
 
