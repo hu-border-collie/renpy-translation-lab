@@ -25,6 +25,8 @@ PROJECT_CONTEXT_FLAG_KEYS = (
     "batch_rag_bootstrap_on_build",
     "batch_project_analysis_enabled",
     "batch_project_analysis_inject_published_brief",
+    "sync_source_index_enabled",
+    "sync_project_analysis_inject_published_brief",
 )
 
 
@@ -67,6 +69,15 @@ def default_context_flags_from_config(config: dict[str, Any] | None) -> dict[str
     project_analysis = batch.get("project_analysis")
     if not isinstance(project_analysis, dict):
         project_analysis = {}
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    sync_source_index = sync.get("source_index")
+    if not isinstance(sync_source_index, dict):
+        sync_source_index = {}
+    sync_project_analysis = sync.get("project_analysis")
+    if not isinstance(sync_project_analysis, dict):
+        sync_project_analysis = {}
     return {
         "rag_enabled": _coerce_bool(rag.get("enabled"), False),
         "source_index_enabled": _coerce_bool(source_index.get("enabled"), False),
@@ -74,6 +85,12 @@ def default_context_flags_from_config(config: dict[str, Any] | None) -> dict[str
         "project_analysis_enabled": _coerce_bool(project_analysis.get("enabled"), False),
         "project_analysis_inject_enabled": _coerce_bool(
             project_analysis.get("inject_published_brief"), False
+        ),
+        "sync_source_index_enabled": _coerce_bool(
+            sync_source_index.get("enabled"), False
+        ),
+        "sync_project_analysis_inject_enabled": _coerce_bool(
+            sync_project_analysis.get("inject_published_brief"), False
         ),
     }
 
@@ -100,6 +117,11 @@ def load_project_context_settings(
         "batch_project_analysis_enabled": ("project_analysis_enabled", False),
         "batch_project_analysis_inject_published_brief": (
             "project_analysis_inject_enabled",
+            False,
+        ),
+        "sync_source_index_enabled": ("sync_source_index_enabled", False),
+        "sync_project_analysis_inject_published_brief": (
+            "sync_project_analysis_inject_enabled",
             False,
         ),
     }
@@ -132,6 +154,12 @@ def save_project_context_settings(
         ),
         "batch_project_analysis_inject_published_brief": _coerce_bool(
             flags.get("project_analysis_inject_enabled"), False
+        ),
+        "sync_source_index_enabled": _coerce_bool(
+            flags.get("sync_source_index_enabled"), False
+        ),
+        "sync_project_analysis_inject_published_brief": _coerce_bool(
+            flags.get("sync_project_analysis_inject_enabled"), False
         ),
     }
     tmp_path = ""
@@ -198,6 +226,22 @@ def apply_project_context_settings_to_config(
     source_index["enabled"] = flags["source_index_enabled"]
     project_analysis["enabled"] = flags["project_analysis_enabled"]
     project_analysis["inject_published_brief"] = flags["project_analysis_inject_enabled"]
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+        config["sync"] = sync
+    sync_source_index = sync.get("source_index")
+    if not isinstance(sync_source_index, dict):
+        sync_source_index = {}
+        sync["source_index"] = sync_source_index
+    sync_project_analysis = sync.get("project_analysis")
+    if not isinstance(sync_project_analysis, dict):
+        sync_project_analysis = {}
+        sync["project_analysis"] = sync_project_analysis
+    sync_source_index["enabled"] = flags["sync_source_index_enabled"]
+    sync_project_analysis["inject_published_brief"] = flags[
+        "sync_project_analysis_inject_enabled"
+    ]
     return config
 
 

@@ -118,14 +118,15 @@ class ScriptedBackend:
 
 
 class BlockingBackend:
-    def __init__(self):
+    def __init__(self, wait_timeout=30.0):
         self.started = threading.Event()
         self.release = threading.Event()
         self.cancelled = threading.Event()
+        self.wait_timeout = float(wait_timeout)
 
     def send(self, request, *, attempt, timeout_seconds):
         self.started.set()
-        if not self.release.wait(timeout=2.0):
+        if not self.release.wait(timeout=self.wait_timeout):
             raise AssertionError('test backend was not released')
         return ProviderOutcome(
             accepted_items=request['expected_ids'],
@@ -158,7 +159,7 @@ class ConcurrentBlockingBackend:
             if len(self.started) >= self.expected_started:
                 self.started_event.set()
         try:
-            if not self.release.wait(timeout=3.0):
+            if not self.release.wait(timeout=30.0):
                 raise AssertionError('concurrent test backend was not released')
             return ProviderOutcome(accepted_items=request['expected_ids'])
         finally:
@@ -231,8 +232,11 @@ class PolicyTests(unittest.TestCase):
 
 
 class ExecutorTests(unittest.TestCase):
+    start_wait = 5.0
+    join_wait = 8.0
+
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.tmp.name)
 
     def tearDown(self):
@@ -427,9 +431,13 @@ class ExecutorTests(unittest.TestCase):
             )
         )
         worker.start()
-        self.assertTrue(backend.started_event.wait(timeout=1.0))
-        backend.release.set()
-        worker.join(timeout=2.0)
+        try:
+            self.assertTrue(backend.started_event.wait(timeout=self.start_wait))
+            backend.release.set()
+            worker.join(timeout=self.join_wait)
+        finally:
+            backend.release.set()
+            worker.join(timeout=2.0)
         self.assertFalse(worker.is_alive())
         self.assertEqual(backend.started, ['req-1'])
         self.assertEqual(
@@ -511,7 +519,7 @@ class ExecutorTests(unittest.TestCase):
 
         def delayed_dispatch(**kwargs):
             entered.set()
-            self.assertTrue(release.wait(timeout=2.0))
+            self.assertTrue(release.wait(timeout=self.start_wait))
             return original_dispatch(**kwargs)
 
         store.dispatch_attempt = delayed_dispatch
@@ -522,29 +530,40 @@ class ExecutorTests(unittest.TestCase):
             )
         )
         worker.start()
-        self.assertTrue(entered.wait(timeout=1.0))
-        self.assertTrue(store.cancel_intent(reason='user'))
-        release.set()
-        worker.join(timeout=2.0)
+        try:
+            self.assertTrue(entered.wait(timeout=self.start_wait))
+            self.assertTrue(store.cancel_intent(reason='user'))
+            release.set()
+            worker.join(timeout=self.join_wait)
+        finally:
+            release.set()
+            worker.join(timeout=2.0)
         self.assertFalse(worker.is_alive())
         self.assertEqual(result['snapshot']['run_status'], RunStatus.CANCELLED.value)
         self.assertEqual(backend.calls, [])
 
     def test_heartbeat_keeps_lease_alive_during_provider_io(self):
         store, policy = self.bootstrap()
-        backend = BlockingBackend()
+        backend = BlockingBackend(wait_timeout=8.0)
+        # Keep I/O longer than TTL so the lease would expire without heartbeats,
+        # but leave enough slack for loaded Windows CI loops.
+        lease_ttl_seconds = 2.0
+        hold_seconds = 4.5
 
         def release_later():
-            self.assertTrue(backend.started.wait(timeout=1.0))
-            time.sleep(1.1)
+            self.assertTrue(backend.started.wait(timeout=self.start_wait))
+            time.sleep(hold_seconds)
             backend.release.set()
 
         releaser = threading.Thread(target=release_later)
         releaser.start()
-        snapshot = self.executor(
-            store, backend, policy, lease_ttl_seconds=0.5
-        ).run()
-        releaser.join(timeout=2.0)
+        try:
+            snapshot = self.executor(
+                store, backend, policy, lease_ttl_seconds=lease_ttl_seconds
+            ).run()
+        finally:
+            backend.release.set()
+            releaser.join(timeout=2.0)
         self.assertEqual(snapshot['run_status'], RunStatus.COMPLETED.value)
 
     def test_max_in_flight_is_a_real_bounded_dispatch_limit(self):
@@ -559,18 +578,27 @@ class ExecutorTests(unittest.TestCase):
 
         worker = threading.Thread(
             target=lambda: result.setdefault(
-                'snapshot', self.executor(store, backend, policy).run()
+                'snapshot',
+                self.executor(
+                    store, backend, policy, lease_ttl_seconds=5.0
+                ).run(),
             )
         )
         worker.start()
-        self.assertTrue(backend.started_event.wait(timeout=1.0))
-        time.sleep(0.1)
-        with backend.lock:
-            self.assertEqual(len(backend.started), 2)
-            self.assertEqual(backend.max_active, 2)
-        backend.release.set()
-        worker.join(timeout=3.0)
-        self.assertFalse(worker.is_alive())
+        worker_alive = True
+        try:
+            self.assertTrue(backend.started_event.wait(timeout=self.start_wait))
+            time.sleep(0.1)
+            with backend.lock:
+                self.assertEqual(len(backend.started), 2)
+                self.assertEqual(backend.max_active, 2)
+            backend.release.set()
+            worker.join(timeout=self.join_wait)
+            worker_alive = worker.is_alive()
+        finally:
+            backend.release.set()
+            worker.join(timeout=2.0)
+        self.assertFalse(worker_alive)
         self.assertEqual(result['snapshot']['run_status'], RunStatus.COMPLETED.value)
         self.assertEqual(len(backend.started), 4)
         self.assertEqual(backend.max_active, 2)
@@ -599,9 +627,9 @@ class ExecutorTests(unittest.TestCase):
         worker.start()
         worker_alive = True
         try:
-            self.assertTrue(backend.started_event.wait(timeout=2.0))
+            self.assertTrue(backend.started_event.wait(timeout=self.start_wait))
             self.assertTrue(store.cancel_intent(reason='user'))
-            worker.join(timeout=5.0)
+            worker.join(timeout=self.join_wait)
             worker_alive = worker.is_alive()
         finally:
             # Never leave provider workers holding the SQLite file open when
@@ -631,9 +659,9 @@ class ExecutorTests(unittest.TestCase):
         worker.start()
         worker_alive = True
         try:
-            self.assertTrue(backend.started.wait(timeout=2.0))
+            self.assertTrue(backend.started.wait(timeout=self.start_wait))
             self.assertTrue(store.cancel_intent(reason='user'))
-            worker.join(timeout=5.0)
+            worker.join(timeout=self.join_wait)
             worker_alive = worker.is_alive()
         finally:
             backend.release.set()

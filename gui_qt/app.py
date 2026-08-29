@@ -485,6 +485,8 @@ _CONFIG_SNAPSHOT_KEYS_BY_PAGE: dict[str, frozenset[str]] = {
             "rag_enabled",
             "source_index_enabled",
             "bootstrap_on_build",
+            "sync_source_index_enabled",
+            "sync_project_analysis_inject_enabled",
             "context_storage_location",
             *PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
         }
@@ -520,6 +522,8 @@ _SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
     "rag_enabled_cb": "context",
     "source_index_enabled_cb": "context",
     "bootstrap_on_build_cb": "context",
+    "sync_source_index_enabled_cb": "context",
+    "sync_inject_published_brief_cb": "context",
     "context_storage_game_cb": "context",
     "sync_model_combo": "models",
     "sync_embedding_combo": "models",
@@ -3577,8 +3581,14 @@ class MainWindow(QMainWindow):
         self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库（批量，当前项目）")
         context_layout.addWidget(self.rag_enabled_cb)
 
-        self.source_index_enabled_cb = QCheckBox("启用原文索引（当前项目）")
+        self.source_index_enabled_cb = QCheckBox("启用原文索引（批量，当前项目）")
         context_layout.addWidget(self.source_index_enabled_cb)
+
+        self.sync_source_index_enabled_cb = QCheckBox("同步翻译使用原文索引（当前项目）")
+        self.sync_source_index_enabled_cb.setToolTip(
+            "复用已预建的 Source Index Store。关闭时同步初译保持原行为。"
+        )
+        context_layout.addWidget(self.sync_source_index_enabled_cb)
 
         self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库（当前项目）")
         context_layout.addWidget(self.bootstrap_on_build_cb)
@@ -3614,12 +3624,19 @@ class MainWindow(QMainWindow):
         analysis_box, analysis_layout = self._settings_group("项目剧情分析")
         analysis_hint = QLabel(
             "先启用分析并保存，再到「上下文库」开始构建。只有人工确认、"
-            "仍与当前脚本一致且开启“用于翻译”的项目摘要才会进入提示词。"
-            "当前这些选项是全局默认；项目级开关将在 #262 后续阶段收口。"
+            "仍与当前脚本一致且开启“用于翻译”的项目摘要才会进入批量提示词。"
+            "同步翻译需另外开启“同步翻译注入已发布项目摘要”。"
         )
         analysis_hint.setWordWrap(True)
         analysis_hint.setObjectName("config_hint_label")
         analysis_layout.addWidget(analysis_hint)
+        self.sync_inject_published_brief_cb = QCheckBox(
+            "同步翻译注入已发布项目摘要（当前项目）"
+        )
+        self.sync_inject_published_brief_cb.setToolTip(
+            "仅注入 published 且 fingerprint 匹配的摘要；draft/stale/missing 不会静默注入。"
+        )
+        analysis_layout.addWidget(self.sync_inject_published_brief_cb)
         for field in context_fields:
             if field.key not in PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS:
                 continue
@@ -11618,6 +11635,10 @@ class MainWindow(QMainWindow):
             "rag_enabled": _checked("rag_enabled_cb"),
             "source_index_enabled": _checked("source_index_enabled_cb"),
             "bootstrap_on_build": _checked("bootstrap_on_build_cb"),
+            "sync_source_index_enabled": _checked("sync_source_index_enabled_cb"),
+            "sync_project_analysis_inject_enabled": _checked(
+                "sync_inject_published_brief_cb"
+            ),
             "context_storage_location": storage_location,
             "sync_backend": self._selected_sync_backend(),
             "sync_model": _combo_text("sync_model_combo"),
@@ -11648,6 +11669,17 @@ class MainWindow(QMainWindow):
             source_cb = self._settings_widget("source_index_enabled_cb")
             if source_cb is not None and "source_index_enabled" in snapshot:
                 source_cb.setChecked(bool(snapshot["source_index_enabled"]))
+            sync_source_cb = self._settings_widget("sync_source_index_enabled_cb")
+            if sync_source_cb is not None and "sync_source_index_enabled" in snapshot:
+                sync_source_cb.setChecked(bool(snapshot["sync_source_index_enabled"]))
+            sync_inject_cb = self._settings_widget("sync_inject_published_brief_cb")
+            if (
+                sync_inject_cb is not None
+                and "sync_project_analysis_inject_enabled" in snapshot
+            ):
+                sync_inject_cb.setChecked(
+                    bool(snapshot["sync_project_analysis_inject_enabled"])
+                )
             bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
             if bootstrap_cb is not None and "bootstrap_on_build" in snapshot:
                 bootstrap_cb.setChecked(bool(snapshot["bootstrap_on_build"]))
@@ -11954,6 +11986,8 @@ class MainWindow(QMainWindow):
         values = BASIC_RECOMMENDED_VALUES
         self.rag_enabled_cb.setChecked(bool(values["rag_enabled"]))
         self.source_index_enabled_cb.setChecked(bool(values["source_index_enabled"]))
+        self.sync_source_index_enabled_cb.setChecked(False)
+        self.sync_inject_published_brief_cb.setChecked(False)
         self.bootstrap_on_build_cb.setChecked(bool(values["bootstrap_on_build"]))
         self.context_storage_game_cb.setChecked(values["context_storage_location"] == "game")
         backend_combo = getattr(self, "sync_backend_combo", None)
@@ -14900,6 +14934,16 @@ class MainWindow(QMainWindow):
                 source_cb = self._settings_widget("source_index_enabled_cb")
                 if source_cb is not None:
                     source_cb.setChecked(context_flags["source_index_enabled"])
+                sync_source_cb = self._settings_widget("sync_source_index_enabled_cb")
+                if sync_source_cb is not None:
+                    sync_source_cb.setChecked(
+                        bool(context_flags.get("sync_source_index_enabled"))
+                    )
+                sync_inject_cb = self._settings_widget("sync_inject_published_brief_cb")
+                if sync_inject_cb is not None:
+                    sync_inject_cb.setChecked(
+                        bool(context_flags.get("sync_project_analysis_inject_enabled"))
+                    )
                 bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
                 if bootstrap_cb is not None:
                     bootstrap_cb.setChecked(context_flags["bootstrap_on_build"])
@@ -15137,6 +15181,10 @@ class MainWindow(QMainWindow):
                 "rag_enabled": self.rag_enabled_cb.isChecked(),
                 "source_index_enabled": self.source_index_enabled_cb.isChecked(),
                 "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
+                "sync_source_index_enabled": self.sync_source_index_enabled_cb.isChecked(),
+                "sync_project_analysis_inject_enabled": (
+                    self.sync_inject_published_brief_cb.isChecked()
+                ),
             }
 
             sync_backend = self._selected_sync_backend()

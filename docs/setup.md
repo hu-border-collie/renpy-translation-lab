@@ -58,7 +58,9 @@
   "batch_source_index_enabled": true,
   "batch_rag_bootstrap_on_build": true,
   "batch_project_analysis_enabled": true,
-  "batch_project_analysis_inject_published_brief": false
+  "batch_project_analysis_inject_published_brief": false,
+  "sync_source_index_enabled": false,
+  "sync_project_analysis_inject_published_brief": false
 }
 ```
 
@@ -66,7 +68,7 @@
 
 - GUI「设置 · 上下文」保存时写入该文件；加载时按当前 `game_root` 读取。
 - CLI 的 `load_batch_settings` 会在解析 `translator_config.json` 后套用该文件。
-- 文件不存在时：回退到 `translator_config.json` 里 `batch.rag.enabled` / `batch.source_index.enabled` / `batch.rag.bootstrap_on_build` / `batch.project_analysis.enabled` / `batch.project_analysis.inject_published_brief`。
+- 文件不存在时：回退到 `translator_config.json` 里 `batch.rag.enabled` / `batch.source_index.enabled` / `batch.rag.bootstrap_on_build` / `batch.project_analysis.enabled` / `batch.project_analysis.inject_published_brief` / `sync.source_index.enabled` / `sync.project_analysis.inject_published_brief`。
 - 实现见 `project_context_settings.py`。
 - 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`。
 - 如果你不想使用 `translator_config.json`，也可以至少通过 `GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标 `work` 目录。

@@ -75,6 +75,12 @@ def _snapshot_translator_runtime_state():
         'SYNC_RAG_ENABLED': runtime.SYNC_RAG_ENABLED,
         'SYNC_RAG_STORE_DIR': runtime.SYNC_RAG_STORE_DIR,
         'SYNC_RAG_EMBEDDING_MODEL': runtime.SYNC_RAG_EMBEDDING_MODEL,
+        'SYNC_RAG_EMBEDDING_BACKEND': runtime.SYNC_RAG_EMBEDDING_BACKEND,
+        'SYNC_RAG_EMBEDDING_PROVIDER': runtime.SYNC_RAG_EMBEDDING_PROVIDER,
+        'SYNC_RAG_EMBEDDING_ENDPOINT': runtime.SYNC_RAG_EMBEDDING_ENDPOINT,
+        'SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS': runtime.SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS,
+        'SYNC_RAG_EMBEDDING_API_KEY_ENV': runtime.SYNC_RAG_EMBEDDING_API_KEY_ENV,
+        'SYNC_RAG_EMBEDDING_LOAD_ERROR': runtime.SYNC_RAG_EMBEDDING_LOAD_ERROR,
         'SYNC_RAG_QUERY_TASK_TYPE': runtime.SYNC_RAG_QUERY_TASK_TYPE,
         'SYNC_RAG_DOCUMENT_TASK_TYPE': runtime.SYNC_RAG_DOCUMENT_TASK_TYPE,
         'SYNC_RAG_OUTPUT_DIMENSIONALITY': runtime.SYNC_RAG_OUTPUT_DIMENSIONALITY,
@@ -244,7 +250,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
         self.assertIn(
             'Sync TranslationPlan context frozen: retrieval_chunks=1, '
-            'history_hits=1, story_chunks=0.',
+            'history_hits=1, source_hits=0, story_chunks=0, analysis_chunks=0.',
             output.getvalue(),
         )
 

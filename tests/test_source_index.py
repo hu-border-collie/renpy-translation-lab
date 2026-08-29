@@ -10,7 +10,21 @@ from unittest import mock
 
 import gemini_translate_batch as batch_mod
 import prompt_context
+from embedding_runtime import parse_embedding_runtime_settings
 from rag_memory import JsonSourceIndexStore, JsonSourceIndexStoreLockError, now_iso
+
+
+def seed_source_index_identity(store, *, dim=None):
+    settings = parse_embedding_runtime_settings(
+        {
+            'embedding_backend': batch_mod.RAG_EMBEDDING_BACKEND,
+            'embedding_provider': batch_mod.RAG_EMBEDDING_PROVIDER,
+            'embedding_endpoint': batch_mod.RAG_EMBEDDING_ENDPOINT,
+            'embedding_model': batch_mod.RAG_EMBEDDING_MODEL,
+            'output_dimensionality': dim if dim is not None else batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+        }
+    )
+    store.set_embedding_identity(settings.document_identity())
 
 
 class SourceIndexStoreTests(unittest.TestCase):
@@ -179,6 +193,8 @@ class SourceIndexStoreTests(unittest.TestCase):
                 unchanged_record['embedding'] = [0.9, 0.9, 0.9]
                 unchanged_record['embedding_metadata']['embedding_model'] = batch_mod.RAG_EMBEDDING_MODEL
 
+                with mock.patch('gemini_translate_batch.RAG_OUTPUT_DIMENSIONALITY', 3):
+                    seed_source_index_identity(store, dim=3)
                 store.upsert_segments([stale_record, unchanged_record])
 
                 mock_embeddings = [[0.9, 0.9, 0.9]]
@@ -281,6 +297,7 @@ class SourceIndexStoreTests(unittest.TestCase):
                 rpy_path.write_text(rpy_content, encoding='utf-8')
 
                 store = JsonSourceIndexStore(str(store_dir))
+                seed_source_index_identity(store, dim=3)
                 stale_record = self.make_segment('stale_id', file_rel_path='script.rpy', source='Old stale text', start=1, end=2)
                 store.upsert_segments([stale_record])
 
@@ -409,6 +426,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             batch_mod.SOURCE_INDEX_CHAR_LIMIT = 50
 
             store = JsonSourceIndexStore(str(source_store_dir))
+            seed_source_index_identity(store, dim=3)
             seg1 = self.make_segment('s1', source='Good morning everyone', embedding=[1.0, 0.0, 0.0])
             seg2 = self.make_segment('s2', source='See you tomorrow', embedding=[0.0, 1.0, 0.0])
             store.upsert_segments([seg1, seg2])
@@ -457,7 +475,9 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             stale = self.make_segment('stale', source='Stale source', embedding=[1.0, 0.0, 0.0])
             stale['embedding_metadata']['embedding_task_type'] = 'SEMANTIC_SIMILARITY'
             current = self.make_segment('current', source='Current source', embedding=[0.9, 0.1, 0.0])
-            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([stale, current])
+            store = JsonSourceIndexStore(str(source_store_dir))
+            seed_source_index_identity(store, dim=3)
+            store.upsert_segments([stale, current])
 
             with (
                 mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]),
@@ -486,7 +506,9 @@ class SourceIndexIntegrationTests(unittest.TestCase):
 
             long_source = 'Long source text for truncation'
             segment = self.make_segment('long', source=long_source, embedding=[1.0, 0.0, 0.0])
-            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([segment])
+            store = JsonSourceIndexStore(str(source_store_dir))
+            seed_source_index_identity(store, dim=3)
+            store.upsert_segments([segment])
 
             with (
                 mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]),
@@ -510,7 +532,9 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             batch_mod.SOURCE_INDEX_ENABLED = True
             batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
             batch_mod._SOURCE_INDEX_STORE = None
-            JsonSourceIndexStore(str(source_store_dir)).upsert_segments([
+            store = JsonSourceIndexStore(str(source_store_dir))
+            seed_source_index_identity(store)
+            store.upsert_segments([
                 self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
             ])
 
@@ -520,7 +544,8 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(hits, [])
             self.assertTrue(stats['enabled'])
             self.assertEqual(stats['failure_reason'], 'retrieval_error')
-            self.assertIn('embed failed', stats['error'])
+            self.assertNotIn('embed failed', str(stats))
+            self.assertEqual(stats.get('error_category'), 'provider_error')
             self.assertEqual(
                 stats['source_context_char_budget'],
                 batch_mod.SOURCE_INDEX_TOP_K * batch_mod.SOURCE_INDEX_CHAR_LIMIT,
@@ -554,6 +579,24 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertTrue(stats['enabled'])
             self.assertEqual(stats['reason'], 'empty_source_store')
             self.assertEqual(stats['source_context_char_budget'], 5 * batch_mod.SOURCE_INDEX_CHAR_LIMIT)
+
+    def test_retrieve_source_hits_skips_incompatible_store_without_mixing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_store_dir = Path(tmp) / 'source_store'
+            source_store_dir.mkdir()
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_STORE_DIR = str(source_store_dir)
+            batch_mod._SOURCE_INDEX_STORE = None
+            store = JsonSourceIndexStore(str(source_store_dir))
+            store.upsert_segments([
+                self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
+            ])
+            with mock.patch('gemini_translate_batch.embed_query_text', return_value=[1.0, 0.0, 0.0]):
+                hits, stats = batch_mod.retrieve_source_hits([{'text': 'Hello world'}], [])
+            self.assertEqual(hits, [])
+            self.assertEqual(stats.get('reason'), 'rebuild_store')
+            self.assertEqual(stats.get('action'), 'rebuild_store')
+            self.assertFalse(stats.get('embedding_compatibility', {}).get('compatible', True))
 
     def test_source_index_disabled_does_not_read_store_or_add_prompt_context(self):
         batch_mod.SOURCE_INDEX_ENABLED = False
@@ -645,6 +688,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
 
                 store = JsonSourceIndexStore(str(source_store_dir))
                 store.set_metadata(schema_version=batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
+                seed_source_index_identity(store, dim=3)
                 seg = self.make_segment('s1', source='Hello world', embedding=[1.0, 0.0, 0.0])
                 stale_seg = self.make_segment('stale', source='Stale source', embedding=[1.0, 0.0, 0.0])
                 stale_seg['embedding_metadata']['embedding_task_type'] = 'SEMANTIC_SIMILARITY'

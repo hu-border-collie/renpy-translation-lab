@@ -1373,6 +1373,100 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
             batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
 
+    def test_sync_rag_store_for_jobs_does_not_rebuild_incompatible_store(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store_dir = root / 'rag_store'
+                store = rag_memory.JsonRagStore(str(store_dir))
+                store.upsert_history(
+                    [
+                        {
+                            'memory_id': 'm1',
+                            'source_text': 'Hello',
+                            'translated_text': '你好',
+                            'embedding': [1.0, 0.0, 0.0],
+                        }
+                    ]
+                )
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(store_dir)
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(root / 'tl')
+
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock:
+                    summary = batch_mod.sync_rag_store_for_jobs(
+                        [{'file_rel_path': 'script.rpy', 'file_path': str(root / 'script.rpy')}]
+                    )
+
+                store.load()
+                self.assertEqual(summary['error'], 'rebuild_store')
+                self.assertEqual(summary['action'], 'rebuild_store')
+                self.assertEqual(summary['upserted'], 0)
+                self.assertEqual(store.count_history(), 1)
+                embed_mock.assert_not_called()
+
+                with mock.patch.object(
+                    batch_mod,
+                    'embed_texts',
+                    return_value=[[0.0, 1.0, 0.0]],
+                ), mock.patch.object(
+                    batch_mod,
+                    'collect_files_to_process',
+                    return_value=[],
+                ), mock.patch.object(
+                    batch_mod,
+                    'collect_rag_seed_records_for_jobs',
+                    return_value=[],
+                ):
+                    rebuilt = batch_mod.sync_rag_store_for_jobs(
+                        [],
+                        scan_all_files=True,
+                        rebuild=True,
+                    )
+                reloaded = rag_memory.JsonRagStore(str(store_dir))
+                reloaded.load()
+                self.assertNotEqual(rebuilt.get('error'), 'rebuild_store')
+                self.assertEqual(reloaded.count_history(), 0)
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+
+    def test_batch_plan_context_policy_keeps_source_index_budget_separate(self):
+        old_values = {
+            'history': batch_mod.RAG_HISTORY_CHAR_LIMIT,
+            'enabled': batch_mod.SOURCE_INDEX_ENABLED,
+            'top_k': batch_mod.SOURCE_INDEX_TOP_K,
+            'char_limit': batch_mod.SOURCE_INDEX_CHAR_LIMIT,
+        }
+        try:
+            batch_mod.RAG_HISTORY_CHAR_LIMIT = 220
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_TOP_K = 4
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = 220
+            policy = batch_mod._batch_plan_context_policy()
+            self.assertEqual(policy.history_char_limit, 220)
+            self.assertEqual(policy.source_index_char_limit, 880)
+        finally:
+            batch_mod.RAG_HISTORY_CHAR_LIMIT = old_values['history']
+            batch_mod.SOURCE_INDEX_ENABLED = old_values['enabled']
+            batch_mod.SOURCE_INDEX_TOP_K = old_values['top_k']
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = old_values['char_limit']
+
 
 
 if __name__ == '__main__':

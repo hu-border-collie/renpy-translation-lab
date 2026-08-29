@@ -109,6 +109,30 @@ class _EmbeddingIdentityStoreMixin:
                 lock_info,
             )
 
+    def _clear_embedding_records_unlocked(self):
+        raise NotImplementedError
+
+    def rebuild_document_identity(self, identity):
+        """Drop persisted vectors and write a new document identity.
+
+        Query/search must never call this. Bootstrap and other explicit rebuild
+        actions use it when the current adapter identity cannot bless existing
+        vectors.
+        """
+
+        if not isinstance(identity, EmbeddingIdentity):
+            raise EmbeddingContractError('identity must be an EmbeddingIdentity')
+        if identity.task_type is not EmbeddingTaskType.DOCUMENT:
+            raise EmbeddingContractError('store embedding identity must use document task type')
+        with self._locked('rebuild_document_identity') as lock_info:
+            self._refresh_from_disk_if_changed()
+            self._clear_embedding_records_unlocked()
+            self._update_metadata_unlocked(
+                'rebuild_document_identity',
+                {'embedding_identity': identity.to_dict()},
+                lock_info,
+            )
+
     def embedding_compatibility(self, query_identity):
         """Return a fail-closed, field-level compatibility/rebuild diagnostic."""
 
@@ -216,6 +240,11 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
 
     def _embedding_record_count(self):
         return sum(1 for record in self.history.values() if _record_has_embedding(record))
+
+    def _clear_embedding_records_unlocked(self):
+        self.history = {}
+        self.file_index = {}
+        self._write_history()
 
     def get_history_record(self, memory_id):
         self.load()
@@ -695,6 +724,12 @@ class JsonSourceIndexStore(_EmbeddingIdentityStoreMixin, object):
 
     def _embedding_record_count(self):
         return sum(1 for record in self.segments.values() if _record_has_embedding(record))
+
+    def _clear_embedding_records_unlocked(self):
+        self.segments = {}
+        self.file_index = {}
+        self._search_cache = {}
+        self._write_segments()
 
     def get_segment(self, source_id):
         self.load()

@@ -33,6 +33,9 @@ from atomic_io import (
     sha256_text,
 )
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
+import advanced_context
+import embedding_runtime
+from embedding_backend import EmbeddingBackendError, EmbeddingContractError
 import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
@@ -306,6 +309,12 @@ CHECK_BLOCK_REASON_CODES = {
 RAG_ENABLED = False
 RAG_STORE_DIR = ''
 RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
+RAG_EMBEDDING_BACKEND = embedding_runtime.BACKEND_GEMINI
+RAG_EMBEDDING_PROVIDER = ''
+RAG_EMBEDDING_ENDPOINT = ''
+RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_runtime.DEFAULT_TIMEOUT_SECONDS
+RAG_EMBEDDING_API_KEY_ENV = ''
+RAG_EMBEDDING_LOAD_ERROR = ''
 RAG_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
 RAG_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
 RAG_OUTPUT_DIMENSIONALITY = 768
@@ -426,11 +435,7 @@ def read_text_file(path):
 
 
 def normalize_task_type(value, default):
-    if isinstance(value, str):
-        cleaned = value.strip().upper()
-        if cleaned:
-            return cleaned
-    return default
+    return embedding_runtime.persist_task_type(value, default)
 
 
 def normalize_batch_safety_settings(value):
@@ -483,6 +488,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     global KEYWORD_DISPLAY_NAME_PREFIX, KEYWORD_CHUNK_SIZE, KEYWORD_MAX_CANDIDATES_PER_CHUNK
     global REVISION_DISPLAY_NAME_PREFIX, REVISION_CHUNK_SIZE
     global RAG_ENABLED, RAG_STORE_DIR, RAG_EMBEDDING_MODEL, RAG_QUERY_TASK_TYPE
+    global RAG_EMBEDDING_BACKEND, RAG_EMBEDDING_PROVIDER, RAG_EMBEDDING_ENDPOINT
+    global RAG_EMBEDDING_TIMEOUT_SECONDS, RAG_EMBEDDING_API_KEY_ENV
+    global RAG_EMBEDDING_LOAD_ERROR
     global RAG_DOCUMENT_TASK_TYPE, RAG_OUTPUT_DIMENSIONALITY, RAG_TOP_K_HISTORY
     global RAG_TOP_K_TERMS, RAG_MIN_SIMILARITY, RAG_SEGMENT_LINES
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
@@ -650,12 +658,35 @@ def load_batch_settings(*, tolerate_routing_errors=False):
 
     RAG_ENABLED = coerce_bool(rag.get('enabled'), RAG_ENABLED)
     RAG_EMBEDDING_MODEL = coerce_non_empty_string(rag.get('embedding_model'), RAG_EMBEDDING_MODEL)
-    RAG_QUERY_TASK_TYPE = normalize_task_type(rag.get('query_task_type'), RAG_QUERY_TASK_TYPE)
-    RAG_DOCUMENT_TASK_TYPE = normalize_task_type(rag.get('document_task_type'), RAG_DOCUMENT_TASK_TYPE)
-    RAG_OUTPUT_DIMENSIONALITY = coerce_positive_int(
-        rag.get('output_dimensionality'),
-        RAG_OUTPUT_DIMENSIONALITY,
-    )
+    try:
+        embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
+            rag,
+            default_model=RAG_EMBEDDING_MODEL or DEFAULT_GEMINI_EMBEDDING_MODEL,
+        )
+        RAG_EMBEDDING_LOAD_ERROR = ''
+    except EmbeddingContractError as exc:
+        if embedding_runtime.is_explicit_non_gemini_backend(rag):
+            raise SystemExit(
+                f'ERROR: invalid batch.rag embedding settings: {exc}'
+            ) from exc
+        print(
+            f'Warning: invalid batch.rag embedding settings ({exc}); '
+            'using Gemini embedding defaults.'
+        )
+        RAG_EMBEDDING_LOAD_ERROR = str(exc)
+        embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
+            {'embedding_model': RAG_EMBEDDING_MODEL},
+            default_model=DEFAULT_GEMINI_EMBEDDING_MODEL,
+        )
+    RAG_EMBEDDING_BACKEND = embedding_settings.backend
+    RAG_EMBEDDING_PROVIDER = embedding_settings.provider
+    RAG_EMBEDDING_ENDPOINT = embedding_settings.endpoint
+    RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_settings.timeout_seconds
+    RAG_EMBEDDING_API_KEY_ENV = embedding_settings.api_key_env
+    RAG_EMBEDDING_MODEL = embedding_settings.model
+    RAG_OUTPUT_DIMENSIONALITY = embedding_settings.output_dimension
+    RAG_QUERY_TASK_TYPE = embedding_settings.native_query_task_type
+    RAG_DOCUMENT_TASK_TYPE = embedding_settings.native_document_task_type
     RAG_TOP_K_HISTORY = coerce_positive_int(rag.get('top_k_history'), RAG_TOP_K_HISTORY)
     RAG_TOP_K_TERMS = coerce_positive_int(rag.get('top_k_terms'), RAG_TOP_K_TERMS)
     RAG_MIN_SIMILARITY = coerce_float(rag.get('min_similarity'), RAG_MIN_SIMILARITY)
@@ -796,86 +827,28 @@ def load_batch_settings(*, tolerate_routing_errors=False):
 
 
 def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
-    """Recompute structure fingerprint from scripts under build-time roots when known.
+    """Recompute structure fingerprint from scripts under build-time roots when known."""
+    from project_analysis import compute_current_project_analysis_fingerprint as impl
 
-    Prefers ``project_identity.script_roots`` persisted by
-    ``build_structure_drafts`` so custom ``--script-root`` builds stay injectable.
-    Falls back to default game/work/original discovery under *base_dir*.
-
-    When a project moves or is copied, relative graph/root paths are rebased onto
-    the current *base_dir*. Legacy absolute paths that were inside the stored
-    project base are rebased by the same relative offset; external roots stay put.
-    """
-    from project_analysis import resolve_project_analysis_store
-    from project_analysis_routes import digest_script_paths, discover_script_files
-
-    base = base_dir if base_dir is not None else (legacy.BASE_DIR or None)
-    roots = []
-    graph_base = base or ''
     resolved_store = store_dir if store_dir is not None else (PROJECT_ANALYSIS_STORE_DIR or None)
-    try:
-        store = resolve_project_analysis_store(resolved_store, base_dir=base)
-        manifest = store.load_manifest() or {}
-        identity = manifest.get('project_identity') if isinstance(manifest, dict) else {}
-        if isinstance(identity, dict):
-            stored_identity_base = str(identity.get('base_dir') or '').strip()
-            stored_base = str(identity.get('graph_base') or stored_identity_base).strip()
-            if base and stored_base and os.path.isabs(stored_base) and stored_identity_base:
-                try:
-                    relative_graph_base = os.path.relpath(stored_base, stored_identity_base)
-                except ValueError:
-                    relative_graph_base = ''
-                if relative_graph_base and not relative_graph_base.startswith('..'):
-                    stored_base = os.path.join(base, relative_graph_base)
-            if stored_base:
-                if not os.path.isabs(stored_base) and base:
-                    graph_base = os.path.abspath(os.path.join(base, stored_base))
-                else:
-                    graph_base = stored_base
-            elif base:
-                graph_base = base
-            stored_roots = identity.get('script_roots') or []
-            if isinstance(stored_roots, list):
-                for raw_root in stored_roots:
-                    root = str(raw_root or '').strip()
-                    if not root:
-                        continue
-                    if not os.path.isabs(root):
-                        relocation_base = base or stored_base
-                        if relocation_base:
-                            root = os.path.join(relocation_base, root)
-                    elif base and stored_identity_base:
-                        try:
-                            relative_root = os.path.relpath(root, stored_identity_base)
-                        except ValueError:
-                            relative_root = ''
-                        if relative_root and not relative_root.startswith('..'):
-                            root = os.path.join(base, relative_root)
-                    roots.append(root)
-    except Exception:
-        roots = []
-
-    if not roots:
-        if not base:
-            return ''
-        for rel in ('game', os.path.join('work', 'game'), os.path.join('original', 'game')):
-            candidate = os.path.join(base, rel)
-            if os.path.isdir(candidate):
-                roots.append(candidate)
-        if not roots:
-            roots.append(base)
-        graph_base = base
-
-    paths = discover_script_files(roots)
-    if not paths:
-        return ''
-    return digest_script_paths(paths, base_dir=graph_base or base)
+    return impl(
+        base_dir=base_dir if base_dir is not None else (legacy.BASE_DIR or None),
+        store_dir=resolved_store,
+    )
 
 
 def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=None):
     """Load cached global artifacts and select target-local context in memory."""
     global _PROJECT_BRIEF_CACHE, _PROJECT_BRIEF_CACHE_KEY
-    empty = {'text': '', 'diagnostics': '', 'labels': [], 'routes': [], 'local_diagnostics': ''}
+    empty = {
+        'text': '',
+        'diagnostics': '',
+        'labels': [],
+        'routes': [],
+        'local_diagnostics': '',
+        'injectable': False,
+        'reason': 'injection_disabled',
+    }
     if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         return empty
     from project_analysis import (
@@ -925,7 +898,9 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
                 route_records = store.load_routes()
         except Exception as exc:
             print(f'Warning: project analysis local context unavailable: {exc}', file=sys.stderr)
-            return empty
+            failed = dict(empty)
+            failed['reason'] = 'analysis_unavailable'
+            return failed
         source = {
             'result': {
                 'text': str(payload.get('text') or '') if payload.get('injectable') else '',
@@ -933,6 +908,8 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
                 'labels': [],
                 'routes': [],
                 'local_diagnostics': '',
+                'injectable': bool(payload.get('injectable')),
+                'reason': str(payload.get('reason') or ''),
             },
             'label_records': label_records,
             'route_records': route_records,
@@ -1131,6 +1108,85 @@ def get_source_index_char_budget():
     return max(0, int(SOURCE_INDEX_TOP_K or 0)) * max(0, int(SOURCE_INDEX_CHAR_LIMIT or 0))
 
 
+def current_batch_embedding_settings():
+    from dataclasses import replace
+
+    settings = embedding_runtime.EmbeddingRuntimeSettings(
+        backend=RAG_EMBEDDING_BACKEND or embedding_runtime.BACKEND_GEMINI,
+        provider=RAG_EMBEDDING_PROVIDER
+        or (
+            embedding_runtime.DEFAULT_GEMINI_PROVIDER
+            if (RAG_EMBEDDING_BACKEND or embedding_runtime.BACKEND_GEMINI)
+            == embedding_runtime.BACKEND_GEMINI
+            else RAG_EMBEDDING_PROVIDER
+        ),
+        model=RAG_EMBEDDING_MODEL or DEFAULT_GEMINI_EMBEDDING_MODEL,
+        output_dimension=int(RAG_OUTPUT_DIMENSIONALITY or 768),
+        endpoint=RAG_EMBEDDING_ENDPOINT or '',
+        timeout_seconds=float(
+            RAG_EMBEDDING_TIMEOUT_SECONDS or embedding_runtime.DEFAULT_TIMEOUT_SECONDS
+        ),
+        api_key_env=RAG_EMBEDDING_API_KEY_ENV or '',
+        native_query_task_type=RAG_QUERY_TASK_TYPE,
+        native_document_task_type=RAG_DOCUMENT_TASK_TYPE,
+    )
+    if (
+        settings.backend == embedding_runtime.BACKEND_OPENAI_COMPATIBLE
+        and not settings.endpoint
+    ):
+        custom = (getattr(legacy, 'CUSTOM_LITELLM_PROVIDERS', {}) or {}).get(settings.provider)
+        base_url = getattr(custom, 'base_url', '') if custom is not None else ''
+        if base_url:
+            settings = replace(settings, endpoint=str(base_url))
+    return settings
+
+
+def _resolve_batch_embedding_api_key(settings):
+    if settings.backend != embedding_runtime.BACKEND_OPENAI_COMPATIBLE:
+        return None
+    env_name = settings.api_key_env
+    if not env_name:
+        custom = (getattr(legacy, 'CUSTOM_LITELLM_PROVIDERS', {}) or {}).get(settings.provider)
+        env_name = getattr(custom, 'api_key_env', '') if custom is not None else ''
+    if not env_name and settings.provider == 'openai':
+        env_name = 'OPENAI_API_KEY'
+    value = embedding_runtime.resolve_api_key_from_env(env_name)
+    return value or None
+
+
+def _litellm_embedding_transport():
+    try:
+        import litellm
+    except ImportError as exc:
+        raise embedding_runtime.EmbeddingRuntimeError(
+            'LiteLLM is not installed for the OpenAI-compatible embedding backend',
+            reason='litellm_not_installed',
+        ) from exc
+    return litellm.embedding
+
+
+def build_live_batch_embedding_adapter(settings=None):
+    settings = settings or current_batch_embedding_settings()
+    if settings.backend == embedding_runtime.BACKEND_GEMINI:
+        return embedding_runtime.build_embedding_adapter(
+            settings,
+            gemini_client=create_batch_client(),
+        )
+    return embedding_runtime.build_embedding_adapter(
+        settings,
+        openai_transport=_litellm_embedding_transport(),
+        api_key=_resolve_batch_embedding_api_key(settings),
+    )
+
+
+def _attach_batch_store_document_identity(store, *, rebuild=False):
+    return embedding_runtime.ensure_store_document_identity(
+        store,
+        current_batch_embedding_settings().document_identity(),
+        rebuild=rebuild,
+    )
+
+
 def get_source_index_store(update_metadata=True):
     global _SOURCE_INDEX_STORE, SOURCE_INDEX_STORE_DIR
     if not SOURCE_INDEX_STORE_DIR:
@@ -1145,6 +1201,7 @@ def get_source_index_store(update_metadata=True):
             document_task_type=RAG_DOCUMENT_TASK_TYPE,
             output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
         )
+        _attach_batch_store_document_identity(_SOURCE_INDEX_STORE)
     return _SOURCE_INDEX_STORE
 
 
@@ -1163,6 +1220,7 @@ def get_rag_store():
             document_task_type=RAG_DOCUMENT_TASK_TYPE,
             output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
         )
+        _attach_batch_store_document_identity(_RAG_STORE)
     return _RAG_STORE
 
 
@@ -1801,29 +1859,47 @@ def build_rag_query_text(target_items, context_past):
 def embed_texts(contents, task_type):
     if not contents:
         return []
+    settings = current_batch_embedding_settings()
     api_key_count = len(getattr(legacy, 'API_KEYS', []) or [])
     key_attempts = (
         legacy.api_key_rotation_attempts()
         if hasattr(legacy, 'api_key_rotation_attempts')
         else max(1, api_key_count)
     )
-    attempts = max(3, key_attempts * 2)
+    attempts = (
+        max(3, key_attempts * 2)
+        if settings.backend == embedding_runtime.BACKEND_GEMINI
+        else 1
+    )
     last_error = None
     for attempt in range(1, attempts + 1):
-        client = create_batch_client()
         try:
-            response = client.models.embed_content(
-                model=RAG_EMBEDDING_MODEL,
-                contents=contents,
-                config=genai_types.EmbedContentConfig(
-                    task_type=task_type,
-                    output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
-                ),
+            adapter = build_live_batch_embedding_adapter(settings)
+            return embedding_runtime.embed_texts(
+                adapter,
+                contents,
+                task_type,
+                timeout_seconds=settings.timeout_seconds,
             )
-            break
+        except EmbeddingBackendError as exc:
+            last_error = exc
+            if exc.retryable and attempt < attempts:
+                rotated = legacy.rotate_api_key()
+                key_action = 'next API key' if rotated else 'same API key'
+                print(
+                    f'Embedding request hit {exc.category.value}. '
+                    f'Retrying with {key_action} ({attempt}/{attempts})...'
+                )
+                time.sleep(min(attempt, 2))
+                continue
+            raise
         except Exception as exc:
             last_error = exc
-            retryable = is_quota_error(exc) or is_unavailable_error(exc)
+            retryable = False
+            try:
+                retryable = is_quota_error(exc) or is_unavailable_error(exc)
+            except Exception:
+                retryable = False
             if retryable and attempt < attempts:
                 rotated = legacy.rotate_api_key()
                 label = 'quota' if is_quota_error(exc) else 'service unavailable'
@@ -1832,15 +1908,9 @@ def embed_texts(contents, task_type):
                 time.sleep(min(attempt, 2))
                 continue
             raise
-    else:
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError('Embedding request failed without a captured exception.')
-    embeddings = getattr(response, 'embeddings', None) or []
-    values = [list(getattr(item, 'values', None) or []) for item in embeddings]
-    if len(values) != len(contents):
-        raise RuntimeError(f'Embedding count mismatch: expected {len(contents)}, got {len(values)}')
-    return values
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError('Embedding request failed without a captured exception.')
 
 
 def embed_query_text(query_text):
@@ -1920,36 +1990,32 @@ def retrieve_history_hits(target_items, context_past):
         return [], {'enabled': True, 'reason': 'empty_query'}
 
     try:
+        query_identity = current_batch_embedding_settings().query_identity()
+        compatibility = embedding_runtime.store_compatibility_report(store, query_identity)
+        if not compatibility.compatible:
+            return [], {
+                'enabled': True,
+                'reason': 'rebuild_store',
+                'action': compatibility.action,
+                'embedding_compatibility': compatibility.to_dict(),
+            }
         query_vector = embed_query_text(query_text)
-        matches = store.search_history(
+        return advanced_context.retrieve_history_hits_compatible(
+            store,
             query_vector,
+            query_identity,
             top_k=RAG_TOP_K_HISTORY,
             min_similarity=RAG_MIN_SIMILARITY,
+            char_limit=RAG_HISTORY_CHAR_LIMIT,
+            query_text=query_text,
         )
     except Exception as exc:
-        print(f'Warning: RAG history retrieval failed: {exc}')
-        return [], {'enabled': True, 'error': str(exc)}
-
-    hits = []
-    for match in matches:
-        hits.append(
-            {
-                'memory_id': match.get('memory_id', ''),
-                'file_rel_path': match.get('file_rel_path', ''),
-                'line_start': match.get('line_start', 0),
-                'line_end': match.get('line_end', 0),
-                'source_text': truncate_text(match.get('source_text', ''), RAG_HISTORY_CHAR_LIMIT),
-                'translated_text': truncate_text(match.get('translated_text', ''), RAG_HISTORY_CHAR_LIMIT),
-                'quality_state': match.get('quality_state', ''),
-                'score': float(match.get('score', 0.0)),
-            }
+        diagnostics = embedding_runtime.public_error_diagnostics(exc)
+        print(
+            'Warning: RAG history retrieval failed: '
+            f"{diagnostics.get('error_category') or diagnostics.get('failure_reason')}"
         )
-
-    return hits, {
-        'enabled': True,
-        'query_text': truncate_text(query_text, 400),
-        'hit_count': len(hits),
-    }
+        return [], {'enabled': True, **diagnostics}
 
 
 def retrieve_source_hits(target_items, context_past):
@@ -1974,62 +2040,42 @@ def retrieve_source_hits(target_items, context_past):
                 'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
                 'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version') if store else None,
             }
+        query_identity = current_batch_embedding_settings().query_identity()
+        compatibility = embedding_runtime.store_compatibility_report(store, query_identity)
+        if not compatibility.compatible:
+            return [], {
+                'enabled': True,
+                'reason': 'rebuild_store',
+                'action': compatibility.action,
+                'embedding_compatibility': compatibility.to_dict(),
+                'source_context_char_budget': get_source_index_char_budget(),
+                'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
+            }
         query_vector = embed_query_text(query_text)
-        matches, search_diagnostics = store.search_segments(
+        return advanced_context.retrieve_source_hits_compatible(
+            store,
             query_vector,
+            query_identity,
             top_k=SOURCE_INDEX_TOP_K,
             min_similarity=SOURCE_INDEX_MIN_SIMILARITY,
+            char_limit=SOURCE_INDEX_CHAR_LIMIT,
+            query_text=query_text,
             embedding_model=RAG_EMBEDDING_MODEL,
             embedding_task_type=RAG_DOCUMENT_TASK_TYPE,
             embedding_dim=RAG_OUTPUT_DIMENSIONALITY,
-            return_diagnostics=True,
+            char_budget=get_source_index_char_budget(),
         )
     except Exception as exc:
-        print(f'Warning: Source index retrieval failed: {exc}')
+        diagnostics = embedding_runtime.public_error_diagnostics(exc)
+        print(
+            'Warning: Source index retrieval failed: '
+            f"{diagnostics.get('error_category') or diagnostics.get('failure_reason')}"
+        )
         return [], {
             'enabled': True,
-            'error': str(exc),
-            'failure_reason': 'retrieval_error',
             'source_context_char_budget': get_source_index_char_budget(),
+            **diagnostics,
         }
-
-    hits = []
-    truncated_count = 0
-    source_context_chars = 0
-    for match in matches:
-        source_text = match.get('source_text', '')
-        truncated_source_text = truncate_text(source_text, SOURCE_INDEX_CHAR_LIMIT)
-        was_truncated = isinstance(source_text, str) and truncated_source_text != source_text
-        if was_truncated:
-            truncated_count += 1
-        source_context_chars += len(truncated_source_text)
-        hit = {
-            'source_id': match.get('source_id', ''),
-            'file_rel_path': match.get('file_rel_path', ''),
-            'line_start': match.get('line_start', 0),
-            'line_end': match.get('line_end', 0),
-            'source_text': truncated_source_text,
-            'source_text_truncated': was_truncated,
-            'score': float(match.get('score', 0.0)),
-        }
-        hits.append(hit)
-
-    return hits, {
-        'enabled': True,
-        'query_text': truncate_text(query_text, 400),
-        'query_char_count': len(query_text),
-        'hit_count': len(hits),
-        'matched_count': search_diagnostics.get('matched_before_top_k', len(matches)),
-        'filtered_count': search_diagnostics.get('metadata_filtered_count', 0),
-        'stale_hits_skipped': search_diagnostics.get('metadata_filtered_count', 0),
-        'below_similarity_count': search_diagnostics.get('below_similarity_count', 0),
-        'truncated_count': truncated_count,
-        'source_context_chars': source_context_chars,
-        'source_context_char_budget': get_source_index_char_budget(),
-        'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
-        'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version'),
-        'search_diagnostics': search_diagnostics,
-    }
 
 
 def get_story_graph():
@@ -3387,13 +3433,13 @@ def _batch_plan_context_policy():
     return translation_plan.ContextPolicy(
         local_context_before=BATCH_CONTEXT_BEFORE,
         local_context_after=BATCH_CONTEXT_AFTER,
-        # The retrieval layer backstop is history+story in the shared
-        # policy. Batch can additionally inject Source Index reference text
-        # (top_k * char_limit), so add that budget to the backstop;
-        # section-level limits are already applied by the providers.
-        history_char_limit=(
-            RAG_HISTORY_CHAR_LIMIT
-            + (get_source_index_char_budget() if SOURCE_INDEX_ENABLED else 0)
+        # The retrieval layer backstop is history + story + optional Source
+        # Index. Section-level limits are already applied by the providers;
+        # keep the Source Index budget off history_char_limit so history
+        # estimates stay honest.
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+        source_index_char_limit=(
+            get_source_index_char_budget() if SOURCE_INDEX_ENABLED else 0
         ),
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
         # Project analysis injects both the global brief and local
@@ -3457,6 +3503,7 @@ def _batch_plan_config_snapshot():
         'source_index_enabled': SOURCE_INDEX_ENABLED,
         'story_memory_enabled': STORY_MEMORY_ENABLED,
         'project_analysis_enabled': PROJECT_ANALYSIS_ENABLED,
+        'embedding': current_batch_embedding_settings().public_dict(),
         'macro_setting': BATCH_MACRO_SETTING,
     }
 
@@ -3468,44 +3515,19 @@ def _render_batch_retrieval_reference_text(history_hits, story_hits, source_hits
     (issue #346, D2); the retrieval layer carries only RAG history, source
     index, and story memory reference text.
     """
-    blocks = []
-    if history_hits:
-        blocks.append(
-            'RETRIEVED MEMORY:\n'
-            f'{format_history_hits_block(history_hits)}\n\n'
-        )
-    if source_hits:
-        blocks.append(
-            'RELATED PROJECT CONTEXT:\n'
-            f'{prompt_context.format_source_hits_block(source_hits)}\n\n'
-        )
-    if story_memory.has_story_hits(story_hits):
-        blocks.append(
-            'STORY MEMORY:\n'
-            f"{story_memory.format_story_hits_block(story_hits, STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n"
-        )
-    return ''.join(blocks)
+    return advanced_context.render_retrieval_reference_text(
+        history_hits,
+        story_hits,
+        source_hits,
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_source_text=True,
+    )
 
 
 def _render_batch_analysis_reference_text(project_context):
     """Render the Published Project Analysis layer from existing batch context."""
-    project_context = project_context or {}
-    blocks = []
-    brief = str(project_context.get('text') or '').strip()
-    if brief:
-        diagnostics = str(project_context.get('diagnostics') or '')
-        blocks.append(
-            'PROJECT BRIEF:\n'
-            f'{prompt_context.format_project_brief_block(brief, diagnostics=diagnostics)}\n\n'
-        )
-    local_context = prompt_context.format_project_local_context_block(
-        project_context.get('labels') or [],
-        project_context.get('routes') or [],
-        str(project_context.get('local_diagnostics') or ''),
-    )
-    if local_context.strip():
-        blocks.append(f'PROJECT LOCAL CONTEXT:\n{local_context}\n\n')
-    return ''.join(blocks)
+    return advanced_context.render_analysis_reference_text(project_context)
 
 
 def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
@@ -3690,6 +3712,10 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             if STORY_MEMORY_ENABLED
             else None
         )
+        project_context = load_injectable_project_context_for_prompts(
+            file_rel_path,
+            [unit.display_line_number for unit in chunk_input.target_units],
+        )
         captures.append(
             {
                 'file_rel_path': file_rel_path,
@@ -3703,11 +3729,18 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
                 'source_hits': source_hits,
                 'source_index_stats': source_index_stats,
                 'story_hits': story_hits,
+                'project_context': project_context,
+                'project_analysis': advanced_context.analysis_skip_diagnostics(project_context),
             }
         )
         return _render_batch_retrieval_reference_text(history_hits, story_hits, source_hits)
 
     def analysis_provider(chunk_input):
+        for capture in captures:
+            if capture.get('file_rel_path') == str(chunk_input.file_rel_path or '') and list(
+                capture.get('target_units') or []
+            ) == list(chunk_input.target_units or []):
+                return _render_batch_analysis_reference_text(capture.get('project_context'))
         target_units = chunk_input.target_units
         project_context = load_injectable_project_context_for_prompts(
             str(chunk_input.file_rel_path or ''),
@@ -13468,12 +13501,45 @@ def sync_rag_store_for_jobs(
     scan_all_files=False,
     extra_records=None,
     extra_summary=None,
+    rebuild=False,
 ):
     if not RAG_ENABLED:
         return {'enabled': False}
     store = get_rag_store()
     if store is None:
         return {'enabled': True, 'error': 'RAG store unavailable'}
+    identity_status = _attach_batch_store_document_identity(store, rebuild=False)
+    if not identity_status.get('ready'):
+        if not rebuild:
+            print(
+                'Warning: RAG embedding identity is missing or incompatible; '
+                'refusing to rewrite the existing store. '
+                'Run bootstrap-rag to rebuild with the selected embedding backend. '
+                'Existing vectors will not be reused until then.'
+            )
+            stats = {
+                'enabled': True,
+                'store_dir': store.store_dir,
+                'scan_scope': 'all_files' if scan_all_files else 'pending_files',
+                'pending': 0,
+                'embedding_pending': 0,
+                'reused_embeddings': 0,
+                'embedded': 0,
+                'upserted': 0,
+                'history_records_before': store.count_history(),
+                'history_records_after': store.count_history(),
+                'error': 'rebuild_store',
+                'action': identity_status.get('action') or 'rebuild_store',
+                'embedding_compatibility': identity_status,
+            }
+            stats.update(extra_summary or {})
+            return stats
+        print(
+            'Warning: RAG embedding identity is missing or incompatible; '
+            'rebuilding the store with the selected embedding backend. '
+            'Existing vectors will not be reused.'
+        )
+        identity_status = _attach_batch_store_document_identity(store, rebuild=True)
 
     scan_jobs = all_rag_file_jobs() if scan_all_files else file_jobs
     base_records = collect_rag_seed_records_for_jobs(scan_jobs, quality_state=quality_state)
@@ -13574,6 +13640,7 @@ def print_rag_bootstrap_summary(summary):
         'upserted',
         'history_records_before',
         'history_records_after',
+        'action',
     ):
         if key in summary:
             print(f'- {key}: {summary[key]}')
@@ -13648,6 +13715,15 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
 
     store = get_source_index_store()
     store.load()
+    identity_status = _attach_batch_store_document_identity(store, rebuild=False)
+    if not identity_status.get('ready'):
+        print(
+            'Warning: source index embedding identity is missing or incompatible; '
+            'rebuilding the store with the selected embedding backend. '
+            'Existing vectors will not be reused.'
+        )
+        identity_status = _attach_batch_store_document_identity(store, rebuild=True)
+        store.load()
 
     scan_jobs = all_rag_file_jobs()
     scanned_segments = collect_source_segments_for_jobs(scan_jobs)
@@ -13789,6 +13865,7 @@ def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
         scan_all_files=True,
         extra_records=external_records,
         extra_summary=external_summary,
+        rebuild=True,
     )
     print_rag_bootstrap_summary(summary)
     return summary
@@ -15735,7 +15812,7 @@ def _doctor_should_recommend_enabling_rag(report):
 
 
 def _doctor_source_index_needs_bootstrap(source_index):
-    if not source_index.get('enabled'):
+    if not (source_index.get('enabled') or source_index.get('sync_enabled')):
         return ''
     segments = int(source_index.get('source_segments') or 0)
     expected = int(source_index.get('expected_segments') or 0)
@@ -15747,7 +15824,7 @@ def _doctor_source_index_needs_bootstrap(source_index):
 
 
 def _doctor_rag_needs_bootstrap(rag):
-    if not rag.get('enabled'):
+    if not (rag.get('enabled') or rag.get('sync_enabled')):
         return False
     if not rag.get('store_exists'):
         return True
@@ -15855,7 +15932,19 @@ def collect_doctor_recommendations(report):
     project_analysis = context_status.get('project_analysis') or {}
 
     source_index_status = _doctor_source_index_needs_bootstrap(source_index)
-    if source_index_status == 'missing':
+    if (
+        (source_index.get('enabled') or source_index.get('sync_enabled'))
+        and source_index.get('store_exists')
+        and int(source_index.get('source_segments') or 0) > 0
+        and (
+            source_index.get('embedding_compatible') is False
+            or source_index.get('sync_embedding_compatible') is False
+        )
+    ):
+        recommendations.append(
+            doctor_rec.make_doctor_recommendation(doctor_rec.REBUILD_SOURCE_INDEX_STORE)
+        )
+    elif source_index_status == 'missing':
         recommendations.append(
             doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX)
         )
@@ -15864,7 +15953,19 @@ def collect_doctor_recommendations(report):
             doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE)
         )
 
-    if _doctor_rag_needs_bootstrap(rag):
+    if (
+        (rag.get('enabled') or rag.get('sync_enabled'))
+        and rag.get('store_exists')
+        and int(rag.get('history_records') or 0) > 0
+        and (
+            rag.get('embedding_compatible') is False
+            or rag.get('sync_embedding_compatible') is False
+        )
+    ):
+        recommendations.append(
+            doctor_rec.make_doctor_recommendation(doctor_rec.REBUILD_RAG_STORE)
+        )
+    elif _doctor_rag_needs_bootstrap(rag):
         if rag.get('bootstrap_on_build'):
             recommendations.append(
                 doctor_rec.make_doctor_recommendation(doctor_rec.BOOTSTRAP_RAG_OR_WARM_ON_BUILD)
@@ -15970,6 +16071,8 @@ def collect_doctor_context_status():
     rag_store_dir = RAG_STORE_DIR or get_default_rag_store_dir()
     source_index_store_dir = SOURCE_INDEX_STORE_DIR or get_default_source_index_store_dir()
 
+    embedding_settings = current_batch_embedding_settings()
+    embedding_public = embedding_settings.public_dict()
     rag_status = {
         'enabled': RAG_ENABLED,
         'store_dir': rag_store_dir if RAG_ENABLED else '',
@@ -15978,16 +16081,56 @@ def collect_doctor_context_status():
         'bootstrap_on_build': RAG_BOOTSTRAP_ON_BUILD,
         'updated_at': '',
         'error': '',
+        'embedding_backend': embedding_public.get('backend'),
+        'embedding_model': embedding_public.get('model'),
+        'embedding_compatible': True,
+        'embedding_action': 'none',
+        'embedding_load_error': RAG_EMBEDDING_LOAD_ERROR,
+        'sync_enabled': bool(getattr(legacy, 'SYNC_RAG_ENABLED', False)),
+        'sync_embedding_backend': '',
+        'sync_embedding_model': '',
+        'sync_embedding_compatible': True,
+        'sync_embedding_action': 'none',
+        'sync_embedding_load_error': str(
+            getattr(legacy, 'SYNC_RAG_EMBEDDING_LOAD_ERROR', '') or ''
+        ),
     }
-    if RAG_ENABLED:
+    if RAG_ENABLED or rag_status['sync_enabled']:
+        rag_status['store_dir'] = rag_store_dir
         rag_exists = _store_dir_has_context_files(rag_store_dir, ('history.jsonl', 'metadata.json'))
         rag_status['store_exists'] = rag_exists
+        store = None
         if rag_exists:
             store = JsonRagStore(rag_store_dir)
             count, error, metadata = _load_store_count(store, 'count_history')
             rag_status['history_records'] = count
             rag_status['updated_at'] = metadata.get('updated_at', '')
             rag_status['error'] = error
+            if RAG_ENABLED:
+                compatibility = embedding_runtime.store_compatibility_report(
+                    store,
+                    embedding_settings.query_identity(),
+                )
+                rag_status['embedding_compatible'] = bool(compatibility.compatible)
+                rag_status['embedding_action'] = compatibility.action
+                rag_status['embedding_codes'] = ','.join(compatibility.codes)
+
+    try:
+        sync_settings = legacy.current_sync_embedding_settings()
+        sync_public = sync_settings.public_dict()
+        rag_status['sync_embedding_backend'] = sync_public.get('backend')
+        rag_status['sync_embedding_model'] = sync_public.get('model')
+        if rag_status['sync_enabled'] and rag_status.get('store_exists'):
+            store = JsonRagStore(rag_store_dir)
+            store.load()
+            sync_compat = embedding_runtime.store_compatibility_report(
+                store,
+                sync_settings.query_identity(),
+            )
+            rag_status['sync_embedding_compatible'] = bool(sync_compat.compatible)
+            rag_status['sync_embedding_action'] = sync_compat.action
+    except Exception:
+        pass
 
     source_index_status = {
         'enabled': SOURCE_INDEX_ENABLED,
@@ -15997,13 +16140,36 @@ def collect_doctor_context_status():
         'schema_version': '',
         'updated_at': '',
         'error': '',
+        'embedding_backend': embedding_public.get('backend'),
+        'embedding_model': embedding_public.get('model'),
+        'embedding_compatible': True,
+        'embedding_action': 'none',
+        'sync_enabled': bool(getattr(legacy, 'SYNC_SOURCE_INDEX_ENABLED', False)),
+        'sync_embedding_backend': '',
+        'sync_embedding_model': '',
+        'sync_embedding_compatible': True,
+        'sync_embedding_action': 'none',
     }
-    if SOURCE_INDEX_ENABLED:
+    if SOURCE_INDEX_ENABLED or source_index_status['sync_enabled']:
+        source_index_status['store_dir'] = source_index_store_dir
         source_exists = _store_dir_has_context_files(
             source_index_store_dir,
             ('source_segments.jsonl', 'source_metadata.json'),
         )
         source_index_status['store_exists'] = source_exists
+        sync_settings = None
+        if source_index_status['sync_enabled']:
+            try:
+                sync_settings = legacy.current_sync_embedding_settings()
+                sync_public = sync_settings.public_dict()
+                source_index_status['sync_embedding_backend'] = sync_public.get(
+                    'backend'
+                )
+                source_index_status['sync_embedding_model'] = sync_public.get(
+                    'model'
+                )
+            except Exception:
+                sync_settings = None
         if source_exists:
             store = JsonSourceIndexStore(source_index_store_dir)
             count, error, metadata = _load_store_count(store, 'count_segments')
@@ -16018,6 +16184,23 @@ def collect_doctor_context_status():
                 part for part in (error, expected_error) if part
             )
             source_index_status['error'] = combined_error
+            if SOURCE_INDEX_ENABLED:
+                compatibility = embedding_runtime.store_compatibility_report(
+                    store,
+                    embedding_settings.query_identity(),
+                )
+                source_index_status['embedding_compatible'] = bool(compatibility.compatible)
+                source_index_status['embedding_action'] = compatibility.action
+                source_index_status['embedding_codes'] = ','.join(compatibility.codes)
+            if sync_settings is not None:
+                sync_compat = embedding_runtime.store_compatibility_report(
+                    store,
+                    sync_settings.query_identity(),
+                )
+                source_index_status['sync_embedding_compatible'] = bool(
+                    sync_compat.compatible
+                )
+                source_index_status['sync_embedding_action'] = sync_compat.action
 
     try:
         from project_analysis import collect_project_analysis_status
@@ -16027,6 +16210,9 @@ def collect_doctor_context_status():
             {
                 'enabled': bool(PROJECT_ANALYSIS_ENABLED),
                 'inject_published_brief': bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+                'sync_inject_published_brief': bool(
+                    getattr(legacy, 'SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF', False)
+                ),
                 'model': PROJECT_ANALYSIS_MODEL or BATCH_MODEL or SYNC_MODEL or '',
                 'api_key_count': len(getattr(legacy, 'API_KEYS', []) or []),
             }
@@ -16629,6 +16815,17 @@ def print_doctor_report(report):
         f"store_exists={rag_context.get('store_exists', False)}, "
         f"history_records={rag_context.get('history_records', 0)}, "
         f"bootstrap_on_build={rag_context.get('bootstrap_on_build', False)}, "
+        f"embedding_backend={rag_context.get('embedding_backend') or ''}, "
+        f"embedding_model={rag_context.get('embedding_model') or ''}, "
+        f"embedding_compatible={rag_context.get('embedding_compatible', True)}, "
+        f"embedding_action={rag_context.get('embedding_action') or 'none'}, "
+        f"embedding_load_error={rag_context.get('embedding_load_error') or ''}, "
+        f"sync_enabled={rag_context.get('sync_enabled', False)}, "
+        f"sync_embedding_backend={rag_context.get('sync_embedding_backend') or ''}, "
+        f"sync_embedding_model={rag_context.get('sync_embedding_model') or ''}, "
+        f"sync_embedding_compatible={rag_context.get('sync_embedding_compatible', True)}, "
+        f"sync_embedding_action={rag_context.get('sync_embedding_action') or 'none'}, "
+        f"sync_embedding_load_error={rag_context.get('sync_embedding_load_error') or ''}, "
         f"updated_at={rag_context.get('updated_at') or ''}, "
         f"error={rag_context.get('error') or ''}"
     )
@@ -16640,6 +16837,13 @@ def print_doctor_report(report):
         f"source_segments={source_index_context.get('source_segments', 0)}, "
         f"expected_segments={source_index_context.get('expected_segments', 0)}, "
         f"schema_version={source_index_context.get('schema_version') or ''}, "
+        f"embedding_backend={source_index_context.get('embedding_backend') or ''}, "
+        f"embedding_model={source_index_context.get('embedding_model') or ''}, "
+        f"embedding_compatible={source_index_context.get('embedding_compatible', True)}, "
+        f"embedding_action={source_index_context.get('embedding_action') or 'none'}, "
+        f"sync_enabled={source_index_context.get('sync_enabled', False)}, "
+        f"sync_embedding_compatible={source_index_context.get('sync_embedding_compatible', True)}, "
+        f"sync_embedding_action={source_index_context.get('sync_embedding_action') or 'none'}, "
         f"updated_at={source_index_context.get('updated_at') or ''}, "
         f"error={source_index_context.get('error') or ''}"
     )
@@ -16649,6 +16853,7 @@ def print_doctor_report(report):
         f"store_dir={project_analysis_context.get('store_dir') or ''}, "
         f"store_exists={project_analysis_context.get('store_exists', False)}, "
         f"injectable={project_analysis_context.get('injectable', False)}, "
+        f"sync_inject={project_analysis_context.get('sync_inject_published_brief', False)}, "
         f"chunks={project_analysis_context.get('chunk_count', 0)}, "
         f"labels={project_analysis_context.get('label_count', 0)}, "
         f"routes={project_analysis_context.get('route_count', 0)}, "
@@ -17257,7 +17462,11 @@ def build_arg_parser():
 
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
-        help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
+        help=(
+            'Prebuild or refresh the Batch RAG history store from all allowed '
+            'TL files. Missing or incompatible embedding identity rebuilds the '
+            'store and does not reuse existing vectors.'
+        ),
     )
     bootstrap_rag_parser.add_argument(
         '--skip-prepare',

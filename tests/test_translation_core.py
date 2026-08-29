@@ -611,7 +611,15 @@ class TranslationCoreRegressionTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            {"text": "", "diagnostics": "", "labels": [], "routes": [], "local_diagnostics": ""},
+            {
+                "text": "",
+                "diagnostics": "",
+                "labels": [],
+                "routes": [],
+                "local_diagnostics": "",
+                "injectable": False,
+                "reason": "analysis_unavailable",
+            },
         )
         self.assertIsNone(cached)
         self.assertIn("project analysis local context unavailable", stderr.getvalue())

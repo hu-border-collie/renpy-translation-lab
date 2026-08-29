@@ -55,6 +55,11 @@
     "macro_setting_file": "macro_setting.md",
     "rag": {
       "enabled": false,
+      "embedding_backend": "gemini",
+      "embedding_provider": "",
+      "embedding_endpoint": "",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "",
       "embedding_model": "gemini-embedding-001",
       "query_task_type": "RETRIEVAL_QUERY",
       "document_task_type": "RETRIEVAL_DOCUMENT",
@@ -74,6 +79,16 @@
       "top_k_relations": 4,
       "top_k_terms": 8,
       "include_scene_summary": true
+    },
+    "source_index": {
+      "enabled": false,
+      "top_k": 4,
+      "min_similarity": 0.72,
+      "char_limit": 220,
+      "store_dir": ""
+    },
+    "project_analysis": {
+      "inject_published_brief": false
     }
   },
   "batch": {
@@ -89,6 +104,11 @@
     "thinking_level": "minimal",
     "rag": {
       "enabled": true,
+      "embedding_backend": "gemini",
+      "embedding_provider": "",
+      "embedding_endpoint": "",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "",
       "embedding_model": "gemini-embedding-001",
       "query_task_type": "RETRIEVAL_QUERY",
       "document_task_type": "RETRIEVAL_DOCUMENT",

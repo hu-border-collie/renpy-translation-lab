@@ -51,7 +51,10 @@ from gemini_model_catalog import (
     merge_model_lists,
     normalize_model_names,
 )
-from rag_memory import JsonRagStore, hash_text, truncate_text
+from rag_memory import JsonRagStore, JsonSourceIndexStore, hash_text
+import advanced_context
+import embedding_runtime
+from embedding_backend import EmbeddingBackendError, EmbeddingContractError
 from rpa_safety import (
     DEFAULT_RPA_LIMITS,
     RpaExtractionBudget,
@@ -103,6 +106,11 @@ DEFAULT_MAX_ITEMS = translation_core.CANONICAL_CHUNK_MAX_ITEMS
 DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
 DEFAULT_SYNC_BACKEND = "gemini"
 DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
+DEFAULT_SYNC_RAG_EMBEDDING_BACKEND = embedding_runtime.BACKEND_GEMINI
+DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_runtime.DEFAULT_TIMEOUT_SECONDS
+DEFAULT_SYNC_SOURCE_INDEX_TOP_K = 4
+DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY = 0.72
+DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT = 220
 DEFAULT_SYNC_CONTEXT_BEFORE = 30
 DEFAULT_SYNC_CONTEXT_AFTER = 10
 DEFAULT_SYNC_MACRO_SETTING_FILE = "macro_setting.md"
@@ -207,6 +215,12 @@ USE_TRANSLATION_MEMORY = True
 SYNC_RAG_ENABLED = False
 SYNC_RAG_STORE_DIR = ""
 SYNC_RAG_EMBEDDING_MODEL = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+SYNC_RAG_EMBEDDING_BACKEND = DEFAULT_SYNC_RAG_EMBEDDING_BACKEND
+SYNC_RAG_EMBEDDING_PROVIDER = ""
+SYNC_RAG_EMBEDDING_ENDPOINT = ""
+SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+SYNC_RAG_EMBEDDING_API_KEY_ENV = ""
+SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
 SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
 SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
 SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -218,6 +232,13 @@ SYNC_RAG_HISTORY_CHAR_LIMIT = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
 SYNC_RAG_UPDATE_ON_SUCCESS = True
 SYNC_RAG_QUALITY_STATE = "sync_applied"
 _SYNC_RAG_STORE = None
+SYNC_SOURCE_INDEX_ENABLED = False
+SYNC_SOURCE_INDEX_STORE_DIR = ""
+SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
+SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
+SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+_SYNC_SOURCE_INDEX_STORE = None
+SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
 # Optional structured story memory for synchronous translation. Disabled by
 # default to keep sync repair and smoke-test runs lightweight unless configured.
@@ -535,21 +556,7 @@ def _coerce_non_empty_string(value, default):
 
 
 def _normalize_task_type(value, default):
-    allowed = {
-        "SEMANTIC_SIMILARITY",
-        "CLASSIFICATION",
-        "CLUSTERING",
-        "RETRIEVAL_DOCUMENT",
-        "RETRIEVAL_QUERY",
-        "QUESTION_ANSWERING",
-        "FACT_VERIFICATION",
-        "CODE_RETRIEVAL_QUERY",
-    }
-    if isinstance(value, str):
-        normalized = value.strip().upper()
-        if normalized in allowed:
-            return normalized
-    return default
+    return embedding_runtime.persist_task_type(value, default)
 
 
 def _normalize_context_storage_location(value):
@@ -932,6 +939,9 @@ def load_glossary():
 
 def load_sync_rag_settings(config):
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
+    global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY
     global SYNC_RAG_TOP_K_TERMS, SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES
@@ -949,18 +959,35 @@ def load_sync_rag_settings(config):
         rag.get("embedding_model"),
         DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
     )
-    SYNC_RAG_QUERY_TASK_TYPE = _normalize_task_type(
-        rag.get("query_task_type"),
-        "RETRIEVAL_QUERY",
-    )
-    SYNC_RAG_DOCUMENT_TASK_TYPE = _normalize_task_type(
-        rag.get("document_task_type"),
-        "RETRIEVAL_DOCUMENT",
-    )
-    SYNC_RAG_OUTPUT_DIMENSIONALITY = _coerce_positive_int(
-        rag.get("output_dimensionality"),
-        768,
-    )
+    try:
+        embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
+            rag,
+            default_model=DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
+        )
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
+    except EmbeddingContractError as exc:
+        if embedding_runtime.is_explicit_non_gemini_backend(rag):
+            raise SystemExit(
+                f"ERROR: invalid sync.rag embedding settings: {exc}"
+            ) from exc
+        print(
+            f"Warning: invalid sync.rag embedding settings ({exc}); "
+            "using Gemini embedding defaults."
+        )
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = str(exc)
+        embedding_settings = embedding_runtime.parse_embedding_runtime_settings(
+            {"embedding_model": SYNC_RAG_EMBEDDING_MODEL},
+            default_model=DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
+        )
+    SYNC_RAG_EMBEDDING_BACKEND = embedding_settings.backend
+    SYNC_RAG_EMBEDDING_PROVIDER = embedding_settings.provider
+    SYNC_RAG_EMBEDDING_ENDPOINT = embedding_settings.endpoint
+    SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_settings.timeout_seconds
+    SYNC_RAG_EMBEDDING_API_KEY_ENV = embedding_settings.api_key_env
+    SYNC_RAG_EMBEDDING_MODEL = embedding_settings.model
+    SYNC_RAG_OUTPUT_DIMENSIONALITY = embedding_settings.output_dimension
+    SYNC_RAG_QUERY_TASK_TYPE = embedding_settings.native_query_task_type
+    SYNC_RAG_DOCUMENT_TASK_TYPE = embedding_settings.native_document_task_type
     SYNC_RAG_TOP_K_HISTORY = _coerce_positive_int(rag.get("top_k_history"), 4)
     SYNC_RAG_TOP_K_TERMS = _coerce_positive_int(rag.get("top_k_terms"), 8)
     SYNC_RAG_MIN_SIMILARITY = _coerce_float(rag.get("min_similarity"), 0.72)
@@ -977,6 +1004,53 @@ def load_sync_rag_settings(config):
     else:
         SYNC_RAG_STORE_DIR = ""
     _SYNC_RAG_STORE = None
+
+
+def load_sync_source_index_settings(config):
+    global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
+    global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    source_index = sync.get("source_index")
+    if not isinstance(source_index, dict):
+        source_index = {}
+    SYNC_SOURCE_INDEX_ENABLED = _coerce_bool(source_index.get("enabled"), False)
+    SYNC_SOURCE_INDEX_TOP_K = _coerce_positive_int(
+        source_index.get("top_k"),
+        DEFAULT_SYNC_SOURCE_INDEX_TOP_K,
+    )
+    SYNC_SOURCE_INDEX_MIN_SIMILARITY = _coerce_float(
+        source_index.get("min_similarity"),
+        DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY,
+    )
+    SYNC_SOURCE_INDEX_CHAR_LIMIT = _coerce_positive_int(
+        source_index.get("char_limit"),
+        DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT,
+    )
+    store_dir = source_index.get("store_dir")
+    if store_dir:
+        SYNC_SOURCE_INDEX_STORE_DIR = _resolve_path(BASE_DIR, store_dir)
+    else:
+        SYNC_SOURCE_INDEX_STORE_DIR = ""
+    _SYNC_SOURCE_INDEX_STORE = None
+
+
+def load_sync_project_analysis_settings(config):
+    global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
+
+    sync = config.get("sync")
+    if not isinstance(sync, dict):
+        sync = {}
+    project_analysis = sync.get("project_analysis")
+    if not isinstance(project_analysis, dict):
+        project_analysis = {}
+    SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = _coerce_bool(
+        project_analysis.get("inject_published_brief"),
+        False,
+    )
 
 
 def load_sync_story_memory_settings(config):
@@ -1333,6 +1407,12 @@ class RuntimeConfig:
     sync_rag_enabled: bool = False
     sync_rag_store_dir: str = ""
     sync_rag_embedding_model: str = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+    sync_rag_embedding_backend: str = DEFAULT_SYNC_RAG_EMBEDDING_BACKEND
+    sync_rag_embedding_provider: str = ""
+    sync_rag_embedding_endpoint: str = ""
+    sync_rag_embedding_timeout_seconds: float = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+    sync_rag_embedding_api_key_env: str = ""
+    sync_rag_embedding_load_error: str = ""
     sync_rag_query_task_type: str = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
     sync_rag_document_task_type: str = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
     sync_rag_output_dimensionality: int = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -1342,6 +1422,12 @@ class RuntimeConfig:
     sync_rag_segment_lines: int = DEFAULT_SYNC_RAG_SEGMENT_LINES
     sync_rag_history_char_limit: int = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
     sync_rag_update_on_success: bool = True
+    sync_source_index_enabled: bool = False
+    sync_source_index_store_dir: str = ""
+    sync_source_index_top_k: int = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
+    sync_source_index_min_similarity: float = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
+    sync_source_index_char_limit: int = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+    sync_project_analysis_inject_published_brief: bool = False
 
     sync_story_memory_enabled: bool = False
     sync_story_memory_graph_file: str = ""
@@ -1466,6 +1552,12 @@ def snapshot_runtime_config() -> RuntimeConfig:
         sync_rag_enabled=SYNC_RAG_ENABLED,
         sync_rag_store_dir=SYNC_RAG_STORE_DIR,
         sync_rag_embedding_model=SYNC_RAG_EMBEDDING_MODEL,
+        sync_rag_embedding_backend=SYNC_RAG_EMBEDDING_BACKEND,
+        sync_rag_embedding_provider=SYNC_RAG_EMBEDDING_PROVIDER,
+        sync_rag_embedding_endpoint=SYNC_RAG_EMBEDDING_ENDPOINT,
+        sync_rag_embedding_timeout_seconds=SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS,
+        sync_rag_embedding_api_key_env=SYNC_RAG_EMBEDDING_API_KEY_ENV,
+        sync_rag_embedding_load_error=SYNC_RAG_EMBEDDING_LOAD_ERROR,
         sync_rag_query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
         sync_rag_document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
         sync_rag_output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
@@ -1475,6 +1567,12 @@ def snapshot_runtime_config() -> RuntimeConfig:
         sync_rag_segment_lines=SYNC_RAG_SEGMENT_LINES,
         sync_rag_history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
         sync_rag_update_on_success=SYNC_RAG_UPDATE_ON_SUCCESS,
+        sync_source_index_enabled=SYNC_SOURCE_INDEX_ENABLED,
+        sync_source_index_store_dir=SYNC_SOURCE_INDEX_STORE_DIR,
+        sync_source_index_top_k=SYNC_SOURCE_INDEX_TOP_K,
+        sync_source_index_min_similarity=SYNC_SOURCE_INDEX_MIN_SIMILARITY,
+        sync_source_index_char_limit=SYNC_SOURCE_INDEX_CHAR_LIMIT,
+        sync_project_analysis_inject_published_brief=SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF,
         sync_story_memory_enabled=SYNC_STORY_MEMORY_ENABLED,
         sync_story_memory_graph_file=SYNC_STORY_MEMORY_GRAPH_FILE,
         sync_story_memory_max_context_chars=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
@@ -1501,10 +1599,17 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global CUSTOM_LITELLM_PROVIDERS
     global INCLUDE_FILES, INCLUDE_PREFIXES
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
+    global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
     global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
+    global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
+    global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
     global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
@@ -1568,6 +1673,12 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         SYNC_RAG_ENABLED = applied.sync_rag_enabled
         SYNC_RAG_STORE_DIR = applied.sync_rag_store_dir
         SYNC_RAG_EMBEDDING_MODEL = applied.sync_rag_embedding_model
+        SYNC_RAG_EMBEDDING_BACKEND = applied.sync_rag_embedding_backend
+        SYNC_RAG_EMBEDDING_PROVIDER = applied.sync_rag_embedding_provider
+        SYNC_RAG_EMBEDDING_ENDPOINT = applied.sync_rag_embedding_endpoint
+        SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = applied.sync_rag_embedding_timeout_seconds
+        SYNC_RAG_EMBEDDING_API_KEY_ENV = applied.sync_rag_embedding_api_key_env
+        SYNC_RAG_EMBEDDING_LOAD_ERROR = applied.sync_rag_embedding_load_error
         SYNC_RAG_QUERY_TASK_TYPE = applied.sync_rag_query_task_type
         SYNC_RAG_DOCUMENT_TASK_TYPE = applied.sync_rag_document_task_type
         SYNC_RAG_OUTPUT_DIMENSIONALITY = applied.sync_rag_output_dimensionality
@@ -1578,6 +1689,15 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         SYNC_RAG_HISTORY_CHAR_LIMIT = applied.sync_rag_history_char_limit
         SYNC_RAG_UPDATE_ON_SUCCESS = applied.sync_rag_update_on_success
         _SYNC_RAG_STORE = None
+        SYNC_SOURCE_INDEX_ENABLED = applied.sync_source_index_enabled
+        SYNC_SOURCE_INDEX_STORE_DIR = applied.sync_source_index_store_dir
+        SYNC_SOURCE_INDEX_TOP_K = applied.sync_source_index_top_k
+        SYNC_SOURCE_INDEX_MIN_SIMILARITY = applied.sync_source_index_min_similarity
+        SYNC_SOURCE_INDEX_CHAR_LIMIT = applied.sync_source_index_char_limit
+        _SYNC_SOURCE_INDEX_STORE = None
+        SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = (
+            applied.sync_project_analysis_inject_published_brief
+        )
 
         SYNC_STORY_MEMORY_ENABLED = applied.sync_story_memory_enabled
         SYNC_STORY_MEMORY_GRAPH_FILE = applied.sync_story_memory_graph_file
@@ -1711,10 +1831,17 @@ def _reset_project_settings_to_defaults():
     global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
     global SYNC_BACKEND, SYNC_TIMEOUT_SECONDS
     global SYNC_RAG_ENABLED, SYNC_RAG_STORE_DIR, SYNC_RAG_EMBEDDING_MODEL
+    global SYNC_RAG_EMBEDDING_BACKEND, SYNC_RAG_EMBEDDING_PROVIDER
+    global SYNC_RAG_EMBEDDING_ENDPOINT, SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+    global SYNC_RAG_EMBEDDING_API_KEY_ENV, SYNC_RAG_EMBEDDING_LOAD_ERROR
     global SYNC_RAG_QUERY_TASK_TYPE, SYNC_RAG_DOCUMENT_TASK_TYPE
     global SYNC_RAG_OUTPUT_DIMENSIONALITY, SYNC_RAG_TOP_K_HISTORY, SYNC_RAG_TOP_K_TERMS
     global SYNC_RAG_MIN_SIMILARITY, SYNC_RAG_SEGMENT_LINES, SYNC_RAG_HISTORY_CHAR_LIMIT
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
+    global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
+    global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
     global SYNC_STORY_MEMORY_TOP_K_TERMS, SYNC_STORY_MEMORY_INCLUDE_SCENE_SUMMARY
@@ -1750,6 +1877,12 @@ def _reset_project_settings_to_defaults():
     SYNC_RAG_ENABLED = False
     SYNC_RAG_STORE_DIR = ""
     SYNC_RAG_EMBEDDING_MODEL = DEFAULT_SYNC_RAG_EMBEDDING_MODEL
+    SYNC_RAG_EMBEDDING_BACKEND = DEFAULT_SYNC_RAG_EMBEDDING_BACKEND
+    SYNC_RAG_EMBEDDING_PROVIDER = ""
+    SYNC_RAG_EMBEDDING_ENDPOINT = ""
+    SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+    SYNC_RAG_EMBEDDING_API_KEY_ENV = ""
+    SYNC_RAG_EMBEDDING_LOAD_ERROR = ""
     SYNC_RAG_QUERY_TASK_TYPE = DEFAULT_SYNC_RAG_QUERY_TASK_TYPE
     SYNC_RAG_DOCUMENT_TASK_TYPE = DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE
     SYNC_RAG_OUTPUT_DIMENSIONALITY = DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY
@@ -1760,6 +1893,13 @@ def _reset_project_settings_to_defaults():
     SYNC_RAG_HISTORY_CHAR_LIMIT = DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT
     SYNC_RAG_UPDATE_ON_SUCCESS = True
     _SYNC_RAG_STORE = None
+    SYNC_SOURCE_INDEX_ENABLED = False
+    SYNC_SOURCE_INDEX_STORE_DIR = ""
+    SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
+    SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
+    SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+    _SYNC_SOURCE_INDEX_STORE = None
+    SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
     SYNC_STORY_MEMORY_ENABLED = False
     SYNC_STORY_MEMORY_GRAPH_FILE = ""
@@ -1952,9 +2092,14 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
             "commands can run arbitrary processes. Prefer argv lists and enable "
             f"prepare.allow_shell_commands only for trusted shell strings. Details: {exc}"
         ) from exc
+    from project_context_settings import apply_project_context_settings_to_config
+
+    apply_project_context_settings_to_config(config, BASE_DIR)
     load_include_filters_from_config(config)
     load_sync_translation_settings(config)
     load_sync_rag_settings(config)
+    load_sync_source_index_settings(config)
+    load_sync_project_analysis_settings(config)
     load_sync_story_memory_settings(config)
     _active_runtime_config = snapshot_runtime_config()
 
@@ -3171,6 +3316,97 @@ def get_default_sync_rag_store_dir():
     return get_default_context_store_dir("rag_store")
 
 
+def current_sync_embedding_settings():
+    """Return the active Sync embedding backend selection."""
+
+    from dataclasses import replace
+
+    settings = embedding_runtime.EmbeddingRuntimeSettings(
+        backend=SYNC_RAG_EMBEDDING_BACKEND or embedding_runtime.BACKEND_GEMINI,
+        provider=SYNC_RAG_EMBEDDING_PROVIDER
+        or (
+            embedding_runtime.DEFAULT_GEMINI_PROVIDER
+            if (SYNC_RAG_EMBEDDING_BACKEND or embedding_runtime.BACKEND_GEMINI)
+            == embedding_runtime.BACKEND_GEMINI
+            else SYNC_RAG_EMBEDDING_PROVIDER
+        ),
+        model=SYNC_RAG_EMBEDDING_MODEL or DEFAULT_SYNC_RAG_EMBEDDING_MODEL,
+        output_dimension=int(SYNC_RAG_OUTPUT_DIMENSIONALITY or 768),
+        endpoint=SYNC_RAG_EMBEDDING_ENDPOINT or "",
+        timeout_seconds=float(
+            SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS
+            or embedding_runtime.DEFAULT_TIMEOUT_SECONDS
+        ),
+        api_key_env=SYNC_RAG_EMBEDDING_API_KEY_ENV or "",
+        native_query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
+        native_document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
+    )
+    if (
+        settings.backend == embedding_runtime.BACKEND_OPENAI_COMPATIBLE
+        and not settings.endpoint
+    ):
+        custom = (CUSTOM_LITELLM_PROVIDERS or {}).get(settings.provider)
+        base_url = getattr(custom, "base_url", "") if custom is not None else ""
+        if base_url:
+            settings = replace(settings, endpoint=str(base_url))
+    return settings
+
+
+def _resolve_embedding_api_key(settings):
+    if settings.backend != embedding_runtime.BACKEND_OPENAI_COMPATIBLE:
+        return None
+    env_name = settings.api_key_env
+    if not env_name:
+        custom = (CUSTOM_LITELLM_PROVIDERS or {}).get(settings.provider)
+        env_name = getattr(custom, "api_key_env", "") if custom is not None else ""
+    if not env_name and settings.provider == "openai":
+        env_name = "OPENAI_API_KEY"
+    value = embedding_runtime.resolve_api_key_from_env(env_name)
+    return value or None
+
+
+def _litellm_embedding_transport():
+    try:
+        import litellm
+    except ImportError as exc:
+        raise embedding_runtime.EmbeddingRuntimeError(
+            "LiteLLM is not installed for the OpenAI-compatible embedding backend",
+            reason="litellm_not_installed",
+        ) from exc
+    return litellm.embedding
+
+
+def build_live_embedding_adapter(settings=None):
+    """Build an adapter from the current runtime, injecting live transports."""
+
+    settings = settings or current_sync_embedding_settings()
+    if settings.backend == embedding_runtime.BACKEND_GEMINI:
+        return embedding_runtime.build_embedding_adapter(
+            settings,
+            gemini_client=create_genai_client(),
+        )
+    return embedding_runtime.build_embedding_adapter(
+        settings,
+        openai_transport=_litellm_embedding_transport(),
+        api_key=_resolve_embedding_api_key(settings),
+    )
+
+
+def get_sync_source_index_char_budget():
+    return max(0, int(SYNC_SOURCE_INDEX_TOP_K or 0)) * max(
+        0, int(SYNC_SOURCE_INDEX_CHAR_LIMIT or 0)
+    )
+
+
+def _attach_store_document_identity(store, settings=None, *, rebuild=False):
+    settings = settings or current_sync_embedding_settings()
+    return embedding_runtime.ensure_store_document_identity(
+        store,
+        settings.document_identity(),
+        rebuild=rebuild,
+    )
+
+
 def get_sync_rag_store():
     global _SYNC_RAG_STORE, SYNC_RAG_STORE_DIR
     if not SYNC_RAG_ENABLED:
@@ -3190,7 +3426,22 @@ def get_sync_rag_store():
             document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
             output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
         )
+        _attach_store_document_identity(_SYNC_RAG_STORE)
     return _SYNC_RAG_STORE
+
+
+def get_sync_source_index_store():
+    global _SYNC_SOURCE_INDEX_STORE, SYNC_SOURCE_INDEX_STORE_DIR
+    if not SYNC_SOURCE_INDEX_STORE_DIR:
+        SYNC_SOURCE_INDEX_STORE_DIR = get_default_source_index_store_dir()
+    if (
+        _SYNC_SOURCE_INDEX_STORE is None
+        or os.path.abspath(_SYNC_SOURCE_INDEX_STORE.store_dir)
+        != os.path.abspath(SYNC_SOURCE_INDEX_STORE_DIR)
+    ):
+        _SYNC_SOURCE_INDEX_STORE = JsonSourceIndexStore(SYNC_SOURCE_INDEX_STORE_DIR)
+        _attach_store_document_identity(_SYNC_SOURCE_INDEX_STORE)
+    return _SYNC_SOURCE_INDEX_STORE
 
 
 def compact_text(text):
@@ -3213,21 +3464,34 @@ def build_sync_rag_query_text(target_items):
 def embed_texts(contents, task_type):
     if not contents:
         return []
-    genai = get_genai_module()
-    client = create_genai_client()
-    response = client.models.embed_content(
-        model=SYNC_RAG_EMBEDDING_MODEL,
-        contents=contents,
-        config=genai.types.EmbedContentConfig(
-            task_type=task_type,
-            output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
-        ),
+    settings = current_sync_embedding_settings()
+    last_error = None
+    key_attempts = api_key_rotation_attempts()
+    attempts = (
+        max(3, key_attempts * 2)
+        if settings.backend == embedding_runtime.BACKEND_GEMINI
+        else 1
     )
-    embeddings = getattr(response, "embeddings", None) or []
-    values = [list(getattr(item, "values", None) or []) for item in embeddings]
-    if len(values) != len(contents):
-        raise RuntimeError(f"Embedding count mismatch: expected {len(contents)}, got {len(values)}")
-    return values
+    for attempt in range(1, attempts + 1):
+        try:
+            adapter = build_live_embedding_adapter(settings)
+            return embedding_runtime.embed_texts(
+                adapter,
+                contents,
+                task_type,
+                timeout_seconds=settings.timeout_seconds,
+            )
+        except EmbeddingBackendError as exc:
+            last_error = exc
+            if exc.retryable and attempt < attempts and settings.backend == embedding_runtime.BACKEND_GEMINI:
+                rotate_api_key()
+                continue
+            raise
+        except embedding_runtime.EmbeddingRuntimeError:
+            raise
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Embedding request failed without a captured exception.")
 
 
 def embed_sync_query_text(query_text):
@@ -3322,41 +3586,155 @@ def retrieve_sync_history_hits(target_items):
     if store is None or store.count_history() <= 0:
         return [], {"enabled": True, "reason": "empty_history_store"}
 
-    query_text = build_sync_rag_query_text(target_items)
+    query_text = advanced_context.build_source_only_query_text(target_items)
     if not query_text:
         return [], {"enabled": True, "reason": "empty_query"}
 
+    settings = current_sync_embedding_settings()
     try:
+        compatibility = embedding_runtime.store_compatibility_report(
+            store,
+            settings.query_identity(),
+        )
+        if not compatibility.compatible:
+            return [], {
+                "enabled": True,
+                "reason": "rebuild_store",
+                "action": compatibility.action,
+                "embedding_compatibility": compatibility.to_dict(),
+            }
         query_vector = embed_sync_query_text(query_text)
-        matches = store.search_history(
+        return advanced_context.retrieve_history_hits_compatible(
+            store,
             query_vector,
+            settings.query_identity(),
             top_k=SYNC_RAG_TOP_K_HISTORY,
             min_similarity=SYNC_RAG_MIN_SIMILARITY,
+            char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+            query_text=query_text,
         )
     except Exception as exc:
-        print(f"Warning: Sync RAG history retrieval failed: {exc}")
-        return [], {"enabled": True, "error": str(exc)}
-
-    hits = []
-    for match in matches:
-        hits.append(
-            {
-                "memory_id": match.get("memory_id", ""),
-                "file_rel_path": match.get("file_rel_path", ""),
-                "line_start": match.get("line_start", 0),
-                "line_end": match.get("line_end", 0),
-                "source_text": truncate_text(match.get("source_text", ""), SYNC_RAG_HISTORY_CHAR_LIMIT),
-                "translated_text": truncate_text(match.get("translated_text", ""), SYNC_RAG_HISTORY_CHAR_LIMIT),
-                "quality_state": match.get("quality_state", ""),
-                "score": float(match.get("score", 0.0)),
-            }
+        diagnostics = embedding_runtime.public_error_diagnostics(exc)
+        print(
+            "Warning: Sync RAG history retrieval failed: "
+            f"{diagnostics.get('error_category') or diagnostics.get('failure_reason')}"
         )
+        return [], {"enabled": True, **diagnostics}
 
-    return hits, {
-        "enabled": True,
-        "query_text": truncate_text(query_text, 400),
-        "hit_count": len(hits),
+
+def retrieve_sync_source_hits(target_items):
+    if not SYNC_SOURCE_INDEX_ENABLED:
+        return [], {"enabled": False}
+    query_text = advanced_context.build_source_only_query_text(target_items)
+    char_budget = get_sync_source_index_char_budget()
+    if not query_text:
+        return [], {
+            "enabled": True,
+            "reason": "empty_query",
+            "source_context_char_budget": char_budget,
+        }
+    try:
+        store = get_sync_source_index_store()
+        if store is None or store.count_segments() <= 0:
+            return [], {
+                "enabled": True,
+                "reason": "empty_source_store",
+                "source_context_char_budget": char_budget,
+                "store_dir": getattr(store, "store_dir", SYNC_SOURCE_INDEX_STORE_DIR or ""),
+            }
+        settings = current_sync_embedding_settings()
+        compatibility = embedding_runtime.store_compatibility_report(
+            store,
+            settings.query_identity(),
+        )
+        if not compatibility.compatible:
+            return [], {
+                "enabled": True,
+                "reason": "rebuild_store",
+                "action": compatibility.action,
+                "embedding_compatibility": compatibility.to_dict(),
+                "source_context_char_budget": char_budget,
+            }
+        query_vector = embed_sync_query_text(query_text)
+        return advanced_context.retrieve_source_hits_compatible(
+            store,
+            query_vector,
+            settings.query_identity(),
+            top_k=SYNC_SOURCE_INDEX_TOP_K,
+            min_similarity=SYNC_SOURCE_INDEX_MIN_SIMILARITY,
+            char_limit=SYNC_SOURCE_INDEX_CHAR_LIMIT,
+            query_text=query_text,
+            embedding_model=SYNC_RAG_EMBEDDING_MODEL,
+            embedding_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
+            embedding_dim=SYNC_RAG_OUTPUT_DIMENSIONALITY,
+            char_budget=char_budget,
+        )
+    except Exception as exc:
+        diagnostics = embedding_runtime.public_error_diagnostics(exc)
+        print(
+            "Warning: Sync source index retrieval failed: "
+            f"{diagnostics.get('error_category') or diagnostics.get('failure_reason')}"
+        )
+        return [], {
+            "enabled": True,
+            "source_context_char_budget": char_budget,
+            **diagnostics,
+        }
+
+
+def load_sync_injectable_project_context(file_rel_path="", line_numbers=None):
+    """Load a fresh published brief only when the Sync inject setting is on."""
+
+    empty = {
+        "text": "",
+        "injectable": False,
+        "reason": "injection_disabled",
+        "status": {},
+        "diagnostics": "",
+        "labels": [],
+        "routes": [],
+        "local_diagnostics": "",
     }
+    if not SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+        return empty
+    from project_analysis import (
+        compute_current_project_analysis_fingerprint,
+        load_injectable_project_context,
+    )
+
+    current_fp = compute_current_project_analysis_fingerprint(BASE_DIR or None)
+    if not current_fp:
+        empty["reason"] = "source_fingerprint_unavailable"
+        return empty
+    normalized_lines = []
+    for raw_value in line_numbers or []:
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            normalized_lines.append(value)
+    try:
+        payload = load_injectable_project_context(
+            base_dir=BASE_DIR or None,
+            expected_source_fingerprint=current_fp,
+            file_rel_path=file_rel_path,
+            line_numbers=normalized_lines,
+            enabled=True,
+        )
+    except Exception as exc:
+        diagnostics = embedding_runtime.public_error_diagnostics(exc)
+        print(
+            "Warning: Sync published project analysis unavailable: "
+            f"{diagnostics.get('failure_reason')}"
+        )
+        empty["reason"] = diagnostics.get("failure_reason") or "analysis_unavailable"
+        return empty
+    if not payload.get("injectable"):
+        payload.setdefault("labels", [])
+        payload.setdefault("routes", [])
+        payload["text"] = ""
+    return payload
 
 
 def get_random_delay():
@@ -4240,6 +4618,12 @@ def upsert_sync_rag_records(store, records):
     if not pending_records:
         return stats
 
+    identity_status = _attach_store_document_identity(store)
+    if not identity_status.get("ready"):
+        stats["error"] = "rebuild_store"
+        stats["embedding_compatibility"] = identity_status
+        return stats
+
     embedded_records = embed_sync_history_records(pending_records)
     stats["upserted"] = store.upsert_history(embedded_records)
     return stats
@@ -4392,11 +4776,18 @@ def build_prompt(
 
 def _sync_plan_context_policy():
     """Return the shared context policy while honoring legacy Sync overrides."""
+    analysis_limit = translation_core.CANONICAL_ANALYSIS_CHAR_LIMIT
+    if SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+        analysis_limit = 4000 + 800 + 1200
     return translation_plan.ContextPolicy(
         local_context_before=SYNC_CONTEXT_BEFORE,
         local_context_after=SYNC_CONTEXT_AFTER,
         history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        source_index_char_limit=(
+            get_sync_source_index_char_budget() if SYNC_SOURCE_INDEX_ENABLED else 0
+        ),
         story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        analysis_char_limit=analysis_limit,
         include_source_text=True,
         include_translation_memory=SYNC_RAG_ENABLED,
         story_block_suffix='\n\n',
@@ -4457,6 +4848,16 @@ def _sync_plan_config_snapshot():
             'context_before': SYNC_CONTEXT_BEFORE,
             'context_after': SYNC_CONTEXT_AFTER,
             'rag_enabled': SYNC_RAG_ENABLED,
+            'embedding': current_sync_embedding_settings().public_dict(),
+            'source_index': {
+                'enabled': SYNC_SOURCE_INDEX_ENABLED,
+                'top_k': SYNC_SOURCE_INDEX_TOP_K,
+                'min_similarity': SYNC_SOURCE_INDEX_MIN_SIMILARITY,
+                'char_limit': SYNC_SOURCE_INDEX_CHAR_LIMIT,
+            },
+            'project_analysis': {
+                'inject_published_brief': SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF,
+            },
             'story_memory': {
                 'enabled': SYNC_STORY_MEMORY_ENABLED,
                 'graph_file': _sync_plan_story_graph_identity(),
@@ -4560,20 +4961,16 @@ def validate_sync_translation_plan_before_dispatch(plan_build):
     }
 
 
-def _render_sync_retrieval_reference_text(history_hits, story_hits):
+def _render_sync_retrieval_reference_text(history_hits, story_hits, source_hits=None):
     """Render the shared retrieval layer without the lexical glossary block."""
-    blocks = []
-    if history_hits:
-        blocks.append(
-            'RETRIEVED MEMORY:\n'
-            f'{prompt_context.format_history_hits_block(history_hits, char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT, include_source_text=True)}\n\n'
-        )
-    if story_memory.has_story_hits(story_hits):
-        blocks.append(
-            'STORY MEMORY:\n'
-            f'{story_memory.format_story_hits_block(story_hits, SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS)}\n\n'
-        )
-    return ''.join(blocks)
+    return advanced_context.render_retrieval_reference_text(
+        history_hits,
+        story_hits,
+        source_hits,
+        history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
+        include_source_text=True,
+    )
 
 
 def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, run_id=''):
@@ -4586,7 +4983,12 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
     normalize_map = dict(NORMALIZE_TRANSLATION_MAP)
     non_translatable_exact = set(NON_TRANSLATABLE_EXACT)
     macro_setting = str(SYNC_MACRO_SETTING or '')
-    retrieval_enabled = SYNC_RAG_ENABLED or SYNC_STORY_MEMORY_ENABLED
+    retrieval_enabled = (
+        SYNC_RAG_ENABLED
+        or SYNC_STORY_MEMORY_ENABLED
+        or SYNC_SOURCE_INDEX_ENABLED
+        or SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
+    )
     capabilities = routing_plan.capabilities.get(route.profile_id)
     budget = (
         capabilities.context_budget_tokens
@@ -4608,7 +5010,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             flush=True,
         )
 
-    def build_plan(retrieval_blocks_provider):
+    def build_plan(retrieval_blocks_provider, analysis_blocks_provider=None):
         return translation_plan.build_translation_plan(
             file_jobs,
             execution_strategy=model_profile.ExecutionStrategy.SYNC.value,
@@ -4626,6 +5028,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             non_translatable_exact=non_translatable_exact,
             macro_setting=macro_setting,
             retrieval_blocks_provider=retrieval_blocks_provider,
+            analysis_blocks_provider=analysis_blocks_provider,
             generation_config=_sync_plan_generation_config(),
         )
 
@@ -4676,19 +5079,61 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             if SYNC_RAG_ENABLED
             else ([], {'enabled': False})
         )
+        source_hits, source_index_stats = (
+            retrieve_sync_source_hits(chunk_input.target_items)
+            if SYNC_SOURCE_INDEX_ENABLED
+            else ([], {'enabled': False})
+        )
         story_hits = (
             retrieve_sync_story_hits(chunk_input.target_items)
             if SYNC_STORY_MEMORY_ENABLED
             else None
         )
         text = translation_plan.normalize_context_provider_text(
-            _render_sync_retrieval_reference_text(history_hits, story_hits)
+            _render_sync_retrieval_reference_text(
+                history_hits,
+                story_hits,
+                source_hits,
+            )
         )
         if rag_stats.get('hit_count'):
             print(
                 f"  Sync RAG memory hits: {rag_stats['hit_count']}",
                 flush=True,
             )
+        if source_index_stats.get('hit_count'):
+            print(
+                f"  Sync source index hits: {source_index_stats['hit_count']}",
+                flush=True,
+            )
+        if source_index_stats.get('reason') == 'rebuild_store':
+            print(
+                '  Sync source index skipped: store identity requires rebuild.',
+                flush=True,
+            )
+        if rag_stats.get('reason') == 'rebuild_store':
+            print(
+                '  Sync RAG skipped: store identity requires rebuild.',
+                flush=True,
+            )
+        project_context = (
+            load_sync_injectable_project_context(
+                chunk_input.file_rel_path,
+                [unit.display_line_number for unit in chunk_input.target_units],
+            )
+            if SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
+            else {
+                'text': '',
+                'injectable': False,
+                'reason': 'injection_disabled',
+                'labels': [],
+                'routes': [],
+                'local_diagnostics': '',
+            }
+        )
+        analysis_text = translation_plan.normalize_context_provider_text(
+            advanced_context.render_analysis_reference_text(project_context)
+        )
         captures.append({
             'file_rel_path': chunk_input.file_rel_path,
             'expected_ids': [unit.id for unit in chunk_input.target_units],
@@ -4699,9 +5144,12 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
                 chunk_input.local_context_diagnostics or {}
             ),
             'retrieval_blocks_text': text,
-            'analysis_blocks_text': '',
+            'analysis_blocks_text': analysis_text,
             'rag_stats': dict(rag_stats or {}),
+            'source_index_stats': dict(source_index_stats or {}),
+            'project_analysis': advanced_context.analysis_skip_diagnostics(project_context),
             'history_hit_count': len(history_hits),
+            'source_hit_count': len(source_hits),
             'story_memory_applied': story_memory.has_story_hits(story_hits),
             'context_policy': context_policy,
             'preserve_terms': preserve_terms,
@@ -4711,7 +5159,23 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         })
         return text
 
-    plan_build = build_plan(retrieval_provider)
+    def analysis_provider(chunk_input):
+        for capture in captures:
+            if (
+                capture.get('file_rel_path') == chunk_input.file_rel_path
+                and list(capture.get('expected_ids') or [])
+                == [unit.id for unit in chunk_input.target_units]
+            ):
+                return capture.get('analysis_blocks_text') or ''
+        project_context = load_sync_injectable_project_context(
+            chunk_input.file_rel_path,
+            [unit.display_line_number for unit in chunk_input.target_units],
+        )
+        return translation_plan.normalize_context_provider_text(
+            advanced_context.render_analysis_reference_text(project_context)
+        )
+
+    plan_build = build_plan(retrieval_provider, analysis_provider)
     if len(captures) != len(plan_build.requests):
         raise RuntimeError(
             'Sync TranslationPlan retrieval capture count does not match its '
@@ -4737,6 +5201,15 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             int((item.get('rag_stats') or {}).get('hit_count') or 0)
             for item in captures
         )
+        source_hit_count = sum(
+            int((item.get('source_index_stats') or {}).get('hit_count') or 0)
+            for item in captures
+        )
+        analysis_chunk_count = sum(
+            1
+            for item in captures
+            if (item.get('project_analysis') or {}).get('injectable')
+        )
         story_chunk_count = sum(
             1 for item in captures if item.get('story_memory_applied')
         )
@@ -4744,7 +5217,9 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             'Sync TranslationPlan context frozen: '
             f'retrieval_chunks={len(captures)}, '
             f'history_hits={history_hit_count}, '
-            f'story_chunks={story_chunk_count}.',
+            f'source_hits={source_hit_count}, '
+            f'story_chunks={story_chunk_count}, '
+            f'analysis_chunks={analysis_chunk_count}.',
             flush=True,
         )
     return plan_build, captures

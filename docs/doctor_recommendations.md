@@ -45,7 +45,7 @@ GUI 文案入口名称（须与界面一致）：
 - 模板：TL 目录、翻译文件、Ren'Py SDK、自定义模板命令是否可用。
 - 工作量：待译条目数、待译文件数、翻译块和原文注释数量。
 - 翻译阶段：是否已有**中文**旧译（`translated_task_count`，不是模板里的 `old_lines`）、是否属于全新初译或增量补译。
-- 上下文系统：RAG、原文索引是否启用，store 是否存在，记录或片段是否完整。
+- 上下文系统：RAG、原文索引是否启用，store 是否存在，记录或片段是否完整，embedding backend/model 与 store identity 是否兼容。
 - 项目分析：按当前项目解析是否启用，再检查产物是否缺失/过期、生成模型与 API Key 是否可用。
 - 项目资产：术语表和风格设定是否存在、路径是否匹配当前项目。
 - 运行条件：API 密钥是否配置。
@@ -211,7 +211,7 @@ plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor �
 
 `start_pending_batch`、`start_incremental_batch`、`substantially_complete` 和 `no_pending_lines` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
 
-当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
+当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag` / `rebuild_rag_store` / `rebuild_source_index_store`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
 
 ## 文案要求
 
