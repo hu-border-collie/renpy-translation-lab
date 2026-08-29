@@ -1,0 +1,774 @@
+{
+  "schema_version": 1,
+  "engine": "tyrano",
+  "target_language": "ch",
+  "classification_vocabulary": [
+    "translatable",
+    "already_translated",
+    "explicitly_excluded",
+    "unsupported",
+    "parse_error",
+    "unknown"
+  ],
+  "reason_code_vocabulary": [
+    "tyrano.chara_ptext",
+    "tyrano.character_definition",
+    "tyrano.comment",
+    "tyrano.dynamic_parameter_expression",
+    "tyrano.engine_control_structure",
+    "tyrano.iscript_boundary_tag",
+    "tyrano.iscript_content",
+    "tyrano.lang_set_control_tag",
+    "tyrano.official_parser_compensated",
+    "tyrano.registered_tag_parameter",
+    "tyrano.tag_parameter_not_registered",
+    "tyrano.text_node",
+    "tyrano.unclosed_inline_tag",
+    "tyrano.unquoted_parameter_sequence",
+    "tyrano.unregistered_macro_invocation",
+    "tyrano.unterminated_quoted_parameter"
+  ],
+  "candidates": [
+    {
+      "line": 0,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "; scene1.ks - dialogue, character names, default glink/ptext",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line0:comment:1"
+    },
+    {
+      "line": 1,
+      "node_index": 0,
+      "structure_kind": "label",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.engine_control_structure"
+      ],
+      "source_value": "Start",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "label"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line1:node0:label"
+    },
+    {
+      "line": 3,
+      "node_index": 1,
+      "structure_kind": "tag",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.character_definition"
+      ],
+      "source_value": "Akane",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "chara_new",
+        "tag_name": "chara_new",
+        "param_name": "jname"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line3:node1:chara_new"
+    },
+    {
+      "line": 5,
+      "node_index": 2,
+      "structure_kind": "chara_ptext",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.chara_ptext"
+      ],
+      "source_value": "akane",
+      "catalog": {
+        "path": [
+          "charas",
+          "akane"
+        ],
+        "translation": "茜"
+      },
+      "evidence": {
+        "parser_name": "chara_ptext",
+        "param_name": "name"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line5:node2:chara_ptext"
+    },
+    {
+      "line": 6,
+      "node_index": 3,
+      "structure_kind": "text",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": "Hello, world!",
+      "catalog": {
+        "path": [
+          "scenes",
+          "scene1.ks",
+          "scenario",
+          "Hello, world!"
+        ],
+        "translation": "你好，世界！"
+      },
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line6:node3:text"
+    },
+    {
+      "line": 8,
+      "node_index": 4,
+      "structure_kind": "chara_ptext",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.chara_ptext"
+      ],
+      "source_value": "akane",
+      "catalog": {
+        "path": [
+          "charas",
+          "akane"
+        ],
+        "translation": "茜"
+      },
+      "evidence": {
+        "parser_name": "chara_ptext",
+        "param_name": "name"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line8:node4:chara_ptext"
+    },
+    {
+      "line": 9,
+      "node_index": 5,
+      "structure_kind": "text",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": "A line with ",
+      "catalog": {
+        "path": [
+          "scenes",
+          "scene1.ks",
+          "scenario",
+          "A line with "
+        ],
+        "translation": "一行带有 "
+      },
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line9:node5:text"
+    },
+    {
+      "line": 9,
+      "node_index": 6,
+      "structure_kind": "tag",
+      "classification": "unsupported",
+      "reason_codes": [
+        "tyrano.tag_parameter_not_registered"
+      ],
+      "source_value": "漢字",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "ruby",
+        "tag_name": "ruby",
+        "param_name": "text",
+        "registered": false
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line9:node6:ruby"
+    },
+    {
+      "line": 9,
+      "node_index": 7,
+      "structure_kind": "text",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": " inline markup.",
+      "catalog": {
+        "path": [
+          "scenes",
+          "scene1.ks",
+          "scenario",
+          " inline markup."
+        ],
+        "translation": " 的行内标记。"
+      },
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line9:node7:text"
+    },
+    {
+      "line": 11,
+      "node_index": 8,
+      "structure_kind": "tag",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.registered_tag_parameter"
+      ],
+      "source_value": "Start Game",
+      "catalog": {
+        "path": [
+          "scenes",
+          "scene1.ks",
+          "tag",
+          "ptext",
+          "text",
+          "Start Game"
+        ],
+        "translation": "开始游戏"
+      },
+      "evidence": {
+        "parser_name": "ptext",
+        "tag_name": "ptext",
+        "param_name": "text",
+        "registered": true
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line11:node8:ptext"
+    },
+    {
+      "line": 13,
+      "node_index": 9,
+      "structure_kind": "tag",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.registered_tag_parameter"
+      ],
+      "source_value": "Continue",
+      "catalog": {
+        "path": [
+          "scenes",
+          "scene1.ks",
+          "tag",
+          "glink",
+          "text",
+          "Continue"
+        ],
+        "translation": "继续"
+      },
+      "evidence": {
+        "parser_name": "glink",
+        "tag_name": "glink",
+        "param_name": "text",
+        "registered": true
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line13:node9:glink"
+    },
+    {
+      "line": 15,
+      "node_index": 10,
+      "structure_kind": "tag",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.lang_set_control_tag"
+      ],
+      "source_value": "ch",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "lang_set",
+        "tag_name": "lang_set",
+        "param_name": "name"
+      },
+      "file_rel_path": "scene1.ks",
+      "candidate_id": "tyrano:scene1.ks:line15:node10:lang_set"
+    },
+    {
+      "line": 0,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "; choices.ks - registered custom tag, unknown macro, dynamic parameter, iscript",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line0:comment:1"
+    },
+    {
+      "line": 1,
+      "node_index": 0,
+      "structure_kind": "label",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.engine_control_structure"
+      ],
+      "source_value": "Menu",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "label"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line1:node0:label"
+    },
+    {
+      "line": 3,
+      "node_index": 1,
+      "structure_kind": "text",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": "Plain ",
+      "catalog": {
+        "path": [
+          "scenes",
+          "choices.ks",
+          "scenario",
+          "Plain "
+        ],
+        "translation": "普通 "
+      },
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line3:node1:text"
+    },
+    {
+      "line": 3,
+      "node_index": 2,
+      "structure_kind": "tag",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.engine_control_structure"
+      ],
+      "source_value": "",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "nw",
+        "tag_name": "nw"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line3:node2:nw"
+    },
+    {
+      "line": 3,
+      "node_index": 3,
+      "structure_kind": "text",
+      "classification": "translatable",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": " text before a ",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line3:node3:text"
+    },
+    {
+      "line": 3,
+      "node_index": 4,
+      "structure_kind": "tag",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.registered_tag_parameter"
+      ],
+      "source_value": "Save Game",
+      "catalog": {
+        "path": [
+          "scenes",
+          "choices.ks",
+          "tag",
+          "glink",
+          "text",
+          "Save Game"
+        ],
+        "translation": "保存游戏"
+      },
+      "evidence": {
+        "parser_name": "glink",
+        "tag_name": "glink",
+        "param_name": "text",
+        "registered": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line3:node4:glink"
+    },
+    {
+      "line": 3,
+      "node_index": 5,
+      "structure_kind": "text",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.text_node"
+      ],
+      "source_value": " choice.",
+      "catalog": {
+        "path": [
+          "scenes",
+          "choices.ks",
+          "scenario",
+          " choice."
+        ],
+        "translation": " 的选项。"
+      },
+      "evidence": {
+        "parser_name": "text"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line3:node5:text"
+    },
+    {
+      "line": 5,
+      "node_index": 6,
+      "structure_kind": "tag",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.registered_tag_parameter"
+      ],
+      "source_value": "It's fine",
+      "catalog": {
+        "path": [
+          "scenes",
+          "choices.ks",
+          "tag",
+          "ptext",
+          "text",
+          "It's fine"
+        ],
+        "translation": "没问题"
+      },
+      "evidence": {
+        "parser_name": "ptext",
+        "tag_name": "ptext",
+        "param_name": "text",
+        "registered": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line5:node6:ptext"
+    },
+    {
+      "line": 7,
+      "node_index": 7,
+      "structure_kind": "tag",
+      "classification": "already_translated",
+      "reason_codes": [
+        "tyrano.registered_tag_parameter"
+      ],
+      "source_value": "Translate this",
+      "catalog": {
+        "path": [
+          "scenes",
+          "choices.ks",
+          "tag",
+          "mymacro",
+          "value",
+          "Translate this"
+        ],
+        "translation": "翻译这个"
+      },
+      "evidence": {
+        "parser_name": "mymacro",
+        "tag_name": "mymacro",
+        "param_name": "value",
+        "registered": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line7:node7:mymacro"
+    },
+    {
+      "line": 9,
+      "node_index": 8,
+      "structure_kind": "tag",
+      "classification": "unknown",
+      "reason_codes": [
+        "tyrano.unregistered_macro_invocation"
+      ],
+      "source_value": "Do not auto-translate",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "unknown_macro",
+        "tag_name": "unknown_macro",
+        "param_name": "caption",
+        "registered": false
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line9:node8:unknown_macro"
+    },
+    {
+      "line": 11,
+      "node_index": 9,
+      "structure_kind": "tag",
+      "classification": "unsupported",
+      "reason_codes": [
+        "tyrano.dynamic_parameter_expression"
+      ],
+      "source_value": "&sf.button_label",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "ptext",
+        "tag_name": "ptext",
+        "param_name": "text",
+        "registered": true,
+        "dynamic_expression": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line11:node9:ptext_dynamic"
+    },
+    {
+      "line": 13,
+      "node_index": 10,
+      "structure_kind": "tag",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.iscript_boundary_tag"
+      ],
+      "source_value": "",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "iscript",
+        "tag_name": "iscript"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line13:node10:iscript"
+    },
+    {
+      "line": 14,
+      "node_index": 11,
+      "structure_kind": "text",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.iscript_content"
+      ],
+      "source_value": "// This JavaScript string is intentionally not a candidate.",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "text",
+        "inside_iscript": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line14:node11:text"
+    },
+    {
+      "line": 15,
+      "node_index": 12,
+      "structure_kind": "text",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.iscript_content"
+      ],
+      "source_value": "var notice = \"Not a candidate\";",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "text",
+        "inside_iscript": true
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line15:node12:text"
+    },
+    {
+      "line": 16,
+      "node_index": 13,
+      "structure_kind": "tag",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.iscript_boundary_tag"
+      ],
+      "source_value": "",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "endscript",
+        "tag_name": "endscript"
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line16:node13:endscript"
+    },
+    {
+      "line": 18,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "; trailing comment",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "choices.ks",
+      "candidate_id": "tyrano:choices.ks:line18:comment:1"
+    },
+    {
+      "line": 0,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "; broken.ks - official parser is permissive; P5 adapter must surface defects",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line0:comment:1"
+    },
+    {
+      "line": 1,
+      "node_index": 0,
+      "structure_kind": "label",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.engine_control_structure"
+      ],
+      "source_value": "Broken",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "label"
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line1:node0:label"
+    },
+    {
+      "line": 3,
+      "node_index": 1,
+      "structure_kind": "tag",
+      "classification": "parse_error",
+      "reason_codes": [
+        "tyrano.unterminated_quoted_parameter",
+        "tyrano.official_parser_compensated"
+      ],
+      "source_value": "Unterminated param",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "ptext",
+        "tag_name": "ptext",
+        "param_name": "text",
+        "raw_line": "[ptext layer=0 text=\"Unterminated param ]"
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line3:node1:ptext"
+    },
+    {
+      "line": 5,
+      "node_index": 2,
+      "structure_kind": "tag",
+      "classification": "parse_error",
+      "reason_codes": [
+        "tyrano.unquoted_parameter_sequence",
+        "tyrano.unregistered_macro_invocation"
+      ],
+      "source_value": "",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "unknown_macro",
+        "tag_name": "unknown_macro",
+        "raw_line": "[unknown_macro value=bare unquoted value]"
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line5:node2:unknown_macro"
+    },
+    {
+      "line": 7,
+      "node_index": 3,
+      "structure_kind": "text",
+      "classification": "parse_error",
+      "reason_codes": [
+        "tyrano.unclosed_inline_tag"
+      ],
+      "source_value": "A line with an unclosed ",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "text",
+        "raw_line": "A line with an unclosed [glink text=\"oops\""
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line7:node3:text"
+    },
+    {
+      "line": 7,
+      "node_index": 4,
+      "structure_kind": "tag",
+      "classification": "parse_error",
+      "reason_codes": [
+        "tyrano.unclosed_inline_tag"
+      ],
+      "source_value": "oops",
+      "catalog": null,
+      "evidence": {
+        "parser_name": "glink",
+        "tag_name": "glink",
+        "param_name": "text",
+        "raw_line": "A line with an unclosed [glink text=\"oops\""
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line7:node4:glink"
+    },
+    {
+      "line": 9,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "/*",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line9:comment:1"
+    },
+    {
+      "line": 10,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "text inside block comment",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line10:comment:2"
+    },
+    {
+      "line": 11,
+      "node_index": null,
+      "structure_kind": "comment",
+      "classification": "explicitly_excluded",
+      "reason_codes": [
+        "tyrano.comment"
+      ],
+      "source_value": "*/",
+      "catalog": null,
+      "evidence": {
+        "parser_name": null
+      },
+      "file_rel_path": "broken.ks",
+      "candidate_id": "tyrano:broken.ks:line11:comment:3"
+    }
+  ]
+}

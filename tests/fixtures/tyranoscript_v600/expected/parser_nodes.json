@@ -1,0 +1,313 @@
+{
+  "engine": "tyrano",
+  "files": {
+    "broken.ks": [
+      {
+        "line": 1,
+        "name": "label",
+        "node_index": 0,
+        "pm": {
+          "index": 0,
+          "label_name": "broken",
+          "line": 1,
+          "val": "Broken"
+        },
+        "val": "Broken"
+      },
+      {
+        "line": 3,
+        "name": "ptext",
+        "node_index": 1,
+        "pm": {
+          "layer": "0",
+          "text": "Unterminated param"
+        },
+        "val": ""
+      },
+      {
+        "line": 5,
+        "name": "unknown_macro",
+        "node_index": 2,
+        "pm": {
+          "unquoted": "",
+          "value": ""
+        },
+        "val": ""
+      },
+      {
+        "line": 7,
+        "name": "text",
+        "node_index": 3,
+        "pm": {
+          "val": "A line with an unclosed "
+        },
+        "val": "A line with an unclosed "
+      },
+      {
+        "line": 7,
+        "name": "glink",
+        "node_index": 4,
+        "pm": {
+          "text": "oops"
+        },
+        "val": ""
+      }
+    ],
+    "choices.ks": [
+      {
+        "line": 1,
+        "name": "label",
+        "node_index": 0,
+        "pm": {
+          "index": 0,
+          "label_name": "menu",
+          "line": 1,
+          "val": "Menu"
+        },
+        "val": "Menu"
+      },
+      {
+        "line": 3,
+        "name": "text",
+        "node_index": 1,
+        "pm": {
+          "val": "Plain "
+        },
+        "val": "Plain "
+      },
+      {
+        "line": 3,
+        "name": "nw",
+        "node_index": 2,
+        "pm": {},
+        "val": ""
+      },
+      {
+        "line": 3,
+        "name": "text",
+        "node_index": 3,
+        "pm": {
+          "val": " text before a "
+        },
+        "val": " text before a "
+      },
+      {
+        "line": 3,
+        "name": "glink",
+        "node_index": 4,
+        "pm": {
+          "target": "*save",
+          "text": "Save Game"
+        },
+        "val": ""
+      },
+      {
+        "line": 3,
+        "name": "text",
+        "node_index": 5,
+        "pm": {
+          "val": " choice."
+        },
+        "val": " choice."
+      },
+      {
+        "line": 5,
+        "name": "ptext",
+        "node_index": 6,
+        "pm": {
+          "layer": "0",
+          "text": "It's fine",
+          "x": "10",
+          "y": "20"
+        },
+        "val": ""
+      },
+      {
+        "line": 7,
+        "name": "mymacro",
+        "node_index": 7,
+        "pm": {
+          "value": "Translate this"
+        },
+        "val": ""
+      },
+      {
+        "line": 9,
+        "name": "unknown_macro",
+        "node_index": 8,
+        "pm": {
+          "caption": "Do not auto-translate"
+        },
+        "val": ""
+      },
+      {
+        "line": 11,
+        "name": "ptext",
+        "node_index": 9,
+        "pm": {
+          "layer": "0",
+          "text": "&sf.button_label",
+          "x": "10",
+          "y": "40"
+        },
+        "val": ""
+      },
+      {
+        "line": 13,
+        "name": "iscript",
+        "node_index": 10,
+        "pm": {},
+        "val": ""
+      },
+      {
+        "line": 14,
+        "name": "text",
+        "node_index": 11,
+        "pm": {
+          "val": "// This JavaScript string is intentionally not a candidate."
+        },
+        "val": "// This JavaScript string is intentionally not a candidate."
+      },
+      {
+        "line": 15,
+        "name": "text",
+        "node_index": 12,
+        "pm": {
+          "val": "var notice = \"Not a candidate\";"
+        },
+        "val": "var notice = \"Not a candidate\";"
+      },
+      {
+        "line": 16,
+        "name": "endscript",
+        "node_index": 13,
+        "pm": {},
+        "val": ""
+      }
+    ],
+    "scene1.ks": [
+      {
+        "line": 1,
+        "name": "label",
+        "node_index": 0,
+        "pm": {
+          "index": 0,
+          "label_name": "start",
+          "line": 1,
+          "val": "Start"
+        },
+        "val": "Start"
+      },
+      {
+        "line": 3,
+        "name": "chara_new",
+        "node_index": 1,
+        "pm": {
+          "jname": "Akane",
+          "name": "akane",
+          "storage": "akane.png"
+        },
+        "val": ""
+      },
+      {
+        "line": 5,
+        "name": "chara_ptext",
+        "node_index": 2,
+        "pm": {
+          "face": "smile",
+          "name": "akane"
+        },
+        "val": ""
+      },
+      {
+        "line": 6,
+        "name": "text",
+        "node_index": 3,
+        "pm": {
+          "val": "Hello, world!"
+        },
+        "val": "Hello, world!"
+      },
+      {
+        "line": 8,
+        "name": "chara_ptext",
+        "node_index": 4,
+        "pm": {
+          "face": "",
+          "name": "akane"
+        },
+        "val": ""
+      },
+      {
+        "line": 9,
+        "name": "text",
+        "node_index": 5,
+        "pm": {
+          "val": "A line with "
+        },
+        "val": "A line with "
+      },
+      {
+        "line": 9,
+        "name": "ruby",
+        "node_index": 6,
+        "pm": {
+          "rt": "kanji",
+          "text": "漢字"
+        },
+        "val": ""
+      },
+      {
+        "line": 9,
+        "name": "text",
+        "node_index": 7,
+        "pm": {
+          "val": " inline markup."
+        },
+        "val": " inline markup."
+      },
+      {
+        "line": 11,
+        "name": "ptext",
+        "node_index": 8,
+        "pm": {
+          "layer": "0",
+          "text": "Start Game",
+          "x": "40",
+          "y": "680"
+        },
+        "val": ""
+      },
+      {
+        "line": 13,
+        "name": "glink",
+        "node_index": 9,
+        "pm": {
+          "target": "*start",
+          "text": "Continue"
+        },
+        "val": ""
+      },
+      {
+        "line": 15,
+        "name": "lang_set",
+        "node_index": 10,
+        "pm": {
+          "name": "ch"
+        },
+        "val": ""
+      }
+    ]
+  },
+  "generator": {
+    "generated_at": "2026-08-29T08:58:33Z",
+    "keep_space_in_parameter_value": "2",
+    "open_source_ref": "https://github.com/ShikemokuMK/tyranoscript branch tyrano6 @ 6f45d046029943a756f8bd10004b2a1e8089fa25",
+    "package": "tyranoscript_v602c_en.zip",
+    "package_sha256": "7f07ffe04dd40eb88d3660f54dd4efd892889746ad5a4c77e1fc274d0c9b1803",
+    "package_url": "https://tyranoscript.com/download/studio/tyranoscript_v602c_en.zip",
+    "parser": "TyranoScript runtime V602c",
+    "parser_rel_path": "tyrano/plugins/kag/kag.parser.js"
+  },
+  "schema_version": 1
+}

@@ -20,6 +20,9 @@
   adapter / coverage 与 P2 的 relocation、validation、writeback plan 消费均已落地；
   本文继续作为 reconciliation、coverage 下游门禁和后续引擎阶段的合同基线。
   当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
+- [TyranoScript V600+ P5 parser 调研与 fixture 基线](tyranoscript_v600_parser_research.md)：
+  #265 P5 开工前的官方 parser / 原生 catalog / TyranoStudio 翻译工作流调研，
+  以及 `tests/fixtures/tyranoscript_v600` 离线 golden 与 characterization 测试约定。
 - [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](issue-346-implementation-plan.md)：
   基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；D1–D7 已冻结，P1 纯核心已合并，
   P2–P5 继续按本文边界推进。
