@@ -1,0 +1,57 @@
+{
+  "scenes": {
+    "scene1.ks": {
+      "scenario": {
+        "Hello, world!": "你好，世界！",
+        "A line with ": "一行带有 ",
+        " inline markup.": " 的行内标记。"
+      },
+      "tag": {
+        "ptext": {
+          "text": {
+            "Start Game": "开始游戏"
+          }
+        },
+        "glink": {
+          "text": {
+            "Continue": "继续"
+          }
+        }
+      }
+    },
+    "choices.ks": {
+      "scenario": {
+        "Plain ": "普通 ",
+        " choice.": " 的选项。"
+      },
+      "tag": {
+        "glink": {
+          "text": {
+            "Save Game": "保存游戏"
+          }
+        },
+        "ptext": {
+          "text": {
+            "It's fine": "没问题"
+          }
+        },
+        "mymacro": {
+          "value": {
+            "Translate this": "翻译这个"
+          }
+        }
+      }
+    }
+  },
+  "charas": {
+    "akane": "茜"
+  },
+  "systems": {
+    "go_title": "返回标题？"
+  },
+  "tags": {
+    "glink": ["text"],
+    "ptext": ["text"],
+    "mymacro": ["value"]
+  }
+}

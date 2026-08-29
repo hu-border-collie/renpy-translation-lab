@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "baseline_catalog": "data/others/lang/ch.json",
+  "cases": [
+    {
+      "name": "missing_row",
+      "description": "Remove one scenario text row; extraction must report missing catalog entry instead of silently treating the source as translated.",
+      "mutations": [
+        {
+          "action": "remove_path",
+          "path": [
+            "scenes",
+            "scene1.ks",
+            "scenario",
+            "Hello, world!"
+          ]
+        }
+      ],
+      "expected": {
+        "coverage_or_writeback": "block",
+        "classification": "translatable",
+        "reason_codes": [
+          "tyrano.catalog.missing_row"
+        ]
+      }
+    },
+    {
+      "name": "stale_extra_row",
+      "description": "Add a catalog row that no longer exists in any parsed source; freshness/reconciliation must detect provenance drift.",
+      "mutations": [
+        {
+          "action": "set_path",
+          "path": [
+            "scenes",
+            "choices.ks",
+            "scenario",
+            "Text removed from source"
+          ],
+          "value": "幽灵译文"
+        }
+      ],
+      "expected": {
+        "coverage_or_writeback": "block_or_attention",
+        "reason_codes": [
+          "tyrano.catalog.stale"
+        ]
+      }
+    },
+    {
+      "name": "missing_scenario_section",
+      "description": "Remove the whole scenario section for scene1.ks; runtime silently falls back to original text, so the adapter must block completion.",
+      "mutations": [
+        {
+          "action": "remove_path",
+          "path": [
+            "scenes",
+            "scene1.ks"
+          ]
+        }
+      ],
+      "expected": {
+        "coverage_or_writeback": "block",
+        "reason_codes": [
+          "tyrano.catalog.missing_scenario"
+        ]
+      }
+    },
+    {
+      "name": "empty_translation",
+      "description": "Official runtime ignores empty-string translations (truthiness check); the fixture freezes that edge so writeback must not rely on empty rows.",
+      "mutations": [
+        {
+          "action": "set_path",
+          "path": [
+            "scenes",
+            "scene1.ks",
+            "scenario",
+            "Hello, world!"
+          ],
+          "value": ""
+        }
+      ],
+      "expected": {
+        "coverage_or_writeback": "block",
+        "reason_codes": [
+          "tyrano.catalog.empty_translation"
+        ]
+      }
+    },
+    {
+      "name": "stale_tag_registry",
+      "description": "Remove a registered tag parameter from tags; its source row must become unsupported/unknown rather than silently disappear.",
+      "mutations": [
+        {
+          "action": "remove_path",
+          "path": [
+            "tags",
+            "mymacro"
+          ]
+        }
+      ],
+      "expected": {
+        "coverage_or_writeback": "attention",
+        "reason_codes": [
+          "tyrano.tag_parameter_not_registered"
+        ]
+      }
+    }
+  ]
+}
