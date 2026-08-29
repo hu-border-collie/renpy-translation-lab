@@ -487,6 +487,7 @@ class ContextPolicy:
     local_context_after: int = translation_core.CANONICAL_LOCAL_CONTEXT_AFTER
     history_char_limit: int = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
     story_char_limit: int = translation_core.CANONICAL_STORY_CHAR_LIMIT
+    source_index_char_limit: int = 0
     analysis_char_limit: int = translation_core.CANONICAL_ANALYSIS_CHAR_LIMIT
     include_source_text: bool = translation_core.CANONICAL_INCLUDE_SOURCE_TEXT
     include_translation_memory: bool = True
@@ -499,6 +500,7 @@ class ContextPolicy:
             'local_context_after': int(self.local_context_after),
             'history_char_limit': int(self.history_char_limit),
             'story_char_limit': int(self.story_char_limit),
+            'source_index_char_limit': int(self.source_index_char_limit),
             'analysis_char_limit': int(self.analysis_char_limit),
             'include_source_text': bool(self.include_source_text),
             'include_translation_memory': bool(self.include_translation_memory),
@@ -779,7 +781,11 @@ def _retrieval_layer(chunk_input, policy):
     separator).
     """
     text = str(chunk_input.retrieval_blocks_text or '')
-    limit = policy.history_char_limit + policy.story_char_limit
+    limit = (
+        policy.history_char_limit
+        + policy.story_char_limit
+        + policy.source_index_char_limit
+    )
     truncated = False
     if text and len(text) > limit:
         text = text[:limit]
@@ -789,6 +795,7 @@ def _retrieval_layer(chunk_input, policy):
         'budget_mode': 'd5_combined_backstop',
         'history_char_limit': policy.history_char_limit,
         'story_char_limit': policy.story_char_limit,
+        'source_index_char_limit': policy.source_index_char_limit,
         'include_source_text': policy.include_source_text,
     }
     return ContextLayerResult(

@@ -645,6 +645,24 @@ class ContextAssemblyTests(unittest.TestCase):
         self.assertEqual(retrieval.char_limit, 220 + 1200)
         self.assertTrue(retrieval.truncated)
         self.assertEqual(retrieval.char_used, retrieval.char_limit)
+        self.assertEqual(retrieval.diagnostics['source_index_char_limit'], 0)
+
+    def test_source_index_char_limit_widens_retrieval_backstop(self):
+        long_text = 'RELATED PROJECT CONTEXT:\n' + ('x' * 5000)
+        chunk_input = translation_plan.ChunkContextInput(
+            target_units=[],
+            retrieval_blocks_text=long_text,
+        )
+        assembly = translation_plan.assemble_context_layers(
+            chunk_input,
+            translation_plan.ContextPolicy(source_index_char_limit=880),
+        )
+        retrieval = next(
+            layer for layer in assembly.layers if layer.layer == translation_plan.CONTEXT_LAYER_RETRIEVAL
+        )
+        self.assertEqual(retrieval.char_limit, 220 + 1200 + 880)
+        self.assertEqual(retrieval.diagnostics['source_index_char_limit'], 880)
+        self.assertEqual(retrieval.diagnostics['history_char_limit'], 220)
 
     def test_aggregate_budget_preserves_priority_and_explains_trimming(self):
         chunk_input = translation_plan.ChunkContextInput(

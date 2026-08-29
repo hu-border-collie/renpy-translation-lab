@@ -4782,9 +4782,9 @@ def _sync_plan_context_policy():
     return translation_plan.ContextPolicy(
         local_context_before=SYNC_CONTEXT_BEFORE,
         local_context_after=SYNC_CONTEXT_AFTER,
-        history_char_limit=(
-            SYNC_RAG_HISTORY_CHAR_LIMIT
-            + (get_sync_source_index_char_budget() if SYNC_SOURCE_INDEX_ENABLED else 0)
+        history_char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
+        source_index_char_limit=(
+            get_sync_source_index_char_budget() if SYNC_SOURCE_INDEX_ENABLED else 0
         ),
         story_char_limit=SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS,
         analysis_char_limit=analysis_limit,

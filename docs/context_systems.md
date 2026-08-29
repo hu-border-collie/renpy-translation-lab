@@ -8,8 +8,10 @@
 
 Sync 与 Gemini Batch 初译由共享 ContextAssembler 按固定优先级组装：TARGET/结构信息、
 block-bounded 局部前后文、本地 Macro 与词法 glossary、检索上下文、分析上下文。现行生产
-策略分别对检索层和分析层应用字符 backstop；每层的 rank、字符预算、实际使用、truncated
-标记和舍弃原因进入 request diagnostics。核心 ContextPolicy 另支持调用方提供总字符预算；
+策略分别对检索层和分析层应用字符 backstop；检索层 backstop 是 history + story +
+可选 Source Index 三项之和，Source Index 预算不并入 `history_char_limit`。每层的 rank、
+字符预算、实际使用、truncated 标记和舍弃原因进入 request diagnostics。核心 ContextPolicy
+另支持调用方提供总字符预算；
 启用时会保留必需/本地/项目层，再依优先级裁剪检索和分析层，并报告 mandatory overflow。
 普通 Sync/Batch 当前未从模型 profile 自动设置这项总字符预算。
 
@@ -65,7 +67,7 @@ logs/story_memory/story_graph.json
 
 `batch.rag.store_dir`、`batch.source_index.store_dir`、`sync.rag.store_dir`、`sync.source_index.store_dir` 和 `story_memory.graph_file` 仍然可以显式指定；一旦填了具体路径，就优先使用该路径，不再跟随 `context_storage.location`。
 
-Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端。`sync.rag` / `batch.rag` 的 `embedding_backend` 默认为 `gemini`；选择 `openai_compatible` 时必须显式填写 `embedding_model` 和 `embedding_provider`，不得从生成模型推断。明确选择非 Gemini 后端但配置无效时，加载会直接失败，而不是改回 Gemini。`query_task_type` / `document_task_type` 只接受 `RETRIEVAL_QUERY` / `RETRIEVAL_DOCUMENT` 或大小写不敏感的 `query` / `document`；`SEMANTIC_SIMILARITY` 等旧 Gemini native 值会在加载时拒绝。Store 会记录 backend/provider/model/task type/dimension identity；query 与 store 不兼容时拒绝混用并建议重建，旧纯文本 store 不会被静默升级。
+Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端。`sync.rag` / `batch.rag` 的 `embedding_backend` 默认为 `gemini`；选择 `openai_compatible` 时必须显式填写 `embedding_model` 和 `embedding_provider`，不得从生成模型推断。明确选择非 Gemini 后端但配置无效时，加载会直接失败，而不是改回 Gemini。`query_task_type` / `document_task_type` 只接受 `RETRIEVAL_QUERY` / `RETRIEVAL_DOCUMENT` 或大小写不敏感的 `query` / `document`；`SEMANTIC_SIMILARITY` 等旧 Gemini native 值会在加载时拒绝。Store 会记录 backend/provider/model/task type/dimension identity；query 与 store 不兼容时拒绝混用并建议重建，旧纯文本 store 不会被静默升级。Batch `apply`、订正写回和 `bootstrap_on_build` 预热遇到缺 identity / 不兼容 store 时只报告 `rebuild_store`、不改写已有向量；只有显式 `bootstrap-rag` / `bootstrap-source-index`（或 GUI「上下文库」预建）才会清空重建。
 
 ## Project Analysis（项目分析）
 
@@ -250,7 +252,7 @@ JSONL 每行是一个对象，支持以下字段：
 
 命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`external_seed_records`、`external_seed_invalid_json`、`external_seed_filtered`、`external_seed_skipped`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
 
-注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。
+注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。现有 store 缺 embedding identity 或与当前后端不兼容时，`build` / `apply` 不会自动清空；必须显式运行 `bootstrap-rag`（或 GUI「上下文库」预建）。
 
 同步 RAG 启用后，普通 Sync 初译会在不可变 TranslationPlan 构建阶段为全部固定 chunk 完成检索，随后才开始模型调用；因此同一次 preview run 不会在 chunk 之间刷新检索结果。history store 只在用户审查并 apply preview 后按成功写回文件更新，下一次 Sync run 才会读取这些新历史。运行日志会报告 plan 构建阶段的检索 chunk、RAG 命中和 Story Memory 生效 chunk 数；大项目应预期第一次模型调用前存在集中检索等待与 query embedding 消耗。
 

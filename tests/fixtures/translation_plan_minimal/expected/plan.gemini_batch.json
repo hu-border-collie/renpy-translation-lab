@@ -98,6 +98,7 @@
     "include_translation_memory": true,
     "local_context_after": 10,
     "local_context_before": 30,
+    "source_index_char_limit": 0,
     "story_block_suffix": "\n\n",
     "story_char_limit": 1200,
     "total_char_limit": 0
@@ -125,8 +126,8 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "8b677ab3816175fb",
-  "plan_id": "299f778e5dc44f5d",
+  "plan_fingerprint": "7926152fae63ed62",
+  "plan_id": "3876ea08740b81fe",
   "request_summaries": [
     {
       "capability_requirements": {
@@ -191,6 +192,7 @@
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
               "include_source_text": true,
+              "source_index_char_limit": 0,
               "story_char_limit": 1200
             },
             "layer": "retrieval",
@@ -212,9 +214,9 @@
         ],
         "total_char_used": 915
       },
-      "prompt_fingerprint": "e14597acfc6111bf",
-      "request_fingerprint": "f4480a0ef639a161",
-      "request_id": "62566ff3eedd2d50"
+      "prompt_fingerprint": "11196503f147f80c",
+      "request_fingerprint": "9f8241d4c0aa441e",
+      "request_id": "c68d7d897ea89cc7"
     },
     {
       "capability_requirements": {
@@ -280,6 +282,7 @@
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
               "include_source_text": true,
+              "source_index_char_limit": 0,
               "story_char_limit": 1200
             },
             "layer": "retrieval",
@@ -301,9 +304,9 @@
         ],
         "total_char_used": 1022
       },
-      "prompt_fingerprint": "926854780f0e1ea7",
-      "request_fingerprint": "436c542dfa3c5b0c",
-      "request_id": "a4a7a95c9c956b92"
+      "prompt_fingerprint": "fbe969abfe42a341",
+      "request_fingerprint": "0f39664e524a74a5",
+      "request_id": "1bf12c182fde98c2"
     },
     {
       "capability_requirements": {
@@ -365,6 +368,7 @@
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
               "include_source_text": true,
+              "source_index_char_limit": 0,
               "story_char_limit": 1200
             },
             "layer": "retrieval",
@@ -386,9 +390,9 @@
         ],
         "total_char_used": 525
       },
-      "prompt_fingerprint": "00756b8992768dfe",
-      "request_fingerprint": "61a3213074a32c59",
-      "request_id": "01417c3411de278f"
+      "prompt_fingerprint": "c258d91fe57bf06d",
+      "request_fingerprint": "133333c82efbcf07",
+      "request_id": "f32d17e7c7adcdba"
     }
   ],
   "run_id": "fixture-run",

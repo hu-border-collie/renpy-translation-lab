@@ -27,6 +27,8 @@
 - Batch `load_batch_settings()` 现在会把 `embedding_backend` / provider / endpoint / timeout / API key env 写回模块全局变量；配置 `openai_compatible` 后不再仍走 Gemini adapter。
 - Embedding task type 在加载时按 provider-neutral 合同校验并持久化为 `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`；空 embedding 输入改为立即报错，避免 zip 错位静默丢记录。
 - 明确选择非 Gemini embedding 后端但缺 model/provider 时启动失败；Gemini 解析失败仍可回退，但原因写入 doctor `embedding_load_error`。
+- Batch `apply` / 订正写回 / `bootstrap_on_build` 不再对缺 identity 或不兼容的 RAG store 自动重建；只有显式 `bootstrap-rag` 才会清空旧向量。
+- Sync/Batch `ContextPolicy` 把 Source Index 字符预算放到独立的 `source_index_char_limit`，不再抬高 `history_char_limit`。
 
 ### 变更
 

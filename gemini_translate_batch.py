@@ -3433,13 +3433,13 @@ def _batch_plan_context_policy():
     return translation_plan.ContextPolicy(
         local_context_before=BATCH_CONTEXT_BEFORE,
         local_context_after=BATCH_CONTEXT_AFTER,
-        # The retrieval layer backstop is history+story in the shared
-        # policy. Batch can additionally inject Source Index reference text
-        # (top_k * char_limit), so add that budget to the backstop;
-        # section-level limits are already applied by the providers.
-        history_char_limit=(
-            RAG_HISTORY_CHAR_LIMIT
-            + (get_source_index_char_budget() if SOURCE_INDEX_ENABLED else 0)
+        # The retrieval layer backstop is history + story + optional Source
+        # Index. Section-level limits are already applied by the providers;
+        # keep the Source Index budget off history_char_limit so history
+        # estimates stay honest.
+        history_char_limit=RAG_HISTORY_CHAR_LIMIT,
+        source_index_char_limit=(
+            get_source_index_char_budget() if SOURCE_INDEX_ENABLED else 0
         ),
         story_char_limit=STORY_MEMORY_MAX_CONTEXT_CHARS,
         # Project analysis injects both the global brief and local
@@ -13501,6 +13501,7 @@ def sync_rag_store_for_jobs(
     scan_all_files=False,
     extra_records=None,
     extra_summary=None,
+    rebuild=False,
 ):
     if not RAG_ENABLED:
         return {'enabled': False}
@@ -13509,6 +13510,30 @@ def sync_rag_store_for_jobs(
         return {'enabled': True, 'error': 'RAG store unavailable'}
     identity_status = _attach_batch_store_document_identity(store, rebuild=False)
     if not identity_status.get('ready'):
+        if not rebuild:
+            print(
+                'Warning: RAG embedding identity is missing or incompatible; '
+                'refusing to rewrite the existing store. '
+                'Run bootstrap-rag to rebuild with the selected embedding backend. '
+                'Existing vectors will not be reused until then.'
+            )
+            stats = {
+                'enabled': True,
+                'store_dir': store.store_dir,
+                'scan_scope': 'all_files' if scan_all_files else 'pending_files',
+                'pending': 0,
+                'embedding_pending': 0,
+                'reused_embeddings': 0,
+                'embedded': 0,
+                'upserted': 0,
+                'history_records_before': store.count_history(),
+                'history_records_after': store.count_history(),
+                'error': 'rebuild_store',
+                'action': identity_status.get('action') or 'rebuild_store',
+                'embedding_compatibility': identity_status,
+            }
+            stats.update(extra_summary or {})
+            return stats
         print(
             'Warning: RAG embedding identity is missing or incompatible; '
             'rebuilding the store with the selected embedding backend. '
@@ -13615,6 +13640,7 @@ def print_rag_bootstrap_summary(summary):
         'upserted',
         'history_records_before',
         'history_records_after',
+        'action',
     ):
         if key in summary:
             print(f'- {key}: {summary[key]}')
@@ -13839,6 +13865,7 @@ def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
         scan_all_files=True,
         extra_records=external_records,
         extra_summary=external_summary,
+        rebuild=True,
     )
     print_rag_bootstrap_summary(summary)
     return summary
@@ -17435,7 +17462,11 @@ def build_arg_parser():
 
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
-        help='Prebuild or refresh the Batch RAG history store from all allowed TL files.',
+        help=(
+            'Prebuild or refresh the Batch RAG history store from all allowed '
+            'TL files. Missing or incompatible embedding identity rebuilds the '
+            'store and does not reuse existing vectors.'
+        ),
     )
     bootstrap_rag_parser.add_argument(
         '--skip-prepare',

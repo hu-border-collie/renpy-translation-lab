@@ -367,5 +367,28 @@ class EmbeddingLoaderRegressionTests(unittest.TestCase):
             self._restore_sync_embedding_globals(snapshot)
 
 
+class ContextPolicyBudgetTests(unittest.TestCase):
+    def test_sync_plan_context_policy_keeps_source_index_budget_separate(self):
+        old = {
+            'history': runtime.SYNC_RAG_HISTORY_CHAR_LIMIT,
+            'enabled': runtime.SYNC_SOURCE_INDEX_ENABLED,
+            'top_k': runtime.SYNC_SOURCE_INDEX_TOP_K,
+            'char_limit': runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT,
+        }
+        try:
+            runtime.SYNC_RAG_HISTORY_CHAR_LIMIT = 220
+            runtime.SYNC_SOURCE_INDEX_ENABLED = True
+            runtime.SYNC_SOURCE_INDEX_TOP_K = 4
+            runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT = 220
+            policy = runtime._sync_plan_context_policy()
+            self.assertEqual(policy.history_char_limit, 220)
+            self.assertEqual(policy.source_index_char_limit, 880)
+        finally:
+            runtime.SYNC_RAG_HISTORY_CHAR_LIMIT = old['history']
+            runtime.SYNC_SOURCE_INDEX_ENABLED = old['enabled']
+            runtime.SYNC_SOURCE_INDEX_TOP_K = old['top_k']
+            runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT = old['char_limit']
+
+
 if __name__ == '__main__':
     unittest.main()
