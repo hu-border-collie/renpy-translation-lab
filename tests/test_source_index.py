@@ -456,7 +456,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(stats['filtered_count'], 0)
             self.assertEqual(stats['truncated_count'], 0)
             self.assertEqual(stats['source_context_chars'], len('Good morning everyone'))
-            self.assertEqual(stats['source_context_char_budget'], 100)
+            self.assertEqual(stats['source_context_char_budget'], batch_mod.get_source_index_char_budget())
             self.assertEqual(stats['search_diagnostics']['segments_seen'], 2)
 
     def test_retrieve_source_hits_filters_stale_embedding_metadata(self):
@@ -521,7 +521,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertTrue(hits[0]['source_text_truncated'])
             self.assertEqual(stats['truncated_count'], 1)
             self.assertEqual(stats['source_context_chars'], 12)
-            self.assertEqual(stats['source_context_char_budget'], 12)
+            self.assertEqual(stats['source_context_char_budget'], batch_mod.get_source_index_char_budget())
 
     def test_retrieve_source_hits_reports_failure_reason(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -548,7 +548,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(stats.get('error_category'), 'provider_error')
             self.assertEqual(
                 stats['source_context_char_budget'],
-                batch_mod.SOURCE_INDEX_TOP_K * batch_mod.SOURCE_INDEX_CHAR_LIMIT,
+                batch_mod.get_source_index_char_budget(),
             )
 
     def test_retrieve_source_hits_degrades_when_source_store_is_locked(self):
@@ -578,7 +578,7 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertEqual(hits, [])
             self.assertTrue(stats['enabled'])
             self.assertEqual(stats['reason'], 'empty_source_store')
-            self.assertEqual(stats['source_context_char_budget'], 5 * batch_mod.SOURCE_INDEX_CHAR_LIMIT)
+            self.assertEqual(stats['source_context_char_budget'], batch_mod.get_source_index_char_budget())
 
     def test_retrieve_source_hits_skips_incompatible_store_without_mixing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -733,18 +733,27 @@ class SourceIndexIntegrationTests(unittest.TestCase):
                 self.assertEqual(manifest_data['source_index_store_path'], str(source_store_dir))
                 self.assertEqual(manifest_data['source_index_settings']['top_k'], batch_mod.SOURCE_INDEX_TOP_K)
                 self.assertEqual(manifest_data['source_index_settings']['schema_version'], batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
-                self.assertEqual(manifest_data['source_index_settings']['char_budget_per_chunk'], 40)
+                self.assertEqual(
+                    manifest_data['source_index_settings']['char_budget_per_chunk'],
+                    batch_mod.get_source_index_char_budget(),
+                )
                 self.assertIn('source_index_summary', manifest_data)
 
                 summary = manifest_data['source_index_summary']
                 self.assertEqual(summary['schema_version'], batch_mod.SOURCE_INDEX_SCHEMA_VERSION)
                 self.assertEqual(summary['store_schema_versions'], [batch_mod.SOURCE_INDEX_SCHEMA_VERSION])
-                self.assertEqual(summary['per_chunk_char_budget'], 40)
+                self.assertEqual(
+                    summary['per_chunk_char_budget'],
+                    batch_mod.get_source_index_char_budget(),
+                )
                 self.assertEqual(summary['chunks_with_source_hits'], 1)
                 self.assertEqual(summary['source_hit_count'], 1)
                 self.assertEqual(summary['source_context_truncation_count'], 0)
                 self.assertEqual(summary['source_context_char_count'], len('Hello world'))
-                self.assertEqual(summary['source_context_char_budget'], 40)
+                self.assertEqual(
+                    summary['source_context_char_budget'],
+                    batch_mod.get_source_index_char_budget(),
+                )
                 self.assertEqual(summary['source_filtered_count'], 1)
                 self.assertEqual(summary['stale_hits_skipped'], 1)
                 self.assertEqual(summary['below_similarity_count'], 0)

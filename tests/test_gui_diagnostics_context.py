@@ -89,7 +89,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertTrue(any("fp-1" in fact for fact in current))
         self.assertTrue(any("规范化请求数：1" in fact for fact in current))
         self.assertTrue(any("上下文裁剪请求数：1" in fact for fact in current))
-        self.assertTrue(any("上下文 provider 降级数：1" in fact for fact in current))
+        self.assertTrue(any("上下文供给降级数：1" in fact for fact in current))
         legacy = format_translation_plan_facts({})
         self.assertTrue(any("旧版兼容模式" in fact for fact in legacy))
 

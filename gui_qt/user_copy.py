@@ -103,7 +103,7 @@ TRANSLATION_PLAN_COPY = {
     "requests": "规范化请求数",
     "context_truncated": "上下文裁剪请求数",
     "context_dropped": "上下文舍弃记录数",
-    "context_provider_downgrade": "上下文 provider 降级数",
+    "context_provider_downgrade": "上下文供给降级数",
 }
 
 CONTEXT_LIBRARY_COPY = {

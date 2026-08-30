@@ -237,6 +237,7 @@ SYNC_SOURCE_INDEX_STORE_DIR = ""
 SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
 SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
 SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
 _SYNC_SOURCE_INDEX_STORE = None
 SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
@@ -1009,7 +1010,8 @@ def load_sync_rag_settings(config):
 def load_sync_source_index_settings(config):
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
@@ -1030,6 +1032,7 @@ def load_sync_source_index_settings(config):
         source_index.get("char_limit"),
         DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT,
     )
+    SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
     store_dir = source_index.get("store_dir")
     if store_dir:
         SYNC_SOURCE_INDEX_STORE_DIR = _resolve_path(BASE_DIR, store_dir)
@@ -1608,7 +1611,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
     global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
@@ -1694,6 +1698,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         SYNC_SOURCE_INDEX_TOP_K = applied.sync_source_index_top_k
         SYNC_SOURCE_INDEX_MIN_SIMILARITY = applied.sync_source_index_min_similarity
         SYNC_SOURCE_INDEX_CHAR_LIMIT = applied.sync_source_index_char_limit
+        SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
         _SYNC_SOURCE_INDEX_STORE = None
         SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = (
             applied.sync_project_analysis_inject_published_brief
@@ -1840,7 +1845,8 @@ def _reset_project_settings_to_defaults():
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
     global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
@@ -1898,6 +1904,7 @@ def _reset_project_settings_to_defaults():
     SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
     SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
     SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+    SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
     _SYNC_SOURCE_INDEX_STORE = None
     SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
@@ -3393,9 +3400,7 @@ def build_live_embedding_adapter(settings=None):
 
 
 def get_sync_source_index_char_budget():
-    return max(0, int(SYNC_SOURCE_INDEX_TOP_K or 0)) * max(
-        0, int(SYNC_SOURCE_INDEX_CHAR_LIMIT or 0)
-    )
+    return max(0, int(SYNC_SOURCE_INDEX_CHAR_BUDGET or 0))
 
 
 def _attach_store_document_identity(store, settings=None, *, rebuild=False):

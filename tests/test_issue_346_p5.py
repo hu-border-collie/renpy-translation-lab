@@ -313,15 +313,75 @@ class P5ProviderDiagnosticGoldenTests(unittest.TestCase):
                     summary = translation_plan.summarize_request_diagnostics(
                         sync.plan.request_summaries
                     )
-                    self.assertGreaterEqual(summary['context_provider_downgrade_count'], 2)
-                    self.assertIn(
-                        f'source_index:{source_diagnostic.get("reason", "disabled") if source_diagnostic.get("enabled") is not False else "disabled"}',
-                        summary['context_provider_downgrade_reasons'],
+                    expected_source_status = (
+                        'disabled'
+                        if source_diagnostic.get('enabled') is False
+                        else (
+                            'incompatible'
+                            if (source_diagnostic.get('embedding_compatibility') or {}).get('compatible') is False
+                            else source_diagnostic.get('reason', 'available')
+                        )
+                    )
+                    expected_analysis_status = (
+                        'disabled'
+                        if analysis_diagnostic.get('reason') == 'injection_disabled'
+                        else analysis_diagnostic['reason']
+                    )
+                    expected_downgrades = sum(
+                        status not in {
+                            'available',
+                            'disabled',
+                            'empty_query',
+                            'excerpt_cropped',
+                            'stale_hits_skipped',
+                        }
+                        for status in (expected_source_status, expected_analysis_status)
+                    )
+                    self.assertEqual(
+                        summary['context_provider_downgrade_count'],
+                        expected_downgrades,
                     )
                     self.assertIn(
-                        f'published_project_analysis:{analysis_diagnostic["reason"]}',
-                        summary['context_provider_downgrade_reasons'],
+                        f'source_index:{expected_source_status}',
+                        summary['context_provider_status_counts'],
                     )
+                    self.assertIn(
+                        f'published_project_analysis:{expected_analysis_status}',
+                        summary['context_provider_status_counts'],
+                    )
+                    source_summary = batch_mod.summarize_batch_source_index([
+                        {'source_index_stats': source_diagnostic}
+                    ])
+                    expected_source_failure = (
+                        'incompatible'
+                        if expected_source_status == 'incompatible'
+                        else source_diagnostic.get('reason')
+                    )
+                    if expected_source_failure:
+                        self.assertEqual(
+                            source_summary['source_retrieval_failure_reasons'],
+                            {expected_source_failure: 1},
+                        )
+                    else:
+                        self.assertEqual(
+                            source_summary['source_retrieval_failure_reasons'],
+                            {},
+                        )
+                    for provider_name, status in (
+                        ('source_index', expected_source_status),
+                        ('published_project_analysis', expected_analysis_status),
+                    ):
+                        key = f'{provider_name}:{status}'
+                        if status in {
+                            'available',
+                            'disabled',
+                            'empty_query',
+                            'excerpt_cropped',
+                            'stale_hits_skipped',
+                        }:
+                            self.assertNotIn(key, summary['context_provider_downgrade_reasons'])
+                        else:
+                            self.assertIn(key, summary['context_provider_downgrade_reasons'])
 
     def test_batch_project_analysis_keeps_published_identity_for_diagnostics(self):
         payload = {
@@ -361,6 +421,66 @@ class P5ProviderDiagnosticGoldenTests(unittest.TestCase):
         self.assertEqual(diagnostics['brief_status'], 'stale')
         self.assertEqual(diagnostics['source_fingerprint'], 'old-source-fingerprint')
         self.assertEqual(diagnostics['reason'], 'brief_not_fresh:stale')
+
+    def test_disabled_injection_does_not_report_missing_brief(self):
+        with (
+            mock.patch.object(batch_mod, 'PROJECT_ANALYSIS_ENABLED', True),
+            mock.patch.object(batch_mod, 'PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF', False),
+            mock.patch.object(batch_mod, 'compute_current_project_analysis_fingerprint') as fingerprint,
+        ):
+            result = batch_mod.load_injectable_project_context_for_prompts(
+                'script.rpy', [2]
+            )
+
+        fingerprint.assert_not_called()
+        summary = batch_mod.summarize_batch_project_analysis([
+            {'project_analysis': result}
+        ])
+        self.assertEqual(summary['skip_reasons'], {'injection_disabled': 1})
+        self.assertEqual(summary['brief_statuses'], {})
+        self.assertEqual(summary['injected_char_count'], 0)
+
+    def test_project_analysis_summary_counts_injected_chars(self):
+        payload = _published_context()
+        summary = batch_mod.summarize_batch_project_analysis([
+            {'project_analysis': payload}
+        ])
+        self.assertEqual(
+            summary['injected_char_count'],
+            len(payload['text']),
+        )
+        self.assertEqual(summary['brief_statuses'], {'published': 1})
+
+    def test_routine_filtering_and_excerpt_crop_are_not_provider_downgrades(self):
+        diagnostics = translation_plan.summarize_request_diagnostics([
+            {
+                'context_diagnostics': {
+                    'layers': [{
+                        'diagnostics': {
+                            'provider': {
+                                'source_index': {
+                                    'enabled': True,
+                                    'stale_hits_skipped': 1,
+                                },
+                                'published_project_analysis': {
+                                    'injectable': True,
+                                    'truncated_count': 1,
+                                },
+                            }
+                        }
+                    }]
+                }
+            }
+        ])
+        self.assertEqual(diagnostics['context_provider_downgrade_count'], 0)
+        self.assertEqual(
+            diagnostics['context_provider_status_counts'],
+            {
+                'source_index:stale_hits_skipped': 1,
+                'published_project_analysis:excerpt_cropped': 1,
+            },
+        )
+        self.assertEqual(diagnostics['context_provider_downgrade_reasons'], {})
 
 
 class P5BudgetAndEmbeddingTests(unittest.TestCase):
@@ -451,6 +571,7 @@ class P5BudgetAndEmbeddingTests(unittest.TestCase):
             mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_ENABLED', True),
             mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_TOP_K', 1),
             mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_CHAR_LIMIT', 80),
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_CHAR_BUDGET', 80),
             mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_MIN_SIMILARITY', 0.0),
             mock.patch.object(runtime, 'SYNC_RAG_OUTPUT_DIMENSIONALITY', 2),
             mock.patch.object(runtime, 'SYNC_RAG_EMBEDDING_MODEL', settings.model),
@@ -465,6 +586,7 @@ class P5BudgetAndEmbeddingTests(unittest.TestCase):
             mock.patch.object(batch_mod, 'SOURCE_INDEX_ENABLED', True),
             mock.patch.object(batch_mod, 'SOURCE_INDEX_TOP_K', 1),
             mock.patch.object(batch_mod, 'SOURCE_INDEX_CHAR_LIMIT', 80),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_CHAR_BUDGET', 80),
             mock.patch.object(batch_mod, 'SOURCE_INDEX_MIN_SIMILARITY', 0.0),
             mock.patch.object(batch_mod, 'RAG_OUTPUT_DIMENSIONALITY', 2),
             mock.patch.object(batch_mod, 'RAG_EMBEDDING_MODEL', settings.model),
@@ -494,6 +616,82 @@ class P5BudgetAndEmbeddingTests(unittest.TestCase):
         self.assertEqual(sync_stats['embedding_provider'], batch_stats['embedding_provider'])
         self.assertEqual(sync_stats['source_context_chars'], batch_stats['source_context_chars'])
         self.assertEqual(sync_stats['source_context_char_budget'], 80)
+
+    def test_production_source_index_uses_independent_partition_budget(self):
+        settings = parse_embedding_runtime_settings({
+            'embedding_model': 'gemini-embedding-001',
+            'output_dimensionality': 2,
+        })
+        matches = [
+            {'source_id': 'one', 'source_text': 'abcdefghij', 'score': 0.9},
+            {'source_id': 'two', 'source_text': 'klmnopqrst', 'score': 0.8},
+            {'source_id': 'three', 'source_text': 'uvwxyz', 'score': 0.7},
+        ]
+
+        class Compatibility:
+            compatible = True
+            action = ''
+
+            def to_dict(self):
+                return {'compatible': True, 'action': '', 'codes': []}
+
+        class Store:
+            store_dir = 'fixture-source-index'
+            metadata = {'schema_version': 1}
+
+            def count_segments(self):
+                return len(matches)
+
+            def embedding_compatibility(self, _identity):
+                return Compatibility()
+
+            def search_segments_compatible(self, *_args, **_kwargs):
+                return matches, {
+                    'embedding_compatibility': {'compatible': True},
+                    'matched_before_top_k': len(matches),
+                }
+
+        store = Store()
+        patches = (
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_ENABLED', True),
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_TOP_K', 3),
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_CHAR_LIMIT', 8),
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_CHAR_BUDGET', 10),
+            mock.patch.object(runtime, 'SYNC_SOURCE_INDEX_MIN_SIMILARITY', 0.0),
+            mock.patch.object(runtime, 'SYNC_RAG_OUTPUT_DIMENSIONALITY', 2),
+            mock.patch.object(runtime, 'SYNC_RAG_EMBEDDING_MODEL', settings.model),
+            mock.patch.object(runtime, 'SYNC_RAG_DOCUMENT_TASK_TYPE', settings.native_document_task_type),
+            mock.patch.object(runtime, 'current_sync_embedding_settings', return_value=settings),
+            mock.patch.object(runtime, 'get_sync_source_index_store', return_value=store),
+            mock.patch.object(runtime, 'embed_sync_query_text', return_value=[1.0, 0.0]),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_ENABLED', True),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_TOP_K', 3),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_CHAR_LIMIT', 8),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_CHAR_BUDGET', 10),
+            mock.patch.object(batch_mod, 'SOURCE_INDEX_MIN_SIMILARITY', 0.0),
+            mock.patch.object(batch_mod, 'RAG_OUTPUT_DIMENSIONALITY', 2),
+            mock.patch.object(batch_mod, 'RAG_EMBEDDING_MODEL', settings.model),
+            mock.patch.object(batch_mod, 'RAG_DOCUMENT_TASK_TYPE', settings.native_document_task_type),
+            mock.patch.object(batch_mod, 'current_batch_embedding_settings', return_value=settings),
+            mock.patch.object(batch_mod, 'get_source_index_store', return_value=store),
+            mock.patch.object(batch_mod, 'embed_query_text', return_value=[1.0, 0.0]),
+        )
+        with ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+            sync_hits, sync_stats = runtime.retrieve_sync_source_hits(
+                [{'text': 'Hello world'}]
+            )
+            batch_hits, batch_stats = batch_mod.retrieve_source_hits(
+                [{'text': 'Hello world'}], []
+            )
+
+        self.assertEqual(sync_hits, batch_hits)
+        for stats in (sync_stats, batch_stats):
+            self.assertEqual(stats['source_context_char_budget'], 10)
+            self.assertEqual(stats['source_context_chars'], 10)
+            self.assertEqual(stats['source_context_budget_dropped_count'], 1)
+            self.assertTrue(stats['source_context_budget_exhausted'])
 
 
 if __name__ == '__main__':

@@ -291,7 +291,7 @@ source_segments.jsonl
 3. 输出同步前统计信息。
 4. 默认自动 prune stale 记录；如需保留，可传入 `--no-prune`。
 
-Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制。当前 source index 复用 `batch.rag` 中的 embedding 模型、query/document task type、output dimensionality 和 `segment_lines`；`batch.source_index` 自身控制检索开关、命中数、相似度阈值、单条原文截断预算和独立存储目录：
+Batch 构建时是否检索 source index 由 `batch.source_index.enabled` 控制。当前 source index 复用 `batch.rag` 中的 embedding 模型、query/document task type、output dimensionality 和 `segment_lines`；`batch.source_index` 自身控制检索开关、命中数、相似度阈值、单条原文截断预算和独立存储目录。总字符预算是独立的每 chunk 分区预算（默认 880，写入 manifest 的 `char_budget_per_chunk`），不由 `top_k × char_limit` 推导。
 
 ```json
 {

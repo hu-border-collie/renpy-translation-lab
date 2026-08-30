@@ -17,6 +17,9 @@ import prompt_context
 from rag_memory import truncate_text
 import story_memory
 
+# Independent aggregate Source Index partition budget.
+DEFAULT_SOURCE_INDEX_CHAR_BUDGET = 880
+
 
 def compact_text(text: object) -> str:
     if not isinstance(text, str):
@@ -40,14 +43,7 @@ def compact_item_texts(items: Sequence[object] | None) -> list[str]:
 
 
 def embedding_provider_diagnostics(settings: object) -> dict[str, Any]:
-    """Return the credential-free identity of the active embedding provider.
-
-    Sync and Gemini Batch construct their runtime settings in different
-    modules, but the provider contract must be observable in the same shape.
-    Keeping this small adapter here prevents either executor from serializing
-    endpoints, API-key names, or other transport-only details into plan
-    diagnostics.
-    """
+    """Return credential-free identity facts for the active embedding provider."""
 
     public_dict = getattr(settings, 'public_dict', None)
     if not callable(public_dict):
@@ -328,11 +324,10 @@ def analysis_skip_diagnostics(project_context: Mapping[str, Any] | None) -> dict
 
     payload = dict(project_context or {})
     status = payload.get('status') if isinstance(payload.get('status'), Mapping) else {}
+    explicit_brief_status = payload.get('brief_status') or status.get('brief_status')
     brief_status = str(
-        payload.get('brief_status')
-        or status.get('brief_status')
+        explicit_brief_status
         or ('published' if payload.get('injectable') else '')
-        or 'missing'
     )
     reason = str(payload.get('reason') or '')
     if not payload.get('injectable') and not reason:
@@ -344,11 +339,19 @@ def analysis_skip_diagnostics(project_context: Mapping[str, Any] | None) -> dict
         if isinstance(brief_entry, Mapping):
             lineage = dict(brief_entry.get('lineage') or {})
     fingerprint = str(lineage.get('source_fingerprint') or payload.get('source_fingerprint') or '')
+    raw_injected_chars = payload.get('injected_chars')
+    if raw_injected_chars is None:
+        injected_chars = len(str(payload.get('text') or ''))
+    else:
+        try:
+            injected_chars = max(0, int(raw_injected_chars))
+        except (TypeError, ValueError):
+            injected_chars = len(str(payload.get('text') or ''))
     return {
         'injectable': bool(payload.get('injectable')),
         'reason': reason,
         'brief_status': brief_status,
         'source_fingerprint': fingerprint,
         'diagnostics': str(payload.get('diagnostics') or ''),
-        'injected_chars': len(str(payload.get('text') or '')),
+        'injected_chars': injected_chars,
     }

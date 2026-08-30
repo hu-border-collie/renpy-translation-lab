@@ -321,7 +321,11 @@ def summarize_request_diagnostics(request_summaries):
         if payload.get('enabled') is False:
             return 'disabled'
         if payload.get('injectable') is False:
-            return str(payload.get('reason') or 'not_injectable')
+            reason = str(payload.get('reason') or 'not_injectable')
+            return 'disabled' if reason == 'injection_disabled' else reason
+        compatibility = payload.get('embedding_compatibility')
+        if isinstance(compatibility, Mapping) and compatibility.get('compatible') is False:
+            return 'incompatible'
         reason = payload.get('failure_reason') or payload.get('reason')
         if reason:
             return str(reason)
@@ -344,7 +348,13 @@ def summarize_request_diagnostics(request_summaries):
                 status = provider_status(provider_name, payload)
                 key = f'{provider_name}:{status}'
                 provider_status_counts[key] = provider_status_counts.get(key, 0) + 1
-                if status != 'available':
+                if status not in {
+                    'available',
+                    'disabled',
+                    'empty_query',
+                    'excerpt_cropped',
+                    'stale_hits_skipped',
+                }:
                     provider_downgrade_count += 1
                     provider_downgrade_reasons[key] = (
                         provider_downgrade_reasons.get(key, 0) + 1
@@ -926,10 +936,7 @@ def assemble_context_layers(chunk_input, context_policy=None):
     dropped = []
     seen_texts = set()
     for result in sorted(results, key=lambda item: item.rank):
-        # Empty provider partitions still carry the reason why no text was
-        # injected (disabled, missing, stale, or incompatible). Keep those
-        # diagnostic-only layers so a safe degradation is explainable even
-        # when it contributes zero model-visible characters.
+        # Retain diagnostic-only provider partitions so safe skips remain explainable.
         diagnostic_only_provider_layer = bool(
             not result.text
             and result.layer in {CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS}

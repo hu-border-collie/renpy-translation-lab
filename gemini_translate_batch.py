@@ -335,6 +335,7 @@ SOURCE_INDEX_SCHEMA_VERSION = 1
 SOURCE_INDEX_TOP_K = 4
 SOURCE_INDEX_MIN_SIMILARITY = 0.72
 SOURCE_INDEX_CHAR_LIMIT = 220
+SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
 
 STORY_MEMORY_ENABLED = False
 STORY_MEMORY_GRAPH_FILE = ''
@@ -496,6 +497,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     global RAG_BOOTSTRAP_ON_BUILD, RAG_HISTORY_CHAR_LIMIT, _RAG_STORE
     global SOURCE_INDEX_ENABLED, SOURCE_INDEX_STORE_DIR, _SOURCE_INDEX_STORE
     global SOURCE_INDEX_TOP_K, SOURCE_INDEX_MIN_SIMILARITY, SOURCE_INDEX_CHAR_LIMIT
+    global SOURCE_INDEX_CHAR_BUDGET
     global STORY_MEMORY_ENABLED, STORY_MEMORY_GRAPH_FILE, STORY_MEMORY_MAX_CONTEXT_CHARS
     global STORY_MEMORY_TOP_K_RELATIONS, STORY_MEMORY_TOP_K_TERMS
     global STORY_MEMORY_INCLUDE_SCENE_SUMMARY, _STORY_GRAPH, _STORY_GRAPH_PATH
@@ -710,6 +712,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     SOURCE_INDEX_TOP_K = coerce_positive_int(source_index_config.get('top_k'), SOURCE_INDEX_TOP_K)
     SOURCE_INDEX_MIN_SIMILARITY = coerce_float(source_index_config.get('min_similarity'), SOURCE_INDEX_MIN_SIMILARITY)
     SOURCE_INDEX_CHAR_LIMIT = coerce_positive_int(source_index_config.get('char_limit'), SOURCE_INDEX_CHAR_LIMIT)
+    SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
     source_index_store_dir = source_index_config.get('store_dir')
     if source_index_store_dir:
         SOURCE_INDEX_STORE_DIR = legacy._resolve_path(legacy.BASE_DIR, source_index_store_dir)
@@ -911,10 +914,7 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
                 'local_diagnostics': '',
                 'injectable': bool(payload.get('injectable')),
                 'reason': str(payload.get('reason') or ''),
-                # Preserve the published artifact identity/status for the
-                # shared P5 diagnostics seam. The renderer ignores these
-                # fields; analysis_skip_diagnostics uses them to explain
-                # draft/stale/missing decisions exactly like Sync.
+                # Keep status and lineage for diagnostics without rendering them.
                 'status': dict(payload.get('status') or {}),
                 'brief_status': str(payload.get('brief_status') or ''),
                 'source_fingerprint': str(payload.get('source_fingerprint') or ''),
@@ -1113,7 +1113,7 @@ def get_default_source_index_store_dir():
 
 
 def get_source_index_char_budget():
-    return max(0, int(SOURCE_INDEX_TOP_K or 0)) * max(0, int(SOURCE_INDEX_CHAR_LIMIT or 0))
+    return max(0, int(SOURCE_INDEX_CHAR_BUDGET or 0))
 
 
 def current_batch_embedding_settings():
@@ -3948,6 +3948,9 @@ def summarize_batch_source_index(chunks):
     failure_reasons = {}
     for stats in stats_list:
         reason = stats.get('failure_reason') or stats.get('reason')
+        compatibility = stats.get('embedding_compatibility')
+        if isinstance(compatibility, dict) and compatibility.get('compatible') is False:
+            reason = 'incompatible'
         if reason:
             failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
     store_schema_versions = sorted(
@@ -3989,7 +3992,14 @@ def summarize_batch_project_analysis(chunks):
     """Aggregate Published Project Analysis injection/skip diagnostics."""
 
     chunk_count = len(chunks)
-    payloads = [chunk.get('project_analysis') or {} for chunk in chunks]
+    payloads = []
+    for chunk in chunks:
+        payload = chunk.get('project_analysis') or {}
+        payloads.append(
+            advanced_context.analysis_skip_diagnostics(payload)
+            if payload
+            else {}
+        )
     injectable_count = sum(1 for payload in payloads if payload.get('injectable'))
     reasons = {}
     brief_statuses = {}
