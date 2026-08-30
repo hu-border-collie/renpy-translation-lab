@@ -489,6 +489,8 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 
 新 manifest 默认复用其中冻结的 `ab_experiment` 路由（通常为 `primary` 同步模型），不会把 `batch_model` 当作 A/B 模型。只有显式传入 `--model` 时才覆盖该同步路由；LiteLLM 路由可使用带 Provider 前缀的模型名。报告中的 Model / Provider 以实际执行路由为准。
 
+兼容旧包或不完整 manifest 时，如果其中没有可用的同步 `ab_experiment` 路由（路由缺失或被冻结为非同步策略），`compare-variants` 不会执行那条非同步路由，而会按 `--model`、manifest 记录的 Batch 模型、当前 Batch 默认值的顺序重建一次同步 A/B 回退路由。该兼容回退与直接调用内部同步覆盖函数不同；后者会拒绝非同步冻结路由。
+
 图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：在「诊断与运行日志」页工具栏打开，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引的强制开/关变体，无需手写 `variants.json`。
 
 ```bash
