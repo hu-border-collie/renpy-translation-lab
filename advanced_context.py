@@ -39,6 +39,26 @@ def compact_item_texts(items: Sequence[object] | None) -> list[str]:
     return compacted
 
 
+def embedding_provider_diagnostics(settings: object) -> dict[str, Any]:
+    """Return the credential-free identity of the active embedding provider.
+
+    Sync and Gemini Batch construct their runtime settings in different
+    modules, but the provider contract must be observable in the same shape.
+    Keeping this small adapter here prevents either executor from serializing
+    endpoints, API-key names, or other transport-only details into plan
+    diagnostics.
+    """
+
+    public_dict = getattr(settings, 'public_dict', None)
+    if not callable(public_dict):
+        return {}
+    try:
+        payload = public_dict()
+    except Exception:
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
+
+
 def build_source_only_query_text(target_items: Sequence[object] | None) -> str:
     """Build a TARGET-only query for Source Index retrieval."""
 
@@ -92,17 +112,43 @@ def shape_history_hits(matches: Sequence[Mapping[str, Any]] | None, char_limit: 
 def shape_source_hits(
     matches: Sequence[Mapping[str, Any]] | None,
     char_limit: int,
+    char_budget: int = 0,
 ) -> tuple[list[dict[str, Any]], int, int]:
+    """Shape source hits under both per-hit and aggregate text budgets.
+
+    ``char_limit`` protects each excerpt while ``char_budget`` protects the
+    complete Source Index partition for one request. A zero aggregate budget
+    preserves the historical per-hit-only behavior; positive budgets consume
+    ranked hits in order and truncate the final excerpt when necessary.
+    """
+
     hits = []
     truncated_count = 0
     source_context_chars = 0
-    for match in matches or []:
+    try:
+        remaining_budget = max(0, int(char_budget or 0))
+    except (TypeError, ValueError):
+        remaining_budget = 0
+    bounded = remaining_budget > 0
+    try:
+        per_hit_limit = int(char_limit or 0)
+    except (TypeError, ValueError):
+        per_hit_limit = 0
+    match_list = list(matches or [])
+    for match in match_list:
+        if bounded and remaining_budget <= 0:
+            break
         source_text = match.get('source_text', '')
-        truncated_source_text = truncate_text(source_text, char_limit)
+        effective_limit = per_hit_limit
+        if bounded:
+            effective_limit = min(effective_limit, remaining_budget) if effective_limit > 0 else remaining_budget
+        truncated_source_text = truncate_text(source_text, effective_limit)
         was_truncated = isinstance(source_text, str) and truncated_source_text != source_text
         if was_truncated:
             truncated_count += 1
         source_context_chars += len(truncated_source_text)
+        if bounded:
+            remaining_budget = max(0, remaining_budget - len(truncated_source_text))
         hits.append(
             {
                 'source_id': match.get('source_id', ''),
@@ -184,7 +230,7 @@ def retrieve_source_hits_compatible(
         'hit_count': 0,
         'truncated_count': 0,
         'source_context_chars': 0,
-        'source_context_char_budget': char_budget,
+        'source_context_char_budget': 0,
         'store_dir': getattr(store, 'store_dir', ''),
         'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version'),
         'embedding_compatibility': compatibility,
@@ -194,14 +240,30 @@ def retrieve_source_hits_compatible(
             if key != 'embedding_compatibility'
         },
     }
+    try:
+        normalized_budget = max(0, int(char_budget or 0))
+    except (TypeError, ValueError):
+        normalized_budget = 0
+    stats['source_context_char_budget'] = normalized_budget
     if not compatibility.get('compatible'):
         stats['reason'] = 'rebuild_store'
         stats['action'] = compatibility.get('action') or 'rebuild_store'
         return [], stats
-    hits, truncated_count, source_context_chars = shape_source_hits(matches, char_limit)
+    hits, truncated_count, source_context_chars = shape_source_hits(
+        matches,
+        char_limit,
+        char_budget=char_budget,
+    )
     stats['hit_count'] = len(hits)
     stats['truncated_count'] = truncated_count
     stats['source_context_chars'] = source_context_chars
+    stats['source_context_budget_dropped_count'] = max(
+        0,
+        len(matches or []) - len(hits),
+    ) if normalized_budget else 0
+    stats['source_context_budget_exhausted'] = bool(
+        normalized_budget and source_context_chars >= normalized_budget
+    )
     stats['matched_count'] = diagnostics.get('matched_before_top_k', len(matches))
     stats['filtered_count'] = diagnostics.get('metadata_filtered_count', 0)
     stats['stale_hits_skipped'] = diagnostics.get('metadata_filtered_count', 0)
@@ -273,6 +335,8 @@ def analysis_skip_diagnostics(project_context: Mapping[str, Any] | None) -> dict
         or 'missing'
     )
     reason = str(payload.get('reason') or '')
+    if not payload.get('injectable') and not reason:
+        reason = 'injection_disabled'
     lineage = {}
     artifacts = status.get('artifacts') if isinstance(status, Mapping) else {}
     if isinstance(artifacts, Mapping):

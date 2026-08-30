@@ -1061,6 +1061,17 @@ def format_translation_plan_facts(manifest: dict[str, object]) -> list[str]:
         facts.append(f'{TRANSLATION_PLAN_COPY["context_truncated"]}：{truncated}')
     if dropped:
         facts.append(f'{TRANSLATION_PLAN_COPY["context_dropped"]}：{dropped}')
+    provider_downgrades = int(
+        diagnostics.get(
+            "context_provider_downgrade_count",
+            derived_diagnostics["context_provider_downgrade_count"],
+        )
+    )
+    if provider_downgrades:
+        facts.append(
+            f'{TRANSLATION_PLAN_COPY["context_provider_downgrade"]}：'
+            f'{provider_downgrades}'
+        )
     return facts
 
 

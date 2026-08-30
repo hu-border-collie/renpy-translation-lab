@@ -303,8 +303,55 @@ def is_material_context_drop(entry):
 
 
 def summarize_request_diagnostics(request_summaries):
-    """Aggregate stable trim/drop counters from persisted request summaries."""
+    """Aggregate stable trim/drop/provider counters from request summaries.
+
+    Provider payloads are intentionally summarized by status and reason only;
+    the detailed, credential-free payload remains attached to each context
+    layer for diagnostics and golden comparisons.
+    """
     summaries = list(request_summaries or [])
+    provider_status_counts = {}
+    provider_downgrade_reasons = {}
+    provider_diagnostic_requests = 0
+    provider_downgrade_count = 0
+
+    def provider_status(provider_name, payload):
+        if not isinstance(payload, Mapping):
+            return 'invalid'
+        if payload.get('enabled') is False:
+            return 'disabled'
+        if payload.get('injectable') is False:
+            return str(payload.get('reason') or 'not_injectable')
+        reason = payload.get('failure_reason') or payload.get('reason')
+        if reason:
+            return str(reason)
+        if int(payload.get('source_context_budget_dropped_count') or 0) > 0:
+            return 'budget_cropped'
+        if int(payload.get('stale_hits_skipped') or 0) > 0:
+            return 'stale_hits_skipped'
+        if int(payload.get('truncated_count') or 0) > 0:
+            return 'excerpt_cropped'
+        return 'available'
+
+    for summary in summaries:
+        request_has_provider_diagnostic = False
+        for layer in ((summary.get('context_diagnostics') or {}).get('layers') or []):
+            provider = ((layer or {}).get('diagnostics') or {}).get('provider')
+            if not isinstance(provider, Mapping):
+                continue
+            for provider_name, payload in provider.items():
+                request_has_provider_diagnostic = True
+                status = provider_status(provider_name, payload)
+                key = f'{provider_name}:{status}'
+                provider_status_counts[key] = provider_status_counts.get(key, 0) + 1
+                if status != 'available':
+                    provider_downgrade_count += 1
+                    provider_downgrade_reasons[key] = (
+                        provider_downgrade_reasons.get(key, 0) + 1
+                    )
+        if request_has_provider_diagnostic:
+            provider_diagnostic_requests += 1
+
     return {
         'request_count': len(summaries),
         'context_truncated_requests': sum(
@@ -325,6 +372,10 @@ def summarize_request_diagnostics(request_summaries):
             )
             if is_material_context_drop(entry)
         ),
+        'context_provider_diagnostic_requests': provider_diagnostic_requests,
+        'context_provider_downgrade_count': provider_downgrade_count,
+        'context_provider_status_counts': provider_status_counts,
+        'context_provider_downgrade_reasons': provider_downgrade_reasons,
     }
 
 
@@ -664,6 +715,8 @@ class ChunkContextInput:
     lexical_glossary_hits: list = field(default_factory=list)
     retrieval_blocks_text: str = ''
     analysis_blocks_text: str = ''
+    retrieval_diagnostics: dict = field(default_factory=dict)
+    analysis_diagnostics: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -798,6 +851,12 @@ def _retrieval_layer(chunk_input, policy):
         'source_index_char_limit': policy.source_index_char_limit,
         'include_source_text': policy.include_source_text,
     }
+    if chunk_input.retrieval_diagnostics:
+        diagnostics['provider'] = redact_sensitive(
+            dict(chunk_input.retrieval_diagnostics)
+        )
+    if truncated:
+        diagnostics['char_discarded'] = max(0, len(chunk_input.retrieval_blocks_text or '') - len(text))
     return ContextLayerResult(
         layer=CONTEXT_LAYER_RETRIEVAL,
         rank=CONTEXT_LAYER_RANKS[CONTEXT_LAYER_RETRIEVAL],
@@ -825,6 +884,17 @@ def _analysis_layer(chunk_input, policy):
         text = text[:limit]
         truncated = True
     text = text.rstrip('\n')
+    diagnostics = {
+        'source': 'published_project_analysis',
+        'budget_mode': 'd5_backstop',
+        'analysis_char_limit': limit,
+    }
+    if chunk_input.analysis_diagnostics:
+        diagnostics['provider'] = redact_sensitive(
+            dict(chunk_input.analysis_diagnostics)
+        )
+    if truncated:
+        diagnostics['char_discarded'] = max(0, len(chunk_input.analysis_blocks_text or '') - len(text))
     return ContextLayerResult(
         layer=CONTEXT_LAYER_ANALYSIS,
         rank=CONTEXT_LAYER_RANKS[CONTEXT_LAYER_ANALYSIS],
@@ -832,11 +902,7 @@ def _analysis_layer(chunk_input, policy):
         char_used=len(text),
         char_limit=limit,
         truncated=truncated,
-        diagnostics={
-            'source': 'published_project_analysis',
-            'budget_mode': 'd5_backstop',
-            'analysis_char_limit': limit,
-        },
+        diagnostics=diagnostics,
     )
 
 
@@ -860,14 +926,24 @@ def assemble_context_layers(chunk_input, context_policy=None):
     dropped = []
     seen_texts = set()
     for result in sorted(results, key=lambda item: item.rank):
-        if result.text in seen_texts:
+        # Empty provider partitions still carry the reason why no text was
+        # injected (disabled, missing, stale, or incompatible). Keep those
+        # diagnostic-only layers so a safe degradation is explainable even
+        # when it contributes zero model-visible characters.
+        diagnostic_only_provider_layer = bool(
+            not result.text
+            and result.layer in {CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS}
+            and result.diagnostics.get('provider')
+        )
+        if result.text in seen_texts and not diagnostic_only_provider_layer:
             dropped.append({
                 'layer': result.layer,
                 'reason': 'duplicate_text',
                 'char_used': result.char_used,
             })
             continue
-        seen_texts.add(result.text)
+        if not diagnostic_only_provider_layer:
+            seen_texts.add(result.text)
         layers.append(result)
     total_limit = max(0, int(policy.total_char_limit or 0))
     if total_limit:
@@ -1178,7 +1254,7 @@ def normalize_context_provider_text(value):
     return str(value or '').replace('\r\n', '\n')
 
 
-def _resolve_text_source(value, chunk_input, label):
+def _resolve_provider_source(value, chunk_input, label):
     """Accept a constant string or a per-chunk callable, LF-normalized.
 
     Provider text is normalized to LF line endings on entry so a CRLF
@@ -1186,14 +1262,35 @@ def _resolve_text_source(value, chunk_input, label):
     text is byte-stable by contract, not by caller discipline.
     """
     if value is None:
-        return ''
+        return '', {}
     if callable(value):
-        resolved = str(value(chunk_input) or '')
+        resolved = value(chunk_input)
     elif isinstance(value, str):
         resolved = value
     else:
-        raise TypeError(f'{label} must be a string or a callable(chunk_input) -> str')
-    return normalize_context_provider_text(resolved)
+        raise TypeError(
+            f'{label} must be a string or a callable(chunk_input) -> str or mapping'
+        )
+    diagnostics = {}
+    if isinstance(resolved, Mapping):
+        if 'text' not in resolved and 'diagnostics' not in resolved:
+            raise TypeError(
+                f'{label} mapping result must contain text and/or diagnostics'
+            )
+        text_value = resolved.get('text', '')
+        raw_diagnostics = resolved.get('diagnostics') or {}
+        if not isinstance(raw_diagnostics, Mapping):
+            raise TypeError(f'{label}.diagnostics must be a mapping')
+        diagnostics = redact_sensitive(dict(raw_diagnostics))
+    else:
+        text_value = resolved
+    return normalize_context_provider_text(text_value), diagnostics
+
+
+def _resolve_text_source(value, chunk_input, label):
+    """Compatibility wrapper returning only provider text."""
+
+    return _resolve_provider_source(value, chunk_input, label)[0]
 
 
 def _unit_semantic_entry(unit):
@@ -1252,12 +1349,15 @@ def build_translation_plan(
     ``file_jobs`` mirrors the legacy batch shape: a list of
     ``{'file_rel_path', 'file_path', 'tasks': [...]}`` mappings. Retrieved
     context enters through ``retrieval_blocks_provider`` /
-    ``analysis_blocks_provider`` — each a ``callable(chunk_input) -> str`` of
-    pre-rendered reference text (P2/P3 adapt their stores to this seam; #341
-    attaches providers here). ``plan_id`` covers source identity, redacted
-    config/profile snapshots, strategy, policies, and unit content — never
-    retrieved content or ``run_id``; retrieved content is captured by each
-    request's ``prompt_fingerprint`` instead.
+    ``analysis_blocks_provider`` — each may be a string, a
+    ``callable(chunk_input) -> str``, or a callable returning
+    ``{'text': str, 'diagnostics': mapping}`` of pre-rendered reference text
+    and credential-free provider facts (P2/P3 adapt their stores to this
+    seam; #341 attaches providers here). ``plan_id`` covers source identity,
+    redacted config/profile snapshots, strategy, policies, and unit content —
+    never retrieved content or ``run_id``; retrieved content and provider
+    diagnostics are captured by each request's ``prompt_fingerprint`` and
+    context diagnostics instead.
     """
     strategy = _resolve_strategy(execution_strategy)
     chunk_policy = chunk_policy or ChunkPolicy()
@@ -1352,10 +1452,20 @@ def build_translation_plan(
             macro_setting=str(macro_setting or ''),
             lexical_glossary_hits=lexical_hits,
         )
-        retrieval_text = _resolve_text_source(retrieval_blocks_provider, chunk_input, 'retrieval_blocks_provider')
-        analysis_text = _resolve_text_source(analysis_blocks_provider, chunk_input, 'analysis_blocks_provider')
+        retrieval_text, retrieval_diagnostics = _resolve_provider_source(
+            retrieval_blocks_provider,
+            chunk_input,
+            'retrieval_blocks_provider',
+        )
+        analysis_text, analysis_diagnostics = _resolve_provider_source(
+            analysis_blocks_provider,
+            chunk_input,
+            'analysis_blocks_provider',
+        )
         chunk_input.retrieval_blocks_text = retrieval_text
         chunk_input.analysis_blocks_text = analysis_text
+        chunk_input.retrieval_diagnostics = retrieval_diagnostics
+        chunk_input.analysis_diagnostics = analysis_diagnostics
 
         assembly = assemble_context_layers(chunk_input, context_policy)
         system_instruction = translation_core.build_canonical_translation_system_instruction(
@@ -1467,6 +1577,8 @@ def derive_translation_request(
     macro_setting='',
     retrieval_blocks_text='',
     analysis_blocks_text='',
+    retrieval_diagnostics=None,
+    analysis_diagnostics=None,
     lineage_kind='',
 ):
     """Create a deterministic retry request without changing its parent plan.
@@ -1498,6 +1610,24 @@ def derive_translation_request(
         preserve_terms=preserve_terms,
         non_translatable_exact=non_translatable_exact,
     )
+
+    def inherited_provider_diagnostics(layer_name):
+        for layer in (parent_request.context_assembly or {}).get('layers') or []:
+            if (layer or {}).get('layer') != layer_name:
+                continue
+            diagnostics = (layer or {}).get('diagnostics') or {}
+            provider = diagnostics.get('provider')
+            return dict(provider) if isinstance(provider, Mapping) else {}
+        return {}
+
+    if retrieval_diagnostics is None:
+        retrieval_diagnostics = inherited_provider_diagnostics(
+            CONTEXT_LAYER_RETRIEVAL
+        )
+    if analysis_diagnostics is None:
+        analysis_diagnostics = inherited_provider_diagnostics(
+            CONTEXT_LAYER_ANALYSIS
+        )
     chunk_input = ChunkContextInput(
         file_rel_path=str(file_rel_path or ''),
         target_items=items,
@@ -1512,6 +1642,8 @@ def derive_translation_request(
         analysis_blocks_text=normalize_context_provider_text(
             analysis_blocks_text
         ),
+        retrieval_diagnostics=dict(retrieval_diagnostics or {}),
+        analysis_diagnostics=dict(analysis_diagnostics or {}),
     )
     assembly = assemble_context_layers(chunk_input, policy)
     reference_blocks_text = '\n\n'.join(

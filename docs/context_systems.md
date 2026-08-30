@@ -325,6 +325,14 @@ Prompt 中 source index 命中会进入独立的 `RELATED PROJECT CONTEXT` 分�
 
 普通 Sync 使用同一 Source Index Store，不复制第二套索引格式。项目级开关 `sync_source_index_enabled`（配置键 `sync.source_index.enabled`）默认关闭；开启后为 TARGET 构建 source-only query，只注入与当前 embedding identity 完全兼容的命中，并使用独立的 top-k、相似度阈值、单条截断和总字符预算。没有 store、没有命中、检索失败或 identity 不兼容时降级为空命中，并在 prompt/manifest/doctor 中报告原因。
 
+P5 的 provider 诊断在 Sync preview 和 Batch manifest 中保持同一口径：每个 retrieval / analysis layer
+可带脱敏的 provider identity 与状态；plan 摘要汇总 `context_provider_downgrade_count`、
+`context_provider_status_counts` 和 `context_provider_downgrade_reasons`。Source Index 的总预算裁剪会
+额外记录 `source_context_budget_dropped_count` / `source_context_budget_exhausted`；Batch 的
+`source_index_summary` 和 `project_analysis_summary`、Sync 每个文件的 `prompt_context_batches`
+都会保留这些摘要，便于区分 disabled、missing、incompatible/rebuild、draft 和 stale，而不把凭据
+写入 plan 或 manifest。
+
 ## 结构化剧情记忆
 
 Structured Story Memory 是 glossary / translation-memory RAG 之外的可选上下文层。它不会调用额外 LLM 自动抽取图谱，也不依赖 Neo4j；启用后只读取本地 JSON，并把命中的结构化信息插入到 prompt 的 `STORY MEMORY` 分区。

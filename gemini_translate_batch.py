@@ -862,6 +862,7 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
     base_dir = legacy.BASE_DIR or None
     current_fp = compute_current_project_analysis_fingerprint(base_dir, store_dir=store_dir)
     if not current_fp:
+        empty['reason'] = 'source_fingerprint_unavailable'
         return empty
     normalized_lines = []
     for raw_value in line_numbers or []:
@@ -910,6 +911,13 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
                 'local_diagnostics': '',
                 'injectable': bool(payload.get('injectable')),
                 'reason': str(payload.get('reason') or ''),
+                # Preserve the published artifact identity/status for the
+                # shared P5 diagnostics seam. The renderer ignores these
+                # fields; analysis_skip_diagnostics uses them to explain
+                # draft/stale/missing decisions exactly like Sync.
+                'status': dict(payload.get('status') or {}),
+                'brief_status': str(payload.get('brief_status') or ''),
+                'source_fingerprint': str(payload.get('source_fingerprint') or ''),
             },
             'label_records': label_records,
             'route_records': route_records,
@@ -2022,12 +2030,15 @@ def retrieve_source_hits(target_items, context_past):
     if not SOURCE_INDEX_ENABLED:
         return [], {'enabled': False}
 
-    query_text = build_rag_query_text(target_items, context_past)
+    settings = current_batch_embedding_settings()
+    embedding_provider = advanced_context.embedding_provider_diagnostics(settings)
+    query_text = advanced_context.build_source_only_query_text(target_items)
     if not query_text:
         return [], {
             'enabled': True,
             'reason': 'empty_query',
             'source_context_char_budget': get_source_index_char_budget(),
+            'embedding_provider': embedding_provider,
         }
 
     try:
@@ -2039,8 +2050,9 @@ def retrieve_source_hits(target_items, context_past):
                 'source_context_char_budget': get_source_index_char_budget(),
                 'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
                 'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version') if store else None,
+                'embedding_provider': embedding_provider,
             }
-        query_identity = current_batch_embedding_settings().query_identity()
+        query_identity = settings.query_identity()
         compatibility = embedding_runtime.store_compatibility_report(store, query_identity)
         if not compatibility.compatible:
             return [], {
@@ -2050,9 +2062,15 @@ def retrieve_source_hits(target_items, context_past):
                 'embedding_compatibility': compatibility.to_dict(),
                 'source_context_char_budget': get_source_index_char_budget(),
                 'store_dir': getattr(store, 'store_dir', SOURCE_INDEX_STORE_DIR or ''),
+                'store_schema_version': (
+                    (getattr(store, 'metadata', {}) or {}).get('schema_version')
+                    if store is not None
+                    else None
+                ),
+                'embedding_provider': embedding_provider,
             }
         query_vector = embed_query_text(query_text)
-        return advanced_context.retrieve_source_hits_compatible(
+        hits, stats = advanced_context.retrieve_source_hits_compatible(
             store,
             query_vector,
             query_identity,
@@ -2065,6 +2083,8 @@ def retrieve_source_hits(target_items, context_past):
             embedding_dim=RAG_OUTPUT_DIMENSIONALITY,
             char_budget=get_source_index_char_budget(),
         )
+        stats['embedding_provider'] = embedding_provider
+        return hits, stats
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
         print(
@@ -2074,6 +2094,7 @@ def retrieve_source_hits(target_items, context_past):
         return [], {
             'enabled': True,
             'source_context_char_budget': get_source_index_char_budget(),
+            'embedding_provider': embedding_provider,
             **diagnostics,
         }
 
@@ -3020,6 +3041,18 @@ def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
     if source_manifest.get('source_index_enabled'):
         part_manifest['source_index_summary'] = summarize_batch_source_index(part_chunks)
 
+    for key in (
+        'project_analysis_enabled',
+        'project_analysis_inject_published_brief',
+        'project_analysis_settings',
+    ):
+        if key in source_manifest:
+            part_manifest[key] = source_manifest[key]
+    if source_manifest.get('project_analysis_enabled'):
+        part_manifest['project_analysis_summary'] = summarize_batch_project_analysis(
+            part_chunks
+        )
+
 
 def split_chunks_and_lines(chunks, request_lines, max_chunks=0, max_items=0):
     groups = []
@@ -3556,15 +3589,15 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
     lexical_hits = retrieve_glossary_hits(target_items)
     context_past = list(subchunk.get('context_past') or [])
     context_future = list(subchunk.get('context_future') or [])
-    history_hits, _rag_stats = (
+    history_hits, rag_stats = (
         retrieve_history_hits(target_items, context_past)
         if RAG_ENABLED
         else ([], {'enabled': False})
     )
-    source_hits, _source_index_stats = (
+    source_hits, source_index_stats = (
         retrieve_source_hits(target_items, context_past)
         if SOURCE_INDEX_ENABLED
-        else ([], {})
+        else ([], {'enabled': False})
     )
     story_hits = (
         retrieve_batch_story_hits(
@@ -3582,6 +3615,15 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         [unit.display_line_number for unit in target_units],
     )
     analysis_text = _render_batch_analysis_reference_text(project_context)
+    retrieval_diagnostics = {
+        'source_index': dict(source_index_stats or {}),
+    }
+    if SOURCE_INDEX_ENABLED or RAG_ENABLED:
+        retrieval_diagnostics['embedding_provider'] = (
+            advanced_context.embedding_provider_diagnostics(
+                current_batch_embedding_settings()
+            )
+        )
     chunk_input = translation_plan.ChunkContextInput(
         file_rel_path=file_rel_path,
         target_items=target_items,
@@ -3595,6 +3637,12 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         lexical_glossary_hits=lexical_hits,
         retrieval_blocks_text=retrieval_text,
         analysis_blocks_text=analysis_text,
+        retrieval_diagnostics=retrieval_diagnostics,
+        analysis_diagnostics={
+            'published_project_analysis': advanced_context.analysis_skip_diagnostics(
+                project_context
+            ),
+        },
     )
     assembly = translation_plan.assemble_context_layers(chunk_input, _batch_plan_context_policy())
     reference_blocks_text = '\n\n'.join(
@@ -3700,7 +3748,9 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             )
             sys.stdout.flush()
         source_hits, source_index_stats = (
-            retrieve_source_hits(target_items, before) if SOURCE_INDEX_ENABLED else ([], {})
+            retrieve_source_hits(target_items, before)
+            if SOURCE_INDEX_ENABLED
+            else ([], {'enabled': False})
         )
         story_hits = (
             retrieve_batch_story_hits(
@@ -3733,20 +3783,54 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
                 'project_analysis': advanced_context.analysis_skip_diagnostics(project_context),
             }
         )
-        return _render_batch_retrieval_reference_text(history_hits, story_hits, source_hits)
+        return {
+            'text': _render_batch_retrieval_reference_text(
+                history_hits,
+                story_hits,
+                source_hits,
+            ),
+            'diagnostics': {
+                'source_index': dict(source_index_stats or {}),
+                **(
+                    {
+                        'embedding_provider': advanced_context.embedding_provider_diagnostics(
+                            current_batch_embedding_settings()
+                        )
+                    }
+                    if (SOURCE_INDEX_ENABLED or RAG_ENABLED)
+                    else {}
+                ),
+            },
+        }
 
     def analysis_provider(chunk_input):
         for capture in captures:
             if capture.get('file_rel_path') == str(chunk_input.file_rel_path or '') and list(
                 capture.get('target_units') or []
             ) == list(chunk_input.target_units or []):
-                return _render_batch_analysis_reference_text(capture.get('project_context'))
+                return {
+                    'text': _render_batch_analysis_reference_text(
+                        capture.get('project_context')
+                    ),
+                    'diagnostics': {
+                        'published_project_analysis': advanced_context.analysis_skip_diagnostics(
+                            capture.get('project_context')
+                        ),
+                    },
+                }
         target_units = chunk_input.target_units
         project_context = load_injectable_project_context_for_prompts(
             str(chunk_input.file_rel_path or ''),
             [unit.display_line_number for unit in target_units],
         )
-        return _render_batch_analysis_reference_text(project_context)
+        return {
+            'text': _render_batch_analysis_reference_text(project_context),
+            'diagnostics': {
+                'published_project_analysis': advanced_context.analysis_skip_diagnostics(
+                    project_context
+                ),
+            },
+        }
 
     if routing_plan is None:
         model_profile_snapshot = None
@@ -3802,6 +3886,7 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             'rag_stats': capture.get('rag_stats', {}),
             'source_hits': capture.get('source_hits', []),
             'source_index_stats': capture.get('source_index_stats', {}),
+            'project_analysis': capture.get('project_analysis', {}),
             'items': [
                 translation_core.legacy_item_from_unit(unit, translation_core.MODE_TRANSLATION)
                 for unit in capture.get('target_units', [])
@@ -3887,9 +3972,44 @@ def summarize_batch_source_index(chunks):
         'source_context_truncation_count': sum(int(stats.get('truncated_count') or 0) for stats in stats_list),
         'source_context_char_count': sum(int(stats.get('source_context_chars') or 0) for stats in stats_list),
         'source_context_char_budget': sum(int(stats.get('source_context_char_budget') or 0) for stats in stats_list),
+        'source_context_budget_dropped_count': sum(
+            int(stats.get('source_context_budget_dropped_count') or 0)
+            for stats in stats_list
+        ),
+        'source_context_budget_exhausted_count': sum(
+            1 for stats in stats_list if stats.get('source_context_budget_exhausted')
+        ),
         'source_filtered_count': sum(int(stats.get('filtered_count') or 0) for stats in stats_list),
         'stale_hits_skipped': sum(int(stats.get('stale_hits_skipped') or 0) for stats in stats_list),
         'below_similarity_count': sum(int(stats.get('below_similarity_count') or 0) for stats in stats_list),
+    }
+
+
+def summarize_batch_project_analysis(chunks):
+    """Aggregate Published Project Analysis injection/skip diagnostics."""
+
+    chunk_count = len(chunks)
+    payloads = [chunk.get('project_analysis') or {} for chunk in chunks]
+    injectable_count = sum(1 for payload in payloads if payload.get('injectable'))
+    reasons = {}
+    brief_statuses = {}
+    for payload in payloads:
+        reason = str(payload.get('reason') or '')
+        if reason:
+            reasons[reason] = reasons.get(reason, 0) + 1
+        status = str(payload.get('brief_status') or '')
+        if status:
+            brief_statuses[status] = brief_statuses.get(status, 0) + 1
+    return {
+        'enabled': bool(PROJECT_ANALYSIS_ENABLED),
+        'inject_published_brief': bool(PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF),
+        'chunks': chunk_count,
+        'injectable_chunks': injectable_count,
+        'injected_char_count': sum(
+            int(payload.get('injected_chars') or 0) for payload in payloads
+        ),
+        'skip_reasons': reasons,
+        'brief_statuses': brief_statuses,
     }
 
 
@@ -4075,6 +4195,18 @@ def create_batch_package(display_name_override='', skip_prepare=False):
             'char_budget_per_chunk': get_source_index_char_budget(),
         } if SOURCE_INDEX_ENABLED else {},
         'source_index_summary': summarize_batch_source_index(chunks) if SOURCE_INDEX_ENABLED else {},
+        'project_analysis_enabled': PROJECT_ANALYSIS_ENABLED,
+        'project_analysis_inject_published_brief': PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF,
+        'project_analysis_settings': {
+            'max_brief_chars': PROJECT_ANALYSIS_MAX_BRIEF_CHARS,
+            'max_label_summary_chars': PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS,
+            'max_route_summary_chars': PROJECT_ANALYSIS_MAX_ROUTE_SUMMARY_CHARS,
+        } if PROJECT_ANALYSIS_ENABLED else {},
+        'project_analysis_summary': (
+            summarize_batch_project_analysis(chunks)
+            if PROJECT_ANALYSIS_ENABLED
+            else {}
+        ),
         'story_memory_enabled': STORY_MEMORY_ENABLED,
         'story_memory_graph_file': STORY_MEMORY_GRAPH_FILE if STORY_MEMORY_ENABLED else '',
         'story_memory_settings': {
