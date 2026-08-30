@@ -401,7 +401,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
             with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
                 manifest = json.load(source)
             manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
-            manifest['batch_model'] = 'gemini-fallback'
+            manifest['batch_model'] = 'models/gemini-2.5-flash'
             plan = batch_mod.model_profile.resolve_routing_plan(
                 {
                     'sync': {'backend': 'litellm', 'model': 'openrouter/original'},
@@ -436,7 +436,10 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 sync_runner=fake_sync_runner,
             )
 
-            self.assertEqual(captured, [('gemini', 'gemini-fallback')] * 2)
+            self.assertEqual(
+                captured,
+                [('gemini', 'models/gemini-2.5-flash')] * 2,
+            )
 
     def test_non_sync_frozen_ab_route_uses_explicit_model_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

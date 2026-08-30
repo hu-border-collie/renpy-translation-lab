@@ -280,6 +280,17 @@ class ResolveRoutingPlanTests(unittest.TestCase):
             plan.routes["translation"].strategy, mp.ExecutionStrategy.GEMINI_BATCH,
         )
 
+    def test_gemini_resource_name_uses_batch_adapter(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {},
+            execution=mp.ExecutionStrategy.GEMINI_BATCH,
+            stage_overrides={"translation": "models/gemini-2.5-flash"},
+        )
+        profile = plan.profiles["translation_override"]
+        self.assertEqual(profile.adapter, mp.ADAPTER_GEMINI)
+        self.assertEqual(profile.provider, "gemini")
+        self.assertEqual(profile.model, "models/gemini-2.5-flash")
+
     def test_override_gemini_batch_stage_keeps_other_profiles(self) -> None:
         plan = mp.resolve_routing_plan(
             {
@@ -358,6 +369,19 @@ class ResolveRoutingPlanTests(unittest.TestCase):
         self.assertEqual(profile.adapter, mp.ADAPTER_GEMINI)
         self.assertEqual(profile.model, "gemini-2.5-flash")
 
+    def test_override_sync_stage_accepts_gemini_resource_name(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "gemini", "model": "gemini-2.0-flash"}},
+        )
+        patched = mp.override_sync_stage(
+            plan, mp.STAGE_AB_EXPERIMENT, "models/gemini-2.5-flash",
+        )
+        profile = patched.profiles[
+            patched.routes[mp.STAGE_AB_EXPERIMENT].profile_id
+        ]
+        self.assertEqual(profile.adapter, mp.ADAPTER_GEMINI)
+        self.assertEqual(profile.model, "models/gemini-2.5-flash")
+
     def test_override_sync_stage_rejects_non_sync_route(self) -> None:
         plan = mp.resolve_routing_plan(
             {}, execution=mp.ExecutionStrategy.GEMINI_BATCH,
@@ -388,6 +412,10 @@ class ResolveRoutingPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provider-prefixed"):
             mp.override_sync_stage(
                 plan, mp.STAGE_AB_EXPERIMENT, "gpt-4o-mini",
+            )
+        with self.assertRaisesRegex(ValueError, "provider-prefixed"):
+            mp.override_sync_stage(
+                plan, mp.STAGE_AB_EXPERIMENT, "models/gemini-2.5-flash",
             )
 
     def test_unknown_sync_backend_refused(self) -> None:

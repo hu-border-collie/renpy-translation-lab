@@ -598,7 +598,7 @@ def _legacy_ab_routing_plan(model_name: str):
     model = str(model_name or '').strip()
     sync_backend = (
         batch_mod.model_profile.SYNC_BACKEND_LITELLM
-        if '/' in model
+        if batch_mod.model_profile.is_provider_prefixed_model_id(model)
         else batch_mod.model_profile.SYNC_BACKEND_GEMINI
     )
     plan = batch_mod.model_profile.resolve_routing_plan_from_runtime(

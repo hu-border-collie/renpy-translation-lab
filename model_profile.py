@@ -604,6 +604,16 @@ def _clean_str(value: Any) -> str:
     return str(value).strip() if isinstance(value, str) else ""
 
 
+def is_provider_prefixed_model_id(model: str) -> bool:
+    """Return whether ``model`` is a LiteLLM-style provider/model id.
+
+    Google APIs also accept Gemini resource names such as
+    ``models/gemini-2.5-flash``; ``models`` is not a LiteLLM provider.
+    """
+    cleaned = _clean_str(model)
+    return "/" in cleaned and not cleaned.lower().startswith("models/")
+
+
 def _gemini_capabilities(overrides: Mapping[str, Any]) -> ModelCapabilities:
     """Adapter defaults for the direct google-genai client."""
     caps = ModelCapabilities(
@@ -778,7 +788,7 @@ def _batch_profile(
     transport.
     """
     provider = provider_from_model(model)
-    if provider:
+    if is_provider_prefixed_model_id(model):
         return ModelProfile(
             id=profile_id,
             label=label or provider_display_label(provider, custom_providers) or model,
@@ -1173,14 +1183,20 @@ def validate_routing_plan(
                 profile_id=profile_id,
             ))
             continue
-        if profile.adapter == ADAPTER_LITELLM and not profile.provider:
+        if (
+            profile.adapter == ADAPTER_LITELLM
+            and not is_provider_prefixed_model_id(profile.model)
+        ):
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Profile {profile_id} has a model without a provider prefix; "
                 "LiteLLM needs '<provider>/<model>'.",
                 profile_id=profile_id,
             ))
-        if profile.adapter == ADAPTER_GEMINI and "/" in profile.model:
+        if (
+            profile.adapter == ADAPTER_GEMINI
+            and is_provider_prefixed_model_id(profile.model)
+        ):
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Profile {profile_id} uses provider-prefixed model "
@@ -1344,13 +1360,16 @@ def override_sync_stage(
     base_profile = profile_for_route(plan, base_route)
     if (
         base_profile.adapter == ADAPTER_LITELLM
-        and not provider_from_model(cleaned)
+        and not is_provider_prefixed_model_id(cleaned)
     ):
         raise ValueError(
             f"Frozen LiteLLM stage {stage} requires a provider-prefixed model "
             "id '<provider>/<model>'."
         )
-    if base_profile.adapter == ADAPTER_GEMINI and "/" in cleaned:
+    if (
+        base_profile.adapter == ADAPTER_GEMINI
+        and is_provider_prefixed_model_id(cleaned)
+    ):
         raise ValueError(
             f"Frozen direct Gemini stage {stage} cannot accept provider-prefixed "
             f"model {cleaned}; rebuild the manifest with a LiteLLM sync route."
