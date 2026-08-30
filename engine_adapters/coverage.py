@@ -381,7 +381,6 @@ def build_coverage_report(
         or draft.source_changed_during_scan
         or classification_counts["unknown"]
         or classification_counts["parse_error"]
-        or draft.catalog_freshness == "missing"
         or any(
             code in reason_counts
             for code in {
