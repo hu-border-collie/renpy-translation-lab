@@ -130,25 +130,25 @@ class CanonicalJsonTests(unittest.TestCase):
 
     def test_bare_string_term_is_one_term_not_characters(self):
         self.assertEqual(
-            translation_plan._canonical_term_sequence('Dawn Chorus'),
-            ['Dawn Chorus'],
+            translation_plan._canonical_term_sequence('Sample Ensemble'),
+            ['Sample Ensemble'],
         )
         str_build = build_fixture_plan(
             translation_plan.STRATEGY_SYNC,
-            preserve_terms='Dawn Chorus',
+            preserve_terms='Sample Ensemble',
             non_translatable_exact='B-side',
         )
         list_build = build_fixture_plan(
             translation_plan.STRATEGY_SYNC,
-            preserve_terms=['Dawn Chorus'],
+            preserve_terms=['Sample Ensemble'],
             non_translatable_exact=['B-side'],
         )
         self.assertEqual(str_build.plan.plan_id, list_build.plan.plan_id)
         dawn_chorus_chunk = next(
             request for request in str_build.requests
-            if '- Preserve: Dawn Chorus' in request.user_prompt
+            if '- Preserve: Sample Ensemble' in request.user_prompt
         )
-        self.assertIn('- Preserve: Dawn Chorus', dawn_chorus_chunk.user_prompt)
+        self.assertIn('- Preserve: Sample Ensemble', dawn_chorus_chunk.user_prompt)
         b_side_chunk = next(
             request for request in str_build.requests
             if '- Non-translatable: B-side' in request.user_prompt
@@ -309,16 +309,16 @@ class LocalContextWindowTests(unittest.TestCase):
 class LexicalGlossaryTests(unittest.TestCase):
     def test_hit_order_is_normalize_preserve_non_translatable_with_dedup(self):
         hits = translation_plan.retrieve_lexical_glossary_hits(
-            [{'text': 'The setlist and Mrs. Parker kept the B-side and the setlist.'}],
+            [{'text': 'The setlist and Director B kept the B-side and the setlist.'}],
             normalize_map={'setlist': '曲目单'},
-            preserve_terms=['Mrs. Parker', 'setlist'],
+            preserve_terms=['Director B', 'setlist'],
             non_translatable_exact=['B-side'],
         )
         self.assertEqual(
             hits,
             [
                 {'source': 'setlist', 'target': '曲目单', 'kind': 'normalize'},
-                {'source': 'Mrs. Parker', 'target': 'Mrs. Parker', 'kind': 'preserve'},
+                {'source': 'Director B', 'target': 'Director B', 'kind': 'preserve'},
                 {'source': 'B-side', 'target': '', 'kind': 'non_translatable'},
             ],
         )
@@ -332,14 +332,14 @@ class LexicalGlossaryTests(unittest.TestCase):
     def test_render_uses_issue338_wording(self):
         text = translation_plan.render_lexical_glossary_text([
             {'source': 'setlist', 'target': '曲目单', 'kind': 'normalize'},
-            {'source': 'Dawn Chorus', 'target': 'Dawn Chorus', 'kind': 'preserve'},
+            {'source': 'Sample Ensemble', 'target': 'Sample Ensemble', 'kind': 'preserve'},
             {'source': 'B-side', 'target': '', 'kind': 'non_translatable'},
         ])
         self.assertEqual(
             text.splitlines(),
             [
                 '- Existing mapping: setlist -> 曲目单',
-                '- Preserve: Dawn Chorus',
+                '- Preserve: Sample Ensemble',
                 '- Non-translatable: B-side',
             ],
         )
@@ -495,12 +495,12 @@ class PlanBuildTests(unittest.TestCase):
     def test_unordered_term_collections_yield_stable_identity(self):
         list_build = build_fixture_plan(
             translation_plan.STRATEGY_SYNC,
-            preserve_terms=['Dawn Chorus', 'Mrs. Parker'],
+            preserve_terms=['Director B', 'Sample Ensemble'],
             non_translatable_exact=['B-side'],
         )
         set_build = build_fixture_plan(
             translation_plan.STRATEGY_SYNC,
-            preserve_terms={'Dawn Chorus', 'Mrs. Parker'},
+            preserve_terms={'Sample Ensemble', 'Director B'},
             non_translatable_exact=frozenset({'B-side'}),
         )
         self.assertEqual(list_build.plan.plan_id, set_build.plan.plan_id)
@@ -746,7 +746,7 @@ class ContextAssemblyTests(unittest.TestCase):
             if request.chunk_id == translation_plan.build_chunk_id('chapter01/dialogue.rpy', 1)
         )
         self.assertIn(
-            'CONTEXT AFTER:\n- Parker (p): Relax. I kept the B-side as the encore, like you asked.',
+            'CONTEXT AFTER:\n- CharacterB (p): Relax. I kept the B-side as the encore, like you asked.',
             first.user_prompt,
         )
         second = next(
@@ -754,10 +754,10 @@ class ContextAssemblyTests(unittest.TestCase):
             if request.chunk_id == translation_plan.build_chunk_id('chapter01/dialogue.rpy', 2)
         )
         self.assertIn(
-            'CONTEXT BEFORE:\n- Gil (g): Hey [Gil_name!t], did you finish the Dawn Chorus setlist?',
+            'CONTEXT BEFORE:\n- CharacterA (g): Hey [CharacterA_name!t], did you finish the Sample Ensemble setlist?',
             second.user_prompt,
         )
-        self.assertIn('- Gil (g): Mrs. Parker will flip', second.user_prompt)
+        self.assertIn('- CharacterA (g): Director B will flip', second.user_prompt)
         self.assertIn('CONTEXT AFTER:\n(none)', second.user_prompt)
 
     def test_file_jobs_lines_index_source_lines_containing_task_text(self):

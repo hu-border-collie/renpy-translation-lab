@@ -633,7 +633,7 @@ def build_translation_system_instruction(preserve_terms, macro_setting=''):
         'If a TARGET contains one of those terms, copy that exact source substring verbatim into the translation, '
         'including honorifics, apostrophes, numbers, and spacing; do not localize, reorder, or partially translate it.\n'
         "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
-        "Every bracketed Ren'Py interpolation such as [Gil_name!t], [Main], or [Parker_last!t] "
+        "Every bracketed Ren'Py interpolation such as [CharacterA_name!t], [Main], or [CharacterB_last!t] "
         'must be copied exactly; never replace it with a literal visible name.\n'
         'Return one result for every TARGET id even when the text is hard to translate; never omit an item.\n'
         'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'
@@ -756,7 +756,7 @@ def build_sync_translation_prompt(
         'including honorifics, apostrophes, numbers, and spacing.\n'
         '1.1 Keep all person names in English; do not translate names.\n'
         "2. Preserve Ren'Py tags like {i}, {/i}, {color=...}, [name], %s.\n"
-        "2.0a Copy bracketed Ren'Py interpolations exactly, e.g. [Gil_name!t], [Main], [Parker_last!t]; "
+        "2.0a Copy bracketed Ren'Py interpolations exactly, e.g. [CharacterA_name!t], [Main], [CharacterB_last!t]; "
         'never turn them into literal names.\n'
         '2.1 If an input item includes speaker_id or speaker_name, use it only to identify who is speaking and their voice.\n'
         '3. Output plain Chinese text. No markdown, no Pinyin, no explanations.\n'
@@ -835,7 +835,7 @@ def build_canonical_translation_system_instruction(preserve_terms, macro_setting
         'including honorifics, apostrophes, numbers, and spacing; do not localize, reorder, or partially translate it.\n'
         "Keep names, Ren'Py tags, placeholders, variables, and format strings unchanged.\n"
         'Keep all person names in English; do not translate names.\n'
-        "Every bracketed Ren'Py interpolation such as [Gil_name!t], [Main], or [Parker_last!t] "
+        "Every bracketed Ren'Py interpolation such as [CharacterA_name!t], [Main], or [CharacterB_last!t] "
         'must be copied exactly; never replace it with a literal visible name.\n'
         'Return one result for every TARGET id even when the text is hard to translate; never omit an item.\n'
         'When TARGET items include speaker_id or speaker_name, use them only to identify the speaker and voice.\n'

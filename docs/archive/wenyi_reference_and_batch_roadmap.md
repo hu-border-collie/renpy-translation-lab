@@ -8,7 +8,7 @@
 
 本地参考克隆：
 
-- 路径：`C:\RenPy_Workspace\_ref\wenyi`（仓库外，不随 lab 提交）
+- 路径：`<workspace>\_ref\wenyi`（仓库外，不随 lab 提交）
 - 上游：`https://github.com/BigDawnGhost/wenyi`（文译 / Wenyi，`trans-novel`）
 - 本轮对照基线：本地 `main@b796e45`（已与 origin 对齐），发行标签至 **v0.3.4**
 
@@ -187,5 +187,5 @@
 | 2026-07-21 | 初版：对照文译、Batch 主路径取舍、润色 vs 订正、候选优先级 |
 | 2026-07-22 | 刷新本地 wenyi 至 `b796e45` / v0.3.4；补 prepare/review/usage/tiers；对齐 #252–#256；明确默认不复制源码 |
 | 2026-07-26 | 对齐当前实现：#254–#256 与 #262 已补齐项目分析生成、审查、上下文组合、终审边界和 GUI 产品化；移除“LLM/终审仍待实现”的旧状态 |
-| 2026-08-05 | 项目分析首轮真实项目观察：工程链路与 publish/inject 门禁可用，但自动 brief/label/route 偏路线目录，对初译边际收益有限；记录见 `docs/context_systems.md` 与 `docs/project_notes.md` |
+| 实战观察 | 项目分析首轮私有项目副本观察：工程链路与 publish/inject 门禁可用，但自动 brief/label/route 偏路线目录，对初译边际收益有限；记录见 `docs/context_systems.md` 与 `docs/project_notes.md` |
 | 2026-08-08 | #252 实际模型用量账本已交付；本文移入 `docs/archive/`，现行行为改由 Batch、上下文和用量账本文档维护 |

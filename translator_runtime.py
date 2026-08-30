@@ -257,8 +257,8 @@ INCLUDE_PREFIXES = set()
 
 NORMALIZE_TRANSLATION_MAP = {}
 PRESERVE_TERM_ALIASES = {
-    "H.U.": ("H. U.", "Highwell University", "Highwell Uni"),
-    "H. U.": ("H.U.", "Highwell University", "Highwell Uni"),
+    "E.A.": ("E. A.", "Example Academy"),
+    "E. A.": ("E.A.", "Example Academy"),
 }
 
 SPECIAL_ESCAPES = [

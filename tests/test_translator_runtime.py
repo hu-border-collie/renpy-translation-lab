@@ -485,7 +485,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
 
     def test_sync_and_batch_production_plan_adapters_share_semantic_request(self):
-        content = b'label start:\n    e "Encore tonight."\n    "Keep [Gil_name!t]."\n'
+        content = b'label start:\n    e "Encore tonight."\n    "Keep [CharacterA_name!t]."\n'
         digest = hashlib.sha256(content).hexdigest()
         document = SourceDocument(
             file_rel_path='script.rpy',
@@ -515,7 +515,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 },
                 {
                     'id': 'script:2:4',
-                    'text': 'Keep [Gil_name!t].',
+                    'text': 'Keep [CharacterA_name!t].',
                     'line': 2,
                     'block_name': 'start',
                 },
@@ -529,7 +529,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         glossary = {
             'Encore': '返场',
         }
-        preserve = ['[Gil_name!t]']
+        preserve = ['[CharacterA_name!t]']
         non_translatable = {'Eileen'}
         batch_jobs = batch_mod.TranslationFileJobs(
             file_jobs,
@@ -607,7 +607,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(sync_request.context_assembly, batch_request.context_assembly)
         self.assertIn('Use a warm stage tone.', sync_request.system_instruction)
         self.assertIn('Existing mapping: Encore -> 返场', sync_request.user_prompt)
-        self.assertIn('Preserve: [Gil_name!t]', sync_request.user_prompt)
+        self.assertIn('Preserve: [CharacterA_name!t]', sync_request.user_prompt)
         self.assertEqual(
             sync_request.transport_metadata['sync_stage'],
             'initial_translation',
@@ -742,19 +742,19 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
     def test_short_preserve_terms_allow_matching_renpy_name_field(self):
         with (
-            mock.patch.object(runtime, 'PRESERVE_TERMS', ['Gil', 'Don']),
-            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gil', 'don'}),
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['CharacterA', 'OtherName']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'charactera', 'othername'}),
         ):
-            self.assertEqual(runtime.missing_preserved_terms('coach Gil said so.', '[Gil_name!t] 教练这么说。'), [])
-            self.assertEqual(runtime.missing_preserved_terms('Don said so.', '[Gil_name!t] 这么说。'), ['Don'])
+            self.assertEqual(runtime.missing_preserved_terms('coach CharacterA said so.', '[CharacterA_name!t] 教练这么说。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('OtherName said so.', '[CharacterA_name!t] 这么说。'), ['OtherName'])
 
     def test_preserve_terms_allow_known_aliases(self):
         with (
-            mock.patch.object(runtime, 'PRESERVE_TERMS', ['H.U.']),
-            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'h.u.'}),
+            mock.patch.object(runtime, 'PRESERVE_TERMS', ['E.A.']),
+            mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'e.a.'}),
         ):
-            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在Highwell University。'), [])
-            self.assertEqual(runtime.missing_preserved_terms('I am in H.U. now.', '我现在在学校。'), ['H.U.'])
+            self.assertEqual(runtime.missing_preserved_terms('I am in E.A. now.', '我现在在Example Academy。'), [])
+            self.assertEqual(runtime.missing_preserved_terms('I am in E.A. now.', '我现在在学校。'), ['E.A.'])
     def test_non_chinese_term_translation_allows_repeated_preserved_phrase(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', ['Music Appreciation']),
@@ -769,7 +769,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(runtime.is_non_translatable('Page Up'))
         self.assertTrue(runtime.is_non_translatable('+III'))
         self.assertTrue(runtime.is_non_translatable('%b %d, %H:%M'))
-        self.assertTrue(runtime.is_non_translatable('AndersF_name'))
+        self.assertTrue(runtime.is_non_translatable('CharacterA_name'))
         self.assertFalse(runtime.is_non_translatable('I'))
 
     def test_translation_templates_skip_keyword_argument_strings(self):
@@ -858,20 +858,20 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_phrase_preserve_terms_allow_non_chinese_punctuation_change(self):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', [
-                'Raven Three',
-                'Mrs. de Bruin',
-                'New Lutetia',
-                'Pretty Bunny Angel Heart',
+                'Sample Group',
+                'Dr. Example',
+                'Example City',
+                'Sample Series',
             ]),
             mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {
-                'raven three',
-                'mrs. de bruin',
-                'new lutetia',
-                'pretty bunny angel heart',
+                'sample group',
+                'dr. example',
+                'example city',
+                'sample series',
             }),
         ):
-            self.assertTrue(runtime.allow_non_chinese_term_translation('Raven Three!', 'Raven Three！'))
-            self.assertTrue(runtime.allow_non_chinese_term_translation('Mrs. de Bruin?', 'Mrs. de Bruin？'))
+            self.assertTrue(runtime.allow_non_chinese_term_translation('Sample Group!', 'Sample Group！'))
+            self.assertTrue(runtime.allow_non_chinese_term_translation('Dr. Example?', 'Dr. Example？'))
             self.assertFalse(runtime.allow_non_chinese_term_translation('New Heart?', 'New Heart？'))
 
     def test_batch_request_includes_request_level_safety_settings(self):
@@ -914,7 +914,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         )
 
     def test_batch_non_chinese_allowance_accepts_preserved_names_and_acronyms(self):
-        with mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'gilly', 'dearmer'}):
+        with mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'sampleactor', 'examplecreator'}):
             self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
                 {},
                 {'glossary_hits': [], 'history_hits': []},
@@ -924,14 +924,14 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
                 {},
                 {'glossary_hits': [], 'history_hits': []},
-                'G-gilly!?',
-                'G-Gilly！？',
+                'S-sampleactor!?',
+                'S-Sampleactor！？',
             ))
             self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
                 {},
                 {'glossary_hits': [], 'history_hits': []},
-                'Dearmer',
-                'Dearmer',
+                'ExampleCreator',
+                'ExampleCreator',
             ))
             self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
                 {},
@@ -949,8 +949,8 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
             {},
             {'file_rel_path': 'screens_menu_about.rpy'},
-            '{a=https://example.test}Dirk the Red Panda{/a}.',
-            '{a=https://example.test}Dirk the Red Panda{/a}。',
+            '{a=https://example.test}Example Mascot{/a}.',
+            '{a=https://example.test}Example Mascot{/a}。',
         ))
         self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
             {},
@@ -961,14 +961,14 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
             {},
             {'file_rel_path': 'screens_menu_about.rpy'},
-            'Main Writer: Andy Peng',
-            'Main Writer: Andy Peng',
+            'Main Writer: Example Writer',
+            'Main Writer: Example Writer',
         ))
         self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
             {},
             {'file_rel_path': 'screens_charselect.rpy'},
-            'Lars Dearmer',
-            'Lars Dearmer',
+            'Example Creator',
+            'Example Creator',
         ))
         self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
             {},
@@ -1014,7 +1014,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
 
     def test_batch_non_chinese_allowance_uses_glossary_without_rag_enabled(self):
         chunk = {
-            'glossary_hits': [{'source': 'Raven Three', 'target': 'Raven Three'}],
+            'glossary_hits': [{'source': 'Sample Group', 'target': 'Sample Group'}],
             'history_hits': [],
         }
         with (
@@ -1027,14 +1027,14 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertTrue(batch_mod.allow_non_chinese_batch_translation(
                 {'rag_enabled': False},
                 chunk,
-                'Raven Three!',
-                'Raven Three！',
+                'Sample Group!',
+                'Sample Group！',
             ))
             self.assertFalse(batch_mod.allow_non_chinese_batch_translation(
                 {'rag_enabled': False},
                 {'glossary_hits': [], 'history_hits': []},
-                'Dawn Hound?',
-                'Dawn Hound？',
+                'Unlisted Group?',
+                'Unlisted Group？',
             ))
 
     def test_collect_tasks_keeps_distinct_entries_on_same_line(self):

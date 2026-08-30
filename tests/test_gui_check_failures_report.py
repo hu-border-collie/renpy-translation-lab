@@ -108,7 +108,7 @@ class GuiCheckFailuresReportTests(unittest.TestCase):
         self.assertEqual(
             classify_reason_category(
                 "validation_failed",
-                "Validation failed: Preserved terms missing: [Gil_name!t]",
+                "Validation failed: Preserved terms missing: [CharacterA_name!t]",
             ),
             REASON_CATEGORY_RETRY,
         )

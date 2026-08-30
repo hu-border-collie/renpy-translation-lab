@@ -41,14 +41,13 @@ legacy compatibility：它没有新增的 plan/request freshness 保护，不应
 
 `allow_non_chinese_batch_translation` 在单次校验调用内会缓存 TL/source 文件读取，避免 short-circuit OR 链重复打开同一文件；pass/fail 结果与缓存前一致。
 
-### 校验的语义边界（2026-08-06 记录）
+### 校验的语义边界
 
-`writeback_gate.decision=allow` 只表示**结构性写回安全**（源文本匹配、标签/占位符完整、含中文字符等），**不表示译文内容质量合格**；`quality_gate` 负责报告机械质量报警。2026-08-06 在真实项目 Chapter 4（约 6,062 块）的审校中发现，初译直出即使结构检查通过仍存在系统性文本问题：
+`writeback_gate.decision=allow` 只表示**结构性写回安全**（源文本匹配、标签/占位符完整、含中文字符等），**不表示译文内容质量合格**；`quality_gate` 负责报告机械质量报警。私有项目副本中一个数千块章节的审校表明，初译直出即使结构检查通过仍存在系统性文本问题：
 
-- `{w=...}` 标签插进中文词语中间，全文件约 241 处；
-- 中文与英文/数字紧贴缺空格，全文件约 339 处；
-- 已知机器错乱词残留，全文件 7 处实锤；
-- Ren'Py 标签后的英文词缀被吞进中文（如法术名后残留的复数/过去式词尾），全文件 2 处。
+- `{w=...}` 标签插进中文词语中间，达到数百处；
+- 中文与英文/数字紧贴缺空格，达到数百处；
+- 已知机器错乱词残留和标签后英文词缀问题数量较少，但均有确认样本。
 
 结论与建议：
 
@@ -436,9 +435,9 @@ python gemini_translate_batch.py export-reuse-results \
   结果导出」；`export-reuse-results` 只写 Batch 包内的结果 JSONL，之后仍必须
   `check` → `apply`。细节见
   [P4 译文复用候选与人工确认](engine_adapter.md#p4-译文复用候选与人工确认)。
-- 2026-08-24 已在两部真实 Ren'Py 项目副本上跑通上述离线命令与写回闸门（含
+- 已在两部私有 Ren'Py 项目副本上跑通上述离线命令与写回闸门（含
   `apply --force` 不能绕过 `deny`）；实测摘要见
-  [真实项目门禁实测](engine_adapter.md#真实项目门禁实测-2026-08-24)。不把历史
+  [真实项目门禁实测](engine_adapter.md#真实项目门禁实测)。不把历史
   Batch 包套到已经漂移的源树上冻结译文记录。
 
 ## 关键词提取流程
@@ -486,6 +485,8 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 ## 翻译质量 A/B 实验
 
 `compare-variants` 用同一批 manifest chunk 在**同步模式**下跑多个配置变体，生成并排 Markdown 报告，**不会写回** `.rpy` 或 `glossary.json`。适合比较 Story Memory、RAG、macro setting 等上下文层对译文的影响。
+
+新 manifest 默认复用其中冻结的 `ab_experiment` 路由（通常为 `primary` 同步模型），不会把 `batch_model` 当作 A/B 模型。只有显式传入 `--model` 时才覆盖该同步路由；LiteLLM 路由可使用带 Provider 前缀的模型名。报告中的 Model / Provider 以实际执行路由为准。
 
 图形界面入口见 [GUI 工作台 · 翻译 A/B 对比](gui_workbench.md#翻译-ab-对比)：在「诊断与运行日志」页工具栏打开，通过对话框选择 baseline 与 Story Memory / RAG / 原文索引的强制开/关变体，无需手写 `variants.json`。
 

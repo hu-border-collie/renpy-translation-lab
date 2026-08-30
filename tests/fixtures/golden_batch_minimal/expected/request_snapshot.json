@@ -17,7 +17,7 @@
         "chapter01/dialogue.rpy:chapter01_start:3:2ecaab1c",
         "chapter01/dialogue.rpy:chapter01_start:4:8c8bd881"
       ],
-      "system_instruction_sha256": "7c5b104b600c0ecc7889b99c6939aed126f38d7f7f262f1130c2ac1e446dd360",
+      "system_instruction_sha256": "257cdf5c5dc03c242859b6b2f4a6c5a09dccdeb99804301392d2c7d7a24124ee",
       "user_prompt_sha256": "59623d440b69061f515501e3db48edc1cc6a91c78073b68d6807616e88701fd6",
       "generation_config": {
         "keys": [
@@ -80,7 +80,7 @@
         "chapter02/strings.rpy:strings:1:365f992a",
         "chapter02/strings.rpy:strings:2:802aa657"
       ],
-      "system_instruction_sha256": "7c5b104b600c0ecc7889b99c6939aed126f38d7f7f262f1130c2ac1e446dd360",
+      "system_instruction_sha256": "257cdf5c5dc03c242859b6b2f4a6c5a09dccdeb99804301392d2c7d7a24124ee",
       "user_prompt_sha256": "0d7bcee3cfa05e1d7210903336ef640dba082df1d8b159b8cc59b7fae89f2a33",
       "generation_config": {
         "keys": [

@@ -664,16 +664,16 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(load_context.call_args_list[1].args, ("script.rpy", [20]))
 
     def test_translation_prompts_emphasize_renpy_interpolation_preservation(self):
-        system_text = translation_core.build_translation_system_instruction(['[Gil_name!t]'])
-        self.assertIn('[Gil_name!t]', system_text)
+        system_text = translation_core.build_translation_system_instruction(['[CharacterA_name!t]'])
+        self.assertIn('[CharacterA_name!t]', system_text)
         self.assertIn('never replace', system_text)
         self.assertIn('never omit an item', system_text)
 
         sync_text = translation_core.build_sync_translation_prompt(
-            [{'id': 'line-1', 'text': 'Coach [Gil_name!t] is here.'}],
-            ['[Gil_name!t]'],
+            [{'id': 'line-1', 'text': 'Coach [CharacterA_name!t] is here.'}],
+            ['[CharacterA_name!t]'],
         )
-        self.assertIn('[Gil_name!t]', sync_text)
+        self.assertIn('[CharacterA_name!t]', sync_text)
         self.assertIn('never turn them into literal names', sync_text)
 
     def test_sync_prompt_includes_bounded_local_context_when_window_given(self):
@@ -829,13 +829,13 @@ class TranslationCoreRegressionTests(unittest.TestCase):
 
     def test_canonical_system_instruction_merges_sync_rules_into_batch_base(self):
         instruction = translation_core.build_canonical_translation_system_instruction(
-            ['Dawn Chorus'],
+            ['Sample Ensemble'],
             macro_setting='A college story.',
         )
         # Batch base contract.
         self.assertIn('Translate only TARGET lines into Simplified Chinese.', instruction)
         self.assertIn('Setting:\nA college story.', instruction)
-        self.assertIn('Keep these terms unchanged: Dawn Chorus', instruction)
+        self.assertIn('Keep these terms unchanged: Sample Ensemble', instruction)
         # Sync-only rules merged in (issue #346, D3).
         self.assertIn('Keep all person names in English; do not translate names.', instruction)
         self.assertIn('No markdown, no Pinyin, no explanations.', instruction)
@@ -853,11 +853,11 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         prompt = translation_core.build_canonical_translation_user_prompt(
             translation_core.ContextWindow(['Previous line'], ['Next line']),
             units,
-            reference_blocks_text='LOCKED TERMS:\n- Keep unchanged: Dawn Chorus\n\n',
-            lexical_glossary_text='- Preserve: Dawn Chorus',
+            reference_blocks_text='LOCKED TERMS:\n- Keep unchanged: Sample Ensemble\n\n',
+            lexical_glossary_text='- Preserve: Sample Ensemble',
         )
-        self.assertIn('Existing glossary entries:\n- Preserve: Dawn Chorus\n\n', prompt)
-        self.assertIn('LOCKED TERMS:\n- Keep unchanged: Dawn Chorus\n\n', prompt)
+        self.assertIn('Existing glossary entries:\n- Preserve: Sample Ensemble\n\n', prompt)
+        self.assertIn('LOCKED TERMS:\n- Keep unchanged: Sample Ensemble\n\n', prompt)
         self.assertIn('CONTEXT BEFORE:\n- Previous line\n\n', prompt)
         self.assertIn('CONTEXT AFTER:\n- Next line\n\n', prompt)
         self.assertTrue(prompt.endswith('Return the result now.'))
