@@ -162,7 +162,7 @@ def _read_keep_space_setting(project_root: Path) -> str:
     if not config_path.is_file():
         return "2"
     text = config_path.read_text(encoding="utf-8-sig", errors="replace")
-    match = re.search(r";KeepSpaceInParameterValue\s*=\s*([123])\s*;", text)
+    match = re.search(r";?KeepSpaceInParameterValue\s*=\s*([123])\s*;?", text)
     if not match:
         return "2"
     return match.group(1)
@@ -603,6 +603,26 @@ def _normalize_tag_value(raw_value: str, keep_space: str, quote: str) -> str:
     return value
 
 
+def _merged_tag_registry(catalog_data: Mapping[str, Any]) -> Mapping[str, tuple[str, ...]]:
+    """Official built-in registrations are always active.
+
+    TyranoStudio writes project registrations into the catalog's ``tags`` key;
+    those may add or override parameters but must not silently remove the
+    built-in ``glink`` / ``ptext`` defaults.
+    """
+    merged: dict[str, tuple[str, ...]] = {
+        tag: tuple(params) for tag, params in DEFAULT_TAG_REGISTRY.items()
+    }
+    project_tags = catalog_data.get("tags") if isinstance(catalog_data, dict) else None
+    if isinstance(project_tags, dict):
+        for tag_name, params in project_tags.items():
+            if isinstance(tag_name, str) and isinstance(params, list):
+                normalized = tuple(str(item) for item in params if isinstance(item, str))
+                if normalized:
+                    merged[tag_name] = normalized
+    return merged
+
+
 class TyranoAdapter:
     """Read-only TyranoScript V600+ adapter.
 
@@ -960,11 +980,7 @@ class TyranoAdapter:
         if node.kind == "text":
             return str(node.pm.get("val") or "")
         if node.kind == "tag":
-            registered = (
-                catalog_data.get("tags", DEFAULT_TAG_REGISTRY).get(node.name)
-                or DEFAULT_TAG_REGISTRY.get(node.name)
-                or ()
-            )
+            registered = _merged_tag_registry(catalog_data).get(node.name) or ()
             for param_name in registered:
                 value = str(node.pm.get(param_name) or "")
                 if value:
@@ -983,7 +999,7 @@ class TyranoAdapter:
         line_error_reasons: Sequence[str] | None = None,
         line_has_official_compensation: bool = False,
     ) -> list[Candidate]:
-        tag_registry = catalog_data.get("tags", DEFAULT_TAG_REGISTRY)
+        tag_registry = _merged_tag_registry(catalog_data)
         structural_tags = {
             "lang_set": ("tyrano.lang_set_control_tag", "explicitly_excluded"),
             "iscript": ("tyrano.iscript_boundary_tag", "explicitly_excluded"),

@@ -15,6 +15,8 @@ from engine_adapters.contracts import InventoryPolicy, ProjectDiscoveryRequest
 from engine_adapters.tyrano import (
     ADAPTER_VERSION,
     TyranoAdapter,
+    _merged_tag_registry,
+    _read_keep_space_setting,
     build_translation_snapshot,
     parse_tyrano_scenario,
 )
@@ -438,7 +440,7 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
             )
             draft, report, _ = self._adapter_report(root)
             self.assertIn("tyrano.catalog.stale", draft.reason_codes)
-            self.assertEqual(report.coverage_status, "attention")
+            self.assertEqual(report.coverage_status, "block")
 
     def test_registered_tag_with_multiple_parameters_gets_one_candidate_each(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -515,6 +517,25 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
             _, report, inventory = self._adapter_report(root)
             self.assertEqual(report.coverage_status, "attention")
             self.assertEqual(len(inventory.candidates), 2)
+
+    def test_keep_space_setting_accepts_optional_semicolon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data" / "system").mkdir(parents=True)
+            (root / "data" / "system" / "Config.tjs").write_text(
+                "KeepSpaceInParameterValue = 1;\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            self.assertEqual(_read_keep_space_setting(root), "1")
+
+    def test_default_tag_registry_survives_project_tags(self):
+        merged = _merged_tag_registry(
+            {"tags": {"mymacro": ["value"]}}
+        )
+        self.assertEqual(merged["glink"], ("text",))
+        self.assertEqual(merged["ptext"], ("text",))
+        self.assertEqual(merged["mymacro"], ("value",))
 
     def test_parse_tyrano_scenario_normalizes_keep_space_level(self):
         lines = ['[ptext layer=0 x=10 text="  Keep  inner " ]']

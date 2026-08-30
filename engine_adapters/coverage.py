@@ -389,6 +389,7 @@ def build_coverage_report(
                 "tyrano.catalog.missing_row",
                 "tyrano.catalog.empty_translation",
                 "tyrano.catalog.invalid_json",
+                "tyrano.catalog.stale",
             }
         )
     ):
