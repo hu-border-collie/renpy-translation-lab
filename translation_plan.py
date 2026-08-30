@@ -344,6 +344,8 @@ def summarize_request_diagnostics(request_summaries):
             if not isinstance(provider, Mapping):
                 continue
             for provider_name, payload in provider.items():
+                if provider_name == 'embedding_provider':
+                    continue
                 request_has_provider_diagnostic = True
                 status = provider_status(provider_name, payload)
                 key = f'{provider_name}:{status}'

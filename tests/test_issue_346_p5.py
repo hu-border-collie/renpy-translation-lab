@@ -186,6 +186,7 @@ class P5ProductionGoldenTests(unittest.TestCase):
         self.assertEqual(diagnostics['context_provider_diagnostic_requests'], 1)
         self.assertEqual(diagnostics['context_provider_downgrade_count'], 0)
         self.assertIn('source_index:available', diagnostics['context_provider_status_counts'])
+        self.assertNotIn('embedding_provider:available', diagnostics['context_provider_status_counts'])
         self.assertIn(
             'published_project_analysis:available',
             diagnostics['context_provider_status_counts'],
@@ -481,6 +482,25 @@ class P5ProviderDiagnosticGoldenTests(unittest.TestCase):
             },
         )
         self.assertEqual(diagnostics['context_provider_downgrade_reasons'], {})
+
+        identity_only = translation_plan.summarize_request_diagnostics([
+            {
+                'context_diagnostics': {
+                    'layers': [{
+                        'diagnostics': {
+                            'provider': {
+                                'embedding_provider': {
+                                    'backend': 'gemini',
+                                    'model': 'gemini-embedding-001',
+                                }
+                            }
+                        }
+                    }]
+                }
+            }
+        ])
+        self.assertEqual(identity_only['context_provider_diagnostic_requests'], 0)
+        self.assertEqual(identity_only['context_provider_status_counts'], {})
 
 
 class P5BudgetAndEmbeddingTests(unittest.TestCase):
