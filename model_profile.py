@@ -1334,6 +1334,11 @@ def override_sync_stage(
     base_route = plan.routes.get(stage)
     if base_route is None:
         raise ValueError(f"Routing plan has no route for stage: {stage}")
+    if base_route.strategy is not ExecutionStrategy.SYNC:
+        raise ValueError(
+            f"Routing plan stage {stage} is not synchronous and cannot accept "
+            "a sync model override."
+        )
     base_profile = profile_for_route(plan, base_route)
     sync_backend = (
         SYNC_BACKEND_LITELLM

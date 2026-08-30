@@ -381,6 +381,111 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 ],
             )
 
+    def test_partial_manifest_without_ab_route_uses_legacy_model_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = os.path.join(tmp, 'manifest.json')
+            with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
+            manifest['batch_model'] = 'gemini-fallback'
+            plan = batch_mod.model_profile.resolve_routing_plan(
+                {
+                    'sync': {'backend': 'litellm', 'model': 'openrouter/original'},
+                    'batch': {'model': 'gemini-fallback'},
+                },
+                execution=batch_mod.model_profile.ExecutionStrategy.GEMINI_BATCH,
+            )
+            frozen = plan.to_manifest_dict()
+            del frozen['routes'][batch_mod.model_profile.STAGE_AB_EXPERIMENT]
+            manifest['model_routing'] = frozen
+            with open(manifest_path, 'w', encoding='utf-8') as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            loaded = batch_mod.load_manifest(manifest_path)
+            variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
+            captured = []
+
+            def fake_sync_runner(request_payload, route, plan=None, api_key_index=None):
+                profile = batch_mod.model_profile.profile_for_route(plan, route)
+                captured.append((profile.adapter, profile.model))
+                return {
+                    'response_text': _full_chunk_translations(),
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {},
+                }
+
+            ab_mod.run_translation_ab_experiment(
+                loaded,
+                variants,
+                limit=1,
+                output_dir=os.path.join(tmp, 'experiment'),
+                sync_runner=fake_sync_runner,
+            )
+
+            self.assertEqual(captured, [('gemini', 'gemini-fallback')] * 2)
+
+    def test_non_sync_frozen_ab_route_uses_explicit_model_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = os.path.join(tmp, 'manifest.json')
+            with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
+            plan = batch_mod.model_profile.resolve_routing_plan(
+                {
+                    'sync': {'backend': 'litellm', 'model': 'openrouter/original'},
+                    'batch': {'model': 'gemini-batch'},
+                },
+                execution=batch_mod.model_profile.ExecutionStrategy.GEMINI_BATCH,
+            )
+            frozen = plan.to_manifest_dict()
+            frozen['routes'][batch_mod.model_profile.STAGE_AB_EXPERIMENT] = {
+                'stage': batch_mod.model_profile.STAGE_AB_EXPERIMENT,
+                'profile_id': 'batch',
+                'strategy': 'gemini_batch',
+                'source': 'stage_config',
+            }
+            manifest['model_routing'] = frozen
+            with open(manifest_path, 'w', encoding='utf-8') as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            loaded = batch_mod.load_manifest(manifest_path)
+            variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
+            captured = []
+
+            def fake_sync_runner(request_payload, route, plan=None, api_key_index=None):
+                profile = batch_mod.model_profile.profile_for_route(plan, route)
+                captured.append((profile.adapter, profile.provider, profile.model))
+                return {
+                    'response_text': _full_chunk_translations(),
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {},
+                }
+
+            ab_mod.run_translation_ab_experiment(
+                loaded,
+                variants,
+                limit=1,
+                output_dir=os.path.join(tmp, 'experiment'),
+                model_override='openrouter/deepseek/deepseek-v4-flash-0731',
+                sync_runner=fake_sync_runner,
+            )
+
+            self.assertEqual(
+                captured,
+                [
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                ],
+            )
+
     def test_run_translation_ab_experiment_usage_ledger_error_does_not_fail_variant(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = os.path.join(tmp, 'manifest.json')

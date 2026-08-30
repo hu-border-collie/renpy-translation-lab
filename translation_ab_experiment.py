@@ -617,6 +617,18 @@ def _legacy_ab_routing_plan(model_name: str):
     return plan
 
 
+def _has_frozen_sync_ab_route(plan) -> bool:
+    """Return whether a manifest plan froze a usable synchronous A/B route."""
+    if plan is None:
+        return False
+    batch_mod = _batch()
+    route = plan.routes.get(batch_mod.model_profile.STAGE_AB_EXPERIMENT)
+    return bool(
+        route is not None
+        and route.strategy is batch_mod.model_profile.ExecutionStrategy.SYNC
+    )
+
+
 def run_variant_for_chunk(
     chunk: dict,
     *,
@@ -747,9 +759,10 @@ def run_translation_ab_experiment(
     chunks = select_manifest_chunks(manifest, limit=limit, offset=offset)
     explicit_model = model_override.strip()
     routing_plan = batch_mod.routing_plan_from_manifest(manifest)
-    if routing_plan is None:
-        # Legacy manifests did not freeze routing. Preserve their historical
-        # fallback to the recorded Batch model, then the loaded Batch default.
+    if not _has_frozen_sync_ab_route(routing_plan):
+        # Legacy or partial manifests did not freeze a synchronous A/B route.
+        # Preserve their historical fallback to the recorded Batch model,
+        # then the loaded Batch default.
         fallback_model = (
             explicit_model
             or str(manifest.get('batch_model') or '').strip()
