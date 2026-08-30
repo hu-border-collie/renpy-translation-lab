@@ -394,6 +394,18 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
             self.assertIn("tyrano.catalog.empty_translation", draft.reason_codes)
             self.assertEqual(report.coverage_status, "block")
 
+    def test_missing_scenario_section_blocks_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_project(
+                root,
+                "*start|Start\nHello, world!\n",
+                catalog={"scenes": {}},
+            )
+            draft, report, _ = self._adapter_report(root)
+            self.assertIn("tyrano.catalog.missing_scenario", draft.reason_codes)
+            self.assertEqual(report.coverage_status, "block")
+
     def test_invalid_json_blocks_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
