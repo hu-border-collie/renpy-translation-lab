@@ -13,7 +13,7 @@
   "python_version": "3.11",
   "schema_version": 1,
   "sources": {
-    ".gitattributes": "e6de71d168d3dfbbdfb23ba91d339c9267067b9778f0e7f59271186c409cc9ea",
+    ".gitattributes": "86b102a146b93e31013b50cdb3502e024bccda2e591c926225fe50ce95750c1b",
     "relation_analyzer/requirements-semantic.txt": "17f1f0c4ae4076afcb55daa1d710341899cd10001f4ac0fb59376bb2fb98fe5f",
     "relation_analyzer/requirements.txt": "39f8bca4b350065b1358cb95331531b4552f912b6566e9bf1e07ec0fa4a9da3c",
     "requirements-genai.txt": "5633e28ace0a4ae97ef23cc2932b9aa54ab8c5ca1f6ba4c114a17206bc9fed45",
