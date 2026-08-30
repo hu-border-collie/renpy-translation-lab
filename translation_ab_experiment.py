@@ -591,6 +591,32 @@ def _invoke_ab_sync_runner(
     )
 
 
+def _legacy_ab_routing_plan(model_name: str):
+    """Resolve old manifests without leaking the live sync backend into them."""
+    batch_mod = _batch()
+    model = str(model_name or '').strip()
+    sync_backend = (
+        batch_mod.model_profile.SYNC_BACKEND_LITELLM
+        if '/' in model
+        else batch_mod.model_profile.SYNC_BACKEND_GEMINI
+    )
+    plan = batch_mod.model_profile.resolve_routing_plan_from_runtime(
+        sync_backend=sync_backend,
+        sync_model=model,
+        batch_model=str(batch_mod.BATCH_MODEL or model),
+        custom_providers=batch_mod._runtime_custom_providers(),
+        execution=batch_mod.model_profile.ExecutionStrategy.SYNC,
+        stage_overrides={
+            batch_mod.model_profile.STAGE_AB_EXPERIMENT: model,
+        } if model else None,
+    )
+    batch_mod.require_valid_routing_plan(
+        plan,
+        {batch_mod.model_profile.STAGE_AB_EXPERIMENT},
+    )
+    return plan
+
+
 def run_variant_for_chunk(
     chunk: dict,
     *,
@@ -606,18 +632,12 @@ def run_variant_for_chunk(
 ) -> VariantRunResult:
     batch_mod = _batch()
     if plan is None or route is None:
-        overrides = {}
         explicit = (
             model_override.strip()
             or str(settings.get('model') or '').strip()
             or str(batch_mod.BATCH_MODEL or '').strip()
         )
-        if explicit:
-            overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = explicit
-        plan = batch_mod.freeze_runtime_routing_plan(
-            stage_overrides=overrides or None,
-            required_stages={batch_mod.model_profile.STAGE_AB_EXPERIMENT},
-        )
+        plan = _legacy_ab_routing_plan(explicit)
         route = plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
     model_name = batch_mod.route_model(plan, route)
     try:
@@ -725,16 +745,32 @@ def run_translation_ab_experiment(
     batch_mod = _batch()
     batch_mod.require_manifest_mode(manifest, batch_mod.MANIFEST_MODE_TRANSLATION, 'compare-variants')
     chunks = select_manifest_chunks(manifest, limit=limit, offset=offset)
-    default_model = model_override.strip() or manifest.get('batch_model') or batch_mod.BATCH_MODEL
-    ab_overrides = {}
-    if str(default_model or '').strip():
-        ab_overrides[batch_mod.model_profile.STAGE_AB_EXPERIMENT] = str(default_model).strip()
-    routing_plan = batch_mod.freeze_runtime_routing_plan(
-        stage_overrides=ab_overrides or None,
-        required_stages={batch_mod.model_profile.STAGE_AB_EXPERIMENT},
-    )
+    explicit_model = model_override.strip()
+    routing_plan = batch_mod.routing_plan_from_manifest(manifest)
+    if routing_plan is None:
+        # Legacy manifests did not freeze routing. Preserve their historical
+        # fallback to the recorded Batch model, then the loaded Batch default.
+        fallback_model = (
+            explicit_model
+            or str(manifest.get('batch_model') or '').strip()
+            or str(batch_mod.BATCH_MODEL or '').strip()
+        )
+        routing_plan = _legacy_ab_routing_plan(fallback_model)
+    else:
+        if explicit_model:
+            routing_plan = batch_mod.model_profile.override_sync_stage(
+                routing_plan,
+                batch_mod.model_profile.STAGE_AB_EXPERIMENT,
+                explicit_model,
+                custom_providers=batch_mod._runtime_custom_providers(),
+            )
+        batch_mod.require_valid_routing_plan(
+            routing_plan,
+            {batch_mod.model_profile.STAGE_AB_EXPERIMENT},
+        )
     ab_route = routing_plan.routes[batch_mod.model_profile.STAGE_AB_EXPERIMENT]
     default_model = batch_mod.route_model(routing_plan, ab_route)
+    ab_profile = batch_mod.model_profile.profile_for_route(routing_plan, ab_route)
 
     if not output_dir:
         slug = batch_mod.guess_project_slug()
@@ -764,6 +800,11 @@ def run_translation_ab_experiment(
     try:
         for variant in variants:
             with variant_batch_settings(variant.get('overrides') or {}) as settings:
+                settings = {
+                    **settings,
+                    'model': default_model,
+                    'provider': ab_profile.provider,
+                }
                 for chunk_index, chunk in enumerate(chunks):
                     chunk_results[chunk_index].variant_results.append(
                         run_variant_for_chunk(

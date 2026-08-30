@@ -1312,6 +1312,63 @@ def override_gemini_batch_stage(
     )
 
 
+def override_sync_stage(
+    plan: ModelRoutingPlan,
+    stage: str,
+    model: str,
+    *,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> ModelRoutingPlan:
+    """Replace one synchronous stage on a frozen routing plan.
+
+    The replacement keeps the frozen stage's adapter family: a LiteLLM route
+    may switch to another provider-prefixed model, while a direct Gemini route
+    remains Gemini-only and is rejected later if given a provider prefix.
+    Other stages, profiles, and config origins remain unchanged.
+    """
+    cleaned = _clean_str(model)
+    if not cleaned:
+        raise ValueError("Sync stage override requires a model id.")
+    if stage not in KNOWN_STAGES:
+        raise ValueError(f"Unknown task stage in routing plan: {stage}")
+    base_route = plan.routes.get(stage)
+    if base_route is None:
+        raise ValueError(f"Routing plan has no route for stage: {stage}")
+    base_profile = profile_for_route(plan, base_route)
+    sync_backend = (
+        SYNC_BACKEND_LITELLM
+        if base_profile.adapter == ADAPTER_LITELLM
+        else SYNC_BACKEND_GEMINI
+    )
+    profile_id = f"{stage}_override"
+    profile = _sync_profile(
+        profile_id,
+        cleaned,
+        sync_backend,
+        custom_providers,
+        label=f"{stage} explicit model",
+    )
+    profiles = dict(plan.profiles)
+    profiles[profile_id] = profile
+    capabilities = dict(plan.capabilities)
+    capabilities[profile_id] = resolve_capabilities(
+        profile, custom_providers=custom_providers,
+    )
+    routes = dict(plan.routes)
+    routes[stage] = TaskRoute(
+        stage=stage,
+        profile_id=profile_id,
+        strategy=ExecutionStrategy.SYNC,
+        source=ROUTE_SOURCE_EXPLICIT,
+    )
+    return replace(
+        plan,
+        profiles=profiles,
+        routes=routes,
+        capabilities=capabilities,
+    )
+
+
 def resolve_routing_plan_from_runtime(
     *,
     sync_backend: str,

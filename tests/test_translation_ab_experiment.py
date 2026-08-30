@@ -259,6 +259,128 @@ class TranslationAbExperimentTests(unittest.TestCase):
             self.assertEqual(translations['baseline'][SAMPLE_ITEM_ID], '你好')
             self.assertEqual(translations['story_memory'][SAMPLE_ITEM_ID], '你好')
 
+    def test_manifest_routing_keeps_ab_experiment_on_primary_sync_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = os.path.join(tmp, 'manifest.json')
+            with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
+            plan = batch_mod.model_profile.resolve_routing_plan(
+                {
+                    'sync': {
+                        'backend': 'litellm',
+                        'model': 'openrouter/deepseek/deepseek-v4-flash-0731',
+                    },
+                    'batch': {'model': 'gemini-batch-should-not-run'},
+                },
+                execution=batch_mod.model_profile.ExecutionStrategy.GEMINI_BATCH,
+            )
+            manifest['model_routing'] = plan.to_manifest_dict()
+            with open(manifest_path, 'w', encoding='utf-8') as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            loaded = batch_mod.load_manifest(manifest_path)
+            variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
+            captured = []
+
+            def fake_sync_runner(request_payload, route, plan=None, api_key_index=None):
+                profile = batch_mod.model_profile.profile_for_route(plan, route)
+                captured.append((profile.adapter, profile.provider, profile.model))
+                return {
+                    'response_text': _full_chunk_translations(),
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {'total_tokens': 3},
+                    'request_metadata': {'provider': profile.provider},
+                }
+
+            summary = ab_mod.run_translation_ab_experiment(
+                loaded,
+                variants,
+                limit=1,
+                output_dir=os.path.join(tmp, 'experiment'),
+                sync_runner=fake_sync_runner,
+            )
+
+            self.assertEqual(
+                captured,
+                [
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                ],
+            )
+            with open(summary['results_path'], 'r', encoding='utf-8') as handle:
+                row = json.loads(handle.readline())
+            self.assertEqual(
+                {variant['settings']['model'] for variant in row['variants']},
+                {'openrouter/deepseek/deepseek-v4-flash-0731'},
+            )
+
+    def test_manifest_routing_explicit_model_override_stays_on_sync_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = os.path.join(tmp, 'manifest.json')
+            with open(FIXTURE_MANIFEST, 'r', encoding='utf-8') as source:
+                manifest = json.load(source)
+            manifest['mode'] = batch_mod.MANIFEST_MODE_TRANSLATION
+            plan = batch_mod.model_profile.resolve_routing_plan(
+                {
+                    'sync': {
+                        'backend': 'litellm',
+                        'model': 'openrouter/original',
+                    },
+                    'batch': {'model': 'gemini-batch-should-not-run'},
+                },
+                execution=batch_mod.model_profile.ExecutionStrategy.GEMINI_BATCH,
+            )
+            manifest['model_routing'] = plan.to_manifest_dict()
+            with open(manifest_path, 'w', encoding='utf-8') as handle:
+                json.dump(manifest, handle, ensure_ascii=False, indent=2)
+
+            loaded = batch_mod.load_manifest(manifest_path)
+            variants = ab_mod.load_variants_file(str(FIXTURE_VARIANTS))
+            captured = []
+
+            def fake_sync_runner(request_payload, route, plan=None, api_key_index=None):
+                profile = batch_mod.model_profile.profile_for_route(plan, route)
+                captured.append((profile.adapter, profile.provider, profile.model))
+                return {
+                    'response_text': _full_chunk_translations(),
+                    'finish_reason': 'STOP',
+                    'usage_metadata': {},
+                }
+
+            ab_mod.run_translation_ab_experiment(
+                loaded,
+                variants,
+                limit=1,
+                output_dir=os.path.join(tmp, 'experiment'),
+                model_override='openrouter/deepseek/deepseek-v4-flash-0731',
+                sync_runner=fake_sync_runner,
+            )
+
+            self.assertEqual(
+                captured,
+                [
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                    (
+                        'litellm',
+                        'openrouter',
+                        'openrouter/deepseek/deepseek-v4-flash-0731',
+                    ),
+                ],
+            )
+
     def test_run_translation_ab_experiment_usage_ledger_error_does_not_fail_variant(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest_path = os.path.join(tmp, 'manifest.json')
