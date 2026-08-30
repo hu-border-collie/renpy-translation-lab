@@ -154,6 +154,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     ab_mod.VariantRunResult(
                         variant_name='baseline',
                         settings={
+                            'provider': 'openrouter',
                             'model': 'test-model',
                             'story_memory_enabled': False,
                             'rag_enabled': False,
@@ -165,6 +166,7 @@ class TranslationAbExperimentTests(unittest.TestCase):
                     ab_mod.VariantRunResult(
                         variant_name='story_memory',
                         settings={
+                            'provider': 'openrouter',
                             'model': 'test-model',
                             'story_memory_enabled': True,
                             'rag_enabled': False,
@@ -185,6 +187,8 @@ class TranslationAbExperimentTests(unittest.TestCase):
         )
         self.assertIn('baseline', report)
         self.assertIn('story_memory', report)
+        self.assertIn('| Variant | Provider | Model |', report)
+        self.assertIn('| baseline | openrouter | test-model |', report)
         self.assertIn('| line-1 | Hello | 你好 | 你好啊 |', report)
 
     def test_run_translation_ab_experiment_dry_run_writes_outputs(self):
@@ -215,6 +219,9 @@ class TranslationAbExperimentTests(unittest.TestCase):
             self.assertEqual(len(rows), 1)
             self.assertEqual(len(rows[0]['variants']), 2)
             self.assertTrue(all(variant['dry_run'] for variant in rows[0]['variants']))
+            with open(summary['settings_path'], 'r', encoding='utf-8') as handle:
+                settings = json.load(handle)
+            self.assertTrue(settings['provider'])
 
     def test_run_translation_ab_experiment_calls_sync_runner_per_variant(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -322,6 +329,13 @@ class TranslationAbExperimentTests(unittest.TestCase):
                 {variant['settings']['model'] for variant in row['variants']},
                 {'openrouter/deepseek/deepseek-v4-flash-0731'},
             )
+            self.assertEqual(
+                {variant['settings']['provider'] for variant in row['variants']},
+                {'openrouter'},
+            )
+            with open(summary['settings_path'], 'r', encoding='utf-8') as handle:
+                settings = json.load(handle)
+            self.assertEqual(settings['provider'], 'openrouter')
 
     def test_manifest_routing_explicit_model_override_stays_on_sync_adapter(self):
         with tempfile.TemporaryDirectory() as tmp:

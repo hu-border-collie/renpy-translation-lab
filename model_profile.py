@@ -1323,7 +1323,9 @@ def override_sync_stage(
 
     The replacement keeps the frozen stage's adapter family: a LiteLLM route
     may switch to another provider-prefixed model, while a direct Gemini route
-    remains Gemini-only and is rejected later if given a provider prefix.
+    remains Gemini-only. Adapter-incompatible model ids are rejected here so
+    callers do not receive advice that changing the live backend could alter a
+    frozen route.
     Other stages, profiles, and config origins remain unchanged.
     """
     cleaned = _clean_str(model)
@@ -1340,6 +1342,24 @@ def override_sync_stage(
             "a sync model override."
         )
     base_profile = profile_for_route(plan, base_route)
+    if (
+        base_profile.adapter == ADAPTER_LITELLM
+        and not provider_from_model(cleaned)
+    ):
+        raise ValueError(
+            f"Frozen LiteLLM stage {stage} requires a provider-prefixed model "
+            "id '<provider>/<model>'."
+        )
+    if base_profile.adapter == ADAPTER_GEMINI and "/" in cleaned:
+        raise ValueError(
+            f"Frozen direct Gemini stage {stage} cannot accept provider-prefixed "
+            f"model {cleaned}; rebuild the manifest with a LiteLLM sync route."
+        )
+    if base_profile.adapter not in {ADAPTER_GEMINI, ADAPTER_LITELLM}:
+        raise ValueError(
+            f"Frozen stage {stage} uses unsupported sync adapter "
+            f"{base_profile.adapter}."
+        )
     sync_backend = (
         SYNC_BACKEND_LITELLM
         if base_profile.adapter == ADAPTER_LITELLM

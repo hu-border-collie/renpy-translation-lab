@@ -312,6 +312,84 @@ class ResolveRoutingPlanTests(unittest.TestCase):
             "gemini-2.0-flash",
         )
 
+    def test_override_sync_stage_keeps_litellm_family_and_other_profiles(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {
+                "sync": {
+                    "backend": "litellm",
+                    "model": "openai/gpt-4o-mini",
+                },
+                "batch": {
+                    "model": "gemini-2.0-flash",
+                    "project_analysis": {"model": "openai/pa-frozen"},
+                },
+            },
+            execution=mp.ExecutionStrategy.GEMINI_BATCH,
+        )
+        patched = mp.override_sync_stage(
+            plan,
+            mp.STAGE_AB_EXPERIMENT,
+            "openrouter/deepseek/deepseek-v4-flash-0731",
+        )
+        ab_profile = patched.profiles[
+            patched.routes[mp.STAGE_AB_EXPERIMENT].profile_id
+        ]
+        self.assertEqual(ab_profile.adapter, mp.ADAPTER_LITELLM)
+        self.assertEqual(ab_profile.provider, "openrouter")
+        self.assertEqual(
+            ab_profile.model, "openrouter/deepseek/deepseek-v4-flash-0731",
+        )
+        self.assertEqual(
+            patched.profiles[patched.routes[mp.STAGE_PROJECT_ANALYSIS].profile_id].model,
+            "openai/pa-frozen",
+        )
+        self.assertEqual(plan.profiles["primary"].model, "openai/gpt-4o-mini")
+
+    def test_override_sync_stage_keeps_gemini_family(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "gemini", "model": "gemini-2.0-flash"}},
+        )
+        patched = mp.override_sync_stage(
+            plan, mp.STAGE_AB_EXPERIMENT, "gemini-2.5-flash",
+        )
+        profile = patched.profiles[
+            patched.routes[mp.STAGE_AB_EXPERIMENT].profile_id
+        ]
+        self.assertEqual(profile.adapter, mp.ADAPTER_GEMINI)
+        self.assertEqual(profile.model, "gemini-2.5-flash")
+
+    def test_override_sync_stage_rejects_non_sync_route(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {}, execution=mp.ExecutionStrategy.GEMINI_BATCH,
+        )
+        with self.assertRaisesRegex(ValueError, "not synchronous"):
+            mp.override_sync_stage(
+                plan, mp.STAGE_TRANSLATION, "gemini-2.5-flash",
+            )
+
+    def test_override_sync_stage_rejects_prefixed_model_for_gemini(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {"sync": {"backend": "gemini", "model": "gemini-2.0-flash"}},
+        )
+        with self.assertRaisesRegex(ValueError, "direct Gemini"):
+            mp.override_sync_stage(
+                plan, mp.STAGE_AB_EXPERIMENT, "openrouter/example/model",
+            )
+
+    def test_override_sync_stage_requires_provider_prefix_for_litellm(self) -> None:
+        plan = mp.resolve_routing_plan(
+            {
+                "sync": {
+                    "backend": "litellm",
+                    "model": "openai/gpt-4o-mini",
+                },
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "provider-prefixed"):
+            mp.override_sync_stage(
+                plan, mp.STAGE_AB_EXPERIMENT, "gpt-4o-mini",
+            )
+
     def test_unknown_sync_backend_refused(self) -> None:
         with self.assertRaises(ValueError):
             mp.resolve_routing_plan({"sync": {"backend": "openai"}})

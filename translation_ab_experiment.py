@@ -413,14 +413,15 @@ def render_markdown_report(
         '',
         '## Variant Settings',
         '',
-        '| Variant | Model | Story Memory | RAG | Source Index | Macro (preview) |',
-        '| --- | --- | --- | --- | --- | --- |',
+        '| Variant | Provider | Model | Story Memory | RAG | Source Index | Macro (preview) |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
     ]
     for name in variant_names:
         settings = settings_by_variant.get(name, {})
         lines.append(
-            '| {name} | {model} | {story} | {rag} | {source_index} | {macro} |'.format(
+            '| {name} | {provider} | {model} | {story} | {rag} | {source_index} | {macro} |'.format(
                 name=_escape_table_cell(name),
+                provider=_escape_table_cell(settings.get('provider', '')),
                 model=_escape_table_cell(settings.get('model', '')),
                 story='yes' if settings.get('story_memory_enabled') else 'no',
                 rag='yes' if settings.get('rag_enabled') else 'no',
@@ -838,6 +839,7 @@ def run_translation_ab_experiment(
     finally:
         experiment_settings = {
             'manifest_path': manifest.get('_manifest_path', ''),
+            'provider': ab_profile.provider,
             'model': default_model,
             'limit': limit,
             'offset': offset,

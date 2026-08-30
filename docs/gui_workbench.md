@@ -213,7 +213,7 @@ GUI 不要求手写 JSON 变体文件。对话框以 **baseline + 可选覆盖�
   - **原文索引**
 - 「强制开启 / 强制关闭」会在 baseline 之外追加一个仅覆盖该开关的变体。
 
-至少需为某一维度选择「强制开启」或「强制关闭」，否则会提示对比项不足。高级用户仍可在命令参考区复制 `compare-variants --variants-file <variants.json>` 模板，自行编写更复杂的变体（例如 macro setting、模型覆盖）；GUI 对话框暂不覆盖这些维度。
+至少需为某一维度选择「强制开启」或「强制关闭」，否则会提示对比项不足。高级用户仍可在命令参考区复制 `compare-variants --variants-file <variants.json>` 模板，自行编写更复杂的上下文变体（例如 macro setting）；GUI 对话框暂不覆盖这些维度。模型是单次实验的共享执行路由，如需切换模型请使用运行级 `--model`，`variants.json` 中的 `model` / `provider` 不会形成逐变体路由。
 
 ### 高级选项
 
