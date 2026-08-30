@@ -1,11 +1,11 @@
 # #346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同
 
-状态：P0–P4 已实现并完成正式出口审计（2026-08-28）；P5 仍等待 #341 · D1–D7 已于 2026-08-22 冻结，见 [定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547) · 历史基线 `main@fa69d14`（2026-08-21）
+状态：P0–P5 已实现并完成正式出口审计（2026-08-30）；D1–D7 已于 2026-08-22 冻结，见 [定稿评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/346#issuecomment-5379565547) · 历史基线 `main@fa69d14`（2026-08-21）
 关联 issue：<https://github.com/hu-border-collie/renpy-translation-lab/issues/346>
 
 ## 0. 结论
 
-#346 的 P0–P3 已由 #378/#380/#390/#394 合入；P4 在 #397 合并后的主干上重新审计并补齐普通 Sync/Batch freshness、规范化请求 diff、diagnostics/legacy/GUI/文档与回归测试。P5 与 #341 联动，仍不在本阶段范围内。
+#346 的 P0–P3 已由 #378/#380/#390/#394 合入；P4 在 #397 合并后的主干上重新审计并补齐普通 Sync/Batch freshness、规范化请求 diff、diagnostics/legacy/GUI/文档与回归测试；P5 在 #401 合入 #341 provider 后补齐了两条执行路径的等价请求、预算裁剪与降级诊断。
 
 | 阶段 | 内容 | 是否依赖 #341 |
 |---|---|---|
@@ -14,7 +14,7 @@
 | P2 | Gemini Batch 改为消费 TranslationPlan | 否 |
 | P3 | Sync 初译改为消费同一 TranslationPlan | 否 |
 | P4 | 诊断、黄金等价测试与 source snapshot 安全收口 | 否 |
-| P5 | Source Index / Published Project Analysis / Embedding provider 接入 | 是 |
+| P5 | Source Index / Published Project Analysis / Embedding provider 的等价合同、预算与降级诊断 | 是 |
 
 ## 1. 基线事实（main@`fa69d14`）
 
@@ -199,15 +199,15 @@ ContextLayer / ContextAssembly
 
 ## 8. P5：#341 联动
 
-#341 在 P1 冻结 provider 接口后即可并行开发，P4 完成后合并最终集成：
+#341 在 P1 冻结 provider 接口后并行完成生产接线，#346 P5 负责最终合同收口：
 
 1. #341 实现 `source_index` provider（复用现有 Source Index Store，不复制索引格式）；
 2. #341 实现 `published_project_analysis` provider（只注入 fresh/published brief，记录 identity）；
 3. #341 实现 provider-neutral Embedding 边界（model/task type/dimension 与 store 一致，否则拒绝混用）；
-4. #346 侧补充两条路径对这些 provider 的等价 golden case 与预算/降级诊断；
+4. #346 侧已补充两条路径对这些 provider 的等价 golden case，以及预算裁剪、disabled/missing/incompatible/rebuild/draft/stale 降级诊断；
 5. 用 #139 或真实项目 A/B 验证收益后再决定是否默认开启。
 
-#346 的最终验收项中涉及 Source Index / PA 的部分在此阶段关闭。
+#346 的最终验收项中涉及 Source Index / PA / Embedding 的部分已在 P5 关闭。
 
 ## 9. 阶段与 issue checkbox 映射
 
@@ -222,7 +222,8 @@ ContextLayer / ContextAssembly
 | Gemini Batch 构建器改为消费 TranslationPlan | P2 |
 | 同步初译入口改为消费同一 TranslationPlan | P3 |
 | plan 和每个 request 输出规范化 fingerprint/diagnostics | P1 / P4 |
-| golden tests：Sync 与 Batch 交给模型前规范化请求相同 | P4 |
+| golden tests：Sync 与 Batch 交给模型前规范化请求相同 | P4 / P5 |
+| Source Index / Published Project Analysis / Embedding provider 的预算与降级诊断 | P5 |
 | 与 #265 source snapshot/引擎适配标识对齐 | P2–P4 |
 
 ## 10. 门禁命令

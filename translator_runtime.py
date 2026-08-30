@@ -237,6 +237,7 @@ SYNC_SOURCE_INDEX_STORE_DIR = ""
 SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
 SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
 SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
 _SYNC_SOURCE_INDEX_STORE = None
 SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
@@ -1009,7 +1010,8 @@ def load_sync_rag_settings(config):
 def load_sync_source_index_settings(config):
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
 
     sync = config.get("sync")
     if not isinstance(sync, dict):
@@ -1030,6 +1032,7 @@ def load_sync_source_index_settings(config):
         source_index.get("char_limit"),
         DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT,
     )
+    SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
     store_dir = source_index.get("store_dir")
     if store_dir:
         SYNC_SOURCE_INDEX_STORE_DIR = _resolve_path(BASE_DIR, store_dir)
@@ -1608,7 +1611,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
     global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
@@ -1694,6 +1698,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         SYNC_SOURCE_INDEX_TOP_K = applied.sync_source_index_top_k
         SYNC_SOURCE_INDEX_MIN_SIMILARITY = applied.sync_source_index_min_similarity
         SYNC_SOURCE_INDEX_CHAR_LIMIT = applied.sync_source_index_char_limit
+        SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
         _SYNC_SOURCE_INDEX_STORE = None
         SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = (
             applied.sync_project_analysis_inject_published_brief
@@ -1840,7 +1845,8 @@ def _reset_project_settings_to_defaults():
     global SYNC_RAG_UPDATE_ON_SUCCESS, _SYNC_RAG_STORE
     global SYNC_SOURCE_INDEX_ENABLED, SYNC_SOURCE_INDEX_STORE_DIR
     global SYNC_SOURCE_INDEX_TOP_K, SYNC_SOURCE_INDEX_MIN_SIMILARITY
-    global SYNC_SOURCE_INDEX_CHAR_LIMIT, _SYNC_SOURCE_INDEX_STORE
+    global SYNC_SOURCE_INDEX_CHAR_LIMIT, SYNC_SOURCE_INDEX_CHAR_BUDGET
+    global _SYNC_SOURCE_INDEX_STORE
     global SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
     global SYNC_STORY_MEMORY_ENABLED, SYNC_STORY_MEMORY_GRAPH_FILE
     global SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS, SYNC_STORY_MEMORY_TOP_K_RELATIONS
@@ -1898,6 +1904,7 @@ def _reset_project_settings_to_defaults():
     SYNC_SOURCE_INDEX_TOP_K = DEFAULT_SYNC_SOURCE_INDEX_TOP_K
     SYNC_SOURCE_INDEX_MIN_SIMILARITY = DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY
     SYNC_SOURCE_INDEX_CHAR_LIMIT = DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT
+    SYNC_SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
     _SYNC_SOURCE_INDEX_STORE = None
     SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 
@@ -3393,9 +3400,7 @@ def build_live_embedding_adapter(settings=None):
 
 
 def get_sync_source_index_char_budget():
-    return max(0, int(SYNC_SOURCE_INDEX_TOP_K or 0)) * max(
-        0, int(SYNC_SOURCE_INDEX_CHAR_LIMIT or 0)
-    )
+    return max(0, int(SYNC_SOURCE_INDEX_CHAR_BUDGET or 0))
 
 
 def _attach_store_document_identity(store, settings=None, *, rebuild=False):
@@ -3627,11 +3632,14 @@ def retrieve_sync_source_hits(target_items):
         return [], {"enabled": False}
     query_text = advanced_context.build_source_only_query_text(target_items)
     char_budget = get_sync_source_index_char_budget()
+    settings = current_sync_embedding_settings()
+    embedding_provider = advanced_context.embedding_provider_diagnostics(settings)
     if not query_text:
         return [], {
             "enabled": True,
             "reason": "empty_query",
             "source_context_char_budget": char_budget,
+            "embedding_provider": embedding_provider,
         }
     try:
         store = get_sync_source_index_store()
@@ -3641,8 +3649,13 @@ def retrieve_sync_source_hits(target_items):
                 "reason": "empty_source_store",
                 "source_context_char_budget": char_budget,
                 "store_dir": getattr(store, "store_dir", SYNC_SOURCE_INDEX_STORE_DIR or ""),
+                "store_schema_version": (
+                    (getattr(store, "metadata", {}) or {}).get("schema_version")
+                    if store is not None
+                    else None
+                ),
+                "embedding_provider": embedding_provider,
             }
-        settings = current_sync_embedding_settings()
         compatibility = embedding_runtime.store_compatibility_report(
             store,
             settings.query_identity(),
@@ -3654,9 +3667,16 @@ def retrieve_sync_source_hits(target_items):
                 "action": compatibility.action,
                 "embedding_compatibility": compatibility.to_dict(),
                 "source_context_char_budget": char_budget,
+                "store_dir": getattr(store, "store_dir", SYNC_SOURCE_INDEX_STORE_DIR or ""),
+                "store_schema_version": (
+                    (getattr(store, "metadata", {}) or {}).get("schema_version")
+                    if store is not None
+                    else None
+                ),
+                "embedding_provider": embedding_provider,
             }
         query_vector = embed_sync_query_text(query_text)
-        return advanced_context.retrieve_source_hits_compatible(
+        hits, stats = advanced_context.retrieve_source_hits_compatible(
             store,
             query_vector,
             settings.query_identity(),
@@ -3669,6 +3689,8 @@ def retrieve_sync_source_hits(target_items):
             embedding_dim=SYNC_RAG_OUTPUT_DIMENSIONALITY,
             char_budget=char_budget,
         )
+        stats["embedding_provider"] = embedding_provider
+        return hits, stats
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
         print(
@@ -3678,6 +3700,7 @@ def retrieve_sync_source_hits(target_items):
         return [], {
             "enabled": True,
             "source_context_char_budget": char_budget,
+            "embedding_provider": embedding_provider,
             **diagnostics,
         }
 
@@ -5157,7 +5180,21 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
             'non_translatable_exact': non_translatable_exact,
             'macro_setting': macro_setting,
         })
-        return text
+        return {
+            'text': text,
+            'diagnostics': {
+                'source_index': dict(source_index_stats or {}),
+                **(
+                    {
+                        'embedding_provider': advanced_context.embedding_provider_diagnostics(
+                            current_sync_embedding_settings()
+                        )
+                    }
+                    if (SYNC_SOURCE_INDEX_ENABLED or SYNC_RAG_ENABLED)
+                    else {}
+                ),
+            },
+        }
 
     def analysis_provider(chunk_input):
         for capture in captures:
@@ -5166,14 +5203,28 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
                 and list(capture.get('expected_ids') or [])
                 == [unit.id for unit in chunk_input.target_units]
             ):
-                return capture.get('analysis_blocks_text') or ''
+                return {
+                    'text': capture.get('analysis_blocks_text') or '',
+                    'diagnostics': {
+                        'published_project_analysis': dict(
+                            capture.get('project_analysis') or {}
+                        ),
+                    },
+                }
         project_context = load_sync_injectable_project_context(
             chunk_input.file_rel_path,
             [unit.display_line_number for unit in chunk_input.target_units],
         )
-        return translation_plan.normalize_context_provider_text(
-            advanced_context.render_analysis_reference_text(project_context)
-        )
+        return {
+            'text': translation_plan.normalize_context_provider_text(
+                advanced_context.render_analysis_reference_text(project_context)
+            ),
+            'diagnostics': {
+                'published_project_analysis': advanced_context.analysis_skip_diagnostics(
+                    project_context
+                ),
+            },
+        }
 
     plan_build = build_plan(retrieval_provider, analysis_provider)
     if len(captures) != len(plan_build.requests):
@@ -6070,6 +6121,8 @@ def derive_sync_retry_request(parent_request, batch, request_context, suffix, ki
         macro_setting=context.get('macro_setting', SYNC_MACRO_SETTING),
         retrieval_blocks_text=context.get('retrieval_blocks_text', ''),
         analysis_blocks_text=context.get('analysis_blocks_text', ''),
+        retrieval_diagnostics=context.get('retrieval_diagnostics'),
+        analysis_diagnostics=context.get('analysis_diagnostics'),
         lineage_kind=kind,
     )
 
@@ -7196,6 +7249,12 @@ def run_translation(*, prepare=False):
                         translation_request.context_assembly or {}
                     ),
                     'rag_stats': dict(request_context.get('rag_stats') or {}),
+                    'source_index_stats': dict(
+                        request_context.get('source_index_stats') or {}
+                    ),
+                    'project_analysis': dict(
+                        request_context.get('project_analysis') or {}
+                    ),
                 })
                 file_context_batches.append(context_stats)
                 successful_entries.extend(process_batch_with_retry(

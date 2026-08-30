@@ -149,6 +149,8 @@ class EmbeddingRuntimeSettings:
             'adapter_backend': self.adapter_backend,
             'provider': identity.provider,
             'model': self.model,
+            'query_task_type': self.native_query_task_type,
+            'document_task_type': self.native_document_task_type,
             'output_dimension': self.output_dimension,
             'timeout_seconds': self.timeout_seconds,
             'fingerprint': identity.fingerprint,

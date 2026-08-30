@@ -17,6 +17,9 @@ import prompt_context
 from rag_memory import truncate_text
 import story_memory
 
+# Independent aggregate Source Index partition budget.
+DEFAULT_SOURCE_INDEX_CHAR_BUDGET = 880
+
 
 def compact_text(text: object) -> str:
     if not isinstance(text, str):
@@ -37,6 +40,19 @@ def compact_item_texts(items: Sequence[object] | None) -> list[str]:
         if text:
             compacted.append(text)
     return compacted
+
+
+def embedding_provider_diagnostics(settings: object) -> dict[str, Any]:
+    """Return credential-free identity facts for the active embedding provider."""
+
+    public_dict = getattr(settings, 'public_dict', None)
+    if not callable(public_dict):
+        return {}
+    try:
+        payload = public_dict()
+    except Exception:
+        return {}
+    return dict(payload) if isinstance(payload, Mapping) else {}
 
 
 def build_source_only_query_text(target_items: Sequence[object] | None) -> str:
@@ -92,17 +108,43 @@ def shape_history_hits(matches: Sequence[Mapping[str, Any]] | None, char_limit: 
 def shape_source_hits(
     matches: Sequence[Mapping[str, Any]] | None,
     char_limit: int,
+    char_budget: int = 0,
 ) -> tuple[list[dict[str, Any]], int, int]:
+    """Shape source hits under both per-hit and aggregate text budgets.
+
+    ``char_limit`` protects each excerpt while ``char_budget`` protects the
+    complete Source Index partition for one request. A zero aggregate budget
+    preserves the historical per-hit-only behavior; positive budgets consume
+    ranked hits in order and truncate the final excerpt when necessary.
+    """
+
     hits = []
     truncated_count = 0
     source_context_chars = 0
-    for match in matches or []:
+    try:
+        remaining_budget = max(0, int(char_budget or 0))
+    except (TypeError, ValueError):
+        remaining_budget = 0
+    bounded = remaining_budget > 0
+    try:
+        per_hit_limit = int(char_limit or 0)
+    except (TypeError, ValueError):
+        per_hit_limit = 0
+    match_list = list(matches or [])
+    for match in match_list:
+        if bounded and remaining_budget <= 0:
+            break
         source_text = match.get('source_text', '')
-        truncated_source_text = truncate_text(source_text, char_limit)
+        effective_limit = per_hit_limit
+        if bounded:
+            effective_limit = min(effective_limit, remaining_budget) if effective_limit > 0 else remaining_budget
+        truncated_source_text = truncate_text(source_text, effective_limit)
         was_truncated = isinstance(source_text, str) and truncated_source_text != source_text
         if was_truncated:
             truncated_count += 1
         source_context_chars += len(truncated_source_text)
+        if bounded:
+            remaining_budget = max(0, remaining_budget - len(truncated_source_text))
         hits.append(
             {
                 'source_id': match.get('source_id', ''),
@@ -184,7 +226,7 @@ def retrieve_source_hits_compatible(
         'hit_count': 0,
         'truncated_count': 0,
         'source_context_chars': 0,
-        'source_context_char_budget': char_budget,
+        'source_context_char_budget': 0,
         'store_dir': getattr(store, 'store_dir', ''),
         'store_schema_version': (getattr(store, 'metadata', {}) or {}).get('schema_version'),
         'embedding_compatibility': compatibility,
@@ -194,14 +236,30 @@ def retrieve_source_hits_compatible(
             if key != 'embedding_compatibility'
         },
     }
+    try:
+        normalized_budget = max(0, int(char_budget or 0))
+    except (TypeError, ValueError):
+        normalized_budget = 0
+    stats['source_context_char_budget'] = normalized_budget
     if not compatibility.get('compatible'):
         stats['reason'] = 'rebuild_store'
         stats['action'] = compatibility.get('action') or 'rebuild_store'
         return [], stats
-    hits, truncated_count, source_context_chars = shape_source_hits(matches, char_limit)
+    hits, truncated_count, source_context_chars = shape_source_hits(
+        matches,
+        char_limit,
+        char_budget=char_budget,
+    )
     stats['hit_count'] = len(hits)
     stats['truncated_count'] = truncated_count
     stats['source_context_chars'] = source_context_chars
+    stats['source_context_budget_dropped_count'] = max(
+        0,
+        len(matches or []) - len(hits),
+    ) if normalized_budget else 0
+    stats['source_context_budget_exhausted'] = bool(
+        normalized_budget and source_context_chars >= normalized_budget
+    )
     stats['matched_count'] = diagnostics.get('matched_before_top_k', len(matches))
     stats['filtered_count'] = diagnostics.get('metadata_filtered_count', 0)
     stats['stale_hits_skipped'] = diagnostics.get('metadata_filtered_count', 0)
@@ -266,13 +324,14 @@ def analysis_skip_diagnostics(project_context: Mapping[str, Any] | None) -> dict
 
     payload = dict(project_context or {})
     status = payload.get('status') if isinstance(payload.get('status'), Mapping) else {}
+    explicit_brief_status = payload.get('brief_status') or status.get('brief_status')
     brief_status = str(
-        payload.get('brief_status')
-        or status.get('brief_status')
+        explicit_brief_status
         or ('published' if payload.get('injectable') else '')
-        or 'missing'
     )
     reason = str(payload.get('reason') or '')
+    if not payload.get('injectable') and not reason:
+        reason = 'injection_disabled'
     lineage = {}
     artifacts = status.get('artifacts') if isinstance(status, Mapping) else {}
     if isinstance(artifacts, Mapping):
@@ -280,11 +339,19 @@ def analysis_skip_diagnostics(project_context: Mapping[str, Any] | None) -> dict
         if isinstance(brief_entry, Mapping):
             lineage = dict(brief_entry.get('lineage') or {})
     fingerprint = str(lineage.get('source_fingerprint') or payload.get('source_fingerprint') or '')
+    raw_injected_chars = payload.get('injected_chars')
+    if raw_injected_chars is None:
+        injected_chars = len(str(payload.get('text') or ''))
+    else:
+        try:
+            injected_chars = max(0, int(raw_injected_chars))
+        except (TypeError, ValueError):
+            injected_chars = len(str(payload.get('text') or ''))
     return {
         'injectable': bool(payload.get('injectable')),
         'reason': reason,
         'brief_status': brief_status,
         'source_fingerprint': fingerprint,
         'diagnostics': str(payload.get('diagnostics') or ''),
-        'injected_chars': len(str(payload.get('text') or '')),
+        'injected_chars': injected_chars,
     }
