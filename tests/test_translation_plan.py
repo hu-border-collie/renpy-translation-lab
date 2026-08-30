@@ -144,11 +144,11 @@ class CanonicalJsonTests(unittest.TestCase):
             non_translatable_exact=['B-side'],
         )
         self.assertEqual(str_build.plan.plan_id, list_build.plan.plan_id)
-        dawn_chorus_chunk = next(
+        sample_ensemble_chunk = next(
             request for request in str_build.requests
             if '- Preserve: Sample Ensemble' in request.user_prompt
         )
-        self.assertIn('- Preserve: Sample Ensemble', dawn_chorus_chunk.user_prompt)
+        self.assertIn('- Preserve: Sample Ensemble', sample_ensemble_chunk.user_prompt)
         b_side_chunk = next(
             request for request in str_build.requests
             if '- Non-translatable: B-side' in request.user_prompt

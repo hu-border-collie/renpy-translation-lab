@@ -256,10 +256,7 @@ INCLUDE_FILES = set()
 INCLUDE_PREFIXES = set()
 
 NORMALIZE_TRANSLATION_MAP = {}
-PRESERVE_TERM_ALIASES = {
-    "E.A.": ("E. A.", "Example Academy"),
-    "E. A.": ("E.A.", "Example Academy"),
-}
+PRESERVE_TERM_ALIASES = {}
 
 SPECIAL_ESCAPES = [
     ("\\", "\\\\"),

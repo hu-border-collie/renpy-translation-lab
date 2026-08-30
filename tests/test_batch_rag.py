@@ -208,6 +208,7 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.STORY_MEMORY_ENABLED = False
             batch_mod.legacy.PRESERVE_TERMS = ['Sample Ensemble']
 
+            sample_text = 'Hello Sample Ensemble'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -215,10 +216,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Hello Sample Ensemble',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 17,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                     ],
@@ -264,6 +265,7 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {'setlist': '曲目单'}
             batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
 
+            sample_text = 'Sample Ensemble setlist and Director B'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -271,10 +273,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Sample Ensemble setlist and Director B',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 36,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                     ],
@@ -397,6 +399,7 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {}
             batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
 
+            sample_text = 'Sample Ensemble'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -404,10 +407,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Sample Ensemble',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 12,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                         {

@@ -126,12 +126,12 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "448d789f851e4ec9",
-  "plan_id": "8878158beda215c7",
+  "plan_fingerprint": "4d1b60ef84ae7585",
+  "plan_id": "84faf27bbbe9dbed",
   "request_summaries": [
     {
       "capability_requirements": {
-        "context_budget_tokens": 2098,
+        "context_budget_tokens": 2109,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -175,7 +175,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 189,
+            "char_used": 200,
             "diagnostics": {
               "lexical_glossary_hits": 3,
               "macro_injected": true,
@@ -212,15 +212,15 @@
             "truncated": false
           }
         ],
-        "total_char_used": 961
+        "total_char_used": 972
       },
-      "prompt_fingerprint": "0da1a7a4749d9e8f",
-      "request_fingerprint": "7312253c4fac4789",
-      "request_id": "96d0a6e3485ab8d0"
+      "prompt_fingerprint": "f70d96d45c386300",
+      "request_fingerprint": "b2df5399f8e42e3b",
+      "request_id": "b80c6fba192abe84"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 2212,
+        "context_budget_tokens": 2223,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -265,7 +265,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 165,
+            "char_used": 176,
             "diagnostics": {
               "lexical_glossary_hits": 2,
               "macro_injected": true,
@@ -302,15 +302,15 @@
             "truncated": false
           }
         ],
-        "total_char_used": 1075
+        "total_char_used": 1086
       },
-      "prompt_fingerprint": "34a40ad1af7e7d3d",
-      "request_fingerprint": "e015a0410ff9742a",
-      "request_id": "50130ff67fc47c85"
+      "prompt_fingerprint": "ec980daa693042f7",
+      "request_fingerprint": "8225365584799d09",
+      "request_id": "7cb559fedd185643"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 1674,
+        "context_budget_tokens": 1685,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -351,7 +351,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 131,
+            "char_used": 142,
             "diagnostics": {
               "lexical_glossary_hits": 1,
               "macro_injected": true,
@@ -388,11 +388,11 @@
             "truncated": false
           }
         ],
-        "total_char_used": 537
+        "total_char_used": 548
       },
-      "prompt_fingerprint": "878ebcbc581b6cae",
-      "request_fingerprint": "af9bd2544b6a944f",
-      "request_id": "a11287e9b2ce3c7a"
+      "prompt_fingerprint": "9853cc8aeaa6e866",
+      "request_fingerprint": "6b8ad0b94d8e6d3c",
+      "request_id": "1dc500e765c71071"
     }
   ],
   "run_id": "fixture-run",

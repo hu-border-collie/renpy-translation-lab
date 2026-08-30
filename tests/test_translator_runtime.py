@@ -752,6 +752,9 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         with (
             mock.patch.object(runtime, 'PRESERVE_TERMS', ['E.A.']),
             mock.patch.object(runtime, 'PRESERVE_TERMS_LOWER', {'e.a.'}),
+            mock.patch.object(runtime, 'PRESERVE_TERM_ALIASES', {
+                'E.A.': ('E. A.', 'Example Academy'),
+            }),
         ):
             self.assertEqual(runtime.missing_preserved_terms('I am in E.A. now.', '我现在在Example Academy。'), [])
             self.assertEqual(runtime.missing_preserved_terms('I am in E.A. now.', '我现在在学校。'), ['E.A.'])
