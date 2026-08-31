@@ -6,7 +6,7 @@ import html
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +51,19 @@ REASON_LABELS = {
 class QualityReportExportError(ValueError):
     """Raised when a quality report cannot be read or exported safely."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        code_name: str = "QUALITY_REPORT_EXPORT_FAILED",
+        suggested_action: str = "retry_quality_report",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code_name = str(code_name)
+        self.suggested_action = str(suggested_action)
+        self.details = dict(details or {})
+
 
 def reason_label(reason_code: str) -> str:
     return REASON_LABELS.get(reason_code, reason_code or "未知规则")
@@ -92,12 +105,20 @@ def load_quality_findings(path: str) -> list[dict[str, Any]]:
     source = Path(path)
     if not path or not source.is_file():
         raise QualityReportExportError(
-            "未找到质量检查报告；请先运行 check，或确认 manifest 引用的报告仍然存在。"
+            "未找到质量检查报告；请先运行 check，或确认 manifest 引用的报告仍然存在。",
+            code_name="QUALITY_FINDINGS_UNAVAILABLE",
+            suggested_action="rerun_check",
+            details={"quality_findings_path": path},
         )
     try:
         text = source.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError) as exc:
-        raise QualityReportExportError(f"无法读取质量检查报告：{source}") from exc
+        raise QualityReportExportError(
+            f"无法读取质量检查报告：{source}",
+            code_name="QUALITY_FINDINGS_UNAVAILABLE",
+            suggested_action="rerun_check",
+            details={"quality_findings_path": str(source)},
+        ) from exc
 
     findings: list[dict[str, Any]] = []
     for line_number, raw_line in enumerate(text.splitlines(), start=1):
@@ -107,11 +128,23 @@ def load_quality_findings(path: str) -> list[dict[str, Any]]:
             value = json.loads(raw_line)
         except json.JSONDecodeError as exc:
             raise QualityReportExportError(
-                f"质量检查报告第 {line_number} 行不是有效 JSON。"
+                f"质量检查报告第 {line_number} 行不是有效 JSON。",
+                code_name="INVALID_QUALITY_FINDINGS_JSON",
+                suggested_action="rerun_check",
+                details={
+                    "quality_findings_path": str(source),
+                    "line": line_number,
+                },
             ) from exc
         if not isinstance(value, dict):
             raise QualityReportExportError(
-                f"质量检查报告第 {line_number} 行不是 JSON 对象。"
+                f"质量检查报告第 {line_number} 行不是 JSON 对象。",
+                code_name="INVALID_QUALITY_FINDINGS_JSON",
+                suggested_action="rerun_check",
+                details={
+                    "quality_findings_path": str(source),
+                    "line": line_number,
+                },
             )
         findings.append(translation_quality.normalize_finding(value))
     return findings
@@ -138,6 +171,7 @@ def _finding_card(finding: Mapping[str, Any], acknowledged: set[str]) -> str:
     searchable = " ".join(
         str(finding.get(field) or "")
         for field in (
+            "finding_id",
             "reason_code",
             "file",
             "item_id",
@@ -171,7 +205,7 @@ def _finding_card(finding: Mapping[str, Any], acknowledged: set[str]) -> str:
         f'<span class="disposition">{_escape(disposition)}</span>'
         f'<span class="state state-{state}">{state_label}</span>'
         f'<h3>{_escape(reason_label(reason))}</h3>'
-        f'<code>{_escape(reason)}</code>'
+        f'<code>{_escape(reason)} · finding {_escape(finding_id)}</code>'
         '</div>'
         f'<p class="location">{_escape(_location(finding))}</p>'
         f'<dl>{"".join(detail_rows)}</dl>'
@@ -266,11 +300,30 @@ def render_quality_report_html(
 '''
 
 
+def resolve_report_output_path(
+    manifest: Mapping[str, Any],
+    *,
+    manifest_path: str = "",
+    output_path: str = "",
+) -> str:
+    """Resolve an explicit or default HTML destination without writing it."""
+
+    explicit = str(output_path or "").strip()
+    if explicit:
+        return os.path.abspath(explicit)
+    source_path = resolve_report_source(manifest, manifest_path=manifest_path)
+    return os.path.join(
+        os.path.dirname(os.path.abspath(source_path)),
+        DEFAULT_REPORT_FILENAME,
+    )
+
+
 def export_quality_report(
     manifest: Mapping[str, Any],
     *,
     manifest_path: str = "",
     output_path: str = "",
+    protected_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Read the current findings and atomically write one standalone report."""
 
@@ -281,27 +334,37 @@ def export_quality_report(
         for value in manifest.get("quality_acknowledged_finding_ids") or []
         if str(value).strip()
     }
-    resolved_output = str(output_path or "").strip()
-    if resolved_output:
-        resolved_output = os.path.abspath(resolved_output)
-    else:
-        resolved_output = os.path.join(
-            os.path.dirname(os.path.abspath(source_path)),
-            DEFAULT_REPORT_FILENAME,
-        )
+    resolved_output = resolve_report_output_path(
+        manifest,
+        manifest_path=manifest_path,
+        output_path=output_path,
+    )
     if os.path.isdir(resolved_output):
-        raise QualityReportExportError(f"HTML 输出路径不能是目录：{resolved_output}")
-    protected_paths = {
-        os.path.normcase(os.path.abspath(path))
+        raise QualityReportExportError(
+            f"HTML 输出路径不能是目录：{resolved_output}",
+            code_name="QUALITY_REPORT_PATH_CONFLICT",
+            suggested_action="choose_different_output",
+            details={"output_path": resolved_output},
+        )
+    protected_path_map = {
+        os.path.normcase(os.path.abspath(path)): os.path.abspath(path)
         for path in (
             source_path,
             str(manifest_path or manifest.get("_manifest_path") or ""),
+            *protected_paths,
         )
         if str(path or "").strip()
     }
-    if os.path.normcase(resolved_output) in protected_paths:
+    conflict_path = protected_path_map.get(os.path.normcase(resolved_output))
+    if conflict_path:
         raise QualityReportExportError(
-            "HTML 输出路径不能覆盖 manifest 或 quality_findings.jsonl。"
+            f"HTML 输出路径不能覆盖任务输入或写回目标：{conflict_path}",
+            code_name="QUALITY_REPORT_PATH_CONFLICT",
+            suggested_action="choose_different_output",
+            details={
+                "output_path": resolved_output,
+                "conflict_path": conflict_path,
+            },
         )
 
     title_hint = str(
@@ -320,7 +383,12 @@ def export_quality_report(
         os.makedirs(os.path.dirname(resolved_output) or os.curdir, exist_ok=True)
         atomic_write_text(resolved_output, document)
     except OSError as exc:
-        raise QualityReportExportError(f"无法写入 HTML 报告：{resolved_output}") from exc
+        raise QualityReportExportError(
+            f"无法写入 HTML 报告：{resolved_output}",
+            code_name="QUALITY_REPORT_WRITE_FAILED",
+            suggested_action="choose_different_output",
+            details={"output_path": resolved_output},
+        ) from exc
 
     return {
         "schema_version": REPORT_SCHEMA_VERSION,

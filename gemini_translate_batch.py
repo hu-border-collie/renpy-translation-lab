@@ -19133,11 +19133,27 @@ def dispatch_command(parser, args):
 
     if command == 'quality-report':
         manifest = load_manifest(args.target or None)
-        result = quality_report_export.export_quality_report(
-            manifest,
-            manifest_path=manifest['_manifest_path'],
-            output_path=getattr(args, 'html', '') or '',
-        )
+        try:
+            result = quality_report_export.export_quality_report(
+                manifest,
+                manifest_path=manifest['_manifest_path'],
+                output_path=getattr(args, 'html', '') or '',
+                protected_paths=collect_manifest_protected_paths(
+                    manifest['_manifest_path']
+                ),
+            )
+        except quality_report_export.QualityReportExportError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code_name,
+                suggested_action=exc.suggested_action,
+                semantic_exit_code=(
+                    cli_contract.EXIT_USAGE
+                    if exc.code_name == 'QUALITY_REPORT_PATH_CONFLICT'
+                    else cli_contract.EXIT_INVALID_STATE
+                ),
+                details=exc.details,
+            ) from exc
         print(f"Quality report: {result['output_path']}")
         print(
             'Findings: '
@@ -20130,7 +20146,7 @@ def _candidate_manifest_paths_from_args(args):
     return candidates
 
 
-def _collect_manifest_protected_paths(manifest_path):
+def collect_manifest_protected_paths(manifest_path):
     """Return task inputs and writeback targets associated with one manifest."""
 
     protected = [manifest_path]
@@ -20209,6 +20225,12 @@ def _collect_manifest_protected_paths(manifest_path):
                 continue
 
     return protected
+
+
+def _collect_manifest_protected_paths(manifest_path):
+    """Compatibility wrapper for the former private helper name."""
+
+    return collect_manifest_protected_paths(manifest_path)
 
 
 def _collect_output_file_protected_paths(args):
@@ -20316,8 +20338,32 @@ def _collect_output_file_protected_paths(args):
     for manifest_path in _candidate_manifest_paths_from_args(args):
         add_path(manifest_path)
         if os.path.isfile(manifest_path):
-            for path in _collect_manifest_protected_paths(manifest_path):
+            for path in collect_manifest_protected_paths(manifest_path):
                 add_path(path)
+            if command == 'quality-report' and not (
+                isinstance(html_output, str) and html_output.strip()
+            ):
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as handle:
+                        manifest = json.load(handle)
+                    if isinstance(manifest, dict):
+                        manifest = dict(manifest)
+                        manifest['_manifest_path'] = manifest_path
+                        manifest['_package_dir'] = os.path.dirname(manifest_path)
+                        add_path(
+                            quality_report_export.resolve_report_output_path(
+                                manifest,
+                                manifest_path=manifest_path,
+                            )
+                        )
+                except (
+                    OSError,
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                    TypeError,
+                    ValueError,
+                ):
+                    pass
 
     return protected
 

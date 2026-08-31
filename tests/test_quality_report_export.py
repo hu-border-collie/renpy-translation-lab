@@ -60,6 +60,8 @@ class QualityReportExportTests(unittest.TestCase):
         self.assertIn("显示 2 / 2 条", document)
         self.assertIn('data-state="acknowledged"', document)
         self.assertIn("CJK/拉丁字符间距", document)
+        self.assertIn("finding f-warning", document)
+        self.assertIn("f-warning quality.typography.cjk_latin_spacing", document)
         self.assertIn("&lt;script&gt;alert(&#x27;source&#x27;)&lt;/script&gt;", document)
         self.assertNotIn("<script>alert('source')</script>", document)
         self.assertNotIn("https://", document)
@@ -100,8 +102,14 @@ class QualityReportExportTests(unittest.TestCase):
             path = Path(tmp_dir) / "quality_findings.jsonl"
             path.write_text('{}\n{"broken"\n', encoding="utf-8")
 
-            with self.assertRaisesRegex(QualityReportExportError, "第 2 行"):
+            with self.assertRaisesRegex(QualityReportExportError, "第 2 行") as raised:
                 load_quality_findings(str(path))
+
+            self.assertEqual(
+                raised.exception.code_name,
+                "INVALID_QUALITY_FINDINGS_JSON",
+            )
+            self.assertEqual(raised.exception.details["line"], 2)
 
     def test_export_refuses_to_overwrite_manifest_or_findings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -128,6 +136,43 @@ class QualityReportExportTests(unittest.TestCase):
                             manifest_path=str(manifest_path),
                             output_path=str(protected_path),
                         )
+
+    def test_export_refuses_additional_task_protected_paths(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            package = Path(tmp_dir)
+            report_path = package / "quality_findings.jsonl"
+            report_path.write_text(
+                json.dumps(FINDINGS[0], ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = package / "manifest.json"
+            results_path = package / "results.jsonl"
+            results_path.write_text("do not replace\n", encoding="utf-8")
+            manifest = {
+                "_manifest_path": str(manifest_path),
+                "last_quality_findings_path": str(report_path),
+            }
+
+            with self.assertRaises(QualityReportExportError) as raised:
+                export_quality_report(
+                    manifest,
+                    manifest_path=str(manifest_path),
+                    output_path=str(results_path),
+                    protected_paths=[str(results_path)],
+                )
+
+            self.assertEqual(
+                raised.exception.code_name,
+                "QUALITY_REPORT_PATH_CONFLICT",
+            )
+            self.assertEqual(
+                Path(raised.exception.details["conflict_path"]),
+                results_path,
+            )
+            self.assertEqual(
+                results_path.read_text(encoding="utf-8"),
+                "do not replace\n",
+            )
 
 
 if __name__ == "__main__":

@@ -207,10 +207,15 @@ class QualityFindingsDialog(QDialog):
         if not output_path:
             return
         try:
+            import gemini_translate_batch as batch
+
             result = export_quality_report(
                 self._manifest,
                 manifest_path=self._manifest_path,
                 output_path=output_path,
+                protected_paths=batch.collect_manifest_protected_paths(
+                    self._manifest_path
+                ),
             )
         except (OSError, QualityReportExportError) as exc:
             QMessageBox.warning(self, "导出失败", str(exc))
