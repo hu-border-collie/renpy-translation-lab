@@ -604,6 +604,16 @@ def _clean_str(value: Any) -> str:
     return str(value).strip() if isinstance(value, str) else ""
 
 
+def is_provider_prefixed_model_id(model: str) -> bool:
+    """Return whether ``model`` is a LiteLLM-style provider/model id.
+
+    Google APIs also accept Gemini resource names such as
+    ``models/gemini-2.5-flash``; ``models`` is not a LiteLLM provider.
+    """
+    cleaned = _clean_str(model)
+    return "/" in cleaned and not cleaned.lower().startswith("models/")
+
+
 def _gemini_capabilities(overrides: Mapping[str, Any]) -> ModelCapabilities:
     """Adapter defaults for the direct google-genai client."""
     caps = ModelCapabilities(
@@ -778,7 +788,7 @@ def _batch_profile(
     transport.
     """
     provider = provider_from_model(model)
-    if provider:
+    if is_provider_prefixed_model_id(model):
         return ModelProfile(
             id=profile_id,
             label=label or provider_display_label(provider, custom_providers) or model,
@@ -1173,14 +1183,20 @@ def validate_routing_plan(
                 profile_id=profile_id,
             ))
             continue
-        if profile.adapter == ADAPTER_LITELLM and not profile.provider:
+        if (
+            profile.adapter == ADAPTER_LITELLM
+            and not is_provider_prefixed_model_id(profile.model)
+        ):
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Profile {profile_id} has a model without a provider prefix; "
                 "LiteLLM needs '<provider>/<model>'.",
                 profile_id=profile_id,
             ))
-        if profile.adapter == ADAPTER_GEMINI and "/" in profile.model:
+        if (
+            profile.adapter == ADAPTER_GEMINI
+            and is_provider_prefixed_model_id(profile.model)
+        ):
             issues.append(RoutingValidationIssue(
                 MODEL_PROFILE_INVALID,
                 f"Profile {profile_id} uses provider-prefixed model "
@@ -1302,6 +1318,91 @@ def override_gemini_batch_stage(
         stage=stage,
         profile_id=profile_id,
         strategy=ExecutionStrategy.GEMINI_BATCH,
+        source=ROUTE_SOURCE_EXPLICIT,
+    )
+    return replace(
+        plan,
+        profiles=profiles,
+        routes=routes,
+        capabilities=capabilities,
+    )
+
+
+def override_sync_stage(
+    plan: ModelRoutingPlan,
+    stage: str,
+    model: str,
+    *,
+    custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+) -> ModelRoutingPlan:
+    """Replace one synchronous stage on a frozen routing plan.
+
+    The replacement keeps the frozen stage's adapter family: a LiteLLM route
+    may switch to another provider-prefixed model, while a direct Gemini route
+    remains Gemini-only. Adapter-incompatible model ids are rejected here so
+    callers do not receive advice that changing the live backend could alter a
+    frozen route.
+    Other stages, profiles, and config origins remain unchanged.
+    """
+    cleaned = _clean_str(model)
+    if not cleaned:
+        raise ValueError("Sync stage override requires a model id.")
+    if stage not in KNOWN_STAGES:
+        raise ValueError(f"Unknown task stage in routing plan: {stage}")
+    base_route = plan.routes.get(stage)
+    if base_route is None:
+        raise ValueError(f"Routing plan has no route for stage: {stage}")
+    if base_route.strategy is not ExecutionStrategy.SYNC:
+        raise ValueError(
+            f"Routing plan stage {stage} is not synchronous and cannot accept "
+            "a sync model override."
+        )
+    base_profile = profile_for_route(plan, base_route)
+    if (
+        base_profile.adapter == ADAPTER_LITELLM
+        and not is_provider_prefixed_model_id(cleaned)
+    ):
+        raise ValueError(
+            f"Frozen LiteLLM stage {stage} requires a provider-prefixed model "
+            "id '<provider>/<model>'."
+        )
+    if (
+        base_profile.adapter == ADAPTER_GEMINI
+        and is_provider_prefixed_model_id(cleaned)
+    ):
+        raise ValueError(
+            f"Frozen direct Gemini stage {stage} cannot accept provider-prefixed "
+            f"model {cleaned}; rebuild the manifest with a LiteLLM sync route."
+        )
+    if base_profile.adapter not in {ADAPTER_GEMINI, ADAPTER_LITELLM}:
+        raise ValueError(
+            f"Frozen stage {stage} uses unsupported sync adapter "
+            f"{base_profile.adapter}."
+        )
+    sync_backend = (
+        SYNC_BACKEND_LITELLM
+        if base_profile.adapter == ADAPTER_LITELLM
+        else SYNC_BACKEND_GEMINI
+    )
+    profile_id = f"{stage}_override"
+    profile = _sync_profile(
+        profile_id,
+        cleaned,
+        sync_backend,
+        custom_providers,
+        label=f"{stage} explicit model",
+    )
+    profiles = dict(plan.profiles)
+    profiles[profile_id] = profile
+    capabilities = dict(plan.capabilities)
+    capabilities[profile_id] = resolve_capabilities(
+        profile, custom_providers=custom_providers,
+    )
+    routes = dict(plan.routes)
+    routes[stage] = TaskRoute(
+        stage=stage,
+        profile_id=profile_id,
+        strategy=ExecutionStrategy.SYNC,
         source=ROUTE_SOURCE_EXPLICIT,
     )
     return replace(
