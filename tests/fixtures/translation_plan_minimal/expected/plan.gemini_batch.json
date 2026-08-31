@@ -26,11 +26,11 @@
         7,
         8
       ],
-      "source_char_count": 161,
+      "source_char_count": 178,
       "unit_ids": [
-        "chapter01/dialogue.rpy:chapter01_start:1:10a68e16",
-        "chapter01/dialogue.rpy:chapter01_start:2:c4d75441",
-        "chapter01/dialogue.rpy:chapter01_start:3:39f88feb"
+        "chapter01/dialogue.rpy:chapter01_start:1:c98036f5",
+        "chapter01/dialogue.rpy:chapter01_start:2:ade3eb87",
+        "chapter01/dialogue.rpy:chapter01_start:3:d210d46b"
       ]
     },
     {
@@ -42,7 +42,7 @@
         "context_after_chars": 0,
         "context_after_items": 0,
         "context_after_limit": 10,
-        "context_before_chars": 161,
+        "context_before_chars": 178,
         "context_before_items": 3,
         "context_before_limit": 30,
         "context_truncated": false
@@ -54,11 +54,11 @@
         13,
         14
       ],
-      "source_char_count": 153,
+      "source_char_count": 157,
       "unit_ids": [
         "chapter01/dialogue.rpy:chapter01_start:4:23a766ca",
         "chapter01/dialogue.rpy:chapter01_hall:1:aa916e5f",
-        "chapter01/dialogue.rpy:chapter01_hall:2:e0e4d9f7"
+        "chapter01/dialogue.rpy:chapter01_hall:2:5353fc47"
       ]
     },
     {
@@ -82,11 +82,11 @@
         7,
         10
       ],
-      "source_char_count": 37,
+      "source_char_count": 41,
       "unit_ids": [
         "chapter02/strings.rpy:strings:1:602b26d9",
         "chapter02/strings.rpy:strings:2:2e026239",
-        "chapter02/strings.rpy:strings:3:23abf38c"
+        "chapter02/strings.rpy:strings:3:c3d384f2"
       ]
     }
   ],
@@ -126,12 +126,12 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "7926152fae63ed62",
-  "plan_id": "3876ea08740b81fe",
+  "plan_fingerprint": "de17f6a654a89fdc",
+  "plan_id": "6e210e07ff44ed7c",
   "request_summaries": [
     {
       "capability_requirements": {
-        "context_budget_tokens": 2038,
+        "context_budget_tokens": 2109,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -141,7 +141,7 @@
         "layers": [
           {
             "char_limit": 0,
-            "char_used": 486,
+            "char_used": 521,
             "diagnostics": {
               "file_rel_path": "chapter01/dialogue.rpy",
               "speakers": [
@@ -156,7 +156,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 108,
+            "char_used": 112,
             "diagnostics": {
               "algorithm": "block_bounded_window",
               "block_bounded_after": true,
@@ -175,7 +175,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 186,
+            "char_used": 200,
             "diagnostics": {
               "lexical_glossary_hits": 3,
               "macro_injected": true,
@@ -187,7 +187,7 @@
           },
           {
             "char_limit": 1420,
-            "char_used": 85,
+            "char_used": 89,
             "diagnostics": {
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
@@ -212,15 +212,15 @@
             "truncated": false
           }
         ],
-        "total_char_used": 915
+        "total_char_used": 972
       },
-      "prompt_fingerprint": "11196503f147f80c",
-      "request_fingerprint": "9f8241d4c0aa441e",
-      "request_id": "c68d7d897ea89cc7"
+      "prompt_fingerprint": "f70d96d45c386300",
+      "request_fingerprint": "72369daf1b62a6d0",
+      "request_id": "8eca9ba1bb3780c6"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 2145,
+        "context_budget_tokens": 2223,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -230,7 +230,7 @@
         "layers": [
           {
             "char_limit": 0,
-            "char_used": 484,
+            "char_used": 498,
             "diagnostics": {
               "file_rel_path": "chapter01/dialogue.rpy",
               "speakers": [
@@ -246,7 +246,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 238,
+            "char_used": 273,
             "diagnostics": {
               "algorithm": "block_bounded_window",
               "block_bounded_after": false,
@@ -254,7 +254,7 @@
               "context_after_chars": 0,
               "context_after_items": 0,
               "context_after_limit": 10,
-              "context_before_chars": 161,
+              "context_before_chars": 178,
               "context_before_items": 3,
               "context_before_limit": 30,
               "context_truncated": false
@@ -265,7 +265,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 165,
+            "char_used": 176,
             "diagnostics": {
               "lexical_glossary_hits": 2,
               "macro_injected": true,
@@ -277,7 +277,7 @@
           },
           {
             "char_limit": 1420,
-            "char_used": 85,
+            "char_used": 89,
             "diagnostics": {
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
@@ -302,15 +302,15 @@
             "truncated": false
           }
         ],
-        "total_char_used": 1022
+        "total_char_used": 1086
       },
-      "prompt_fingerprint": "fbe969abfe42a341",
-      "request_fingerprint": "0f39664e524a74a5",
-      "request_id": "1bf12c182fde98c2"
+      "prompt_fingerprint": "ec980daa693042f7",
+      "request_fingerprint": "98a395ea7089cc89",
+      "request_id": "dcd6932ee0a09722"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 1648,
+        "context_budget_tokens": 1685,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -320,7 +320,7 @@
         "layers": [
           {
             "char_limit": 0,
-            "char_used": 218,
+            "char_used": 222,
             "diagnostics": {
               "file_rel_path": "chapter02/strings.rpy",
               "speakers": [],
@@ -351,7 +351,7 @@
           },
           {
             "char_limit": 0,
-            "char_used": 127,
+            "char_used": 142,
             "diagnostics": {
               "lexical_glossary_hits": 1,
               "macro_injected": true,
@@ -363,7 +363,7 @@
           },
           {
             "char_limit": 1420,
-            "char_used": 85,
+            "char_used": 89,
             "diagnostics": {
               "budget_mode": "d5_combined_backstop",
               "history_char_limit": 220,
@@ -388,11 +388,11 @@
             "truncated": false
           }
         ],
-        "total_char_used": 525
+        "total_char_used": 548
       },
-      "prompt_fingerprint": "c258d91fe57bf06d",
-      "request_fingerprint": "133333c82efbcf07",
-      "request_id": "f32d17e7c7adcdba"
+      "prompt_fingerprint": "9853cc8aeaa6e866",
+      "request_fingerprint": "eb2e3a878ece622a",
+      "request_id": "1190f0edad638ad0"
     }
   ],
   "run_id": "fixture-run",
@@ -401,10 +401,10 @@
     "adapter_version": "8.5.2",
     "engine": "renpy",
     "file_digests": {
-      "chapter01/dialogue.rpy": "137614ec373b9aca5b571c4918fd69e6002b3d94421334a45afb6cbf835fca38",
-      "chapter02/strings.rpy": "2e43952c413866f0707e9dcbfa79983324d0d0be4d5a140a63d1de8b0521897c"
+      "chapter01/dialogue.rpy": "3c1f3e1600adbb75f229ae4924eeb01dd1fbae722dc20a6ed55c700ec1525d37",
+      "chapter02/strings.rpy": "6ca5a56889f7990e7fbf8921cf193c36d70c6f125b527bb1e95d8b9264c1e926"
     },
     "project_identity_digest": "a4bf6402f0f91dc1d5597582612c4b21125d776777c155295c2546e4714e4a79",
-    "source_snapshot_fingerprint": "f10658642b3c98ec2472c5fcf0274454c1cdf79aa2337573dbfcd0f4d3dd705b"
+    "source_snapshot_fingerprint": "68f2cf14ad3b6dc7121ea14d8b58f6148ee6fadd772a07e87f51b11faf576167"
   }
 }

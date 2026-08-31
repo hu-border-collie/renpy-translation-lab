@@ -89,7 +89,7 @@ python -B scripts/run_quality_gates.py all
 本地已有 SDK 时可复现：
 
 ```powershell
-python -B scripts/run_renpy_integration.py --sdk C:\RenPy_Workspace\renpy-8.5.3-sdk
+python -B scripts/run_renpy_integration.py --sdk C:\path\to\renpy-sdk
 ```
 
 Linux 无桌面环境时，在 Xvfb 下执行同一 runner：

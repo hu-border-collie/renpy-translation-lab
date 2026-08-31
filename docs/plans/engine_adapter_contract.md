@@ -6,7 +6,7 @@
 > writeback plan 及 sync/Batch/revision 的公共 plan 消费；#330 实现 P3 的
 > source-only ProjectSnapshot / GameVersion JSON/JSONL 与只读
 > reconciliation/freshness；#354 / PR #358 实现 P4 译文复用候选与人工确认。
-> 2026-08-24 已在真实 Ren'Py 项目副本上完成 P1–P4 门禁实测。P5–P6 尚未交付。
+> 已在私有 Ren'Py 项目副本上完成 P1–P4 门禁实测。P5–P6 尚未交付。
 > 当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
 
 ## 1. 范围与硬性边界

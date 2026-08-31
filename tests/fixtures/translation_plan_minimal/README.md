@@ -7,7 +7,7 @@ P0 golden fixture 骨架 + P1 期望快照，用于冻结 Sync / Gemini Batch �
 ## 目录结构
 
 - `game/` — 手写的最小 Ren'Py 源文件（两个 label 形成 block 边界素材、说话人、
-  `[Gil_name!t]` 插值、`{i}` 标签，以及术语命中：Dawn Chorus / Mrs. Parker /
+  `[CharacterA_name!t]` 插值、`{i}` 标签，以及术语命中：Sample Ensemble / Director B /
   setlist / B-side）。
 - `inputs/file_jobs.json` — 从 `game/` 手工推导的 tasks（id 格式与生产
   `translation_core.build_identity_v2` 一致：`file:label:idx:sha1(text)[:8]`，内容

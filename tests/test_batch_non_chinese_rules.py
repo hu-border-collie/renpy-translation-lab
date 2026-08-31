@@ -65,8 +65,8 @@ class BatchNonChineseRulesTests(unittest.TestCase):
             batch_mod.is_manifest_static_non_chinese_item(
                 manifest,
                 chunk,
-                'Main Writer: Andy Peng',
-                'Main Writer: Andy Peng',
+                'Main Writer: Example Writer',
+                'Main Writer: Example Writer',
             )
         )
 

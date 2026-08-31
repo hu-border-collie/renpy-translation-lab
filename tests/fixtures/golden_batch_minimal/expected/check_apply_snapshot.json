@@ -28,15 +28,15 @@
     "rag": {}
   },
   "progress": {
+    "chapter02/strings.rpy": [
+      2,
+      5
+    ],
     "chapter01/dialogue.rpy": [
       2,
       5,
       8,
       11
-    ],
-    "chapter02/strings.rpy": [
-      2,
-      5
     ]
   }
 }

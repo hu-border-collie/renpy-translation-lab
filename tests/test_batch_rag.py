@@ -206,8 +206,9 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.BATCH_CONTEXT_AFTER = 1
             batch_mod.RAG_ENABLED = False
             batch_mod.STORY_MEMORY_ENABLED = False
-            batch_mod.legacy.PRESERVE_TERMS = ['Dawn Chorus']
+            batch_mod.legacy.PRESERVE_TERMS = ['Sample Ensemble']
 
+            sample_text = 'Hello Sample Ensemble'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -215,10 +216,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Hello Dawn Chorus',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 17,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                     ],
@@ -235,11 +236,11 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         self.assertTrue(chunks)
         hits = chunks[0].get('glossary_hits') or []
-        self.assertTrue(any(str(hit.get('source') or '') == 'Dawn Chorus' for hit in hits))
+        self.assertTrue(any(str(hit.get('source') or '') == 'Sample Ensemble' for hit in hits))
         self.assertNotIn('story_hits', chunks[0])
         user_prompt = str(chunks[0].get('user_prompt') or '')
         self.assertIn('Existing glossary entries:', user_prompt)
-        self.assertIn('Preserve: Dawn Chorus', user_prompt)
+        self.assertIn('Preserve: Sample Ensemble', user_prompt)
         self.assertNotIn('LOCKED TERMS:', user_prompt)
 
     def test_build_chunks_lexical_glossary_covers_normalize_and_non_translatable(self):
@@ -260,10 +261,11 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.BATCH_CONTEXT_AFTER = 1
             batch_mod.RAG_ENABLED = False
             batch_mod.STORY_MEMORY_ENABLED = False
-            batch_mod.legacy.PRESERVE_TERMS = ['Mrs. Parker']
+            batch_mod.legacy.PRESERVE_TERMS = ['Director B']
             batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {'setlist': '曲目单'}
-            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Dawn Chorus'}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
 
+            sample_text = 'Sample Ensemble setlist and Director B'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -271,10 +273,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Dawn Chorus setlist and Mrs. Parker',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 36,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                     ],
@@ -295,12 +297,12 @@ class BatchRagRegressionTests(unittest.TestCase):
         hits = chunks[0].get('glossary_hits') or []
         pushed = {(hit.get('source'), hit.get('kind')) for hit in hits}
         self.assertIn(('setlist', 'normalize'), pushed)
-        self.assertIn(('Dawn Chorus', 'non_translatable'), pushed)
-        self.assertIn(('Mrs. Parker', 'preserve'), pushed)
+        self.assertIn(('Sample Ensemble', 'non_translatable'), pushed)
+        self.assertIn(('Director B', 'preserve'), pushed)
         user_prompt = str(chunks[0].get('user_prompt') or '')
         self.assertIn('Existing mapping: setlist -> 曲目单', user_prompt)
-        self.assertIn('Non-translatable: Dawn Chorus', user_prompt)
-        self.assertIn('Preserve: Mrs. Parker', user_prompt)
+        self.assertIn('Non-translatable: Sample Ensemble', user_prompt)
+        self.assertIn('Preserve: Director B', user_prompt)
         self.assertNotIn('LOCKED TERMS:', user_prompt)
 
     def test_build_chunks_embeds_plan_request_fields(self):
@@ -395,8 +397,9 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.STORY_MEMORY_ENABLED = False
             batch_mod.legacy.PRESERVE_TERMS = []
             batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {}
-            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Dawn Chorus'}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
 
+            sample_text = 'Sample Ensemble'
             chunks = batch_mod.build_chunks([
                 {
                     'file_rel_path': 'script.rpy',
@@ -404,10 +407,10 @@ class BatchRagRegressionTests(unittest.TestCase):
                     'tasks': [
                         {
                             'id': 'script.rpy:1:0',
-                            'text': 'Dawn Chorus',
+                            'text': sample_text,
                             'line': 0,
                             'start': 0,
-                            'end': 12,
+                            'end': len(sample_text),
                             'block_name': 'script.rpy::start',
                         },
                         {
@@ -442,7 +445,7 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertIn('Keep all person names in English; do not translate names.', system_text)
         self.assertIn('No markdown, no Pinyin, no explanations.', system_text)
         user_prompt = row['request']['contents'][0]['parts'][0]['text']
-        self.assertIn('Non-translatable: Dawn Chorus', user_prompt)
+        self.assertIn('Non-translatable: Sample Ensemble', user_prompt)
         self.assertIn('TARGET:', user_prompt)
 
     def test_format_history_hits_block_shows_source_translation_pair(self):

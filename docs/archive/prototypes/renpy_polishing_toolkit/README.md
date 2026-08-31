@@ -1,35 +1,14 @@
-# RenPy Polishing Toolkit 原型归档
+# 润色工具原型设计摘录
 
-> **状态：历史原型，仅供设计参考。**
-> 本目录不属于 Ren'Py Translation Lab 的稳定 CLI、GUI 或公共 API；不要直接运行其中脚本处理正式项目。
+> **状态：历史设计摘录，仅供参考。**
+> 本目录不属于 Ren'Py Translation Lab 的稳定 CLI、GUI 或公共 API。
 
-## 归档来源
+## 脱敏说明
 
-- 原始目录：`C:\RenPy_Workspace\RenPy_Polishing_Toolkit`
-- 归档日期：2026-08-07（Asia/Shanghai）
-- 原目录未包含独立 Git 元数据、测试目录或许可证文件。
-- 本次只保存文本快照，没有归档 `__pycache__/`。
-- 原始文件的 SHA-256 记录在 [SHA256SUMS](SHA256SUMS)；归档文本已逐项执行换行归一化后的内容等价检查。
-
-脚本统一保存为 `*.py.txt`，避免它们被误认为受支持的可执行入口。源码发行包会包含 tracked 文件，因此不得把这些副本恢复为可直接运行的 `.py` 文件。
-原型原文含有行尾空格；为保持快照内容不变，`.gitattributes` 只对本目录关闭 `trailing-space` diff 报警，正式代码与其他文档仍使用原有检查规则。
-
-## 归档内容
-
-| 原文件 | 归档副本 | 原型意图 |
-|---|---|---|
-| `extract_dialogue_pairs.py` | [source/extract_dialogue_pairs.py.txt](source/extract_dialogue_pairs.py.txt) | 导出原文、现译、文件与行号供线性通读 |
-| `apply_polish_batch.py` | [source/apply_polish_batch.py.txt](source/apply_polish_batch.py.txt) | 从 Markdown 润色提案批量写回 |
-| `verify_polish_status.py` | [source/verify_polish_status.py.txt](source/verify_polish_status.py.txt) | 检查提案译文是否已经出现 |
-| `apply_glossary.py` | [source/apply_glossary.py.txt](source/apply_glossary.py.txt) | 按项目术语映射批量替换 |
-| `verify_glossary.py` | [source/verify_glossary.py.txt](source/verify_glossary.py.txt) | 扫描遗留源词 |
-| `deep_polish_engine.py` | [source/deep_polish_engine.py.txt](source/deep_polish_engine.py.txt) | 使用固定中文替换规则机械润色 |
-| `README.md` | [original_README.md.txt](original_README.md.txt) | 原始迭代润色工作流说明 |
-| `polishing_guide.md` | [polishing_guide.original.md.txt](polishing_guide.original.md.txt) | 原始润色与校对 SOP |
-
-### 原始快照中的历史断链
-
-`polishing_guide.original.md.txt` 末尾保留了原环境中的相对链接 `../renpy-translation-lab/docs/games_registry.md`。为保持 SHA-256 所记录的原始快照不改写，正文仍原样保留；归档中另放置一个只读 [兼容重定向](../renpy-translation-lab/docs/games_registry.md)，指向当前的 [工作区项目总表](../../../games_registry.md)。`*.original.md.txt` 仍是不可变证据，不是现行用户手册。
+早期原型曾包含项目专用术语、角色名和本机绝对路径。当前公开快照不再保存
+这些原始正文、脚本副本或内容哈希，只保留下方与具体项目无关的设计结论。
+需要考证旧实现时应在非公开、权限受控的副本中进行，不要从公开仓库恢复后
+直接运行。
 
 ## 采用结论
 
@@ -70,4 +49,4 @@
 - [#322：订正页 GUI 产品化](https://github.com/hu-border-collie/renpy-translation-lab/issues/322)
 - 机械质量检查、glossary 一致性与写回/质量状态拆分已由 [GitHub #313](https://github.com/hu-border-collie/renpy-translation-lab/issues/313) 跟踪。
 
-本目录只作为设计证据。日常使用以根目录 `README.md`、`docs/batch_workflows.md`、现行 CLI `--help` 和 GUI 为准。
+本目录只作为设计摘录。日常使用以根目录 `README.md`、`docs/batch_workflows.md`、现行 CLI `--help` 和 GUI 为准。

@@ -433,7 +433,7 @@ class RagIndependentContextTests(unittest.TestCase):
         system = '\n'.join(request.system_instruction for request in build.requests)
         self.assertIn('A college a cappella story', system)
         self.assertIn('Existing mapping: setlist -> 曲目单', prompt)
-        self.assertIn('Preserve: Dawn Chorus', prompt)
+        self.assertIn('Preserve: Sample Ensemble', prompt)
         self.assertIn('Non-translatable: B-side', prompt)
         for request in build.requests:
             project = next(

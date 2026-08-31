@@ -8,5 +8,5 @@ translate chinese strings:
     old "Continue"
     new ""
 
-    old "Dawn Chorus — Route B"
+    old "Sample Ensemble — Route B"
     new ""

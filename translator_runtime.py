@@ -257,10 +257,7 @@ INCLUDE_FILES = set()
 INCLUDE_PREFIXES = set()
 
 NORMALIZE_TRANSLATION_MAP = {}
-PRESERVE_TERM_ALIASES = {
-    "H.U.": ("H. U.", "Highwell University", "Highwell Uni"),
-    "H. U.": ("H.U.", "Highwell University", "Highwell Uni"),
-}
+PRESERVE_TERM_ALIASES = {}
 
 SPECIAL_ESCAPES = [
     ("\\", "\\\\"),
