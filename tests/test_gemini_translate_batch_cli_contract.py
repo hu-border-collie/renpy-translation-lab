@@ -496,8 +496,8 @@ class BatchCliContractTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
         self.assertEqual(
-            Path(raised.exception.details["conflict_path"]),
-            shared_path,
+            batch._normalized_abs_path(raised.exception.details["conflict_path"]),
+            batch._normalized_abs_path(shared_path),
         )
 
     def test_quality_report_reuses_complete_manifest_protected_paths(self):
@@ -521,14 +521,17 @@ class BatchCliContractTests(unittest.TestCase):
             )
 
             protected = {
-                Path(path)
+                batch._normalized_abs_path(path)
                 for path in batch.collect_manifest_protected_paths(
                     str(manifest_path)
                 )
             }
 
         self.assertTrue(
-            {manifest_path, results_path, check_path, script_path}.issubset(protected)
+            {
+                batch._normalized_abs_path(path)
+                for path in (manifest_path, results_path, check_path, script_path)
+            }.issubset(protected)
         )
 
 
