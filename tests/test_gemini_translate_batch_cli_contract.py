@@ -445,6 +445,95 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "JOB_STATE_SUCCEEDED")
         self.assertEqual(payload["artifacts"]["output_file"], str(output_path))
 
+    def test_quality_report_keeps_html_separate_from_json_output_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared_path = str(Path(tmp) / "report.html")
+            args = batch.build_arg_parser().parse_args(
+                [
+                    "quality-report",
+                    "manifest.json",
+                    "--html",
+                    shared_path,
+                    "--output",
+                    "json",
+                    "--output-file",
+                    shared_path,
+                ]
+            )
+
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                batch._preflight_output_file(args)
+
+        self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
+
+    def test_quality_report_default_html_is_separate_from_json_output_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "last_quality_findings_path": "quality_findings.jsonl",
+                        "files": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            shared_path = package / "quality_report.html"
+            args = batch.build_arg_parser().parse_args(
+                [
+                    "quality-report",
+                    str(manifest_path),
+                    "--output",
+                    "json",
+                    "--output-file",
+                    str(shared_path),
+                ]
+            )
+
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                batch._preflight_output_file(args)
+
+        self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
+        self.assertEqual(
+            batch._normalized_abs_path(raised.exception.details["conflict_path"]),
+            batch._normalized_abs_path(shared_path),
+        )
+
+    def test_quality_report_reuses_complete_manifest_protected_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            results_path = package / "results.jsonl"
+            check_path = package / "check_failures.jsonl"
+            script_path = package / "translated.rpy"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "result_jsonl_path": "results.jsonl",
+                        "last_check_report_path": "check_failures.jsonl",
+                        "files": {
+                            "translated.rpy": {"path": str(script_path)},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            protected = {
+                batch._normalized_abs_path(path)
+                for path in batch.collect_manifest_protected_paths(
+                    str(manifest_path)
+                )
+            }
+
+        self.assertTrue(
+            {
+                batch._normalized_abs_path(path)
+                for path in (manifest_path, results_path, check_path, script_path)
+            }.issubset(protected)
+        )
+
 
     def test_output_file_preflight_failure_is_structured_before_dispatch(self):
         stdout = io.StringIO()
@@ -1639,6 +1728,181 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(pruned["status"], "updated")
         self.assertEqual(pruned["result"]["acknowledged_finding_ids"], [])
 
+    def test_quality_report_machine_envelope_exposes_html_artifact(self):
+        envelope = batch.build_machine_success_envelope(
+            "quality-report",
+            {
+                "schema_version": 1,
+                "manifest_path": "C:/jobs/demo/manifest.json",
+                "source_path": "C:/jobs/demo/quality_findings.jsonl",
+                "output_path": "C:/jobs/demo/quality_report.html",
+                "finding_count": 4,
+                "warning_count": 3,
+                "blocker_count": 1,
+                "acknowledged_count": 2,
+            },
+            SimpleNamespace(command="quality-report"),
+        )
+
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "exported")
+        self.assertEqual(envelope["result"]["finding_count"], 4)
+        self.assertEqual(
+            envelope["artifacts"]["quality_report"],
+            "C:/jobs/demo/quality_report.html",
+        )
+
+    def test_quality_report_json_stdout_contains_only_one_machine_document(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            findings_path = package / "quality_findings.jsonl"
+            findings_path.write_text(
+                json.dumps(
+                    {
+                        "finding_id": "finding-1",
+                        "reason_code": "quality.typography.cjk_latin_spacing",
+                        "severity": "medium",
+                        "disposition": "warning",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = package / "manifest.json"
+            manifest_data = {
+                "_manifest_path": str(manifest_path),
+                "_package_dir": str(package),
+                "last_quality_findings_path": "quality_findings.jsonl",
+                "files": {},
+            }
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "last_quality_findings_path": "quality_findings.jsonl",
+                        "files": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(batch, "initialize_batch_logging"),
+                mock.patch.object(batch.legacy, "load_config"),
+                mock.patch.object(batch.legacy, "load_translator_settings"),
+                mock.patch.object(batch.legacy, "load_glossary"),
+                mock.patch.object(batch, "load_batch_settings"),
+                mock.patch.object(batch, "print_banner"),
+                mock.patch.object(batch, "load_manifest", return_value=manifest_data),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(
+                    [
+                        "quality-report",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--compact",
+                    ]
+                )
+
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["result"]["finding_count"], 1)
+        self.assertIn("Quality report:", stderr.getvalue())
+
+    def test_quality_report_invalid_json_has_stable_machine_error(self):
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            findings_path = package / "quality_findings.jsonl"
+            findings_path.write_text('{"broken"\n', encoding="utf-8")
+            manifest_path = package / "manifest.json"
+            manifest_data = {
+                "_manifest_path": str(manifest_path),
+                "_package_dir": str(package),
+                "last_quality_findings_path": "quality_findings.jsonl",
+                "files": {},
+            }
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "last_quality_findings_path": "quality_findings.jsonl",
+                        "files": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(batch, "initialize_batch_logging"),
+                mock.patch.object(batch.legacy, "load_config"),
+                mock.patch.object(batch.legacy, "load_translator_settings"),
+                mock.patch.object(batch.legacy, "load_glossary"),
+                mock.patch.object(batch, "load_batch_settings"),
+                mock.patch.object(batch, "print_banner"),
+                mock.patch.object(batch, "load_manifest", return_value=manifest_data),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                exit_code = batch.main(
+                    [
+                        "quality-report",
+                        str(manifest_path),
+                        "--output",
+                        "json",
+                        "--compact",
+                        "--strict-exit-codes",
+                    ]
+                )
+
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error"]["code"],
+            "INVALID_QUALITY_FINDINGS_JSON",
+        )
+        self.assertEqual(payload["error"]["details"]["line"], 1)
+
+    def test_quality_report_missing_findings_has_stable_error_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp)
+            manifest_path = package / "manifest.json"
+            manifest_data = {
+                "_manifest_path": str(manifest_path),
+                "_package_dir": str(package),
+                "last_quality_findings_path": "missing.jsonl",
+                "files": {},
+            }
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "last_quality_findings_path": "missing.jsonl",
+                        "files": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parser = batch.build_arg_parser()
+            args = parser.parse_args(["quality-report", str(manifest_path)])
+
+            with (
+                mock.patch.object(batch, "load_manifest", return_value=manifest_data),
+                self.assertRaises(batch.cli_contract.MachineContractError) as raised,
+            ):
+                batch.dispatch_command(parser, args)
+
+        self.assertEqual(
+            raised.exception.code_name,
+            "QUALITY_FINDINGS_UNAVAILABLE",
+        )
+        self.assertEqual(raised.exception.suggested_action, "rerun_check")
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
@@ -2198,6 +2462,27 @@ class BatchCliContractTests(unittest.TestCase):
                                 mock.patch.object(
                                     batch,
                                     "print_quality_acknowledgement_summary",
+                                ),
+                            ]
+                        )
+                    elif command == "quality-report":
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch,
+                                    "load_manifest",
+                                    return_value={"_manifest_path": "manifest.json"},
+                                ),
+                                mock.patch.object(
+                                    batch.quality_report_export,
+                                    "export_quality_report",
+                                    return_value={
+                                        "output_path": "quality_report.html",
+                                        "finding_count": 0,
+                                        "warning_count": 0,
+                                        "blocker_count": 0,
+                                        "acknowledged_count": 0,
+                                    },
                                 ),
                             ]
                         )

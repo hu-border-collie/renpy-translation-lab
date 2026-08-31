@@ -63,6 +63,7 @@ import keyword_history
 import model_profile
 import model_usage_ledger
 import prompt_context
+import quality_report_export
 import revision_corpus
 import revision_proposals
 import revision_selection
@@ -138,6 +139,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'export-reuse-results',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'build-revisions',
         'preview-revisions',
         'sync-revisions',
@@ -163,6 +165,7 @@ EXPLICIT_TARGET_COMMANDS = frozenset(
         'apply',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'preview-revisions',
         'export-keywords',
         'final-review-status',
@@ -191,6 +194,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'export-reuse-results',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'split',
         'build-retry',
         'merge-retry',
@@ -18074,6 +18078,30 @@ def build_arg_parser():
         help='Manifest path or package dir. Defaults to latest package.',
     )
 
+    quality_report_parser = subparsers.add_parser(
+        'quality-report',
+        help=(
+            'Export the current quality findings as a self-contained offline '
+            'HTML review report.'
+        ),
+    )
+    add_machine_output_argument(quality_report_parser)
+    quality_report_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    quality_report_parser.add_argument(
+        '--html',
+        default='',
+        metavar='PATH',
+        help=(
+            'HTML output path. Defaults to quality_report.html next to the '
+            'quality findings JSONL.'
+        ),
+    )
+
     for ack_command in ('quality-ack', 'quality-unack'):
         action_text = (
             'Acknowledge' if ack_command == 'quality-ack' else 'Revert acknowledged'
@@ -19245,6 +19273,38 @@ def dispatch_command(parser, args):
     if command == 'check':
         return check_results(args.target or None)
 
+    if command == 'quality-report':
+        manifest = load_manifest(args.target or None)
+        try:
+            result = quality_report_export.export_quality_report(
+                manifest,
+                manifest_path=manifest['_manifest_path'],
+                output_path=getattr(args, 'html', '') or '',
+                protected_paths=collect_manifest_protected_paths(
+                    manifest['_manifest_path']
+                ),
+            )
+        except quality_report_export.QualityReportExportError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code_name,
+                suggested_action=exc.suggested_action,
+                semantic_exit_code=(
+                    cli_contract.EXIT_USAGE
+                    if exc.code_name == 'QUALITY_REPORT_PATH_CONFLICT'
+                    else cli_contract.EXIT_INVALID_STATE
+                ),
+                details=exc.details,
+            ) from exc
+        print(f"Quality report: {result['output_path']}")
+        print(
+            'Findings: '
+            f"{result['finding_count']} "
+            f"(warnings={result['warning_count']}, blockers={result['blocker_count']}, "
+            f"acknowledged={result['acknowledged_count']})"
+        )
+        return result
+
     if command in {'quality-ack', 'quality-unack'}:
         result = quality_acknowledge_command(
             args.target or None,
@@ -19501,6 +19561,25 @@ def build_machine_success_envelope(command, value, args):
             artifacts=_nonempty_artifacts(
                 manifest=manifest.get('_manifest_path'),
                 quality_findings=manifest.get('last_quality_findings_path'),
+            ),
+        )
+
+    if command == 'quality-report':
+        payload = dict(value or {})
+        return cli_contract.success_envelope(
+            command,
+            status='exported',
+            result={
+                'schema_version': payload.get('schema_version'),
+                'finding_count': int(payload.get('finding_count') or 0),
+                'warning_count': int(payload.get('warning_count') or 0),
+                'blocker_count': int(payload.get('blocker_count') or 0),
+                'acknowledged_count': int(payload.get('acknowledged_count') or 0),
+            },
+            artifacts=_nonempty_artifacts(
+                manifest=payload.get('manifest_path'),
+                quality_findings=payload.get('source_path'),
+                quality_report=payload.get('output_path'),
             ),
         )
 
@@ -20209,7 +20288,7 @@ def _candidate_manifest_paths_from_args(args):
     return candidates
 
 
-def _collect_manifest_protected_paths(manifest_path):
+def collect_manifest_protected_paths(manifest_path):
     """Return task inputs and writeback targets associated with one manifest."""
 
     protected = [manifest_path]
@@ -20288,6 +20367,12 @@ def _collect_manifest_protected_paths(manifest_path):
                 continue
 
     return protected
+
+
+def _collect_manifest_protected_paths(manifest_path):
+    """Compatibility wrapper for the former private helper name."""
+
+    return collect_manifest_protected_paths(manifest_path)
 
 
 def _collect_output_file_protected_paths(args):
@@ -20378,6 +20463,11 @@ def _collect_output_file_protected_paths(args):
             os.path.join(output_dir, engine_reuse.DEFAULT_CANDIDATES_FILENAME)
         )
 
+    # Keep the JSON envelope separate from the generated HTML artifact.
+    html_output = getattr(args, 'html', None)
+    if isinstance(html_output, str) and html_output.strip():
+        add_path(os.path.abspath(html_output.strip()))
+
     # merge-keywords-to-glossary falls back to the active glossary file.
     glossary_value = getattr(args, 'glossary', None)
     if isinstance(glossary_value, str) and glossary_value.strip():
@@ -20390,8 +20480,32 @@ def _collect_output_file_protected_paths(args):
     for manifest_path in _candidate_manifest_paths_from_args(args):
         add_path(manifest_path)
         if os.path.isfile(manifest_path):
-            for path in _collect_manifest_protected_paths(manifest_path):
+            for path in collect_manifest_protected_paths(manifest_path):
                 add_path(path)
+            if command == 'quality-report' and not (
+                isinstance(html_output, str) and html_output.strip()
+            ):
+                try:
+                    with open(manifest_path, 'r', encoding='utf-8') as handle:
+                        manifest = json.load(handle)
+                    if isinstance(manifest, dict):
+                        manifest = dict(manifest)
+                        manifest['_manifest_path'] = manifest_path
+                        manifest['_package_dir'] = os.path.dirname(manifest_path)
+                        add_path(
+                            quality_report_export.resolve_report_output_path(
+                                manifest,
+                                manifest_path=manifest_path,
+                            )
+                        )
+                except (
+                    OSError,
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                    TypeError,
+                    ValueError,
+                ):
+                    pass
 
     return protected
 

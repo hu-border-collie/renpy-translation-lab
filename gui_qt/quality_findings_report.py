@@ -9,37 +9,12 @@ from typing import Callable, Iterable
 
 import translation_quality
 from atomic_io import atomic_write_json
+from quality_report_export import reason_label, severity_label
 
 from .diagnostics_context import resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
-SEVERITY_LABELS = {"info": "提示", "low": "低", "medium": "中", "high": "高"}
-
-REASON_LABELS = {
-    translation_quality.REASON_WAIT_TAG_INSIDE_CJK: "等待标签插入中文词内",
-    translation_quality.REASON_UNCLOSED_DELIMITERS: "未闭合或破损的括号",
-    translation_quality.REASON_ENGLISH_SUFFIX_ADJACENT: "中文与英文形态词尾粘连",
-    translation_quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE: "可疑英文残留",
-    translation_quality.REASON_CJK_LATIN_SPACING: "CJK/拉丁字符间距",
-    translation_quality.REASON_HALFWIDTH_PUNCTUATION: "半角标点或异常引号",
-    translation_quality.REASON_ASCII_ELLIPSIS: "ASCII 省略号",
-    translation_quality.REASON_GLOSSARY_TERM_NOT_APPLIED: "glossary 译法未满足",
-    translation_quality.REASON_SPEAKER_LABEL_UNTRANSLATED: "说话人标签未翻译",
-    translation_quality.REASON_INTERJECTION_UNTRANSLATED: "短感叹词/拟声词未翻译",
-    translation_quality.REASON_KNOWN_GARBLED_PHRASE: "已知错乱词",
-    translation_quality.REASON_UNMATCHED_QUALITY_SUBJECT: "质量采集无法匹配",
-    translation_quality.FINAL_REVIEW_REASON_OMISSION: "最终审校：漏译",
-    translation_quality.FINAL_REVIEW_REASON_MISTRANSLATION: "最终审校：误译",
-    translation_quality.FINAL_REVIEW_REASON_ADDITION: "最终审校：多余内容",
-    translation_quality.FINAL_REVIEW_REASON_FORMAT: "最终审校：格式问题",
-    translation_quality.FINAL_REVIEW_REASON_TERMINOLOGY: "最终审校：术语问题",
-    translation_quality.FINAL_REVIEW_REASON_ADDRESS: "最终审校：称呼问题",
-    translation_quality.FINAL_REVIEW_REASON_STYLE_DRIFT: "最终审校：文风漂移",
-    translation_quality.FINAL_REVIEW_REASON_NEEDS_CONFIRMATION: "最终审校：待确认",
-}
-
-
 @dataclass(frozen=True)
 class QualityFindingItem:
     reason_code: str
@@ -68,14 +43,6 @@ class QualityFindingsReport:
     omitted_item_count: int
     facts: list[str]
     detail_lines: list[str]
-
-
-def reason_label(reason_code: str) -> str:
-    return REASON_LABELS.get(reason_code, reason_code or "未知规则")
-
-
-def severity_label(severity: str) -> str:
-    return SEVERITY_LABELS.get(severity, severity or "未知")
 
 
 def _safe_preview(text: object, *, max_len: int = 160) -> str:

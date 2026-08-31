@@ -22,6 +22,7 @@ from .batch_workflow_support import (
 )
 from .user_copy import (
     DURABLE_SYNC_COPY,
+    QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
     USAGE_LEDGER_COPY,
     VERSION_ASSET_COPY,
@@ -439,6 +440,14 @@ def build_cli_commands(
     # keyword / retry packages expose the same import/report actions.
     commands.extend(
         [
+            DiagnosticsCommand(
+                label=QUALITY_REPORT_EXPORT_LABEL,
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["quality-report", manifest_path],
+                ),
+            ),
             DiagnosticsCommand(
                 label="导入当前结果用量",
                 command=format_cli_command(
