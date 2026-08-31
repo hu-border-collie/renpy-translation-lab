@@ -63,6 +63,7 @@ import keyword_history
 import model_profile
 import model_usage_ledger
 import prompt_context
+import quality_report_export
 import revision_corpus
 import revision_proposals
 import revision_selection
@@ -138,6 +139,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'export-reuse-results',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'build-revisions',
         'preview-revisions',
         'sync-revisions',
@@ -163,6 +165,7 @@ EXPLICIT_TARGET_COMMANDS = frozenset(
         'apply',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'preview-revisions',
         'export-keywords',
         'final-review-status',
@@ -191,6 +194,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'export-reuse-results',
         'quality-ack',
         'quality-unack',
+        'quality-report',
         'split',
         'build-retry',
         'merge-retry',
@@ -17932,6 +17936,30 @@ def build_arg_parser():
         help='Manifest path or package dir. Defaults to latest package.',
     )
 
+    quality_report_parser = subparsers.add_parser(
+        'quality-report',
+        help=(
+            'Export the current quality findings as a self-contained offline '
+            'HTML review report.'
+        ),
+    )
+    add_machine_output_argument(quality_report_parser)
+    quality_report_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Manifest path or package dir. Defaults to latest package.',
+    )
+    quality_report_parser.add_argument(
+        '--html',
+        default='',
+        metavar='PATH',
+        help=(
+            'HTML output path. Defaults to quality_report.html next to the '
+            'quality findings JSONL.'
+        ),
+    )
+
     for ack_command in ('quality-ack', 'quality-unack'):
         action_text = (
             'Acknowledge' if ack_command == 'quality-ack' else 'Revert acknowledged'
@@ -19103,6 +19131,22 @@ def dispatch_command(parser, args):
     if command == 'check':
         return check_results(args.target or None)
 
+    if command == 'quality-report':
+        manifest = load_manifest(args.target or None)
+        result = quality_report_export.export_quality_report(
+            manifest,
+            manifest_path=manifest['_manifest_path'],
+            output_path=getattr(args, 'html', '') or '',
+        )
+        print(f"Quality report: {result['output_path']}")
+        print(
+            'Findings: '
+            f"{result['finding_count']} "
+            f"(warnings={result['warning_count']}, blockers={result['blocker_count']}, "
+            f"acknowledged={result['acknowledged_count']})"
+        )
+        return result
+
     if command in {'quality-ack', 'quality-unack'}:
         result = quality_acknowledge_command(
             args.target or None,
@@ -19359,6 +19403,25 @@ def build_machine_success_envelope(command, value, args):
             artifacts=_nonempty_artifacts(
                 manifest=manifest.get('_manifest_path'),
                 quality_findings=manifest.get('last_quality_findings_path'),
+            ),
+        )
+
+    if command == 'quality-report':
+        payload = dict(value or {})
+        return cli_contract.success_envelope(
+            command,
+            status='exported',
+            result={
+                'schema_version': payload.get('schema_version'),
+                'finding_count': int(payload.get('finding_count') or 0),
+                'warning_count': int(payload.get('warning_count') or 0),
+                'blocker_count': int(payload.get('blocker_count') or 0),
+                'acknowledged_count': int(payload.get('acknowledged_count') or 0),
+            },
+            artifacts=_nonempty_artifacts(
+                manifest=payload.get('manifest_path'),
+                quality_findings=payload.get('source_path'),
+                quality_report=payload.get('output_path'),
             ),
         )
 
@@ -20235,6 +20298,11 @@ def _collect_output_file_protected_paths(args):
         add_path(
             os.path.join(output_dir, engine_reuse.DEFAULT_CANDIDATES_FILENAME)
         )
+
+    # Keep the JSON envelope separate from the generated HTML artifact.
+    html_output = getattr(args, 'html', None)
+    if isinstance(html_output, str) and html_output.strip():
+        add_path(os.path.abspath(html_output.strip()))
 
     # merge-keywords-to-glossary falls back to the active glossary file.
     glossary_value = getattr(args, 'glossary', None)

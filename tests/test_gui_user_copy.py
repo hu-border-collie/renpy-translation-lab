@@ -4,6 +4,7 @@ import doctor_recommendations as doctor_rec
 
 from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,
+    QUALITY_REPORT_EXPORT_LABEL,
     LITELLM_CACHE_COPY,
     REVISION_CORPUS_COPY,
     REVISION_PROPOSAL_COPY,
@@ -59,6 +60,7 @@ class GuiUserCopyTests(unittest.TestCase):
             }
         ))
         self.assertIn("可写回 ≠ 可交付", QUALITY_DELIVERY_NOTICE)
+        self.assertEqual(QUALITY_REPORT_EXPORT_LABEL, "导出 HTML 报告")
 
     def test_safety_level_label_case_insensitive(self):
         self.assertEqual(safety_level_label("Safe"), "可写回")

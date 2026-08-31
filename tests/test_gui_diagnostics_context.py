@@ -137,6 +137,20 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
+    def test_command_reference_includes_quality_html_report(self):
+        manifest_path = r"C:\jobs\manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=manifest_path,
+            manifest={"mode": "translation"},
+        )
+        by_label = {command.label: command.command for command in commands}
+
+        self.assertIn("导出 HTML 报告", by_label)
+        self.assertIn("quality-report", by_label["导出 HTML 报告"])
+        self.assertIn(manifest_path, by_label["导出 HTML 报告"])
+
     def test_command_reference_includes_durable_sync_lifecycle(self):
         commands = build_cli_commands(
             python_exe='python',

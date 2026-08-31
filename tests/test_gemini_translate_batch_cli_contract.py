@@ -445,6 +445,27 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(payload["status"], "JOB_STATE_SUCCEEDED")
         self.assertEqual(payload["artifacts"]["output_file"], str(output_path))
 
+    def test_quality_report_keeps_html_separate_from_json_output_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shared_path = str(Path(tmp) / "report.html")
+            args = batch.build_arg_parser().parse_args(
+                [
+                    "quality-report",
+                    "manifest.json",
+                    "--html",
+                    shared_path,
+                    "--output",
+                    "json",
+                    "--output-file",
+                    shared_path,
+                ]
+            )
+
+            with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                batch._preflight_output_file(args)
+
+        self.assertEqual(raised.exception.code_name, "OUTPUT_FILE_PATH_CONFLICT")
+
 
     def test_output_file_preflight_failure_is_structured_before_dispatch(self):
         stdout = io.StringIO()
@@ -1639,6 +1660,30 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(pruned["status"], "updated")
         self.assertEqual(pruned["result"]["acknowledged_finding_ids"], [])
 
+    def test_quality_report_machine_envelope_exposes_html_artifact(self):
+        envelope = batch.build_machine_success_envelope(
+            "quality-report",
+            {
+                "schema_version": 1,
+                "manifest_path": "C:/jobs/demo/manifest.json",
+                "source_path": "C:/jobs/demo/quality_findings.jsonl",
+                "output_path": "C:/jobs/demo/quality_report.html",
+                "finding_count": 4,
+                "warning_count": 3,
+                "blocker_count": 1,
+                "acknowledged_count": 2,
+            },
+            SimpleNamespace(command="quality-report"),
+        )
+
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "exported")
+        self.assertEqual(envelope["result"]["finding_count"], 4)
+        self.assertEqual(
+            envelope["artifacts"]["quality_report"],
+            "C:/jobs/demo/quality_report.html",
+        )
+
     def test_build_without_pending_work_does_not_load_latest_manifest(self):
         args = SimpleNamespace(target="")
 
@@ -2198,6 +2243,27 @@ class BatchCliContractTests(unittest.TestCase):
                                 mock.patch.object(
                                     batch,
                                     "print_quality_acknowledgement_summary",
+                                ),
+                            ]
+                        )
+                    elif command == "quality-report":
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    batch,
+                                    "load_manifest",
+                                    return_value={"_manifest_path": "manifest.json"},
+                                ),
+                                mock.patch.object(
+                                    batch.quality_report_export,
+                                    "export_quality_report",
+                                    return_value={
+                                        "output_path": "quality_report.html",
+                                        "finding_count": 0,
+                                        "warning_count": 0,
+                                        "blocker_count": 0,
+                                        "acknowledged_count": 0,
+                                    },
                                 ),
                             ]
                         )

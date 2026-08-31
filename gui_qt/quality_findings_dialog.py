@@ -1,6 +1,8 @@
 """Dialog for filtering and reviewing quality_findings.jsonl alarms."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
@@ -8,6 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,6 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 import translation_quality
+from quality_report_export import (
+    DEFAULT_REPORT_FILENAME,
+    QualityReportExportError,
+    export_quality_report,
+)
 
 from .quality_findings_report import (
     QualityFindingsReport,
@@ -29,6 +37,11 @@ from .quality_findings_report import (
     persist_quality_acknowledgement,
     reason_label,
     severity_label,
+)
+from .user_copy import (
+    QUALITY_REPORT_EXPORT_LABEL,
+    QUALITY_REPORT_EXPORT_SUCCESS,
+    QUALITY_REPORT_EXPORT_TITLE,
 )
 
 
@@ -145,9 +158,15 @@ class QualityFindingsDialog(QDialog):
         self.ack_all_btn.setToolTip(
             "确认当前筛选结果中的全部 warning 报警；blocker 不能被确认。"
         )
+        self.export_html_btn = QPushButton(QUALITY_REPORT_EXPORT_LABEL)
+        self.export_html_btn.setObjectName("quality_export_html_btn")
+        self.export_html_btn.setToolTip(
+            "生成可离线打开、筛选和打印的单文件报告；不会修改译文或 manifest。"
+        )
         actions.addWidget(self.ack_selected_btn)
         actions.addWidget(self.ack_all_btn)
         actions.addStretch(1)
+        actions.addWidget(self.export_html_btn)
         layout.addLayout(actions)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -164,8 +183,43 @@ class QualityFindingsDialog(QDialog):
         self.ack_all_btn.clicked.connect(
             lambda: self._apply_acknowledgement(selected_only=False)
         )
+        self.export_html_btn.clicked.connect(self._export_html_report)
+        self.export_html_btn.setEnabled(bool(self._manifest_path))
 
         self._refresh()
+
+    def _export_html_report(self) -> None:
+        if not self._manifest_path:
+            QMessageBox.warning(self, "无法导出", "当前任务没有可用的 manifest 路径。")
+            return
+        base_dir = (
+            str(Path(self._report.report_path).parent)
+            if self._report.report_path
+            else str(Path(self._manifest_path).parent)
+        )
+        suggested = str(Path(base_dir) / DEFAULT_REPORT_FILENAME)
+        output_path, _selected_filter = QFileDialog.getSaveFileName(
+            self,
+            QUALITY_REPORT_EXPORT_TITLE,
+            suggested,
+            "HTML 报告 (*.html)",
+        )
+        if not output_path:
+            return
+        try:
+            result = export_quality_report(
+                self._manifest,
+                manifest_path=self._manifest_path,
+                output_path=output_path,
+            )
+        except (OSError, QualityReportExportError) as exc:
+            QMessageBox.warning(self, "导出失败", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            QUALITY_REPORT_EXPORT_TITLE,
+            f"{QUALITY_REPORT_EXPORT_SUCCESS}\n{result['output_path']}",
+        )
 
     def _refresh(self) -> None:
         selected_reason = str(self.rule_filter.currentData() or "")
@@ -301,5 +355,8 @@ class QualityFindingsDialog(QDialog):
             for value in applied.get("acknowledged_finding_ids") or []
             if str(value).strip()
         }
+        updated_manifest = applied.get("manifest")
+        if isinstance(updated_manifest, dict):
+            self._manifest = dict(updated_manifest)
         self._refresh()
         self.quality_acknowledged.emit()
