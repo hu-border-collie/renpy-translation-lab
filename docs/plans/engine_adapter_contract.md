@@ -445,18 +445,22 @@ fragment。adapter 负责按 Ren'Py renderer 语义生成它；common 层只做 
 validation 校验并拼接，不得再次调用 `render_replacement_lines()`、`quote_with()` 或
 其他 engine renderer 二次渲染。
 
-v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 首个 kind 为
-`text_span_replace`。plan：
+v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 使用
+`text_span_replace`；TyranoScript 原生语言 JSON 使用 `json_catalog_set`，并增加
+`target_json_path` 字符串数组。后者的 `line/start_col/end_col` 固定为 `-1`，
+`expected_fragment_sha256` 绑定目标 path 的当前字符串值；目标 path 或 row 缺失时
+不得自动创建。plan：
 
 - 不含绝对目标路径；
 - 不含删除目录、重命名、shell、Python 表达式或 callback；
 - 每个 operation 绑定 live file hash、span、expected fragment 和 validation；
 - operation 按 `target_rel_path/line/start_col` canonical sort 后计算 plan digest；
-- common 层拒绝重叠 span、重复 operation、未知 root/kind 和路径逃逸；
+- common 层拒绝重叠 span、重复 JSON target、未知 root/kind 和路径逃逸；
 - common 层在第一笔写入前再次读取全部文件并复核；
 - 全部通过后才生成 rendered files 并交给 `atomic_write_many_lines()`。
 
-- `expected_fragment_sha256` 是 common consumer 对 live raw span 的校验；
+- `expected_fragment_sha256` 是 common consumer 对 live raw span 或 JSON row 当前值的
+  校验；
 - `expected_text_digest` 绑定 adapter 已解码的源文本与 operation/plan payload，
   但 common 层保持 engine-neutral，不重新解析 Ren'Py 字符串 literal；adapter
   构建 plan 时必须从同一已验证 occurrence 生成该 digest。

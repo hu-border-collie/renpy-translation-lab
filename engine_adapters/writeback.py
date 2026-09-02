@@ -1,14 +1,16 @@
 """Common validation and rendering for declarative adapter writeback plans.
 
-Adapters describe safe text-span operations.  This module re-checks the plan
-against the live source snapshot and renders changed lines in memory.  It has
-no filesystem write authority; workflow code remains responsible for path
-resolution, transaction journaling, and atomic writes.
+Adapters describe safe text-span or semantic JSON catalog operations. This
+module re-checks the plan against the live source snapshot and renders changed
+files in memory. It has no filesystem write authority; workflow code remains
+responsible for path resolution, transaction journaling, and atomic writes.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import json
 import ntpath
 from typing import Mapping, NoReturn, Sequence
 
@@ -81,8 +83,11 @@ def _validate_operation(
     operation: WritebackOperation,
     documents: Mapping[str, SourceDocument],
     spans: list[tuple[str, int, int, int]],
+    json_targets: set[tuple[str, tuple[str, ...]]],
+    target_kinds: dict[str, str],
+    json_documents: dict[str, object],
 ) -> tuple[str, SourceDocument, list[str]]:
-    if operation.kind != "text_span_replace":
+    if operation.kind not in {"text_span_replace", "json_catalog_set"}:
         _fail(
             "common.writeback.operation_unsupported",
             f"Unsupported writeback operation kind: {operation.kind!r}",
@@ -133,6 +138,81 @@ def _validate_operation(
         _fail(
             "common.writeback.source_snapshot_mismatch",
             f"Writeback target file changed: {rel_path}",
+        )
+
+    existing_kind = target_kinds.setdefault(rel_path, operation.kind)
+    if existing_kind != operation.kind:
+        _fail(
+            "common.writeback.plan_invalid",
+            f"Writeback target mixes incompatible operation kinds: {rel_path}",
+        )
+
+    if operation.kind == "json_catalog_set":
+        if (operation.line, operation.start_col, operation.end_col) != (-1, -1, -1):
+            _fail(
+                "common.writeback.plan_invalid",
+                f"JSON catalog operation has unexpected span coordinates: {rel_path}",
+            )
+        json_path = tuple(operation.target_json_path)
+        if not json_path or any(
+            not isinstance(part, str) or not part for part in json_path
+        ):
+            _fail(
+                "common.writeback.plan_invalid",
+                f"JSON catalog operation has an invalid target path: {rel_path}",
+            )
+        json_target = (rel_path, json_path)
+        if json_target in json_targets:
+            _fail(
+                "common.writeback.target_duplicate",
+                f"Duplicate JSON catalog target: {rel_path}:{'/'.join(json_path)}",
+            )
+        json_targets.add(json_target)
+        if rel_path not in json_documents:
+            try:
+                json_documents[rel_path] = json.loads(document.text())
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                _fail(
+                    "common.writeback.catalog_invalid_json",
+                    f"Writeback catalog is not valid JSON: {rel_path} ({type(exc).__name__})",
+                )
+        data = json_documents[rel_path]
+        current = data
+        for part in json_path[:-1]:
+            if not isinstance(current, dict) or part not in current:
+                _fail(
+                    "common.writeback.catalog_path_missing",
+                    f"Writeback catalog path is missing: {rel_path}:{'/'.join(json_path)}",
+                )
+            current = current[part]
+        leaf = json_path[-1]
+        if not isinstance(current, dict) or leaf not in current:
+            _fail(
+                "common.writeback.catalog_path_missing",
+                f"Writeback catalog row is missing: {rel_path}:{'/'.join(json_path)}",
+            )
+        current_value = current[leaf]
+        if not isinstance(current_value, str):
+            _fail(
+                "common.writeback.catalog_value_invalid",
+                f"Writeback catalog row is not a string: {rel_path}:{'/'.join(json_path)}",
+            )
+        if _sha256_text(current_value) != operation.expected_fragment_sha256:
+            _fail(
+                "common.writeback.catalog_value_mismatch",
+                f"Writeback catalog row no longer matches the plan: {rel_path}:{'/'.join(json_path)}",
+            )
+        if operation.replacement_fragment == "":
+            _fail(
+                "common.writeback.replacement_invalid",
+                f"JSON catalog replacement must not be empty: {rel_path}:{'/'.join(json_path)}",
+            )
+        return rel_path, document, list(document.lines())
+
+    if operation.target_json_path:
+        _fail(
+            "common.writeback.plan_invalid",
+            f"Text-span operation has an unexpected JSON target path: {rel_path}",
         )
     lines = document.lines()
     if operation.line < 0 or operation.line >= len(lines):
@@ -223,9 +303,19 @@ def validate_writeback_plan(
             )
         documents[rel_path] = document
     spans: list[tuple[str, int, int, int]] = []
+    json_targets: set[tuple[str, tuple[str, ...]]] = set()
+    target_kinds: dict[str, str] = {}
+    json_documents: dict[str, object] = {}
     validated: list[tuple[str, WritebackOperation, SourceDocument]] = []
     for operation in plan.operations:
-        rel_path, document, _lines = _validate_operation(operation, documents, spans)
+        rel_path, document, _lines = _validate_operation(
+            operation,
+            documents,
+            spans,
+            json_targets,
+            target_kinds,
+            json_documents,
+        )
         validated.append((rel_path, operation, document))
     return tuple(validated)
 
@@ -249,11 +339,34 @@ def render_writeback_plan(
         )
     )
     rendered: dict[str, list[str]] = {}
+    json_documents: dict[str, object] = {}
+    json_source_documents: dict[str, SourceDocument] = {}
     for rel_path, operation, document in validated:
+        if operation.kind == "json_catalog_set":
+            data = json_documents.setdefault(
+                rel_path,
+                copy.deepcopy(json.loads(document.text())),
+            )
+            json_source_documents[rel_path] = document
+            current = data
+            for part in operation.target_json_path[:-1]:
+                current = current[part]
+            current[operation.target_json_path[-1]] = operation.replacement_fragment
+            continue
         lines = rendered.setdefault(rel_path, list(document.lines()))
         lines[operation.line] = (
             lines[operation.line][: operation.start_col]
             + operation.replacement_fragment
             + lines[operation.line][operation.end_col :]
         )
+    for rel_path, data in json_documents.items():
+        document = json_source_documents[rel_path]
+        source_text = document.text()
+        newline = "\r\n" if "\r\n" in source_text else "\n"
+        serialized = json.dumps(data, ensure_ascii=False, indent=2)
+        if document.content.startswith(b"\xef\xbb\xbf"):
+            serialized = "\ufeff" + serialized
+        if source_text.endswith(("\n", "\r")):
+            serialized += newline
+        rendered[rel_path] = serialized.splitlines(keepends=True)
     return rendered
