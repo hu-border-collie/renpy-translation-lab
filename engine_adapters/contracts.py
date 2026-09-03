@@ -309,7 +309,10 @@ class ValidatedTranslation:
 class WritebackOperation:
     """Declarative replacement emitted by an engine adapter.
 
-    ``expected_fragment_sha256`` is the common consumer's live raw-span guard.
+    ``expected_fragment_sha256`` is the common consumer's live value guard. For
+    ``text_span_replace`` it covers the raw source span; for
+    ``json_catalog_set`` it covers the current string value at
+    ``target_json_path``.
     ``expected_text_digest`` binds the adapter-decoded source text into the
     operation and plan digests; the engine-neutral consumer deliberately does
     not decode engine-specific literals a second time.
@@ -327,9 +330,10 @@ class WritebackOperation:
     expected_text_digest: str
     replacement_fragment: str
     validation_digest: str
+    target_json_path: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "operation_id": self.operation_id,
             "kind": self.kind,
             "occurrence_id": self.occurrence_id,
@@ -344,6 +348,11 @@ class WritebackOperation:
             "replacement_fragment": self.replacement_fragment,
             "validation_digest": self.validation_digest,
         }
+        # Keep schema-v1 text-span payloads byte-for-byte compatible with
+        # persisted plans created before semantic catalog operations existed.
+        if self.target_json_path:
+            payload["target_json_path"] = list(self.target_json_path)
+        return payload
 
 
 @dataclass(frozen=True)

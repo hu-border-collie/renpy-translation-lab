@@ -1,12 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Read-only TyranoScript V600+ adapter for project discovery, inventory,
-coverage audit, and occurrence extraction (#265 P5 / #399).
+"""TyranoScript V600+ hybrid adapter (#265 P5 / #399).
 
-This module intentionally implements only the read side of the common
-``EngineAdapter`` contract for now.  Writeback for Tyrano native
-localization catalogs needs a new common operation kind and will be added in
-a later PR; the adapter therefore fails closed for relocation, validation,
-and writeback planning unless/until those operations are supported.
+The adapter inventories source ``.ks`` files but emits semantic writeback
+operations only for existing rows in Tyrano's native language JSON. Direct
+source-script mutation remains unsupported.
 """
 
 from __future__ import annotations
@@ -18,6 +15,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any, Mapping, Sequence
+import unicodedata
 
 import translation_core
 
@@ -25,6 +23,8 @@ from .contracts import (
     CANDIDATE_SCHEMA_VERSION,
     CONTENT_FINGERPRINT_SCHEMA_VERSION,
     ENGINE_ADAPTER_PROTOCOL_VERSION,
+    VALIDATION_SCHEMA_VERSION,
+    WRITEBACK_PLAN_SCHEMA_VERSION,
     Candidate,
     CandidateInventory,
     CoverageReportDraft,
@@ -39,15 +39,17 @@ from .contracts import (
     SourceDocument,
     ValidatedTranslation,
     ValidationResult,
+    WritebackOperation,
     WritebackPlan,
 )
 from .coverage import (
     REVIEW_POLICIES,
     digest_json,
 )
+from .writeback import WritebackPlanError, source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "0.1.0"
+ADAPTER_VERSION = "0.2.0"
 LOCATOR_SCHEMA_VERSION = 1
 DEFAULT_TAG_REGISTRY = {"glink": ("text",), "ptext": ("text",)}
 SCENARIO_DIR = "data/scenario"
@@ -624,7 +626,7 @@ def _merged_tag_registry(catalog_data: Mapping[str, Any]) -> Mapping[str, tuple[
 
 
 class TyranoAdapter:
-    """Read-only TyranoScript V600+ adapter.
+    """TyranoScript V600+ hybrid source/catalog adapter.
 
     Source inventory is a strict superset of the official parser: the same
     dialogue / tag / character candidates are produced, and malformed tags are
@@ -654,7 +656,7 @@ class TyranoAdapter:
             source_inventory=True,
             native_catalog=True,
             relocation=False,
-            declarative_writeback=(),
+            declarative_writeback=("json_catalog_set",),
             native_catalog_required_for_writeback=True,
         )
 
@@ -665,9 +667,10 @@ class TyranoAdapter:
                 "engine": self.engine,
                 "adapter_version": self.adapter_version,
                 "locator_schema_version": self.locator_schema_version,
-                "read_only": True,
+                "read_only": False,
                 "source_inventory": True,
                 "native_catalog": True,
+                "json_catalog_writeback": True,
                 "candidate_schema_version": CANDIDATE_SCHEMA_VERSION,
                 "content_fingerprint_schema_version": CONTENT_FINGERPRINT_SCHEMA_VERSION,
             }
@@ -754,6 +757,19 @@ class TyranoAdapter:
                     content=config_content,
                 )
             )
+        catalog_path = self._catalog_path(project_root_path, target_language)
+        catalog_state = self._read_catalog_state(project_root_path, target_language)
+        catalog_content = catalog_state.get("content")
+        if isinstance(catalog_content, bytes):
+            documents.append(
+                SourceDocument(
+                    file_rel_path=f"{CATALOG_DIR}/{target_language}.json",
+                    file_path=str(catalog_path),
+                    size=len(catalog_content),
+                    sha256=str(catalog_state.get("sha256") or ""),
+                    content=catalog_content,
+                )
+            )
         documents.sort(key=lambda item: item.file_rel_path)
 
         source_payload = [document.manifest_entry() for document in documents]
@@ -767,8 +783,6 @@ class TyranoAdapter:
             }
         )
 
-        catalog_path = self._catalog_path(project_root_path, target_language)
-        catalog_state = self._read_catalog_state(project_root_path, target_language)
         catalog_provenance = {
             "format": "tyrano_lang_json",
             "target_language": target_language,
@@ -1653,7 +1667,7 @@ class TyranoAdapter:
         return tuple(occurrences)
 
     # ------------------------------------------------------------------
-    # Unsupported write-side operations fail closed
+    # Validation and native catalog writeback
     # ------------------------------------------------------------------
 
     def relocate_occurrences(
@@ -1672,9 +1686,114 @@ class TyranoAdapter:
         occurrence: Occurrence,
         translated_text: str,
     ) -> ValidationResult:
-        raise NotImplementedError(
-            "TyranoAdapter validation is not implemented yet."
+        if occurrence.engine != self.engine or occurrence.locator.engine != self.engine:
+            raise ValueError(
+                f"TyranoAdapter cannot validate engine={occurrence.engine!r}."
+            )
+        source_constraints_digest = digest_json(
+            {
+                "engine": self.engine,
+                "content_fingerprint": occurrence.content_fingerprint,
+                "locator": occurrence.locator.to_dict(),
+                "source_text": occurrence.unit.text,
+            }
         )
+        reason_codes: list[str] = []
+        diagnostics: list[Mapping[str, Any]] = []
+        if not isinstance(translated_text, str) or translated_text == "":
+            reason_codes.append("tyrano.translation.empty")
+        elif any(unicodedata.category(character) == "Cc" for character in translated_text):
+            reason_codes.append("tyrano.translation.control_character")
+            diagnostics.append(
+                {
+                    "reason_code": "tyrano.translation.control_character",
+                    "positions": [
+                        index
+                        for index, character in enumerate(translated_text)
+                        if unicodedata.category(character) == "Cc"
+                    ],
+                }
+            )
+        translation_digest = digest_json(
+            {
+                "validation_schema_version": VALIDATION_SCHEMA_VERSION,
+                "translation": translated_text,
+            }
+        )
+        return ValidationResult(
+            occurrence_id=occurrence.occurrence_id,
+            engine=self.engine,
+            status="block" if reason_codes else "pass",
+            reason_codes=tuple(reason_codes),
+            diagnostics=tuple(diagnostics),
+            source_constraints_digest=source_constraints_digest,
+            translation_digest=translation_digest,
+        )
+
+    @staticmethod
+    def _catalog_json_path(occurrence: Occurrence) -> tuple[str, ...]:
+        locator = occurrence.locator.locator
+        source_value = str(locator.get("parser_value") or "")
+        file_rel_path = _normalize_rel_path(str(locator.get("file_rel_path") or ""))
+        scenario = str(locator.get("scenario") or "")
+        if not source_value or source_value != occurrence.unit.text:
+            raise WritebackPlanError(
+                "tyrano.writeback.locator_invalid",
+                f"Tyrano occurrence source does not match its locator: {occurrence.occurrence_id}",
+            )
+        if scenario != _scenario_key(file_rel_path):
+            raise WritebackPlanError(
+                "tyrano.writeback.locator_invalid",
+                f"Tyrano occurrence scenario does not match its source path: {occurrence.occurrence_id}",
+            )
+        kind = str(locator.get("kind") or "")
+        if kind == "text":
+            return ("scenes", scenario, "scenario", source_value)
+        if kind == "chara_ptext":
+            return ("charas", source_value)
+        if kind == "tag":
+            tag_name = str(locator.get("tag_name") or "")
+            param_name = str(locator.get("param_name") or "")
+            if tag_name and param_name:
+                return (
+                    "scenes",
+                    scenario,
+                    "tag",
+                    tag_name,
+                    param_name,
+                    source_value,
+                )
+        raise WritebackPlanError(
+            "tyrano.writeback.locator_unsupported",
+            f"Tyrano occurrence has no writable catalog locator: {occurrence.occurrence_id}",
+        )
+
+    @staticmethod
+    def _catalog_value_at_path(
+        catalog_data: Mapping[str, Any],
+        json_path: tuple[str, ...],
+    ) -> str:
+        current: Any = catalog_data
+        for part in json_path[:-1]:
+            if not isinstance(current, dict) or part not in current:
+                raise WritebackPlanError(
+                    "tyrano.writeback.catalog_path_missing",
+                    "Tyrano catalog path is missing: " + "/".join(json_path),
+                )
+            current = current[part]
+        leaf = json_path[-1]
+        if not isinstance(current, dict) or leaf not in current:
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_row_missing",
+                "Tyrano catalog row is missing: " + "/".join(json_path),
+            )
+        value = current[leaf]
+        if not isinstance(value, str):
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_value_invalid",
+                "Tyrano catalog row is not a string: " + "/".join(json_path),
+            )
+        return value
 
     def build_writeback_plan(
         self,
@@ -1682,8 +1801,173 @@ class TyranoAdapter:
         validated: Sequence[ValidatedTranslation],
         live_sources: Sequence[SourceDocument],
     ) -> WritebackPlan:
-        raise NotImplementedError(
-            "TyranoAdapter writeback planning is not implemented yet."
+        if project.engine != self.engine:
+            raise ValueError(
+                f"TyranoAdapter cannot build a plan for engine={project.engine!r}."
+            )
+        expected_documents = project.document_by_path()
+        live_documents = {
+            _normalize_rel_path(document.file_rel_path): document
+            for document in live_sources
+        }
+        if len(live_documents) != len(live_sources):
+            raise WritebackPlanError(
+                "tyrano.writeback.source_snapshot_mismatch",
+                "Tyrano writeback received duplicate live source paths.",
+            )
+        if set(live_documents) != set(expected_documents):
+            raise WritebackPlanError(
+                "tyrano.writeback.source_snapshot_mismatch",
+                "Tyrano writeback requires the complete discovered source and catalog snapshot.",
+            )
+        for rel_path, expected in expected_documents.items():
+            live = live_documents[rel_path]
+            if live.sha256 != expected.sha256 or live.size != expected.size:
+                raise WritebackPlanError(
+                    "tyrano.writeback.source_snapshot_mismatch",
+                    f"Tyrano writeback source changed after discovery: {rel_path}",
+                )
+        live_source_fingerprint = source_snapshot_fingerprint(tuple(live_documents.values()))
+        if live_source_fingerprint != project.source_fingerprint:
+            raise WritebackPlanError(
+                "tyrano.writeback.source_snapshot_mismatch",
+                "Tyrano writeback snapshot fingerprint changed after discovery.",
+            )
+
+        catalog_rel_path = _normalize_rel_path(
+            str(project.catalog_provenance.get("catalog_rel_path") or "")
+        )
+        catalog_document = live_documents.get(catalog_rel_path)
+        if catalog_document is None:
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_missing",
+                f"Tyrano catalog is missing from the live snapshot: {catalog_rel_path}",
+            )
+        if catalog_document.sha256 != str(
+            project.catalog_provenance.get("catalog_sha256") or ""
+        ):
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_snapshot_mismatch",
+                f"Tyrano catalog changed after discovery: {catalog_rel_path}",
+            )
+        try:
+            catalog_data = json.loads(catalog_document.text())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_invalid_json",
+                f"Tyrano catalog is not valid JSON: {type(exc).__name__}",
+            ) from exc
+        if not isinstance(catalog_data, dict):
+            raise WritebackPlanError(
+                "tyrano.writeback.catalog_invalid_json",
+                "Tyrano catalog root must be an object.",
+            )
+
+        rows: dict[tuple[str, ...], tuple[ValidatedTranslation, str]] = {}
+        for item in validated:
+            occurrence = item.occurrence
+            if occurrence.project_snapshot_fingerprint != project.project_snapshot_fingerprint:
+                raise WritebackPlanError(
+                    "tyrano.writeback.occurrence_snapshot_mismatch",
+                    f"Tyrano occurrence is stale: {occurrence.occurrence_id}",
+                )
+            expected_content_fingerprint = digest_json(
+                {
+                    "engine": self.engine,
+                    "locator": occurrence.locator.to_dict(),
+                    "source_value": occurrence.unit.text,
+                }
+            )
+            if occurrence.content_fingerprint != expected_content_fingerprint:
+                raise WritebackPlanError(
+                    "tyrano.writeback.occurrence_digest_mismatch",
+                    f"Tyrano occurrence digest is invalid: {occurrence.occurrence_id}",
+                )
+            expected_validation = self.validate_translation(
+                occurrence,
+                item.translated_text,
+            )
+            if item.validation != expected_validation or expected_validation.status != "pass":
+                raise WritebackPlanError(
+                    "tyrano.writeback.validation_mismatch",
+                    f"Tyrano validation is missing, stale, or blocking: {occurrence.occurrence_id}",
+                )
+            json_path = self._catalog_json_path(occurrence)
+            current_value = self._catalog_value_at_path(catalog_data, json_path)
+            previous = rows.get(json_path)
+            if previous is not None and previous[0].translated_text != item.translated_text:
+                raise WritebackPlanError(
+                    "tyrano.writeback.catalog_translation_conflict",
+                    "Tyrano occurrences mapped to one catalog row have conflicting translations: "
+                    + "/".join(json_path),
+                )
+            if previous is None or occurrence.occurrence_id < previous[0].occurrence.occurrence_id:
+                rows[json_path] = (item, current_value)
+
+        operations: list[WritebackOperation] = []
+        for json_path in sorted(rows):
+            item, current_value = rows[json_path]
+            operation_payload = {
+                "kind": "json_catalog_set",
+                "occurrence_id": item.occurrence.occurrence_id,
+                "target_root": "localization_catalog",
+                "target_rel_path": catalog_rel_path,
+                "expected_file_sha256": catalog_document.sha256,
+                "line": -1,
+                "start_col": -1,
+                "end_col": -1,
+                "expected_fragment_sha256": _sha256_bytes(current_value.encode("utf-8")),
+                "expected_text_digest": _sha256_bytes(
+                    item.occurrence.unit.text.encode("utf-8")
+                ),
+                "replacement_fragment": item.translated_text,
+                "validation_digest": digest_json(item.validation.to_dict()),
+                "target_json_path": json_path,
+            }
+            operations.append(
+                WritebackOperation(
+                    operation_id="op1:" + digest_json(operation_payload),
+                    **operation_payload,
+                )
+            )
+
+        project_identity_digest = digest_json(
+            {
+                "engine": project.engine,
+                "target_language": project.target_language,
+                "localization_mode": project.localization_mode.value,
+                "localization_root": os.path.realpath(project.localization_root),
+            }
+        )
+        coverage_digest = str(
+            project.coverage_digest
+            or project.catalog_provenance.get("coverage_digest")
+            or ""
+        )
+        coverage_review_digest = str(
+            project.coverage_review_digest
+            or project.catalog_provenance.get("coverage_review_digest")
+            or ""
+        )
+        plan_payload = {
+            "writeback_plan_schema_version": WRITEBACK_PLAN_SCHEMA_VERSION,
+            "engine": self.engine,
+            "adapter_version": self.adapter_version,
+            "project_identity_digest": project_identity_digest,
+            "source_snapshot_fingerprint": live_source_fingerprint,
+            "coverage_digest": coverage_digest,
+            "coverage_review_digest": coverage_review_digest,
+            "operations": [operation.to_dict() for operation in operations],
+        }
+        return WritebackPlan(
+            engine=self.engine,
+            adapter_version=self.adapter_version,
+            project_identity_digest=project_identity_digest,
+            source_snapshot_fingerprint=live_source_fingerprint,
+            coverage_digest=coverage_digest,
+            coverage_review_digest=coverage_review_digest,
+            operations=tuple(operations),
+            plan_digest=digest_json(plan_payload),
         )
 
     # ------------------------------------------------------------------
@@ -1709,10 +1993,6 @@ class TyranoAdapter:
             expired = self._catalog_cache_order.pop(0)
             self._catalog_cache.pop(expired, None)
 
-    @staticmethod
-    def _catalog_path(project_root: Path, target_language: str) -> Path:
-        return project_root / CATALOG_DIR / f"{target_language}.json"
-
     def _read_catalog_state(
         self,
         project_root: Path,
@@ -1720,7 +2000,7 @@ class TyranoAdapter:
     ) -> Mapping[str, Any]:
         path = self._catalog_path(project_root, target_language)
         if not path.is_file():
-            return {"data": {}, "status": "missing", "sha256": ""}
+            return {"data": {}, "status": "missing", "sha256": "", "content": None}
         try:
             catalog_bytes = path.read_bytes()
         except OSError as exc:
@@ -1728,6 +2008,7 @@ class TyranoAdapter:
                 "data": {},
                 "status": "missing",
                 "sha256": "",
+                "content": None,
                 "detail": type(exc).__name__,
             }
         sha256 = _sha256_bytes(catalog_bytes)
@@ -1738,6 +2019,7 @@ class TyranoAdapter:
                 "data": {},
                 "status": "invalid_json",
                 "sha256": sha256,
+                "content": catalog_bytes,
                 "detail": type(exc).__name__,
             }
         if not isinstance(data, dict):
@@ -1745,9 +2027,15 @@ class TyranoAdapter:
                 "data": {},
                 "status": "invalid_json",
                 "sha256": sha256,
+                "content": catalog_bytes,
                 "detail": type(data).__name__,
             }
-        return {"data": data, "status": "ok", "sha256": sha256}
+        return {
+            "data": data,
+            "status": "ok",
+            "sha256": sha256,
+            "content": catalog_bytes,
+        }
 
     def _load_catalog_state(
         self,

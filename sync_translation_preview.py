@@ -228,6 +228,12 @@ def _deserialize_writeback_plan(payload: Any):
             values["line"] = int(values["line"])
             values["start_col"] = int(values["start_col"])
             values["end_col"] = int(values["end_col"])
+            raw_json_path = raw_operation.get("target_json_path", [])
+            if not isinstance(raw_json_path, list) or any(
+                not isinstance(part, str) for part in raw_json_path
+            ):
+                raise ValueError("Sync preview writeback target_json_path must be a string list.")
+            values["target_json_path"] = tuple(raw_json_path)
             operations.append(WritebackOperation(**values))
         return WritebackPlan(
             engine=str(payload["engine"]),

@@ -13,6 +13,48 @@ from atomic_io import file_sha256
 
 
 class SyncTranslationPreviewTests(unittest.TestCase):
+    def test_deserialize_writeback_plan_preserves_json_catalog_path(self):
+        payload = {
+            "writeback_plan_schema_version": 1,
+            "engine": "tyrano",
+            "adapter_version": "0.2.0",
+            "project_identity_digest": "project",
+            "source_snapshot_fingerprint": "source",
+            "coverage_digest": "coverage",
+            "coverage_review_digest": "review",
+            "operations": [
+                {
+                    "operation_id": "op1:digest",
+                    "kind": "json_catalog_set",
+                    "occurrence_id": "occ1:digest",
+                    "target_root": "localization_catalog",
+                    "target_rel_path": "data/others/lang/ch.json",
+                    "expected_file_sha256": "file",
+                    "line": -1,
+                    "start_col": -1,
+                    "end_col": -1,
+                    "expected_fragment_sha256": "value",
+                    "expected_text_digest": "source-value",
+                    "replacement_fragment": "译文",
+                    "validation_digest": "validation",
+                    "target_json_path": [
+                        "scenes",
+                        "sample.ks",
+                        "scenario",
+                        "Hello",
+                    ],
+                }
+            ],
+            "plan_digest": "plan",
+        }
+
+        plan = preview._deserialize_writeback_plan(payload)
+
+        self.assertEqual(
+            plan.operations[0].target_json_path,
+            ("scenes", "sample.ks", "scenario", "Hello"),
+        )
+
     def _refresh_binding_plan_fingerprint(self, manifest):
         plan_payload = manifest["translation_plan"]
         fingerprint_payload = dict(plan_payload)

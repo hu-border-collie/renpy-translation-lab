@@ -1,4 +1,4 @@
-# Ren'Py Engine Adapter 与覆盖审计
+# Engine Adapter、覆盖审计与安全写回
 
 文档地图：[docs/README.md](README.md)
 
@@ -12,8 +12,9 @@ workflow 执行 check→apply、路径约束、事务恢复和 atomic write。P3
 `check` → `apply`。
 
 已在两部私有 Ren'Py 项目的副本上完成 P1–P4 门禁实测；摘要见
-[真实项目门禁实测](#真实项目门禁实测)。P5 TyranoScript
-V600+ 验证 adapter 与 P6 产品化仍未交付。
+[真实项目门禁实测](#真实项目门禁实测)。P5 TyranoScript V600+ 已交付只读发现、
+inventory、coverage、occurrence extraction，以及原生语言 JSON 的声明式语义写回
+核心；relocation、完整性/语言切换收口和 P6 产品化仍未交付。
 
 ## 当前边界
 
@@ -21,8 +22,9 @@ V600+ 验证 adapter 与 P6 产品化仍未交付。
 |---|---|
 | `engine_adapters/contracts.py` | engine-neutral protocol、capability、candidate、occurrence、validation / writeback 的版本化信封 |
 | `engine_adapters/renpy.py` | Ren'Py 项目发现、`.rpy` inventory、分类、source marker、speaker、translate block / occurrence / ordinal、只读 occurrence 提取 |
+| `engine_adapters/tyrano.py` | TyranoScript V600+ `.ks` inventory、原生语言 JSON 对账、occurrence extraction、译文校验与 `json_catalog_set` plan |
 | `engine_adapters/coverage.py` | 独立校验 inventory invariant、生成稳定 digest、导出 coverage/review package、导入并校验人工或 Agent review |
-| `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span、重叠和 plan digest 校验；只在内存中渲染，不持有 writer |
+| `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span / JSON path、冲突和 plan digest 校验；只在内存中渲染，不持有 writer |
 | `engine_adapters/versioning.py` | P3 `GameVersion` / `ProjectSnapshot` / source-only `UnitOccurrenceRecord`、JSON/JSONL 导入导出、只读 reconciliation 与 freshness 校验 |
 | `translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
 | sync / Batch / revision workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌；atomic writer 仍在 workflow/common 层 |
@@ -31,11 +33,12 @@ P2 的 `relocate_occurrences()` 先按 identity v2，再在同一 localization �
 source/context evidence 做唯一重定位；content evidence 还需达到最低结构分
 （`CONTENT_EVIDENCE_MIN_SCORE`，默认 140，排除仅“同文件+同原文”的 125 分弱匹配），
 同分并列时仍返回 `common.locator.unresolved`。`validate_translation()`
-输出版本化 `ValidationResult`，`build_writeback_plan()` 只产生
-`text_span_replace` 操作。公共消费者会在 check 和 apply 的二次源重读后再次校验
-source snapshot、文件 hash、半开 span、非重叠、相对路径和 plan digest；adapter 没有
-文件写入权限。keyword、Project Analysis 与 Final Review 的独立扫描入口不在本阶段
-扩大范围。
+输出版本化 `ValidationResult`。Ren'Py 的 `build_writeback_plan()` 产生
+`text_span_replace`；TyranoScript 只对既有原生 catalog row 产生
+`json_catalog_set`，不会直接改写 `.ks`。公共消费者会在 check 和 apply 的二次源重读
+后再次校验 source snapshot、文件 hash、半开 span或 JSON path、目标当前值、相对路径和
+plan digest；adapter 没有文件写入权限。keyword、Project Analysis 与 Final Review 的
+独立扫描入口不在本阶段扩大范围。
 
 ## 扫描与等价性
 
@@ -256,10 +259,20 @@ P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交�
   `writeback_gate.decision=allow` 后 apply 成功完成最小写回。
 - 对同一清单改源后再 `apply`，以及 `apply --force`，均被拒绝。
 
-### 对 P5 的含义
+### P5 TyranoScript 当前状态
 
-P1–P4 的真实项目门禁已满足，可以按「一阶段一个子 issue / PR」开 P5。下列问题
-不阻挡 TyranoScript adapter，应另开 follow-up，而不是扩写 P5：
+TyranoScript adapter 使用 `hybrid` 模式：`.ks` 负责完整候选清单，
+`data/others/lang/<lang>.json` 是唯一译文写回目标。catalog 自身纳入 source snapshot；
+计划生成后只要场景、`Config.tjs` 或 catalog 任一文件变化，旧计划即失效。
+
+当前声明式 `json_catalog_set` 仅更新已存在且当前值匹配的 string row；缺 scenario、
+缺 row、非 string row、同一 row 的冲突译文、空译文、控制字符和被修改的 catalog 都会
+fail closed。重复对白或角色 occurrence 映射到同一 catalog row 时合并为一个操作。
+公共 renderer 只返回内存中的 catalog 文件内容，`.ks` 不会成为渲染目标。
+
+P5 尚需继续完成 relocation、`lang_set` / 多 catalog / 语言代码完整性、完整 coverage
+review 门禁接线与最终 Ren'Py 非回归。下列既有 Ren'Py 问题不阻挡 P5，应另开
+follow-up，而不是扩写 P5：
 
 1. speaker-label 在对白已是目标语言时仍标 translatable；
 2. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。

@@ -1,17 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Read-only TyranoScript V600+ adapter tests (#265 P5 / #399)."""
+"""TyranoScript V600+ hybrid adapter tests (#265 P5 / #399)."""
 
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 import json
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from engine_adapters.coverage import build_coverage_report
-from engine_adapters.contracts import InventoryPolicy, ProjectDiscoveryRequest
+from engine_adapters.coverage import build_coverage_report, digest_json
+from engine_adapters.contracts import (
+    InventoryPolicy,
+    ProjectDiscoveryRequest,
+    ValidatedTranslation,
+)
 from engine_adapters.tyrano import (
     ADAPTER_VERSION,
     TyranoAdapter,
@@ -20,6 +24,7 @@ from engine_adapters.tyrano import (
     build_translation_snapshot,
     parse_tyrano_scenario,
 )
+from engine_adapters.writeback import WritebackPlanError, render_writeback_plan
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tyranoscript_v600"
 
@@ -37,14 +42,14 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
             ),
         )
 
-    def test_capabilities_are_read_only_hybrid(self):
+    def test_capabilities_are_hybrid_with_catalog_writeback(self):
         capabilities = self.adapter.capabilities()
         self.assertEqual(capabilities.engine, "tyrano")
         self.assertEqual(capabilities.adapter_version, ADAPTER_VERSION)
         self.assertTrue(capabilities.source_inventory)
         self.assertTrue(capabilities.native_catalog)
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
-        self.assertEqual(capabilities.declarative_writeback, ())
+        self.assertEqual(capabilities.declarative_writeback, ("json_catalog_set",))
         self.assertEqual(capabilities.relocation, False)
 
     def test_discovery_scans_ks_and_fingerprint_behavior_config(self):
@@ -57,6 +62,7 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
                 "data/scenario/choices.ks",
                 "data/scenario/broken.ks",
                 "data/system/Config.tjs",
+                "data/others/lang/ch.json",
             },
         )
         self.assertTrue(project.source_fingerprint)
@@ -263,16 +269,257 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
                 [approved[0], approved[0]],
             )
 
-    def test_write_side_operations_fail_closed(self):
+    def test_relocation_remains_fail_closed(self):
         with self.assertRaises(NotImplementedError):
             self.adapter.relocate_occurrences(self.snapshot.project, (), ())
-        with self.assertRaises(NotImplementedError):
-            self.adapter.validate_translation(self.snapshot.occurrences[0], "译文")
-        with self.assertRaises(NotImplementedError):
-            self.adapter.build_writeback_plan(self.snapshot.project, (), ())
+
+    def test_validation_rejects_empty_and_control_characters(self):
+        occurrence = self.snapshot.occurrences[0]
+        empty = self.adapter.validate_translation(occurrence, "")
+        self.assertEqual(empty.status, "block")
+        self.assertEqual(empty.reason_codes, ("tyrano.translation.empty",))
+
+        control = self.adapter.validate_translation(occurrence, "译文\n下一行")
+        self.assertEqual(control.status, "block")
+        self.assertEqual(
+            control.reason_codes,
+            ("tyrano.translation.control_character",),
+        )
+
+        valid = self.adapter.validate_translation(occurrence, "有效译文")
+        self.assertEqual(valid.status, "pass")
+        self.assertTrue(valid.source_constraints_digest)
+        self.assertTrue(valid.translation_digest)
+
+    def _validated(self, occurrence, translated_text):
+        return ValidatedTranslation(
+            occurrence=occurrence,
+            translated_text=translated_text,
+            validation=self.adapter.validate_translation(occurrence, translated_text),
+        )
+
+    def test_catalog_plan_is_semantic_and_does_not_render_ks_files(self):
+        occurrence = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        plan = self.adapter.build_writeback_plan(
+            self.snapshot.project,
+            (self._validated(occurrence, "新的问候"),),
+            self.snapshot.project.source_documents,
+        )
+        self.assertEqual(len(plan.operations), 1)
+        operation = plan.operations[0]
+        self.assertEqual(operation.kind, "json_catalog_set")
+        self.assertEqual(operation.target_rel_path, "data/others/lang/ch.json")
+        self.assertEqual(
+            operation.target_json_path,
+            ("scenes", "scene1.ks", "scenario", "Hello, world!"),
+        )
+        self.assertEqual((operation.line, operation.start_col, operation.end_col), (-1, -1, -1))
+
+        rendered = render_writeback_plan(
+            plan,
+            self.snapshot.project.source_documents,
+        )
+        self.assertEqual(set(rendered), {"data/others/lang/ch.json"})
+        catalog = json.loads("".join(rendered["data/others/lang/ch.json"]))
+        self.assertEqual(
+            catalog["scenes"]["scene1.ks"]["scenario"]["Hello, world!"],
+            "新的问候",
+        )
+
+    def test_duplicate_occurrences_share_one_catalog_operation(self):
+        occurrences = [
+            item for item in self.snapshot.occurrences if item.unit.text == "akane"
+        ]
+        self.assertEqual(len(occurrences), 2)
+        plan = self.adapter.build_writeback_plan(
+            self.snapshot.project,
+            tuple(self._validated(item, "朱音") for item in occurrences),
+            self.snapshot.project.source_documents,
+        )
+        self.assertEqual(len(plan.operations), 1)
+        self.assertEqual(plan.operations[0].target_json_path, ("charas", "akane"))
+
+        conflicting = (
+            self._validated(occurrences[0], "朱音"),
+            self._validated(occurrences[1], "茜"),
+        )
+        with self.assertRaises(WritebackPlanError) as captured:
+            self.adapter.build_writeback_plan(
+                self.snapshot.project,
+                conflicting,
+                self.snapshot.project.source_documents,
+            )
+        self.assertEqual(
+            captured.exception.reason_code,
+            "tyrano.writeback.catalog_translation_conflict",
+        )
+
+    def test_missing_catalog_row_and_incomplete_snapshot_block_planning(self):
+        missing_row = next(
+            item
+            for item in self.snapshot.occurrences
+            if item.unit.text == " text before a "
+        )
+        with self.assertRaises(WritebackPlanError) as captured:
+            self.adapter.build_writeback_plan(
+                self.snapshot.project,
+                (self._validated(missing_row, " 标签前的文本 "),),
+                self.snapshot.project.source_documents,
+            )
+        self.assertEqual(
+            captured.exception.reason_code,
+            "tyrano.writeback.catalog_row_missing",
+        )
+
+        catalog_rel_path = "data/others/lang/ch.json"
+        without_catalog = tuple(
+            document
+            for document in self.snapshot.project.source_documents
+            if document.file_rel_path != catalog_rel_path
+        )
+        existing = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        with self.assertRaises(WritebackPlanError) as captured:
+            self.adapter.build_writeback_plan(
+                self.snapshot.project,
+                (self._validated(existing, "新的问候"),),
+                without_catalog,
+            )
+        self.assertEqual(
+            captured.exception.reason_code,
+            "tyrano.writeback.source_snapshot_mismatch",
+        )
+
+    def test_changed_catalog_snapshot_blocks_render(self):
+        occurrence = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        plan = self.adapter.build_writeback_plan(
+            self.snapshot.project,
+            (self._validated(occurrence, "新的问候"),),
+            self.snapshot.project.source_documents,
+        )
+        changed_documents = tuple(
+            replace(document, sha256="0" * 64)
+            if document.file_rel_path == "data/others/lang/ch.json"
+            else document
+            for document in self.snapshot.project.source_documents
+        )
+        with self.assertRaises(WritebackPlanError) as captured:
+            render_writeback_plan(plan, changed_documents)
+        self.assertEqual(
+            captured.exception.reason_code,
+            "common.writeback.source_snapshot_mismatch",
+        )
+
+    def test_common_renderer_rejects_missing_signed_catalog_path(self):
+        occurrence = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        plan = self.adapter.build_writeback_plan(
+            self.snapshot.project,
+            (self._validated(occurrence, "新的问候"),),
+            self.snapshot.project.source_documents,
+        )
+        changed_operation = replace(
+            plan.operations[0],
+            operation_id="",
+            target_json_path=("scenes", "scene1.ks", "scenario", "missing"),
+        )
+        operation_payload = changed_operation.to_dict()
+        operation_payload.pop("operation_id")
+        changed_operation = replace(
+            changed_operation,
+            operation_id="op1:" + digest_json(operation_payload),
+        )
+        changed_plan = replace(plan, operations=(changed_operation,), plan_digest="")
+        plan_payload = changed_plan.to_dict()
+        plan_payload.pop("plan_digest")
+        changed_plan = replace(changed_plan, plan_digest=digest_json(plan_payload))
+
+        with self.assertRaises(WritebackPlanError) as captured:
+            render_writeback_plan(
+                changed_plan,
+                self.snapshot.project.source_documents,
+            )
+        self.assertEqual(
+            captured.exception.reason_code,
+            "common.writeback.catalog_path_missing",
+        )
 
 
 class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
+    def test_catalog_writeback_preserves_utf8_bom_and_crlf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original_catalog = {
+                "format": "tyrano_lang_json",
+                "scenes": {
+                    "sample.ks": {
+                        "scenario": {"Hello, world!": "你好"},
+                        "tag": {},
+                    }
+                },
+                "target_language": "ch",
+            }
+            self._make_project(
+                root,
+                "*start|Start\nHello, world!\n",
+                catalog=original_catalog,
+            )
+            catalog_path = root / "data" / "others" / "lang" / "ch.json"
+            payload = json.dumps(
+                original_catalog,
+                ensure_ascii=False,
+                indent=2,
+            ).replace("\n", "\r\n") + "\r\n"
+            catalog_path.write_bytes(b"\xef\xbb\xbf" + payload.encode("utf-8"))
+
+            adapter = TyranoAdapter()
+            snapshot = build_translation_snapshot(
+                adapter,
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(catalog_path.parent),
+                    target_language="ch",
+                ),
+            )
+            occurrence = snapshot.occurrences[0]
+            translated = ValidatedTranslation(
+                occurrence=occurrence,
+                translated_text="新的问候",
+                validation=adapter.validate_translation(occurrence, "新的问候"),
+            )
+            plan = adapter.build_writeback_plan(
+                snapshot.project,
+                (translated,),
+                snapshot.project.source_documents,
+            )
+            rendered = "".join(
+                render_writeback_plan(plan, snapshot.project.source_documents)[
+                    "data/others/lang/ch.json"
+                ]
+            )
+            self.assertTrue(rendered.startswith("\ufeff"))
+            self.assertIn("\r\n", rendered)
+            self.assertNotIn("\n", rendered.replace("\r\n", ""))
+
+            rendered_catalog = json.loads(rendered.removeprefix("\ufeff"))
+            self.assertEqual(list(rendered_catalog), list(original_catalog))
+            self.assertEqual(
+                list(rendered_catalog["scenes"]["sample.ks"]),
+                list(original_catalog["scenes"]["sample.ks"]),
+            )
+            self.assertEqual(
+                rendered_catalog["scenes"]["sample.ks"]["scenario"][
+                    "Hello, world!"
+                ],
+                "新的问候",
+            )
+
     def test_missing_catalog_blocks_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
