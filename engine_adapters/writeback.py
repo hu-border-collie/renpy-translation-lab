@@ -364,6 +364,8 @@ def render_writeback_plan(
         source_text = document.text()
         newline = "\r\n" if "\r\n" in source_text else "\n"
         serialized = json.dumps(data, ensure_ascii=False, indent=2)
+        if newline != "\n":
+            serialized = serialized.replace("\n", newline)
         if document.content.startswith(b"\xef\xbb\xbf"):
             serialized = "\ufeff" + serialized
         if source_text.endswith(("\n", "\r")):

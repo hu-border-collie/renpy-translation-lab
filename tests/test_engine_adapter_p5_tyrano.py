@@ -455,28 +455,24 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
     def test_catalog_writeback_preserves_utf8_bom_and_crlf(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            original_catalog = {
+                "format": "tyrano_lang_json",
+                "scenes": {
+                    "sample.ks": {
+                        "scenario": {"Hello, world!": "你好"},
+                        "tag": {},
+                    }
+                },
+                "target_language": "ch",
+            }
             self._make_project(
                 root,
                 "*start|Start\nHello, world!\n",
-                catalog={
-                    "scenes": {
-                        "sample.ks": {
-                            "scenario": {"Hello, world!": "你好"},
-                            "tag": {},
-                        }
-                    }
-                },
+                catalog=original_catalog,
             )
             catalog_path = root / "data" / "others" / "lang" / "ch.json"
             payload = json.dumps(
-                {
-                    "scenes": {
-                        "sample.ks": {
-                            "scenario": {"Hello, world!": "你好"},
-                            "tag": {},
-                        }
-                    }
-                },
+                original_catalog,
                 ensure_ascii=False,
                 indent=2,
             ).replace("\n", "\r\n") + "\r\n"
@@ -509,6 +505,20 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
             )
             self.assertTrue(rendered.startswith("\ufeff"))
             self.assertIn("\r\n", rendered)
+            self.assertNotIn("\n", rendered.replace("\r\n", ""))
+
+            rendered_catalog = json.loads(rendered.removeprefix("\ufeff"))
+            self.assertEqual(list(rendered_catalog), list(original_catalog))
+            self.assertEqual(
+                list(rendered_catalog["scenes"]["sample.ks"]),
+                list(original_catalog["scenes"]["sample.ks"]),
+            )
+            self.assertEqual(
+                rendered_catalog["scenes"]["sample.ks"]["scenario"][
+                    "Hello, world!"
+                ],
+                "新的问候",
+            )
 
     def test_missing_catalog_blocks_coverage(self):
         with tempfile.TemporaryDirectory() as tmp:
