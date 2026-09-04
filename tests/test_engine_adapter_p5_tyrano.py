@@ -5,12 +5,17 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from engine_adapters.coverage import build_coverage_report, digest_json
+from engine_adapters.coverage import (
+    build_coverage_report,
+    digest_json,
+    export_coverage_package,
+)
 from engine_adapters.contracts import (
     InventoryPolicy,
     ProjectDiscoveryRequest,
@@ -41,6 +46,49 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
                 target_language="ch",
             ),
         )
+        cls._writeback_tmp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._writeback_tmp.cleanup)
+        writeback_root = Path(cls._writeback_tmp.name)
+        scenario_dir = writeback_root / "data" / "scenario"
+        scenario_dir.mkdir(parents=True)
+        (scenario_dir / "sample.ks").write_text(
+            '*start|Start\n#akane\nHello, world!\n#akane\n[ptext text="Start Game"]\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        lang_dir = writeback_root / "data" / "others" / "lang"
+        lang_dir.mkdir(parents=True)
+        (lang_dir / "ch.json").write_text(
+            json.dumps(
+                {
+                    "scenes": {
+                        "sample.ks": {
+                            "scenario": {"Hello, world!": "你好，世界！"},
+                            "tag": {
+                                "ptext": {
+                                    "text": {"Start Game": "开始游戏"},
+                                }
+                            },
+                        }
+                    },
+                    "charas": {"akane": "茜"},
+                    "tags": {"glink": ["text"], "ptext": ["text"]},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+            newline="\n",
+        )
+        cls.writeback_snapshot = build_translation_snapshot(
+            cls.adapter,
+            ProjectDiscoveryRequest(
+                project_root=str(writeback_root),
+                localization_root=str(lang_dir),
+                target_language="ch",
+            ),
+        )
+        if cls.writeback_snapshot.report.coverage_status != "attention":
+            raise AssertionError(cls.writeback_snapshot.report.to_dict())
 
     def test_capabilities_are_hybrid_with_catalog_writeback(self):
         capabilities = self.adapter.capabilities()
@@ -50,7 +98,7 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
         self.assertTrue(capabilities.native_catalog)
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
         self.assertEqual(capabilities.declarative_writeback, ("json_catalog_set",))
-        self.assertEqual(capabilities.relocation, False)
+        self.assertTrue(capabilities.relocation)
 
     def test_discovery_scans_ks_and_fingerprint_behavior_config(self):
         project = self.snapshot.project
@@ -239,6 +287,20 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
         self.assertEqual(report.engine, "tyrano")
         self.assertTrue(report.coverage_digest)
 
+    def test_review_package_locates_source_and_native_catalog_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = export_coverage_package(
+                tmp,
+                self.snapshot.project,
+                self.snapshot.inventory,
+                self.snapshot.report,
+            )
+            review = Path(paths.review_markdown_path).read_text(encoding="utf-8")
+            self.assertIn("data/scenario/scene1.ks", review)
+            self.assertIn("Catalog row", review)
+            self.assertIn("Hello, world!", review)
+            self.assertIn("scenes", review)
+
     def test_extract_occurrences_only_returns_extractable_candidates(self):
         inventory = self.snapshot.inventory
         approved = [
@@ -269,9 +331,80 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
                 [approved[0], approved[0]],
             )
 
-    def test_relocation_remains_fail_closed(self):
-        with self.assertRaises(NotImplementedError):
-            self.adapter.relocate_occurrences(self.snapshot.project, (), ())
+    def test_relocation_preserves_exact_occurrences(self):
+        result = self.adapter.relocate_occurrences(
+            self.snapshot.project,
+            self.snapshot.occurrences,
+            self.snapshot.project.source_documents,
+        )
+        self.assertEqual(len(result.occurrences), len(self.snapshot.occurrences))
+        self.assertFalse(result.unresolved_occurrence_ids)
+        self.assertTrue(
+            all(item["match"] == "identity_v2" for item in result.diagnostics)
+        )
+
+    def test_relocation_uses_unique_semantic_locator_after_line_move(self):
+        original = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        live_sources = []
+        for document in self.snapshot.project.source_documents:
+            if document.file_rel_path != "data/scenario/scene1.ks":
+                live_sources.append(document)
+                continue
+            content = ("\n" + document.text()).encode("utf-8")
+            live_sources.append(
+                replace(
+                    document,
+                    content=content,
+                    size=len(content),
+                    sha256=hashlib.sha256(content).hexdigest(),
+                )
+            )
+
+        result = self.adapter.relocate_occurrences(
+            self.snapshot.project,
+            (original,),
+            tuple(live_sources),
+        )
+        self.assertFalse(result.unresolved_occurrence_ids)
+        self.assertEqual(len(result.occurrences), 1)
+        relocated = result.occurrences[0]
+        self.assertEqual(relocated.unit.id, original.unit.id)
+        self.assertEqual(relocated.unit.line, original.unit.line + 1)
+        self.assertNotEqual(
+            relocated.project_snapshot_fingerprint,
+            original.project_snapshot_fingerprint,
+        )
+        self.assertEqual(result.diagnostics[0]["match"], "semantic_locator")
+
+    def test_relocation_rejects_changed_source_text(self):
+        original = next(
+            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+        )
+        live_sources = []
+        for document in self.snapshot.project.source_documents:
+            if document.file_rel_path != "data/scenario/scene1.ks":
+                live_sources.append(document)
+                continue
+            content = document.content.replace(b"Hello, world!", b"Goodbye, world!")
+            live_sources.append(
+                replace(
+                    document,
+                    content=content,
+                    size=len(content),
+                    sha256=hashlib.sha256(content).hexdigest(),
+                )
+            )
+
+        result = self.adapter.relocate_occurrences(
+            self.snapshot.project,
+            (original,),
+            tuple(live_sources),
+        )
+        self.assertEqual(result.occurrences, ())
+        self.assertEqual(result.unresolved_occurrence_ids, (original.occurrence_id,))
+        self.assertEqual(result.diagnostics[0]["status"], "missing")
 
     def test_validation_rejects_empty_and_control_characters(self):
         occurrence = self.snapshot.occurrences[0]
@@ -300,12 +433,14 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
 
     def test_catalog_plan_is_semantic_and_does_not_render_ks_files(self):
         occurrence = next(
-            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "Hello, world!"
         )
         plan = self.adapter.build_writeback_plan(
-            self.snapshot.project,
+            self.writeback_snapshot.project,
             (self._validated(occurrence, "新的问候"),),
-            self.snapshot.project.source_documents,
+            self.writeback_snapshot.project.source_documents,
         )
         self.assertEqual(len(plan.operations), 1)
         operation = plan.operations[0]
@@ -313,30 +448,32 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
         self.assertEqual(operation.target_rel_path, "data/others/lang/ch.json")
         self.assertEqual(
             operation.target_json_path,
-            ("scenes", "scene1.ks", "scenario", "Hello, world!"),
+            ("scenes", "sample.ks", "scenario", "Hello, world!"),
         )
         self.assertEqual((operation.line, operation.start_col, operation.end_col), (-1, -1, -1))
 
         rendered = render_writeback_plan(
             plan,
-            self.snapshot.project.source_documents,
+            self.writeback_snapshot.project.source_documents,
         )
         self.assertEqual(set(rendered), {"data/others/lang/ch.json"})
         catalog = json.loads("".join(rendered["data/others/lang/ch.json"]))
         self.assertEqual(
-            catalog["scenes"]["scene1.ks"]["scenario"]["Hello, world!"],
+            catalog["scenes"]["sample.ks"]["scenario"]["Hello, world!"],
             "新的问候",
         )
 
     def test_duplicate_occurrences_share_one_catalog_operation(self):
         occurrences = [
-            item for item in self.snapshot.occurrences if item.unit.text == "akane"
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "akane"
         ]
         self.assertEqual(len(occurrences), 2)
         plan = self.adapter.build_writeback_plan(
-            self.snapshot.project,
+            self.writeback_snapshot.project,
             tuple(self._validated(item, "朱音") for item in occurrences),
-            self.snapshot.project.source_documents,
+            self.writeback_snapshot.project.source_documents,
         )
         self.assertEqual(len(plan.operations), 1)
         self.assertEqual(plan.operations[0].target_json_path, ("charas", "akane"))
@@ -347,16 +484,16 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
         )
         with self.assertRaises(WritebackPlanError) as captured:
             self.adapter.build_writeback_plan(
-                self.snapshot.project,
+                self.writeback_snapshot.project,
                 conflicting,
-                self.snapshot.project.source_documents,
+                self.writeback_snapshot.project.source_documents,
             )
         self.assertEqual(
             captured.exception.reason_code,
             "tyrano.writeback.catalog_translation_conflict",
         )
 
-    def test_missing_catalog_row_and_incomplete_snapshot_block_planning(self):
+    def test_blocked_coverage_and_incomplete_snapshot_block_planning(self):
         missing_row = next(
             item
             for item in self.snapshot.occurrences
@@ -370,21 +507,23 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
             )
         self.assertEqual(
             captured.exception.reason_code,
-            "tyrano.writeback.catalog_row_missing",
+            "tyrano.writeback.coverage_block",
         )
 
         catalog_rel_path = "data/others/lang/ch.json"
         without_catalog = tuple(
             document
-            for document in self.snapshot.project.source_documents
+            for document in self.writeback_snapshot.project.source_documents
             if document.file_rel_path != catalog_rel_path
         )
         existing = next(
-            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "Hello, world!"
         )
         with self.assertRaises(WritebackPlanError) as captured:
             self.adapter.build_writeback_plan(
-                self.snapshot.project,
+                self.writeback_snapshot.project,
                 (self._validated(existing, "新的问候"),),
                 without_catalog,
             )
@@ -395,18 +534,20 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
 
     def test_changed_catalog_snapshot_blocks_render(self):
         occurrence = next(
-            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "Hello, world!"
         )
         plan = self.adapter.build_writeback_plan(
-            self.snapshot.project,
+            self.writeback_snapshot.project,
             (self._validated(occurrence, "新的问候"),),
-            self.snapshot.project.source_documents,
+            self.writeback_snapshot.project.source_documents,
         )
         changed_documents = tuple(
             replace(document, sha256="0" * 64)
             if document.file_rel_path == "data/others/lang/ch.json"
             else document
-            for document in self.snapshot.project.source_documents
+            for document in self.writeback_snapshot.project.source_documents
         )
         with self.assertRaises(WritebackPlanError) as captured:
             render_writeback_plan(plan, changed_documents)
@@ -415,14 +556,37 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
             "common.writeback.source_snapshot_mismatch",
         )
 
+    def test_stale_coverage_digest_blocks_planning(self):
+        occurrence = next(
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "Hello, world!"
+        )
+        stale_project = replace(
+            self.writeback_snapshot.project,
+            coverage_digest="0" * 64,
+        )
+        with self.assertRaises(WritebackPlanError) as captured:
+            self.adapter.build_writeback_plan(
+                stale_project,
+                (self._validated(occurrence, "新的问候"),),
+                self.writeback_snapshot.project.source_documents,
+            )
+        self.assertEqual(
+            captured.exception.reason_code,
+            "tyrano.writeback.coverage_stale",
+        )
+
     def test_common_renderer_rejects_missing_signed_catalog_path(self):
         occurrence = next(
-            item for item in self.snapshot.occurrences if item.unit.text == "Hello, world!"
+            item
+            for item in self.writeback_snapshot.occurrences
+            if item.unit.text == "Hello, world!"
         )
         plan = self.adapter.build_writeback_plan(
-            self.snapshot.project,
+            self.writeback_snapshot.project,
             (self._validated(occurrence, "新的问候"),),
-            self.snapshot.project.source_documents,
+            self.writeback_snapshot.project.source_documents,
         )
         changed_operation = replace(
             plan.operations[0],
@@ -443,7 +607,7 @@ class TyranoAdapterFixtureTests(unittest.TestCase):
         with self.assertRaises(WritebackPlanError) as captured:
             render_writeback_plan(
                 changed_plan,
-                self.snapshot.project.source_documents,
+                self.writeback_snapshot.project.source_documents,
             )
         self.assertEqual(
             captured.exception.reason_code,
@@ -550,6 +714,56 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
             self.assertIn("tyrano.catalog.missing_file", draft.reason_codes)
             self.assertEqual(report.coverage_status, "block")
 
+    def test_ambiguous_duplicate_relocation_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_project(
+                root,
+                "*start|Start\nHello, world!\nHello, world!\n",
+                catalog={
+                    "scenes": {
+                        "sample.ks": {
+                            "scenario": {"Hello, world!": "你好"},
+                            "tag": {},
+                        }
+                    }
+                },
+            )
+            adapter = TyranoAdapter()
+            snapshot = build_translation_snapshot(
+                adapter,
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(root / "data" / "others" / "lang"),
+                    target_language="ch",
+                ),
+            )
+            original = snapshot.occurrences[0]
+            live_sources = []
+            for document in snapshot.project.source_documents:
+                if document.file_rel_path != "data/scenario/sample.ks":
+                    live_sources.append(document)
+                    continue
+                content = ("\n" + document.text()).encode("utf-8")
+                live_sources.append(
+                    replace(
+                        document,
+                        content=content,
+                        size=len(content),
+                        sha256=hashlib.sha256(content).hexdigest(),
+                    )
+                )
+
+            result = adapter.relocate_occurrences(
+                snapshot.project,
+                (original,),
+                tuple(live_sources),
+            )
+            self.assertEqual(result.occurrences, ())
+            self.assertEqual(result.unresolved_occurrence_ids, (original.occurrence_id,))
+            self.assertEqual(result.diagnostics[0]["status"], "ambiguous")
+            self.assertEqual(result.diagnostics[0]["candidate_count"], 2)
+
     def test_missing_project_root_fails_closed(self):
         adapter = TyranoAdapter()
         with self.assertRaises(ValueError):
@@ -574,6 +788,222 @@ class TyranoAdapterNegativeFixtureTests(unittest.TestCase):
         rel_paths = {document.file_rel_path for document in project.source_documents}
         self.assertIn("data/scenario/scene1.ks", rel_paths)
         self.assertNotIn("data/scenario/choices.ks", rel_paths)
+
+    def test_static_lang_set_mismatch_and_missing_catalog_block_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_project(
+                root,
+                '*start|Start\n[lang_set name="ja"]\nHello, world!\n',
+                catalog={
+                    "scenes": {
+                        "sample.ks": {
+                            "scenario": {"Hello, world!": "你好"},
+                            "tag": {},
+                        }
+                    }
+                },
+            )
+            draft, report, _ = self._adapter_report(root)
+            self.assertIn("tyrano.lang_set.catalog_missing", draft.reason_codes)
+            self.assertIn("tyrano.lang_set.target_mismatch", draft.reason_codes)
+            self.assertEqual(report.coverage_status, "block")
+
+            adapter = TyranoAdapter()
+            snapshot = build_translation_snapshot(
+                adapter,
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(root / "data" / "others" / "lang"),
+                    target_language="ch",
+                ),
+            )
+            lang_set = next(
+                candidate
+                for candidate in snapshot.inventory.candidates
+                if "tyrano.lang_set_control_tag" in candidate.reason_codes
+            )
+            self.assertIn("tyrano.lang_set.catalog_missing", lang_set.reason_codes)
+            self.assertIn("tyrano.lang_set.target_mismatch", lang_set.reason_codes)
+            occurrence = next(
+                item for item in snapshot.occurrences if item.unit.text == "Hello, world!"
+            )
+            validated = ValidatedTranslation(
+                occurrence=occurrence,
+                translated_text="新的问候",
+                validation=adapter.validate_translation(occurrence, "新的问候"),
+            )
+            with self.assertRaises(WritebackPlanError) as captured:
+                adapter.build_writeback_plan(
+                    snapshot.project,
+                    (validated,),
+                    snapshot.project.source_documents,
+                )
+            self.assertEqual(
+                captured.exception.reason_code,
+                "tyrano.writeback.coverage_block",
+            )
+
+    def test_dynamic_lang_set_audits_all_catalogs_and_reports_attention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = {
+                "scenes": {
+                    "sample.ks": {
+                        "scenario": {"Hello, world!": "你好"},
+                        "tag": {},
+                    }
+                }
+            }
+            self._make_project(
+                root,
+                '*start|Start\n[lang_set name="&sf.select_lang"]\nHello, world!\n',
+                catalog=catalog,
+            )
+            lang_dir = root / "data" / "others" / "lang"
+            (lang_dir / "ja.json").write_text(
+                json.dumps(catalog, ensure_ascii=False),
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            adapter = TyranoAdapter()
+            project = adapter.discover_project(
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(lang_dir),
+                    target_language="ch",
+                )
+            )
+            inventory = adapter.inventory_candidates(project, InventoryPolicy())
+            draft = adapter.audit_extraction(project, inventory)
+            report = build_coverage_report(
+                project,
+                inventory,
+                draft,
+                adapter_behavior_digest=adapter.behavior_digest(),
+            )
+            self.assertEqual(
+                project.catalog_provenance["available_catalog_languages"],
+                ("ch", "ja"),
+            )
+            self.assertIn("data/others/lang/ja.json", project.document_by_path())
+            self.assertIn("tyrano.lang_set.dynamic_expression", draft.reason_codes)
+            lang_set = next(
+                candidate
+                for candidate in inventory.candidates
+                if "tyrano.lang_set_control_tag" in candidate.reason_codes
+            )
+            self.assertIn("tyrano.lang_set.dynamic_expression", lang_set.reason_codes)
+            self.assertTrue(lang_set.evidence["dynamic_expression"])
+            self.assertEqual(report.coverage_status, "attention")
+
+            snapshot = build_translation_snapshot(
+                adapter,
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(lang_dir),
+                    target_language="ch",
+                ),
+            )
+            occurrence = next(
+                item for item in snapshot.occurrences if item.unit.text == "Hello, world!"
+            )
+            translated = ValidatedTranslation(
+                occurrence=occurrence,
+                translated_text="新的问候",
+                validation=adapter.validate_translation(occurrence, "新的问候"),
+            )
+            plan = adapter.build_writeback_plan(
+                snapshot.project,
+                (translated,),
+                snapshot.project.source_documents,
+            )
+            changed_documents = tuple(
+                replace(document, sha256="0" * 64)
+                if document.file_rel_path == "data/others/lang/ja.json"
+                else document
+                for document in snapshot.project.source_documents
+            )
+            with self.assertRaises(WritebackPlanError) as captured:
+                render_writeback_plan(plan, changed_documents)
+            self.assertEqual(
+                captured.exception.reason_code,
+                "common.writeback.source_snapshot_mismatch",
+            )
+
+    def test_dynamic_lang_set_blocks_mismatched_catalog_tag_registries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target_catalog = {
+                "scenes": {
+                    "sample.ks": {
+                        "scenario": {"Hello, world!": "你好"},
+                        "tag": {},
+                    }
+                }
+            }
+            self._make_project(
+                root,
+                '*start|Start\n[lang_set name="&sf.select_lang"]\nHello, world!\n',
+                catalog=target_catalog,
+            )
+            other_catalog = dict(target_catalog)
+            other_catalog["tags"] = {"mymacro": ["value"]}
+            lang_dir = root / "data" / "others" / "lang"
+            (lang_dir / "ja.json").write_text(
+                json.dumps(other_catalog, ensure_ascii=False),
+                encoding="utf-8",
+                newline="\n",
+            )
+            draft, report, _ = self._adapter_report(root)
+            self.assertIn("tyrano.catalog.tag_registry_mismatch", draft.reason_codes)
+            self.assertEqual(report.coverage_status, "block")
+
+    def test_invalid_catalog_filename_language_code_blocks_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = {
+                "scenes": {
+                    "sample.ks": {
+                        "scenario": {"Hello, world!": "你好"},
+                        "tag": {},
+                    }
+                }
+            }
+            self._make_project(
+                root,
+                '*start|Start\n[lang_set name="ch"]\nHello, world!\n',
+                catalog=catalog,
+            )
+            lang_dir = root / "data" / "others" / "lang"
+            (lang_dir / "bad.name.json").write_text(
+                json.dumps(catalog, ensure_ascii=False),
+                encoding="utf-8",
+                newline="\n",
+            )
+            draft, report, _ = self._adapter_report(root)
+            self.assertIn("tyrano.catalog.language_code_invalid", draft.reason_codes)
+            self.assertEqual(report.coverage_status, "block")
+
+    def test_non_string_runtime_translation_blocks_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_project(
+                root,
+                "*start|Start\nHello, world!\n",
+                catalog={
+                    "scenes": {
+                        "sample.ks": {
+                            "scenario": {"Hello, world!": 42},
+                            "tag": {},
+                        }
+                    }
+                },
+            )
+            draft, report, _ = self._adapter_report(root)
+            self.assertIn("tyrano.catalog.invalid_json", draft.reason_codes)
+            self.assertEqual(report.coverage_status, "block")
 
     @staticmethod
     def _make_project(root, scenario_text, *, catalog=None, catalog_text=None):

@@ -12,9 +12,10 @@ workflow 执行 check→apply、路径约束、事务恢复和 atomic write。P3
 `check` → `apply`。
 
 已在两部私有 Ren'Py 项目的副本上完成 P1–P4 门禁实测；摘要见
-[真实项目门禁实测](#真实项目门禁实测)。P5 TyranoScript V600+ 已交付只读发现、
-inventory、coverage、occurrence extraction，以及原生语言 JSON 的声明式语义写回
-核心；relocation、完整性/语言切换收口和 P6 产品化仍未交付。
+[真实项目门禁实测](#真实项目门禁实测)。P5 TyranoScript V600+ 已交付发现、
+inventory、coverage、occurrence extraction、relocation、译文验证，以及原生语言
+JSON 的声明式语义写回和多 catalog / `lang_set` 完整性门禁。P6 的 CLI、GUI、doctor
+与产品化接入仍未交付。
 
 ## 当前边界
 
@@ -29,10 +30,12 @@ inventory、coverage、occurrence extraction，以及原生语言 JSON 的声明
 | `translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
 | sync / Batch / revision workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌；atomic writer 仍在 workflow/common 层 |
 
-P2 的 `relocate_occurrences()` 先按 identity v2，再在同一 localization 文件内按
+P2 的 Ren'Py `relocate_occurrences()` 先按 identity v2，再在同一 localization 文件内按
 source/context evidence 做唯一重定位；content evidence 还需达到最低结构分
 （`CONTENT_EVIDENCE_MIN_SCORE`，默认 140，排除仅“同文件+同原文”的 125 分弱匹配），
-同分并列时仍返回 `common.locator.unresolved`。`validate_translation()`
+同分并列时仍返回 `common.locator.unresolved`。TyranoScript 先按 identity v2 匹配，
+发生行移动时只接受同一 `.ks`、同一 parser 值和同一 tag/parameter 语义的唯一候选；
+重复文本无法唯一定位时同样拒绝。`validate_translation()`
 输出版本化 `ValidationResult`。Ren'Py 的 `build_writeback_plan()` 产生
 `text_span_replace`；TyranoScript 只对既有原生 catalog row 产生
 `json_catalog_set`，不会直接改写 `.ks`。公共消费者会在 check 和 apply 的二次源重读
@@ -270,9 +273,16 @@ TyranoScript adapter 使用 `hybrid` 模式：`.ks` 负责完整候选清单，
 fail closed。重复对白或角色 occurrence 映射到同一 catalog row 时合并为一个操作。
 公共 renderer 只返回内存中的 catalog 文件内容，`.ks` 不会成为渲染目标。
 
-P5 尚需继续完成 relocation、`lang_set` / 多 catalog / 语言代码完整性、完整 coverage
-review 门禁接线与最终 Ren'Py 非回归。下列既有 Ren'Py 问题不阻挡 P5，应另开
-follow-up，而不是扩写 P5：
+发现阶段会把语言目录内的 JSON catalog 一并纳入 source snapshot。静态 `lang_set`
+语言代码非法、与目标 catalog 不一致或引用不存在的 catalog 时 coverage 为 `block`；
+动态 `&sf.*` 选择会显式记为 `attention`，并对目录内所有可选 catalog 做运行时结构与
+source ↔ catalog 双向检查。多 catalog 的 tag registry 不一致、stale/缺失/空 row、
+非法翻译值或非法 catalog 文件名都会阻止写回。计划生成前会在同一不可变快照上重跑
+coverage；自动状态为 `block` 或已记录 coverage digest 过期时不生成计划。
+
+coverage review 的候选表同时列出 `.ks` locator、分类理由和原生 catalog JSON path，
+可直接回到源 occurrence 与目标 row 核对。P6 的 CLI / GUI / doctor 与 Project Analysis /
+Final Review 产品化接入不在 P5 中。下列既有 Ren'Py 问题不阻挡 P5，应另开 follow-up：
 
 1. speaker-label 在对白已是目标语言时仍标 translatable；
 2. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。
