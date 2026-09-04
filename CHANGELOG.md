@@ -14,6 +14,7 @@
 - 增加 Project Analysis 的生成、审查、发布与按场景注入生命周期，以及 report-only 最终审校 campaign。
 - 增加按项目归集 Batch、同步、订正、关键词与分析调用的实际模型用量账本。
 - 增加 Ren'Py Engine Adapter 的稳定扫描/occurrence/coverage 产物和写回计划校验。
+- 增加 TyranoScript V600+ 验证 Adapter：严格 `.ks` candidate inventory、原生语言 JSON 双向对账、唯一语义重定位、`lang_set`/多 catalog 完整性审计，以及只写既有 catalog row 的声明式安全计划；CLI/GUI 产品化留待后续阶段。
 - 增加提交恢复、成本估算、翻译 A/B 对比、同步预览写回与订正预览写回等完整工作流。
 - `check` 新增确定性机械质量检查与 `quality_findings.jsonl`：标签插字、未闭合括号、中英文粘连、可疑英文残留、CJK/拉丁间距、半角标点、glossary 未满足、说话人标签与短感叹词漏译、配置错乱词黑名单等。
 - 新增 `quality-report` 和 GUI「导出 HTML 报告」：把当前机械质量报警、最终审校 finding 与 warning 确认状态汇总为可离线搜索、筛选、打印的单文件质量体检报告；导出只读，不修改译文、manifest 或写回门禁。

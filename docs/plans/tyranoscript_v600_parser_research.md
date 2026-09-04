@@ -1,7 +1,9 @@
 # TyranoScript V600+ P5 parser 调研与 fixture 基线
 
-> **状态**：#265 P5 预研资料，用于冻结 parser 行为与离线 golden fixture。
-> 本文不引入生产行为；实现边界以 `engine_adapters/contracts.py` 和 #265 正文为准。
+> **状态**：#265 P5 预研资料，用于冻结 parser 行为与离线 golden fixture；P5
+> 验证 adapter 已按该基线完成，现行实现见 `engine_adapters/tyrano.py` 和
+> [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。
+> 本文自身不定义生产行为；实现边界以 `engine_adapters/contracts.py` 和 #265 正文为准。
 > 基线：`main@114b376`。调研日期：2026-08-29。
 
 ## 1. 结论摘要

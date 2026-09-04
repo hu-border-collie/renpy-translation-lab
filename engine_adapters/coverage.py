@@ -90,6 +90,10 @@ CANDIDATE_REASON_CODES = frozenset(
         "tyrano.iscript_boundary_tag",
         "tyrano.iscript_content",
         "tyrano.lang_set_control_tag",
+        "tyrano.lang_set.dynamic_expression",
+        "tyrano.lang_set.language_code_invalid",
+        "tyrano.lang_set.catalog_missing",
+        "tyrano.lang_set.target_mismatch",
         "tyrano.unterminated_quoted_parameter",
         "tyrano.official_parser_compensated",
         "tyrano.unquoted_parameter_sequence",
@@ -122,6 +126,13 @@ REPORT_REASON_CODES = frozenset(
         "tyrano.catalog.missing_row",
         "tyrano.catalog.empty_translation",
         "tyrano.catalog.invalid_json",
+        "tyrano.catalog.language_code_invalid",
+        "tyrano.catalog.language_code_collision",
+        "tyrano.catalog.tag_registry_mismatch",
+        "tyrano.lang_set.dynamic_expression",
+        "tyrano.lang_set.language_code_invalid",
+        "tyrano.lang_set.catalog_missing",
+        "tyrano.lang_set.target_mismatch",
     }
 )
 
@@ -390,6 +401,12 @@ def build_coverage_report(
                 "tyrano.catalog.empty_translation",
                 "tyrano.catalog.invalid_json",
                 "tyrano.catalog.stale",
+                "tyrano.catalog.language_code_invalid",
+                "tyrano.catalog.language_code_collision",
+                "tyrano.catalog.tag_registry_mismatch",
+                "tyrano.lang_set.language_code_invalid",
+                "tyrano.lang_set.catalog_missing",
+                "tyrano.lang_set.target_mismatch",
             }
         )
     ):
@@ -400,6 +417,7 @@ def build_coverage_report(
         or any(
             code in reason_counts
             for code in {
+                "tyrano.lang_set.dynamic_expression",
                 "renpy.catalog.provenance_unknown",
                 "renpy.catalog.stale",
                 "renpy.catalog.missing_entry",
@@ -645,8 +663,8 @@ def render_review_markdown(
             "5. Fix the adapter or add an auditable project override, then regenerate ",
             "the package; do not patch text directly into the review record.\n\n",
             "## Candidate inventory\n\n",
-            "| ID | Locator | Kind | Classification | Reasons | Text / context | Evidence |\n",
-            "| --- | --- | --- | --- | --- | --- | --- |\n",
+            "| ID | Locator | Kind | Classification | Reasons | Text / context | Catalog row | Evidence |\n",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |\n",
         ]
     )
     for candidate in sorted(
@@ -665,6 +683,7 @@ def render_review_markdown(
             f"| `{_markdown_cell(candidate.classification)}` "
             f"| {_markdown_cell(', '.join(candidate.reason_codes))} "
             f"| {_markdown_cell(candidate.raw_excerpt)} "
+            f"| `{_markdown_cell(stable_json_dumps(candidate.catalog_link or {}))}` "
             f"| `{_markdown_cell(stable_json_dumps(candidate.evidence))}` |\n"
         )
     lines.append("\n")
