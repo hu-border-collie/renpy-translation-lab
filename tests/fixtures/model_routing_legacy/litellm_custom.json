@@ -1,0 +1,19 @@
+{
+  "sync": {
+    "backend": "litellm",
+    "model": "acme-compatible/model-a",
+    "custom_litellm_providers": [
+      {
+        "id": "acme-compatible",
+        "label": "Acme Compatible",
+        "base_url": "https://models.example.test/v1",
+        "models_url": "https://models.example.test/v1/models",
+        "api_key_env": "ACME_API_KEY",
+        "requires_key": true
+      }
+    ]
+  },
+  "batch": {
+    "model": "gemini-3.1-flash-lite"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "game_root": "C:/games/example/work",
+  "model_routing": {
+    "schema_version": 1,
+    "providers": {
+      "gemini-direct": {
+        "label": "Google Gemini",
+        "adapter": "gemini",
+        "provider": "gemini",
+        "credential_ref": {
+          "kind": "api_keys_json",
+          "name": "api_keys",
+          "env_name": "GEMINI_API_KEY"
+        }
+      },
+      "openrouter": {
+        "label": "OpenRouter",
+        "adapter": "litellm",
+        "provider": "openrouter",
+        "credential_ref": {
+          "kind": "keyring",
+          "name": "openrouter",
+          "env_name": "OPENROUTER_API_KEY"
+        }
+      },
+      "acme-compatible": {
+        "label": "Acme Compatible",
+        "adapter": "litellm",
+        "provider": "acme-compatible",
+        "base_url": "https://models.example.test/v1",
+        "models_url": "https://models.example.test/v1/models",
+        "credential_ref": {
+          "kind": "keyring",
+          "name": "acme-compatible",
+          "env_name": "ACME_API_KEY"
+        }
+      }
+    },
+    "profiles": {
+      "gemini-main": {
+        "label": "Gemini Main",
+        "provider_id": "gemini-direct",
+        "model": "gemini-3.1-flash-lite",
+        "models": [
+          "gemini-3.1-flash-lite"
+        ],
+        "capability_overrides": {},
+        "params": {
+          "temperature": 0.4
+        },
+        "embedding_profile_id": "gemini-embedding"
+      },
+      "gemini-embedding": {
+        "label": "Gemini Embedding",
+        "provider_id": "gemini-direct",
+        "model": "gemini-embedding-001",
+        "models": [],
+        "capability_overrides": {},
+        "params": {}
+      },
+      "openrouter-review": {
+        "label": "OpenRouter Review",
+        "provider_id": "openrouter",
+        "model": "openrouter/deepseek/deepseek-chat",
+        "models": [],
+        "capability_overrides": {},
+        "params": {}
+      }
+    },
+    "defaults": {
+      "primary_profile_id": "gemini-main",
+      "execution_strategy": "gemini_batch"
+    },
+    "routes": {
+      "final_review": {
+        "profile_id": "openrouter-review",
+        "strategy": "sync"
+      }
+    },
+    "future_extension": {
+      "preserved": true
+    }
+  },
+  "unrelated_future_section": {
+    "preserved": true
+  }
+}
