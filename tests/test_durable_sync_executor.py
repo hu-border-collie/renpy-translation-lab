@@ -544,11 +544,12 @@ class ExecutorTests(unittest.TestCase):
 
     def test_heartbeat_keeps_lease_alive_during_provider_io(self):
         store, policy = self.bootstrap()
-        backend = BlockingBackend(wait_timeout=8.0)
+        backend = BlockingBackend(wait_timeout=20.0)
         # Keep I/O longer than TTL so the lease would expire without heartbeats,
-        # but leave enough slack for loaded Windows CI loops.
-        lease_ttl_seconds = 2.0
-        hold_seconds = 4.5
+        # but leave enough slack for loaded Windows CI loops. 2s still expired
+        # before the first loop heartbeat on windows-latest after a long suite.
+        lease_ttl_seconds = 5.0
+        hold_seconds = 12.0
 
         def release_later():
             self.assertTrue(backend.started.wait(timeout=self.start_wait))
