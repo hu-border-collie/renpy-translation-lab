@@ -42,6 +42,7 @@ import batch_submit_recovery
 import cli_contract
 import cli_discovery
 import doctor_recommendations as doctor_rec
+import generation_target
 from engine_adapters.contracts import (
     Occurrence,
     OpaqueLocator,
@@ -3540,6 +3541,9 @@ def _batch_plan_config_snapshot():
     """Non-sensitive config snapshot used for plan identity."""
     return {
         'target_language': getattr(legacy, 'PREP_LANGUAGE', ''),
+        'generation_target': getattr(
+            legacy, 'GENERATION_TARGET_LANGUAGE', generation_target.DEFAULT_GENERATION_TARGET
+        ),
         'source_language': getattr(legacy, 'PREP_SOURCE_LANGUAGE', ''),
         'batch': current_batch_settings_snapshot(),
         'rag_enabled': RAG_ENABLED,
@@ -4092,6 +4096,7 @@ def get_batch_risk_warnings():
 
 
 def create_batch_package(display_name_override='', skip_prepare=False):
+    legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_TRANSLATION},
@@ -4273,7 +4278,10 @@ def create_batch_package(display_name_override='', skip_prepare=False):
 
     print(f'Created batch package: {package_dir}')
     print(f"TL subdir: {manifest['tl_subdir']}")
-    print(f"Target language: {manifest['target_language']}")
+    print(f"Catalog language: {manifest['target_language']}")
+    print(
+        f"Generation target: {manifest.get('generation_target') or generation_target.DEFAULT_GENERATION_TARGET}"
+    )
     print(f"Pending files: {manifest['summary']['file_count']}")
     print(f"Chunks: {manifest['summary']['chunk_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
@@ -5224,6 +5232,7 @@ def build_revision_request(chunk, model=None):
 
 
 def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
+    legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_REVISION},
@@ -6834,6 +6843,7 @@ def build_keyword_request(chunk, max_candidates_per_chunk=None, model=None):
 
 
 def create_keyword_package(display_name_override='', skip_prepare=True, chunk_size=None, max_candidates_per_chunk=None):
+    legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_KEYWORD},
@@ -16823,11 +16833,27 @@ def collect_doctor_report():
             )
         )
 
+    generation_resolution = generation_target.resolve_generation_target(
+        getattr(legacy, 'GENERATION_TARGET_LANGUAGE', generation_target.DEFAULT_GENERATION_TARGET)
+    )
+    if not generation_resolution.supported:
+        warnings.append(generation_target.unsupported_message(generation_resolution))
+    else:
+        catalog_hint = generation_target.catalog_language_hint(
+            legacy.PREP_LANGUAGE,
+            legacy.TL_SUBDIR,
+        )
+        if catalog_hint:
+            warnings.append(generation_target.catalog_not_generation_warning(catalog_hint))
+
     report = {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         'tl_subdir': legacy.TL_SUBDIR,
         'language': legacy.PREP_LANGUAGE,
+        'catalog_language': legacy.PREP_LANGUAGE,
+        'generation_target': generation_resolution.canonical,
+        'generation_target_supported': generation_resolution.supported,
         'source_game_dir': source_game_dir,
         'original_game_dir': original_game_dir,
         'work_dir': work_dir,
@@ -16891,7 +16917,10 @@ def print_doctor_report(report):
     print(f"- Base dir: {report['base_dir']}")
     print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
     print(f"- TL subdir: {report.get('tl_subdir') or ''}")
-    print(f"- Language: {report['language']}")
+    print(f"- Catalog language: {report.get('catalog_language') or report['language']}")
+    print(
+        f"- Generation target: {report.get('generation_target') or generation_target.DEFAULT_GENERATION_TARGET}"
+    )
     routing_status = report.get('model_routing') or {}
     routing_issues = list(routing_status.get('issues') or [])
     print(
@@ -17133,6 +17162,9 @@ def _manifest_target_language_fields(source_manifest=None):
     fields = {
         'tl_subdir': legacy.TL_SUBDIR,
         'target_language': legacy.PREP_LANGUAGE,
+        'generation_target': getattr(
+            legacy, 'GENERATION_TARGET_LANGUAGE', generation_target.DEFAULT_GENERATION_TARGET
+        ),
     }
     if not isinstance(source_manifest, dict):
         return fields
@@ -17142,6 +17174,9 @@ def _manifest_target_language_fields(source_manifest=None):
     target_language = source_manifest.get('target_language')
     if isinstance(target_language, str) and target_language.strip():
         fields['target_language'] = target_language.strip()
+    generation_target_value = source_manifest.get('generation_target')
+    if isinstance(generation_target_value, str) and generation_target_value.strip():
+        fields['generation_target'] = generation_target_value.strip()
     return fields
 
 
@@ -17151,7 +17186,12 @@ def print_banner():
     print(f'Base dir: {legacy.BASE_DIR}')
     print(f'TL subdir: {legacy.TL_SUBDIR}')
     print(f'TL dir: {legacy.TL_DIR} (exists: {os.path.isdir(legacy.TL_DIR)})')
-    print(f'Target language: {legacy.PREP_LANGUAGE}')
+    print(f'Catalog language: {legacy.PREP_LANGUAGE}')
+    print(
+        'Generation target: '
+        f"{getattr(legacy, 'GENERATION_TARGET_LANGUAGE', generation_target.DEFAULT_GENERATION_TARGET)} "
+        f'({generation_target.GENERATION_TARGET_PROMPT_NAME})'
+    )
     print(f'Batch jobs dir: {BATCH_JOBS_DIR}')
     print(f'Translator config: {legacy.TRANSLATOR_CONFIG} (exists: {os.path.isfile(legacy.TRANSLATOR_CONFIG)})')
     print(f'Glossary: {legacy.GLOSSARY_FILE} (exists: {os.path.isfile(legacy.GLOSSARY_FILE)})')

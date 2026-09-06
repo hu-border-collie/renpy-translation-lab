@@ -70,7 +70,7 @@ def summarize_template_generation_output(
 
     facts: list[str] = []
     if language:
-        append_unique_fact(facts, f"目标语言：{language}")
+        append_unique_fact(facts, f"目录语言：{language}")
     if tl_dir:
         append_unique_fact(facts, f"翻译目录：{tl_dir}")
     if rpy_files > 0:

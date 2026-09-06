@@ -89,9 +89,11 @@ Game_Example/
 └─ build/
 ```
 
-默认目标语言是 `schinese`，可以通过 `translator_config.json` 里的 `tl_subdir` 和 `prepare.language` 调整。例如日语本地化可设为 `game/tl/japanese` 与 `prepare.language: "japanese"`；两者末段应保持一致。
+当前版本的**模型生成目标只支持简体中文**（`generation.target_language=schinese`，可省略）。`tl_subdir` 与 `prepare.language` 只选择 Ren'Py 的 **TL 目录 / 模板语言**，不会让模型改翻日语或其他语言。自定义目录名（例如 `game/tl/japanese`）仍然可用，但写入的仍是简中译文；`doctor` 会提示目录语言与生成目标不同。
 
-`doctor`、`build` 与 `generate-template` 会在输出中显示当前 TL 路径与目标语言，便于确认配置是否生效。
+若把 `generation.target_language` 设为非 `schinese` 的值，Sync / Batch / 订正 / 关键词 / A/B 会在调用模型前以 `generation_target.unsupported` 失败。`generate-template` 仍按 `prepare.language` 调用 Ren'Py。
+
+`doctor`、`build` 与 `generate-template` 会分别打印目录语言与生成目标，便于确认配置。
 
 推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新对应语言模板。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
 

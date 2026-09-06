@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 明确生成目标只支持简体中文：`generation.target_language`（省略即 `schinese`）。`tl_subdir` / `prepare.language` 只表示 Ren'Py 目录/模板语言。不支持的生成目标在 Sync、Batch、订正、关键词和 A/B 调用模型前以 `generation_target.unsupported` 失败；自定义 TL 目录名仍可用。
 - 普通 Sync 可按项目开关消费 Source Index（独立 `RELATED PROJECT CONTEXT` 分区）与 fresh published Project Analysis brief；draft/stale/missing 只报告原因、不注入。Embedding 生产路径统一使用 Gemini / OpenAI-compatible adapters，store 记录 identity，不兼容时拒绝混用并建议重建。
 - 为核心 Batch 命令增加版本化 JSON 结果 envelope、严格语义退出码、非交互显式 target、能力发现与命令 schema。
 - `sync-revisions` 与 `sync-keywords` 接入同一版本化 JSON envelope：预览/写回分别复用 `preview-revisions` / `apply-revisions` 形状，关键词导出复用 `export-keywords` 的四份报告；sync 包不更新 latest，`manifest_path` 指向本次运行。
@@ -38,6 +39,7 @@
 
 ### 变更
 
+- doctor / Batch banner / GUI 摘要把「目录语言」与「生成目标」分开显示，不再把 `prepare.language` 说成模型会翻成的语言。
 - 局部上下文诊断改为 `scene_aware_window`：多行共享翻译块仍截断，逐句独立 block ID 不再截断。夹心已译邻句进入 `CONTEXT BETWEEN`，诊断增加 `context_between_*` / `context_interleaved`。已有 TranslationPlan 的 prompt/request fingerprint 会变化，旧预览需按现有新鲜度合同重新生成后才能写回。
 
 - 普通 Sync 初译改为消费共享 TranslationPlan（#346 P3）：默认 chunk 对齐为 60/18000，Sync/Gemini Batch 共用 canonical system/user prompt、响应 schema、ContextAssembler 与稳定 request/prompt/plan fingerprint；Gemini、LiteLLM 和自定义 OpenAI-compatible Provider 均显式传递 system instruction。缺项/无效响应只生成带 `--T` / `--L` / `--R` lineage 的确定性派生请求，不修改原 plan；sync preview manifest 绑定 plan、request IDs、逐文件 source digest 与既有 adapter writeback/source snapshot 门禁。旧显式 Sync 分块配置与无 plan 的旧 preview manifest 保持兼容。

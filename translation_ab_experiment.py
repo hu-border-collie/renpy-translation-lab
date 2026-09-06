@@ -756,6 +756,7 @@ def run_translation_ab_experiment(
     sync_runner: Callable[..., dict] | None = None,
 ) -> dict:
     batch_mod = _batch()
+    batch_mod.legacy.require_supported_generation_target()
     batch_mod.require_manifest_mode(manifest, batch_mod.MANIFEST_MODE_TRANSLATION, 'compare-variants')
     chunks = select_manifest_chunks(manifest, limit=limit, offset=offset)
     explicit_model = model_override.strip()

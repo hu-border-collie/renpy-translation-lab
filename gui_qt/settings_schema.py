@@ -951,7 +951,8 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "tl_subdir",
         ("tl_subdir",),
         "翻译目录",
-        "相对 work 目录的 Ren'Py 翻译目录；默认 schinese，可改为 japanese、korean 等。",
+        "相对 work 目录的 Ren'Py TL 目录。末段是目录语言（如 schinese / japanese），"
+        "不是模型生成目标；当前版本生成仍是简体中文。",
         "str",
         "game/tl/schinese",
         "项目与资源",
@@ -1027,10 +1028,22 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "prepare_language",
         ("prepare", "language"),
         "模板语言代码",
-        "Ren'Py generate_translations 使用的语言目录名；需与 tl_subdir 末段一致。",
+        "Ren'Py generate_translations 使用的目录语言名，需与 tl_subdir 末段一致。"
+        "它只影响模板路径，不会让模型改翻其他语言。",
         "str",
         "schinese",
         "准备流程",
+    ),
+    SettingField(
+        "generation_target_language",
+        ("generation", "target_language"),
+        "生成目标语言",
+        "模型译文的目标语言。当前版本只支持 schinese（简体中文）。"
+        "留空视为 schinese。设为其他值会在调用模型前报错。",
+        "str",
+        "schinese",
+        "项目与资源",
+        allow_empty=True,
     ),
     SettingField(
         "prepare_renpy_sdk_dir",

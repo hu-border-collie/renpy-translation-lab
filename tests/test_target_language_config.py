@@ -18,6 +18,7 @@ def _snapshot_runtime_path_settings():
         'BASE_DIR': runtime.BASE_DIR,
         'WORK_GAME_DIR': runtime.WORK_GAME_DIR,
         'PREP_LANGUAGE': runtime.PREP_LANGUAGE,
+        'GENERATION_TARGET_LANGUAGE': runtime.GENERATION_TARGET_LANGUAGE,
     }
 
 
@@ -50,7 +51,9 @@ class TargetLanguageConfigTests(unittest.TestCase):
 
                 self.assertEqual(runtime.TL_SUBDIR, 'game/tl/japanese')
                 self.assertEqual(runtime.PREP_LANGUAGE, 'japanese')
+                self.assertEqual(runtime.GENERATION_TARGET_LANGUAGE, 'schinese')
                 self.assertTrue(runtime.TL_DIR.replace('\\', '/').endswith('work/game/tl/japanese'))
+                runtime.require_supported_generation_target()
         finally:
             _restore_runtime_path_settings(snapshot)
 
@@ -58,15 +61,18 @@ class TargetLanguageConfigTests(unittest.TestCase):
         with (
             mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/korean'),
             mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'korean'),
+            mock.patch.object(batch_mod.legacy, 'GENERATION_TARGET_LANGUAGE', 'schinese'),
         ):
             fields = batch_mod._manifest_target_language_fields()
         self.assertEqual(fields['tl_subdir'], 'game/tl/korean')
         self.assertEqual(fields['target_language'], 'korean')
+        self.assertEqual(fields['generation_target'], 'schinese')
 
     def test_manifest_target_language_fields_inherit_from_parent_manifest(self):
         parent = {
             'tl_subdir': 'game/tl/japanese',
             'target_language': 'japanese',
+            'generation_target': 'schinese',
         }
         with (
             mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
@@ -75,6 +81,7 @@ class TargetLanguageConfigTests(unittest.TestCase):
             fields = batch_mod._manifest_target_language_fields(parent)
         self.assertEqual(fields['tl_subdir'], 'game/tl/japanese')
         self.assertEqual(fields['target_language'], 'japanese')
+        self.assertEqual(fields['generation_target'], 'schinese')
 
     def test_collect_doctor_report_exposes_configured_language(self):
         with (
@@ -107,6 +114,12 @@ class TargetLanguageConfigTests(unittest.TestCase):
 
         self.assertEqual(report['tl_subdir'], 'game/tl/japanese')
         self.assertEqual(report['language'], 'japanese')
+        self.assertEqual(report['catalog_language'], 'japanese')
+        self.assertEqual(report['generation_target'], 'schinese')
+        self.assertTrue(report['generation_target_supported'])
+        self.assertTrue(
+            any('Catalog language only names the Ren\'Py TL directory' in item for item in report['warnings'])
+        )
 
     def test_print_doctor_report_includes_language_and_tl_subdir(self):
         report = {
@@ -151,7 +164,8 @@ class TargetLanguageConfigTests(unittest.TestCase):
             batch_mod.print_doctor_report(report)
         output = stdout.getvalue()
         self.assertIn('TL subdir: game/tl/japanese', output)
-        self.assertIn('Language: japanese', output)
+        self.assertIn('Catalog language: japanese', output)
+        self.assertIn('Generation target: schinese', output)
         self.assertNotIn('Workflow state:', output)
 
     def test_print_doctor_report_includes_nonempty_workflow_state(self):
@@ -206,12 +220,58 @@ class TargetLanguageConfigTests(unittest.TestCase):
                     {
                         'tl_subdir': 'game/tl/japanese',
                         'target_language': 'japanese',
+                        'generation_target': 'schinese',
                     },
                     handle,
                 )
             facts = load_target_language_facts_from_manifest(manifest_path)
             self.assertIn('TL 路径：game/tl/japanese', facts)
-            self.assertIn('目标语言：japanese', facts)
+            self.assertIn('目录语言：japanese', facts)
+            self.assertTrue(any(item.startswith('生成目标：schinese') for item in facts))
+
+    def test_load_generation_target_japanese_is_rejected_before_model(self):
+        snapshot = _snapshot_runtime_path_settings()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp)
+                work_dir = workspace / 'work'
+                work_dir.mkdir()
+                config = {
+                    'game_root': str(work_dir),
+                    'tl_subdir': 'game/tl/schinese',
+                    'prepare': {'language': 'schinese'},
+                    'generation': {'target_language': 'japanese'},
+                }
+                config_path = workspace / 'translator_config.json'
+                config_path.write_text(json.dumps(config), encoding='utf-8')
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'renpy-translation-lab')),
+                    mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'renpy-translation-lab')),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                ):
+                    runtime.load_translator_settings()
+                self.assertEqual(runtime.GENERATION_TARGET_LANGUAGE, 'japanese')
+                with self.assertRaises(SystemExit) as raised:
+                    runtime.require_supported_generation_target()
+                self.assertIn('generation_target.unsupported', str(raised.exception))
+        finally:
+            _restore_runtime_path_settings(snapshot)
+
+    def test_japanese_catalog_still_requires_chinese_model_output(self):
+        import translation_core
+        self.assertIn(
+            'Simplified Chinese',
+            translation_core.build_canonical_translation_system_instruction([]),
+        )
+        self.assertEqual(
+            runtime.validate_translation('Hello there.', 'こんにちは。'),
+            (False, 'No Chinese characters'),
+        )
+        self.assertEqual(
+            runtime.validate_translation('Hello there.', '你好。'),
+            (True, 'OK'),
+        )
 
 
 class TlSubdirBoundaryTests(unittest.TestCase):

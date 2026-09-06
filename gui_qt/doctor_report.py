@@ -403,8 +403,18 @@ def parse_doctor_output(output: str) -> dict[str, object]:
                 parsed["tl_exists"] = _parse_bool(match.group(2))
             continue
 
+        if line.startswith("- Catalog language:"):
+            parsed["language"] = line.split(":", 1)[1].strip()
+            parsed["catalog_language"] = parsed["language"]
+            continue
+
+        if line.startswith("- Generation target:"):
+            parsed["generation_target"] = line.split(":", 1)[1].strip().split()[0]
+            continue
+
         if line.startswith("- Language:"):
             parsed["language"] = line.split(":", 1)[1].strip()
+            parsed.setdefault("catalog_language", parsed["language"])
             continue
 
         if line.startswith("- Template generation:"):
@@ -506,6 +516,11 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         "tl_subdir": str(report.get("tl_subdir") or ""),
         "tl_exists": report.get("tl_exists"),
         "language": str(report.get("language") or ""),
+        "catalog_language": str(
+            report.get("catalog_language") or report.get("language") or ""
+        ),
+        "generation_target": str(report.get("generation_target") or ""),
+        "generation_target_supported": report.get("generation_target_supported"),
         "mode": str(report.get("mode") or ""),
         "layout_status": str(report.get("layout_status") or ""),
         "is_work_root": report.get("is_work_root"),
@@ -637,8 +652,12 @@ def _summarize_doctor_parsed(
         append_unique_fact(all_facts, f"翻译目录：{exists_text}")
     if parsed.get("tl_subdir"):
         append_unique_fact(all_facts, f"TL 路径：{parsed['tl_subdir']}")
-    if parsed.get("language"):
-        append_unique_fact(all_facts, f"目标语言：{parsed['language']}")
+    catalog_language = parsed.get("catalog_language") or parsed.get("language")
+    if catalog_language:
+        append_unique_fact(all_facts, f"目录语言：{catalog_language}")
+    generation_target = str(parsed.get("generation_target") or "").strip() or "schinese"
+    suffix = "（简体中文，当前仅支持）" if generation_target == "schinese" else ""
+    append_unique_fact(all_facts, f"生成目标：{generation_target}{suffix}")
     if mode:
         append_unique_fact(all_facts, f"检查模式：{doctor_mode_label(mode)}")
     if counts:

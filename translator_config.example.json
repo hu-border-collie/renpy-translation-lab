@@ -3,6 +3,9 @@
   "game_root": "C:/games/Game_Example/work",
   "glossary_file": "glossary.json",
   "tl_subdir": "game/tl/schinese",
+  "generation": {
+    "target_language": "schinese"
+  },
   "context_storage": {
     "location": "tool",
     "game_dir_name": "translation_context"
