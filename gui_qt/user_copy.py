@@ -483,7 +483,8 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
         "建议：补译环境已就绪；在左侧「批量翻译」点击「开始翻译」打包并提交"
     ),
     doctor_rec.NO_PENDING_LINES: (
-        "建议：当前没有待译条目；如需创建新批次，请先刷新翻译模板"
+        "建议：当前没有待译条目。空目标只有在带有注释原文或 old 原文时才会进入待译；"
+        "如需创建新批次，请先刷新带原文的翻译模板"
     ),
     doctor_rec.START_PENDING_BATCH: (
         "建议：在左侧「批量翻译」点击「开始翻译」打包并提交云端任务"
@@ -494,7 +495,10 @@ DOCTOR_RECOMMENDATION_UNKNOWN_FACT = "建议：收到未识别的诊断建议，
 DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY = "收到未识别的诊断建议，请查看诊断日志。"
 
 # Shared status copy for no-pending (legacy rec path and workflow_state path).
-_NO_PENDING_STATUS_MESSAGE = "当前没有待译条目；如需创建新批次，请先刷新翻译模板。"
+_NO_PENDING_STATUS_MESSAGE = (
+    "当前没有待译条目。空目标只有在带有注释原文或 old 原文时才会进入待译；"
+    "如需创建新批次，请先刷新带原文的翻译模板。"
+)
 
 DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",

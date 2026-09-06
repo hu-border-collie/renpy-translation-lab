@@ -812,6 +812,38 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertEqual(progress, {"translated_count": 1})
         self.assertEqual(runtime.collect_tasks(lines), tasks)
 
+    def test_collect_tasks_treats_empty_catalog_targets_as_pending(self):
+        lines = [
+            "translate schinese scene_1:\n",
+            '    # e "Hello there."\n',
+            '    e ""\n',
+            "translate schinese strings:\n",
+            '    old "Good morning."\n',
+            '    new ""\n',
+            "translate schinese scene_2:\n",
+            '    # e "Already done."\n',
+            '    e "已经完成。"\n',
+            "translate schinese scene_3:\n",
+            '    # e ""\n',
+            '    e ""\n',
+        ]
+        tasks, progress = runtime.collect_tasks_with_progress(lines)
+        self.assertEqual(
+            [task["text"] for task in tasks],
+            ["Hello there.", "Good morning."],
+        )
+        self.assertEqual(progress, {"translated_count": 1})
+        self.assertEqual(tasks[0]["live_catalog_text"], "")
+        self.assertEqual(tasks[1]["live_catalog_text"], "")
+        self.assertTrue(runtime.is_blank_dialogue_text(""))
+        self.assertTrue(runtime.is_blank_dialogue_text("   "))
+        self.assertIsNone(runtime.empty_target_source_for_pending(None, ""))
+        self.assertIsNone(runtime.empty_target_source_for_pending("", ""))
+        self.assertEqual(
+            runtime.empty_target_source_for_pending("Hello there.", ""),
+            "Hello there.",
+        )
+
 
     def test_batch_non_chinese_allowance_accepts_say_speaker_label_item(self):
         line = '    "Terry" "Hello there." (ctc="ctc_blink", ctc_position="nestled")\n'

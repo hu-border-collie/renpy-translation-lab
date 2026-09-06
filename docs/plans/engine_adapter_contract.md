@@ -586,10 +586,11 @@ Analysis 只消费 analysis projection digest，不把所有 UI 文本注入 pro
 
 - 识别：`renpy.dialogue_string`、`renpy.narration_string`、
   `renpy.translate_comment_pair`、`renpy.old_new_pair`、
-  `renpy.catalog.translation_present`；
+  `renpy.catalog.translation_present`、`renpy.empty_target`；
 - 排除：`renpy.character_display_definition`、
   `renpy.keyword_argument`、`renpy.voice_asset`、`renpy.asset_path`、
-  `renpy.non_player_visible_literal`、`project.explicit_exclusion`；
+  `renpy.non_player_visible_literal`、`project.explicit_exclusion`、
+  `renpy.empty_source`；
 - 不支持/未知：`renpy.dynamic_string_expression`、
   `renpy.custom_statement_unsupported`、`renpy.visibility_unknown`；
 - 解析：`renpy.tokenize_error`、`renpy.ast_parse_error`、

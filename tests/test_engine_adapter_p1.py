@@ -72,7 +72,7 @@ class TestRenPyAdapterP1(unittest.TestCase):
         self.assertTrue(capabilities.relocation)
         self.assertEqual(capabilities.declarative_writeback, ("text_span_replace",))
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
-        self.assertEqual(capabilities.adapter_version, "1.1.0")
+        self.assertEqual(capabilities.adapter_version, "1.1.1")
         self.assertNotEqual(adapter.behavior_digest(), "")
 
 
@@ -999,6 +999,163 @@ translate schinese start:
         self.assertEqual(
             target.read_bytes(),
             b"\xef\xbb\xbf" + body.replace('    "Hello"', '    "你好"').encode("utf-8"),
+        )
+
+
+class TestEmptyCatalogTargets(unittest.TestCase):
+    """Empty ``e ""`` / ``new ""`` slots are pending, not already translated (#411)."""
+
+    def make_project(self, files):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        tl_dir = root / "game" / "tl" / "schinese"
+        tl_dir.mkdir(parents=True)
+        for rel_path, text in files.items():
+            target = tl_dir / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        return root, tl_dir
+
+    @staticmethod
+    def request(root, tl_dir):
+        return ProjectDiscoveryRequest(
+            project_root=str(root),
+            localization_root=str(tl_dir),
+            target_language="schinese",
+        )
+
+    def snapshot_for(self, source: str):
+        root, tl_dir = self.make_project({"script.rpy": source})
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        return snapshot
+
+    def test_empty_dialogue_and_old_new_are_pending_not_already_translated(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    # e "Hello there."\n'
+            '    e ""\n'
+            "\n"
+            "translate schinese strings:\n"
+            '    old "Good morning."\n'
+            '    new ""\n'
+        )
+        snapshot = self.snapshot_for(source)
+        classifications = [candidate.classification for candidate in snapshot.inventory.candidates]
+        self.assertNotIn("already_translated", classifications)
+        self.assertEqual(snapshot.pending_task_count, 2)
+        self.assertEqual(
+            [task["text"] for task in snapshot.pending_tasks_by_file["script.rpy"]],
+            ["Hello there.", "Good morning."],
+        )
+        self.assertTrue(
+            all(
+                "renpy.empty_target" in candidate.reason_codes
+                for candidate in snapshot.inventory.candidates
+                if candidate.classification == "translatable"
+            )
+        )
+        pending_units = [
+            occurrence.unit
+            for occurrence in snapshot.occurrences
+            if occurrence.unit.id
+            in {task["id"] for task in snapshot.pending_tasks_by_file["script.rpy"]}
+        ]
+        self.assertEqual({unit.current_translation for unit in pending_units}, {""})
+        self.assertEqual(
+            {unit.metadata.get("live_catalog_text") for unit in pending_units},
+            {""},
+        )
+
+    def test_original_backfill_and_chinese_translation_keep_existing_status(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    # e "Hello there."\n'
+            '    e "Hello there."\n'
+            '    # e "Goodbye now."\n'
+            '    e "再见。"\n'
+        )
+        snapshot = self.snapshot_for(source)
+        self.assertEqual(snapshot.pending_task_count, 1)
+        self.assertEqual(
+            [task["text"] for task in snapshot.pending_tasks_by_file["script.rpy"]],
+            ["Hello there."],
+        )
+        self.assertEqual(
+            snapshot.progress_by_file["script.rpy"]["translated_count"],
+            1,
+        )
+        already = [
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.classification == "already_translated"
+        ]
+        self.assertEqual(len(already), 1)
+        self.assertIn("renpy.catalog.translation_present", already[0].reason_codes)
+
+    def test_whitespace_target_with_source_is_pending(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    # e "Hello there."\n'
+            '    e "   "\n'
+        )
+        snapshot = self.snapshot_for(source)
+        self.assertEqual(snapshot.pending_task_count, 1)
+        self.assertEqual(
+            snapshot.pending_tasks_by_file["script.rpy"][0]["text"],
+            "Hello there.",
+        )
+        self.assertNotIn(
+            "already_translated",
+            [candidate.classification for candidate in snapshot.inventory.candidates],
+        )
+
+    def test_empty_original_is_excluded_not_pending_or_translated(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    # e ""\n'
+            '    e ""\n'
+            "translate schinese strings:\n"
+            '    old ""\n'
+            '    new ""\n'
+        )
+        snapshot = self.snapshot_for(source)
+        self.assertEqual(snapshot.pending_task_count, 0)
+        classifications = {
+            candidate.classification for candidate in snapshot.inventory.candidates
+        }
+        self.assertNotIn("already_translated", classifications)
+        self.assertNotIn("translatable", classifications)
+        self.assertTrue(
+            any(
+                candidate.classification == "explicitly_excluded"
+                and "renpy.empty_source" in candidate.reason_codes
+                for candidate in snapshot.inventory.candidates
+            )
+        )
+
+    def test_missing_source_evidence_is_not_already_translated(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    e ""\n'
+            "translate schinese strings:\n"
+            '    new ""\n'
+        )
+        snapshot = self.snapshot_for(source)
+        self.assertEqual(snapshot.pending_task_count, 0)
+        self.assertNotIn(
+            "already_translated",
+            [candidate.classification for candidate in snapshot.inventory.candidates],
+        )
+        self.assertTrue(
+            any(
+                candidate.classification == "parse_error"
+                and "renpy.source_marker_unpaired" in candidate.reason_codes
+                for candidate in snapshot.inventory.candidates
+            )
         )
 
 
