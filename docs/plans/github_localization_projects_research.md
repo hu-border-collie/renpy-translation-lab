@@ -4,7 +4,7 @@
 > **核对日期**：2026-09-06。
 > **研究对象**：[renpy-translation-lab](https://github.com/hu-border-collie/renpy-translation-lab) 及 GitHub 上定位相近的视觉小说 / 游戏本地化工具。
 > **证据边界**：本轮阅读了公开仓库的 README、目录、关键源码和部分测试；没有把所有外部项目完整安装并运行，因此动态兼容性不能由本文单独确认。
-> **本地状态**：研究时 checkout 为 `main@5ea0ddd`；本地 `origin/main` tracking ref 领先 3 个提交，差异主要是 Ren'Py speaker label sibling detection。刷新本文时应重新核对当前 checkout 和远端默认分支。
+> **本地状态**：研究原稿对照 `main@5ea0ddd`。2026-09-06 复核时远端默认分支 tip 为 `main@64f04bb`（已含合入的 [#417](https://github.com/hu-border-collie/renpy-translation-lab/pull/417) speaker-label 分类修复与 [#421](https://github.com/hu-border-collie/renpy-translation-lab/pull/421) coverage reason-code allowlist）。实现或刷新本文时以当前默认分支 tip 为准，不要再以 `5ea0ddd` 为基线；speaker-label follow-up 已完成，勿再记为待办。
 
 ## 1. 摘要结论
 
@@ -152,6 +152,7 @@ source text
 
 #### 不应照搬的部分
 
+- 将 `inject_missing_placeholders()` 或「部分注入后仍保留译文」当作可进入本项目 safe `apply` 的恢复手段；缺失 token 应 fail-closed 或进入 quality finding，不得拼接进写回计划。
 自动把缺失 token 按位置插回或追加到译文尾部，最多只能生成 repair preview：
 
 - 位置可能已经发生语义变化；

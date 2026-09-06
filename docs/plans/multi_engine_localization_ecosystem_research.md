@@ -20,7 +20,7 @@
 3. **#272 对候选引擎的评估结论得到外部生态的强力验证**：
    * **Naninovel (Unity)**：官方原生内置了纯文本的 `Resources/Naninovel/Localization/{Locale}/` 目录与 CSV 交换机制。**完全不需要挂载 Unity 运行时即可实现离线原子写回**，印证了其作为唯一推荐第三引擎（评级 A+）的科学性；
    * **Godot + Dialogic 2**：生态中已有成熟的 CSV 翻译插件，但 Dialogic 2.0 目前处于 Alpha 20，API 频繁重构，过早立项必然背负巨大的接口废弃维护债务；
-   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）普遍采用直接原位重写数十兆的单体 `MapXXX.json`，极易导致工程损毁，且原生缺乏官方多语言支持，印证了其“评级 C- / 异构压力测试候选”的定位。
+   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（依托 Komorebi 夹具）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
 4. **对本项目的战略启示**：
    * 本项目在 `#265` 中建立的 `ProjectSnapshot`、`ReconciliationReport`、`TranslationRecord` 与声明式 `WritebackPlan`，在**数据严密性与防漂移安全性上明显超越了同类开源游戏翻译工具**；
    * 本项目应积极借鉴 **VNTextPatch 的字符 Span 重定位算法**、**Weblate 的 Fuzzy 微改审核状态**、**Translator++ 的数据网格交互直觉**，以及 **Naninovel 官方离线文本目录的直接消费模式**，完成从“文本翻译脚本”到“工业级多引擎工作台”的跃迁。
@@ -166,7 +166,8 @@
    * 一旦在写回过程中遇到非标准插件注入的数据字段、编码异常或结构微调，**会导致整张地图数据损毁、游戏彻底无法加载**。
 3. **缺乏官方原生多语言**：
    * 引擎原生没有类似 Ren'Py `tl/` 或 Naninovel `Localization/` 的概念，必须依赖第三方插件（如 DK_Localization）才能在运行时切换语言；
-   * **裁定**：完全印证了 #272 将其定为 **“评级 C-（异构压力测试候选）”** 的判断——不具备原生目录写回安全边界，当前阶段不予支持。
+   * **裁定**：对**未收敛的全量 RPG Maker**（战斗数值、复杂插件、粗暴 JSON 覆写），#272 原 **C- / 不予泛化支持** 的判断仍然成立。
+   * **收敛后的叙事模式**：仅限 Narrative/ADV、事件节点精确定位、声明式 `WritebackPlan` + `check -> apply`、并排除战斗/插件动态字符串时，与矩阵文档一致，可作为 **B+ 实战原型先行线**（Komorebi 夹具），**不得**宣传为支持全部 RPG Maker 游戏。
 
 ---
 
@@ -179,7 +180,7 @@
 | **translate-toolkit (Weblate)** | 工业级本地化底座 | 通用格式 (PO/JSON/CSV) | 格式无损往返读写 (Roundtrip) | ✅ 成熟的三向合并与 Fuzzy 降级 | 吸收 Fuzzy 降级状态机；弥补游戏剧情上下文。 |
 | **Naninovel Built-in** | Unity 顶级视觉小说插件 | 原生纯文本目录 + CSV | 离线纯文本写回，无需 Unity 运行时 | ✅ 官方文本 ID 增量更新与保留 | **证实为最佳第三引擎候选**；直接消费离线目录。 |
 | **Dialogic 2 (Godot)** | Godot 剧情对白系统 | 原生 CSV 矩阵导出 | 依赖 Godot 启动时编译 `.translation` | ⚠️ Alpha 阶段频繁重构 | 技术路线可行；严格等待 Beta/RC 稳定。 |
-| **RPGMLocalizer** | RPG Maker JSON 批翻译器 | 暴力解析 `MapXXX.json` | 危险的原位 Monolithic JSON 覆写 | ❌ 极差，重新生成易破坏事件树 | **印证高危预警**；严禁引入全量破坏性写回。 |
+| **RPGMLocalizer** | RPG Maker JSON 批翻译器 | 暴力解析 `MapXXX.json` | 危险的原位 Monolithic JSON 覆写 | ❌ 极差，重新生成易破坏事件树 | **印证全量 RPG 高危预警**；严禁粗暴 JSON 覆写。叙事模式 B+ 原型线须另走节点级声明式写回（见矩阵文档）。 |
 | **renpy-translation-lab** | **工业级 VN 本地化工作台** | **抽象 Adapter + 混合双轨** | **声明式 WritebackPlan + 原子 Span SHA-256 门禁** | **ProjectSnapshot + Reconciliation 严格对账** | **坚守架构领先优势，补齐产品化交互。** |
 
 ---
