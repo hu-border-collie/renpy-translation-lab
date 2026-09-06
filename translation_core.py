@@ -529,10 +529,16 @@ def _format_context_line(line):
         )
     else:
         text = str(line)
+    current_translation = ''
+    if isinstance(line, TranslationUnit):
+        current_translation = str(line.current_translation or '')
+    elif isinstance(line, dict):
+        current_translation = str(line.get('current_translation') or '')
     label = _speaker_label(speaker_id, speaker_name)
-    if label and text:
-        return f'{label}: {text}'
-    return text
+    rendered = f'{label}: {text}' if label and text else text
+    if rendered and current_translation and current_translation not in {text, rendered}:
+        rendered = f'{rendered} [translated: {current_translation}]'
+    return rendered
 
 
 def format_context_block(lines, empty_label='(none)'):

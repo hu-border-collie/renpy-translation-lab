@@ -586,7 +586,12 @@ def build_request_id(plan_id, chunk_id, expected_ids):
     return short_fingerprint(canonical_json(payload))
 
 
-# --- Local context window (D1: block-bounded, from issue #338) ----------------
+# --- Local context window (D1: scene-aware file order, issue #410) ------------
+
+EXPLICIT_SCENE_KEYS = ('scene_boundary', 'route_id')
+CONTEXT_BOUNDARY_FILE_ORDER = 'file_order'
+CONTEXT_BOUNDARY_SHARED_BLOCK = 'shared_block_label'
+CONTEXT_BOUNDARY_EXPLICIT_SCENE = 'explicit_scene'
 
 
 def _task_text_len(item):
@@ -594,48 +599,180 @@ def _task_text_len(item):
     return len(text) if isinstance(text, str) else 0
 
 
-def build_local_context_window(tasks, start, end, before_limit, after_limit):
-    """Build a file-bounded, block-bounded local context window (issue #338).
+def _item_block_name(item):
+    return str((item or {}).get('block_name') or '')
 
-    The window never crosses translate-block boundaries when the first task of
-    a side carries a different ``block_name``. Returns
-    ``(translation_core.ContextWindow, diagnostics)``; the diagnostics record
-    applied limits, item/character counts, block bounding, and whether the
-    item budget truncated the window.
+
+def _item_id(item):
+    return str((item or {}).get('id') or '')
+
+
+def _block_name_counts(sequence):
+    counts = {}
+    for item in sequence or ():
+        name = _item_block_name(item)
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _explicit_scene_token(item):
+    mapping = item or {}
+    for key in EXPLICIT_SCENE_KEYS:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return f'{key}:{value.strip()}'
+    return ''
+
+
+def _context_stop_reason(current, neighbor, block_counts):
+    """Return why the window must stop between ``current`` and ``neighbor``.
+
+    Unique per-item translate block IDs are not scene boundaries (issue #410).
+    A ``block_name`` is only a label/scene signal when it groups two or more
+    items in the sequence. Explicit ``scene_boundary`` / ``route_id`` values
+    always bound when both sides are present and differ. Missing scene
+    metadata degrades to file order instead of inventing a control-flow graph.
     """
+    current_scene = _explicit_scene_token(current)
+    neighbor_scene = _explicit_scene_token(neighbor)
+    if current_scene and neighbor_scene and current_scene != neighbor_scene:
+        return CONTEXT_BOUNDARY_EXPLICIT_SCENE
+    current_block = _item_block_name(current)
+    neighbor_block = _item_block_name(neighbor)
+    if current_block and neighbor_block and current_block != neighbor_block:
+        if block_counts.get(current_block, 0) >= 2 or block_counts.get(neighbor_block, 0) >= 2:
+            return CONTEXT_BOUNDARY_SHARED_BLOCK
+    return ''
+
+
+def _target_span_in_sequence(sequence, target_items, fallback_start, fallback_end):
+    """Locate the TARGET slice inside a (possibly larger) context sequence."""
+    if not target_items:
+        return fallback_start, fallback_end, False
+    id_index = {}
+    for index, item in enumerate(sequence or ()):
+        item_id = _item_id(item)
+        if item_id and item_id not in id_index:
+            id_index[item_id] = index
+    indices = []
+    for item in target_items:
+        item_id = _item_id(item)
+        if item_id not in id_index:
+            return fallback_start, fallback_end, True
+        indices.append(id_index[item_id])
+    return min(indices), max(indices) + 1, False
+
+
+def context_item_from_unit(unit):
+    """Project a TranslationUnit into the local-context sequence (issue #410)."""
+    metadata = unit.metadata if isinstance(getattr(unit, 'metadata', None), Mapping) else {}
+    source = str(getattr(unit, 'source', '') or getattr(unit, 'text', '') or '')
+    live = str(getattr(unit, 'current_translation', '') or '')
+    text = str(getattr(unit, 'text', '') or source)
+    role = 'translated' if live and live != source else 'pending'
+    if role == 'translated':
+        text = source or text
+    item = {
+        'id': str(getattr(unit, 'id', '') or ''),
+        'text': text,
+        'source': source,
+        'current_translation': live,
+        'role': role,
+        'speaker_id': str(getattr(unit, 'speaker_id', '') or ''),
+        'speaker_name': str(getattr(unit, 'speaker_name', '') or ''),
+        'block_name': str(metadata.get('block_name') or ''),
+        'file_rel_path': str(getattr(unit, 'file_rel_path', '') or ''),
+        'line': int(getattr(unit, 'line', 0) or 0),
+    }
+    for key in EXPLICIT_SCENE_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            item[key] = value.strip()
+    return item
+
+
+def attach_context_items_from_units(file_jobs, units_by_file):
+    """Fill ``context_items`` from file-ordered units (pending + translated)."""
+    for job in file_jobs or ():
+        rel_path = str((job or {}).get('file_rel_path') or '')
+        units = list((units_by_file or {}).get(rel_path) or ())
+        units.sort(
+            key=lambda unit: (
+                int(getattr(unit, 'line', 0) or 0),
+                int(getattr(unit, 'start', 0) or 0),
+                str(getattr(unit, 'id', '') or ''),
+            )
+        )
+        if units:
+            job['context_items'] = [context_item_from_unit(unit) for unit in units]
+        else:
+            job.setdefault('context_items', list((job or {}).get('tasks') or []))
+    return file_jobs
+
+
+def build_local_context_window(tasks, start, end, before_limit, after_limit):
+    """Build a file-ordered local context window (issues #338 / #410).
+
+    ``tasks`` is the context sequence for one file: pending TARGET items plus
+    already-translated neighbors when the caller supplies ``context_items``.
+    The window never crosses files. Unique per-sentence translate block IDs
+    are not treated as scene boundaries; multi-item shared block names and
+    explicit scene/route tokens still bound. When no reliable scene metadata
+    exists the window degrades to file order plus the item budget.
+
+    Returns ``(translation_core.ContextWindow, diagnostics)``.
+    """
+    sequence = list(tasks or [])
     before = []
     after = []
     before_truncated = False
     after_truncated = False
     block_bounded_before = False
     block_bounded_after = False
+    reason_before = ''
+    reason_after = ''
+    block_counts = _block_name_counts(sequence)
 
     if before_limit > 0 and start > 0:
-        batch_block = tasks[start].get('block_name')
+        current = sequence[start]
         index = start - 1
         while index >= 0 and len(before) < before_limit:
-            item = tasks[index]
-            if item.get('block_name') != batch_block:
+            item = sequence[index]
+            stop_reason = _context_stop_reason(current, item, block_counts)
+            if stop_reason:
                 block_bounded_before = True
+                reason_before = stop_reason
                 break
             before.append(item)
+            current = item
             index -= 1
         if index >= 0 and len(before) >= before_limit:
             before_truncated = True
         before.reverse()
 
-    if after_limit > 0 and end < len(tasks):
-        batch_block = tasks[end - 1].get('block_name')
+    if after_limit > 0 and end < len(sequence):
+        current = sequence[end - 1]
         index = end
-        while index < len(tasks) and len(after) < after_limit:
-            item = tasks[index]
-            if item.get('block_name') != batch_block:
+        while index < len(sequence) and len(after) < after_limit:
+            item = sequence[index]
+            stop_reason = _context_stop_reason(current, item, block_counts)
+            if stop_reason:
                 block_bounded_after = True
+                reason_after = stop_reason
                 break
             after.append(item)
+            current = item
             index += 1
-        if index < len(tasks) and len(after) >= after_limit:
+        if index < len(sequence) and len(after) >= after_limit:
             after_truncated = True
+
+    if reason_before == CONTEXT_BOUNDARY_EXPLICIT_SCENE or reason_after == CONTEXT_BOUNDARY_EXPLICIT_SCENE:
+        boundary_mode = CONTEXT_BOUNDARY_EXPLICIT_SCENE
+    elif reason_before == CONTEXT_BOUNDARY_SHARED_BLOCK or reason_after == CONTEXT_BOUNDARY_SHARED_BLOCK:
+        boundary_mode = CONTEXT_BOUNDARY_SHARED_BLOCK
+    else:
+        boundary_mode = CONTEXT_BOUNDARY_FILE_ORDER
 
     diagnostics = {
         'context_before_limit': before_limit,
@@ -647,6 +784,20 @@ def build_local_context_window(tasks, start, end, before_limit, after_limit):
         'context_truncated': before_truncated or after_truncated,
         'block_bounded_before': block_bounded_before,
         'block_bounded_after': block_bounded_after,
+        'boundary_mode': boundary_mode,
+        'boundary_reason_before': reason_before,
+        'boundary_reason_after': reason_after,
+        'scene_boundary_unknown': boundary_mode == CONTEXT_BOUNDARY_FILE_ORDER,
+        'context_translated_items': sum(
+            1
+            for item in (*before, *after)
+            if str((item or {}).get('role') or '') == 'translated'
+            or (
+                str((item or {}).get('current_translation') or '')
+                and str((item or {}).get('current_translation') or '')
+                != str((item or {}).get('text') or '')
+            )
+        ),
     }
     return translation_core.ContextWindow(before, after), diagnostics
 
@@ -799,7 +950,7 @@ def _local_layer(chunk_input):
     after_text = translation_core.format_context_block(window.after, '(none)')
     text = f'CONTEXT BEFORE:\n{before_text}\n\nCONTEXT AFTER:\n{after_text}'
     diagnostics = dict(chunk_input.local_context_diagnostics or {})
-    diagnostics['algorithm'] = 'block_bounded_window'
+    diagnostics['algorithm'] = 'scene_aware_window'
     return ContextLayerResult(
         layer=CONTEXT_LAYER_LOCAL,
         rank=CONTEXT_LAYER_RANKS[CONTEXT_LAYER_LOCAL],
@@ -1310,9 +1461,9 @@ def _unit_semantic_entry(unit):
         'speaker_name': unit.speaker_name,
         'file_rel_path': unit.file_rel_path,
         'line': unit.line,
-        # block_name drives the D1 local-context window; it must participate
-        # in plan identity or two jobs differing only in block layout would
-        # share a plan_id while their prompts diverge.
+        # block_name still participates in plan identity: shared multi-item
+        # names remain scene/label bounds, and two jobs that differ only in
+        # block layout must not share a plan_id while their prompts diverge.
         'block_name': str(unit.metadata.get('block_name', '') if isinstance(unit.metadata, Mapping) else ''),
     }
 
@@ -1399,6 +1550,7 @@ def build_translation_plan(
                 file_rel_path=file_rel_path,
                 file_path=file_path,
             )
+            context_items = list((job or {}).get('context_items') or tasks)
             chunk_specs.append({
                 'file_rel_path': file_rel_path,
                 'file_path': file_path,
@@ -1408,6 +1560,7 @@ def build_translation_plan(
                 'start': start,
                 'end': end,
                 'tasks': tasks,
+                'context_items': context_items,
             })
             unit_entries.extend(_unit_semantic_entry(unit) for unit in target_units)
 
@@ -1439,13 +1592,23 @@ def build_translation_plan(
         target_items = spec['target_items']
         chunk_id = build_chunk_id(file_rel_path, spec['chunk_index'])
         expected_ids = [unit.id for unit in target_units]
-        context_window, local_diagnostics = build_local_context_window(
-            spec['tasks'],
+        context_items = spec.get('context_items') or spec['tasks']
+        window_start, window_end, unaligned = _target_span_in_sequence(
+            context_items,
+            spec['target_items'],
             spec['start'],
             spec['end'],
+        )
+        context_window, local_diagnostics = build_local_context_window(
+            context_items,
+            window_start,
+            window_end,
             context_policy.local_context_before,
             context_policy.local_context_after,
         )
+        if unaligned:
+            local_diagnostics = dict(local_diagnostics)
+            local_diagnostics['context_sequence_unaligned'] = True
         lexical_hits = retrieve_lexical_glossary_hits(
             target_items,
             normalize_map=normalize_map,

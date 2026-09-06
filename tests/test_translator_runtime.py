@@ -3084,8 +3084,8 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             {'id': 'b3', 'text': 'Six', 'block_name': 'scene2'},
             {'id': 'b4', 'text': 'Seven', 'block_name': 'scene2'},
         ]
-        # Batch is [b1]; the preceding item belongs to scene1, so before is
-        # intentionally empty (no silent cross-scene context). After is
+        # Batch is [b1]; scene1/scene2 are multi-item labels, so before is
+        # empty rather than splicing across that label. After is
         # budget-truncated to 2 of the remaining scene2 items.
         window, stats = runtime.build_sync_local_context(
             tasks, 3, 4, before_limit=5, after_limit=2,

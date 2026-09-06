@@ -80,14 +80,14 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 
 同步初译提示词包含三类基础上下文，全部只作参考，模型仍只能返回 TARGET 条目的 ID 与译文：
 
-- **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口只取当前文件内的待译条目，并在可识别的 translate block 边界处提前截断——不会静默跨越场景；没有 block 信息时退化为纯预算截断。设为 0 可关闭对应方向。
+- **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口取当前文件的对白顺序，待译 TARGET 和已译邻句都可以作为参考；模型仍只能返回 TARGET 的 ID。逐句生成的独立 translate 块不会被当成场景边界。真正的多行翻译块、显式路线/场景标记仍会截断。没有可识别场景信息时退化为文件顺序加预算截断，并在诊断里标记 `scene_boundary_unknown`。设为 0 可关闭对应方向。
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
 - **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
 每次运行的上下文构造事实会写入 manifest 与预览制品：
 
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
-- 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断与 block 边界截断标记。
+- 每个文件的 `prompt_context.batches`：该文件各请求实际的前后文条目数/字符数、预算截断、场景/多行块边界截断标记，以及 `scene_boundary_unknown` 降级诊断。
 - manifest 顶层 `translation_plan` / `plan_fingerprint` / `request_ids`：绑定本次初译的共享 plan、稳定请求身份和 prompt/request fingerprint；Gemini、LiteLLM 及自定义 OpenAI-compatible Provider 都接收同一 system/user 分离语义。
 - manifest 顶层 `translation_plan_diagnostics` 及各 request summary：记录规范化请求数、上下文层 rank/预算/裁剪/舍弃原因和 capability 估算；GUI「诊断与运行日志」显示非敏感摘要，完整 plan 留在本地 manifest。
 

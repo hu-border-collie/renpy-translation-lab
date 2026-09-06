@@ -3523,17 +3523,18 @@ def retrieve_sync_glossary_hits(target_items):
 
 
 def build_sync_local_context(tasks, start, end, before_limit, after_limit):
-    """Build a file-bounded ContextWindow for one sync batch (issue #338).
+    """Build a file-ordered ContextWindow for one sync batch (issues #338 / #410).
 
-    Delegates to the shared block-bounded window builder (issue #346, D1) so
-    sync and batch consume the same local-context algorithm.
+    Delegates to the shared scene-aware window builder so sync and batch
+    consume the same local-context algorithm.
 
-    The window is limited to the current file's pending task sequence (the
-    caller passes one file at a time) and stops at translate-block boundaries
-    so context cannot silently cross scenes when a block is identifiable.
+    The window is limited to the current file sequence the caller passes
+    (pending TARGET items, plus already-translated neighbors when supplied)
+    and stops at shared multi-item translate blocks or explicit scene/route
+    tokens. Unique per-sentence block IDs are not treated as scene bounds.
 
     Returns ``(ContextWindow, diagnostics)`` where diagnostics records the
-    applied limits, actual item/character counts, block bounding, and whether
+    applied limits, actual item/character counts, scene bounding, and whether
     the budget truncated the context.
     """
     return translation_plan.build_local_context_window(tasks, start, end, before_limit, after_limit)
@@ -5481,11 +5482,22 @@ def prepare_sync_translation_execution_context(
             task['file_path'] = document.file_path
             tasks.append(task)
         if tasks:
-            pending_jobs.append({
+            job = {
                 'file_rel_path': progress_key,
                 'file_path': document.file_path,
                 'tasks': tasks,
-            })
+            }
+            translation_plan.attach_context_items_from_units(
+                [job],
+                {
+                    progress_key: [
+                        occurrence.unit
+                        for occurrence in adapter_snapshot.occurrences
+                        if occurrence.unit.file_rel_path == progress_key
+                    ]
+                },
+            )
+            pending_jobs.append(job)
 
     plan_build, captures = build_sync_translation_plan(
         pending_jobs,
