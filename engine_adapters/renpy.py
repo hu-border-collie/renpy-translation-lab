@@ -55,7 +55,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.1"
+ADAPTER_VERSION = "1.1.2"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -882,6 +882,13 @@ class RenPyAdapter:
             tokens,
             token_index,
         )
+        speaker_label_sibling_translated = (
+            legacy.is_say_speaker_label_with_translated_sibling(
+                line,
+                tokens,
+                token_index,
+            )
+        )
         if speaker_id or is_speaker_label:
             structure_kind = "dialogue_string"
             supported_reason = "renpy.dialogue_string"
@@ -985,6 +992,15 @@ class RenPyAdapter:
             classification = "unknown"
             reasons = ["renpy.visibility_unknown"]
             structure_kind = "unknown_string_structure"
+
+        if (
+            speaker_label_sibling_translated
+            and classification in {"translatable", "already_translated"}
+        ):
+            classification = "already_translated"
+            if "renpy.catalog.translation_present" not in reasons:
+                reasons.append("renpy.catalog.translation_present")
+            reasons.append("renpy.speaker_label_sibling_translated")
 
         source_marker_kind = "direct_source"
         source_text = str(text_value) if isinstance(text_value, str) else ""

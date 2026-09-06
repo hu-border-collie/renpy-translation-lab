@@ -6747,6 +6747,25 @@ def _is_say_speaker_label_string_token(line, tokens, token_index):
     return _has_later_non_keyword_string(tokens, token_index)
 
 
+def is_say_speaker_label_with_translated_sibling(line, tokens, token_index):
+    """Return whether a string speaker-label is followed by Chinese dialogue."""
+    if not _is_say_speaker_label_string_token(line, tokens, token_index):
+        return False
+    for later_index in range(token_index + 1, len(tokens)):
+        later = tokens[later_index]
+        if later.type != tokenize.STRING:
+            continue
+        if _is_keyword_argument_string_token(tokens, later_index):
+            continue
+        try:
+            text_value = ast.literal_eval(later.string)
+        except Exception:
+            continue
+        if isinstance(text_value, str) and contains_chinese(text_value):
+            return True
+    return False
+
+
 def is_say_speaker_label_string_span(line, start_col, end_col):
     try:
         start_col = int(start_col)
@@ -6970,6 +6989,13 @@ def collect_tasks_with_progress(lines, skip_translated=True):
                     continue
 
                 prefix, quote = parse_string_literal_format(token.string)
+                speaker_label_sibling_translated = (
+                    is_say_speaker_label_with_translated_sibling(
+                        line,
+                        tokens,
+                        token_index,
+                    )
+                )
 
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
                 # If it's pure ASCII/English, we want to translate it.
@@ -7001,6 +7027,8 @@ def collect_tasks_with_progress(lines, skip_translated=True):
                         and contains_chinese(text_val)
                     ):
                         translated_count += 1
+                    continue
+                if speaker_label_sibling_translated:
                     continue
 
                 task_id = translation_core.build_identity_v2(

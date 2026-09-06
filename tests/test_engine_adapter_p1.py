@@ -72,8 +72,104 @@ class TestRenPyAdapterP1(unittest.TestCase):
         self.assertTrue(capabilities.relocation)
         self.assertEqual(capabilities.declarative_writeback, ("text_span_replace",))
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
-        self.assertEqual(capabilities.adapter_version, "1.1.1")
+        self.assertEqual(capabilities.adapter_version, "1.1.2")
         self.assertNotEqual(adapter.behavior_digest(), "")
+
+
+    def test_string_speaker_label_uses_translated_dialogue_sibling(self):
+        translated_source = (
+            'translate schinese chapter:\n'
+            '    # "Terry" "Hello there."\n'
+            '    "Terry" "你好。"\n'
+        )
+        root, tl_dir = self.make_project({"translated.rpy": translated_source})
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        label = next(
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.unit is not None and candidate.unit.text == "Terry"
+        )
+        dialogue = next(
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.unit is not None and candidate.unit.text == "你好。"
+        )
+        tasks, progress = runtime.collect_tasks_with_progress(
+            translated_source.splitlines(keepends=True)
+        )
+
+        self.assertEqual(label.classification, "already_translated")
+        self.assertIn("renpy.catalog.translation_present", label.reason_codes)
+        self.assertIn(
+            "renpy.speaker_label_sibling_translated",
+            label.reason_codes,
+        )
+        self.assertEqual(dialogue.classification, "already_translated")
+        self.assertEqual(tasks, [])
+        self.assertEqual(snapshot.pending_task_count, 0)
+        self.assertEqual(snapshot.progress_by_file["translated.rpy"], progress)
+
+        untranslated_source = translated_source.replace('"你好。"', '"Hello there."')
+        root, tl_dir = self.make_project({"untranslated.rpy": untranslated_source})
+        untranslated = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        label = next(
+            candidate
+            for candidate in untranslated.inventory.candidates
+            if candidate.unit is not None and candidate.unit.text == "Terry"
+        )
+        tasks, _progress = runtime.collect_tasks_with_progress(
+            untranslated_source.splitlines(keepends=True)
+        )
+        self.assertEqual(label.classification, "translatable")
+        self.assertEqual(untranslated.pending_task_count, len(tasks))
+        self.assertEqual([task["text"] for task in tasks], ["Terry", "Hello there."])
+
+        character_id_source = (
+            'translate schinese chapter:\n'
+            '    # e "Hello there."\n'
+            '    e "你好。"\n'
+        )
+        root, tl_dir = self.make_project({"character_id.rpy": character_id_source})
+        character_id = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        self.assertFalse(
+            any(
+                candidate.unit is not None and candidate.unit.text == "e"
+                for candidate in character_id.inventory.candidates
+            )
+        )
+        self.assertEqual(character_id.pending_task_count, 0)
+
+        empty_dialogue_source = (
+            'translate schinese chapter:\n'
+            '    # "Terry" "Hello there."\n'
+            '    "Terry" ""\n'
+        )
+        root, tl_dir = self.make_project({"empty_dialogue.rpy": empty_dialogue_source})
+        empty_dialogue = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            self.request(root, tl_dir),
+        )
+        label = next(
+            candidate
+            for candidate in empty_dialogue.inventory.candidates
+            if candidate.unit is not None
+            and candidate.unit.text == "Terry"
+            and candidate.locator.locator["start_col_hint"] == 4
+        )
+        self.assertEqual(label.classification, "translatable")
+        self.assertNotIn(
+            "renpy.speaker_label_sibling_translated",
+            label.reason_codes,
+        )
 
 
     def test_adapter_matches_legacy_units_ids_speakers_sources_and_spans(self):
