@@ -95,7 +95,7 @@ Game_Example/
 
 推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新对应语言模板。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
 
-不要用 Ren'Py 的 `--empty` 生成空模板。本工具的初译流程需要目标行保留原文，之后再把目标行或 `new` 行替换成中文。
+推荐用目标行保留原文的模板，之后再把目标行或 `new` 行替换成中文。不要用 Ren'Py 的 `--empty` 作为首选生成方式。若模板里已经是空目标（`e ""` / `new ""`）但上一行注释原文或 `old` 行仍有可译原文，扫描会把它们识别为待译并写回该空目标，而不会把空白项计为已完成。没有原文证据、或原文本身为空的目标既不是待译也不是已译。
 
 **信任边界：** `translator_config.json` 是**可执行的本地配置**，不只是数据文件。`prepare.unpack_command` / `prepare.template_command` 会在准备阶段在本机运行。推荐使用 **argv 列表**；shell 字符串命令默认拒绝，只有显式设置 `prepare.allow_shell_commands: true` 后才允许（doctor / GUI 会标高风险）。不要加载来源不明的项目配置。
 

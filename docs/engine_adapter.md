@@ -53,7 +53,10 @@ plan digest；adapter 没有文件写入权限。keyword、Project Analysis 与 
    等价性来源，保留 task 集合、identity v2、speaker、source 和 span；
 4. 公共 coverage 层校验每个 candidate 恰有一个分类；
 5. 只有 `translatable` / `already_translated` candidate 可以变成
-   `Occurrence[TranslationUnit]`。
+   `Occurrence[TranslationUnit]`。空的 `e ""` / `new ""` 目标只要注释原文或
+   `old` 行仍有可译原文，就进入 `translatable`（reason `renpy.empty_target`），
+   不得标成 `already_translated`。原文也为空时进入 `explicitly_excluded`
+   （`renpy.empty_source`）。
 
 合法但当前不支持的动态字符串进入 `unsupported`；未配对 source marker、字符串
 tokenize 失败、AST/literal 解析失败进入可定位的 `parse_error`。这些项目不会再因为

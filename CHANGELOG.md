@@ -26,6 +26,8 @@
 
 ### 修复
 
+- 空的 Ren'Py 目标模板（`e ""` / `new ""`）不再被标成 `already_translated`。只要注释原文或 `old` 行仍有可译原文，就会进入待译并走现有 preview / check / 安全写回；原文为空或缺少原文证据不会被计为已完成。
+
 - Batch `load_batch_settings()` 现在会把 `embedding_backend` / provider / endpoint / timeout / API key env 写回模块全局变量；配置 `openai_compatible` 后不再仍走 Gemini adapter。
 - Embedding task type 在加载时按 provider-neutral 合同校验并持久化为 `RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`；空 embedding 输入改为立即报错，避免 zip 错位静默丢记录。
 - 明确选择非 Gemini embedding 后端但缺 model/provider 时启动失败；Gemini 解析失败仍可回退，但原因写入 doctor `embedding_load_error`。

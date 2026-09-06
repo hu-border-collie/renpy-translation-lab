@@ -144,8 +144,9 @@ _START_PENDING_MESSAGE = (
     "Pending translation lines are ready; start batch translation when API keys are configured."
 )
 _NO_PENDING_MESSAGE = (
-    "No pending translation lines detected; review TL files or refresh templates "
-    "before starting a new batch."
+    "No pending translation lines detected; empty catalog targets count as pending "
+    "only when a comment or old source is still translatable. Review TL files or "
+    "refresh templates before starting a new batch."
 )
 
 _LEGACY_EXACT_MESSAGES: dict[str, str] = {
@@ -165,6 +166,9 @@ _LEGACY_EXACT_MESSAGES: dict[str, str] = {
     _START_INCREMENTAL_MESSAGE: START_INCREMENTAL_BATCH,
     _START_PENDING_MESSAGE: START_PENDING_BATCH,
     _NO_PENDING_MESSAGE: NO_PENDING_LINES,
+    # Pre-#411 wording still seen in saved doctor logs.
+    "No pending translation lines detected; review TL files or refresh templates "
+    "before starting a new batch.": NO_PENDING_LINES,
 }
 
 _DETAIL_MESSAGES: dict[str, str] = {

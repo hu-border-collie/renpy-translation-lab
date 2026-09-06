@@ -575,6 +575,40 @@ class TestRenPyAdapterP2(unittest.TestCase):
                 snapshot.project.source_documents,
             )
 
+    def test_writeback_plan_replaces_empty_catalog_target(self):
+        source = (
+            "translate schinese scene_1:\n"
+            '    # e "Hello there."\n'
+            '    e ""\n'
+        )
+        root, tl_dir, adapter, snapshot = self.snapshot(source)
+        self.assertEqual(snapshot.pending_task_count, 1)
+        occurrence = self.occurrence_for(snapshot, "Hello there.")
+        self.assertEqual(occurrence.unit.text, "Hello there.")
+        self.assertEqual(occurrence.unit.current_translation, "")
+        validation = adapter.validate_translation(occurrence, "你好。")
+        self.assertEqual(validation.status, "pass")
+
+        plan = adapter.build_writeback_plan(
+            snapshot.project,
+            (ValidatedTranslation(occurrence, "你好。", validation),),
+            snapshot.project.source_documents,
+        )
+        operation = plan.operations[0]
+        self.assertEqual(
+            operation.expected_text_digest,
+            hashlib.sha256("".encode("utf-8")).hexdigest(),
+        )
+        rendered = render_writeback_plan(plan, snapshot.project.source_documents)
+        rendered_text = "".join(rendered["script.rpy"]).replace("\r\n", "\n")
+        self.assertEqual(
+            rendered_text,
+            "translate schinese scene_1:\n"
+            '    # e "Hello there."\n'
+            '    e "你好。"\n',
+        )
+        self.assertEqual((tl_dir / "script.rpy").read_text(encoding="utf-8"), source)
+
 
 if __name__ == "__main__":
     unittest.main()

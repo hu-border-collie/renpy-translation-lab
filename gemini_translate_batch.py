@@ -16949,9 +16949,11 @@ def print_doctor_report(report):
         )
         if report['pending_task_count'] > 0:
             print(
-                '  Note: pending counts English strings without Han characters; may include '
-                'preserved names, patron lists, or punctuation-only updates. '
+                '  Note: pending counts English strings without Han characters, including '
+                'empty template targets whose comment or old source is still translatable; '
+                'may also include preserved names, patron lists, or punctuation-only updates. '
                 'translated_count counts targets that already contain Chinese. '
+                'Empty targets are not counted as finished translations. '
                 'This does not indicate missed batch writeback.'
             )
     print(

@@ -6744,6 +6744,28 @@ def _is_translation_target_text(text_val):
     )
 
 
+def is_blank_dialogue_text(text):
+    """Return True when a catalog string is empty or whitespace-only."""
+    return not str(text or "").strip()
+
+
+def empty_target_source_for_pending(source_marker, live_text):
+    """Return translatable source text when the live catalog string is blank.
+
+    Empty ``e ""`` / ``new ""`` slots are not finished translations. When a
+    comment or ``old`` marker still carries translatable source evidence, that
+    source is collected as the pending TARGET. Blank originals and missing
+    markers return ``None`` so they are not treated as pending work.
+    """
+    if source_marker is None or is_blank_dialogue_text(source_marker):
+        return None
+    if not is_blank_dialogue_text(live_text):
+        return None
+    if not _is_translation_target_text(source_marker):
+        return None
+    return source_marker
+
+
 def _ensure_identity_block_occurrence(block_occurrences, block_name, current_occurrence):
     if current_occurrence:
         return current_occurrence
@@ -6916,7 +6938,10 @@ def collect_tasks_with_progress(lines, skip_translated=True):
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
                 # If it's pure ASCII/English, we want to translate it.
                 source_marker = find_source_text_for_translation_line(lines, idx) if is_translation_file else None
-                should_translate = _is_translation_target_text(text_val)
+                pending_from_empty = empty_target_source_for_pending(source_marker, text_val)
+                should_translate = (
+                    _is_translation_target_text(text_val) or pending_from_empty is not None
+                )
                 identity_bearing = (is_translation_file and source_marker is not None) or should_translate
                 if not identity_bearing:
                     continue
@@ -6951,7 +6976,7 @@ def collect_tasks_with_progress(lines, skip_translated=True):
                 )
                 task = {
                     "id": task_id,
-                    "text": text_val,
+                    "text": pending_from_empty if pending_from_empty is not None else text_val,
                     "line": idx,
                     "start": token.start[1],
                     "end": token.end[1],
@@ -6963,6 +6988,9 @@ def collect_tasks_with_progress(lines, skip_translated=True):
                     "block_occurrence": current_block_occurrence,
                     "source_for_id": source_for_id,
                 }
+                if pending_from_empty is not None:
+                    task["current_translation"] = text_val
+                    task["live_catalog_text"] = text_val
                 speaker_id = ""
                 if not (is_translation_file and sline.startswith("new ")):
                     speaker_id = infer_dialogue_speaker_id(line, token.start[1])

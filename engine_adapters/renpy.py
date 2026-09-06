@@ -55,7 +55,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.0"
+ADAPTER_VERSION = "1.1.1"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -894,10 +894,49 @@ class RenPyAdapter:
         unit: translation_core.TranslationUnit | None = None
         final_legacy_item: Mapping[str, Any] | None = None
 
+        live_catalog_text = str(text_value) if isinstance(text_value, str) else ""
+        marker_source = str((marker or {}).get("text") or "") if marker is not None else None
+        pending_from_empty = legacy.empty_target_source_for_pending(
+            marker_source,
+            live_catalog_text,
+        )
+
         if legacy_item is not None:
             classification = "translatable"
             reasons = [supported_reason]
             final_legacy_item = dict(legacy_item)
+            if pending_from_empty is not None:
+                reasons.append("renpy.empty_target")
+        elif identity is not None and pending_from_empty is not None:
+            # collect_tasks should already have emitted this pending item;
+            # synthesize one if the legacy scan and identity views diverge.
+            classification = "translatable"
+            reasons = [supported_reason, "renpy.empty_target"]
+            final_legacy_item = {
+                "id": identity,
+                "text": pending_from_empty,
+                "line": line_index,
+                "start": token.start[1],
+                "end": token.end[1],
+                "quote": quote,
+                "prefix": prefix,
+                "progress_entry": f"task:{line_index}:{token.start[1]}",
+                "block_name": block_name,
+                "block_index": ordinal,
+                "block_occurrence": block_occurrence,
+                "source_for_id": pending_from_empty,
+                "file_rel_path": document.file_rel_path,
+                "file_path": document.file_path,
+            }
+        elif identity is not None and legacy.is_blank_dialogue_text(live_catalog_text):
+            # An empty catalog slot is not a finished translation.
+            classification = "explicitly_excluded"
+            empty_reason = (
+                "renpy.empty_source"
+                if marker_source is None or legacy.is_blank_dialogue_text(marker_source)
+                else "renpy.empty_target"
+            )
+            reasons = [supported_reason, empty_reason]
         elif identity is not None:
             classification = "already_translated"
             reasons = [supported_reason, "renpy.catalog.translation_present"]
@@ -987,8 +1026,9 @@ class RenPyAdapter:
                 }
             unit_item = dict(item)
             unit_item["source"] = source_text
+            unit_item["live_catalog_text"] = live_catalog_text
             if marker is not None:
-                unit_item["current_translation"] = str(text_value)
+                unit_item["current_translation"] = live_catalog_text
             if speaker_id:
                 unit_item["speaker_id"] = speaker_id
                 unit_item["speaker"] = speaker_id
@@ -1364,6 +1404,20 @@ class RenPyAdapter:
         return legacy.quote_with(normalized, str(quote or '"'), prefix=prefix or "")
 
     @staticmethod
+    def _writeback_expected_live_text(unit: translation_core.TranslationUnit) -> str:
+        """Return the catalog string that must currently occupy the writeback span.
+
+        Pending empty templates keep ``unit.text`` as the original to translate,
+        while the live ``e ""`` / ``new ""`` slot is recorded as
+        ``live_catalog_text``. Original-backfilled and already-translated units
+        store the same string in both fields.
+        """
+        metadata = unit.metadata if isinstance(unit.metadata, Mapping) else {}
+        if "live_catalog_text" in metadata:
+            return str(metadata.get("live_catalog_text") or "")
+        return unit.text
+
+    @staticmethod
     def _literal_at_span(line: str, start: int, end: int) -> tuple[str, str] | None:
         try:
             tokens = tokenize.generate_tokens(io.StringIO(line).readline)
@@ -1713,7 +1767,8 @@ class RenPyAdapter:
                 raise ValueError(f"Writeback span invalid: {rel_path}:{unit.line}:{unit.start}-{unit.end}")
             raw_fragment = lines[unit.line][unit.start:unit.end]
             literal = self._literal_at_span(lines[unit.line], unit.start, unit.end)
-            if literal is None or literal[0] != unit.text:
+            expected_live_text = self._writeback_expected_live_text(unit)
+            if literal is None or literal[0] != expected_live_text:
                 raise ValueError(f"Writeback span/source mismatch: {rel_path}:{unit.line}")
             span = (rel_path, unit.line, unit.start, unit.end)
             if any(
@@ -1737,7 +1792,7 @@ class RenPyAdapter:
                 "start_col": unit.start,
                 "end_col": unit.end,
                 "expected_fragment_sha256": _sha256_bytes(raw_fragment.encode("utf-8")),
-                "expected_text_digest": _sha256_bytes(unit.text.encode("utf-8")),
+                "expected_text_digest": _sha256_bytes(expected_live_text.encode("utf-8")),
                 "replacement_fragment": replacement_fragment,
                 "validation_digest": digest_json(item.validation.to_dict()),
             }

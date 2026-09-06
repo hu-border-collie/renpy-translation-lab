@@ -589,7 +589,8 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.heading, "项目检查通过")
         self.assertEqual(
             summary.message,
-            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+            "当前没有待译条目。空目标只有在带有注释原文或 old 原文时才会进入待译；"
+            "如需创建新批次，请先刷新带原文的翻译模板。",
         )
         self.assertFalse(any(fact.startswith("建议：") for fact in summary.facts))
 
@@ -607,7 +608,8 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(summary.heading, "项目检查通过")
         self.assertEqual(
             summary.message,
-            "当前没有待译条目；如需创建新批次，请先刷新翻译模板。",
+            "当前没有待译条目。空目标只有在带有注释原文或 old 原文时才会进入待译；"
+            "如需创建新批次，请先刷新带原文的翻译模板。",
         )
 
     def test_workflow_state_only_start_incremental_stays_ready(self):
