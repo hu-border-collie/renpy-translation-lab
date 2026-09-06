@@ -94,7 +94,12 @@
       ],
       "source_char_count": 19,
       "context_past": [],
-      "context_future": [],
+      "context_future": [
+        {
+          "line": 8,
+          "text": "已翻译"
+        }
+      ],
       "items": [
         {
           "id": "chapter02/strings.rpy:strings:1:365f992a",

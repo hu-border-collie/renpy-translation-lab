@@ -81,7 +81,7 @@
         "chapter02/strings.rpy:strings:2:802aa657"
       ],
       "system_instruction_sha256": "257cdf5c5dc03c242859b6b2f4a6c5a09dccdeb99804301392d2c7d7a24124ee",
-      "user_prompt_sha256": "0d7bcee3cfa05e1d7210903336ef640dba082df1d8b159b8cc59b7fae89f2a33",
+      "user_prompt_sha256": "53fbf54b60368c7000d6c0b252b2a778c664eedfa0236b6161e8119873e46728",
       "generation_config": {
         "keys": [
           "max_output_tokens",

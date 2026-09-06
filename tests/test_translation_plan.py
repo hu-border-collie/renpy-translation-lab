@@ -411,6 +411,28 @@ class LocalContextWindowTests(unittest.TestCase):
         self.assertIn('"id":"pending"', request.user_prompt)
         self.assertNotIn('"id":"done"', request.user_prompt)
 
+    def test_unaligned_context_sequence_does_not_borrow_file_start(self):
+        jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [
+                {'id': 'pending', 'text': 'Good morning.', 'line': 9, 'block_name': 's9'},
+            ],
+            'context_items': [
+                {'id': 'unrelated', 'text': 'File start.', 'line': 0, 'block_name': 's0'},
+                {'id': 'other', 'text': 'Still unrelated.', 'line': 1, 'block_name': 's1'},
+            ],
+        }]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+        )
+        spec = build.plan.chunks[0].context_window_spec
+        self.assertTrue(spec['context_sequence_unaligned'])
+        self.assertEqual(spec['context_before_items'], 0)
+        self.assertEqual(spec['context_after_items'], 0)
+        self.assertNotIn('File start.', build.requests[0].user_prompt)
+
 
 class LexicalGlossaryTests(unittest.TestCase):
     def test_hit_order_is_normalize_preserve_non_translatable_with_dedup(self):

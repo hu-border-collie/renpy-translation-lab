@@ -647,21 +647,41 @@ def _context_stop_reason(current, neighbor, block_counts):
 
 
 def _target_span_in_sequence(sequence, target_items, fallback_start, fallback_end):
-    """Locate the TARGET slice inside a (possibly larger) context sequence."""
+    """Locate the TARGET slice inside a (possibly larger) context sequence.
+
+    When every TARGET id is present, the span is the inclusive min/max index.
+    If the sequence is the same pending-task list used for chunking, the
+    original ``fallback_start``/``fallback_end`` remain valid. Otherwise an
+    unaligned sequence must not reuse those offsets: a one-item patch job
+    would otherwise treat the start of a longer file sequence as context.
+    """
+    sequence = list(sequence or ())
     if not target_items:
         return fallback_start, fallback_end, False
     id_index = {}
-    for index, item in enumerate(sequence or ()):
+    for index, item in enumerate(sequence):
         item_id = _item_id(item)
         if item_id and item_id not in id_index:
             id_index[item_id] = index
     indices = []
+    aligned = True
     for item in target_items:
         item_id = _item_id(item)
         if item_id not in id_index:
-            return fallback_start, fallback_end, True
+            aligned = False
+            break
         indices.append(id_index[item_id])
-    return min(indices), max(indices) + 1, False
+    if aligned and indices:
+        return min(indices), max(indices) + 1, False
+    if (
+        0 <= fallback_start < fallback_end <= len(sequence)
+        and [_item_id(item) for item in sequence[fallback_start:fallback_end]]
+        == [_item_id(item) for item in target_items]
+    ):
+        return fallback_start, fallback_end, False
+    # Empty neighbor window: treat the whole sequence as the TARGET span so
+    # before/after walks have nowhere to go.
+    return 0, len(sequence), True
 
 
 def context_item_from_unit(unit):
