@@ -3,8 +3,8 @@
 This module defines and validates the ``translator_config.json``
 ``model_routing`` section introduced by issue #348.  It is deliberately pure:
 it does not read or write files, resolve credentials, import provider SDKs, or
-change the legacy runtime.  P1 can therefore build an idempotent migrator and
-compatibility reader against a stable, independently tested contract.
+change the legacy runtime. The P1 offline migrator and compatibility reader
+consume this independently tested contract; production activation is P2.
 
 Unknown keys are accepted so a read-modify-write cycle can preserve fields
 written by a newer version.  Known fields still fail closed when malformed,
@@ -58,11 +58,13 @@ _RESERVED_PROFILE_IDS = frozenset({"primary", "batch"})
 _RESERVED_PROFILE_SUFFIXES = ("_model", "_override")
 _SENSITIVE_NORMALIZED_KEYS = frozenset({
     "apikey",
+    "apikeys",
     "accesstoken",
     "authorization",
     "bearertoken",
     "clientsecret",
     "password",
+    "privatekey",
     "refreshtoken",
     "secret",
     "token",
@@ -117,12 +119,12 @@ LEGACY_FIELD_MAPPINGS = (
     LegacyFieldMapping(
         ("batch", "project_analysis", "model"),
         "model_routing.routes.project_analysis",
-        "create an override only when the legacy value is non-empty",
+        "preserve the dedicated model when non-empty and always retain the Sync stage strategy",
     ),
     LegacyFieldMapping(
         ("batch", "final_review", "model"),
         "model_routing.routes.final_review",
-        "create an override only when the legacy value is non-empty",
+        "preserve the dedicated model when non-empty and always retain the Batch stage strategy",
     ),
     LegacyFieldMapping(
         ("sync", "rag"),
@@ -202,6 +204,10 @@ def _validate_credential_ref(
                 f"credential_ref.{key} must be a string reference.",
             ))
     env_name = raw.get("env_name", "")
+    if kind == CREDENTIAL_KIND_ENV:
+        name = raw.get("name")
+        if not isinstance(name, str) or not _ENV_NAME_PATTERN.fullmatch(name):
+            issues.append(_issue(f"{path}.name", "invalid_environment_name", "env credential name must be an environment variable name."))
     if isinstance(env_name, str) and env_name and not _ENV_NAME_PATTERN.fullmatch(env_name):
         issues.append(_issue(
             f"{path}.env_name",
@@ -465,6 +471,18 @@ def validate_model_routing_section(section: object) -> tuple[ConfigContractIssue
         ))
 
     profiles = section.get("profiles")
+    entrypoints = section.get("legacy_entrypoints", {})
+    if not _is_mapping(entrypoints):
+        issues.append(_issue(f"{path}.legacy_entrypoints", "invalid_legacy_entrypoints", "legacy_entrypoints must be an object."))
+    else:
+        for key, adapter in (("sync_profile_id", None), ("batch_profile_id", ADAPTER_GEMINI)):
+            if key not in entrypoints:
+                continue
+            value = entrypoints[key]
+            if not isinstance(value, str) or value not in profile_providers:
+                issues.append(_issue(f"{path}.legacy_entrypoints.{key}", "unknown_legacy_profile", "Legacy entrypoint must reference a configured profile."))
+            elif adapter and provider_adapters[profile_providers[value]] != adapter:
+                issues.append(_issue(f"{path}.legacy_entrypoints.{key}", "strategy_profile_mismatch", "Legacy Batch requires a Gemini profile."))
     if _is_mapping(profiles):
         for profile_id, profile in profiles.items():
             if not _is_mapping(profile):

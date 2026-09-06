@@ -345,53 +345,12 @@ class ProjectState:
     # --- JSON helpers ---
 
     def _read_json_object(self, path: Path, description: str) -> dict[str, Any]:
-        if not path.exists():
-            return {}
-        try:
-            raw = path.read_text(encoding="utf-8-sig")
-        except OSError as exc:
-            raise ValueError(f"Failed to read {description}: {path}") from exc
-        if not raw.strip():
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"{description} is not valid JSON: {path}") from exc
-        if not isinstance(data, dict):
-            raise ValueError(f"{description} must be a JSON object: {path}")
-        return data
+        from config_store import read_json_object
+        return read_json_object(path, description)
 
     def _write_json_object(self, path: Path, data: dict[str, Any]) -> None:
-        tmp = path.with_suffix(".tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            existing_mode = path.stat().st_mode & 0o777 if path.exists() else None
-            target_mode = existing_mode
-            if target_mode is None and path.name == "api_keys.json":
-                target_mode = 0o600
-            payload = json.dumps(data, ensure_ascii=False, indent=2)
-            if target_mode is None:
-                tmp.write_text(payload, encoding="utf-8")
-            else:
-                if tmp.exists():
-                    tmp.unlink()
-                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, target_mode)
-                try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                        fd = None
-                        handle.write(payload)
-                finally:
-                    if fd is not None:
-                        os.close(fd)
-                os.chmod(tmp, target_mode)
-            os.replace(tmp, path)
-        except OSError as exc:
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except OSError:
-                pass
-            raise ValueError(f"Failed to write JSON file: {path}") from exc
+        from config_store import write_json_object
+        write_json_object(path, data)
 
     # --- Workspace root (multi-project area) ---
 

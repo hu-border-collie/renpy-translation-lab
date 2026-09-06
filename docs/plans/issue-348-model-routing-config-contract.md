@@ -1,7 +1,8 @@
 # #348 P0：Model Routing 配置与迁移合同
 
-> 状态：P0 合同已冻结；尚未接入生产读取、迁移写盘或 GUI。当前运行行为仍以旧
-> `sync.*` / `batch.*` 配置为准。
+> 状态：P0 合同与 P1 离线兼容 reader、显式暂存迁移/回滚已实现；尚未激活生产读取或
+> 新模型设置页。当前生产行为仍以旧 `sync.*` / `batch.*` 配置为准。见
+> [P1 操作与限制](../model_config_migration.md)。
 
 本文冻结 #348 第一阶段的长期配置形状、兼容优先级、迁移输入和 #202/#348
 所有权边界。可执行验证器位于 `model_routing_config.py`；schema-v1 示例与四类旧配置
@@ -132,6 +133,13 @@ schema-v1 validator 接受非敏感未知字段。兼容 reader 可以忽略尚�
 重复 route。`batch` 的 chunk、prompt、thinking、pricing、quality gate 等执行/业务参数
 不属于 ModelProfile，不迁入 `model_routing`。
 
+P1 对实际旧入口核验后明确：项目分析固定 Sync、最终审校固定 Gemini Batch，因此迁移器
+即使在旧 stage.model 为空时也保存这两个阶段的 profile/strategy 覆盖，避免继承产品 Batch
+默认值改变项目分析。`legacy_entrypoints.sync_profile_id/batch_profile_id` 保存旧命令角色指针，
+兼容 reader 不再读取保留的旧模型字段。embedding profile 使用 `purpose=embedding`，生成
+profile 的 `embedding_profile_id` 指向对应执行路径的独立连接快照；原 embedding backend
+语义保存在 params，供 P2 生产接入校验，不能改当生成调用。
+
 现有产品的默认入口是 Gemini Batch，因此旧配置迁移后的 `defaults` 仍指向由
 `batch.model` 生成的 Gemini profile，默认策略仍是 `gemini_batch`。旧 `sync-*` 命令
 在兼容期显式选择迁移所得的 Sync profile，不从产品默认值反推；这样既保留 GUI
@@ -173,7 +181,8 @@ P1 migrator 必须满足：
 ## 分阶段验收
 
 - **P0（本文）**：schema、纯 validator、四类旧 fixture、调用链和所有权合同；不改变运行行为。
-- **P1**：幂等 migrator、备份/rollback、兼容 reader、legacy/effective-plan 等价测试。
+- **P1（已实现）**：幂等 migrator、备份/rollback、离线兼容 reader、legacy/effective-plan 等价测试。
+  CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
 - **P2**：生产 resolver 和服务消费 schema-v1；旧配置兼容入口保留弃用诊断。
 - **P3**：统一 CLI/GUI/Settings；复用 #347 服务和 #202 coordinator。
 - **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。
@@ -181,7 +190,7 @@ P1 migrator 必须满足：
 ## P0 非目标
 
 - 不修改 `translator_config.example.json` 的生产示例；它必须在 P1 reader/migrator
-  可用后再切换。
+  可用且 P2 生产激活完成后再切换。本阶段 schema 示例保留在合同 fixture，避免暗示生产已支持。
 - 不改变 CLI 命令、GUI 文案、默认模型或默认 Sync/Batch 策略。
 - 不执行自动迁移、写配置备份或真实 Provider 请求。
 - 不把 `model_routing` 当作已经可用的用户配置；当前新增 fixture 只用于合同测试。

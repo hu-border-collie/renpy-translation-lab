@@ -59,6 +59,13 @@
 - `gui_qt/diagnostics_context.py`：CLI 命令参考与诊断入口。
 - `gui_qt/user_copy.py`：共享用户文案；新增产品能力须同步。
 
+## P1 离线配置迁移
+
+`model_config_migration.py` → `model_routing_migration_store.py` →
+`model_routing_migration.preview_migration` → schema validator / 离线兼容 reader →
+`config_store` 备份、报告和原子替换。GUI 的原始 JSON 保存也委托该 store 并共用写锁。
+生产翻译入口尚不消费新 section；步骤与边界见 [迁移说明](model_config_migration.md)。
+
 ## 修改检查表
 
 - 配置结构：同步 example、runtime reader、Settings schema/page、迁移和文档。

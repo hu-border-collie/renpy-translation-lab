@@ -21,6 +21,7 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    MODEL_CONFIG_MIGRATION_COPY,
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
@@ -227,6 +228,21 @@ def build_cli_commands(
         return []
 
     commands: list[DiagnosticsCommand] = [
+        *[
+            DiagnosticsCommand(
+                label=MODEL_CONFIG_MIGRATION_COPY[action],
+                command=format_cli_command(
+                    python_exe,
+                    join_directory_file(parent_directory(batch_script_path), "model_config_migration.py"),
+                    [action, "--config", "<CONFIG_COPY>", *extra, "--json"],
+                ),
+            )
+            for action, extra in (
+                ("preview", []),
+                ("migrate", ["--expected-fingerprint", "<SOURCE_FINGERPRINT>", "--stage-only"]),
+                ("rollback", ["--report", "<MIGRATION_REPORT>"]),
+            )
+        ],
         DiagnosticsCommand(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),

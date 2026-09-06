@@ -36,6 +36,7 @@
 
 ### 现行：配置与 GUI
 
+- [模型配置离线迁移（P1）](model_config_migration.md)：配置副本的预览、暂存、备份与回滚；尚不激活生产路由。
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
 - [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（统一侧边导航、项目与环境、任务页、设置、诊断与运行日志、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
