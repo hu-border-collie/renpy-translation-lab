@@ -32,7 +32,6 @@ import translator_runtime as runtime
 
 
 REASON_CODE_PATTERN = re.compile(r"^(renpy|tyrano|coverage|project)\.[a-z][a-z0-9_.]*$")
-REASON_COLLECTION_NAMES = {"reason_code", "reason_codes", "reasons", "report_reasons"}
 INVENTORY_ROOTS = {"inventory_candidates", "audit_extraction"}
 
 # These functions emit validation/writeback diagnostics, not candidate or
@@ -64,24 +63,6 @@ VALIDATION_WRITEBACK_PREFIXES = (
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "tyranoscript_v600"
 REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _literal_reason_values(node: ast.AST) -> list[str]:
-    if (
-        isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and REASON_CODE_PATTERN.fullmatch(node.value)
-    ):
-        return [node.value]
-    if not isinstance(node, (ast.List, ast.Tuple)):
-        return []
-    return [
-        element.value
-        for element in node.elts
-        if isinstance(element, ast.Constant)
-        and isinstance(element.value, str)
-        and REASON_CODE_PATTERN.fullmatch(element.value)
-    ]
 
 
 def _function_nodes(tree: ast.AST) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -135,42 +116,10 @@ def _collect_reason_literals(
 
     for function_name, function in functions.items():
         for node in ast.walk(function):
-            values: list[str] = []
-            if isinstance(node, ast.Call):
-                if (
-                    isinstance(node.func, ast.Attribute)
-                    and node.func.attr in {"append", "extend"}
-                    and isinstance(node.func.value, ast.Name)
-                    and node.func.value.id in REASON_COLLECTION_NAMES
-                ):
-                    for argument in node.args:
-                        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                            values.extend(
-                                value
-                                for value in [argument.value]
-                                if REASON_CODE_PATTERN.fullmatch(value)
-                            )
-                        else:
-                            values.extend(_literal_reason_values(argument))
-                for keyword in node.keywords:
-                    if keyword.arg in REASON_COLLECTION_NAMES:
-                        values.extend(_literal_reason_values(keyword.value))
-            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                if any(
-                    isinstance(target, ast.Name) and target.id in REASON_COLLECTION_NAMES
-                    for target in targets
-                ):
-                    values.extend(
-                        _literal_reason_values(
-                            node.value,
-                        )
-                    )
-            elif isinstance(node, ast.Return):
-                values.extend(_literal_reason_values(node.value))
-
-            for value in values:
-                found.add((value, function_name, node.lineno))
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            if REASON_CODE_PATTERN.fullmatch(node.value):
+                found.add((node.value, function_name, node.lineno))
 
     return tuple(sorted(found, key=lambda item: (item[0], item[1], item[2])))
 
@@ -322,9 +271,12 @@ class CoverageReasonCodeContractTests(unittest.TestCase):
     def test_inventory_and_audit_reason_literals_are_allowlisted(self):
         allowed = CANDIDATE_REASON_CODES | REPORT_REASON_CODES
         expected_codes = {
+            "renpy.narration_string",
+            "renpy.empty_source",
             "renpy.speaker_label_sibling_translated",
             "renpy.catalog.provenance_unknown",
             "tyrano.text_node",
+            "tyrano.unclosed_inline_tag",
             "tyrano.catalog.missing_file",
         }
         observed: set[str] = set()
