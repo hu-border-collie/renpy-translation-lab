@@ -95,6 +95,7 @@ class TranslationUnit:
 class ContextWindow:
     before: list = field(default_factory=list)
     after: list = field(default_factory=list)
+    between: list = field(default_factory=list)
 
 
 @dataclass
@@ -529,10 +530,16 @@ def _format_context_line(line):
         )
     else:
         text = str(line)
+    current_translation = ''
+    if isinstance(line, TranslationUnit):
+        current_translation = str(line.current_translation or '')
+    elif isinstance(line, dict):
+        current_translation = str(line.get('current_translation') or '')
     label = _speaker_label(speaker_id, speaker_name)
-    if label and text:
-        return f'{label}: {text}'
-    return text
+    rendered = f'{label}: {text}' if label and text else text
+    if rendered and current_translation and current_translation not in {text, rendered}:
+        rendered = f'{rendered} [translated: {current_translation}]'
+    return rendered
 
 
 def format_context_block(lines, empty_label='(none)'):
@@ -542,6 +549,25 @@ def format_context_block(lines, empty_label='(none)'):
     for line in lines:
         rendered.append(_format_context_line(line))
     return '\n'.join(f'- {line}' for line in rendered if line) or empty_label
+
+
+def local_context_prompt_blocks(context_window, *, empty_label='(none)', trailing='\n\n'):
+    """Render CONTEXT BEFORE / optional CONTEXT BETWEEN / CONTEXT AFTER."""
+    window = context_window or ContextWindow()
+    before = (
+        f'CONTEXT BEFORE:\n{format_context_block(window.before, empty_label)}{trailing}'
+    )
+    after = (
+        f'CONTEXT AFTER:\n{format_context_block(window.after, empty_label)}{trailing}'
+    )
+    between_items = list(getattr(window, 'between', None) or [])
+    between = ''
+    if between_items:
+        between = (
+            f'CONTEXT BETWEEN:\n'
+            f'{format_context_block(between_items, empty_label)}{trailing}'
+        )
+    return before, between, after
 
 
 def format_revision_context_block(items, empty_label='(none)'):
@@ -659,6 +685,7 @@ def build_translation_user_prompt(
         ensure_ascii=False,
         separators=(',', ':'),
     )
+    before_block, between_block, after_block = local_context_prompt_blocks(context_window)
     return ''.join(
         [
             build_reference_blocks(
@@ -669,9 +696,10 @@ def build_translation_user_prompt(
                 include_source_text=include_source_text,
                 story_block_suffix=story_block_suffix,
             ),
-            f'CONTEXT BEFORE:\n{format_context_block(context_window.before, "(none)")}\n\n',
+            before_block,
+            between_block,
             f'TARGET:\n{target_payload}\n\n',
-            f'CONTEXT AFTER:\n{format_context_block(context_window.after, "(none)")}\n\n',
+            after_block,
             'Return the result now.',
         ]
     )
@@ -876,13 +904,15 @@ def build_canonical_translation_user_prompt(
         reference_section = reference_blocks_text
         if not reference_section.endswith('\n\n'):
             reference_section += '\n\n'
+    before_block, between_block, after_block = local_context_prompt_blocks(context_window)
     return ''.join(
         [
             glossary_block,
             reference_section,
-            f'CONTEXT BEFORE:\n{format_context_block(context_window.before, "(none)")}\n\n',
+            before_block,
+            between_block,
             f'TARGET:\n{target_payload}\n\n',
-            f'CONTEXT AFTER:\n{format_context_block(context_window.after, "(none)")}\n\n',
+            after_block,
             'Return the result now.',
         ]
     )

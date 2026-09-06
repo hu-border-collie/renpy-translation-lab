@@ -280,15 +280,57 @@ class StableIdTests(unittest.TestCase):
 
 class LocalContextWindowTests(unittest.TestCase):
     @staticmethod
-    def _task(block, text):
-        return {'text': text, 'block_name': block}
+    def _task(block, text, **extra):
+        item = {'text': text, 'block_name': block}
+        item.update(extra)
+        return item
 
-    def test_stops_at_block_boundary(self):
+    def test_stops_at_shared_block_label(self):
+        # Multi-item translate blocks are real labels; crossing block_a -> block_b
+        # must still bound. Unique per-sentence IDs are covered separately.
         tasks = [self._task('block_a', 'a1'), self._task('block_b', 'b1'), self._task('block_b', 'b2')]
         window, diagnostics = translation_plan.build_local_context_window(tasks, 2, 3, 30, 10)
         self.assertEqual([item['text'] for item in window.before], ['b1'])
         self.assertTrue(diagnostics['block_bounded_before'])
+        self.assertEqual(diagnostics['boundary_mode'], 'shared_block_label')
+        self.assertFalse(diagnostics['scene_boundary_unknown'])
         self.assertFalse(diagnostics['context_truncated'])
+
+    def test_unique_sentence_blocks_do_not_bound(self):
+        tasks = [self._task(f'scene_{index}', f'line {index}', id=f'id-{index}') for index in range(5)]
+        window, diagnostics = translation_plan.build_local_context_window(tasks, 3, 4, 30, 10)
+        self.assertEqual([item['text'] for item in window.before], ['line 0', 'line 1', 'line 2'])
+        self.assertEqual([item['text'] for item in window.after], ['line 4'])
+        self.assertFalse(diagnostics['block_bounded_before'])
+        self.assertFalse(diagnostics['block_bounded_after'])
+        self.assertTrue(diagnostics['scene_boundary_unknown'])
+        self.assertEqual(diagnostics['boundary_mode'], 'file_order')
+
+    def test_already_translated_neighbors_are_usable_context(self):
+        sequence = [
+            self._task(
+                'scene_1',
+                'Hello there.',
+                id='done',
+                role='translated',
+                current_translation='你好。',
+            ),
+            self._task('scene_2', 'Good morning.', id='pending'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(sequence, 1, 2, 30, 10)
+        self.assertEqual([item['id'] for item in window.before], ['done'])
+        self.assertEqual(diagnostics['context_translated_items'], 1)
+        self.assertFalse(diagnostics['block_bounded_before'])
+
+    def test_explicit_scene_tokens_still_bound(self):
+        tasks = [
+            self._task('u1', 'a', id='a', scene_boundary='route_a'),
+            self._task('u2', 'b', id='b', scene_boundary='route_b'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(tasks, 1, 2, 30, 10)
+        self.assertEqual(window.before, [])
+        self.assertTrue(diagnostics['block_bounded_before'])
+        self.assertEqual(diagnostics['boundary_mode'], 'explicit_scene')
 
     def test_budget_truncation_is_reported(self):
         tasks = [self._task('block_b', f'b{i}') for i in range(5)]
@@ -304,6 +346,177 @@ class LocalContextWindowTests(unittest.TestCase):
         self.assertEqual([item['text'] for item in window.before], ['s1'])
         self.assertFalse(diagnostics['block_bounded_before'])
         self.assertFalse(diagnostics['block_bounded_after'])
+
+    def test_plan_cross_chunk_unique_blocks_keep_neighbors(self):
+        tasks = [
+            {
+                'id': f'id-{index}',
+                'text': f'Hello line {index}.',
+                'line': index,
+                'block_name': f'scene_{index}',
+            }
+            for index in range(65)
+        ]
+        jobs = [{'file_rel_path': 'script.rpy', 'file_path': 'script.rpy', 'tasks': tasks}]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+            chunk_policy=translation_plan.ChunkPolicy(max_items=60, max_chars=18000),
+            context_policy=translation_plan.ContextPolicy(
+                local_context_before=30,
+                local_context_after=10,
+            ),
+        )
+        self.assertEqual(len(build.plan.chunks), 2)
+        first, second = build.plan.chunks
+        self.assertGreater(first.context_window_spec['context_after_items'], 0)
+        self.assertEqual(second.context_window_spec['context_before_items'], 30)
+        self.assertFalse(second.context_window_spec['block_bounded_before'])
+        self.assertTrue(second.context_window_spec['scene_boundary_unknown'])
+        self.assertEqual(len(build.requests[1].expected_ids), 5)
+        self.assertTrue(
+            all(item_id.startswith('id-') for item_id in build.requests[1].expected_ids)
+        )
+        self.assertIn('Hello line 59.', build.requests[1].user_prompt)
+        self.assertNotIn('"id-59"', build.requests[1].user_prompt.split('TARGET:', 1)[1].split('CONTEXT AFTER:', 1)[0])
+
+    def test_plan_uses_translated_neighbors_from_context_items(self):
+        jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [
+                {'id': 'pending', 'text': 'Good morning.', 'line': 1, 'block_name': 's2'},
+            ],
+            'context_items': [
+                {
+                    'id': 'done',
+                    'text': 'Hello there.',
+                    'current_translation': '你好。',
+                    'role': 'translated',
+                    'line': 0,
+                    'block_name': 's1',
+                    'speaker_id': 'e',
+                    'speaker_name': 'Eileen',
+                },
+                {'id': 'pending', 'text': 'Good morning.', 'line': 1, 'block_name': 's2'},
+            ],
+        }]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+        )
+        request = build.requests[0]
+        self.assertEqual(request.expected_ids, ['pending'])
+        self.assertIn('Hello there. [translated: 你好。]', request.user_prompt)
+        self.assertIn('"id":"pending"', request.user_prompt)
+        self.assertNotIn('"id":"done"', request.user_prompt)
+
+    def test_unaligned_context_sequence_does_not_borrow_file_start(self):
+        jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [
+                {'id': 'pending', 'text': 'Good morning.', 'line': 9, 'block_name': 's9'},
+            ],
+            'context_items': [
+                {'id': 'unrelated', 'text': 'File start.', 'line': 0, 'block_name': 's0'},
+                {'id': 'other', 'text': 'Still unrelated.', 'line': 1, 'block_name': 's1'},
+            ],
+        }]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+        )
+        spec = build.plan.chunks[0].context_window_spec
+        self.assertTrue(spec['context_sequence_unaligned'])
+        self.assertEqual(spec['context_before_items'], 0)
+        self.assertEqual(spec['context_after_items'], 0)
+        self.assertEqual(spec['context_between_items'], 0)
+        self.assertFalse(spec['context_interleaved'])
+        self.assertNotIn('File start.', build.requests[0].user_prompt)
+
+    def test_interleaved_translated_neighbor_is_context_between(self):
+        sequence = [
+            self._task('s1', 'Good morning.', id='pending-a'),
+            self._task(
+                's2',
+                'Hello there.',
+                id='done',
+                role='translated',
+                current_translation='你好。',
+            ),
+            self._task('s3', 'See you later.', id='pending-b'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(
+            sequence,
+            0,
+            3,
+            30,
+            10,
+            target_ids=['pending-a', 'pending-b'],
+        )
+        self.assertEqual(window.before, [])
+        self.assertEqual(window.after, [])
+        self.assertEqual([item['id'] for item in window.between], ['done'])
+        self.assertEqual(diagnostics['context_between_items'], 1)
+        self.assertTrue(diagnostics['context_interleaved'])
+        self.assertEqual(diagnostics['context_translated_items'], 1)
+
+    def test_interleaved_budget_keeps_neighbors_nearest_targets(self):
+        sequence = [
+            self._task('s0', 'P1', id='p1'),
+            *[self._task(f't{index}', f'T{index}', id=f'done-{index}', role='translated')
+              for index in range(6)],
+            self._task('s9', 'P2', id='p2'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(
+            sequence,
+            0,
+            8,
+            2,
+            1,
+            target_ids=['p1', 'p2'],
+        )
+        self.assertEqual(
+            [item['id'] for item in window.between],
+            ['done-0', 'done-4', 'done-5'],
+        )
+        self.assertTrue(diagnostics['context_truncated'])
+        self.assertTrue(diagnostics['context_interleaved'])
+
+    def test_plan_keeps_interleaved_translated_neighbor_in_prompt(self):
+        jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [
+                {'id': 'pending-a', 'text': 'Good morning.', 'line': 0, 'block_name': 's1'},
+                {'id': 'pending-b', 'text': 'See you later.', 'line': 2, 'block_name': 's3'},
+            ],
+            'context_items': [
+                {'id': 'pending-a', 'text': 'Good morning.', 'line': 0, 'block_name': 's1'},
+                {
+                    'id': 'done',
+                    'text': 'Hello there.',
+                    'current_translation': '你好。',
+                    'role': 'translated',
+                    'line': 1,
+                    'block_name': 's2',
+                },
+                {'id': 'pending-b', 'text': 'See you later.', 'line': 2, 'block_name': 's3'},
+            ],
+        }]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+        )
+        request = build.requests[0]
+        spec = build.plan.chunks[0].context_window_spec
+        self.assertEqual(request.expected_ids, ['pending-a', 'pending-b'])
+        self.assertTrue(spec['context_interleaved'])
+        self.assertEqual(spec['context_between_items'], 1)
+        self.assertIn('CONTEXT BETWEEN:', request.user_prompt)
+        self.assertIn('Hello there. [translated: 你好。]', request.user_prompt)
+        self.assertNotIn('"id":"done"', request.user_prompt)
 
 
 class LexicalGlossaryTests(unittest.TestCase):
@@ -730,6 +943,7 @@ class ContextAssemblyTests(unittest.TestCase):
         self.assertEqual(by_spec[0]['context_before_items'], 0)
         self.assertEqual(by_spec[0]['context_after_items'], 1)
         self.assertEqual(by_spec[0]['block_bounded_after'], True)
+        self.assertEqual(by_spec[0]['boundary_mode'], 'shared_block_label')
         self.assertEqual(by_spec[1]['context_before_items'], 3)
         self.assertEqual(by_spec[1]['context_after_items'], 0)
         self.assertFalse(by_spec[1]['block_bounded_before'])

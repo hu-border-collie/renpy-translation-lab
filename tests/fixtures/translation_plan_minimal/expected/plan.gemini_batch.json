@@ -11,13 +11,21 @@
       "context_window_spec": {
         "block_bounded_after": true,
         "block_bounded_before": false,
+        "boundary_mode": "shared_block_label",
+        "boundary_reason_after": "shared_block_label",
+        "boundary_reason_before": "",
         "context_after_chars": 55,
         "context_after_items": 1,
         "context_after_limit": 10,
         "context_before_chars": 0,
         "context_before_items": 0,
         "context_before_limit": 30,
-        "context_truncated": false
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
+        "context_translated_items": 0,
+        "context_truncated": false,
+        "scene_boundary_unknown": false
       },
       "file_path": "game/chapter01/dialogue.rpy",
       "file_rel_path": "chapter01/dialogue.rpy",
@@ -39,13 +47,21 @@
       "context_window_spec": {
         "block_bounded_after": false,
         "block_bounded_before": false,
+        "boundary_mode": "file_order",
+        "boundary_reason_after": "",
+        "boundary_reason_before": "",
         "context_after_chars": 0,
         "context_after_items": 0,
         "context_after_limit": 10,
         "context_before_chars": 178,
         "context_before_items": 3,
         "context_before_limit": 30,
-        "context_truncated": false
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
+        "context_translated_items": 0,
+        "context_truncated": false,
+        "scene_boundary_unknown": true
       },
       "file_path": "game/chapter01/dialogue.rpy",
       "file_rel_path": "chapter01/dialogue.rpy",
@@ -67,13 +83,21 @@
       "context_window_spec": {
         "block_bounded_after": false,
         "block_bounded_before": false,
+        "boundary_mode": "file_order",
+        "boundary_reason_after": "",
+        "boundary_reason_before": "",
         "context_after_chars": 0,
         "context_after_items": 0,
         "context_after_limit": 10,
         "context_before_chars": 0,
         "context_before_items": 0,
         "context_before_limit": 30,
-        "context_truncated": false
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
+        "context_translated_items": 0,
+        "context_truncated": false,
+        "scene_boundary_unknown": true
       },
       "file_path": "game/chapter02/strings.rpy",
       "file_rel_path": "chapter02/strings.rpy",
@@ -126,7 +150,7 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "de17f6a654a89fdc",
+  "plan_fingerprint": "519f5d96e3025c67",
   "plan_id": "6e210e07ff44ed7c",
   "request_summaries": [
     {
@@ -158,16 +182,24 @@
             "char_limit": 0,
             "char_used": 112,
             "diagnostics": {
-              "algorithm": "block_bounded_window",
+              "algorithm": "scene_aware_window",
               "block_bounded_after": true,
               "block_bounded_before": false,
+              "boundary_mode": "shared_block_label",
+              "boundary_reason_after": "shared_block_label",
+              "boundary_reason_before": "",
               "context_after_chars": 55,
               "context_after_items": 1,
               "context_after_limit": 10,
               "context_before_chars": 0,
               "context_before_items": 0,
               "context_before_limit": 30,
-              "context_truncated": false
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
+              "context_translated_items": 0,
+              "context_truncated": false,
+              "scene_boundary_unknown": false
             },
             "layer": "local",
             "rank": 2,
@@ -214,8 +246,8 @@
         ],
         "total_char_used": 972
       },
-      "prompt_fingerprint": "f70d96d45c386300",
-      "request_fingerprint": "72369daf1b62a6d0",
+      "prompt_fingerprint": "633a5f0d12a15ee5",
+      "request_fingerprint": "a8d8779fbf7502cd",
       "request_id": "8eca9ba1bb3780c6"
     },
     {
@@ -248,16 +280,24 @@
             "char_limit": 0,
             "char_used": 273,
             "diagnostics": {
-              "algorithm": "block_bounded_window",
+              "algorithm": "scene_aware_window",
               "block_bounded_after": false,
               "block_bounded_before": false,
+              "boundary_mode": "file_order",
+              "boundary_reason_after": "",
+              "boundary_reason_before": "",
               "context_after_chars": 0,
               "context_after_items": 0,
               "context_after_limit": 10,
               "context_before_chars": 178,
               "context_before_items": 3,
               "context_before_limit": 30,
-              "context_truncated": false
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
+              "context_translated_items": 0,
+              "context_truncated": false,
+              "scene_boundary_unknown": true
             },
             "layer": "local",
             "rank": 2,
@@ -304,8 +344,8 @@
         ],
         "total_char_used": 1086
       },
-      "prompt_fingerprint": "ec980daa693042f7",
-      "request_fingerprint": "98a395ea7089cc89",
+      "prompt_fingerprint": "ec7e0a5783f0e46d",
+      "request_fingerprint": "e4e4d944a66eaa0e",
       "request_id": "dcd6932ee0a09722"
     },
     {
@@ -334,16 +374,24 @@
             "char_limit": 0,
             "char_used": 45,
             "diagnostics": {
-              "algorithm": "block_bounded_window",
+              "algorithm": "scene_aware_window",
               "block_bounded_after": false,
               "block_bounded_before": false,
+              "boundary_mode": "file_order",
+              "boundary_reason_after": "",
+              "boundary_reason_before": "",
               "context_after_chars": 0,
               "context_after_items": 0,
               "context_after_limit": 10,
               "context_before_chars": 0,
               "context_before_items": 0,
               "context_before_limit": 30,
-              "context_truncated": false
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
+              "context_translated_items": 0,
+              "context_truncated": false,
+              "scene_boundary_unknown": true
             },
             "layer": "local",
             "rank": 2,
@@ -390,8 +438,8 @@
         ],
         "total_char_used": 548
       },
-      "prompt_fingerprint": "9853cc8aeaa6e866",
-      "request_fingerprint": "eb2e3a878ece622a",
+      "prompt_fingerprint": "f0d538a0d95265ff",
+      "request_fingerprint": "ca8c627a75962dec",
       "request_id": "1190f0edad638ad0"
     }
   ],

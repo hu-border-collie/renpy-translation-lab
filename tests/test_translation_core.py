@@ -695,6 +695,37 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertIn('Input JSON:', prompt)
         self.assertNotIn('"Are you ready?"', prompt)
 
+    def test_context_line_tags_existing_translation(self):
+        rendered = translation_core._format_context_line(
+            {
+                'text': 'Hello there.',
+                'current_translation': '你好。',
+                'speaker_id': 'e',
+                'speaker_name': 'Eileen',
+            }
+        )
+        self.assertEqual(rendered, 'Eileen (e): Hello there. [translated: 你好。]')
+        self.assertEqual(
+            translation_core._format_context_line({'text': 'Hello there.'}),
+            'Hello there.',
+        )
+
+    def test_canonical_prompt_includes_context_between_when_present(self):
+        prompt = translation_core.build_canonical_translation_user_prompt(
+            translation_core.ContextWindow(
+                before=['Earlier line'],
+                after=['Later line'],
+                between=[{
+                    'text': 'Hello there.',
+                    'current_translation': '你好。',
+                }],
+            ),
+            [{'id': 'pending', 'text': 'Good morning.'}],
+        )
+        self.assertIn('CONTEXT BETWEEN:', prompt)
+        self.assertIn('Hello there. [translated: 你好。]', prompt)
+        self.assertIn('"id":"pending"', prompt)
+
     def test_sync_prompt_omits_local_context_when_window_omitted(self):
         prompt = translation_core.build_sync_translation_prompt(
             [{'id': 'line-1', 'text': 'Hello Alice'}],

@@ -3217,6 +3217,11 @@ def collect_pending_file_jobs(
         coverage_snapshot=adapter_snapshot,
         adapter_snapshot=adapter_snapshot,
     )
+    units_by_file = {}
+    if include_occurrences:
+        units_by_file = translation_plan.units_by_file_from_occurrences(
+            adapter_snapshot.occurrences
+        )
 
     for document in adapter_snapshot.project.source_documents:
         rel_path = document.file_rel_path
@@ -3241,15 +3246,16 @@ def collect_pending_file_jobs(
         progress = adapter_snapshot.progress_by_file.get(rel_path, {})
         translated_count = int(progress.get('translated_count') or 0)
         if task_count or (include_complete_files and translated_count):
-            jobs.append(
-                {
-                    'file_rel_path': rel_path,
-                    'file_path': file_path,
-                    'task_count': task_count,
-                    'translated_count': translated_count,
-                    'tasks': pending,
-                }
-            )
+            job = {
+                'file_rel_path': rel_path,
+                'file_path': file_path,
+                'task_count': task_count,
+                'translated_count': translated_count,
+                'tasks': pending,
+            }
+            if include_occurrences:
+                translation_plan.attach_context_items_from_units([job], units_by_file)
+            jobs.append(job)
 
     return jobs
 

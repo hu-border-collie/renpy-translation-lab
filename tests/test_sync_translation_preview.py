@@ -488,6 +488,72 @@ class SyncTranslationPreviewTests(unittest.TestCase):
                     active_tl_dir=tl_dir,
                 )
 
+    def test_run_translation_keeps_interleaved_translated_neighbor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / "game" / "tl" / "schinese"
+            tl_dir.mkdir(parents=True)
+            target = tl_dir / "script.rpy"
+            target.write_text(
+                'translate schinese start:\n'
+                '    # "Good morning."\n'
+                '    "Good morning."\n'
+                '\n'
+                '    # "Hello there."\n'
+                '    "你好。"\n'
+                '\n'
+                '    # "See you later."\n'
+                '    "See you later."\n',
+                encoding="utf-8",
+            )
+
+            def translate_batch(batch, replacements, usage_run_id="", **_kwargs):
+                completed = []
+                for task in batch:
+                    replacements.setdefault(task["line"], []).append(
+                        (
+                            task["start"],
+                            task["end"],
+                            "译文",
+                            task.get("prefix") or "",
+                            task["quote"],
+                        )
+                    )
+                    completed.append(task.get("progress_entry") or f"id:{task['line']}")
+                return completed
+
+            with (
+                mock.patch.object(runtime, "BASE_DIR", str(root)),
+                mock.patch.object(runtime, "TL_DIR", str(tl_dir)),
+                mock.patch.object(runtime, "LOG_DIR", str(root / "logs")),
+                mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
+                mock.patch.object(runtime, "MODELS", ["openai/test-model"]),
+                mock.patch.object(runtime, "CURRENT_MODEL_INDEX", 0),
+                mock.patch.object(runtime, "PREP_ENABLED", False),
+                mock.patch.object(runtime, "INCLUDE_FILES", []),
+                mock.patch.object(runtime, "INCLUDE_PREFIXES", []),
+                mock.patch.object(runtime, "load_config"),
+                mock.patch.object(runtime, "load_translator_settings"),
+                mock.patch.object(runtime, "load_glossary"),
+                mock.patch.object(runtime, "load_progress", return_value={}),
+                mock.patch.object(
+                    runtime,
+                    "process_batch_with_retry",
+                    side_effect=translate_batch,
+                ),
+                mock.patch.object(runtime, "maybe_update_sync_rag_store"),
+            ):
+                manifest_path = runtime.run_translation()
+
+            manifest = preview.load_sync_preview(manifest_path)
+            chunk = manifest["translation_plan"]["chunks"][0]
+            spec = chunk["context_window_spec"]
+            self.assertEqual(spec["context_between_items"], 1)
+            self.assertTrue(spec["context_interleaved"])
+            self.assertEqual(len(chunk["unit_ids"]), 2)
+            batches = manifest["files"][0]["prompt_context"]["batches"]
+            self.assertEqual(batches[0]["context_between_items"], 1)
+
     def test_runtime_empty_pending_jobs_keeps_no_new_lines_completion(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
