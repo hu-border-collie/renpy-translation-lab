@@ -294,7 +294,7 @@ python gemini_translate_batch.py bootstrap-work
 python gemini_translate_batch.py doctor
 ```
 
-`doctor` 不调用 Gemini，也不写回 `.rpy`。确认输出中的 `game_root`、`tl_subdir`、目标语言和待译数量符合预期。遇到阻塞项时先修复；可选建议不应被误判为强制失败。
+`doctor` 不调用 Gemini，也不写回 `.rpy`。确认输出中的 `game_root`、`tl_subdir`、目录语言、生成目标和待译数量符合预期。生成目标当前只支持简体中文。遇到阻塞项时先修复；可选建议不应被误判为强制失败。
 
 ## 4. 执行安全 Batch 流程
 
@@ -339,4 +339,4 @@ python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json
 - 报告使用的 manifest、最终安全等级、写回结果和仍未处理的失败项。
 - 不提交 `api_keys.json`、`translator_config.json`、私有游戏脚本、`logs/` 或 Batch 结果到公开仓库。
 
-完整子命令和恢复流程见 [Batch 工作流与安全检查](batch_workflows.md)；配置、SDK 与目标语言见 [安装与本地配置](setup.md)。
+完整子命令和恢复流程见 [Batch 工作流与安全检查](batch_workflows.md)；配置、SDK 与目录/生成语言见 [安装与本地配置](setup.md)。

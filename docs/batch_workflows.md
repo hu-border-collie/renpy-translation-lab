@@ -21,12 +21,12 @@ legacy compatibility：它没有新增的 plan/request freshness 保护，不应
 的 child plan。两者都继续执行相同的 submit/check/apply 请求内容与 freshness 校验，而不是
 复用无法与子包请求一一对应的父 plan summaries。
 
-## 目标语言与 TL 路径
+## 目录语言、生成目标与 TL 路径
 
-- 默认目标语言为 `schinese`，对应 TL 路径 `game/tl/schinese`。
-- 通过 `translator_config.json` 的 `tl_subdir` 与 `prepare.language` 可改为 `japanese`、`korean` 等 Ren'Py 支持的语言目录。
-- `doctor`、`build`、`generate-template` 与 Batch 启动 banner 会打印当前 `tl_subdir` 与目标语言；manifest 也会记录 `tl_subdir` / `target_language` 便于追溯。
-- `prepare.language` 传给 Ren'Py 的 `translate` 命令；`tl_subdir` 决定脚本扫描与写回路径。两者末段应一致。
+- **生成目标**当前只支持简体中文：`generation.target_language` 省略或 `schinese`。共享提示词要求 Simplified Chinese，校验也检查中文字符。
+- **目录语言**由 `tl_subdir` 末段与 `prepare.language` 决定，传给 Ren'Py `translate` 并决定扫描/写回路径。两者末段应一致。自定义目录名（如 `game/tl/japanese`）可用，但不会把模型目标改成日语。
+- `doctor`、`build`、`generate-template` 与 Batch 启动 banner 会打印 TL 路径、目录语言和生成目标；manifest 记录 `tl_subdir` / `target_language`（目录语言）以及 `generation_target`。
+- 订正、关键词提取、最终审校与项目分析均按简中 TL 内容工作；它们不提供其他生成目标。
 
 ### 校验边界（当前版本）
 
@@ -37,7 +37,7 @@ legacy compatibility：它没有新增的 plan/request freshness 保护，不应
 
 可在 `translator_config.json` 的 `batch.non_chinese_validation` 中覆盖或追加路径；GUI 高级设置提供「非中文白名单追加路径」。默认白名单已覆盖真实项目烟测中遇到的常见 UI / 制作人员名单路径。
 
-若目标语言为日语、韩语等，`No Chinese characters` 失败可能属于预期行为，需要调整校验策略或白名单。换语言前请先跑 `doctor` 确认 TL 路径，并在 `check` 结果中逐项确认失败原因。
+当前版本不会把日语/韩语当作生成目标。若目录语言不是 `schinese`，`No Chinese characters` 仍按简中生成合同检查；目录名本身不是放宽校验的信号。非中文白名单只覆盖专名/静态名单等例外。换目录前请先跑 `doctor` 确认 TL 路径与生成目标。
 
 `allow_non_chinese_batch_translation` 在单次校验调用内会缓存 TL/source 文件读取，避免 short-circuit OR 链重复打开同一文件；pass/fail 结果与缓存前一致。
 

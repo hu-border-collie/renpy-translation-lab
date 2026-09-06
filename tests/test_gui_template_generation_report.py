@@ -24,7 +24,7 @@ class GuiTemplateGenerationReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "ready")
         self.assertEqual(summary.rpy_files, 12)
         self.assertTrue(any("翻译文件：12 个" in fact for fact in summary.facts))
-        self.assertTrue(any("目标语言：schinese" in fact for fact in summary.facts))
+        self.assertTrue(any("目录语言：schinese" in fact for fact in summary.facts))
 
     def test_summarize_failed_template_generation_output(self):
         output = TEMPLATE_OUTPUT.replace("status: ready", "status: failed")

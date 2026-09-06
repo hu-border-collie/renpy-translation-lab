@@ -147,7 +147,12 @@ def load_target_language_facts_from_manifest(manifest_path: str) -> list[str]:
         facts.append(f"TL 路径：{tl_subdir.strip()}")
     target_language = manifest.get("target_language")
     if isinstance(target_language, str) and target_language.strip():
-        facts.append(f"目标语言：{target_language.strip()}")
+        facts.append(f"目录语言：{target_language.strip()}")
+    generation_target = manifest.get("generation_target")
+    if isinstance(generation_target, str) and generation_target.strip():
+        value = generation_target.strip()
+        suffix = "（简体中文，当前仅支持）" if value == "schinese" else ""
+        facts.append(f"生成目标：{value}{suffix}")
     return facts
 
 

@@ -192,7 +192,7 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
                 )
             facts = load_target_language_facts_from_manifest(manifest_path)
             self.assertIn("TL 路径：game/tl/korean", facts)
-            self.assertIn("目标语言：korean", facts)
+            self.assertIn("目录语言：korean", facts)
 
     def test_doctor_report_shows_tl_subdir(self):
         parsed = doctor_report_to_parsed(
@@ -215,7 +215,8 @@ class GuiBatchWorkflowSupportTests(unittest.TestCase):
             any("TL 路径：game/tl/schinese" in fact for fact in detail_facts),
             msg=f"facts={summary.facts!r} detail_facts={detail_facts!r}",
         )
-        self.assertTrue(any("目标语言：schinese" in fact for fact in summary.facts))
+        self.assertTrue(any("目录语言：schinese" in fact for fact in summary.facts))
+        self.assertTrue(any("生成目标：schinese" in fact for fact in summary.facts))
 
 
 if __name__ == "__main__":

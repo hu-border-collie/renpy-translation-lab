@@ -9,7 +9,7 @@
 ## 前置条件
 
 1. 使用 Python 3.11+ 安装主依赖；使用 GUI 或 LiteLLM 时再安装对应可选依赖。
-2. 在 `translator_config.json` 明确设置当前 `game_root` 与 `tl_subdir`，并用只读环境检查确认项目：
+2. 在 `translator_config.json` 明确设置当前 `game_root` 与 `tl_subdir`，并用只读环境检查确认项目。同步初译的生成目标当前只支持简体中文；`prepare.language` 只影响 Ren'Py 模板目录：
 
    ```powershell
    python gemini_translate_batch.py doctor

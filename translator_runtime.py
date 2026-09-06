@@ -34,6 +34,7 @@ def locked_runtime_state():
 
 from atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 import cli_contract
+import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
@@ -97,6 +98,7 @@ ENV_GAME_ROOT = os.environ.get("GAME_ROOT") or os.environ.get("SA_GAME_ROOT")
 # Forward-slash form matches normalize_tl_subdir() output on all platforms.
 DEFAULT_TL_SUBDIR = "game/tl/schinese"
 DEFAULT_PREP_LANGUAGE = "schinese"
+DEFAULT_GENERATION_TARGET = generation_target.DEFAULT_GENERATION_TARGET
 DEFAULT_CONTEXT_STORAGE_LOCATION = "tool"
 DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
 # First entry is the rotation/fallback default (cost-efficient lite).
@@ -145,6 +147,7 @@ PREP_UNPACK_RPA = True
 PREP_GENERATE_TEMPLATE = True
 PREP_REFRESH_EXISTING_TEMPLATE = True
 PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
+GENERATION_TARGET_LANGUAGE = DEFAULT_GENERATION_TARGET
 PREP_RENPY_SDK_DIR = ""
 PREP_LAUNCHER_PY = ""
 PREP_PYTHON_EXE = ""
@@ -1371,6 +1374,7 @@ class RuntimeConfig:
     prep_generate_template: bool = True
     prep_refresh_existing_template: bool = True
     prep_language: str = DEFAULT_PREP_LANGUAGE
+    generation_target: str = DEFAULT_GENERATION_TARGET
     prep_renpy_sdk_dir: str = ""
     prep_launcher_py: str = ""
     prep_python_exe: str = ""
@@ -1493,6 +1497,7 @@ def default_runtime_config() -> RuntimeConfig:
         sync_macro_fingerprint="",
         custom_litellm_providers={},
         prep_language=DEFAULT_PREP_LANGUAGE,
+        generation_target=DEFAULT_GENERATION_TARGET,
         context_storage_location=DEFAULT_CONTEXT_STORAGE_LOCATION,
         context_storage_game_dir_name=DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME,
     )
@@ -1513,6 +1518,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
         prep_generate_template=PREP_GENERATE_TEMPLATE,
         prep_refresh_existing_template=PREP_REFRESH_EXISTING_TEMPLATE,
         prep_language=PREP_LANGUAGE,
+        generation_target=GENERATION_TARGET_LANGUAGE,
         prep_renpy_sdk_dir=PREP_RENPY_SDK_DIR,
         prep_launcher_py=PREP_LAUNCHER_PY,
         prep_python_exe=PREP_PYTHON_EXE,
@@ -1587,7 +1593,8 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     global ENV_GAME_ROOT, BASE_DIR, TL_SUBDIR, TL_DIR, WORK_GAME_DIR, SOURCE_GAME_DIR
     global GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE
-    global PREP_LANGUAGE, PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
+    global PREP_LANGUAGE, GENERATION_TARGET_LANGUAGE
+    global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
     global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
     global CONTEXT_STORAGE_LOCATION, CONTEXT_STORAGE_GAME_DIR_NAME
     global API_KEYS, MODELS, CURRENT_KEY_INDEX, CURRENT_MODEL_INDEX
@@ -1634,6 +1641,9 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
         PREP_GENERATE_TEMPLATE = applied.prep_generate_template
         PREP_REFRESH_EXISTING_TEMPLATE = applied.prep_refresh_existing_template
         PREP_LANGUAGE = applied.prep_language or DEFAULT_PREP_LANGUAGE
+        GENERATION_TARGET_LANGUAGE = (
+            applied.generation_target or DEFAULT_GENERATION_TARGET
+        )
         PREP_RENPY_SDK_DIR = applied.prep_renpy_sdk_dir
         PREP_LAUNCHER_PY = applied.prep_launcher_py
         PREP_PYTHON_EXE = applied.prep_python_exe
@@ -1826,7 +1836,7 @@ def _reset_project_settings_to_defaults():
     ``load_config()`` → ``load_translator_settings()`` cascade still works.
     Call :func:`load_runtime_config` for a pure defaults-first rebuild.
     """
-    global TL_SUBDIR, PREP_LANGUAGE, SOURCE_GAME_DIR, GLOSSARY_FILE
+    global TL_SUBDIR, PREP_LANGUAGE, GENERATION_TARGET_LANGUAGE, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE
     global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE
     global PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND, PREP_ALLOW_SHELL_COMMANDS
@@ -1854,6 +1864,7 @@ def _reset_project_settings_to_defaults():
     # Paths/language/prepare always recompute from defaults + current config.
     TL_SUBDIR = DEFAULT_TL_SUBDIR
     PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
+    GENERATION_TARGET_LANGUAGE = DEFAULT_GENERATION_TARGET
     SOURCE_GAME_DIR = ""
     GLOSSARY_FILE = DEFAULT_GLOSSARY_FILE
     PREP_ENABLED = True
@@ -1927,6 +1938,7 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
     """
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
+    global GENERATION_TARGET_LANGUAGE
     global PREP_RENPY_SDK_DIR, PREP_LAUNCHER_PY, PREP_PYTHON_EXE, PREP_UNPACK_COMMAND, PREP_TEMPLATE_COMMAND
     global PREP_ALLOW_SHELL_COMMANDS
     global _active_runtime_config
@@ -2030,8 +2042,11 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
     if isinstance(prep_language, str) and prep_language.strip():
         PREP_LANGUAGE = prep_language.strip()
     else:
-        # Omitted language must not retain a previous project's target language.
+        # Omitted language must not retain a previous project's catalog language.
         PREP_LANGUAGE = DEFAULT_PREP_LANGUAGE
+
+    generation_resolution = generation_target.resolve_generation_target_from_config(config)
+    GENERATION_TARGET_LANGUAGE = generation_resolution.canonical
 
     # SDK path is explicit only: prepare.renpy_sdk_dir or RENPY_SDK_DIR.
     # Do not auto-scan nearby directories at load time; GUI「查找 SDK」is the
@@ -4858,10 +4873,25 @@ def _sync_plan_story_graph_identity():
     }
 
 
+def require_supported_generation_target():
+    """Fail before any model call when generation.target_language is unsupported."""
+    resolution = generation_target.resolve_generation_target(GENERATION_TARGET_LANGUAGE)
+    try:
+        return generation_target.require_supported(resolution)
+    except generation_target.GenerationTargetError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def current_generation_target_resolution():
+    """Return the loaded generation-target resolution (defaults to schinese)."""
+    return generation_target.resolve_generation_target(GENERATION_TARGET_LANGUAGE)
+
+
 def _sync_plan_config_snapshot():
     """Return the non-sensitive existing Sync settings that define a plan."""
     return {
         'target_language': PREP_LANGUAGE,
+        'generation_target': GENERATION_TARGET_LANGUAGE,
         'sync': {
             'backend': SYNC_BACKEND,
             'max_items': MAX_ITEMS,
@@ -5427,6 +5457,7 @@ def prepare_sync_translation_execution_context(
     load_translator_settings(
         persist_corrected_game_root=bool(persist_corrected_game_root)
     )
+    require_supported_generation_target()
     if require_provider and SYNC_BACKEND == 'gemini':
         _require_gemini_api_key()
     load_glossary()
@@ -7095,6 +7126,7 @@ def run_translation(*, prepare=False):
             stage=model_profile.STAGE_TRANSLATION,
         ) from exc
     load_translator_settings()
+    require_supported_generation_target()
     if SYNC_BACKEND == "gemini":
         _require_gemini_api_key()
     load_glossary()
@@ -7113,6 +7145,11 @@ def run_translation(*, prepare=False):
     print(f"Base dir: {BASE_DIR}")
     print(f"TL subdir: {TL_SUBDIR}")
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")
+    print(f"Catalog language: {PREP_LANGUAGE}")
+    print(
+        f"Generation target: {GENERATION_TARGET_LANGUAGE} "
+        f"({generation_target.GENERATION_TARGET_PROMPT_NAME})"
+    )
     print(f"Progress log: {PROGRESS_LOG}")
     print("=" * 60)
     routing_plan = freeze_translation_routing_plan()

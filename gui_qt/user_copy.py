@@ -754,6 +754,7 @@ def format_doctor_warning_fact(warning: str) -> str:
 INFORMATIONAL_DOCTOR_FINDING_MARKERS: tuple[str, ...] = (
     "记忆库含有旧版键格式",
     "检测到旧版任务记录",
+    "目录语言只表示 Ren'Py 的 TL 目录名",
 )
 
 
@@ -817,6 +818,15 @@ def translate_doctor_warning(warning: str) -> str:
             return translated
     if text.startswith("Found ") and "legacy manifest" in text:
         return "检测到旧版任务记录，将使用兼容模式继续处理。"
+    if text.startswith("Catalog language only names the Ren'Py TL directory"):
+        return (
+            "目录语言只表示 Ren'Py 的 TL 目录名，模型生成目标仍是简体中文。"
+        )
+    if text.startswith("ERROR: [generation_target.unsupported]"):
+        return (
+            "当前版本只支持生成简体中文。generation.target_language 不能设为其他语言。"
+            "tl_subdir / prepare.language 只选择目录，不会改模型目标。"
+        )
     if text.startswith("Custom template command cannot be rendered:"):
         return "自定义模板命令无法解析，请检查配置。"
     if text.startswith("RAG store contains legacy ID format keys."):
