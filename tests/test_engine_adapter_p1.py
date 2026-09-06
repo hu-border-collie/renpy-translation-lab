@@ -83,10 +83,17 @@ class TestRenPyAdapterP1(unittest.TestCase):
             '    "Terry" "你好。"\n'
         )
         root, tl_dir = self.make_project({"translated.rpy": translated_source})
-        snapshot = build_translation_snapshot(
-            RenPyAdapter(legacy_module=runtime),
-            self.request(root, tl_dir),
+        adapter = RenPyAdapter(legacy_module=runtime)
+        project = adapter.discover_project(self.request(root, tl_dir))
+        ready_draft = CoverageReportDraft(
+            source_fingerprint=project.source_fingerprint,
+            catalog_freshness="fresh",
         )
+        with mock.patch.object(adapter, "audit_extraction", return_value=ready_draft):
+            snapshot = build_translation_snapshot(
+                adapter,
+                self.request(root, tl_dir),
+            )
         label = next(
             candidate
             for candidate in snapshot.inventory.candidates
@@ -108,6 +115,14 @@ class TestRenPyAdapterP1(unittest.TestCase):
             label.reason_codes,
         )
         self.assertEqual(dialogue.classification, "already_translated")
+        self.assertEqual(snapshot.report.invariant_errors, ())
+        self.assertEqual(snapshot.report.coverage_status, "ready")
+        self.assertTrue(
+            any(
+                occurrence.unit.text == "Terry"
+                for occurrence in snapshot.occurrences
+            )
+        )
         self.assertEqual(tasks, [])
         self.assertEqual(snapshot.pending_task_count, 0)
         self.assertEqual(snapshot.progress_by_file["translated.rpy"], progress)
