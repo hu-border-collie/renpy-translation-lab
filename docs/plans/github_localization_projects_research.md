@@ -3,7 +3,7 @@
 > **状态**：公开仓库源码级研究记录，不是生产实现方案。
 > **核对日期**：2026-09-06。
 > **研究对象**：[renpy-translation-lab](https://github.com/hu-border-collie/renpy-translation-lab) 及 GitHub 上定位相近的视觉小说 / 游戏本地化工具。
-> **证据边界**：本轮阅读了公开仓库的 README、目录、关键源码和部分测试；没有把所有外部项目完整安装并运行，因此动态兼容性不能由本文单独确认。
+> **证据边界**：本轮阅读了公开仓库的 README、目录、关键源码和部分测试；没有把所有外部项目完整安装并运行，因此动态兼容性不能由本文单独确认。2026-09-06 另对十个对等公开仓库做了源码抽查复核（浅克隆 / 定向读文件，非全量跑通），结论见 §7；仍不能单独证明动态兼容性。
 > **本地状态**：研究原稿对照 `main@5ea0ddd`。2026-09-06 复核时远端默认分支 tip 为 `main@64f04bb`（已含合入的 [#417](https://github.com/hu-border-collie/renpy-translation-lab/pull/417) speaker-label 分类修复与 [#421](https://github.com/hu-border-collie/renpy-translation-lab/pull/421) coverage reason-code allowlist）。实现或刷新本文时以当前默认分支 tip 为准，不要再以 `5ea0ddd` 为基线；speaker-label follow-up 已完成，勿再记为待办。
 
 ## 1. 摘要结论
@@ -675,7 +675,68 @@ source inventory
 7. **无界滑动窗口跨场景无脑携带上下文**：会导致严重的跨剧情记忆污染与角色指代漂移。
 8. **忽视字符集字体与渲染直接写回**：只交付文本而不管目标语言字体缺失，会导致终态游戏展示为方块乱码。
 
-## 7. 建议路线图
+
+## 7. 公开源码抽查复核与迁移优先级（2026-09-06）
+
+> 本节是对 §3–§6 的**二次源码抽查**结论，不是新的生产实现方案。抽查对象仍为本文列出的十个对等项目；对照本仓库基线为当时远端 `main@64f04bb`。详细分批笔记见研究时的 peer-analysis 工作副本（不入库）。
+
+### 7.1 总判断
+
+十个项目的公开源码大体**坐实**了前文的得失判断：它们能补本项目的**产品层**（保护、审校、preflight、两阶段流程、字体探测、readiness/回滚 UX），但**没有一个**达到本项目 `check → apply` + 声明式 `WritebackPlan` 的写回安全条。
+
+继续保持定位：
+
+> 借鉴局部能力与工程巧思；写回语义仍由 manifest、source snapshot、coverage、quality gate、EngineAdapter 与 `check → apply` 决定。
+
+### 7.2 按「该不该迁」重排优先级
+
+#### P0（高置信，优先）
+
+1. **RenLocalizer** `syntax_guard`：调用前 protect / 调用后 restore / 完整性校验；术语**长度降序**匹配。
+   - 细化风险：Google 路径上 `inject_missing_placeholders` 可能**部分注入后仍保留**——绝不能进入本项目 safe `apply`；应 fail-closed 或进入 quality finding。
+   - 许可：**GPL-3.0**，只能借鉴思路自研，不能抄代码。
+2. **GameStringer** Dry Run：Ready / Errors / Unsupported 桶 + 进度/质量仪表盘形态。
+   - TM 分层（exact 可填 vs fuzzy 只进 prompt）适合做 soft signal，**不能**授权写回。
+3. **Dialogue Visual Editor**：控制码 mismatch 审计、original / working / translated 快照、角色名映射。
+   - 修正：不是小型显式 FSM，而是富持久化审校状态；领域是 RPG Maker / Tyrano，不是 Ren'Py。许可 **BSD-3**，模式可借。
+
+#### P1（流程 / 体验）
+
+4. **rpgmaker-translator**：DB → 术语 → 正文两阶段；**事件边界重置** LLM 历史。不要借 event-tree 写回身份。
+5. **RenPyTranslator**：隔离工作区、checkpoint、`open | ignored | resolved | needs_recheck` 审校状态、显式导出。
+   - 风险确认：`rmtree` + `copytree`（有备份仍非原子）。**无 LICENSE**，不要抄代码。
+6. **translate-renpy**：`.parsed.yaml` / `.tags.yaml` 分层解耦（**MIT**）。风险确认：校验失败仍写盘 + `--skip-validation`——反面教材。
+7. **varo**：引擎 Stable / Beta 矩阵、apply 前备份 + 一键 rollback UX。Ren'Py 在其表中为 Beta；真正 apply 引擎在公开树外的 `ue_translator`，勿当 AST 合同范本。
+
+#### P1 / P2 辅助
+
+8. **DeepRenPyTrans**：漏译日志回流 + junk / audit 分类（**AGPL**，只借概念）。不要用 `config.replace_text` 当主路径。
+9. **RenForge**：字体字形探测（汉字符 ✓/✗）+ 多媒体面板思路（**GPL**）。不要用 runtime overlay mod 替代 `tl/` 维护。
+10. **2R-Tools**：工作区目录直觉可参考。风险确认：原文 `.upper()` 当 TM key、`backup=False` 原地写——明确禁止。
+
+### 7.3 对路线图的校正
+
+| 研究项 | 外部证据后的建议 |
+|---|---|
+| 统一 protect / restore | **立刻做**；学 RenLocalizer 分层，但**禁止** partial inject 进入 apply |
+| Review index / 逐条审校 | 学 RenPyTranslator 状态枚举 + DVE 快照/审计，挂在现有 quality finding 上 |
+| Preflight | 学 GameStringer Dry Run 桶，聚合 doctor / coverage / 成本 / 质量 |
+| 两阶段 + 场景边界 | 学 rpgmaker-translator 的流程与 history reset，承接本仓库已有 local context（如 #410） |
+| 字体检查 | 学 RenForge 字形探测，进入 doctor / preflight |
+| Stable / Beta + 回滚 GUI | 学 varo 的**可见性与 UX**，底层仍用本仓库 snapshot / `WritebackPlan` |
+
+### 7.4 许可红线
+
+- **不要抄代码**：RenLocalizer（GPL）、DeepRenPyTrans（AGPL）、RenForge（GPL）、RenPyTranslator（无 LICENSE）。
+- **可更放心借鉴模式**（仍须自行实现）：Dialogue Visual Editor（BSD-3）、translate-renpy（MIT）、varo（MIT 公开部分）；GameStringer 需再核其 LICENSE 细节后再决定引用边界。
+
+### 7.5 与本仓库现状的关系（抽查时）
+
+- 写回 / Adapter / coverage / provenance reuse 等**内核强项结论仍然成立**。
+- 统一 protect/restore、译文 Review Index、聚合 preflight 等**产品层缺口仍然成立**。
+- speaker-label 偏严 follow-up 已在 `#417` 合入，勿再记为待办。
+
+## 8. 建议路线图
 
 ### P0：结构保护、代码纯化与审校索引
 
@@ -703,11 +764,13 @@ source inventory
 - 参考 RenForge 探索多媒体（图像/音频）本地化 Adapter，但不扩大当前文本写回合同；
 - 在 Tyrano 和 Ren'Py 稳定后，基于透明的 Stable / Beta 矩阵评估第三个 Engine Adapter（如 RPG Maker 或 Godot）。
 
-## 8. 最终判断
+## 9. 最终判断
 
 本项目不需要把自己变成“功能最多的游戏翻译器”。更有价值的定位是：
 
 > 面向视觉小说源项目的、可复现、可审计、可恢复的 AI 翻译工作台。
+
+公开源码抽查后的迁移优先级、许可红线与路线图校正见 **§7**。
 
 外部项目最值得借鉴的是局部能力与工程巧思：
 
@@ -724,7 +787,7 @@ source inventory
 
 但最终写回语义仍应由本项目现有的 manifest、source snapshot、coverage、quality gate、EngineAdapter 和 `check -> apply` 合同决定。
 
-## 9. 参考资料
+## 10. 参考资料
 
 ### 外部项目源码
 
