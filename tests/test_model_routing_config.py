@@ -17,6 +17,35 @@ def _load_fixture(relative_path: str) -> dict[str, object]:
 
 
 class ModelRoutingConfigContractTests(unittest.TestCase):
+    def test_malformed_json_field_types_return_diagnostics(self) -> None:
+        mutations = [
+            (lambda s, v: s.update(schema_version=v)),
+            (lambda s, v: s["providers"]["openrouter"].update(adapter=v)),
+            (lambda s, v: s["providers"]["openrouter"]["credential_ref"].update(kind=v)),
+            (lambda s, v: s["defaults"].update(primary_profile_id=v)),
+            (lambda s, v: s["defaults"].update(execution_strategy=v)),
+            (lambda s, v: s["profiles"]["gemini-main"].update(embedding_profile_id=v)),
+            (lambda s, v: s["routes"].update(translation={"profile_id": v})),
+        ]
+        for mutate in mutations:
+            for value in ([], {}, True, 1.0, None):
+                section = _load_fixture("model_routing_config_v1.json")["model_routing"]
+                mutate(section, value)
+                with self.subTest(mutation=mutate, value=value):
+                    self.assertTrue(contract.validate_model_routing_section(section))
+
+    def test_malformed_url_and_reserved_ab_slot_return_diagnostics(self) -> None:
+        section = _load_fixture("model_routing_config_v1.json")["model_routing"]
+        for url in ("http://[broken", "https://example.test:wrong"):
+            section["providers"]["openrouter"]["base_url"] = url
+            self.assertIn("invalid_provider_url", {
+                issue.code for issue in contract.validate_model_routing_section(section)
+            })
+        section["profiles"]["ab_experiment_override"] = section["profiles"]["gemini-main"]
+        self.assertIn("reserved_profile_id", {
+            issue.code for issue in contract.validate_model_routing_section(section)
+        })
+
     def test_v1_fixture_is_valid_and_validation_is_read_only(self) -> None:
         config = _load_fixture("model_routing_config_v1.json")
         before = copy.deepcopy(config)

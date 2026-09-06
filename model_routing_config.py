@@ -154,7 +154,7 @@ def _reserved_profile_id(profile_id: str) -> bool:
         return True
     return any(
         profile_id.endswith(suffix)
-        and profile_id[: -len(suffix)] in CONFIGURABLE_TASK_STAGES
+        and profile_id[: -len(suffix)] in (*CONFIGURABLE_TASK_STAGES, "ab_experiment")
         for suffix in _RESERVED_PROFILE_SUFFIXES
     )
 
@@ -187,7 +187,7 @@ def _validate_credential_ref(
         return [_issue(path, "invalid_credential_ref", "credential_ref must be an object.")]
     issues: list[ConfigContractIssue] = []
     kind = raw.get("kind")
-    if kind not in KNOWN_CREDENTIAL_KINDS:
+    if not isinstance(kind, str) or kind not in KNOWN_CREDENTIAL_KINDS:
         issues.append(_issue(
             f"{path}.kind",
             "unsupported_credential_kind",
@@ -209,7 +209,7 @@ def _validate_credential_ref(
             "credential_ref.env_name must be a valid environment variable name.",
         ))
     if (
-        kind in {
+        isinstance(kind, str) and kind in {
             CREDENTIAL_KIND_API_KEYS_JSON,
             CREDENTIAL_KIND_KEYRING,
             CREDENTIAL_KIND_ENV,
@@ -229,7 +229,11 @@ def _validate_url(value: object, path: str) -> list[ConfigContractIssue]:
         return []
     if not isinstance(value, str):
         return [_issue(path, "invalid_provider_url", "Provider URL must be a string.")]
-    parsed = urlsplit(value.strip())
+    try:
+        parsed = urlsplit(value.strip())
+        parsed.port
+    except ValueError:
+        return [_issue(path, "invalid_provider_url", "Provider URL is malformed.")]
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
@@ -275,7 +279,7 @@ def _validate_providers(raw: object) -> tuple[list[ConfigContractIssue], dict[st
                 "provider.label must be a non-empty user-visible name.",
             ))
         adapter = provider.get("adapter")
-        if adapter not in KNOWN_ADAPTERS:
+        if not isinstance(adapter, str) or adapter not in KNOWN_ADAPTERS:
             issues.append(_issue(
                 f"{provider_path}.adapter",
                 "unsupported_adapter",
@@ -385,7 +389,7 @@ def _validate_strategy_for_profile(
     provider_adapters: Mapping[str, str],
     path: str,
 ) -> list[ConfigContractIssue]:
-    if strategy not in KNOWN_EXECUTION_STRATEGIES:
+    if not isinstance(strategy, str) or strategy not in KNOWN_EXECUTION_STRATEGIES:
         return [_issue(
             path,
             "unsupported_execution_strategy",
@@ -418,7 +422,8 @@ def validate_model_routing_section(section: object) -> tuple[ConfigContractIssue
         return (_issue(path, "invalid_section", "model_routing must be an object."),)
 
     issues = _find_sensitive_keys(section, path)
-    if section.get("schema_version") != MODEL_ROUTING_CONFIG_SCHEMA_VERSION:
+    if (type(section.get("schema_version")) is not int
+            or section.get("schema_version") != MODEL_ROUTING_CONFIG_SCHEMA_VERSION):
         issues.append(_issue(
             f"{path}.schema_version",
             "unsupported_schema_version",
@@ -445,7 +450,7 @@ def validate_model_routing_section(section: object) -> tuple[ConfigContractIssue
     else:
         primary_profile_id = defaults.get("primary_profile_id")
         default_strategy = defaults.get("execution_strategy")
-        if primary_profile_id not in profile_providers:
+        if not isinstance(primary_profile_id, str) or primary_profile_id not in profile_providers:
             issues.append(_issue(
                 f"{path}.defaults.primary_profile_id",
                 "unknown_primary_profile",
@@ -465,7 +470,9 @@ def validate_model_routing_section(section: object) -> tuple[ConfigContractIssue
             if not _is_mapping(profile):
                 continue
             embedding_profile_id = profile.get("embedding_profile_id", "")
-            if embedding_profile_id and embedding_profile_id not in profile_providers:
+            if not isinstance(embedding_profile_id, str) or (
+                embedding_profile_id and embedding_profile_id not in profile_providers
+            ):
                 issues.append(_issue(
                     f"{path}.profiles.{profile_id}.embedding_profile_id",
                     "unknown_embedding_profile",
@@ -496,7 +503,7 @@ def validate_model_routing_section(section: object) -> tuple[ConfigContractIssue
                 continue
             route_profile_id = route.get("profile_id", primary_profile_id)
             route_strategy = route.get("strategy", default_strategy)
-            if route_profile_id not in profile_providers:
+            if not isinstance(route_profile_id, str) or route_profile_id not in profile_providers:
                 issues.append(_issue(
                     f"{route_path}.profile_id",
                     "unknown_route_profile",
