@@ -287,8 +287,13 @@ coverage review 的候选表同时列出 `.ks` locator、分类理由和原生 c
 可直接回到源 occurrence 与目标 row 核对。P6 的 CLI / GUI / doctor 与 Project Analysis /
 Final Review 产品化接入不在 P5 中。下列既有 Ren'Py 问题不阻挡 P5，应另开 follow-up：
 
-1. speaker-label 在对白已是目标语言时仍标 translatable；
-2. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。
+speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 #416 修复：
+同一行后续对白含中文时，字符串 speaker-label 保留在 inventory / occurrence 中，
+但分类为 `already_translated`，不再进入 pending。
+
+仍需另开 follow-up 的问题：
+
+1. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
