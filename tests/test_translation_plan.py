@@ -431,7 +431,92 @@ class LocalContextWindowTests(unittest.TestCase):
         self.assertTrue(spec['context_sequence_unaligned'])
         self.assertEqual(spec['context_before_items'], 0)
         self.assertEqual(spec['context_after_items'], 0)
+        self.assertEqual(spec['context_between_items'], 0)
+        self.assertFalse(spec['context_interleaved'])
         self.assertNotIn('File start.', build.requests[0].user_prompt)
+
+    def test_interleaved_translated_neighbor_is_context_between(self):
+        sequence = [
+            self._task('s1', 'Good morning.', id='pending-a'),
+            self._task(
+                's2',
+                'Hello there.',
+                id='done',
+                role='translated',
+                current_translation='你好。',
+            ),
+            self._task('s3', 'See you later.', id='pending-b'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(
+            sequence,
+            0,
+            3,
+            30,
+            10,
+            target_ids=['pending-a', 'pending-b'],
+        )
+        self.assertEqual(window.before, [])
+        self.assertEqual(window.after, [])
+        self.assertEqual([item['id'] for item in window.between], ['done'])
+        self.assertEqual(diagnostics['context_between_items'], 1)
+        self.assertTrue(diagnostics['context_interleaved'])
+        self.assertEqual(diagnostics['context_translated_items'], 1)
+
+    def test_interleaved_budget_keeps_neighbors_nearest_targets(self):
+        sequence = [
+            self._task('s0', 'P1', id='p1'),
+            *[self._task(f't{index}', f'T{index}', id=f'done-{index}', role='translated')
+              for index in range(6)],
+            self._task('s9', 'P2', id='p2'),
+        ]
+        window, diagnostics = translation_plan.build_local_context_window(
+            sequence,
+            0,
+            8,
+            2,
+            1,
+            target_ids=['p1', 'p2'],
+        )
+        self.assertEqual(
+            [item['id'] for item in window.between],
+            ['done-0', 'done-4', 'done-5'],
+        )
+        self.assertTrue(diagnostics['context_truncated'])
+        self.assertTrue(diagnostics['context_interleaved'])
+
+    def test_plan_keeps_interleaved_translated_neighbor_in_prompt(self):
+        jobs = [{
+            'file_rel_path': 'script.rpy',
+            'file_path': 'script.rpy',
+            'tasks': [
+                {'id': 'pending-a', 'text': 'Good morning.', 'line': 0, 'block_name': 's1'},
+                {'id': 'pending-b', 'text': 'See you later.', 'line': 2, 'block_name': 's3'},
+            ],
+            'context_items': [
+                {'id': 'pending-a', 'text': 'Good morning.', 'line': 0, 'block_name': 's1'},
+                {
+                    'id': 'done',
+                    'text': 'Hello there.',
+                    'current_translation': '你好。',
+                    'role': 'translated',
+                    'line': 1,
+                    'block_name': 's2',
+                },
+                {'id': 'pending-b', 'text': 'See you later.', 'line': 2, 'block_name': 's3'},
+            ],
+        }]
+        build = translation_plan.build_translation_plan(
+            jobs,
+            execution_strategy=translation_plan.STRATEGY_SYNC,
+        )
+        request = build.requests[0]
+        spec = build.plan.chunks[0].context_window_spec
+        self.assertEqual(request.expected_ids, ['pending-a', 'pending-b'])
+        self.assertTrue(spec['context_interleaved'])
+        self.assertEqual(spec['context_between_items'], 1)
+        self.assertIn('CONTEXT BETWEEN:', request.user_prompt)
+        self.assertIn('Hello there. [translated: 你好。]', request.user_prompt)
+        self.assertNotIn('"id":"done"', request.user_prompt)
 
 
 class LexicalGlossaryTests(unittest.TestCase):

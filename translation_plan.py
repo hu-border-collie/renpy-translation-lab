@@ -672,6 +672,9 @@ def _target_span_in_sequence(sequence, target_items, fallback_start, fallback_en
             break
         indices.append(id_index[item_id])
     if aligned and indices:
+        # Inclusive min/max keeps already-translated neighbors that sit
+        # between TARGET items inside the span. build_local_context_window
+        # lifts those interior non-TARGET rows into CONTEXT BETWEEN.
         return min(indices), max(indices) + 1, False
     if (
         0 <= fallback_start < fallback_end <= len(sequence)
@@ -712,6 +715,19 @@ def context_item_from_unit(unit):
     return item
 
 
+def units_by_file_from_occurrences(occurrences):
+    """Group adapter occurrence units by ``file_rel_path`` (issue #410)."""
+    units_by_file = {}
+    for occurrence in occurrences or ():
+        unit = getattr(occurrence, 'unit', None)
+        if unit is None:
+            continue
+        rel_path = str(getattr(unit, 'file_rel_path', '') or '')
+        if rel_path:
+            units_by_file.setdefault(rel_path, []).append(unit)
+    return units_by_file
+
+
 def attach_context_items_from_units(file_jobs, units_by_file):
     """Fill ``context_items`` from file-ordered units (pending + translated)."""
     for job in file_jobs or ():
@@ -731,7 +747,24 @@ def attach_context_items_from_units(file_jobs, units_by_file):
     return file_jobs
 
 
-def build_local_context_window(tasks, start, end, before_limit, after_limit):
+def _trim_interleaved_context(items, before_limit, after_limit):
+    """Keep interior neighbors nearest the TARGET edges within the local budget."""
+    items = list(items or ())
+    head_n = max(0, int(after_limit))
+    tail_n = max(0, int(before_limit))
+    limit = head_n + tail_n
+    if not items or limit <= 0:
+        return [], bool(items)
+    if len(items) <= limit:
+        return items, False
+    if head_n <= 0:
+        return items[-tail_n:], True
+    if tail_n <= 0:
+        return items[:head_n], True
+    return items[:head_n] + items[-tail_n:], True
+
+
+def build_local_context_window(tasks, start, end, before_limit, after_limit, target_ids=None):
     """Build a file-ordered local context window (issues #338 / #410).
 
     ``tasks`` is the context sequence for one file: pending TARGET items plus
@@ -741,18 +774,26 @@ def build_local_context_window(tasks, start, end, before_limit, after_limit):
     explicit scene/route tokens still bound. When no reliable scene metadata
     exists the window degrades to file order plus the item budget.
 
+    Interior non-TARGET rows between the first and last TARGET (typical of
+    partially translated files) are returned as ``ContextWindow.between`` and
+    rendered as ``CONTEXT BETWEEN``. Unaligned sequences must pass target ids
+    that are absent from the span so this path stays empty.
+
     Returns ``(translation_core.ContextWindow, diagnostics)``.
     """
     sequence = list(tasks or [])
     before = []
     after = []
+    between = []
     before_truncated = False
     after_truncated = False
+    between_truncated = False
     block_bounded_before = False
     block_bounded_after = False
     reason_before = ''
     reason_after = ''
     block_counts = _block_name_counts(sequence)
+    target_id_set = {str(item_id) for item_id in (target_ids or ()) if str(item_id)}
 
     if before_limit > 0 and start > 0:
         current = sequence[start]
@@ -787,6 +828,24 @@ def build_local_context_window(tasks, start, end, before_limit, after_limit):
         if index < len(sequence) and len(after) >= after_limit:
             after_truncated = True
 
+    if (
+        target_id_set
+        and (before_limit > 0 or after_limit > 0)
+        and 0 <= start < end <= len(sequence)
+    ):
+        span = sequence[start:end]
+        span_ids = {_item_id(item) for item in span}
+        if target_id_set & span_ids:
+            interior = [
+                item for item in span
+                if _item_id(item) not in target_id_set
+            ]
+            between, between_truncated = _trim_interleaved_context(
+                interior,
+                before_limit,
+                after_limit,
+            )
+
     if reason_before == CONTEXT_BOUNDARY_EXPLICIT_SCENE or reason_after == CONTEXT_BOUNDARY_EXPLICIT_SCENE:
         boundary_mode = CONTEXT_BOUNDARY_EXPLICIT_SCENE
     elif reason_before == CONTEXT_BOUNDARY_SHARED_BLOCK or reason_after == CONTEXT_BOUNDARY_SHARED_BLOCK:
@@ -799,18 +858,21 @@ def build_local_context_window(tasks, start, end, before_limit, after_limit):
         'context_after_limit': after_limit,
         'context_before_items': len(before),
         'context_after_items': len(after),
+        'context_between_items': len(between),
         'context_before_chars': sum(_task_text_len(item) for item in before),
         'context_after_chars': sum(_task_text_len(item) for item in after),
-        'context_truncated': before_truncated or after_truncated,
+        'context_between_chars': sum(_task_text_len(item) for item in between),
+        'context_truncated': before_truncated or after_truncated or between_truncated,
         'block_bounded_before': block_bounded_before,
         'block_bounded_after': block_bounded_after,
         'boundary_mode': boundary_mode,
         'boundary_reason_before': reason_before,
         'boundary_reason_after': reason_after,
         'scene_boundary_unknown': boundary_mode == CONTEXT_BOUNDARY_FILE_ORDER,
+        'context_interleaved': bool(between) or between_truncated,
         'context_translated_items': sum(
             1
-            for item in (*before, *after)
+            for item in (*before, *between, *after)
             if str((item or {}).get('role') or '') == 'translated'
             or (
                 str((item or {}).get('current_translation') or '')
@@ -819,7 +881,7 @@ def build_local_context_window(tasks, start, end, before_limit, after_limit):
             )
         ),
     }
-    return translation_core.ContextWindow(before, after), diagnostics
+    return translation_core.ContextWindow(before, after, between), diagnostics
 
 
 # --- Lexical glossary hits (D2: always injected, never RAG-gated) -------------
@@ -968,7 +1030,13 @@ def _local_layer(chunk_input):
     window = chunk_input.context_window or translation_core.ContextWindow()
     before_text = translation_core.format_context_block(window.before, '(none)')
     after_text = translation_core.format_context_block(window.after, '(none)')
-    text = f'CONTEXT BEFORE:\n{before_text}\n\nCONTEXT AFTER:\n{after_text}'
+    parts = [f'CONTEXT BEFORE:\n{before_text}']
+    between = list(getattr(window, 'between', None) or [])
+    if between:
+        between_text = translation_core.format_context_block(between, '(none)')
+        parts.append(f'CONTEXT BETWEEN:\n{between_text}')
+    parts.append(f'CONTEXT AFTER:\n{after_text}')
+    text = '\n\n'.join(parts)
     diagnostics = dict(chunk_input.local_context_diagnostics or {})
     diagnostics['algorithm'] = 'scene_aware_window'
     return ContextLayerResult(
@@ -1625,6 +1693,7 @@ def build_translation_plan(
             window_end,
             context_policy.local_context_before,
             context_policy.local_context_after,
+            target_ids=expected_ids,
         )
         if unaligned:
             local_diagnostics = dict(local_diagnostics)

@@ -5459,6 +5459,9 @@ def prepare_sync_translation_execution_context(
         load_progress(),
         [document.file_path for document in adapter_snapshot.project.source_documents],
     )
+    units_by_file = translation_plan.units_by_file_from_occurrences(
+        adapter_snapshot.occurrences
+    )
     pending_jobs = []
     for document in adapter_snapshot.project.source_documents:
         progress_key = document.file_rel_path
@@ -5482,22 +5485,12 @@ def prepare_sync_translation_execution_context(
             task['file_path'] = document.file_path
             tasks.append(task)
         if tasks:
-            job = {
+            pending_jobs.append({
                 'file_rel_path': progress_key,
                 'file_path': document.file_path,
                 'tasks': tasks,
-            }
-            translation_plan.attach_context_items_from_units(
-                [job],
-                {
-                    progress_key: [
-                        occurrence.unit
-                        for occurrence in adapter_snapshot.occurrences
-                        if occurrence.unit.file_rel_path == progress_key
-                    ]
-                },
-            )
-            pending_jobs.append(job)
+            })
+    translation_plan.attach_context_items_from_units(pending_jobs, units_by_file)
 
     plan_build, captures = build_sync_translation_plan(
         pending_jobs,
@@ -7173,6 +7166,9 @@ def run_translation(*, prepare=False):
         contract_failures = []
         contract_diagnostics = new_sync_contract_diagnostics()
         attempted_file_contexts = []
+        units_by_file = translation_plan.units_by_file_from_occurrences(
+            adapter_snapshot.occurrences
+        )
         pending_jobs = []
         for document in source_documents:
             progress_key = document.file_rel_path
@@ -7209,6 +7205,7 @@ def run_translation(*, prepare=False):
                     'file_path': document.file_path,
                     'tasks': tasks,
                 })
+        translation_plan.attach_context_items_from_units(pending_jobs, units_by_file)
 
         sync_plan_build, sync_plan_captures = build_sync_translation_plan(
             pending_jobs,

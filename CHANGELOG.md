@@ -26,7 +26,7 @@
 
 ### 修复
 
-- 局部前后文不再把逐句独立的 Ren'Py translate 块当成场景边界；跨批次和补译可以引用同一文件里的已译邻句。多行共享翻译块和显式路线/场景标记仍会截断。模型仍然只返回 TARGET ID。
+- 局部前后文不再把逐句独立的 Ren'Py translate 块当成场景边界；跨批次和补译可以引用同一文件里的已译邻句。同一请求内夹在待译句中间的已译邻句会进入 `CONTEXT BETWEEN`。多行共享翻译块和显式路线/场景标记仍会截断。模型仍然只返回 TARGET ID。
 
 - 空的 Ren'Py 目标模板（`e ""` / `new ""`）不再被标成 `already_translated`。只要注释原文或 `old` 行仍有可译原文，就会进入待译并走现有 preview / check / 安全写回；原文为空或缺少原文证据不会被计为已完成。
 
@@ -38,7 +38,7 @@
 
 ### 变更
 
-- 局部上下文诊断改为 `scene_aware_window`：多行共享翻译块仍截断，逐句独立 block ID 不再截断。已有 TranslationPlan 的 prompt/request fingerprint 会变化，旧预览需按现有新鲜度合同重新生成后才能写回。
+- 局部上下文诊断改为 `scene_aware_window`：多行共享翻译块仍截断，逐句独立 block ID 不再截断。夹心已译邻句进入 `CONTEXT BETWEEN`，诊断增加 `context_between_*` / `context_interleaved`。已有 TranslationPlan 的 prompt/request fingerprint 会变化，旧预览需按现有新鲜度合同重新生成后才能写回。
 
 - 普通 Sync 初译改为消费共享 TranslationPlan（#346 P3）：默认 chunk 对齐为 60/18000，Sync/Gemini Batch 共用 canonical system/user prompt、响应 schema、ContextAssembler 与稳定 request/prompt/plan fingerprint；Gemini、LiteLLM 和自定义 OpenAI-compatible Provider 均显式传递 system instruction。缺项/无效响应只生成带 `--T` / `--L` / `--R` lineage 的确定性派生请求，不修改原 plan；sync preview manifest 绑定 plan、request IDs、逐文件 source digest 与既有 adapter writeback/source snapshot 门禁。旧显式 Sync 分块配置与无 plan 的旧 preview manifest 保持兼容。
 - Gemini Batch 初译构建改为消费 TranslationPlan（#346 P2）：`build_chunks` 通过 `translation_plan.build_translation_plan` 生成 plan 与 requests，`build_batch_request` 只负责把 `TranslationRequest` 包成 Batch envelope；manifest v2 增加 `translation_plan` 块，chunk 与 `requests.jsonl` 写入 `request_id` / `prompt_fingerprint` / `request_fingerprint` 可审计字段。Batch 初译 prompt 切换为 canonical system/user 形态，词法 glossary（`normalize_map` / `preserve_terms` / `non_translatable_exact`）解除 `RAG_ENABLED` 门控且不再按 `RAG_TOP_K_TERMS` 截断，未开启 RAG 时也会注入命中的本地术语。

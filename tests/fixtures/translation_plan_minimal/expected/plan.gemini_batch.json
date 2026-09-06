@@ -20,6 +20,9 @@
         "context_before_chars": 0,
         "context_before_items": 0,
         "context_before_limit": 30,
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
         "context_translated_items": 0,
         "context_truncated": false,
         "scene_boundary_unknown": false
@@ -53,6 +56,9 @@
         "context_before_chars": 178,
         "context_before_items": 3,
         "context_before_limit": 30,
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
         "context_translated_items": 0,
         "context_truncated": false,
         "scene_boundary_unknown": true
@@ -86,6 +92,9 @@
         "context_before_chars": 0,
         "context_before_items": 0,
         "context_before_limit": 30,
+        "context_between_chars": 0,
+        "context_between_items": 0,
+        "context_interleaved": false,
         "context_translated_items": 0,
         "context_truncated": false,
         "scene_boundary_unknown": true
@@ -141,7 +150,7 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "a31f3e881134ad79",
+  "plan_fingerprint": "519f5d96e3025c67",
   "plan_id": "6e210e07ff44ed7c",
   "request_summaries": [
     {
@@ -185,6 +194,9 @@
               "context_before_chars": 0,
               "context_before_items": 0,
               "context_before_limit": 30,
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
               "context_translated_items": 0,
               "context_truncated": false,
               "scene_boundary_unknown": false
@@ -234,8 +246,8 @@
         ],
         "total_char_used": 972
       },
-      "prompt_fingerprint": "91fa9734a7679651",
-      "request_fingerprint": "5c6a500afe8b5810",
+      "prompt_fingerprint": "633a5f0d12a15ee5",
+      "request_fingerprint": "a8d8779fbf7502cd",
       "request_id": "8eca9ba1bb3780c6"
     },
     {
@@ -280,6 +292,9 @@
               "context_before_chars": 178,
               "context_before_items": 3,
               "context_before_limit": 30,
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
               "context_translated_items": 0,
               "context_truncated": false,
               "scene_boundary_unknown": true
@@ -329,8 +344,8 @@
         ],
         "total_char_used": 1086
       },
-      "prompt_fingerprint": "70e3069d033669d4",
-      "request_fingerprint": "161cb4aad3c7b736",
+      "prompt_fingerprint": "ec7e0a5783f0e46d",
+      "request_fingerprint": "e4e4d944a66eaa0e",
       "request_id": "dcd6932ee0a09722"
     },
     {
@@ -371,6 +386,9 @@
               "context_before_chars": 0,
               "context_before_items": 0,
               "context_before_limit": 30,
+              "context_between_chars": 0,
+              "context_between_items": 0,
+              "context_interleaved": false,
               "context_translated_items": 0,
               "context_truncated": false,
               "scene_boundary_unknown": true
@@ -420,8 +438,8 @@
         ],
         "total_char_used": 548
       },
-      "prompt_fingerprint": "09933af67ef80325",
-      "request_fingerprint": "dfc21a2359e90124",
+      "prompt_fingerprint": "f0d538a0d95265ff",
+      "request_fingerprint": "ca8c627a75962dec",
       "request_id": "1190f0edad638ad0"
     }
   ],

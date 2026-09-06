@@ -3219,9 +3219,9 @@ def collect_pending_file_jobs(
     )
     units_by_file = {}
     if include_occurrences:
-        for occurrence in adapter_snapshot.occurrences:
-            rel = occurrence.unit.file_rel_path
-            units_by_file.setdefault(rel, []).append(occurrence.unit)
+        units_by_file = translation_plan.units_by_file_from_occurrences(
+            adapter_snapshot.occurrences
+        )
 
     for document in adapter_snapshot.project.source_documents:
         rel_path = document.file_rel_path

@@ -80,7 +80,7 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 
 同步初译提示词包含三类基础上下文，全部只作参考，模型仍只能返回 TARGET 条目的 ID 与译文：
 
-- **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口取当前文件的对白顺序，待译 TARGET 和已译邻句都可以作为参考；模型仍只能返回 TARGET 的 ID。逐句生成的独立 translate 块不会被当成场景边界。真正的多行翻译块、显式路线/场景标记仍会截断。没有可识别场景信息时退化为文件顺序加预算截断，并在诊断里标记 `scene_boundary_unknown`。设为 0 可关闭对应方向。
+- **局部前后文**：`sync.context_before`（默认 30）与 `sync.context_after`（默认 10）控制每个请求附带的 `CONTEXT BEFORE/AFTER` 条目预算，与 Batch 默认对齐。窗口取当前文件的对白顺序，待译 TARGET 和已译邻句都可以作为参考；夹在同一请求 TARGET 之间的已译邻句进入 `CONTEXT BETWEEN`。模型仍只能返回 TARGET 的 ID。逐句生成的独立 translate 块不会被当成场景边界。真正的多行翻译块、显式路线/场景标记仍会截断。没有可识别场景信息时退化为文件顺序加预算截断，并在诊断里标记 `scene_boundary_unknown`。设为 0 可关闭对应方向。
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
 - **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
