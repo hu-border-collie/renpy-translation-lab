@@ -68,6 +68,8 @@
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
 - [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](plans/issue-346-implementation-plan.md)：基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；决策表 D1–D7 在 issue #346 定稿后进入 P1 编码。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md)
+- [GitHub 视觉小说本地化工具源码研究](plans/github_localization_projects_research.md)
+- [多引擎本地化适配与候选引擎开源生态研究](plans/multi_engine_localization_ecosystem_research.md)
 
 
 ### 历史参考（已归档）
