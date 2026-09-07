@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from atomic_io import AtomicFileLockTimeoutError, exclusive_file_lock
+
 
 def read_json_object(path: Path, description: str) -> dict[str, Any]:
     if not path.exists():
@@ -67,26 +69,26 @@ def _write_json_object(path: Path, data: dict[str, Any]) -> None:
         raise ValueError(f"Failed to write JSON file: {path}") from exc
 
 
+class ConfigWriteLockError(ValueError):
+    """A cooperating writer did not release the configuration lock in time."""
+
+
 @contextmanager
 def config_write_lock(path: Path):
-    """Serialize cooperating settings/migration writers; never steal a stale lock.
+    """Share the repository lock protocol across GUI save and migration.
 
-    A process killed while holding the lock requires explicit operator cleanup.
-    External editors do not honor this lock; migration also compares source bytes
-    immediately before replacement.
+    Wait briefly for competing writers, recover abandoned locks after five
+    minutes, and use token-checked cleanup so replacement locks survive.
+    External editors still require the migration's final source-byte check.
     """
     lock = path.with_name(path.name + ".write-lock")
     try:
-        handle = lock.open("xb")
-    except FileExistsError as exc:
-        raise ValueError("Configuration is locked; inspect active writers before removing the lock") from exc
-    try:
-        handle.write(str(os.getpid()).encode("ascii"))
-        handle.close()
-        yield
-    finally:
-        handle.close()
-        lock.unlink()
+        with exclusive_file_lock(lock, timeout=1.0, stale_after=300.0):
+            yield
+    except AtomicFileLockTimeoutError as exc:
+        raise ConfigWriteLockError(
+            f"配置正在被其他进程写入，请稍后重试。锁文件：{lock}"
+        ) from exc
 
 
 def _copy_access_mode(source: Path, target: Path) -> None:

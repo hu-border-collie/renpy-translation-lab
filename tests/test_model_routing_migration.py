@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
@@ -19,7 +20,7 @@ from model_routing_migration import preview_migration
 from model_routing_migration_store import (
     fingerprint, migrate_config_file, preview_config_file, rollback_config_file,
 )
-from model_routing_reader import read_routing_plan, read_embedding_settings
+from model_routing_reader import read_routing_plan, read_embedding_settings, section_custom_providers
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
@@ -65,6 +66,51 @@ class MigrationPlanTests(unittest.TestCase):
                 repeat = preview_migration(result.config)
                 self.assertEqual(repeat.status, "already_current")
                 self.assertEqual(repeat.config, result.config)
+
+    def test_empty_or_omitted_stage_models_keep_profiles_and_strategies(self):
+        for name in ("example_defaults", "litellm_builtin", "gemini_sync", "litellm_custom"):
+            config = fixture(name)
+            result = preview_migration(config)
+            self.assertEqual(result.status, "ready")
+            self.assertEqual(result.config["model_routing"]["routes"], {
+                "project_analysis": {"profile_id": "legacy-sync", "strategy": "sync"},
+                "final_review": {"profile_id": "legacy-batch", "strategy": "gemini_batch"},
+            })
+            for mode in ("sync", "gemini_batch"):
+                old = read_routing_plan(config, legacy_execution=mode)
+                new = read_routing_plan(result.config, legacy_execution=mode)
+                for stage in ("project_analysis", "final_review"):
+                    self.assertEqual(old.routes[stage].strategy, new.routes[stage].strategy)
+                    self.assertEqual(old.profiles[old.routes[stage].profile_id].model,
+                                     new.profiles[new.routes[stage].profile_id].model)
+
+    def test_embedding_names_do_not_shadow_builtin_generation_providers(self):
+        for provider, model in (("openai", "gpt-4"), ("openrouter", "model-a"), ("anthropic", "claude-test")):
+            with self.subTest(provider=provider):
+                config = fixture("litellm_builtin")
+                config["sync"].update(model=f"{provider}/{model}", models=[f"{provider}/{model}"])
+                for scope in ("sync", "batch"):
+                    config[scope]["rag"] = {
+                        "embedding_backend": "openai_compatible", "embedding_provider": provider,
+                        "embedding_endpoint": f"https://{scope}.example.test/v1",
+                        "embedding_model": "embed-a", "embedding_api_key_env": "EMBED_KEY",
+                    }
+                result = preview_migration(config)
+                self.assertEqual(result.status, "ready")
+                self.assertNotIn(provider, section_custom_providers(result.config["model_routing"]))
+                for mode, scope in (("sync", "sync"), ("gemini_batch", "batch")):
+                    self.assertEqual(read_embedding_settings(config, execution=mode),
+                                     read_embedding_settings(result.config, execution=mode))
+
+    def test_embedding_names_do_not_replace_custom_generation_connection(self):
+        config = fixture("litellm_custom")
+        migrated = preview_migration(config).config
+        connection = section_custom_providers(migrated["model_routing"])["acme-compatible"]
+        self.assertEqual(connection.base_url, "https://models.example.test/v1")
+        self.assertEqual(connection.api_key_env, "ACME_API_KEY")
+        embedding = read_embedding_settings(migrated, execution="sync")
+        self.assertEqual(embedding.endpoint, "https://embeddings.example.test/v1")
+        self.assertEqual(embedding.api_key_env, "ACME_EMBEDDING_API_KEY")
 
     def test_explicit_stage_routes_keep_legacy_transports(self):
         migrated = preview_migration(fixture()).config
@@ -329,10 +375,40 @@ class MigrationTransactionTests(unittest.TestCase):
 
     def test_gui_and_migration_share_exclusive_write_lock(self):
         with config_store.config_write_lock(self.path):
-            with self.assertRaisesRegex(ValueError, "locked"):
+            with self.assertRaisesRegex(config_store.ConfigWriteLockError, "锁文件"):
                 self.migrate()
-            with self.assertRaisesRegex(ValueError, "locked"):
+            with self.assertRaisesRegex(config_store.ConfigWriteLockError, "锁文件"):
                 config_store.write_json_object(self.path, {})
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+    def test_abandoned_lock_recovers_for_gui_and_migration(self):
+        lock = self.path.with_name(self.path.name + ".write-lock")
+        for write in (lambda: config_store.write_json_object(self.path, fixture()), self.migrate):
+            self.path.write_bytes(self.original)
+            lock.write_text("12345", encoding="ascii")  # Pre-token lock format.
+            old = time.time() - 301
+            os.utime(lock, (old, old))
+            write()
+            self.assertFalse(lock.exists())
+
+    def test_lock_cleanup_keeps_replacement_owner_and_tolerates_missing_lock(self):
+        lock = self.path.with_name(self.path.name + ".write-lock")
+        replacement = '{"pid": 12345, "token": "different-owner"}'
+        with config_store.config_write_lock(self.path):
+            lock.write_text(replacement, encoding="utf-8")
+        self.assertEqual(lock.read_text(encoding="utf-8"), replacement)
+        lock.unlink()
+        with config_store.config_write_lock(self.path):
+            lock.unlink()
+        self.assertFalse(lock.exists())
+
+    def test_cli_lock_timeout_is_classified_without_exposing_path(self):
+        with config_store.config_write_lock(self.path), redirect_stdout(output := io.StringIO()):
+            code = cli.main(["migrate", "--config", str(self.path), "--stage-only",
+                             "--expected-fingerprint", fingerprint(self.original), "--json"])
+        self.assertEqual(code, 2)
+        self.assertEqual(json.loads(output.getvalue())["reason"], "config_locked")
+        self.assertNotIn(str(self.path), output.getvalue())
         self.assertEqual(self.path.read_bytes(), self.original)
 
     def test_malformed_json_is_not_rewritten(self):

@@ -446,7 +446,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         )
         self.assertEqual(context.status, idle_diagnostics_context().status)
         command_labels = [command.label for command in context.commands]
-        self.assertEqual(command_labels, ["查看项目模型用量"])
+        self.assertIn("查看项目模型用量", command_labels)
+        self.assertEqual(len([c for c in context.commands if "model_config_migration.py" in c.command]), 3)
 
     def test_build_diagnostics_context_idle_when_latest_path_suppressed(self):
         context = build_diagnostics_context(
@@ -470,6 +471,28 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(context.status, "warning")
         self.assertIn("无法读取任务记录", context.heading)
 
+    def test_migration_templates_are_available_without_a_batch_manifest(self):
+        import shlex
+        from model_config_migration import build_parser
+        contexts = [
+            idle_diagnostics_context(batch_script_path="/tool dir/gemini_translate_batch.py"),
+            sync_diagnostics_context(sync_script_path="/tool dir/gemini_translate.py"),
+        ]
+        groups = [context.commands for context in contexts]
+        groups.append(build_cli_commands(python_exe="python", batch_script_path="/tool dir/gemini_translate_batch.py",
+                                         manifest_path="", manifest={}))
+        for commands in groups:
+            selected = [c for c in commands if "model_config_migration.py" in c.command]
+            self.assertEqual(len(selected), 3)
+            for entry in selected:
+                parts = shlex.split(entry.command)
+                self.assertEqual(parts[1], "/tool dir/model_config_migration.py")
+                args = build_parser().parse_args(parts[2:])
+                self.assertEqual(str(args.config), "<CONFIG_COPY>")
+                if args.action == "migrate":
+                    self.assertTrue(args.stage_only)
+                    self.assertEqual(args.expected_fingerprint, "<SOURCE_FINGERPRINT>")
+
     def test_sync_diagnostics_context_shows_sync_command(self):
         context = sync_diagnostics_context(
             sync_script_path=r"C:\tools\gemini_translate.py",
@@ -478,7 +501,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         self.assertEqual(context.status, "ready")
         self.assertIn("同步翻译上下文", context.heading)
-        self.assertEqual(len(context.commands), 1)
+        self.assertEqual(len(context.commands), 4)
         self.assertIn("gemini_translate.py", context.commands[0].command)
         self.assertEqual(context.manifest_json_preview, "")
 

@@ -28,9 +28,19 @@ def checked_section(config: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def section_custom_providers(section: Mapping[str, Any]) -> dict[str, CustomLiteLLMProvider]:
-    """Reconstruct custom connection metadata without consulting legacy fields."""
+    """Build generation connections only; embedding endpoints have their own reader.
+
+    Upstream names are shared across purposes, so an embedding connection must
+    not shadow a built-in or custom generation provider with the same name.
+    """
+    generation_providers = {
+        profile["provider_id"] for profile in section["profiles"].values()
+        if profile.get("purpose") != "embedding"
+    }
     result = {}
-    for provider in section["providers"].values():
+    for provider_id, provider in section["providers"].items():
+        if provider_id not in generation_providers:
+            continue
         if provider["adapter"] != "litellm" or not provider.get("base_url"):
             continue
         ref = provider["credential_ref"]

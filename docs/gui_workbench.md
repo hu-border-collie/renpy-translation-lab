@@ -19,9 +19,9 @@
 
 界面用语尽量使用中文说明；「诊断与运行日志」中的「命令参考」仍保留可复制 CLI 子命令，供高级用户对照。
 
-任务命令参考包含 [模型配置离线迁移 P1](model_config_migration.md) 的 preview、
+空闲、Sync 和 Batch 的命令参考均包含 [模型配置离线迁移 P1](model_config_migration.md) 的 preview、
 stage-only migrate 和 rollback 模板，均要求显式配置副本路径。当前 Settings 仍编辑旧
-配置；不会在加载页面时自动迁移，新模型设置页和生产路由激活属于 #348 后续阶段。
+配置，无需先加载 Batch 任务；不会在加载页面时自动迁移，新模型设置页和生产路由激活属于 #348 后续阶段。
 
 ## 安装与启动
 

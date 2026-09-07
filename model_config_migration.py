@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
+from config_store import ConfigWriteLockError
 from model_routing_migration_store import (
     migrate_config_file, preview_config_file, rollback_config_file,
 )
@@ -12,11 +13,12 @@ from model_routing_migration_store import (
 
 def refusal_details(exc: Exception) -> tuple[str, str]:
     """Classify known refusal messages without reflecting their input values."""
+    if isinstance(exc, ConfigWriteLockError):
+        return "config_locked", "等待配置写入完成后重试；遗留锁满五分钟后可自动恢复"
     message = str(exc)
     for prefix, reason, action in (
         ("Configuration changed since preview", "stale_preview", "重新预览配置，再使用新的源指纹"),
         ("Configuration changed since migration", "edited_after_migration", "保留当前编辑，人工核对备份；禁止直接覆盖"),
-        ("Configuration is locked", "config_locked", "检查活动写入进程；确认无写入者后再处理遗留锁"),
         ("Embedded credential", "embedded_credentials", "移除配置中的密钥值，改用凭据引用"),
         ("Ambiguous legacy", "ambiguous_legacy_models", "核对实际模型；明确 sync.model 并与 sync.models 首项保持一致"),
         ("Implicit rotation", "implicit_rotation_pool", "确认并在配置副本中冻结完整 sync.models 轮换列表"),
