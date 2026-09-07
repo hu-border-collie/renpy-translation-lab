@@ -39,7 +39,9 @@
 - `translation_plan.py`：计划构造、序列化、fingerprint 和 source/context/model 快照。
 - `translator_runtime.py`：生产 Sync plan/build 与 backend 接线。
 - `gemini_translate_batch.py`：Batch build/submit/status/download/check/apply 与阶段请求入口。
-- `sync_run_service.py`：耐久 Sync 的 start/resume/status/cancel/derive 产品服务。
+- `sync_run_service.py`：CLI `sync-start` 等命令使用的耐久 Sync start/resume/status/cancel/derive 服务。
+- `gui_qt/sync_translation_workflow.py` → `gemini_translate.py`：当前 GUI Sync 入口；
+  尚不持久化可恢复 run，#348 P3 再接入 #347 服务。
 - `sync_run_contracts.py`：状态、退出码、错误码和合法转换。
 - `sync_run_store.py`：SQLite/WAL 持久层；产品 UI 不应直接读取。
 

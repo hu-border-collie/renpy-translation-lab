@@ -102,7 +102,12 @@ LEGACY_FIELD_MAPPINGS = (
     LegacyFieldMapping(
         ("sync", "models"),
         "model_routing.profiles.<sync-profile>.models",
-        "preserve same-profile model rotation order",
+        "preserve explicit same-profile rotation order; non-empty sync.models wins over rotation.model",
+    ),
+    LegacyFieldMapping(
+        ("rotation", "model"),
+        "model_routing.profiles.<sync-profile>.models",
+        "require an explicit sync.models snapshot for enabled rotation; never expand an implicit catalog pool",
     ),
     LegacyFieldMapping(
         ("sync", "custom_litellm_providers"),
@@ -117,24 +122,31 @@ LEGACY_FIELD_MAPPINGS = (
     LegacyFieldMapping(
         ("batch", "project_analysis", "model"),
         "model_routing.routes.project_analysis",
-        "create an override only when the legacy value is non-empty",
+        "always emit an explicit sync route; empty/omitted model uses the Sync profile",
     ),
     LegacyFieldMapping(
         ("batch", "final_review", "model"),
         "model_routing.routes.final_review",
-        "create an override only when the legacy value is non-empty",
+        "always emit an explicit gemini_batch route; empty/omitted model uses the Batch profile",
     ),
+) + tuple(
     LegacyFieldMapping(
-        ("sync", "rag"),
-        "model_routing.profiles.<embedding-profile>",
-        "map embedding provider/model/credential reference without moving RAG policy",
-    ),
-    LegacyFieldMapping(
-        ("batch", "rag"),
-        "model_routing.profiles.<embedding-profile>",
-        "map embedding provider/model/credential reference without moving RAG policy",
-    ),
+        (scope, "rag", field), target, rule,
+    )
+    for scope in ("sync", "batch")
+    for field, target, rule in (
+        ("embedding_backend", "embedding profile params.backend", "preserve backend and adapter"),
+        ("embedding_provider", "embedding provider.provider", "preserve upstream provider"),
+        ("embedding_endpoint", "embedding provider.base_url", "preserve connection endpoint"),
+        ("embedding_api_key_env", "embedding provider.credential_ref", "environment reference only; never migrate embedding_api_key values"),
+        ("embedding_model", "embedding profile.model", "preserve embedding model"),
+        ("output_dimensionality", "embedding profile params.output_dimension", "preserve request dimension"),
+        ("embedding_timeout_seconds", "embedding profile params.timeout_seconds", "preserve request timeout"),
+        ("query_task_type", "embedding profile params.native_query_task_type", "preserve query task type"),
+        ("document_task_type", "embedding profile params.native_document_task_type", "preserve document task type"),
+    )
 )
+
 
 
 def _issue(path: str, code: str, message: str) -> ConfigContractIssue:

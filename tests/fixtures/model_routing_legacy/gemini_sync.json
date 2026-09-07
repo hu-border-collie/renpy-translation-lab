@@ -5,12 +5,58 @@
     "models": [
       "gemini-3.1-flash-lite",
       "gemini-3.5-flash-lite"
-    ]
+    ],
+    "rag": {
+      "enabled": false,
+      "embedding_backend": "gemini",
+      "embedding_provider": "",
+      "embedding_endpoint": "",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "",
+      "embedding_model": "gemini-embedding-001",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 4,
+      "top_k_terms": 8,
+      "min_similarity": 0.72,
+      "segment_lines": 4,
+      "history_char_limit": 220,
+      "update_on_success": true,
+      "store_dir": ""
+    }
   },
   "batch": {
-    "model": "gemini-3.1-flash-lite"
+    "model": "gemini-3.1-flash-lite",
+    "rag": {
+      "enabled": true,
+      "embedding_backend": "gemini",
+      "embedding_provider": "",
+      "embedding_endpoint": "",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "",
+      "embedding_model": "gemini-embedding-001",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 4,
+      "top_k_terms": 8,
+      "min_similarity": 0.72,
+      "segment_lines": 4,
+      "bootstrap_on_build": true,
+      "history_char_limit": 220,
+      "store_dir": ""
+    }
   },
   "fixture_unknown": {
     "keep": true
+  },
+  "rotation": {
+    "model": {
+      "enabled": true,
+      "models": [
+        "gemini-3.5-pro"
+      ]
+    }
   }
 }

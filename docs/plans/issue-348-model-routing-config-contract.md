@@ -71,7 +71,9 @@ OpenAI-compatible Provider 使用同一结构；自定义连接只是在 `base_u
 
 - `defaults.primary_profile_id` 是角色指针，不是 profile 自身 ID。
 - `defaults.execution_strategy` 是用户显式选择的 `sync` 或 `gemini_batch`。
-- `routes` 只保存显式覆盖；缺失的阶段继承两个默认值。
+- `routes` 只保存显式覆盖；缺失的阶段继承两个默认值。迁移旧配置时，即使阶段模型为空，
+  也必须显式生成 PA 的 Sync profile + `sync` 和 FR 的 Batch profile + `gemini_batch`
+  路由，以保留旧 resolver 的实际行为。
 - route 可以只覆盖 `profile_id`、只覆盖 `strategy`，或同时覆盖二者。
 - 可配置阶段固定为：初译 `translation`、术语 `keyword`、订正 `revision`、
   项目分析 `project_analysis`、最终审校 `final_review`。
@@ -121,12 +123,21 @@ schema-v1 validator 接受非敏感未知字段。兼容 reader 可以忽略尚�
 |---|---|---|
 | `sync.backend` | Provider + Sync profile | 保持实际 Gemini/LiteLLM adapter |
 | `sync.model` | Sync profile `model` | 保持实际同步模型 |
-| `sync.models` | Sync profile `models` | 保持同 profile 内轮换顺序 |
+| `sync.models` | Sync profile `models` | 保持显式轮换顺序；非空 `sync.models` 优先于 `rotation.model` |
+| `rotation.model` | Sync profile `models` | 启用时要求先提供显式 `sync.models` 快照，否则拒绝迁移；不展开隐式 catalog 池 |
 | `sync.custom_litellm_providers` | `providers` | 迁移连接元数据和凭据引用，不迁移 key 值 |
 | `batch.model` | Gemini Batch profile | 保持实际 Batch 模型和默认策略 |
-| `batch.project_analysis.model` | `routes.project_analysis` | 仅非空值生成覆盖 |
-| `batch.final_review.model` | `routes.final_review` | 仅非空值生成覆盖 |
-| `sync.rag` / `batch.rag` embedding 字段 | embedding profile | 只迁移模型连接；RAG policy 留在原上下文配置 |
+| `batch.project_analysis.model` | `routes.project_analysis` | 始终生成 Sync 路由；空/缺失模型使用 Sync profile |
+| `batch.final_review.model` | `routes.final_review` | 始终生成 Gemini Batch 路由；空/缺失模型使用 Batch profile |
+| `*.rag.embedding_backend/provider/endpoint` | embedding provider + profile backend | 保留 adapter、上游标识与连接地址 |
+| `*.rag.embedding_api_key_env` | embedding provider `credential_ref` | 只保存环境变量引用；不迁移 `embedding_api_key` 值 |
+| `*.rag.embedding_model` | embedding profile `model` | 保留模型 |
+| `*.rag.output_dimensionality/embedding_timeout_seconds/query_task_type/document_task_type` | embedding profile `params` | 保留请求维度、超时和原生 task type |
+
+上表 `*` 指 `sync` / `batch`；`enabled`、`top_k_*`、`store_dir`、相似度、分段、
+历史长度、bootstrap/update 等 RAG policy 均留在原处，不迁入 profile。
+Gemini 与自定义 Provider fixture 同时覆盖两条路径的连接和 policy；
+`example_defaults.json` 覆盖生产示例中 PA/FR 模型为空的情况。
 
 初译、术语和订正在旧配置中没有独立模型时继承对应运行的 base profile，不人为生成
 重复 route。`batch` 的 chunk、prompt、thinking、pricing、quality gate 等执行/业务参数
