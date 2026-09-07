@@ -18,9 +18,9 @@
    * 通用软件本地化标准（PO, XLIFF）具备成熟的三向合并（3-way merge）与 Fuzzy 状态机；
    * 但它们无法原生表达视觉小说的**角色说话人（Speaker）、前后对白滑动窗口（Context Window）与代码/排版控制标签嵌套**。
 3. **#272 对候选引擎的评估结论得到外部生态的强力验证**：
-   * **Naninovel (Unity)**：官方原生内置了纯文本的 `Resources/Naninovel/Localization/{Locale}/` 目录与 CSV 交换机制。**完全不需要挂载 Unity 运行时即可实现离线原子写回**，印证了其作为唯一推荐第三引擎（评级 A+）的科学性；
+   * **Naninovel (Unity)**：官方原生内置了纯文本的 `Resources/Naninovel/Localization/{Locale}/` 目录与 CSV 交换机制。已生成的文档可离线处理；公共写回合同适配仍待验证，支持将其列为推荐第三引擎（评级 A+）；
    * **Godot + Dialogic 2**：生态中已有成熟的 CSV 翻译插件，但 Dialogic 2.0 目前处于 Alpha 20，API 频繁重构，过早立项必然背负巨大的接口废弃维护债务；
-   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（依托 Komorebi 夹具）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
+   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（本地人工样本支持的研究候选，仓库合成夹具仍待建立）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
 4. **对本项目的战略启示**：
    * 本项目在 `#265` 中建立的 `ProjectSnapshot`、`ReconciliationReport`、`TranslationRecord` 与声明式 `WritebackPlan`，在**数据严密性与防漂移安全性上明显超越了同类开源游戏翻译工具**；
    * 本项目应积极借鉴 **VNTextPatch 的字符 Span 重定位算法**、**Weblate 的 Fuzzy 微改审核状态**、**Translator++ 的数据网格交互直觉**，以及 **Naninovel 官方离线文本目录的直接消费模式**，完成从“文本翻译脚本”到“工业级多引擎工作台”的跃迁。
@@ -54,15 +54,15 @@
 
 #### 核心机制剖析
 1. **清晰的抽象接口契约**：
-   定义了通用的 `IScriptFile` / `IScriptFormat` 接口，每个引擎只需实现三个核心生命周期：
-   * `Load(Stream stream)`：加载特定格式脚本或编译二进制；
-   * `List<ScriptText> ExtractText()`：返回抽取出的结构化文本片段列表；
-   * `void PatchText(List<ScriptText> texts)`：将翻译后的文本重写回脚本。
+   上游 [IScript](https://github.com/arcusmaximus/VNTranslationTools/blob/main/VNTextPatch.Shared/IScript.cs) 声明了 `Extension` 属性与以下方法（2026-09-07 源码复核；fork 须单独核对）：
+   * `void Load(ScriptLocation location)`：加载脚本；
+   * `IEnumerable<ScriptString> GetStrings()`：枚举待译字符串；
+   * `void WritePatched(IEnumerable<ScriptString> strings, ScriptLocation location)`：写出补丁脚本。
 2. **字节与字符 Span 偏移重定位（Offset Relocation）**：
    在写回变长目标语言文本时，工具会解析脚本的字节码或控制流，自动修正所有跳转指令（Jumps / Labels / Pointers）的绝对偏移量，并支持在写回阶段按字符像素宽度进行自动折行（Word Wrapping）。
 
 #### 对本项目的启发与边界
-* ✅ **汲取**：其 `ScriptText`（含文本、角色名、位置标识）的设计高度契合本项目的 `TranslationUnit`；其针对不同脚本格式的 Span 替换与语法重定位思路，对完善本项目的 `text_span_replace` 算子很有参考价值。
+* ✅ **汲取**：加载、枚举、写出三个职责的分离值得参考。[ScriptString](https://github.com/arcusmaximus/VNTranslationTools/blob/main/VNTextPatch.Shared/ScriptString.cs) 仅包含 `Text` 与 `Type`，不自带角色名字段、位置标识或版本溯源，不能等同于本项目的 `TranslationUnit`。格式专用的重定位机制可作为研究对象，不能直接替代公共写回门禁。
 * 🛑 **防范**：该工具完全面向“单次补丁制作”，**不具备任何版本快照（Snapshot）机制**。一旦游戏官方发布补丁更改了脚本行数或分支，原有的翻译文档将发生错位；本项目必须坚守 #265 的 `ProjectSnapshot` 对账红线。
 
 ---
@@ -117,17 +117,19 @@
 #### 关键源码事实与生态核验
 1. **离线纯文本与独立 Locale 目录**：
    * Naninovel 原生设计了 `Resources/Naninovel/Localization/{Locale}/` 架构；
-   * 运行官方 `Localization Tool` 后，会在该目录下生成与源脚本**同名且行级镜像对应的纯文本脚本**；
-   * 每个待译行上方均带有由引擎生成的全局稳定文本标识符：
+   * 运行官方 `Localization Tool` 后，在 `Localization/{Locale}/Text/Scripts/` 生成按文本 ID 组织的本地化文档，不是源 `.nani` 的逐行镜像；Managed Text 位于 `Text/`；
+   * 按 [Naninovel 1.21 官方格式](https://naninovel.com/guide/localization#scripts-localization)，条目由 `# ID`、`;` 原文注释和译文组成：
      ```text
      # 8c2d5a3b
-     Original Japanese sentence here.
+     ; Original source sentence here.
+     这里是译文。
      ```
+   * 译文允许占多行，直到下一个 `# ID`；Join Lines 会生成 `# id1|id2|id3` 与 `|` 分隔的片段，`; >` 注解不得进入译文。解析与 fixture 必须覆盖这些结构，不能用物理行号一一对应。
 2. **Spreadsheet CSV 交换工具**：
-   * 官方内置 `Spreadsheet Tool`，可直接将工程所有待译文本导出为标准 `.csv` 表格，翻译后再通过官方工具重新导入生成本地化脚本。
+   * 官方内置 `Spreadsheet Tool`；须先生成本地化数据，再导出 `.csv`，翻译后通过官方工具导入。编辑 CSV 本身不等于完成资源导入。
 3. **完全无需 Unity 运行时的写回能力**：
    * 经核实，Naninovel 的本地化文件在打包前就是项目 Assets 目录下的普通文本文件（UTF-8）；
-   * 本项目的 `EngineAdapter` **完全不需要启动 Unity，也不需要碰复杂的 C# 反射或 IL2CPP 编译注入**，直接作为离线文件适配器对 `Localization/{Locale}` 文本或 CSV 执行声明式写回即可。
+   * Adapter 可离线修改已生成的本地化文档；生成、CSV 导入、构建与运行时验证仍属于官方工具链。公共 `text_span_replace` 当前仅支持单行内替换，多行译文和空译文插入如何形成合法 plan 仍须设计与夹具验证，不能由“纯文本”推定已支持。
 
 #### 对比反思：为什么坚决不用 XUnity.AutoTranslator？
 * 社区常有使用 [XUnity.AutoTranslator](https://github.com/bbepis/XUnity.AutoTranslator) 汉化 Unity 游戏的先例；
@@ -143,7 +145,7 @@
 #### 关键源码事实与生态核验
 1. **Godot 原生 TranslationServer**：
    * Godot 引擎原生支持 CSV 矩阵文件（`keys,en,zh_CN,...`）和 Gettext `.po` 文件；
-   * 游戏启动时，引擎会自动将 CSV / PO 编译为紧凑的二进制 `.translation` 资源。
+   * CSV 由 Godot 编辑器的资源导入器生成 `.translation` 资源，游戏运行时加载导入后的资源；Gettext `.po` 另有资源加载支持，不能统一描述为启动时编译。离线修改 CSV 后须重新执行 Godot 资源导入，才能验证游戏中的新译文。参见 [Godot 翻译导入说明](https://docs.godotengine.org/en/stable/tutorials/assets_pipeline/importing_translations.html)。
 2. **Dialogic 2.0 的本地化出口**：
    * Dialogic 2 专门提供了针对 Godot 本地化系统的导出通道，但目前**仅官方原生支持导出 CSV**；
    * 其 Timeline 行文本与角色名会被提取为带稳定路径的 key（形如 `Text/1/text`）。
@@ -167,7 +169,8 @@
 3. **缺乏官方原生多语言**：
    * 引擎原生没有类似 Ren'Py `tl/` 或 Naninovel `Localization/` 的概念，必须依赖第三方插件（如 DK_Localization）才能在运行时切换语言；
    * **裁定**：对**未收敛的全量 RPG Maker**（战斗数值、复杂插件、粗暴 JSON 覆写），#272 原 **C- / 不予泛化支持** 的判断仍然成立。
-   * **收敛后的叙事模式**：仅限 Narrative/ADV、事件节点精确定位、声明式 `WritebackPlan` + `check -> apply`、并排除战斗/插件动态字符串时，与矩阵文档一致，可作为 **B+ 实战原型先行线**（Komorebi 夹具），**不得**宣传为支持全部 RPG Maker 游戏。
+   * **收敛后的叙事模式**：仅限 Narrative/ADV、事件节点精确定位、声明式 `WritebackPlan` + `check -> apply`、并排除战斗/插件动态字符串时，与矩阵文档一致，可作为 **B+ 实战原型先行线**（须先建立矩阵 §7.4 的合成回归夹具），**不得**宣传为支持全部 RPG Maker 游戏。
+   * **公共合同缺口**：现有 `json_catalog_set` 是字典键路径的写回操作，不是 Adapter 模式，也不支持事件树数组索引。须先完成矩阵 §5.4 所列公共合同扩展与拒绝路径验证，不能将叙事模式写回标为已实现。
 
 ---
 
@@ -179,7 +182,7 @@
 | **Translator++** | 通用跨引擎本地化工作台 | 统一中间网格 (TransData) | 引擎专用插件导出；缺乏原子哈希校验 | ⚠️ 启发式字符串匹配，缺乏门禁 | 借鉴数据网格交互；防范无门禁的静默合并。 |
 | **translate-toolkit (Weblate)** | 工业级本地化底座 | 通用格式 (PO/JSON/CSV) | 格式无损往返读写 (Roundtrip) | ✅ 成熟的三向合并与 Fuzzy 降级 | 吸收 Fuzzy 降级状态机；弥补游戏剧情上下文。 |
 | **Naninovel Built-in** | Unity 顶级视觉小说插件 | 原生纯文本目录 + CSV | 离线纯文本写回，无需 Unity 运行时 | ✅ 官方文本 ID 增量更新与保留 | **证实为最佳第三引擎候选**；直接消费离线目录。 |
-| **Dialogic 2 (Godot)** | Godot 剧情对白系统 | 原生 CSV 矩阵导出 | 依赖 Godot 启动时编译 `.translation` | ⚠️ Alpha 阶段频繁重构 | 技术路线可行；严格等待 Beta/RC 稳定。 |
+| **Dialogic 2 (Godot)** | Godot 剧情对白系统 | 原生 CSV 矩阵导出 | 离线改写 CSV 后由 Godot 编辑器重新导入；运行时加载资源 | ⚠️ Alpha 阶段频繁重构 | 技术路线可行；严格等待 Beta/RC 稳定。 |
 | **RPGMLocalizer** | RPG Maker JSON 批翻译器 | 暴力解析 `MapXXX.json` | 危险的原位 Monolithic JSON 覆写 | ❌ 极差，重新生成易破坏事件树 | **印证全量 RPG 高危预警**；严禁粗暴 JSON 覆写。叙事模式 B+ 原型线须另走节点级声明式写回（见矩阵文档）。 |
 | **renpy-translation-lab** | **工业级 VN 本地化工作台** | **抽象 Adapter + 混合双轨** | **声明式 WritebackPlan + 原子 Span SHA-256 门禁** | **ProjectSnapshot + Reconciliation 严格对账** | **坚守架构领先优势，补齐产品化交互。** |
 
@@ -205,9 +208,9 @@
    * 采用 `native_catalog` / `hybrid` 模式：优先读取并操作 `Resources/Naninovel/Localization/{Locale}/` 下的纯文本脚本；
    * 辅助支持官方 Spreadsheet CSV 格式的双轨对账。
 2. **严格保持无运行时依赖**：
-   * Naninovel Adapter 必须作为纯 Python 离线文件处理器实现，严禁引入对 Unity Editor 或 Mono/IL2CPP 环境的强依赖。
+   * Adapter 核心按纯 Python 离线文件处理器设计；输入须已由官方工具生成。CSV 导入、资源构建与运行时验收仍依赖官方工具链，应在工作流中明确记录。
 3. **对齐版本快照与写回门禁**：
-   * 将 Naninovel 的行级 `# id` 映射为稳定的 `TranslationUnit.identity`；
+   * 按矩阵 §4.1 / §5.2，将 Naninovel 文本 ID 作为 opaque locator 与 lineage 的候选证据；组合 ID 须保留片段关系，不能直接把 `# id` 同时当作 occurrence 与 lineage 身份；
    * 写回计划必须遵循声明式 `WritebackPlan`，在验证目标文件快照哈希与内容校验无误后方可执行写入。
 
 ---

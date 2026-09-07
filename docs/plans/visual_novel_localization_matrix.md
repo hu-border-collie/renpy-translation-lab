@@ -23,7 +23,7 @@
 - **纯研究与路线决策**：本文档仅做技术调研、能力评估与路线决策，**不包含任何新引擎 Adapter 的生产代码实现**。
 - **TyranoScript 不作为候选**：TyranoScript 已收敛在 #265 P5，不参与本 Issue 的第三引擎竞选。
 - **拒绝泛化承诺**：绝不承诺“支持所有视觉小说引擎”或“支持任意 Godot / RPG Maker 游戏”；必须明确限定受支持的具体引擎版本、官方本地化插件及清晰的排除项。
-- **双轨推进与优先级调整**：Naninovel 维持作为 Unity 体系现代纯文本本地化的**首选推荐第三引擎**。同时，鉴于本地已具备《Komorebi》（2.46 万行对白、140 万字符、剥离战斗系统的纯 ADV 架构）作为黄金测试夹具，将 **RPG Maker MV/MZ 纯叙事模式（Narrative/ADV Mode）** 从原评级 C- 提权至 **B+（实战原型先行候选）**。两者形成互补验证：Naninovel 验证离线纯文本 Catalog 机制，RPG Maker 叙事模式验证复杂 JSON 事件树的节点精确替换与字体回退防御。
+- **双轨推进与优先级调整**：Naninovel 维持作为 Unity 体系现代纯文本本地化的**首选推荐第三引擎**。同时，鉴于本地已有长篇纯 ADV 游戏作为人工验证样本，将 **RPG Maker MV/MZ 纯叙事模式（Narrative/ADV Mode）** 从原评级 C- 提权至 **B+（实战原型先行候选）**。B+ 是待验证的研究评级，不代表仓库 fixture 或 Adapter 已就绪；可再分发的合成夹具仍须建立（见 §7.4）。两者拟形成互补验证：Naninovel 验证离线纯文本 Catalog 机制，RPG Maker 叙事模式验证复杂 JSON 事件树的节点精确替换与字体回退防御。
 - **对齐公共安全层**：任何后续 Adapter 必须无条件复用 `translation_core.TranslationUnit`、`check -> apply` 安全合约、声明式 `WritebackPlan` 与版本化快照/复用审计机制，严禁开辟直接改写源码或绕过门禁的私有旁路。
 
 ---
@@ -74,9 +74,9 @@
 | **D7. 语言特性** | `[官方]` TMPro 支持 RTL（需额外设置）与按 locale 换字体 | `[官方]` Godot TextServer：Context、Plural、RTL/BiDi、HarfBuzz | `[推断]` 支持基础格式化，无原生 Plural/RTL | `[官方]` UI 有内置语种；复数等可走 Web `Intl` | `[官方]` 基础 Ruby 与排版标签 | 基础控制码（`\pop[n]`, `\c[n]`, `\i[n]`, `\V[n]`），无原生 Plural；字体需解决 CJK 方块乱码 |
 | **D8. 编码格式** | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` 碎片化：Shift-JIS / UTF-16LE with BOM / 部分 UTF-8+BOM | `[官方]` UTF-8 |
 | **D9. 动态文本** | `[官方]` `{expr}`；自定义命令须 `ILocalizable` + `LocalizableTextParameter` 才会进目录 | `[官方]` Timeline 变量；自定义事件/任意 GDScript 不在 Dialogic CSV 内 | `[推断]` 内置插值；扩展 JS 插件不在 CSV 合同内 | `[官方]` JS 表达式；动态拼接会破坏存档对称性 | `[官方]` `[iscript]` / TJS 动态求值难以静态解析 | 纯 ADV 模式下无复杂战斗内嵌 JS，对白控制码高度规整；复杂 RPG 模式存在插件内嵌代码 |
-| **D10. 推荐模式** | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `source_extraction` / `hybrid` | `source_extraction` | `source_extraction` / `json_catalog_set` |
-| **D11. 安全写回** | `[官方]` 目录与可选 CSV 均为文本，无需 Unity 运行时。`[待夹具验证]` 公共 `text_span_replace` 消费 | `[官方]` 写回 Dialogic CSV；Godot 启动编译。不要把 PO 写成 Dialogic 产物 | `[官方]` 只写官方 CSV；严禁直接改 `data/*.json` | `[推断]` 改写 JS 源，需 AST 沙箱 | `[推断]` 高危：直接改写源 `.ks` | `[已验证]` 内存反序列化 -> 节点精确定位替换 -> 声明式原子落盘；严禁粗暴正则覆写 |
-| **D12. Fixture 获得** | `[官方]` 官方 localization sample。[待夹具验证] MIT 离线夹具与许可证需立项时确认 | `[官方]` Dialogic 仓库与文档示例开源 | `[推断]` 需购买 VN Maker 或自建最小工程 | `[官方]` 引擎 MIT；夹具可自建 | `[推断]` 开源样例多年代久远、编码不一 | `[已就绪]` 本地黄金夹具《Komorebi》（165 个对白地图、24,633 行对白、140.8 万字符），测试条件极其充沛 |
+| **D10. 推荐模式** | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `source_extraction` / `hybrid` | `source_extraction` | `source_extraction`（JSON 写回合同待扩展） |
+| **D11. 安全写回** | `[官方]` 目录与可选 CSV 均为文本，无需 Unity 运行时。`[待夹具验证]` 公共 `text_span_replace` 消费 | `[官方]` 写回 Dialogic CSV；CSV 由 Godot 编辑器资源导入器生成 `.translation`，运行时加载导入后的资源。不要把 PO 写成 Dialogic 产物 | `[官方]` 只写官方 CSV；严禁直接改 `data/*.json` | `[推断]` 改写 JS 源，需 AST 沙箱 | `[推断]` 高危：直接改写源 `.ks` | `[待夹具验证]` 内存反序列化 -> 节点精确定位替换 -> 声明式原子落盘；严禁粗暴正则覆写 |
+| **D12. Fixture 获得** | `[官方]` 官方 localization sample。[待夹具验证] MIT 离线夹具与许可证需立项时确认 | `[官方]` Dialogic 仓库与文档示例开源 | `[推断]` 需购买 VN Maker 或自建最小工程 | `[官方]` 引擎 MIT；夹具可自建 | `[推断]` 开源样例多年代久远、编码不一 | `[待夹具验证]` 有本地人工验证样本；未记录可再分发授权，不能据此认定仓库 / CI 夹具就绪。须自建最小合成 fixture（§7.4） |
 | **综合评级** | **A+ (首选推荐 / 唯一第三引擎)** | **A (下一评估对象；Alpha 未稳)** | **B+ (更后备选)** | **B (受限候选)** | **C (高风险后置)** | **B+ (实战原型先行候选 / 叙事型专属)** |
 
 ---
@@ -139,7 +139,7 @@ Naninovel 文本 ID 适合作为 opaque locator 载荷和 lineage **候选证据
 
 #### 4.1.4 Adapter 接入、范围与写回
 - **推荐模式**：`native_catalog` / `hybrid`；
-- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 只接受 `target_root=localization_catalog` 的 `text_span_replace`；Naninovel Adapter 若产出合法 plan，即可走这条公共消费者，而不是 Ren'Py 私有写入器 `[待夹具验证]`。
+- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 可消费 `target_root=localization_catalog` 的 `text_span_replace`；该操作仅支持单行内非空源片段替换，多行译文与空译文插入仍须设计并验证，不能假设任意本地化文档都可直接形成合法 plan `[待夹具验证]`。
 
 **支持版本**：Naninovel **1.21** + Unity **6.0 LTS 或 6.3 LTS**（须最新 patch；非 LTS 不支持）`[官方]`。
 **明确不支持**：1.18、1.19、1.20 及 Unity 2021.3 / 2022.3 作为推荐窗口；若将来单开遗留车道须另写立项说明。
@@ -298,10 +298,10 @@ monogatari.translation ('Español', {
   - Event Code `401`（Show Text）：承载所有对白与旁白文本；
   - Event Code `102`（Show Choices）：承载分支选项文本；
   - Event Code `101`（Show Text Setup）：承载立绘 Face 与说话人头信息；
-- **纯视觉小说（ADV）形态的分离**：社区与商业生态中存在相当数量剥离了战斗与数值系统、通过 `NovelStyle` / `GALV_MessageStyles` 等插件改造成纯剧情叙事视觉小说的作品（如《Komorebi》）。这类工程的对白高度线性、控制码高度规整（主要为 `\pop[n]`、`\c[n]`、`\i[n]`），彻底避开了传统重度 RPG 战斗插件与动态代码求值的泥潭。
+- **纯视觉小说（ADV）形态的分离**：社区与商业生态中存在相当数量剥离了战斗与数值系统、通过 `NovelStyle` / `GALV_MessageStyles` 等插件改造成纯剧情叙事视觉小说的作品。这类工程的对白高度线性、控制码高度规整（主要为 `\pop[n]`、`\c[n]`、`\i[n]`），彻底避开了传统重度 RPG 战斗插件与动态代码求值的泥潭。
 
 #### 4.6.2 提权依据与边界收敛（Scope Constraints）
-* **提权核心驱动**：本地已引入《Komorebi》（165 个对白地图、24,633 行对白、140.8 万字符、完全剥离 RPG 战斗的纯正 ADV 架构）作为黄金夹具。D12（测试夹具可获得性）由原本的“缺乏代表性纯 VN 样本”转变为“具备零等待、高代表性的长篇实战样本”；
+* **提权依据与证据边界**：本地长篇 ADV 样本可用于人工观察文本分布和控制码，支持将叙事模式列为 B+ 研究候选；目前未记录其可再分发授权，也未提供仓库内可复现的 Adapter 验证。D12 仍为待满足项，不能将本地持有游戏视为可提交或可在 CI 使用的回归夹具。
 * **支持范围（In Scope）**：
   1. 仅限 **RPG Maker MV/MZ 纯叙事/对话模式（Narrative Mode）**；
   2. 地图事件（Code 401 Show Text、Code 102 Show Choices）与公共事件对白；
@@ -364,13 +364,14 @@ flowchart TD
 `[待夹具验证]` Naninovel 文本 ID 可作为 locator / `confirmed_lineage` 的**候选证据**。源脚本增删时，`reconcile-project-snapshots` 应报告 `locator_exact`、`moved_exact`、`source_modified` 等 match kind；`build-reuse-candidates` 再映射为 `exact_reuse` / `moved_reuse` / `source_modified_reference`。不要把复用类名写成 reconcile CLI 的输出。
 
 ### 5.3 安全写回
-`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。Adapter 只需产出合法 plan，不必再写一套私有文件写入器。这不是 `RenPyAdapter` 私有能力。
+`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。该消费者是公共能力，但当前 span 操作不能跨行或插入空源片段。多行译文、空译文与组合 ID 的处理必须先明确公共合同及测试，不能另写私有文件写入器绕过门禁。
 
 ### 5.4 RPG Maker MV/MZ 纯叙事模式 Adapter 设计假设
-`[已具备本地夹具]` 针对纯 ADV 架构的 RPG Maker 工程：
+`[待夹具验证]` 以下为针对纯 ADV 工程的设计假设；本地人工样本不能替代可再分发的合成回归夹具：
 - **候选清单与稳定定位**：opaque locator 保存 `{ "file": "data/Map014.json", "map_id": 14, "event_id": 1, "page_index": 0, "cmd_index": 52 }`，严格绑定至对白指令节点；
-- **范围收敛**：扫描仅提取 Event Code `401`（Show Text）与 `102`（Show Choices），自动过滤战斗、移动路线与代码事件；
-- **原子写回契约**：在内存中对地图 JSON 进行节点精确替换与语法完整性校验后，通过声明式 Plan 落盘，写回前强制生成源地图快照备份；
+- **范围收敛**：提取 Event Code `401`（Show Text）与 `102`（Show Choices）；战斗、移动路线与代码事件仍须保留候选定位和分类证据，明确排除或进入 coverage review，不能静默过滤；
+- **公共合同前置缺口**：现有 `json_catalog_set` 是写回操作类型，不是 Adapter 模式；`target_json_path` 仅接受非空字符串键，消费者只遍历字典，不支持 `events/pages/list/parameters` 中的数组节点，且目标根仅接受 `localization_catalog`。因此不能直接用于 RPG Maker 源地图。须先设计公共操作的类型化数组路径、源目标根约束与快照校验；本研究不实现该扩展。
+- **原子写回契约（待实现）**：公共合同扩展完成后，才能验证地图 JSON 节点替换、无关字段保留、源快照复核与事务写回；禁止 Adapter 私自重写整张地图绕过公共消费者。
 - **字符集渲染防御**：提供可选的 `gamefont.css` 自动覆写与中文字体挂载，解决目标语言方块乱码。
 
 ---
@@ -381,15 +382,15 @@ flowchart TD
 在 #265（Ren'Py + TyranoScript V600+）全部交付并验证完成后：
 
 > 1. **主线标准候选**：推荐将 **Naninovel (Unity)** 作为本工具官方支持的第三个 Engine Adapter（代表 Unity 体系现代纯文本与 CSV 离线目录规范）。
-> 2. **实战原型先行线**：增设 **RPG Maker MV/MZ 纯叙事模式（Narrative Mode）** 作为实战原型先行线。依托本地现成的中大型黄金测试夹具《Komorebi》（2.46 万行对白、140 万字符），闭环验证复杂 JSON 事件树的 AST 映射、字体回退防御与原子写回机制。
+> 2. **实战原型先行线**：将 **RPG Maker MV/MZ 纯叙事模式（Narrative Mode）** 列为 B+ 研究候选。先建立 §7.4 的合成回归夹具，再验证 JSON 事件树映射、字体回退与安全写回；本地游戏仅作为补充人工验证样本。
 
 本文件不为第四引擎立项。Godot + Dialogic 仅在 Dialogic 离开 Alpha、导出合同稳定后重新评估。
 
 ### 6.2 推荐理由总结
 1. **Naninovel：架构契合度第一**：官方文本 ID、隔离的 `Localization/<Language>/` 目录、Managed Text，完美契合 `native_catalog` / `hybrid`，且纯离线零运行时依赖。
-2. **RPG Maker 叙事模式：实战验证条件极其充沛**：
-   - 本地已有完整商业级长篇视觉小说工程《Komorebi》，测试数据完备，无需等待上游工具或样本获取；
-   - 底层引擎与 JSON 结构完全冻结，绝无上游破坏性变更风险；
+2. **RPG Maker 叙事模式：已有人工样本，回归条件待补齐**：
+   - 本地长篇 ADV 样本可补充人工检查；公开回归必须使用自行构造并注明许可证的最小 fixture，不能复制未授权游戏地图或文本；
+   - 须固定引擎版本和插件组合；JSON 布局及控制码仍需回归验证，不能假设永无变更；
    - 控制码（`\pop[n]`, `\c[n]`, `\i[n]`）规整，可有效验证长篇剧情树的占位保护与单体大 JSON 声明式安全写回。
 
 ---
@@ -428,7 +429,10 @@ flowchart TD
   2. 插件脚本中内嵌的动态 JavaScript 字符串；
   3. 地图底层图层、瓦片与碰撞网格数据。
 - **测试夹具要求**：
-  - 依托本地《Komorebi》代表性地图（如 `Map014` 2559 行长文本、`Map006` 引导对白、`Map005` 标题菜单）作为离线黄金夹具，验证 AST 解析、节点定位与安全写回。
+  - 自行构造最小 Map / CommonEvents JSON，使用原创对白与虚构标识；注明作者、来源及可再分发许可证，不复制私有游戏脚本、地图、插件、字体或图像。
+  - 覆盖 101/401 对白、102 选项、多事件页、公共事件、控制码及程序生成的长文本；增加源快照变更、节点错位、非法 JSON 和结构阻断负例，验证失败时不写回。
+  - 增加数组索引越界、节点类型变化、字符串键与整数索引混淆、重复或冲突目标、非法目标根的拒绝用例，并确认未修改字段保留。
+  - 在仓库 / CI 中验证提取、定位、无损写回和失败门禁后，才可将 D12 标记为就绪。本地游戏仅用于补充人工烟测，单独记录引擎版本与验证结果，不提交游戏资产。
 
 ---
 

@@ -656,7 +656,7 @@ source inventory
 
 #### 8. Pre-filtering & Font Fallback Defense
 
-- **扫描端纯化**：参考 `DeepRenPyTrans` 的 `audit & clean` 启发式规则，在扫描期自动跳过代码断言、内部系统 ID、十六进制颜色代码等非可读文本；
+- **扫描端分类**：参考 `DeepRenPyTrans` 的 `audit & clean` 启发式规则识别疑似代码断言、内部系统 ID、十六进制颜色代码，但先保留在 candidate inventory 中；只有具备分类证据与有效 reason code 的项才能标为 `explicitly_excluded`。外观相似的玩家可见文本不得直接丢弃，不确定项进入 `unknown` / coverage review，并保留定位与排除理由供复核；
 - **交付端防御**：参考 `RenForge` 解决汉化方块乱码（“▯▯▯▯”）的痛点，在 preflight / doctor 中增加目标语言字符集字体有效性检查，并提供字体覆写配置建议。
 
 #### 9. Transparent Readiness & One-click Rollback
@@ -741,7 +741,7 @@ source inventory
 ### P0：结构保护、代码纯化与审校索引
 
 - 新增共享 `protect / restore / validate` 核心模块（支持长度降序匹配与带命名空间 Token）；
-- 扫描期增加垃圾代码、断言与系统 ID 预过滤规则（Junk/Code Filter）；
+- 扫描期增加疑似代码、断言与系统 ID 分类规则；候选保留在 inventory，显式排除须有证据与 reason code，不确定项进入 coverage review，禁止启发式静默过滤；
 - 将 missing / extra / reordered token 统一成稳定 reason code；
 - 从现有 manifest 派生 review index；
 - 在 GUI 中增加逐条查看和筛选，不直接绕过 revision preview；
