@@ -40,3 +40,10 @@
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。
+- [GitHub 视觉小说本地化工具源码研究](github_localization_projects_research.md)：
+  对 RenLocalizer、Dialogue Visual Editor、RenPyTranslator、translate-renpy、
+  2R-Tools、GameStringer、rpgmaker-translator 等项目的源码级对照，以及与当前 manifest、EngineAdapter、
+  quality gate 和 `check -> apply` 合同的迁移边界分析。
+- [多引擎本地化适配与候选引擎开源生态研究](multi_engine_localization_ecosystem_research.md)：
+  针对 #265（引擎适配边界与版本化翻译资产）与 #272（第三引擎选型）对标 VNTextPatch、Translator++、
+  Weblate/translate-toolkit 架构以及 Naninovel、Godot+Dialogic 2、RPG Maker 原生生态的深度研究。

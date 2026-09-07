@@ -23,7 +23,7 @@
 - **纯研究与路线决策**：本文档仅做技术调研、能力评估与路线决策，**不包含任何新引擎 Adapter 的生产代码实现**。
 - **TyranoScript 不作为候选**：TyranoScript 已收敛在 #265 P5，不参与本 Issue 的第三引擎竞选。
 - **拒绝泛化承诺**：绝不承诺“支持所有视觉小说引擎”或“支持任意 Godot / RPG Maker 游戏”；必须明确限定受支持的具体引擎版本、官方本地化插件及清晰的排除项。
-- **只选择一个第三引擎**：本文件只推荐 Naninovel 作为第三个 Adapter。Godot + Dialogic 是工作流稳定后的**下一评估对象**，不是已立项的第四引擎。
+- **双轨推进与优先级调整**：Naninovel 维持作为 Unity 体系现代纯文本本地化的**首选推荐第三引擎**。同时，鉴于本地已有长篇纯 ADV 游戏作为人工验证样本，将 **RPG Maker MV/MZ 纯叙事模式（Narrative/ADV Mode）** 从原评级 C- 提权至 **B+（实战原型先行候选）**。B+ 是待验证的研究评级，不代表仓库 fixture 或 Adapter 已就绪；可再分发的合成夹具仍须建立（见 §7.4）。两者拟形成互补验证：Naninovel 验证离线纯文本 Catalog 机制，RPG Maker 叙事模式验证复杂 JSON 事件树的节点精确替换与字体回退防御。
 - **对齐公共安全层**：任何后续 Adapter 必须无条件复用 `translation_core.TranslationUnit`、`check -> apply` 安全合约、声明式 `WritebackPlan` 与版本化快照/复用审计机制，严禁开辟直接改写源码或绕过门禁的私有旁路。
 
 ---
@@ -63,21 +63,21 @@
 
 ## 3. 六大候选引擎能力比对总表
 
-| 评估维度 | 1. Naninovel (Unity) | 2. Godot + Dialogic 2 | 3. Visual Novel Maker | 4. Monogatari | 5. KiriKiri / KAG | 6. RPG Maker MV/MZ |
+| 评估维度 | 1. Naninovel (Unity) | 2. Godot + Dialogic 2 | 3. Visual Novel Maker | 4. Monogatari | 5. KiriKiri / KAG | 6. RPG Maker MV/MZ (叙事模式) |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **D1. 版本与维护** | `[官方]` 活跃维护：当前稳定 **1.21**，仅 Unity **6.0 / 6.3 LTS**。1.18–1.20 已停支，不在推荐窗口 | `[官方]` 快速迭代：Dialogic **2.0 Alpha 20**（2026-07-21），要求 Godot **4.5+**，建议 **4.6+**。仍是 Alpha，不是 Beta/RC | `[官方]` 稳定维护 (Degica/KADOKAWA)；无公开语义化版本合同 | `[官方]` 开源活跃 (v2.x；v3.0 另线) | `[官方]` 历史遗留 / 派生分支 (krkrz, 吉里吉里Z) | `[官方]` 稳定维护 (Gotcha Gotcha Games / MV & MZ) |
-| **D2. 原生产物** | `[官方]` `Resources/Naninovel/Localization/{Locale}/`（Scripts 本地化文档与 Text/ Managed Text）；另有 Spreadsheet CSV 交换 | `[官方]` Dialogic 仅官方导出 **CSV**；Godot 自身另支持 Gettext `.po`，不是 Dialogic 导出通道 | `[官方]` Language Profiles CSV；工程本体是 `data/` JSON | `[官方]` 剧情在 `monogatari.script({ Language: {...} })`；`translation()` 只服务 UI 字符串 | `[官方]` `.ks` 场景脚本，无统一原生 catalog | `[官方]` 原生无多语言；社区插件自定 `locales/` |
-| **D3. 稳定 ID** | `[官方]` 源脚本 `text\|#id\|`；本地化文档独立 `# id` 头。1.21 用 Text Identifier 工具，不再提供 Stable Identification | `[官方]` Timeline 行尾数字 `#id:N`；CSV key 形如 `Text/1/text`。Godot PO 另用 `msgid` | `[官方]` Language Profile 的 UID/Index | `[官方]` 无稳定 ID；依赖 label 名与 statement 下标 | `[官方]` 无原生 ID，依赖行号与标签 | `[官方]` 无原生 ID；插件 key 或 Event/Command 下标 |
-| **D4. 差分保留** | `[官方]` Localization 工具按文本 ID 增量更新，未改动的条目保留译文 | `[官方]` Dialogic「Update CSV files」；Godot PO 可用 `msgmerge`（属引擎层） | `[官方]` CSV 导入/导出对比，保留已有 UID | `[推断]` 需手动/脚本对比语言对象树 | `[推断]` 极差，通常需手动比对 `.ks` | `[推断]` 依赖插件或自行比对 JSON 差异 |
-| **D5. 语言切换** | `[官方]` 内置 Language 下拉、`Default Locale` / `Auto Detect Locale` 与 Fallback | `[官方]` `TranslationServer.set_locale()` | `[官方]` 系统菜单 Profile 切换 | `[官方]` `MultiLanguage` + `preference('Language')` | `[推断]` 极难，多需分包或重写脚本 | `[官方]` 依赖第三方多语言插件 |
-| **D6. 资源覆盖** | `[官方]` 剧本、Managed Text、可替换的背景/音频等资源镜像 | `[官方]` Timeline、角色名、Glossary；资源 remap 走 Godot | `[官方]` 消息、角色、系统、CG/Audio 走 Language Profile | `[官方]` 剧本文本 + UI 词典；资源需代码切换 | `[推断]` 需在 `.ks` 宏中自行实现条件分支 | `[推断]` 依赖插件实现多语言资源劫持 |
-| **D7. 语言特性** | `[官方]` TMPro 支持 RTL（需额外设置）与按 locale 换字体 | `[官方]` Godot TextServer：Context、Plural、RTL/BiDi、HarfBuzz | `[推断]` 支持基础格式化，无原生 Plural/RTL | `[官方]` UI 有内置语种；复数等可走 Web `Intl` | `[官方]` 基础 Ruby 与排版标签 | `[官方]` 基础转义符（`\V[n]`, `\N[n]`），无 Plural |
+| **D1. 版本与维护** | `[官方]` 活跃维护：当前稳定 **1.21**，仅 Unity **6.0 / 6.3 LTS**。1.18–1.20 已停支，不在推荐窗口 | `[官方]` 快速迭代：Dialogic **2.0 Alpha 20**（2026-07-21），要求 Godot **4.5+**，建议 **4.6+**。仍是 Alpha，不是 Beta/RC | `[官方]` 稳定维护 (Degica/KADOKAWA)；无公开语义化版本合同 | `[官方]` 开源活跃 (v2.x；v3.0 另线) | `[官方]` 历史遗留 / 派生分支 (krkrz, 吉里吉里Z) | `[官方]` 稳定维护（MV **v1.6.2**；MZ 须立项时记录确切版本与 patch）；数据为 UTF-8 JSON、相对成熟，但仍须按已记录窗口验收，不能假设所有 MZ 发行版布局永不变更 |
+| **D2. 原生产物** | `[官方]` `Resources/Naninovel/Localization/{Locale}/`（Scripts 本地化文档与 Text/ Managed Text）；另有 Spreadsheet CSV 交换 | `[官方]` Dialogic 仅官方导出 **CSV**；Godot 自身另支持 Gettext `.po`，不是 Dialogic 导出通道 | `[官方]` Language Profiles CSV；工程本体是 `data/` JSON | `[官方]` 剧情在 `monogatari.script({ Language: {...} })`；`translation()` 只服务 UI 字符串 | `[官方]` `.ks` 场景脚本，无统一原生 catalog | 原生单体 `data/Map*.json` 与 `CommonEvents.json`；社区插件自定 `locales/` |
+| **D3. 稳定 ID** | `[官方]` 源脚本 `text\|#id\|`；本地化文档独立 `# id` 头。1.21 用 Text Identifier 工具，不再提供 Stable Identification | `[官方]` Timeline 行尾数字 `#id:N`；CSV key 形如 `Text/1/text`。Godot PO 另用 `msgid` | `[官方]` Language Profile 的 UID/Index | `[官方]` 无稳定 ID；依赖 label 名与 statement 下标 | `[官方]` 无原生 ID，依赖行号与标签 | 事件指令坐标作**快照内** opaque locator：`mapId:eventId:pageId:cmdIndex`（`cmdIndex` 非跨版本 identity；漂移且无法用原文/控制码唯一对账则 Fail-Closed） |
+| **D4. 差分保留** | `[官方]` Localization 工具按文本 ID 增量更新，未改动的条目保留译文 | `[官方]` Dialogic「Update CSV files」；Godot PO 可用 `msgmerge`（属引擎层） | `[官方]` CSV 导入/导出对比，保留已有 UID | `[推断]` 需手动/脚本对比语言对象树 | `[推断]` 极差，通常需手动比对 `.ks` | `[推断]` 纯 ADV 模式下事件流呈线性对白，便于通过事件 ID 与指令序号做 AST 对账 |
+| **D5. 语言切换** | `[官方]` 内置 Language 下拉、`Default Locale` / `Auto Detect Locale` 与 Fallback | `[官方]` `TranslationServer.set_locale()` | `[官方]` 系统菜单 Profile 切换 | `[官方]` `MultiLanguage` + `preference('Language')` | `[推断]` 极难，多需分包或重写脚本 | 单语言工程（硬编码）；可选择多语言插件，或通过本工具实现离线项目多语言副本生成 |
+| **D6. 资源覆盖** | `[官方]` 剧本、Managed Text、可替换的背景/音频等资源镜像 | `[官方]` Timeline、角色名、Glossary；资源 remap 走 Godot | `[官方]` 消息、角色、系统、CG/Audio 走 Language Profile | `[官方]` 剧本文本 + UI 词典；资源需代码切换 | `[推断]` 需在 `.ks` 宏中自行实现条件分支 | 覆盖地图对白（401）、选择支（102）、公共事件、角色名、系统用语、图片立绘替换 |
+| **D7. 语言特性** | `[官方]` TMPro 支持 RTL（需额外设置）与按 locale 换字体 | `[官方]` Godot TextServer：Context、Plural、RTL/BiDi、HarfBuzz | `[推断]` 支持基础格式化，无原生 Plural/RTL | `[官方]` UI 有内置语种；复数等可走 Web `Intl` | `[官方]` 基础 Ruby 与排版标签 | 官方控制码（`\c[n]` / `\i[n]` / `\V[n]` 等）+ 样本扩展码（如非官方 `\pop[n]`，须登记来源）；无原生 Plural；字体需解决 CJK 方块乱码 |
 | **D8. 编码格式** | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` 碎片化：Shift-JIS / UTF-16LE with BOM / 部分 UTF-8+BOM | `[官方]` UTF-8 |
-| **D9. 动态文本** | `[官方]` `{expr}`；自定义命令须 `ILocalizable` + `LocalizableTextParameter` 才会进目录 | `[官方]` Timeline 变量；自定义事件/任意 GDScript 不在 Dialogic CSV 内 | `[推断]` 内置插值；扩展 JS 插件不在 CSV 合同内 | `[官方]` JS 表达式；动态拼接会破坏存档对称性 | `[官方]` `[iscript]` / TJS 动态求值难以静态解析 | `[推断]` 插件内嵌 JS 难以穷举 |
-| **D10. 推荐模式** | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `source_extraction` / `hybrid` | `source_extraction` | `source_extraction` / `hybrid` |
-| **D11. 安全写回** | `[官方]` 目录与可选 CSV 均为文本，无需 Unity 运行时。`[待夹具验证]` 公共 `text_span_replace` 消费 | `[官方]` 写回 Dialogic CSV；Godot 启动编译。不要把 PO 写成 Dialogic 产物 | `[官方]` 只写官方 CSV；严禁直接改 `data/*.json` | `[推断]` 改写 JS 源，需 AST 沙箱 | `[推断]` 高危：直接改写源 `.ks` | `[推断]` 直接改写 monolithic JSON 风险极高 |
-| **D12. Fixture 获得** | `[官方]` 官方 localization sample。[待夹具验证] MIT 离线夹具与许可证需立项时确认 | `[官方]` Dialogic 仓库与文档示例开源 | `[推断]` 需购买 VN Maker 或自建最小工程 | `[官方]` 引擎 MIT；夹具可自建 | `[推断]` 开源样例多年代久远、编码不一 | `[推断]` 有公共域/演示工程，插件授权需逐案确认 |
-| **综合评级** | **A+ (首选推荐 / 唯一第三引擎)** | **A (下一评估对象；Alpha 未稳)** | **B+ (更后备选)** | **B (受限候选)** | **C (高风险后置)** | **C- (异构压力测试)** |
+| **D9. 动态文本** | `[官方]` `{expr}`；自定义命令须 `ILocalizable` + `LocalizableTextParameter` 才会进目录 | `[官方]` Timeline 变量；自定义事件/任意 GDScript 不在 Dialogic CSV 内 | `[推断]` 内置插值；扩展 JS 插件不在 CSV 合同内 | `[官方]` JS 表达式；动态拼接会破坏存档对称性 | `[官方]` `[iscript]` / TJS 动态求值难以静态解析 | 纯 ADV 模式下无复杂战斗内嵌 JS，对白控制码高度规整；复杂 RPG 模式存在插件内嵌代码 |
+| **D10. 推荐模式** | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `source_extraction` / `hybrid` | `source_extraction` | `source_extraction`（JSON 写回合同待扩展） |
+| **D11. 安全写回** | `[官方]` 目录与可选 CSV 均为文本，无需 Unity 运行时。`[待夹具验证]` 公共 `text_span_replace` 消费 | `[官方]` 写回 Dialogic CSV；CSV 由 Godot 编辑器资源导入器生成 `.translation`，运行时加载导入后的资源。不要把 PO 写成 Dialogic 产物 | `[官方]` 只写官方 CSV；严禁直接改 `data/*.json` | `[推断]` 改写 JS 源，需 AST 沙箱 | `[推断]` 高危：直接改写源 `.ks` | `[待夹具验证]` 内存反序列化 -> 节点精确定位替换 -> 声明式原子落盘；严禁粗暴正则覆写 |
+| **D12. Fixture 获得** | `[官方]` 官方 localization sample。[待夹具验证] MIT 离线夹具与许可证需立项时确认 | `[官方]` Dialogic 仓库与文档示例开源 | `[推断]` 需购买 VN Maker 或自建最小工程 | `[官方]` 引擎 MIT；夹具可自建 | `[推断]` 开源样例多年代久远、编码不一 | `[待夹具验证]` 有本地人工验证样本；未记录可再分发授权，不能据此认定仓库 / CI 夹具就绪。须自建最小合成 fixture（§7.4） |
+| **综合评级** | **A+ (首选推荐 / 唯一第三引擎)** | **A (下一评估对象；Alpha 未稳)** | **B+ (更后备选)** | **B (受限候选)** | **C (高风险后置)** | **B+ (实战原型先行候选 / 叙事型专属)** |
 
 ---
 
@@ -139,7 +139,7 @@ Naninovel 文本 ID 适合作为 opaque locator 载荷和 lineage **候选证据
 
 #### 4.1.4 Adapter 接入、范围与写回
 - **推荐模式**：`native_catalog` / `hybrid`；
-- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 只接受 `target_root=localization_catalog` 的 `text_span_replace`；Naninovel Adapter 若产出合法 plan，即可走这条公共消费者，而不是 Ren'Py 私有写入器 `[待夹具验证]`。
+- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 可消费 `target_root=localization_catalog` 的 `text_span_replace`；该操作仅支持单行内非空源片段替换，多行译文与空译文插入仍须设计并验证，不能假设任意本地化文档都可直接形成合法 plan `[待夹具验证]`。
 
 **支持版本**：Naninovel **1.21** + Unity **6.0 LTS 或 6.3 LTS**（须最新 patch；非 LTS 不支持）`[官方]`。
 **明确不支持**：1.18、1.19、1.20 及 Unity 2021.3 / 2022.3 作为推荐窗口；若将来单开遗留车道须另写立项说明。
@@ -290,24 +290,36 @@ monogatari.translation ('Español', {
 
 ---
 
-### 4.6 RPG Maker MV/MZ — 综合评级：C- (异构压力测试)
+### 4.6 RPG Maker MV/MZ — 综合评级：B+ (实战原型先行候选 / 叙事型专属) [原评级 C-]
 
 #### 4.6.1 架构特征与现状
-- **原生单语言**；社区方案依赖第三方插件（DKTools、VisuStella MZ Localization、Eli MZ 等）；
-- 各插件在 `locales/` 下自定义 JSON/CSV，编辑器里用 `${text_key}` 等占位；
-- `[推断]` 插件之间存在加载顺序与标签冲突（例如 VisuStella `<WordWrap>` 与本地化转义）。该条在点名插件并取得夹具前不当成已证事实。
+- **引擎与数据结构相对稳定**：RPG Maker MV (v1.6.2) 与 MZ 的数据格式为标准 UTF-8 JSON，内核相对成熟；仍须在立项时**固定具体引擎版本与 patch**，不能假设所有 MZ 发行版布局永远不变；
+- **核心文本分布**：剧情对白与选项高度集中于 `data/Map*.json`（165+ 地图）与 `data/CommonEvents.json` 中：
+  - Event Code `401`（Show Text）：承载所有对白与旁白文本；
+  - Event Code `102`（Show Choices）：承载分支选项文本；
+  - Event Code `101`（Show Text Setup）：承载立绘 Face 与说话人头信息；
+- **纯视觉小说（ADV）形态的分离**：社区与商业生态中存在相当数量剥离了战斗与数值系统、通过 `NovelStyle` / `GALV_MessageStyles` 等插件改造成纯剧情叙事视觉小说的作品。这类工程的对白高度线性、控制码相对规整（常见官方码如 `\c[n]`、`\i[n]`、`\V[n]`；样本中若出现 `\pop[n]`，它**不是** RPG Maker MZ 官方控制字符，应视为项目/插件扩展语法，立项时记录插件名与版本；未知扩展语法默认不变换，避免写回损坏），彻底避开了传统重度 RPG 战斗插件与动态代码求值的泥潭。
 
-#### 4.6.2 支持版本、输入制品与排除项
-- **支持版本**：不承诺「任意 MV/MZ 项目」。若远期做压力测试，必须点名 **一个** 文档化插件及其主版本。
-- **输入制品**：该插件的 `locales/`（或等价）文本目录，外加一份「支持的事件指令」白名单。
-- **明确排除**：
-  1. 未列入白名单的本地化插件；
-  2. 直接改写整库 `data/*.json` 作为通用写回；
-  3. 插件脚本里动态拼出的字符串；
-  4. 「支持所有 RPG Maker 本地化插件」的产品表述。
+#### 4.6.2 提权依据与边界收敛（Scope Constraints）
+* **提权依据与证据边界**：本地长篇 ADV 样本可用于人工观察文本分布和控制码，支持将叙事模式列为 B+ 研究候选；目前未记录其可再分发授权，也未提供仓库内可复现的 Adapter 验证。D12 仍为待满足项，不能将本地持有游戏视为可提交或可在 CI 使用的回归夹具。
+* **支持范围（In Scope）**：
+  1. 仅限 **RPG Maker MV/MZ 纯叙事/对话模式（Narrative Mode）**；
+  2. 地图事件（Code 401 Show Text、Code 102 Show Choices）与公共事件对白；
+  3. 控制码占位保护与无损还原：官方码（如 `\c[n]`、`\i[n]`、`\V[n]`）与**已登记来源**的扩展码（样本中的 `\pop[n]` 等非官方语法）分开建模；未登记扩展默认原样保留，不得擅自改写；
+  4. 目标语言字体有效性检测与 `www/fonts/gamefont.css` 自动覆写防御；
+* **严格排除项（Out of Scope - 严禁发散）**：
+  1. 坚决排除战斗数值库（Enemies、Skills、Items、Armors、Troops 等复杂 RPG 资产）；
+  2. 坚决排除第三方复杂战斗/UI 插件内嵌脚本动态拼出的代码字符串；
+  3. 坚决排除对地图底层瓦片、移动路线与碰撞网格的修改；
+  4. 绝不泛化宣传为“支持所有 RPG Maker 游戏”。
 
-#### 4.6.3 结论
-严禁承诺支持“任意 RPG Maker 项目”，仅可作为远期异构数据结构的压力测试。
+#### 4.6.3 安全写回与门禁契约
+* **Monolithic JSON 防御**：严禁采用外部民间工具粗暴的正则全局替换；
+* **声明式安全写入**：必须采用“内存严格反序列化 -> 基于 `mapId:eventId:pageId:cmdIndex` 坐标精确定位替换 -> JSON 语法与结构完整性自检 -> 声明式原子落盘”；
+* **快照备份与回滚**：写回前强制生成源地图快照备份，严格接入 `#265` 的 `check -> apply` 事务门禁（Fail-Closed）。
+
+#### 4.6.4 结论
+在收敛至**“纯叙事/视觉小说模式”**的前提下，RPG Maker MV/MZ 具备充沛的实战数据支持与明确的安全写回路径，综合评级提权至 **B+（实战原型先行候选）**。
 
 ---
 
@@ -328,18 +340,20 @@ flowchart TD
 
     subgraph Adapters ["引擎适配层"]
         RPY["Ren'Py Adapter (P1-P4 落地, hybrid)"]
-        TYR["TyranoScript V600+ (P5 规划, hybrid)"]
+        TYR["TyranoScript V600+ (P5 落地, hybrid)"]
         NANI["Naninovel Adapter (推荐第 3 引擎, native_catalog/hybrid)"]
+        RPGM["RPG Maker MV/MZ 叙事模式 (B+ 原型先行, source/json_catalog)"]
         GDO["Godot+Dialogic (下一评估对象，工作流稳定后复核)"]
     end
 
     RPY --> CoreContracts
     TYR --> CoreContracts
     NANI --> CoreContracts
+    RPGM --> CoreContracts
     GDO --> CoreContracts
 ```
 
-> **设计假设 / 待 #265 P5 后复核。** 5.1–5.3 描述的是 Naninovel **若** 实现 Adapter 时应如何对接现有合同，不是已经存在的集成。
+> **设计假设 / 待 #265 P5/P6 后复核。** 5.1–5.4 描述的是候选引擎若实现 Adapter 时应如何对接现有合同，不是已经存在的集成。
 
 ### 5.1 候选清单与覆盖审计
 `[待夹具验证]` Naninovel Adapter 应能输出 `coverage_candidates.jsonl`：
@@ -350,7 +364,15 @@ flowchart TD
 `[待夹具验证]` Naninovel 文本 ID 可作为 locator / `confirmed_lineage` 的**候选证据**。源脚本增删时，`reconcile-project-snapshots` 应报告 `locator_exact`、`moved_exact`、`source_modified` 等 match kind；`build-reuse-candidates` 再映射为 `exact_reuse` / `moved_reuse` / `source_modified_reference`。不要把复用类名写成 reconcile CLI 的输出。
 
 ### 5.3 安全写回
-`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。Adapter 只需产出合法 plan，不必再写一套私有文件写入器。这不是 `RenPyAdapter` 私有能力。
+`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。该消费者是公共能力，但当前 span 操作不能跨行或插入空源片段。多行译文、空译文与组合 ID 的处理必须先明确公共合同及测试，不能另写私有文件写入器绕过门禁。
+
+### 5.4 RPG Maker MV/MZ 纯叙事模式 Adapter 设计假设
+`[待夹具验证]` 以下为针对纯 ADV 工程的设计假设；本地人工样本不能替代可再分发的合成回归夹具：
+- **候选清单与快照内定位**：opaque locator 可保存 `{ "file": "data/Map014.json", "map_id": 14, "event_id": 1, "page_index": 0, "cmd_index": 52 }`，仅作为**单次源快照内**指向对白指令节点的定位坐标。`cmd_index`（以及同类数组下标）**不是**跨版本 identity / lineage；上游插入或删除前置指令后索引会漂移。对账必须用源文本、控制码序列或结构摘要确认唯一匹配；无法确认时 **Fail-Closed**，不得按旧下标写回。
+- **范围收敛**：提取 Event Code `401`（Show Text）与 `102`（Show Choices）；战斗、移动路线与代码事件仍须保留候选定位和分类证据，明确排除或进入 coverage review，不能静默过滤；
+- **公共合同前置缺口**：现有 `json_catalog_set` 是写回操作类型，不是 Adapter 模式；`target_json_path` 仅接受非空字符串键，消费者只遍历字典，不支持 `events/pages/list/parameters` 中的数组节点，且目标根仅接受 `localization_catalog`。因此不能直接用于 RPG Maker 源地图。须先设计公共操作的类型化数组路径、源目标根约束与快照校验；本研究不实现该扩展。
+- **原子写回契约（待实现）**：公共合同扩展完成后，才能验证地图 JSON 节点替换、无关字段保留、源快照复核与事务写回；禁止 Adapter 私自重写整张地图绕过公共消费者。
+- **字符集渲染防御**：提供可选的 `gamefont.css` 自动覆写与中文字体挂载，解决目标语言方块乱码。
 
 ---
 
@@ -359,22 +381,25 @@ flowchart TD
 ### 6.1 最终决策结论
 在 #265（Ren'Py + TyranoScript V600+）全部交付并验证完成后：
 
-> **推荐将 Naninovel (Unity) 作为本工具支持的第三个 Engine Adapter。**
+> 1. **主线标准候选**：推荐将 **Naninovel (Unity)** 作为本工具官方支持的第三个 Engine Adapter（代表 Unity 体系现代纯文本与 CSV 离线目录规范）。
+> 2. **实战原型先行线**：将 **RPG Maker MV/MZ 纯叙事模式（Narrative Mode）** 列为 B+ 研究候选。先建立 §7.4 的合成回归夹具，再验证 JSON 事件树映射、字体回退与安全写回；本地游戏仅作为补充人工验证样本。
 
 本文件不为第四引擎立项。Godot + Dialogic 仅在 Dialogic 离开 Alpha、导出合同稳定后重新评估。
 
 ### 6.2 推荐理由总结
-1. **架构契合度第一**：官方文本 ID、隔离的 `Localization/<Language>/` 目录、Managed Text，匹配 `native_catalog` / `hybrid`。
-2. **零运行时外部依赖**：源 `.nani` 与本地化文档均为 UTF-8 文本，可在没有 Unity Editor 的 CLI / GUI 中解析并做原子写回。
-3. **市场边界清晰**：Unity 商业与同人 VN 的主流插件之一，版本与排除项可以写死，而不是「支持所有 Unity 对话框架」。
+1. **Naninovel：架构契合度第一**：官方文本 ID、隔离的 `Localization/<Language>/` 目录、Managed Text，完美契合 `native_catalog` / `hybrid`，且纯离线零运行时依赖。
+2. **RPG Maker 叙事模式：已有人工样本，回归条件待补齐**：
+   - 本地长篇 ADV 样本可补充人工检查；公开回归必须使用自行构造并注明许可证的最小 fixture，不能复制未授权游戏地图或文本；
+   - 须固定引擎版本和插件组合；JSON 布局及控制码仍需回归验证，不能假设永无变更；
+   - 控制码需按「官方 / 已登记扩展 / 未知」分层验证；仅在扩展来源已记录时把 `\pop[n]` 纳入保护—还原用例，并验证长篇剧情树与单体大 JSON 的声明式安全写回。
 
 ---
 
-## 7. Naninovel Adapter 立项前置条件与规范预设
+## 7. 立项前置条件与规范预设
 
-当 #265 关闭且正式立项支持 Naninovel 时，必须满足以下规范：
+当 #265 关闭且正式立项时，必须满足以下规范：
 
-### 7.1 支持版本与输入产物
+### 7.1 Naninovel 支持版本与输入产物
 - **受支持引擎/插件版本**：Naninovel **1.21**，运行于 Unity **6.0 LTS** 或 **6.3 LTS**（最新 patch；非 LTS 不支持）`[官方]`。
 - **明确不在窗口内**：Naninovel 1.18–1.20；Unity 2021.3 / 2022.3。
 - **输入产物**：
@@ -382,16 +407,32 @@ flowchart TD
   - 本地化根目录：`Resources/Naninovel/Localization/<TargetLanguage>/`；
   - `Text/Scripts/` 本地化文档与 `Text/*.txt` Managed Text。
 
-### 7.2 明确排除项 (Out of Scope)
+### 7.2 Naninovel 明确排除项 (Out of Scope)
 1. 未通过 Naninovel 托管、直接硬编码在 C# `MonoBehaviour` 中的 UI 字符串；
 2. 未实现 `Command.ILocalizable` 的自定义命令，以及非 `LocalizableTextParameter` 的参数；
 3. 第三方 Unity 插件（独立 TMP Asset、I2 Localization）的私有二进制资产；
 4. 打包后的 Unity AssetBundle / `.assets`（坚持源工程与规范本地化目录，不从事资产逆向）。
 
-### 7.3 测试夹具 (Fixture) 要求
-- 建立许可证可再分发的离线工程 `tests/fixtures/naninovel_sample_project/`；官方 sample 是否 MIT 须在立项时核对，不能预先写成已确认 `[待夹具验证]`；
+### 7.3 Naninovel 测试夹具 (Fixture) 要求
+- 建立许可证可再分发的离线工程 `tests/fixtures/naninovel_sample_project/`；
 - 包含至少 3 个 `.nani`（含 `|#id|`）、对应 `# id` 本地化文档、1 个 Managed Text、`@choice` / `@print`、角色名与 `{var}`；
 - 覆盖：正常对话、角色名、未实现 `ILocalizable` 的自定义命令、语法错误脚本、版本更新差分。
+
+### 7.4 RPG Maker MV/MZ 纯叙事模式立项规范与边界预设
+- **受支持引擎版本**：RPG Maker MV **v1.6.2**；RPG Maker MZ 须在夹具/立项入库时记录**确切版本号与 patch**（从样本工程或官方关于对话框读取），夹具与验证结果**仅覆盖该已记录窗口**。本文未绑定某一具体 MZ 发行号，在未记录前不得声称 MZ 写回已验证。范围仍限于纯叙事/视觉小说工程。
+- **输入产物**：
+  - `data/Map*.json`（地图事件列表）；
+  - `data/CommonEvents.json`（公共事件列表）；
+  - 可选 `fonts/gamefont.css`（字体配置）。
+- **严格排除项 (Out of Scope)**：
+  1. 复杂战斗数值资产（Enemies、Skills、Items、Armors、Troops 等）；
+  2. 插件脚本中内嵌的动态 JavaScript 字符串；
+  3. 地图底层图层、瓦片与碰撞网格数据。
+- **测试夹具要求**：
+  - 自行构造最小 Map / CommonEvents JSON，使用原创对白与虚构标识；注明作者、来源及可再分发许可证，不复制私有游戏脚本、地图、插件、字体或图像。
+  - 覆盖 101/401 对白、102 选项、多事件页、公共事件、控制码及程序生成的长文本；增加源快照变更、节点错位、非法 JSON 和结构阻断负例，验证失败时不写回。
+  - 增加数组索引越界、节点类型变化、字符串键与整数索引混淆、重复或冲突目标、非法目标根的拒绝用例，并确认未修改字段保留。
+  - 在仓库 / CI 中验证提取、定位、无损写回和失败门禁后，才可将 D12 标记为就绪。本地游戏仅用于补充人工烟测，单独记录引擎版本与验证结果，不提交游戏资产。
 
 ---
 
@@ -411,4 +452,5 @@ flowchart TD
 - **KiriKiri 2 / KAG3 Preparation**: <https://krkrz.github.io/krkr2doc/kag3doc/contents/Prepare.html>
 - **TyranoScript Translation Reference (#265)**: <https://tyranoscript.com/usage/advance/translate>
 - **RPG Maker MZ Official Help**: <https://rpgmakerofficial.com/product/MZ_help-en/index.html>
+- **多引擎本地化适配与候选引擎开源生态研究**: [multi_engine_localization_ecosystem_research.md](multi_engine_localization_ecosystem_research.md)
 - **本仓库 Adapter 合同**: [engine_adapter.md](../engine_adapter.md)
