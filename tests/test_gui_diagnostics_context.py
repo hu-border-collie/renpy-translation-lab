@@ -153,6 +153,26 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("quality-report", by_label["导出 HTML 报告"])
         self.assertIn(manifest_path, by_label["导出 HTML 报告"])
 
+    def test_command_reference_includes_cli_only_export_template(self):
+        manifest_path = r"C:\jobs\manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=manifest_path,
+            manifest={
+                "mode": "translation",
+                "last_check_summary": {
+                    "safety_level": "safe",
+                    "writeback_gate": {"decision": "allow"},
+                },
+            },
+        )
+        by_label = {command.label: command.command for command in commands}
+
+        self.assertIn("导出翻译文件（CLI，仅导出）", by_label)
+        self.assertIn("--export-only", by_label["导出翻译文件（CLI，仅导出）"])
+        self.assertIn("<EXPORT_ROOT>", by_label["导出翻译文件（CLI，仅导出）"])
+
     def test_command_reference_includes_durable_sync_lifecycle(self):
         commands = build_cli_commands(
             python_exe='python',

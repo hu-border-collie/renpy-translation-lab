@@ -362,7 +362,13 @@ def render_writeback_plan(
     for rel_path, data in json_documents.items():
         document = json_source_documents[rel_path]
         source_text = document.text()
-        newline = "\r\n" if "\r\n" in source_text else "\n"
+        newline = (
+            "\r\n"
+            if "\r\n" in source_text
+            else "\r"
+            if "\r" in source_text
+            else "\n"
+        )
         serialized = json.dumps(data, ensure_ascii=False, indent=2)
         if newline != "\n":
             serialized = serialized.replace("\n", newline)
@@ -371,4 +377,22 @@ def render_writeback_plan(
         if source_text.endswith(("\n", "\r")):
             serialized += newline
         rendered[rel_path] = serialized.splitlines(keepends=True)
+
+    # ``SourceDocument.text()`` intentionally uses utf-8-sig for adapter
+    # parsing, which removes a source BOM.  Reattach it to every rendered
+    # document so the final byte representation remains comparable with the
+    # live source and can be exported without changing its encoding contract.
+    documents_by_path = {
+        _normal_relative_path(document.file_rel_path): document
+        for document in live_sources
+    }
+    for rel_path, lines in rendered.items():
+        document = documents_by_path.get(rel_path)
+        if document is None or not document.content.startswith(b"\xef\xbb\xbf"):
+            continue
+        if lines:
+            if not lines[0].startswith("\ufeff"):
+                lines[0] = "\ufeff" + lines[0]
+        else:
+            lines.append("\ufeff")
     return rendered

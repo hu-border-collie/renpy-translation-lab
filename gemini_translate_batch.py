@@ -36,6 +36,7 @@ from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreL
 import advanced_context
 import embedding_runtime
 from embedding_backend import EmbeddingBackendError, EmbeddingContractError
+import batch_export
 import batch_cost_estimate
 import batch_non_chinese_rules
 import batch_submit_recovery
@@ -2852,14 +2853,24 @@ def write_apply_failure_report(manifest, reason_code, message, summary=None, fai
     return report_path
 
 
-def fail_apply_preflight(manifest, reason_code, message, current_fingerprint=None):
+def fail_apply_preflight(
+    manifest,
+    reason_code,
+    message,
+    current_fingerprint=None,
+    *,
+    update_latest=True,
+):
     report_path = write_apply_failure_report(
         manifest,
         reason_code,
         message,
         current_fingerprint=current_fingerprint,
     )
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    save_manifest(
+        manifest,
+        update_latest=bool(update_latest) and manifest.get('execution') != 'sync',
+    )
     blocked = reason_code == 'unsafe_check_status'
     raise cli_contract.MachineContractError(
         f'{message} Report: {report_path}',
@@ -2881,19 +2892,21 @@ def fail_apply_preflight(manifest, reason_code, message, current_fingerprint=Non
     )
 
 
-def require_safe_check_for_apply(manifest):
+def require_safe_check_for_apply(manifest, *, update_latest=True):
     last_summary = manifest.get('last_check_summary')
     if not isinstance(last_summary, dict):
         fail_apply_preflight(
             manifest,
             'missing_check',
             'Manifest has no valid check summary. Run check before apply.',
+            update_latest=update_latest,
         )
     if last_summary.get('check_contract_version') != CHECK_CONTRACT_VERSION:
         fail_apply_preflight(
             manifest,
             'stale_check_contract',
             'Manifest check summary was produced by an older check contract. Run check again before apply.',
+            update_latest=update_latest,
         )
 
     checked_fingerprint = last_summary.get('check_fingerprint')
@@ -2904,6 +2917,7 @@ def require_safe_check_for_apply(manifest):
             'stale_check_fingerprint',
             'Manifest or results changed after the last check. Run check again before apply.',
             current_fingerprint=current_fingerprint,
+            update_latest=update_latest,
         )
 
     writeback_gate = last_summary.get('writeback_gate')
@@ -2913,6 +2927,7 @@ def require_safe_check_for_apply(manifest):
             'missing_writeback_gate',
             'Manifest check summary has no writeback gate. Run check again before apply.',
             current_fingerprint=current_fingerprint,
+            update_latest=update_latest,
         )
     if writeback_gate.get('decision') != translation_quality.GATE_ALLOW:
         reason_code = 'unsafe_check_status'
@@ -2924,7 +2939,13 @@ def require_safe_check_for_apply(manifest):
             f'quality={quality_gate.get("decision") or "pass"}). '
             'Repair the results or run check again before apply.'
         )
-        fail_apply_preflight(manifest, reason_code, message, current_fingerprint=current_fingerprint)
+        fail_apply_preflight(
+            manifest,
+            reason_code,
+            message,
+            current_fingerprint=current_fingerprint,
+            update_latest=update_latest,
+        )
 
 
 
@@ -12697,13 +12718,190 @@ def check_results(target=None):
     return manifest
 
 
-def apply_results(target=None, force=False):
+def _export_only_error(exc):
+    reason_code = str(getattr(exc, 'reason_code', '') or 'export_only_failed')
+    code_name = 'EXPORT_ONLY_' + re.sub(r'[^A-Za-z0-9]+', '_', reason_code).strip('_').upper()
+    details = dict(getattr(exc, 'details', {}) or {})
+    details.update({'mode': 'export-only', 'reason_code': reason_code})
+    raise cli_contract.MachineContractError(
+        str(exc),
+        code_name=code_name,
+        suggested_action=(
+            'use_a_new_export_directory'
+            if reason_code.endswith(('conflict', 'tree_conflict', 'record_conflict'))
+            else 'inspect_export_diagnostics'
+        ),
+        semantic_exit_code=(
+            cli_contract.EXIT_USAGE
+            if reason_code in {'export_only.path_required'}
+            else cli_contract.EXIT_INVALID_STATE
+        ),
+        details=details,
+    )
+
+
+def _reject_export_only_unsupported(manifest=None, *, durable_target=False):
+    if durable_target or (
+        isinstance(manifest, dict)
+        and (
+            manifest.get('durable_sync')
+            or isinstance(manifest.get('durable_sync_source'), dict)
+        )
+    ):
+        raise cli_contract.MachineContractError(
+            'Durable Sync does not support Batch --export-only; use its bound preview workflow.',
+            code_name='EXPORT_ONLY_UNSUPPORTED_TARGET',
+            suggested_action='use_supported_batch_translation_manifest',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={'mode': 'export-only', 'target_kind': 'durable_sync'},
+        )
+    if isinstance(manifest, dict) and manifest_mode(manifest) != MANIFEST_MODE_TRANSLATION:
+        raise cli_contract.MachineContractError(
+            'Batch --export-only only supports Ren\'Py translation manifests; '
+            f'this manifest is {manifest_mode(manifest)}.',
+            code_name='EXPORT_ONLY_UNSUPPORTED_MODE',
+            suggested_action='use_supported_batch_translation_manifest',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={
+                'mode': 'export-only',
+                'manifest_mode': manifest_mode(manifest),
+            },
+        )
+
+
+def _prepare_export_only_transaction(manifest, export_root):
+    package_dir = manifest.get('_package_dir') or ''
+    export_journal = os.path.join(
+        package_dir,
+        '.export_only_transaction.json',
+    )
+    other_transactions = (
+        ('.apply_writeback_transaction.json', 'apply'),
+        ('.revision_writeback_transaction.json', 'revision'),
+    )
+    for filename, transaction_kind in other_transactions:
+        path = os.path.join(package_dir, filename)
+        if os.path.lexists(path):
+            raise cli_contract.MachineContractError(
+                'An unresolved non-export writeback transaction exists; recover it before export-only.',
+                code_name='EXPORT_ONLY_RECOVERY_REQUIRED',
+                suggested_action='recover_pending_writeback_transaction',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                details={
+                    'mode': 'export-only',
+                    'transaction_kind': transaction_kind,
+                    'transaction_path': path,
+                    'recovery_state': 'recovery_required',
+                },
+            )
+    if not os.path.lexists(export_journal):
+        return export_journal, 'none'
+    try:
+        recovered = batch_export.recover_export_only_transaction(
+            export_root,
+            export_journal,
+        )
+    except Exception as exc:
+        raise cli_contract.MachineContractError(
+            f'Export-only transaction requires recovery before retry: {exc}',
+            code_name='EXPORT_ONLY_RECOVERY_REQUIRED',
+            suggested_action='inspect_export_transaction_and_retry',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'export-only',
+                'transaction_kind': batch_export.EXPORT_TRANSACTION_KIND,
+                'transaction_path': export_journal,
+                'recovery_state': 'recovery_required',
+            },
+        ) from exc
+    return export_journal, 'recovered' if recovered else 'none'
+
+
+def _rendered_lines_with_source_contract(source_document, rendered_lines):
+    lines = list(rendered_lines)
+    if source_document.content.startswith(b'\xef\xbb\xbf'):
+        if lines:
+            if not lines[0].startswith('\ufeff'):
+                lines[0] = '\ufeff' + lines[0]
+        else:
+            lines = ['\ufeff']
+    return lines
+
+
+def _rendered_bytes_with_source_contract(source_document, rendered_lines):
+    return ''.join(
+        _rendered_lines_with_source_contract(source_document, rendered_lines)
+    ).encode('utf-8')
+
+
+def _export_only_request_payload(manifest, identity, summary, plan, source_documents):
+    result_path = resolve_manifest_result_path(manifest)
+    source_entries = [
+        {
+            'file_rel_path': document.file_rel_path,
+            'size': document.size,
+            'sha256': document.sha256,
+        }
+        for document in sorted(source_documents, key=lambda item: item.file_rel_path)
+    ]
+    plan_payload = manifest.get('translation_plan')
+    plan_identity = {}
+    if isinstance(plan_payload, dict):
+        plan_identity = {
+            'plan_id': plan_payload.get('plan_id', ''),
+            'plan_fingerprint': plan_payload.get('plan_fingerprint', ''),
+            'schema_version': plan_payload.get('schema_version', ''),
+        }
+    return {
+        'manifest_mode': manifest_mode(manifest),
+        'manifest_version': manifest.get('manifest_version', manifest.get('version', 1)),
+        'project': {
+            'base_dir': identity.get('base_dir', ''),
+            'tl_dir': identity.get('tl_dir', ''),
+        },
+        'check_contract_version': (manifest.get('last_check_summary') or {}).get(
+            'check_contract_version', ''
+        ),
+        'check_fingerprint': (manifest.get('last_check_summary') or {}).get(
+            'check_fingerprint', {}
+        ),
+        'writeback_gate': (manifest.get('last_check_summary') or {}).get(
+            'writeback_gate', {}
+        ),
+        'quality_gate': (manifest.get('last_check_summary') or {}).get(
+            'quality_gate', {}
+        ),
+        'result_sha256': file_sha256(result_path),
+        'translation_plan': plan_identity,
+        'adapter_plan_digest': getattr(plan, 'plan_digest', '') if plan is not None else '',
+        'source_documents': source_entries,
+        'validated_summary': {
+            key: summary.get(key)
+            for key in (
+                'candidate_valid_items',
+                'valid_items',
+                'skipped_items',
+                'source_mismatch_items',
+                'failure_items',
+                'adapter_writeback_operations',
+                'adapter_writeback_status',
+            )
+        },
+    }
+
+
+def apply_results(target=None, force=False, export_only=None):
+    export_requested = export_only is not None
     durable_store = _resolve_durable_sync_store(target)
     if durable_store is not None:
+        if export_requested:
+            _reject_export_only_unsupported(durable_target=True)
         # Durable Sync always applies through its bound preview.  ``force``
         # intentionally cannot bypass check/source/artifact predicates.
         return apply_durable_sync_results(durable_store)
     manifest = load_manifest(target)
+    if export_requested:
+        _reject_export_only_unsupported(manifest)
     durable_source = manifest.get('durable_sync_source')
     if manifest.get('durable_sync') or isinstance(durable_source, dict):
         raise cli_contract.MachineContractError(
@@ -12723,15 +12921,51 @@ def apply_results(target=None, force=False):
         )
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
     if manifest.get('applied_at') and not force:
-        raise SystemExit('Manifest was already applied. Re-run apply with --force to bypass this guard; source validation still applies.')
-    require_manifest_project_match(manifest, 'apply')
+        message = (
+            'Manifest was already applied. Re-run apply with --force to bypass this guard; '
+            'source validation still applies.'
+        )
+        if export_requested:
+            message = (
+                'Manifest was already applied. Re-run export-only with --force to bypass '
+                'this guard; source validation still applies.'
+            )
+        raise SystemExit(message)
+    identity = require_manifest_project_match(manifest, 'apply')
+
+    export_root = None
+    export_transaction_path = ''
+    export_recovery_state = 'none'
+    if export_requested:
+        try:
+            export_root = batch_export.validate_export_root(
+                export_only,
+                game_root=identity.get('base_dir') or '',
+                package_dir=manifest.get('_package_dir') or '',
+            )
+        except batch_export.ExportOnlyError as exc:
+            _export_only_error(exc)
 
     transaction_path = os.path.join(
         manifest['_package_dir'],
         '.apply_writeback_transaction.json',
     )
-    recover_atomic_write_transaction(transaction_path)
-    require_safe_check_for_apply(manifest)
+    if export_root is None:
+        recover_atomic_write_transaction(
+            transaction_path,
+            expected_transaction_kind='apply',
+        )
+    require_safe_check_for_apply(
+        manifest,
+        update_latest=export_root is None,
+    )
+    if export_root is not None:
+        export_transaction_path, export_recovery_state = _prepare_export_only_transaction(
+            manifest,
+            export_root,
+        )
+        if export_recovery_state == 'recovered':
+            batch_export.prune_recovered_export_root(export_root)
 
     replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
@@ -12749,7 +12983,11 @@ def apply_results(target=None, force=False):
             failure_entries=failure_entries,
             current_fingerprint=summary.get('check_fingerprint'),
         )
-        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+        save_manifest(
+            manifest,
+            update_latest=(export_root is None)
+            and manifest.get('execution') != 'sync',
+        )
         raise SystemExit(f'Apply refused because current results are not safe. Report: {report_path}')
 
     applied_files = 0
@@ -12813,7 +13051,11 @@ def apply_results(target=None, force=False):
             failure_entries=failure_entries,
             current_fingerprint=summary.get('check_fingerprint'),
         )
-        save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+        save_manifest(
+            manifest,
+            update_latest=(export_root is None)
+            and manifest.get('execution') != 'sync',
+        )
         raise SystemExit(f'Apply refused because source revalidation is not safe. Report: {report_path}')
 
     # Preserve the established check/recheck error contract above, then bind
@@ -12822,6 +13064,7 @@ def apply_results(target=None, force=False):
     validate_batch_translation_plan_before_dispatch(manifest, operation='apply')
 
     writeback_files = []
+    rendered_by_file = {}
     if adapter_plan is not None and adapter_snapshot is not None:
         rendered_by_file = _normalize_adapter_rendered_files(
             render_writeback_plan(
@@ -12837,14 +13080,111 @@ def apply_results(target=None, force=False):
             if not revalidated_replacements_by_file[file_key]:
                 continue
             rendered_lines = rendered_by_file[_adapter_render_key(file_key)]
+            source_document = revalidated_source_documents[file_key]
             writeback_files.append(
-                (revalidated_file_paths[file_key], rendered_lines)
+                (
+                    revalidated_file_paths[file_key],
+                    _rendered_lines_with_source_contract(
+                        source_document,
+                        rendered_lines,
+                    ),
+                )
             )
+
+    if export_root is not None:
+        source_documents_by_key = {
+            _adapter_render_key(document.file_rel_path): document
+            for document in (
+                adapter_snapshot.project.source_documents
+                if adapter_snapshot is not None
+                else ()
+            )
+        }
+        export_payloads = []
+        for file_key in sorted(revalidated_replacements_by_file):
+            normalized_key = _adapter_render_key(file_key)
+            source_document = source_documents_by_key.get(normalized_key)
+            if source_document is None:
+                raise cli_contract.MachineContractError(
+                    f'Export-only source document is missing for {file_key}.',
+                    code_name='EXPORT_ONLY_PLAN_INVALID',
+                    suggested_action='run_check_again',
+                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                    details={
+                        'mode': 'export-only',
+                        'reason_code': 'source_document_missing',
+                        'file_rel_path': file_key,
+                    },
+                )
+            rendered_lines = rendered_by_file.get(normalized_key)
+            if rendered_lines is None:
+                raise cli_contract.MachineContractError(
+                    f'Export-only rendered target is missing for {file_key}.',
+                    code_name='EXPORT_ONLY_PLAN_INVALID',
+                    suggested_action='run_check_again',
+                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                    details={
+                        'mode': 'export-only',
+                        'reason_code': 'rendered_target_missing',
+                        'file_rel_path': file_key,
+                    },
+                )
+            output_bytes = _rendered_bytes_with_source_contract(
+                source_document,
+                rendered_lines,
+            )
+            if output_bytes == source_document.content:
+                continue
+            export_payloads.append(
+                {
+                    'source_path': revalidated_file_paths[file_key],
+                    'source_bytes': source_document.content,
+                    'content': output_bytes,
+                    'source_sha256': source_document.sha256,
+                }
+            )
+        try:
+            export_summary = batch_export.export_only(
+                export_root,
+                game_root=identity.get('base_dir') or '',
+                package_dir=manifest.get('_package_dir') or '',
+                payloads=export_payloads,
+                request_payload=_export_only_request_payload(
+                    manifest,
+                    identity,
+                    summary,
+                    adapter_plan,
+                    tuple(source_documents_by_key.values()),
+                ),
+                journal_path=export_transaction_path,
+                recovery_state=export_recovery_state,
+            )
+        except batch_export.ExportOnlyError as exc:
+            _export_only_error(exc)
+        exported_at = datetime.now().isoformat(timespec='seconds')
+        export_summary['exported_at'] = exported_at
+        manifest['exported_at'] = exported_at
+        manifest['export_summary'] = export_summary
+        manifest['export_record_path'] = export_summary['record_path']
+        manifest.pop('last_export_failure_report_path', None)
+        save_manifest(manifest, update_latest=False)
+        print_check_summary(summary)
+        print(f"Export-only status: {export_summary['status']}")
+        print(f"Export root: {export_summary['export_root']}")
+        print(f"Exported files: {export_summary['exported_files']}")
+        print('Applied files: 0')
+        print(f"Export record: {export_summary['record_path']}")
+        print(f"Recovery state: {export_summary['recovery_state']}")
+        if failure_entries:
+            print(f"Failures logged: {len(failure_entries)}")
+        return manifest
+
     if writeback_files:
         atomic_write_many_lines(
             writeback_files,
             journal_path=transaction_path,
             encoding='utf-8',
+            transaction_kind='apply',
         )
 
     for file_key, line_numbers_set in revalidated_line_numbers_by_file.items():
@@ -12863,6 +13203,12 @@ def apply_results(target=None, force=False):
     if RAG_ENABLED and rag_jobs:
         rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='batch_applied')
 
+    # A real workspace apply supersedes the latest export-only operation.  The
+    # export receipt remains in the package, but stale export summary fields
+    # must not make the next machine envelope look like an export.
+    manifest.pop('exported_at', None)
+    manifest.pop('export_summary', None)
+    manifest.pop('export_record_path', None)
     manifest['applied_at'] = datetime.now().isoformat(timespec='seconds')
     manifest.pop('last_apply_failure_report_path', None)
     manifest['apply_summary'] = {
@@ -12913,7 +13259,10 @@ def apply_revisions(target=None, force=False):
         manifest['_package_dir'],
         '.revision_writeback_transaction.json',
     )
-    recover_atomic_write_transaction(transaction_path)
+    recover_atomic_write_transaction(
+        transaction_path,
+        expected_transaction_kind='revision',
+    )
 
     replacements_by_file, _revised_lines_by_file, failure_entries, summary, preview_entries = collect_revision_actions(
         manifest,
@@ -13030,6 +13379,7 @@ def apply_revisions(target=None, force=False):
             writeback_files,
             journal_path=transaction_path,
             encoding='utf-8',
+            transaction_kind='revision',
         )
 
     applied_files = len(applied_file_keys)
@@ -18211,7 +18561,10 @@ def build_arg_parser():
     )
     download_parser.add_argument('--force', action='store_true', help='Overwrite local results.jsonl.')
 
-    apply_parser = subparsers.add_parser('apply', help='Apply downloaded results back into tl files.')
+    apply_parser = subparsers.add_parser(
+        'apply',
+        help='Apply downloaded results back into tl files, or export changed files only.',
+    )
     add_machine_output_argument(apply_parser)
     apply_parser.add_argument(
         'target',
@@ -18222,7 +18575,20 @@ def build_arg_parser():
     apply_parser.add_argument(
         '--force',
         action='store_true',
-        help='Bypass the applied_at guard; source validation still applies.',
+        help=(
+            'Bypass only the applied_at guard; stale checks, source/plan validation, '
+            'structure gates, and export-directory conflicts still apply.'
+        ),
+    )
+    apply_parser.add_argument(
+        '--export-only',
+        default=None,
+        metavar='PATH',
+        help=(
+            'Export this apply result as complete changed files under PATH without '
+            'writing the game tree or advancing apply state. PATH must be missing or empty '
+            'on first use; repeated use requires the matching export receipt and tree.'
+        ),
     )
 
     keyword_export_parser = subparsers.add_parser(
@@ -19382,7 +19748,11 @@ def dispatch_command(parser, args):
         return download_results(args.target or None, force=args.force)
 
     if command == 'apply':
-        return apply_results(args.target or None, force=args.force)
+        return apply_results(
+            args.target or None,
+            force=args.force,
+            export_only=args.export_only,
+        )
 
     if command == 'export-keywords':
         return export_keyword_candidates(
@@ -19810,9 +20180,24 @@ def build_machine_success_envelope(command, value, args):
             or 'unknown'
         )
     elif command == 'apply':
-        result['apply'] = dict(manifest.get('apply_summary') or {})
-        result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
-        status = 'applied' if manifest.get('applied_at') else 'completed'
+        export_summary = manifest.get('export_summary')
+        if isinstance(export_summary, dict):
+            result['apply'] = dict(export_summary)
+            result['apply']['next_split_manifest'] = ''
+            artifacts.update(
+                _nonempty_artifacts(
+                    export_root=export_summary.get('export_root'),
+                    export_record=export_summary.get('record_path'),
+                )
+            )
+            status = str(
+                export_summary.get('status')
+                or ('no-op' if not export_summary.get('exported_files') else 'exported')
+            )
+        else:
+            result['apply'] = dict(manifest.get('apply_summary') or {})
+            result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')
+            status = 'applied' if manifest.get('applied_at') else 'completed'
     elif command == 'apply-revisions' or (
         command == 'sync-revisions' and getattr(args, 'apply', False)
     ):

@@ -367,6 +367,33 @@ def summarize_apply_envelope(
     result = envelope.get("result")
     apply = result.get("apply") if isinstance(result, Mapping) else None
     apply_summary = dict(apply) if isinstance(apply, Mapping) else {}
+    if apply_summary.get("mode") == "export-only":
+        status = str(apply_summary.get("status") or "exported")
+        facts = [format_manifest_path_fact(manifest_path)] if manifest_path else []
+        export_root = apply_summary.get("export_root")
+        if isinstance(export_root, str) and export_root.strip():
+            facts.append(f"导出目录：{export_root.strip()}")
+        exported_files = apply_summary.get("exported_files")
+        if isinstance(exported_files, int):
+            facts.append(f"导出完整文件：{exported_files} 个")
+        record_path = apply_summary.get("record_path")
+        if isinstance(record_path, str) and record_path.strip():
+            facts.append(f"导出记录：{record_path.strip()}")
+        if status == "no-op":
+            heading = "没有需要导出的文件"
+            message = "本次导出为 no-op；没有修改游戏文件或翻译进度。"
+        else:
+            heading = "翻译文件导出完成"
+            message = "已导出完整变更文件；游戏文件和翻译进度未修改。"
+        return WritebackSummary(
+            status=status,
+            heading=heading,
+            message=message,
+            facts=facts,
+            findings=[],
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
     manifest: dict[str, object] = {
         "_manifest_path": manifest_path,
         "applied_at": "structured_result",

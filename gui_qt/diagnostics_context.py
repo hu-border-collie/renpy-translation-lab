@@ -798,6 +798,16 @@ def build_cli_commands(
                 ),
             )
         )
+        commands.append(
+            DiagnosticsCommand(
+                label="导出翻译文件（CLI，仅导出）",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["apply", manifest_path, "--export-only", "<EXPORT_ROOT>"],
+                ),
+            )
+        )
 
     if safety_level == "warn":
         commands.extend(

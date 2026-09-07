@@ -30,6 +30,14 @@ python gemini_translate_batch.py check <manifest> --output json
 python gemini_translate_batch.py apply <manifest> --output json
 ```
 
+P1 还支持只导出本次实际发生字节变化的完整文件，不修改游戏树或翻译进度：
+
+```powershell
+python gemini_translate_batch.py apply <manifest> --export-only <EXPORT_ROOT> --output json --non-interactive --strict-exit-codes
+```
+
+`result.apply.mode=export-only` 时读取 `status=exported` 或 `no-op`、`export_root`、`record_path`、`exported_files`、`applied_files=0` 和 `recovery_state`。目标目录首次必须不存在或为空；重复调用只接受匹配回执与完整受管树。P1 不提供 `--export-dir`、写回并导出或双写事务，也不接受 Durable Sync、revision 或其它非 translation manifest。
+
 P3/P4 的版本资产与译文复用命令也使用同一 envelope：
 
 ```powershell

@@ -116,6 +116,9 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - `apply` 默认要求最近一次 `check` 对应当前 manifest/results，且 `writeback_gate.decision` 必须是 `allow`；未 check、results 变化、manifest item 变化、结构 `warn / block` 或质量规则被配置为 blocker 都会拒绝写回。
 - `--force` 只绕过“manifest 已经 apply 过”的重复写回保护，不会绕过 stale check、source snapshot、adapter/version、plan/request/hash 校验或 `block`。
 - `apply` 写回前会再次校验当前源文本；如果 apply 阶段发现漂移，会拒绝写回并在包目录写入 `apply_failure_report.json` / `failures.jsonl`。
+- P1 的 `apply --export-only <PATH>` 复用同一套 check、写回闸门、源复核、adapter plan 与 `render_writeback_plan`，但只把最终字节确有变化的完整文件复制到导出树；导出根按 manifest 绑定的游戏根与已验证真实源路径计算，不硬编码语言目录。它不会修改游戏文件、进度、RAG、`applied_at`、拆分游标或 latest manifest。
+- 首次 `--export-only` 要求目标目录不存在或为空；重复请求只有在同一导出回执、整棵受管树、源快照和门禁仍匹配时才幂等成功。非空目录、回执/树冲突、路径逃逸/重叠根、符号链接/联接、源漂移、stale check 或非 `allow` 门禁都会拒绝；`--force` 不绕过这些检查。`--export-only` 不支持 Durable Sync、revision 或其它非 translation manifest；P2 的 `--export-dir`、写回并导出和双写事务未实现。
+- 机器 envelope 会在 `result.apply` 中区分 `mode=export-only` 的 `status=exported / no-op`，并给出 `export_root`、`record_path`、`exported_files`、`applied_files=0` 与 `recovery_state`；失败或待恢复使用稳定的 `EXPORT_ONLY_*` 错误码。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
 
 `translator_config.example.json` 的 `batch.quality_gate` 控制机械质量检查：`rules` 可把每条规则设为 `warning` / `blocker` / `off`，`allowed_latin_tokens` 是拉丁词白名单，`garbled_phrases` 是已知错乱词黑名单。质量规则配置进入 `check_fingerprint`；修改配置后必须重新 `check`，旧检查会变 stale。每条 finding 记录稳定 `reason_code`、severity / disposition、item ID、文件与行号、原文/译文和证据，GUI 与 CLI 都只把 `disposition=blocker` 计入写回阻断。
