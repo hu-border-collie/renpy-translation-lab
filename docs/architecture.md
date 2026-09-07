@@ -22,8 +22,10 @@
    - P1 的 `model_routing_reader.py` / `model_routing_migration.py` 提供离线兼容读取和迁移候选，
      `model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚；生产激活属于 P2。
 4. **执行与耐久状态**
-   - Sync 长任务通过 `sync_run_service.py` 进入耐久执行器；状态机和机器错误位于
+   - CLI 耐久路径：`sync-start` → `sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
      `sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
+   - GUI Sync 页仍由 `gui_qt/sync_translation_workflow.py` 启动 `gemini_translate.py`，
+     不持久化可恢复 run；统一页接入 #347 服务属于 #348 P3。
    - Gemini Batch 继续使用 Batch 生命周期，但与 Sync 消费相同 TranslationPlan 合同。
 5. **检查与写回**
    - 模型结果先规范化并检查，再生成绑定 preview，最后由公共 apply 安全层写回。

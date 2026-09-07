@@ -68,6 +68,24 @@ class ModelRoutingConfigContractTests(unittest.TestCase):
             frozenset(strategy.value for strategy in model_profile.ExecutionStrategy),
         )
 
+    def test_reserved_slots_match_legacy_resolver(self) -> None:
+        ids = {"primary", "batch", "foo_model", "foo_override", "gemini-main"}
+        ids.update(stage + suffix for stage in model_profile.KNOWN_STAGES
+                   for suffix in ("_model", "_override"))
+        for profile_id in ids:
+            with self.subTest(profile_id=profile_id):
+                self.assertEqual(contract._reserved_profile_id(profile_id),
+                                 model_profile.is_profile_slot_id(profile_id))
+
+    def test_empty_stage_models_require_legacy_specific_routes(self) -> None:
+        config = _load_fixture("model_routing_legacy/example_defaults.json")
+        for execution in ("sync", "gemini_batch"):
+            plan = model_profile.resolve_routing_plan(config, execution=execution)
+            self.assertEqual(plan.routes["project_analysis"].profile_id, "primary")
+            self.assertEqual(plan.routes["project_analysis"].strategy.value, "sync")
+            self.assertEqual(plan.routes["final_review"].profile_id, "batch")
+            self.assertEqual(plan.routes["final_review"].strategy.value, "gemini_batch")
+
     def test_unknown_non_sensitive_fields_are_forward_compatible(self) -> None:
         config = _load_fixture("model_routing_config_v1.json")
         section = config["model_routing"]
@@ -122,7 +140,7 @@ class ModelRoutingConfigContractTests(unittest.TestCase):
     def test_route_can_override_only_profile_or_only_strategy(self) -> None:
         section = _load_fixture("model_routing_config_v1.json")["model_routing"]
         section["routes"] = {
-            "project_analysis": {"profile_id": "gemini-embedding"},
+            "project_analysis": {"profile_id": "gemini-main"},
             "revision": {"strategy": "sync"},
         }
 
@@ -169,6 +187,14 @@ class ModelRoutingConfigContractTests(unittest.TestCase):
                 ("batch", "model"),
             },
         }
+        rag_keys = {
+            "embedding_backend", "embedding_provider", "embedding_endpoint",
+            "embedding_api_key_env", "embedding_model", "output_dimensionality",
+            "embedding_timeout_seconds", "query_task_type", "document_task_type",
+        }
+        for name in ("gemini_sync.json", "litellm_custom.json"):
+            expected[name].update((scope, "rag", key) for scope in ("sync", "batch") for key in rag_keys)
+        expected["gemini_sync.json"].add(("rotation", "model"))
         for name, paths in expected.items():
             with self.subTest(name=name):
                 config = _load_fixture(f"model_routing_legacy/{name}")
