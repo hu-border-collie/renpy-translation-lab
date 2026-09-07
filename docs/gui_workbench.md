@@ -4,7 +4,7 @@
 
 本文档说明**当前**可选 PySide6 图形工作台：能做什么、怎么装、与 CLI 的边界。
 
-> **状态（2026-07）**：Epic #157 信息架构 **P0a–P3（#158–#166）已合并**；EmptyState 摘要修复见 [PR #177](https://github.com/hu-border-collie/renpy-translation-lab/pull/177)。本文是**现行用户/开发手册**。设计过程稿见归档 [gui_ia_redesign.md](archive/gui_ia_redesign.md)。Epic #176 的五页真实页面化已交付，P6 收壳与协调层抽离见 [PR #190](https://github.com/hu-border-collie/renpy-translation-lab/pull/190)。
+> **状态**：本文是**现行用户/开发手册**。已包含统一侧边导航与页面化（Epic #157/#176）、模型配置离线迁移模板（P1）、质量报告 HTML 导出、耐久 Sync 诊断与项目列表工作区维护等最新能力。历史设计过程稿见归档 [gui_ia_redesign.md](archive/gui_ia_redesign.md) 与 [design-qa.md](archive/design-qa.md)。
 
 ## 定位
 

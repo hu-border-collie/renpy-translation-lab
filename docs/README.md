@@ -24,6 +24,7 @@
 | 参与开发 / AI 协作 | 根目录 [AGENTS.md](../AGENTS.md) → [CONTRIBUTING.md](../CONTRIBUTING.md)（含 **CLI / GUI 同步**） |
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
 | 在 Codex 沙箱内跑 GUI 测试卡住 | [GUI 测试沙箱环境说明](gui_tests_sandbox_notes.md) |
+| 配置离线迁移与回滚（P1） | [模型配置离线迁移（P1）](model_config_migration.md) |
 | 理解依赖所有权与哈希锁 | [依赖输入与哈希锁](dependencies.md) |
 
 ## 文档分组
@@ -63,12 +64,13 @@
 
 ### 规划中（非用户手册）
 
-进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿可迁 [archive/](archive/README.md)。
+进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿迁至 [archive/](archive/README.md)。
 
-- [开放 Issues 审计（2026-08-08）](plans/open_issues_audit_2026-08-08.md)：基于当时 GitHub 与代码状态的时间点快照，不是长期事实源。
-- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)
-- [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](plans/issue-346-implementation-plan.md)：基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；决策表 D1–D7 在 issue #346 定稿后进入 P1 编码。
-- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md)
+- [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力已落地。
+- [#347 → #348 耐久 Sync 产品化交接](plans/issue-347-to-348-handoff.md)：冻结服务/snapshot/CLI/制品接缝与验收边界。
+- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。
+- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md) · [多引擎生态与工具源码研究](plans/multi_engine_localization_ecosystem_research.md) · [GitHub 本地化项目研究](plans/github_localization_projects_research.md)
+- [#364 真实项目质量规则校准执行手册](plans/issue-364-calibration-runbook.md) · [校准基线](plans/quality_calibration_baseline.md)
 
 
 ### 历史参考（已归档）
@@ -79,6 +81,11 @@
 - [翻译全生命周期审计](archive/translation_workflow_audit.md)：流水线与门禁的代码审计快照，可能落后于最新实现细节。
 - [Design QA 验收记录](archive/design-qa.md)：2026-07 统一侧边导航与页面归属的视觉/自动化验收快照；不是用户手册。
 - [文译参考对照与 Batch 主路径增强计划](archive/wenyi_reference_and_batch_roadmap.md)：已落地路线的设计与取舍记录；现行用法以 Batch、上下文和用量账本文档为准。
+- [#346 实施分步计划](archive/issue-346-implementation-plan.md)：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同全阶段交付记录（PR #403）。
+- [#347 设计 P0：耐久同步执行器](archive/issue-347-durable-sync-executor-plan.md)：Run/Request/Attempt 状态机与耐久同步执行器核心设计（CLI 已交付，交接见 [plans/issue-347-to-348-handoff.md](plans/issue-347-to-348-handoff.md)）。
+- [#341：Provider-neutral Embedding 纯核心](archive/issue-341-provider-neutral-embedding-core.md) · [Embedding adapters 与 store identity](archive/issue-341-embedding-adapters-store-identity.md)：跨 Provider 向量合同、store 校验与生产接线。
+- [TyranoScript V600+ P5 parser 调研与 fixture 基线](archive/tyranoscript_v600_parser_research.md)：P5 验证 adapter 调研与基线（P5 已合入）。
+- [开放 Issues 审计（2026-08-08）](archive/open_issues_audit_2026-08-08.md) · [Final Review 失败分类探针](archive/final_review_result_failure_spike.md)：历史 issues 快照与审校结果失败分类 spike。
 
 ## 配置分层（速查）
 

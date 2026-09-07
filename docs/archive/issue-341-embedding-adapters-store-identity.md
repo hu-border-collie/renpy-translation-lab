@@ -1,6 +1,6 @@
 # Issue #341：Embedding adapters 与 store identity
 
-状态：独立可合并切片 · 基线 `origin/main@a7319aa`（2026-08-23）
+状态：**已合并**（PR #388 独立切片与 PR #401 生产接线已落地） · 基线 `origin/main@a7319aa`（2026-08-23）
 
 本切片承接 PR #388 冻结的纯核心合同，新增离线可测的 Provider adapter，
 并把完整 document identity 接入现有 JSON RAG / Source Index store。它不改变

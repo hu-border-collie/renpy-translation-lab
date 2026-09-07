@@ -1,6 +1,6 @@
 # Ren'Py Translation Lab
 
-面向 Ren'Py 视觉小说的翻译工作台：Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层，以及写回前安全校验。
+面向视觉小说（以 Ren'Py 为主生产支持，底层具备 Engine Adapter 扩展架构）的翻译工作台：Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层，以及写回前安全校验。
 
 **最新稳定发行版是 v1.0.0；`main` 是后续开发线。** `main` 已包含尚未发布的改进，项目版本号会在下一次正式发行时统一更新；需要可复现的稳定版本请使用 `v1.0.0` tag。GUI 是普通用户的推荐入口；CLI 是 Agent、脚本、CI 与高级用户的自动化事实来源。正式交付为源码安装运行，暂无零配置安装包。版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -20,7 +20,7 @@
 
 ## 核心能力
 
-- 扫描 `game/tl/<language>/`（默认 `schinese`），抽取待译条目并跳过 `old`。
+- 扫描 `game/tl/<language>/`（默认 `schinese`），抽取待译条目并跳过 `old`（底层具备通用 Engine Adapter 架构，已交付 TyranoScript V600+ 原生 catalog 写回与审计验证）。
 - 按配置预处理项目（脚本提取、`tl` 模板生成）。
 - 构造带 glossary、macro setting、RAG 与可选 Story Memory 的请求。
 - 完整 Batch 异步流程，以及 `check` / `apply` / `repair` 写回闸门（`apply` 默认只接受最近一次 `safe` check）。

@@ -12,34 +12,13 @@
 
 ## 当前设计
 
-- [#348 P0：Model Routing 配置与迁移合同](issue-348-model-routing-config-contract.md)：
-  冻结版本化 `model_routing` schema、Provider/Profile/route 边界、旧字段映射、
-  迁移事务、unknown-field preservation 以及与 #202 Settings coordinator 的所有权。
-- [开放 Issues 审计（2026-08-08）](open_issues_audit_2026-08-08.md)：
-  基于 `main@78ab050` 的 21 个开放 issues 时间点快照、依赖关系、难度与收口顺序；
-  最新状态仍以 GitHub、当前代码和现行文档为准。
-- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
-  #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1 的只读
-  adapter / coverage 与 P2 的 relocation、validation、writeback plan 消费均已落地；
-  本文继续作为 reconciliation、coverage 下游门禁和后续引擎阶段的合同基线。
-  当前实现说明见 [Ren'Py Engine Adapter 与覆盖审计](../engine_adapter.md)。
-- [TyranoScript V600+ P5 parser 调研与 fixture 基线](tyranoscript_v600_parser_research.md)：
-  #265 P5 开工前的官方 parser / 原生 catalog / TyranoStudio 翻译工作流调研，
-  以及 `tests/fixtures/tyranoscript_v600` 离线 golden 与 characterization 测试约定。
-- [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](issue-346-implementation-plan.md)：
-  基于 `main@fa69d14` 的 P0–P5 分阶段实施计划；D1–D7 已冻结，P1 纯核心已合并，
-  P2–P5 继续按本文边界推进。
-- [#347 设计 P0：耐久同步执行器、崩溃恢复与统一安全链路](issue-347-durable-sync-executor-plan.md)：
-  基于 `main@ed07a99` 冻结 Run/Request/Attempt 状态机、SQLite 事务边界、
-  `outcome_unknown` 恢复语义、usage 去重、共享 result/check 门禁、durable Sync preview/apply 与 Batch direct apply 接缝、
-  CLI JSON 合同、fault-injection 矩阵及与 #346/#341/#348 的所有权边界。
+- [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](issue-348-model-routing-config-contract.md)：
+  冻结版本化 `model_routing` schema 与迁移事务；P1 离线 reader、显式暂存迁移/回滚已实现（详见现行手册 [model_config_migration.md](../model_config_migration.md)），P2 生产解析与 P3 设置页待推进。
 - [#347 → #348 耐久 Sync 产品化交接](issue-347-to-348-handoff.md)：
   冻结服务/snapshot/CLI/制品接缝、Provider 中断 smoke 与 #348 的 GUI、配置迁移和
   最终命令别名验收边界。
-- [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
-  A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤；
-  三项目聚合统计、人工标注和 A2 前后对比见
-  [真实项目机械质量校准基线](quality_calibration_baseline.md)。
+- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
+  #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1–P4 门禁实测已完成；当前实现说明见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。
@@ -50,3 +29,19 @@
 - [多引擎本地化适配与候选引擎开源生态研究](multi_engine_localization_ecosystem_research.md)：
   针对 #265（引擎适配边界与版本化翻译资产）与 #272（第三引擎选型）对标 VNTextPatch、Translator++、
   Weblate/translate-toolkit 架构以及 Naninovel、Godot+Dialogic 2、RPG Maker 原生生态的深度研究。
+- [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
+  A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤。
+- [真实项目机械质量校准基线](quality_calibration_baseline.md)：
+  基于三项目真实语料与人工标注的机械质量规则校准数据，支撑 #364 规则默认值调整。
+
+## 已交付并归档的设计与调研
+
+已完成并由主干合入的阶段性设计与探针已归档至 [`docs/archive/`](../archive/README.md)：
+
+- [#346 实施分步计划：Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同](../archive/issue-346-implementation-plan.md)：P0–P5 全阶段已收口并合入主干（PR #403）。
+- [#347 设计 P0：耐久同步执行器、崩溃恢复与统一安全链路](../archive/issue-347-durable-sync-executor-plan.md)：核心实现与 CLI `sync-*` 命令已交付。
+- [#341 P0：Provider-neutral Embedding 纯核心](../archive/issue-341-provider-neutral-embedding-core.md)：跨 Provider 向量合同与指纹规范（PR #401 已交付）。
+- [#341：Embedding adapters 与 store identity](../archive/issue-341-embedding-adapters-store-identity.md)：Adapter 与 store identity 持久化校验（PR #388 / PR #401 已交付）。
+- [TyranoScript V600+ P5 parser 调研与 fixture 基线](../archive/tyranoscript_v600_parser_research.md)：P5 验证 adapter 调研与基线（P5 已合入）。
+- [开放 Issues 审计（2026-08-08）](../archive/open_issues_audit_2026-08-08.md)：21 个开放 issues 快照与收口顺序审计。
+- [Final Review 结果失败分类与 targeted resume spike（#309）](../archive/final_review_result_failure_spike.md)：模型审校结果失败分类 probe 与 targeted resume 设计。
