@@ -88,6 +88,8 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 
 ## 相关文档
 
+- [架构概览](docs/architecture.md)
+- [代码路径索引](docs/code_paths.md)
 - [项目说明](docs/project_notes.md)
 - [GUI 工作台](docs/gui_workbench.md)
 - [Batch 工作流与安全检查](docs/batch_workflows.md)

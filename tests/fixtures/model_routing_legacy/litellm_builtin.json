@@ -1,0 +1,12 @@
+{
+  "sync": {
+    "backend": "litellm",
+    "model": "openrouter/deepseek/deepseek-chat",
+    "models": [
+      "openrouter/deepseek/deepseek-chat"
+    ]
+  },
+  "batch": {
+    "model": "gemini-3.1-flash-lite"
+  }
+}

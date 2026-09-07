@@ -12,6 +12,9 @@
 
 ## 当前设计
 
+- [#348 P0：Model Routing 配置与迁移合同](issue-348-model-routing-config-contract.md)：
+  冻结版本化 `model_routing` schema、Provider/Profile/route 边界、旧字段映射、
+  迁移事务、unknown-field preservation 以及与 #202 Settings coordinator 的所有权。
 - [开放 Issues 审计（2026-08-08）](open_issues_audit_2026-08-08.md)：
   基于 `main@78ab050` 的 21 个开放 issues 时间点快照、依赖关系、难度与收口顺序；
   最新状态仍以 GitHub、当前代码和现行文档为准。

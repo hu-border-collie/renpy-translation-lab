@@ -1,0 +1,57 @@
+{
+  "sync": {
+    "backend": "litellm",
+    "model": "acme-compatible/model-a",
+    "custom_litellm_providers": [
+      {
+        "id": "acme-compatible",
+        "label": "Acme Compatible",
+        "base_url": "https://models.example.test/v1",
+        "models_url": "https://models.example.test/v1/models",
+        "api_key_env": "ACME_API_KEY",
+        "requires_key": true
+      }
+    ],
+    "rag": {
+      "enabled": false,
+      "embedding_backend": "openai_compatible",
+      "embedding_provider": "acme-compatible",
+      "embedding_endpoint": "https://embeddings.example.test/v1",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "ACME_EMBEDDING_API_KEY",
+      "embedding_model": "embedding-a",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 4,
+      "top_k_terms": 8,
+      "min_similarity": 0.72,
+      "segment_lines": 4,
+      "history_char_limit": 220,
+      "update_on_success": true,
+      "store_dir": ""
+    }
+  },
+  "batch": {
+    "model": "gemini-3.1-flash-lite",
+    "rag": {
+      "enabled": true,
+      "embedding_backend": "openai_compatible",
+      "embedding_provider": "acme-compatible",
+      "embedding_endpoint": "https://embeddings.example.test/v1",
+      "embedding_timeout_seconds": 30,
+      "embedding_api_key_env": "ACME_EMBEDDING_API_KEY",
+      "embedding_model": "embedding-a",
+      "query_task_type": "RETRIEVAL_QUERY",
+      "document_task_type": "RETRIEVAL_DOCUMENT",
+      "output_dimensionality": 768,
+      "top_k_history": 4,
+      "top_k_terms": 8,
+      "min_similarity": 0.72,
+      "segment_lines": 4,
+      "bootstrap_on_build": true,
+      "history_char_limit": 220,
+      "store_dir": ""
+    }
+  }
+}
