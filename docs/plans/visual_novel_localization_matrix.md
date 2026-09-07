@@ -71,7 +71,7 @@
 | **D4. 差分保留** | `[官方]` Localization 工具按文本 ID 增量更新，未改动的条目保留译文 | `[官方]` Dialogic「Update CSV files」；Godot PO 可用 `msgmerge`（属引擎层） | `[官方]` CSV 导入/导出对比，保留已有 UID | `[推断]` 需手动/脚本对比语言对象树 | `[推断]` 极差，通常需手动比对 `.ks` | `[推断]` 纯 ADV 模式下事件流呈线性对白，便于通过事件 ID 与指令序号做 AST 对账 |
 | **D5. 语言切换** | `[官方]` 内置 Language 下拉、`Default Locale` / `Auto Detect Locale` 与 Fallback | `[官方]` `TranslationServer.set_locale()` | `[官方]` 系统菜单 Profile 切换 | `[官方]` `MultiLanguage` + `preference('Language')` | `[推断]` 极难，多需分包或重写脚本 | 单语言工程（硬编码）；可选择多语言插件，或通过本工具实现离线项目多语言副本生成 |
 | **D6. 资源覆盖** | `[官方]` 剧本、Managed Text、可替换的背景/音频等资源镜像 | `[官方]` Timeline、角色名、Glossary；资源 remap 走 Godot | `[官方]` 消息、角色、系统、CG/Audio 走 Language Profile | `[官方]` 剧本文本 + UI 词典；资源需代码切换 | `[推断]` 需在 `.ks` 宏中自行实现条件分支 | 覆盖地图对白（401）、选择支（102）、公共事件、角色名、系统用语、图片立绘替换 |
-| **D7. 语言特性** | `[官方]` TMPro 支持 RTL（需额外设置）与按 locale 换字体 | `[官方]` Godot TextServer：Context、Plural、RTL/BiDi、HarfBuzz | `[推断]` 支持基础格式化，无原生 Plural/RTL | `[官方]` UI 有内置语种；复数等可走 Web `Intl` | `[官方]` 基础 Ruby 与排版标签 | 基础控制码（`\pop[n]`, `\c[n]`, `\i[n]`, `\V[n]`），无原生 Plural；字体需解决 CJK 方块乱码 |
+| **D7. 语言特性** | `[官方]` TMPro 支持 RTL（需额外设置）与按 locale 换字体 | `[官方]` Godot TextServer：Context、Plural、RTL/BiDi、HarfBuzz | `[推断]` 支持基础格式化，无原生 Plural/RTL | `[官方]` UI 有内置语种；复数等可走 Web `Intl` | `[官方]` 基础 Ruby 与排版标签 | 官方控制码（`\c[n]` / `\i[n]` / `\V[n]` 等）+ 样本扩展码（如非官方 `\pop[n]`，须登记来源）；无原生 Plural；字体需解决 CJK 方块乱码 |
 | **D8. 编码格式** | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` UTF-8 | `[官方]` 碎片化：Shift-JIS / UTF-16LE with BOM / 部分 UTF-8+BOM | `[官方]` UTF-8 |
 | **D9. 动态文本** | `[官方]` `{expr}`；自定义命令须 `ILocalizable` + `LocalizableTextParameter` 才会进目录 | `[官方]` Timeline 变量；自定义事件/任意 GDScript 不在 Dialogic CSV 内 | `[推断]` 内置插值；扩展 JS 插件不在 CSV 合同内 | `[官方]` JS 表达式；动态拼接会破坏存档对称性 | `[官方]` `[iscript]` / TJS 动态求值难以静态解析 | 纯 ADV 模式下无复杂战斗内嵌 JS，对白控制码高度规整；复杂 RPG 模式存在插件内嵌代码 |
 | **D10. 推荐模式** | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `native_catalog` / `hybrid` | `source_extraction` / `hybrid` | `source_extraction` | `source_extraction`（JSON 写回合同待扩展） |
@@ -293,19 +293,19 @@ monogatari.translation ('Español', {
 ### 4.6 RPG Maker MV/MZ — 综合评级：B+ (实战原型先行候选 / 叙事型专属) [原评级 C-]
 
 #### 4.6.1 架构特征与现状
-- **引擎与数据结构完全冻结**：RPG Maker MV (v1.6.2) 与 MZ 的底层内核高度成熟固化，数据格式为标准的 UTF-8 JSON，不存在上游引擎剧烈破坏性更新的维护风险；
+- **引擎与数据结构相对稳定**：RPG Maker MV (v1.6.2) 与 MZ 的数据格式为标准 UTF-8 JSON，内核相对成熟；仍须在立项时**固定具体引擎版本与 patch**，不能假设所有 MZ 发行版布局永远不变；
 - **核心文本分布**：剧情对白与选项高度集中于 `data/Map*.json`（165+ 地图）与 `data/CommonEvents.json` 中：
   - Event Code `401`（Show Text）：承载所有对白与旁白文本；
   - Event Code `102`（Show Choices）：承载分支选项文本；
   - Event Code `101`（Show Text Setup）：承载立绘 Face 与说话人头信息；
-- **纯视觉小说（ADV）形态的分离**：社区与商业生态中存在相当数量剥离了战斗与数值系统、通过 `NovelStyle` / `GALV_MessageStyles` 等插件改造成纯剧情叙事视觉小说的作品。这类工程的对白高度线性、控制码高度规整（主要为 `\pop[n]`、`\c[n]`、`\i[n]`），彻底避开了传统重度 RPG 战斗插件与动态代码求值的泥潭。
+- **纯视觉小说（ADV）形态的分离**：社区与商业生态中存在相当数量剥离了战斗与数值系统、通过 `NovelStyle` / `GALV_MessageStyles` 等插件改造成纯剧情叙事视觉小说的作品。这类工程的对白高度线性、控制码相对规整（常见官方码如 `\c[n]`、`\i[n]`、`\V[n]`；样本中若出现 `\pop[n]`，它**不是** RPG Maker MZ 官方控制字符，应视为项目/插件扩展语法，立项时记录插件名与版本；未知扩展语法默认不变换，避免写回损坏），彻底避开了传统重度 RPG 战斗插件与动态代码求值的泥潭。
 
 #### 4.6.2 提权依据与边界收敛（Scope Constraints）
 * **提权依据与证据边界**：本地长篇 ADV 样本可用于人工观察文本分布和控制码，支持将叙事模式列为 B+ 研究候选；目前未记录其可再分发授权，也未提供仓库内可复现的 Adapter 验证。D12 仍为待满足项，不能将本地持有游戏视为可提交或可在 CI 使用的回归夹具。
 * **支持范围（In Scope）**：
   1. 仅限 **RPG Maker MV/MZ 纯叙事/对话模式（Narrative Mode）**；
   2. 地图事件（Code 401 Show Text、Code 102 Show Choices）与公共事件对白；
-  3. 规整控制码的占位保护与无损还原（`\pop[n]`, `\c[n]`, `\i[n]`, `\V[n]`）；
+  3. 控制码占位保护与无损还原：官方码（如 `\c[n]`、`\i[n]`、`\V[n]`）与**已登记来源**的扩展码（样本中的 `\pop[n]` 等非官方语法）分开建模；未登记扩展默认原样保留，不得擅自改写；
   4. 目标语言字体有效性检测与 `www/fonts/gamefont.css` 自动覆写防御；
 * **严格排除项（Out of Scope - 严禁发散）**：
   1. 坚决排除战斗数值库（Enemies、Skills、Items、Armors、Troops 等复杂 RPG 资产）；
@@ -368,7 +368,7 @@ flowchart TD
 
 ### 5.4 RPG Maker MV/MZ 纯叙事模式 Adapter 设计假设
 `[待夹具验证]` 以下为针对纯 ADV 工程的设计假设；本地人工样本不能替代可再分发的合成回归夹具：
-- **候选清单与稳定定位**：opaque locator 保存 `{ "file": "data/Map014.json", "map_id": 14, "event_id": 1, "page_index": 0, "cmd_index": 52 }`，严格绑定至对白指令节点；
+- **候选清单与快照内定位**：opaque locator 可保存 `{ "file": "data/Map014.json", "map_id": 14, "event_id": 1, "page_index": 0, "cmd_index": 52 }`，仅作为**单次源快照内**指向对白指令节点的定位坐标。`cmd_index`（以及同类数组下标）**不是**跨版本 identity / lineage；上游插入或删除前置指令后索引会漂移。对账必须用源文本、控制码序列或结构摘要确认唯一匹配；无法确认时 **Fail-Closed**，不得按旧下标写回。
 - **范围收敛**：提取 Event Code `401`（Show Text）与 `102`（Show Choices）；战斗、移动路线与代码事件仍须保留候选定位和分类证据，明确排除或进入 coverage review，不能静默过滤；
 - **公共合同前置缺口**：现有 `json_catalog_set` 是写回操作类型，不是 Adapter 模式；`target_json_path` 仅接受非空字符串键，消费者只遍历字典，不支持 `events/pages/list/parameters` 中的数组节点，且目标根仅接受 `localization_catalog`。因此不能直接用于 RPG Maker 源地图。须先设计公共操作的类型化数组路径、源目标根约束与快照校验；本研究不实现该扩展。
 - **原子写回契约（待实现）**：公共合同扩展完成后，才能验证地图 JSON 节点替换、无关字段保留、源快照复核与事务写回；禁止 Adapter 私自重写整张地图绕过公共消费者。
@@ -391,7 +391,7 @@ flowchart TD
 2. **RPG Maker 叙事模式：已有人工样本，回归条件待补齐**：
    - 本地长篇 ADV 样本可补充人工检查；公开回归必须使用自行构造并注明许可证的最小 fixture，不能复制未授权游戏地图或文本；
    - 须固定引擎版本和插件组合；JSON 布局及控制码仍需回归验证，不能假设永无变更；
-   - 控制码（`\pop[n]`, `\c[n]`, `\i[n]`）规整，可有效验证长篇剧情树的占位保护与单体大 JSON 声明式安全写回。
+   - 控制码需按「官方 / 已登记扩展 / 未知」分层验证；仅在扩展来源已记录时把 `\pop[n]` 纳入保护—还原用例，并验证长篇剧情树与单体大 JSON 的声明式安全写回。
 
 ---
 
@@ -419,7 +419,7 @@ flowchart TD
 - 覆盖：正常对话、角色名、未实现 `ILocalizable` 的自定义命令、语法错误脚本、版本更新差分。
 
 ### 7.4 RPG Maker MV/MZ 纯叙事模式立项规范与边界预设
-- **受支持引擎版本**：RPG Maker MV (v1.6.2) 及 MZ 纯叙事/视觉小说工程。
+- **受支持引擎版本**：RPG Maker MV **v1.6.2**；RPG Maker MZ 须在夹具/立项入库时记录**确切版本号与 patch**（从样本工程或官方关于对话框读取），夹具与验证结果**仅覆盖该已记录窗口**。本文未绑定某一具体 MZ 发行号，在未记录前不得声称 MZ 写回已验证。范围仍限于纯叙事/视觉小说工程。
 - **输入产物**：
   - `data/Map*.json`（地图事件列表）；
   - `data/CommonEvents.json`（公共事件列表）；
