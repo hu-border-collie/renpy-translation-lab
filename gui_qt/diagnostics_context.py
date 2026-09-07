@@ -21,6 +21,7 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    MODEL_CONFIG_MIGRATION_COPY,
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
@@ -215,6 +216,27 @@ def collect_existing_report_paths(
     return entries
 
 
+def model_config_migration_commands(*, python_exe: str, script_path: str) -> list[DiagnosticsCommand]:
+    """Expose offline configuration tools without requiring a task manifest."""
+    if not script_path:
+        return []
+    return [
+        DiagnosticsCommand(
+            label=MODEL_CONFIG_MIGRATION_COPY[action],
+            command=format_cli_command(
+                python_exe,
+                join_directory_file(parent_directory(script_path), "model_config_migration.py"),
+                [action, "--config", "<CONFIG_COPY>", *extra, "--json"],
+            ),
+        )
+        for action, extra in (
+            ("preview", []),
+            ("migrate", ["--expected-fingerprint", "<SOURCE_FINGERPRINT>", "--stage-only"]),
+            ("rollback", ["--report", "<MIGRATION_REPORT>"]),
+        )
+    ]
+
+
 def build_cli_commands(
     *,
     python_exe: str,
@@ -224,9 +246,10 @@ def build_cli_commands(
     submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
     if not manifest_path:
-        return []
+        return model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path)
 
     commands: list[DiagnosticsCommand] = [
+        *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
         DiagnosticsCommand(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
@@ -1118,10 +1141,11 @@ def idle_diagnostics_context(
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
-        message="开始任务后，这里会显示任务记录、翻译包、云端任务和可复制命令。",
+        message=MODEL_CONFIG_MIGRATION_COPY["idle_hint"],
         facts=_project_usage_facts(game_root),
         paths=[],
-        commands=_usage_report_command(batch_script_path, python_exe),
+        commands=[*_usage_report_command(batch_script_path, python_exe),
+                  *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path)],
         manifest_json_preview="",
     )
 
@@ -1139,6 +1163,9 @@ def sync_diagnostics_context(
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
     commands.extend(_usage_report_command(batch_script_path, python_exe))
+    commands.extend(model_config_migration_commands(
+        python_exe=python_exe, script_path=batch_script_path or sync_script_path,
+    ))
     facts = _project_usage_facts(game_root)
     paths = []
     preview = ""

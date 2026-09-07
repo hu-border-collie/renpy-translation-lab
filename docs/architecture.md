@@ -11,7 +11,7 @@
 2. **项目与配置**
    - `translator_runtime.py` 从代码默认值、`api_keys.json`、环境变量和
      `translator_config.json` 构造运行时快照。
-   - `gui_qt/project_state.py` 负责 GUI 的项目路径及 JSON 文件读取/保存。
+   - `gui_qt/project_state.py` 负责 GUI 项目路径，原始 JSON 读取/保存委托给共用 `config_store.py`。
    - `gui_qt/settings_schema.py` 描述高级设置字段；当前 Settings 总体 load/save/dirty
      编排仍位于 `gui_qt/app.py`。
 3. **模型路由与请求计划**
@@ -19,6 +19,8 @@
      ModelRoutingPlan。它的 `primary`/`batch` 等 ID 是兼容 slot，不是长期用户 ID。
    - `translation_plan.py` 冻结 source snapshot、模型路由、上下文、prompt/schema 和预算。
    - #348 的 schema-v1 合同位于 `model_routing_config.py`，目前尚未接入生产读取。
+   - P1 的 `model_routing_reader.py` / `model_routing_migration.py` 提供离线兼容读取和迁移候选，
+     `model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚；生产激活属于 P2。
 4. **执行与耐久状态**
    - CLI 耐久路径：`sync-start` → `sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
      `sync_run_contracts.py`，SQLite 细节不暴露给 GUI。

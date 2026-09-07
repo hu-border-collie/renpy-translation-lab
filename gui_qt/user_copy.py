@@ -868,3 +868,9 @@ def translate_doctor_warning(warning: str) -> str:
 def format_bootstrap_fact(key: str, value: str) -> str:
     label = BOOTSTRAP_FIELD_LABELS.get(key, key)
     return f"{label}：{value}"
+MODEL_CONFIG_MIGRATION_COPY = {
+    "idle_hint": "无需加载任务即可查看配置迁移命令；开始任务后，这里还会显示任务记录、翻译包和云端任务。",
+    "preview": "模型配置迁移预览（离线 P1）",
+    "migrate": "暂存模型配置（不激活生产路由）",
+    "rollback": "回滚模型配置迁移（校验指纹）",
+}

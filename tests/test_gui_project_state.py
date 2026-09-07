@@ -284,7 +284,7 @@ class GuiProjectStateTests(unittest.TestCase):
                 state.save_api_keys(["new-key"])
 
             self.assertEqual(
-                open_calls,
+                [call for call in open_calls if call[0] == state.api_keys_path.with_suffix(".tmp")],
                 [(
                     state.api_keys_path.with_suffix(".tmp"),
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -311,7 +311,7 @@ class GuiProjectStateTests(unittest.TestCase):
                 state.save_api_keys(["new-key"])
 
             self.assertEqual(
-                open_calls,
+                [call for call in open_calls if call[0] == state.api_keys_path.with_suffix(".tmp")],
                 [(
                     state.api_keys_path.with_suffix(".tmp"),
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,

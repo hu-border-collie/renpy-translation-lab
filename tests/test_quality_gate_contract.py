@@ -232,10 +232,18 @@ class CheckFingerprintPolicyTests(unittest.TestCase):
 
 
 class RequireSafeCheckTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        package = tempfile.TemporaryDirectory(prefix="quality-gate-")
+        self.addCleanup(package.cleanup)
+        self.package_dir = Path(package.name)
+
     def _manifest(self, last_summary):
         return {
-            '_manifest_path': '/tmp/pkg/manifest.json',
-            '_package_dir': '/tmp/pkg',
+            '_manifest_path': str(self.package_dir / 'manifest.json'),
+            '_package_dir': str(self.package_dir),
             'settings': {},
             'last_check_summary': last_summary,
         }
