@@ -1712,6 +1712,14 @@ class RenPyAdapter:
             legacy, source_text, translated_text, str(message or "")
         )
         if valid:
+            from . import structure_rules
+            try:
+                structure_rules.validate(source_text, translated_text, self.engine)
+            except ValueError as exc:
+                valid = False
+                reason_codes = tuple(dict.fromkeys((*reason_codes, str(exc))))
+                diagnostics = (*diagnostics, {"code": str(exc)})
+        if valid:
             try:
                 self._render_literal(
                     legacy, translated_text, occurrence.unit.prefix, occurrence.unit.quote

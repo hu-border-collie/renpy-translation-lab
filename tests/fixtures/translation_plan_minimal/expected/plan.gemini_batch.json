@@ -150,12 +150,12 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "519f5d96e3025c67",
+  "plan_fingerprint": "96b79081d094a6ca",
   "plan_id": "6e210e07ff44ed7c",
   "request_summaries": [
     {
       "capability_requirements": {
-        "context_budget_tokens": 2109,
+        "context_budget_tokens": 2415,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -246,13 +246,13 @@
         ],
         "total_char_used": 972
       },
-      "prompt_fingerprint": "633a5f0d12a15ee5",
-      "request_fingerprint": "a8d8779fbf7502cd",
+      "prompt_fingerprint": "51aeb66c56b22f69",
+      "request_fingerprint": "8240008bb43da7ba",
       "request_id": "8eca9ba1bb3780c6"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 2223,
+        "context_budget_tokens": 2460,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -344,13 +344,13 @@
         ],
         "total_char_used": 1086
       },
-      "prompt_fingerprint": "ec7e0a5783f0e46d",
-      "request_fingerprint": "e4e4d944a66eaa0e",
+      "prompt_fingerprint": "c24dbc85ffa71e35",
+      "request_fingerprint": "26c8bd96906b6686",
       "request_id": "dcd6932ee0a09722"
     },
     {
       "capability_requirements": {
-        "context_budget_tokens": 1685,
+        "context_budget_tokens": 1898,
         "estimate_method": "char_upper_bound",
         "structured_output": true
       },
@@ -438,8 +438,8 @@
         ],
         "total_char_used": 548
       },
-      "prompt_fingerprint": "f0d538a0d95265ff",
-      "request_fingerprint": "ca8c627a75962dec",
+      "prompt_fingerprint": "d33dea338923d35f",
+      "request_fingerprint": "f1e3308775403cfd",
       "request_id": "1190f0edad638ad0"
     }
   ],

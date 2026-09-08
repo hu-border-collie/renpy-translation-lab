@@ -63,7 +63,12 @@ class ProviderOutcome:
 
 
 class ProviderFailure(RuntimeError):
-    """Stable, already-redacted Provider or adapter failure."""
+    """Safe public failure details with optional local generated-response artifacts.
+
+    Response artifacts are never copied into public error details or exception
+    text. They retain failed structured outputs under the run store's privacy
+    boundary, not arbitrary Provider exception bodies.
+    """
 
     def __init__(
         self,
@@ -73,6 +78,9 @@ class ProviderFailure(RuntimeError):
         safe_details: Mapping[str, Any] | None = None,
         retry_after_seconds: float | None = None,
         usage_metadata: Mapping[str, Any] | None = None,
+        response_payload: Any = None,
+        normalized_payload: Any = None,
+        contract_diagnostics: Any = None,
         isolatable: bool = False,
         repairable: bool = False,
     ):
@@ -87,6 +95,9 @@ class ProviderFailure(RuntimeError):
             None if retry_after_seconds is None else float(retry_after_seconds)
         )
         self.usage_metadata = dict(usage_metadata or {})
+        self.response_payload = response_payload
+        self.normalized_payload = normalized_payload
+        self.contract_diagnostics = contract_diagnostics
         self.isolatable = bool(isolatable)
         self.repairable = bool(repairable)
         super().__init__(self.reason_code)
@@ -560,6 +571,9 @@ class DurableSyncExecutor:
                 next_eligible_at=next_eligible_at,
                 terminal=False,
                 usage_metadata=failure.usage_metadata,
+                response_payload=failure.response_payload,
+                normalized_payload=failure.normalized_payload,
+                contract_diagnostics=failure.contract_diagnostics,
             )
             return
 
@@ -573,6 +587,9 @@ class DurableSyncExecutor:
                 next_eligible_at=utcnow_iso(),
                 terminal=False,
                 usage_metadata=failure.usage_metadata,
+                response_payload=failure.response_payload,
+                normalized_payload=failure.normalized_payload,
+                contract_diagnostics=failure.contract_diagnostics,
             )
             if accepted:
                 self._derive_request(request_payload, failure.reason_code)
@@ -586,6 +603,9 @@ class DurableSyncExecutor:
             error_safe_details=failure.safe_details,
             terminal=True,
             usage_metadata=failure.usage_metadata,
+            response_payload=failure.response_payload,
+            normalized_payload=failure.normalized_payload,
+            contract_diagnostics=failure.contract_diagnostics,
         )
         if accepted and disposition.decision is RetryDecision.RUN_LEVEL_STOP:
             self.store.stop_run_dispatch(

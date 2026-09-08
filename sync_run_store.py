@@ -2048,11 +2048,17 @@ class SyncRunStore:
         error_safe_details: Mapping[str, Any] | None = None,
         next_eligible_at: str | None = None,
         terminal: bool | None = None,
+        response_payload: Any = None,
+        normalized_payload: Any = None,
+        contract_diagnostics: Any = None,
         usage_metadata: Mapping[str, Any] | None = None,
     ) -> bool:
         """T4: atomically commit a failed attempt and its retry/terminal decision.
 
-        Returns ``True`` for a normal receipt; a late receipt is only audited.
+        Generated responses, normalized candidates and contract diagnostics stay
+        in the attempt artifact columns; they are not item winners or public
+        event details. Returns ``True`` for a normal receipt; a late receipt is
+        only audited.
         """
         category = (
             error_category
@@ -2069,7 +2075,7 @@ class SyncRunStore:
                     attempt=attempt,
                     run=run,
                     observed_owner_token=owner_token,
-                    response_payload=None,
+                    response_payload=response_payload,
                     error_payload={
                         'category': category_value,
                         'reason_code': str(error_reason_code),
@@ -2097,6 +2103,9 @@ class SyncRunStore:
                 error_reason_code=str(error_reason_code),
                 error_safe_details=dict(error_safe_details or {}),
                 usage_metadata=usage_metadata,
+                response_payload=response_payload,
+                normalized_payload=normalized_payload,
+                contract_diagnostics=contract_diagnostics,
             )
             if usage_metadata:
                 self._enqueue_usage_tx(conn, attempt['attempt_id'], usage_metadata, now=now)

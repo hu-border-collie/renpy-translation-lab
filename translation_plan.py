@@ -35,6 +35,7 @@ from collections.abc import Mapping
 
 import model_profile
 import translation_core
+import structure_protection
 
 PLAN_SCHEMA_VERSION = 1
 
@@ -1745,9 +1746,18 @@ def build_translation_plan(
             if layer.layer in (CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS)
             and layer.text
         )
+        request_id = build_request_id(plan_id, chunk_id, expected_ids)
+        model_units, protection = structure_protection.model_units(
+            target_units, engine=identity.engine or 'renpy', request_id=request_id,
+            scope=structure_protection.digest({
+                'context': assembly.to_dict(), 'system': system_instruction,
+                'chunk': chunk_id,
+            }),
+        )
+        system_instruction += structure_protection.INSTRUCTION
         user_prompt = translation_core.build_canonical_translation_user_prompt(
             context_window,
-            target_units,
+            model_units,
             reference_blocks_text=reference_blocks_text,
             lexical_glossary_text=render_lexical_glossary_text(lexical_hits),
         )
@@ -1755,7 +1765,6 @@ def build_translation_plan(
             target_units,
             mode=translation_core.MODE_TRANSLATION,
         )
-        request_id = build_request_id(plan_id, chunk_id, expected_ids)
         # Credential-shaped values are redacted before they can enter the
         # request at all: serialized requests, logs, and fingerprints only
         # ever see the redaction marker.
@@ -1763,6 +1772,7 @@ def build_translation_plan(
             dict(generation_config) if generation_config is not None else default_generation_config()
         )
         transport = redact_sensitive(dict(transport_metadata or {}))
+        transport[structure_protection.KEY] = protection
         if strategy == STRATEGY_GEMINI_BATCH:
             transport.setdefault('batch_key', chunk_id)
         elif strategy == STRATEGY_SYNC:
@@ -1913,9 +1923,18 @@ def derive_translation_request(
         if layer.layer in (CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS)
         and layer.text
     )
+    request_id = f'{parent_request.request_id}{suffix}'
+    model_units = units
+    protection = None
+    if structure_protection.KEY in parent_request.transport_metadata:
+        structure_protection.validate_parent(parent_request, units)
+        parent_protection = parent_request.transport_metadata[structure_protection.KEY]
+        model_units, protection = structure_protection.model_units(
+            units, engine=parent_protection['engine'], request_id=request_id,
+        )
     user_prompt = translation_core.build_canonical_translation_user_prompt(
         chunk_input.context_window,
-        units,
+        model_units,
         reference_blocks_text=reference_blocks_text,
         lexical_glossary_text=render_lexical_glossary_text(lexical_hits),
     )
@@ -1923,9 +1942,10 @@ def derive_translation_request(
         units,
         mode=translation_core.MODE_TRANSLATION,
     )
-    request_id = f'{parent_request.request_id}{suffix}'
     chunk_id = f'{parent_request.chunk_id}{suffix}'
     transport = dict(parent_request.transport_metadata or {})
+    if protection is not None:
+        transport[structure_protection.KEY] = protection
     transport.update({
         'retry_parent_request_id': parent_request.request_id,
         'retry_parent_chunk_id': parent_request.chunk_id,

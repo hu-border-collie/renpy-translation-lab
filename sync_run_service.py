@@ -695,6 +695,8 @@ class ProductionSyncBackendAdapter:
                 expected_units=target_items,
                 allow_legacy=True,
             )
+            import structure_protection
+            report = structure_protection.validate_report(report, request, target_items)
             accepted = {}
             for item in report.items:
                 item_id = str(item.get('id') or '')
@@ -716,6 +718,9 @@ class ProductionSyncBackendAdapter:
                 raise ProviderFailure(
                     ErrorCategory.INVALID_STRUCTURED_RESPONSE,
                     reason,
+                    response_payload=result.get('response_payload') or {},
+                    normalized_payload=report.to_envelope(),
+                    contract_diagnostics=report.to_diagnostics(),
                     usage_metadata=result.get('usage_metadata') or {},
                 )
             return ProviderOutcome(

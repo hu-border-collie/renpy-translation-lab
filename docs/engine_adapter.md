@@ -297,3 +297,8 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
+
+
+## 结构保护
+
+新建翻译请求默认保护引擎结构 token，恢复后再校验；CLI 与 GUI 使用相同实现和诊断。旧请求不补造映射，结构失败不能绕过写回门禁。规则、制品追溯与兼容边界见[结构 token 保护说明](structure_protection.md)。

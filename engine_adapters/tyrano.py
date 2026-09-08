@@ -2138,6 +2138,12 @@ class TyranoAdapter:
                     ],
                 }
             )
+        if not reason_codes and isinstance(translated_text, str) and translated_text:
+            from . import structure_rules
+            try:
+                structure_rules.validate(occurrence.unit.text, translated_text, self.engine)
+            except ValueError as exc:
+                reason_codes.append(str(exc))
         translation_digest = digest_json(
             {
                 "validation_schema_version": VALIDATION_SCHEMA_VERSION,

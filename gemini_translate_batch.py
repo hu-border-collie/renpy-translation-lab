@@ -264,7 +264,7 @@ MANIFEST_MODE_TRANSLATION = 'translation'
 MANIFEST_MODE_KEYWORD_EXTRACTION = 'keyword_extraction'
 MANIFEST_MODE_REVISION = 'revision'
 MANIFEST_MODE_FINAL_REVIEW = 'final_review'
-CHECK_CONTRACT_VERSION = 3
+CHECK_CONTRACT_VERSION = 4
 CHECK_SAFETY_SAFE = 'safe'
 CHECK_SAFETY_WARN = 'warn'
 CHECK_SAFETY_BLOCK = 'block'
@@ -3720,6 +3720,24 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         ),
         context_assembly=assembly.to_dict(),
     )
+    import structure_protection
+    parent_protection = (parent_chunk.get('transport_metadata') or {}).get(structure_protection.KEY)
+    if parent_protection is not None:
+        structure_protection.validate_parent(
+            translation_plan.TranslationRequest.from_dict(parent_chunk), target_units,
+        )
+        views, protection = structure_protection.model_units(
+            target_units, engine=parent_protection['engine'], request_id=request.request_id,
+        )
+        request.transport_metadata[structure_protection.KEY] = protection
+        request.system_instruction += structure_protection.INSTRUCTION
+        request.user_prompt = translation_core.build_canonical_translation_user_prompt(
+            context_window, views, reference_blocks_text=reference_blocks_text,
+            lexical_glossary_text=translation_plan.render_lexical_glossary_text(lexical_hits),
+        )
+        request.capability_requirements['context_budget_tokens'] = translation_plan.estimate_context_tokens(
+            request.system_instruction, request.user_prompt,
+        )
     request.prompt_fingerprint = translation_plan.short_fingerprint(
         translation_plan.canonical_json(request.semantic_payload())
     )
@@ -4605,6 +4623,7 @@ def run_translation_records_export(
             row,
             'translation records source',
             chunk_items,
+            chunk=chunk,
         )
         items_by_id = {str(item.get('id') or ''): item for item in items}
         for unit in chunk_items:
@@ -4953,6 +4972,7 @@ def run_reuse_results_export(
                 parent_row,
                 'parent results',
                 chunk_items,
+                chunk=chunk,
                 allow_empty=True,
             )
             parent_items_by_id = {
@@ -7350,6 +7370,7 @@ def collect_result_integrity_issue_keys(manifest):
                     payload,
                     translation_core.MODE_TRANSLATION,
                     chunk_items,
+                    request=chunk, canonical=isinstance(row.get('normalized_response'), dict),
                 )
                 current_reason_counts = contract.reason_counts()
                 for reason_code, count in current_reason_counts.items():
@@ -7531,7 +7552,7 @@ def load_result_rows_by_key(manifest, label):
     return rows, rows_by_key, result_path
 
 
-def result_items_from_row(row, label, expected_items, allow_empty=False):
+def result_items_from_row(row, label, expected_items, allow_empty=False, *, chunk=None):
     """Return validated translation items from one persisted result row.
 
     ``normalized_response`` takes precedence over the raw provider payload.
@@ -7554,6 +7575,7 @@ def result_items_from_row(row, label, expected_items, allow_empty=False):
             payload,
             translation_core.MODE_TRANSLATION,
             expected_items,
+            request=chunk, canonical=isinstance(normalized, dict),
         )
         if not contract.items and not allow_empty:
             reasons = ', '.join(sorted(contract.reason_counts())) or 'no valid items'
@@ -7602,6 +7624,7 @@ def canonical_translation_result_row(row, chunk):
             normalized,
             translation_core.MODE_TRANSLATION,
             chunk.get('items') or [],
+            request=chunk, canonical=isinstance(normalized, dict),
         )
         canonical['normalized_response'] = contract.to_envelope()
         canonical['contract_diagnostics'] = merge_terminal_contract_diagnostics(
@@ -7621,6 +7644,7 @@ def canonical_translation_result_row(row, chunk):
             parse_json_payload(response_text),
             translation_core.MODE_TRANSLATION,
             chunk.get('items') or [],
+            request=chunk, canonical=isinstance(normalized, dict),
         )
     except Exception:
         return canonical
@@ -7650,6 +7674,7 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
             'parent',
             parent_chunk.get('items') or [],
             allow_empty=True,
+            chunk=parent_chunk,
         ):
             if item.get('id'):
                 merged_by_id[item['id']] = item
@@ -7670,6 +7695,7 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
             'retry',
             retry_chunk.get('items') or [],
             allow_empty=True,
+            chunk=retry_chunk,
         ):
             item_id = item.get('id')
             if item_id in allowed_ids:
@@ -7679,6 +7705,7 @@ def merge_parent_row_with_retry_item_rows(parent_row, parent_chunk, retry_chunks
             result_row_contract_payload(retry_row),
             translation_core.MODE_TRANSLATION,
             retry_chunk.get('items') or [],
+            request=retry_chunk, canonical=isinstance(retry_row.get('normalized_response'), dict),
         )
         terminal_retry_diagnostics.append(
             merge_terminal_contract_diagnostics(
@@ -8912,13 +8939,19 @@ def merge_terminal_contract_diagnostics(
     return merged
 
 
-def validate_result_contract(payload, mode, expected_items):
-    return translation_core.validate_model_response(
+def validate_result_contract(payload, mode, expected_items, *, request=None, canonical=False):
+    report = translation_core.validate_model_response(
         payload,
         mode=mode,
         expected_units=expected_items,
         allow_legacy=True,
     )
+    if request is not None and mode == translation_core.MODE_TRANSLATION:
+        import structure_protection
+        report = structure_protection.validate_report(
+            report, request, expected_items, canonical=canonical,
+        )
+    return report
 
 
 def result_row_contract_payload(row):
@@ -11263,6 +11296,7 @@ def collect_result_actions(manifest, validate_sources=False):
                     payload,
                     translation_core.MODE_TRANSLATION,
                     chunk_items,
+                    request=chunk, canonical=isinstance(row.get('normalized_response'), dict),
                 )
                 persisted_reason_deltas = record_result_row_contract_reasons(
                     summary,
@@ -12170,6 +12204,7 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
                     payload,
                     translation_core.MODE_TRANSLATION,
                     chunk_items,
+                    request=chunk,
                 )
                 parsed_items = len(contract.items)
                 parse_ok = contract.complete
@@ -14239,8 +14274,16 @@ def _build_repair_job(file_rel_path, file_path, entries, target_group, context_b
 
 
 def build_repair_request(job, model=None):
+    import structure_protection
+    request_id = 'repair-' + structure_protection.digest({'key': job['key'], 'items': job['items']})[:24]
+    views, protection = structure_protection.model_units(
+        translation_core.units_from_items(job['items']), engine='renpy', request_id=request_id,
+    )
+    job['request_id'] = request_id
+    job['expected_ids'] = [unit.id for unit in views]
+    job['transport_metadata'] = {structure_protection.KEY: protection}
     instruction = (
-        build_system_instruction()
+        build_system_instruction() + structure_protection.INSTRUCTION
         + '\nSome targets may be short interjections, short UI text, or short reactions. Translate them naturally in context.'
     )
     request = {
@@ -14252,7 +14295,7 @@ def build_repair_request(job, model=None):
                     {
                         'text': build_user_prompt(
                             job['context_past'],
-                            job['items'],
+                            views,
                             job['context_future'],
                             story_hits=job.get('story_hits') if 'story_hits' in job else None,
                             source_hits=job.get('source_hits') or [],
@@ -14269,6 +14312,8 @@ def build_repair_request(job, model=None):
     return {
         'key': job['key'],
         'request': request,
+        'request_id': request_id,
+        'transport_metadata': job['transport_metadata'],
     }
 
 def _sync_result_to_dict(result):
@@ -14736,12 +14781,15 @@ def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None):
             max_candidates,
             model=effective_model,
         ), targeted
+    if _chunk_has_plan_request(chunk):
+        derived = _build_retry_subchunk_plan_request(chunk, targeted)
+        targeted.update(derived.to_dict())
     return build_batch_request(targeted, model=effective_model), targeted
 
 
 def _contract_from_sync_result(result, chunk, mode):
     payload = parse_json_payload(result.get('response_text') or '')
-    return validate_result_contract(payload, mode, chunk.get('items') or [])
+    return validate_result_contract(payload, mode, chunk.get('items') or [], request=chunk)
 
 
 def _merge_sync_contract_reports(first, retry, chunk, mode):
@@ -15518,6 +15566,17 @@ def print_repair_summary(summary):
             print(f"- {name}: {summary['reason_counts'][name]}")
 
 
+def _repair_protection_trace(job, response_text, result_items):
+    """Retain protected request results locally without fabricating legacy traces."""
+    if 'structure_protection' not in (job.get('transport_metadata') or {}):
+        return {}
+    return {'protection_trace': {
+        'request_id': job['request_id'],
+        'raw_response_text': response_text,
+        'normalized_response': {'translations': result_items},
+    }}
+
+
 def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2, api_key_index=None):
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.SYNC,
@@ -15696,6 +15755,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     payload,
                     translation_core.MODE_TRANSLATION,
                     job['items'],
+                    request=job,
                 )
                 record_contract_reasons(summary, contract)
                 result_items = contract.items
@@ -15731,6 +15791,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                         'output_diagnostics': output_diagnostics,
                         'request_metadata': request_metadata,
                         'response_preview': response_text[:500],
+                **_repair_protection_trace(job, response_text, result_items),
                     }
                 )
             result_entries.append(
@@ -15747,6 +15808,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     'output_diagnostics': output_diagnostics,
                     'request_metadata': request_metadata,
                     'response_preview': response_text[:500],
+                **_repair_protection_trace(job, response_text, result_items),
                 }
             )
             continue
@@ -15826,6 +15888,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                 'output_diagnostics': output_diagnostics,
                 'request_metadata': request_metadata,
                 'response_preview': response_text[:500],
+                **_repair_protection_trace(job, response_text, result_items),
             }
         )
 

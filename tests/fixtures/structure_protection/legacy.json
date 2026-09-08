@@ -1,0 +1,14 @@
+{
+  "request": {
+    "request_id": "legacy-request-1",
+    "plan_id": "legacy-plan-1",
+    "chunk_id": "legacy-chunk-1",
+    "system_instruction": "Translate and preserve Ren'Py tags and variables.",
+    "user_prompt": "TARGET:\n[{\"id\":\"one\",\"text\":\"Hello [name]\"}]",
+    "expected_ids": ["one"],
+    "response_schema": {},
+    "transport_metadata": {"batch_key": "legacy-chunk-1"}
+  },
+  "items": [{"id": "one", "text": "Hello [name]"}],
+  "response": [{"id": "one", "translation": "你好 [name]"}]
+}

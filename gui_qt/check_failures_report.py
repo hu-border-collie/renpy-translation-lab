@@ -200,7 +200,8 @@ class CheckIssuesReport:
 def reason_code_label(reason_code: str) -> str:
     """Return a Chinese label for a check failure reason code."""
     text = str(reason_code or "").strip()
-    return REASON_CODE_LABELS.get(text, text or "未知原因")
+    from .user_copy import STRUCTURE_PROTECTION_COPY
+    return STRUCTURE_PROTECTION_COPY.get(text, REASON_CODE_LABELS.get(text, text or "未知原因"))
 
 
 def category_label(category: str) -> str:
@@ -213,6 +214,11 @@ def classify_reason_category(reason_code: str, error: str = "") -> str:
     text = str(reason_code or "").strip()
     if not text:
         return "unknown"
+    if text.startswith('protection.'):
+        return REASON_CATEGORY_REBUILD if text in (
+            'protection.mapping_mismatch', 'protection.stale_mapping',
+            'protection.unsupported_engine',
+        ) else REASON_CATEGORY_RETRY
     error_text = str(error or "").lower()
     if text == "validation_failed" and "preserved terms missing" in error_text:
         return REASON_CATEGORY_RETRY

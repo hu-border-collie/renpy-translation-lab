@@ -189,3 +189,8 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 | 费用语义 | 供应商同步计费，无 Batch 折扣 | Gemini Batch 定价；提交前可 `estimate-cost` |
 
 两条路径都不能代替完整游戏 QA。写回后仍应运行 Ren'Py lint、机械质量检查，并进行人工/LLM 语义审校。
+
+
+## 结构保护
+
+新建翻译请求默认保护引擎结构 token，恢复后再校验；CLI 与 GUI 使用相同实现和诊断。旧请求不补造映射，结构失败不能绕过写回门禁。规则、制品追溯与兼容边界见[结构 token 保护说明](structure_protection.md)。

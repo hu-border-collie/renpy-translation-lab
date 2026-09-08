@@ -237,6 +237,23 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 {'id': item['id'], 'translation': translations[item['text']]}
                 for item in chunk['items']
             ]
+            # Simulate a provider obeying the current protected TARGET view.
+            from engine_adapters import structure_rules
+            for result_item in result_items:
+                protection = (chunk.get('transport_metadata') or {}).get('structure_protection')
+                if protection is None:
+                    continue
+                mapping = protection['items'][result_item['id']]
+                available = list(mapping['entries'])
+                text = result_item['translation']
+                parts, end = [], 0
+                for start, stop, kind in structure_rules.spans(text, protection['engine']):
+                    entry = next(entry for entry in available if entry['value'] == text[start:stop])
+                    available.remove(entry)
+                    parts.extend((text[end:start], entry['marker']))
+                    end = stop
+                parts.append(text[end:])
+                result_item['translation'] = ''.join(parts)
             response_text = json.dumps(result_items, ensure_ascii=False)
             rows.append(
                 {
