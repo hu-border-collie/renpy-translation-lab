@@ -295,6 +295,31 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("已写回 2 个文件", "\n".join(summary.facts))
         self.assertIn("下一拆分包", "\n".join(summary.facts))
 
+    def test_summarize_export_only_envelope_does_not_claim_apply(self):
+        summary = summarize_apply_envelope(
+            {
+                "ok": True,
+                "status": "exported",
+                "result": {
+                    "apply": {
+                        "mode": "export-only",
+                        "status": "exported",
+                        "export_root": r"C:\exports",
+                        "record_path": r"C:\pkg\export_only_record.json",
+                        "exported_files": 2,
+                        "applied_files": 0,
+                    }
+                },
+            },
+            exit_code=0,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "exported")
+        self.assertIn("导出完整文件：2 个", "\n".join(summary.facts))
+        self.assertIn("未修改", summary.message)
+        self.assertFalse(summary.can_apply)
+
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
             APPLY_OUTPUT,

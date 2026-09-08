@@ -805,6 +805,19 @@ class BatchCliContractTests(unittest.TestCase):
             batch.cli_contract.EXIT_BLOCKED,
         )
 
+    def test_export_only_error_codes_keep_one_stable_prefix(self):
+        for reason_code, expected_code in (
+            ("export_only.path_required", "EXPORT_ONLY_PATH_REQUIRED"),
+            ("export_only.commit_failed", "EXPORT_ONLY_COMMIT_FAILED"),
+            ("", "EXPORT_ONLY_FAILED"),
+        ):
+            with self.subTest(reason_code=reason_code):
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch._export_only_error(
+                        SimpleNamespace(reason_code=reason_code, details={})
+                    )
+                self.assertEqual(raised.exception.code_name, expected_code)
+
     def test_typed_core_error_bypasses_message_classifier_in_machine_mode(self):
         stdout = io.StringIO()
 

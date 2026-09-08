@@ -787,7 +787,7 @@ def build_cli_commands(
     )
 
     safety_level = manifest_check_safety_level(manifest)
-    if not manifest.get("applied_at") and safety_level not in {"warn", "block"}:
+    if not manifest.get("applied_at") and safety_level == "safe":
         commands.append(
             DiagnosticsCommand(
                 label="写回翻译（仅可写回）",
@@ -795,6 +795,16 @@ def build_cli_commands(
                     python_exe,
                     batch_script_path,
                     ["apply", manifest_path],
+                ),
+            )
+        )
+        commands.append(
+            DiagnosticsCommand(
+                label="导出翻译文件（CLI，仅导出）",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["apply", manifest_path, "--export-only", "<EXPORT_ROOT>"],
                 ),
             )
         )

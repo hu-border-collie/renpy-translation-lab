@@ -263,6 +263,35 @@ def _stage_lines(
         raise
 
 
+def _stage_bytes(
+    path: str,
+    content: bytes,
+) -> str:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    target_mode = None
+    try:
+        target_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except FileNotFoundError:
+        pass
+    fd, staged_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".txn.tmp",
+        dir=directory,
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if target_mode is not None:
+            os.chmod(staged_path, target_mode)
+        return staged_path
+    except Exception:
+        _remove_if_present(staged_path)
+        raise
+
+
 def _backup_file(path: str) -> str:
     if not os.path.exists(path):
         return ""
@@ -292,7 +321,7 @@ def _cleanup_transaction_entries(entries: Iterable[dict[str, Any]]) -> None:
 def _validate_transaction_journal(
     payload: Any,
     journal: str,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[str, str, list[dict[str, Any]]]:
     if not isinstance(payload, dict) or payload.get("version") != 1:
         raise AtomicWriteTransactionError(
             f"Invalid writeback transaction journal: {journal}"
@@ -303,6 +332,21 @@ def _validate_transaction_journal(
     if state not in {"prepared", "committed"} or not isinstance(entries, list):
         raise AtomicWriteTransactionError(
             f"Invalid writeback transaction journal: {journal}"
+        )
+    transaction_kind = payload.get("transaction_kind")
+    if transaction_kind is None:
+        # Journals written before transaction identities were introduced are
+        # still recoverable.  The dedicated revision filename is the only
+        # legacy signal available; an export journal without an identity must
+        # remain untrusted and will be rejected by its export caller.
+        transaction_kind = (
+            "revision"
+            if os.path.basename(journal) == ".revision_writeback_transaction.json"
+            else "apply"
+        )
+    if not isinstance(transaction_kind, str) or not transaction_kind.strip():
+        raise AtomicWriteTransactionError(
+            f"Invalid transaction identity in writeback journal: {journal}"
         )
 
     for index, entry in enumerate(entries):
@@ -327,7 +371,7 @@ def _validate_transaction_journal(
                 f"Invalid entry {index} in writeback transaction journal: {journal}"
             )
 
-    return state, entries
+    return state, transaction_kind, entries
 
 
 def _restore_backup_copy(backup_path: str, target: str) -> None:
@@ -350,6 +394,8 @@ def _restore_backup_copy(backup_path: str, target: str) -> None:
 
 def recover_atomic_write_transaction(
     journal_path: str | os.PathLike[str],
+    *,
+    expected_transaction_kind: str | None = None,
 ) -> bool:
     """Recover an interrupted multi-file write transaction.
 
@@ -367,7 +413,16 @@ def recover_atomic_write_transaction(
             f"Could not read writeback transaction journal {journal}: {exc}"
         ) from exc
 
-    state, entries = _validate_transaction_journal(payload, journal)
+    state, transaction_kind, entries = _validate_transaction_journal(payload, journal)
+    if (
+        expected_transaction_kind is not None
+        and transaction_kind != expected_transaction_kind
+    ):
+        raise AtomicWriteTransactionError(
+            "Writeback transaction identity does not match the requested "
+            f"recovery kind: expected {expected_transaction_kind!r}, "
+            f"got {transaction_kind!r} ({journal})."
+        )
 
     if state == "prepared":
         for entry in reversed(entries):
@@ -399,6 +454,7 @@ def atomic_write_many_lines(
     journal_path: str | os.PathLike[str],
     encoding: str = "utf-8",
     newline: str | None = "\n",
+    transaction_kind: str = "apply",
 ) -> None:
     """Replace multiple text files as one recoverable writeback transaction.
 
@@ -407,7 +463,10 @@ def atomic_write_many_lines(
     ``prepared`` journal is likewise rolled back on the next invocation.
     """
     journal = os.path.abspath(os.fspath(journal_path))
-    recover_atomic_write_transaction(journal)
+    recover_atomic_write_transaction(
+        journal,
+        expected_transaction_kind=transaction_kind,
+    )
     normalized_writes = [
         (os.path.abspath(os.fspath(path)), lines)
         for path, lines in writes
@@ -440,7 +499,12 @@ def atomic_write_many_lines(
                 }
             )
 
-        payload = {"version": 1, "state": "prepared", "entries": entries}
+        payload = {
+            "version": 1,
+            "transaction_kind": transaction_kind,
+            "state": "prepared",
+            "entries": entries,
+        }
         atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
         journal_written = True
 
@@ -451,7 +515,82 @@ def atomic_write_many_lines(
         atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
     except Exception:
         if journal_written:
-            recover_atomic_write_transaction(journal)
+            recover_atomic_write_transaction(
+                journal,
+                expected_transaction_kind=transaction_kind,
+            )
+        else:
+            _cleanup_transaction_entries(entries)
+        raise
+
+    _cleanup_transaction_entries(entries)
+    _remove_if_present(journal)
+
+
+def atomic_write_many_bytes(
+    writes: Iterable[tuple[str | os.PathLike[str], bytes]],
+    *,
+    journal_path: str | os.PathLike[str],
+    transaction_kind: str = "apply",
+) -> None:
+    """Replace multiple byte files in one recoverable transaction.
+
+    Exported localization files are compared and persisted as bytes so a
+    UTF-8 BOM and the source newline/encoding contract cannot be lost while
+    staging a complete file tree.
+    """
+    journal = os.path.abspath(os.fspath(journal_path))
+    recover_atomic_write_transaction(
+        journal,
+        expected_transaction_kind=transaction_kind,
+    )
+    normalized_writes = [
+        (os.path.abspath(os.fspath(path)), bytes(content))
+        for path, content in writes
+    ]
+    if not normalized_writes:
+        return
+
+    entries: list[dict[str, Any]] = []
+    journal_written = False
+    try:
+        for target, content in normalized_writes:
+            existed = os.path.exists(target)
+            staged_path = _stage_bytes(target, content)
+            try:
+                backup_path = _backup_file(target)
+            except Exception:
+                _remove_if_present(staged_path)
+                raise
+            entries.append(
+                {
+                    "target": target,
+                    "staged_path": staged_path,
+                    "backup_path": backup_path,
+                    "existed": existed,
+                }
+            )
+
+        payload = {
+            "version": 1,
+            "transaction_kind": transaction_kind,
+            "state": "prepared",
+            "entries": entries,
+        }
+        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
+        journal_written = True
+
+        for entry in entries:
+            os.replace(entry["staged_path"], entry["target"])
+
+        payload["state"] = "committed"
+        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
+    except Exception:
+        if journal_written:
+            recover_atomic_write_transaction(
+                journal,
+                expected_transaction_kind=transaction_kind,
+            )
         else:
             _cleanup_transaction_entries(entries)
         raise
