@@ -787,7 +787,7 @@ def build_cli_commands(
     )
 
     safety_level = manifest_check_safety_level(manifest)
-    if not manifest.get("applied_at") and safety_level not in {"warn", "block"}:
+    if not manifest.get("applied_at") and safety_level == "safe":
         commands.append(
             DiagnosticsCommand(
                 label="写回翻译（仅可写回）",

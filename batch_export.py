@@ -895,8 +895,14 @@ def export_only(
             transaction_kind=EXPORT_TRANSACTION_KIND,
         )
     except Exception as exc:
+        recovery_required = os.path.lexists(journal_path)
         if root_was_empty:
-            _prune_empty_recovery_directories(root)
+            try:
+                _prune_empty_recovery_directories(root)
+            except (ExportOnlyError, OSError):
+                # Cleanup diagnostics must not replace the original commit
+                # failure or change the recovery classification.
+                pass
             if not root_existed:
                 try:
                     os.rmdir(root.requested_path)
@@ -904,7 +910,6 @@ def export_only(
                     pass
         if isinstance(exc, ExportOnlyError):
             raise
-        recovery_required = os.path.lexists(journal_path)
         reason_code = (
             "export_only.recovery_required"
             if recovery_required

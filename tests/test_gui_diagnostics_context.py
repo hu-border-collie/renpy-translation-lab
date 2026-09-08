@@ -173,6 +173,20 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("--export-only", by_label["导出翻译文件（CLI，仅导出）"])
         self.assertIn("<EXPORT_ROOT>", by_label["导出翻译文件（CLI，仅导出）"])
 
+    def test_command_reference_omits_apply_templates_without_allow_gate(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\jobs\manifest.json",
+            manifest={
+                "mode": "translation",
+                "last_check_summary": {"safety_level": "safe"},
+            },
+        )
+        labels = {command.label for command in commands}
+        self.assertNotIn("写回翻译（仅可写回）", labels)
+        self.assertNotIn("导出翻译文件（CLI，仅导出）", labels)
+
     def test_command_reference_includes_durable_sync_lifecycle(self):
         commands = build_cli_commands(
             python_exe='python',

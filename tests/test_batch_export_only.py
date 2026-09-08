@@ -254,6 +254,55 @@ class BatchExportOnlyTests(unittest.TestCase):
             self.assertEqual(failed.exception.reason_code, "export_only.commit_failed")
             self.assertFalse((root / "exports").exists())
 
+    def test_cleanup_failure_does_not_replace_recovery_classification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            game_root, package_dir, source = self._setup_paths(root)
+            source_bytes = b"label start:\n    e \"Hello\"\n"
+            output_bytes = b"label start:\n    e \"\xe4\xbd\xa0\xe5\xa5\xbd\"\n"
+            source.write_bytes(source_bytes)
+            export_root = self._export_root(root, game_root, package_dir)
+            journal = package_dir / ".export_only_transaction.json"
+
+            def fail_commit(*_args, **kwargs):
+                Path(kwargs["journal_path"]).write_text("pending", encoding="utf-8")
+                raise OSError("disk full")
+
+            with (
+                mock.patch.object(
+                    batch_export,
+                    "atomic_write_many_bytes",
+                    side_effect=fail_commit,
+                ),
+                mock.patch.object(
+                    batch_export,
+                    "_prune_empty_recovery_directories",
+                    side_effect=batch_export.ExportOnlyError(
+                        "export_only.path_unreadable",
+                        "cleanup failed",
+                    ),
+                ),
+                self.assertRaises(batch_export.ExportOnlyError) as failed,
+            ):
+                batch_export.export_only(
+                    export_root,
+                    game_root=str(game_root),
+                    package_dir=str(package_dir),
+                    payloads=[self._payload(source, source_bytes, output_bytes)],
+                    request_payload={"check_fingerprint": "check-recovery"},
+                    journal_path=str(journal),
+                )
+
+            self.assertEqual(
+                failed.exception.reason_code,
+                "export_only.recovery_required",
+            )
+            self.assertIn("disk full", str(failed.exception))
+            self.assertEqual(
+                failed.exception.details["recovery_state"],
+                "recovery_required",
+            )
+
     def test_interrupted_export_journal_recovers_before_retry(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

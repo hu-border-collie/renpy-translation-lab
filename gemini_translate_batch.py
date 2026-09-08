@@ -12720,7 +12720,8 @@ def check_results(target=None):
 
 def _export_only_error(exc):
     reason_code = str(getattr(exc, 'reason_code', '') or 'export_only_failed')
-    code_name = 'EXPORT_ONLY_' + re.sub(r'[^A-Za-z0-9]+', '_', reason_code).strip('_').upper()
+    normalized = re.sub(r'[^A-Za-z0-9]+', '_', reason_code).strip('_').upper()
+    code_name = normalized if normalized.startswith('EXPORT_ONLY_') else 'EXPORT_ONLY_' + normalized
     details = dict(getattr(exc, 'details', {}) or {})
     details.update({'mode': 'export-only', 'reason_code': reason_code})
     raise cli_contract.MachineContractError(
