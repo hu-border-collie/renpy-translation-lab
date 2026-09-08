@@ -3728,6 +3728,7 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         )
         views, protection = structure_protection.model_units(
             target_units, engine=parent_protection['engine'], request_id=request.request_id,
+            scope=structure_protection.request_scope(request),
         )
         request.transport_metadata[structure_protection.KEY] = protection
         request.system_instruction += structure_protection.INSTRUCTION
@@ -14275,9 +14276,17 @@ def _build_repair_job(file_rel_path, file_path, entries, target_group, context_b
 
 def build_repair_request(job, model=None):
     import structure_protection
+    if job.get('engine', 'renpy') != 'renpy':
+        raise ValueError('protection.unsupported_engine')
     request_id = 'repair-' + structure_protection.digest({'key': job['key'], 'items': job['items']})[:24]
+    job['chunk_id'] = job['key']
+    job['system_instruction'] = build_system_instruction()
+    job['context_assembly'] = {key: job.get(key) for key in (
+        'items', 'context_past', 'context_future', 'story_hits', 'source_hits',
+    )}
     views, protection = structure_protection.model_units(
         translation_core.units_from_items(job['items']), engine='renpy', request_id=request_id,
+        scope=structure_protection.request_scope(job),
     )
     job['request_id'] = request_id
     job['expected_ids'] = [unit.id for unit in views]

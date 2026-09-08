@@ -14,7 +14,7 @@ import re
 
 from engine_adapters import structure_rules
 
-VERSION = 1
+VERSION = 2
 KEY = 'structure_protection'
 INSTRUCTION = '\nCopy every __RTL_ placeholder exactly once into its translation. Never edit placeholders. Only placeholders containing _variable_ may move with language order; keep all other placeholders in their original order.'
 MARKER = re.compile(r'__RTL_[A-Za-z0-9_]*?__')
@@ -26,15 +26,35 @@ def digest(value):
                                      separators=(',', ':')).encode('utf-8')).hexdigest()
 
 
-def protect(source, *, engine, request_id, item_id, scope=None):
+def request_scope(request):
+    """Recompute the model-context binding instead of trusting a stored scope."""
+    payload = request.to_dict() if hasattr(request, 'to_dict') else request
+    prompt = str(payload.get('user_prompt') or '')
+    metadata = (payload.get('transport_metadata') or {}).get(KEY) or {}
+    if isinstance(metadata, dict):
+        replacements = {}
+        for mapping in (metadata.get('items') or {}).values():
+            if isinstance(mapping, dict):
+                for entry in mapping.get('entries') or []:
+                    replacements[entry['marker']] = json.dumps(entry['value'], ensure_ascii=False)[1:-1]
+        prompt = MARKER.sub(lambda match: replacements.get(match.group(), match.group()), prompt)
+    return digest({
+        'prompt': prompt,
+        'context': payload.get('context_assembly') or {},
+        'system': str(payload.get('system_instruction') or '').removesuffix(INSTRUCTION),
+        'chunk': payload.get('chunk_id') or '',
+    })
+
+
+def protect(source, *, engine, request_id, item_id, scope=None, literal_brackets=False):
     """Build a deterministic, collision-free view and its identity-bound map."""
     binding = dict(version=VERSION, engine=engine, request_id=request_id,
-                   item_id=item_id, source_digest=digest(source), scope=scope or request_id)
+                   item_id=item_id, source_digest=digest(source), scope=scope or request_id, literal_brackets=bool(literal_brackets))
     namespace = digest({key: value for key, value in binding.items() if key != 'request_id'})[:24]
     while f'__RTL_{namespace}_' in source:
         namespace = digest(namespace)[:24]
     entries, parts, end = [], [], 0
-    spans = list(structure_rules.spans(source, engine))
+    spans = list(structure_rules.spans(source, engine, literal_brackets=literal_brackets))
     for match in LITERAL_MARKER.finditer(source):
         if not any(start < match.end() and stop > match.start() for start, stop, _ in spans):
             spans.append((match.start(), match.end(), 'literal'))
@@ -53,15 +73,16 @@ def model_units(units, *, engine, request_id, scope=None):
     """Copy translation units for prompt rendering, retaining canonical objects."""
     views, maps = [], {}
     for unit in units:
-        view, mapping = protect(unit.text, engine=engine, request_id=request_id, item_id=unit.id, scope=scope)
+        view, mapping = protect(unit.text, engine=engine, request_id=request_id, item_id=unit.id, scope=scope,
+                                literal_brackets=unit.metadata.get('tyrano_literal_brackets', False))
         views.append(replace(unit, text=view))
         maps[unit.id] = mapping
     return views, dict(version=VERSION, engine=engine, request_id=request_id, scope=scope or request_id, items=maps)
 
 
-def restore(text, mapping, *, source, engine, request_id, item_id, scope=None):
+def restore(text, mapping, *, source, engine, request_id, item_id, scope=None, literal_brackets=False):
     """Restore only exact, once-present markers; never repair missing tokens."""
-    _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=scope)
+    _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=scope, literal_brackets=literal_brackets)
     if mapping != expected:
         raise ValueError('protection.mapping_mismatch')
     markers = {entry['marker']: entry['value'] for entry in mapping['entries']}
@@ -77,7 +98,7 @@ def restore(text, mapping, *, source, engine, request_id, item_id, scope=None):
         raise ValueError('protection.extra_token')
     restored = MARKER.sub(lambda match: markers.get(match.group(), match.group()), text)
     validate_literal_markers(source, restored)
-    structure_rules.validate(source, restored, engine)
+    structure_rules.validate(source, restored, engine, literal_brackets=literal_brackets)
     return restored
 
 
@@ -92,12 +113,13 @@ def validate_parent(request, units):
     metadata = request.transport_metadata[KEY]
     if not isinstance(metadata, dict) or metadata.get('version') != VERSION:
         raise ValueError('protection.stale_mapping')
-    if metadata.get('request_id') != request.request_id:
+    if metadata.get('request_id') != request.request_id or metadata.get('scope') != request_scope(request):
         raise ValueError('protection.mapping_mismatch')
     for unit in units:
         _, expected = protect(unit.text, engine=metadata['engine'],
                               request_id=request.request_id, item_id=unit.id,
-                              scope=metadata.get('scope'))
+                              scope=request_scope(request),
+                              literal_brackets=unit.metadata.get('tyrano_literal_brackets', False))
         if metadata['items'].get(unit.id) != expected:
             raise ValueError('protection.mapping_mismatch')
 
@@ -116,12 +138,12 @@ def validate_report(report, request, units, *, canonical=False):
         return report
     metadata = transport[KEY]
     units = translation_core.units_from_items(units)
-    sources = {unit.id: unit.text for unit in units}
+    sources = {unit.id: unit for unit in units}
     request_id = payload.get('request_id')
     error = ''
     if not isinstance(metadata, dict) or metadata.get('version') != VERSION:
         error = 'protection.stale_mapping'
-    elif metadata.get('request_id') != request_id or set(metadata.get('items') or {}) != set(payload.get('expected_ids') or []):
+    elif metadata.get('request_id') != request_id or metadata.get('scope') != request_scope(payload) or set(metadata.get('items') or {}) != set(payload.get('expected_ids') or []):
         error = 'protection.mapping_mismatch'
     accepted = []
     for item in report.items:
@@ -130,17 +152,19 @@ def validate_report(report, request, units, *, canonical=False):
             if error:
                 raise ValueError(error)
             engine = metadata['engine']
-            source = sources[item_id]
-            _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=metadata.get('scope'))
+            unit = sources[item_id]
+            source = unit.text
+            literal_brackets = unit.metadata.get('tyrano_literal_brackets', False)
+            _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=request_scope(payload), literal_brackets=literal_brackets)
             if metadata['items'].get(item_id) != expected:
                 raise ValueError('protection.mapping_mismatch')
             text = item['translation']
             if canonical:
                 validate_literal_markers(source, text)
-                structure_rules.validate(source, text, engine)
+                structure_rules.validate(source, text, engine, literal_brackets=literal_brackets)
             else:
                 text = restore(text, expected, source=source, engine=engine,
-                               request_id=request_id, item_id=item_id, scope=metadata.get('scope'))
+                               request_id=request_id, item_id=item_id, scope=request_scope(payload), literal_brackets=literal_brackets)
             accepted.append({**item, 'translation': text})
         except (ValueError, KeyError, TypeError) as exc:
             reason = str(exc)

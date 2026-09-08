@@ -1882,6 +1882,9 @@ class TyranoAdapter:
                 end=len(source_value),
                 speaker_id="",
                 speaker_name="",
+                # Scenario text nodes contain only literal brackets: the parser
+                # has already separated unescaped control tags from dialogue.
+                metadata={"tyrano_literal_brackets": locator.get("kind") == "text"},
             )
             content_fingerprint = digest_json(
                 {
@@ -2141,7 +2144,10 @@ class TyranoAdapter:
         if not reason_codes and isinstance(translated_text, str) and translated_text:
             from . import structure_rules
             try:
-                structure_rules.validate(occurrence.unit.text, translated_text, self.engine)
+                structure_rules.validate(
+                    occurrence.unit.text, translated_text, self.engine,
+                    literal_brackets=occurrence.locator.locator.get("kind") == "text",
+                )
             except ValueError as exc:
                 reason_codes.append(str(exc))
         translation_digest = digest_json(

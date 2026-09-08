@@ -28,6 +28,7 @@ def response(request, items):
         {'id': item['id'], 'translation': protection.protect(
             item['text'], engine=maps[item['id']]['engine'],
             request_id=request.request_id, item_id=item['id'], scope=maps[item['id']]['scope'],
+            literal_brackets=maps[item['id']].get('literal_brackets', False),
         )[0].replace('Hello', '你好').replace('Goodbye', '再见')}
         for item in items
     ]}
@@ -39,6 +40,86 @@ def report(request, items, payload, canonical=False):
 
 
 class ProtectionTests(unittest.TestCase):
+    def test_retries_bind_current_context_and_reject_transplanted_maps(self):
+        parent, items = build()
+        left = plan.derive_translation_request(parent, items[:1], lineage_suffix='--retry',
+                                              retrieval_blocks_text='context A')
+        right = plan.derive_translation_request(parent, items[:1], lineage_suffix='--retry',
+                                               retrieval_blocks_text='context B')
+        self.assertEqual(left.request_id, right.request_id)
+        self.assertNotEqual(left.transport_metadata[protection.KEY], right.transport_metadata[protection.KEY])
+        raw = response(left, items[:1])
+        self.assertFalse(report(right, items[:1], raw).complete)
+        right.transport_metadata[protection.KEY] = left.transport_metadata[protection.KEY]
+        self.assertIn('protection.mapping_mismatch', report(right, items[:1], raw).reason_counts())
+        with self.assertRaisesRegex(ValueError, 'mapping_mismatch'):
+            plan.derive_translation_request(right, items[:1], lineage_suffix='--again')
+
+    def test_sensitive_looking_item_id_survives_child_redaction(self):
+        items = [{'id': 'access_token', 'text': 'Hello [name]'}]
+        parent = plan.build_translation_plan(
+            [{'file_rel_path': 'x.rpy', 'tasks': items}], execution_strategy='sync',
+            source_identity={'engine': 'renpy'},
+        ).requests[0]
+        parent.transport_metadata['api_key'] = 'synthetic-secret'
+        child = plan.derive_translation_request(parent, items, lineage_suffix='--retry')
+        self.assertEqual(child.transport_metadata['api_key'], '[redacted]')
+        self.assertIsInstance(child.transport_metadata[protection.KEY]['items']['access_token'], dict)
+        self.assertTrue(report(child, items, response(child, items)).complete)
+        plan.derive_translation_request(child, items, lineage_suffix='--again')
+
+    def test_missing_engine_and_v1_maps_fail_closed(self):
+        for identity in ({}, {'engine': ''}, {'engine': 'unknown'}):
+            with self.subTest(identity=identity), self.assertRaisesRegex(ValueError, 'unsupported_engine'):
+                plan.build_translation_plan([], execution_strategy='sync', source_identity=identity)
+        request, items = build()
+        raw = response(request, items)
+        request.transport_metadata[protection.KEY]['version'] = 1
+        self.assertIn('protection.stale_mapping', report(request, items, raw).reason_counts())
+
+    def test_tyrano_literal_brackets_from_actual_catalog_extraction(self):
+        from engine_adapters.tyrano import TyranoAdapter, build_translation_snapshot
+        from engine_adapters.contracts import ProjectDiscoveryRequest
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenario = root / 'data' / 'scenario'
+            catalog = root / 'data' / 'others' / 'lang'
+            scenario.mkdir(parents=True)
+            catalog.mkdir(parents=True)
+            (scenario / 'sample.ks').write_text('Hello \\[note\\]\nHello \\[\n', encoding='utf-8')
+            (catalog / 'ch.json').write_text(json.dumps({
+                'scenes': {'sample.ks': {'scenario': {'Hello [note]': '', 'Hello [': ''}, 'tag': {}}},
+                'charas': {}, 'tags': {'glink': ['text'], 'ptext': ['text']},
+            }), encoding='utf-8')
+            adapter = TyranoAdapter()
+            snapshot = build_translation_snapshot(adapter, ProjectDiscoveryRequest(
+                project_root=str(root), localization_root=str(catalog), target_language='ch',
+            ))
+            occurrences = list(snapshot.occurrences)
+            self.assertEqual(len(occurrences), 2)
+            items = [core.unit_to_translation_item(item.unit) for item in occurrences]
+            self.assertTrue(all(item['tyrano_literal_brackets'] for item in items))
+            request = plan.build_translation_plan(
+                [{'file_rel_path': 'sample.ks', 'tasks': items}], execution_strategy='sync',
+                source_identity={'engine': 'tyrano'},
+            ).requests[0]
+            raw = {'translations': [{'id': item['id'], 'translation': item['text'].replace('Hello', '你好').replace('note', '说明')}
+                                    for item in items]}
+            self.assertTrue(report(request, items, raw).complete)
+            for occurrence, translated in zip(occurrences, raw['translations']):
+                self.assertEqual(adapter.validate_translation(occurrence, translated['translation']).status, 'pass')
+        self.assertEqual(structure_rules.spans('Hello [', 'tyrano'), [])
+        self.assertEqual(structure_rules.spans(r'Hello \[note\]', 'tyrano'), [])
+        with self.assertRaisesRegex(ValueError, 'invalid_structure'):
+            structure_rules.spans('Hello [', 'renpy')
+        with self.assertRaisesRegex(ValueError, 'structure_order'):
+            structure_rules.validate('Hello [r][p]', '你好 [p][r]', 'tyrano')
+
+    def test_repair_refuses_foreign_engine(self):
+        import gemini_translate_batch as batch
+        with self.assertRaisesRegex(ValueError, 'unsupported_engine'):
+            batch.build_repair_request({'engine': 'tyrano', 'items': [{'id': 'one', 'text': '[r][p]'}]})
+
     def test_round_trip_rules_and_literal_marker(self):
         for engine, source in [
             ('renpy', '{b}{i}Hi [a] [a] [data["x"]!r]{/i}{/b} %s %(name)s'),

@@ -14,8 +14,13 @@ PERCENT = re.compile(
 PAIRED = frozenset('a alpha b color cps font i k outlinecolor plain s size u'.split())
 
 
-def spans(text, engine):
-    """Return non-overlapping (start, end, kind) spans under explicit rules."""
+def spans(text, engine, *, literal_brackets=False):
+    """Return non-overlapping spans under explicit engine rules.
+
+    ``literal_brackets`` is parser provenance for Tyrano dialogue nodes, where
+    unescaped tags have already been separated. Never infer that provenance
+    from the spelling of a normalized string.
+    """
     if engine not in ('renpy', 'tyrano'):
         raise ValueError('protection.unsupported_engine')
     result = []
@@ -32,7 +37,9 @@ def spans(text, engine):
         elif engine == 'renpy' and text[index:index + 2] in ('[[', '{{', '%%'):
             index += 2
             kind = 'escape'
-        elif text[index] == '[':
+        elif engine == 'tyrano' and text[index:index + 2] in ('\\[', '\\]'):
+            index += 2
+        elif text[index] == '[' and not (engine == 'tyrano' and literal_brackets):
             # Ren'Py expressions may contain indexed expressions and strings;
             # Tyrano tag attributes may contain quoted closing brackets.
             depth, quote, escaped = 1, '', False
@@ -54,6 +61,9 @@ def spans(text, engine):
                     depth -= 1
                 index += 1
             if depth:
+                if engine == 'tyrano':
+                    index = start + 1
+                    continue
                 raise ValueError('protection.invalid_structure')
             kind = 'variable' if engine == 'renpy' else 'control'
         elif engine == 'renpy' and text[index] == '{':
@@ -72,14 +82,14 @@ def spans(text, engine):
     return result
 
 
-def validate(text, translated, engine):
+def validate(text, translated, engine, *, literal_brackets=False):
     """Check exact token multiplicity, structural order and tag nesting.
 
     Named variables may move with language order. Positional formats, engine
     commands, escapes, tags and line boundaries retain their relative order.
     """
-    original = [(text[a:b], kind) for a, b, kind in spans(text, engine)]
-    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine)]
+    original = [(text[a:b], kind) for a, b, kind in spans(text, engine, literal_brackets=literal_brackets)]
+    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine, literal_brackets=literal_brackets)]
     if Counter(original) != Counter(current):
         raise ValueError('protection.structure_changed')
     if [x for x in original if x[1] != 'variable'] != [x for x in current if x[1] != 'variable']:

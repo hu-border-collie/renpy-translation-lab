@@ -150,7 +150,7 @@
     },
     "provider": "openai_compatible"
   },
-  "plan_fingerprint": "c04e2422946da4ca",
+  "plan_fingerprint": "369d9c607010e0fc",
   "plan_id": "84faf27bbbe9dbed",
   "request_summaries": [
     {
@@ -246,8 +246,8 @@
         ],
         "total_char_used": 972
       },
-      "prompt_fingerprint": "51aeb66c56b22f69",
-      "request_fingerprint": "789431d41e92e1fc",
+      "prompt_fingerprint": "e54b109b4b73f378",
+      "request_fingerprint": "6c0ecda893e71a86",
       "request_id": "b80c6fba192abe84"
     },
     {
@@ -344,8 +344,8 @@
         ],
         "total_char_used": 1086
       },
-      "prompt_fingerprint": "c24dbc85ffa71e35",
-      "request_fingerprint": "e8a635fb4b13466a",
+      "prompt_fingerprint": "4d0b82dd6491686e",
+      "request_fingerprint": "7d09782900714321",
       "request_id": "7cb559fedd185643"
     },
     {
@@ -439,7 +439,7 @@
         "total_char_used": 548
       },
       "prompt_fingerprint": "d33dea338923d35f",
-      "request_fingerprint": "5dabd8a6b868eb49",
+      "request_fingerprint": "4bc9e2758a4342d3",
       "request_id": "1dc500e765c71071"
     }
   ],
