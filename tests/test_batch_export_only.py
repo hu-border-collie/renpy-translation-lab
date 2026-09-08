@@ -303,6 +303,41 @@ class BatchExportOnlyTests(unittest.TestCase):
                 "recovery_required",
             )
 
+    def test_destination_creation_failure_is_structured(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            game_root, package_dir, source = self._setup_paths(root)
+            source_bytes = b"label start:\n    e \"Hello\"\n"
+            output_bytes = b"label start:\n    e \"\xe4\xbd\xa0\xe5\xa5\xbd\"\n"
+            source.write_bytes(source_bytes)
+            export_root = self._export_root(root, game_root, package_dir)
+            journal = package_dir / ".export_only_transaction.json"
+
+            with (
+                mock.patch.object(
+                    batch_export.os,
+                    "makedirs",
+                    side_effect=OSError("permission denied"),
+                ),
+                self.assertRaises(batch_export.ExportOnlyError) as failed,
+            ):
+                batch_export.export_only(
+                    export_root,
+                    game_root=str(game_root),
+                    package_dir=str(package_dir),
+                    payloads=[self._payload(source, source_bytes, output_bytes)],
+                    request_payload={"check_fingerprint": "check-create-fail"},
+                    journal_path=str(journal),
+                )
+
+            self.assertEqual(
+                failed.exception.reason_code,
+                "export_only.commit_failed",
+            )
+            self.assertEqual(failed.exception.details["recovery_state"], "failed")
+            self.assertIn("permission denied", str(failed.exception))
+            self.assertFalse((root / "exports").exists())
+
     def test_interrupted_export_journal_recovers_before_retry(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

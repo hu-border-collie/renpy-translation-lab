@@ -808,6 +808,7 @@ class BatchCliContractTests(unittest.TestCase):
     def test_export_only_error_codes_keep_one_stable_prefix(self):
         for reason_code, expected_code in (
             ("export_only.path_required", "EXPORT_ONLY_PATH_REQUIRED"),
+            ("export_only.commit_failed", "EXPORT_ONLY_COMMIT_FAILED"),
             ("", "EXPORT_ONLY_FAILED"),
         ):
             with self.subTest(reason_code=reason_code):

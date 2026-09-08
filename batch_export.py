@@ -843,7 +843,40 @@ def export_only(
     root_was_empty = current_tree is None or (
         not current_tree.get("files") and not current_tree.get("directories")
     )
-    os.makedirs(root.requested_path, exist_ok=True)
+    try:
+        os.makedirs(root.requested_path, exist_ok=True)
+    except OSError as exc:
+        recovery_required = os.path.lexists(journal_path)
+        if root_was_empty and not root_existed:
+            try:
+                _prune_empty_recovery_directories(root)
+            except (ExportOnlyError, OSError):
+                pass
+            try:
+                os.rmdir(root.requested_path)
+            except OSError:
+                pass
+        reason_code = (
+            "export_only.recovery_required"
+            if recovery_required
+            else "export_only.commit_failed"
+        )
+        message = (
+            "Export destination setup failed and requires recovery before retry."
+            if recovery_required
+            else "Export destination could not be created."
+        )
+        raise ExportOnlyError(
+            reason_code,
+            f"{message} ({exc})",
+            details={
+                "journal_path": journal_path,
+                "export_root": root.canonical_path,
+                "recovery_state": (
+                    "recovery_required" if recovery_required else "failed"
+                ),
+            },
+        ) from exc
     expected_tree = {
         "files": {
             entry["relative_path"]: {
