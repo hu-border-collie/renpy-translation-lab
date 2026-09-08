@@ -11,5 +11,12 @@
 | [Design QA 验收记录](design-qa.md) | 2026-07 侧边导航与页面归属的视觉/自动化验收快照 |
 | [文译参考对照与 Batch 主路径增强计划](wenyi_reference_and_batch_roadmap.md) | Project Analysis、最终审校与用量账本等已落地路线的设计取舍记录 |
 | [润色工具原型设计摘录](prototypes/renpy_polishing_toolkit/README.md) | 脱敏后的设计结论，不保存脚本副本 |
+| [#346 实施分步计划](issue-346-implementation-plan.md) | Sync / Batch 共用 TranslationPlan、ContextAssembler 与请求合同全阶段实施与收口记录（PR #403 已合入） |
+| [#347 设计 P0：耐久同步执行器](issue-347-durable-sync-executor-plan.md) | Run/Request/Attempt 状态机与耐久同步执行器核心设计（CLI 已交付，交接见 [issue-347-to-348-handoff.md](../plans/issue-347-to-348-handoff.md)） |
+| [#341 P0：Embedding 纯核心](issue-341-provider-neutral-embedding-core.md) | Provider-neutral Embedding 纯核心合同与指纹规范（PR #401 已交付） |
+| [#341：Embedding adapters 与 store identity](issue-341-embedding-adapters-store-identity.md) | Provider adapter、store identity 与兼容检查落地记录（PR #388 / PR #401 已合入） |
+| [TyranoScript V600+ P5 parser 调研与 fixture 基线](tyranoscript_v600_parser_research.md) | 官方 runtime parser/catalog 调研与离线 fixture 规范（P5 已合入主干） |
+| [开放 Issues 审计（2026-08-08）](open_issues_audit_2026-08-08.md) | 基于 `main@78ab050` 的 21 个开放 issues 快照与收口顺序审计 |
+| [Final Review 失败分类探针（#309）](final_review_result_failure_spike.md) | 模型审校结果失败分类 fixture probe 与 targeted resume 设计 |
 
 维护约定：历史文稿只加状态横幅或修正断链，不整篇改写成新手册，避免与现行文档双重维护。

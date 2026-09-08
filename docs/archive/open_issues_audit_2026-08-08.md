@@ -4,7 +4,7 @@
 > 本文记录 `main@78ab050` 与 2026-08-08 GitHub 状态的交叉审计结果。
 > Issue 的最新状态以 GitHub 正文、当前 checkout、现行文档和 CLI `--help` 为准。
 
-文档地图：[规划与设计草案](README.md) · [项目文档](../README.md)
+文档地图：[历史文档归档](README.md) · [规划与设计草案](../plans/README.md) · [项目文档](../README.md)
 
 ## 范围与方法
 

@@ -1,7 +1,6 @@
 # #347 设计 P0：耐久同步执行器、崩溃恢复与统一安全链路
 
-状态：**设计 P0 已完成，生产实现尚未开始** · 基线 `main@ed07a99`（2026-08-23）·
-必须等待 #346 P3/P4 的 Sync `TranslationPlan` 消费、统一 result 与 freshness 门禁落定后再接生产路径。
+状态：**核心实现与 CLI 已交付**（`sync_run_service.py`、`sync_run_store.py`、CLI `sync-*` 命令均已合入主干）；产品化接缝见 [#347 → #348 耐久 Sync 产品化交接](../plans/issue-347-to-348-handoff.md) · 基线 `main@ed07a99`（2026-08-23）
 
 关联 issue：[#347](https://github.com/hu-border-collie/renpy-translation-lab/issues/347) ·
 上游：[#346](https://github.com/hu-border-collie/renpy-translation-lab/issues/346) ·

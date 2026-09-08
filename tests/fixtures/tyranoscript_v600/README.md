@@ -30,6 +30,6 @@
 
 - 测试通过 universal newline 读取夹具；Windows checkout 产生的 CRLF 会被归一化，不参与断言。
 - `expected/parser_nodes.json` 不得手改；若官方 parser 行为重新核实有变化，先更新
-  `docs/plans/tyranoscript_v600_parser_research.md` 中的材料引用，再整体重生成。
+  `docs/archive/tyranoscript_v600_parser_research.md` 中的材料引用，再整体重生成。
 - 修改 `expected/inventory.json` 时必须同时更新 fixture 测试中的原因码集合和
   研究文档的 candidate 合同。

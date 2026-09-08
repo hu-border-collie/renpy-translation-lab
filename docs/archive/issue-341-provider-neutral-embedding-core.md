@@ -1,6 +1,6 @@
 # Issue #341：Provider-neutral Embedding 纯核心
 
-状态：core v1 合同已冻结、尚未接入生产路径 · Issue #341 · 基线 `main@ed07a99`（2026-08-23）
+状态：**已接入生产路径**（PR #401 生产接线与 PR #408 回归覆盖均已合入主干） · Issue #341 · 基线 `main@ed07a99`（2026-08-23）
 
 本阶段只冻结可独立合并的核心合同，不接入生产调用路径，也不改变现有 Gemini 行为。实现位于 `embedding_backend.py`，不依赖 Provider SDK、LiteLLM、PySide6、凭据或网络。
 
@@ -29,4 +29,4 @@
 - Sync RAG / Source Index：构建或更新 store 时写入 document identity；查询前由所选 adapter 生成 query identity并执行兼容检查。若 action 为 `rebuild_store`，跳过检索并把 codes/message 交给 diagnostics，绝不计算相似度。
 - `translation_plan.py`：后续 retrieval provider 消费已经通过兼容检查的命中与诊断；本核心不导入 plan，也不组装 prompt，从而避免与 #346 P2/P3 并行工作发生耦合。
 
-尚未包含：Provider adapter、异步/流式 API、重试策略、配置/doctor/GUI、store 迁移、Sync Source Index 与 Published Project Analysis 生产接线。这些应在后续阶段分别落地，并保持旧 store 不被静默迁移或重写。
+> 注：上述 Provider adapter、store identity 持久化、兼容检查与 Sync Source Index / Published Project Analysis 生产接线已由 PR #388、PR #401 与 PR #408 落地。
