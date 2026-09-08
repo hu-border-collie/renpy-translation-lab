@@ -874,3 +874,17 @@ MODEL_CONFIG_MIGRATION_COPY = {
     "migrate": "暂存模型配置（不激活生产路由）",
     "rollback": "回滚模型配置迁移（校验指纹）",
 }
+
+
+STRUCTURE_PROTECTION_COPY = {
+    "protection.missing_token": "结构占位符缺失，需重新翻译",
+    "protection.duplicate_token": "结构占位符重复，需重新翻译",
+    "protection.extra_token": "出现不属于此条目的结构占位符",
+    "protection.modified_token": "结构占位符被修改",
+    "protection.mapping_mismatch": "保护映射与当前请求或源文本不匹配",
+    "protection.stale_mapping": "保护规则版本不兼容，请新建任务",
+    "protection.invalid_structure": "标签嵌套或结构语法不合法",
+    "protection.structure_changed": "恢复后的结构符与原文不一致",
+    "protection.structure_order": "标签、格式符或控制符顺序被破坏",
+    "protection.unsupported_engine": "此引擎未声明结构保护规则",
+}

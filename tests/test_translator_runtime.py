@@ -2315,6 +2315,7 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 'file_path': 'script.rpy',
                 'tasks': batch,
             }],
+            source_identity={"engine": "renpy"},
             execution_strategy=translation_plan.STRATEGY_SYNC,
             preserve_terms=[],
             normalize_map={},

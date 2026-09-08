@@ -5832,6 +5832,18 @@ def call_gemini_sdk(
             expected_units=items,
             allow_legacy=True,
         )
+        if translation_request is not None:
+            import structure_protection
+            report = structure_protection.validate_report(report, translation_request, items)
+            if structure_protection.KEY in translation_request.transport_metadata:
+                report.metadata['protection_trace'] = {
+                    'request_id': translation_request.request_id,
+                    'request_fingerprint': translation_request.request_fingerprint,
+                    'mapping': translation_request.transport_metadata[structure_protection.KEY],
+                    'raw_response': payload,
+                    'normalized_response': report.to_envelope(),
+                    'diagnostics': report.to_diagnostics(),
+                }
         if return_contract:
             return report
         if not report.items and report.expected_ids:
@@ -6034,6 +6046,8 @@ def _record_sync_contract_report(
         diagnostics['first_pass_valid'] += len(accepted_ids)
     elif retry_kind == 'split_retry':
         diagnostics['split_retry_requests'] += 1
+    if 'protection_trace' in report.metadata:
+        diagnostics.setdefault('protection_traces', []).append(report.metadata['protection_trace'])
     # Contract-valid model output is not yet safe to preview. Only count IDs
     # accepted by the local/adapter validator as final valid results.
     diagnostics['_valid_ids'].update(accepted_ids)
@@ -6108,6 +6122,7 @@ def finalize_sync_contract_diagnostics(diagnostics):
             diagnostics.get('terminal_reason_counts') or {}
         ),
         'retry_lineage': list(diagnostics.get('retry_lineage') or []),
+        'protection_traces': list(diagnostics.get('protection_traces') or []),
     }
 
 

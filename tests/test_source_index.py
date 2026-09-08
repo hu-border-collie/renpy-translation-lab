@@ -648,6 +648,8 @@ class SourceIndexIntegrationTests(unittest.TestCase):
         self.assertIn(expected_line1, ref_blocks)
         self.assertIn(expected_line2, ref_blocks)
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_create_batch_package_source_index_integration(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

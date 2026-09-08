@@ -80,6 +80,8 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertNotIn('thinking_config', config)
         self.assertFalse(any('thinking_level' in warning for warning in warnings))
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_chunks_keeps_context_task_dicts(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
@@ -146,6 +148,8 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual(chunks[1]['context_past'][0]['progress_entry'], 'task:1:0')
         self.assertEqual(chunks[1]['context_future'][0]['speaker_name'], 'Eileen')
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_chunks_respects_source_char_limit(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
@@ -190,6 +194,8 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertEqual([chunk['source_char_count'] for chunk in chunks], [12, 10, 4])
         self.assertEqual(chunks[0]['items'][0]['text'], 'x' * 12)
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_chunks_injects_lexical_glossary_without_rag(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
@@ -243,6 +249,8 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertIn('Preserve: Sample Ensemble', user_prompt)
         self.assertNotIn('LOCKED TERMS:', user_prompt)
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_chunks_lexical_glossary_covers_normalize_and_non_translatable(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
@@ -305,6 +313,8 @@ class BatchRagRegressionTests(unittest.TestCase):
         self.assertIn('Preserve: Director B', user_prompt)
         self.assertNotIn('LOCKED TERMS:', user_prompt)
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_chunks_embeds_plan_request_fields(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,
@@ -377,6 +387,8 @@ class BatchRagRegressionTests(unittest.TestCase):
             chunk['response_schema'],
         )
 
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
     def test_build_retry_subchunk_rebuilds_canonical_plan_request(self):
         old_values = {
             'target_size': batch_mod.BATCH_TARGET_SIZE,

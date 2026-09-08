@@ -360,6 +360,7 @@ class LocalContextWindowTests(unittest.TestCase):
         jobs = [{'file_rel_path': 'script.rpy', 'file_path': 'script.rpy', 'tasks': tasks}]
         build = translation_plan.build_translation_plan(
             jobs,
+            source_identity={"engine": "renpy"},
             execution_strategy=translation_plan.STRATEGY_SYNC,
             chunk_policy=translation_plan.ChunkPolicy(max_items=60, max_chars=18000),
             context_policy=translation_plan.ContextPolicy(
@@ -403,6 +404,7 @@ class LocalContextWindowTests(unittest.TestCase):
         }]
         build = translation_plan.build_translation_plan(
             jobs,
+            source_identity={"engine": "renpy"},
             execution_strategy=translation_plan.STRATEGY_SYNC,
         )
         request = build.requests[0]
@@ -425,6 +427,7 @@ class LocalContextWindowTests(unittest.TestCase):
         }]
         build = translation_plan.build_translation_plan(
             jobs,
+            source_identity={"engine": "renpy"},
             execution_strategy=translation_plan.STRATEGY_SYNC,
         )
         spec = build.plan.chunks[0].context_window_spec
@@ -507,6 +510,7 @@ class LocalContextWindowTests(unittest.TestCase):
         }]
         build = translation_plan.build_translation_plan(
             jobs,
+            source_identity={"engine": "renpy"},
             execution_strategy=translation_plan.STRATEGY_SYNC,
         )
         request = build.requests[0]

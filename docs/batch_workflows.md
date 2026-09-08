@@ -595,3 +595,8 @@ Remove-Item Env:UPDATE_GOLDEN_KEYWORD
 ```
 
 CI 会在 Ubuntu 和 Windows 环境下自动运行单元测试，以验证跨平台路径、文件读写及数据格式合约。CI 中的测试仅使用离线 mock，不覆盖真实的 Ren'Py SDK 模板生成和 Gemini 网络请求。
+
+
+## 结构保护
+
+新建翻译请求默认保护引擎结构 token，恢复后再校验；CLI 与 GUI 使用相同实现和诊断。旧请求不补造映射，结构失败不能绕过写回门禁。规则、制品追溯与兼容边界见[结构 token 保护说明](structure_protection.md)。

@@ -454,6 +454,8 @@ def unit_to_translation_item(unit):
     }
     if unit.speaker_name:
         item['speaker_name'] = unit.speaker_name
+    if 'tyrano_literal_brackets' in unit.metadata:
+        item['tyrano_literal_brackets'] = unit.metadata['tyrano_literal_brackets']
     return item
 
 
