@@ -1,8 +1,11 @@
 """Main GUI application for the optional workbench.
 
-This is the first version shell (per #42):
-- Pure PySide6 with tabbed layout (workbench / config / diagnostics)
-- Delegates everything to the existing CLI via QProcess
+This is the current shell (per #42):
+- Pure PySide6 with unified shell navigation (workbench / settings / diagnostics)
+- Long-running translation workflows execute the existing CLI through QProcess;
+  doctor runs in a QThread with optional child-process isolation. Other
+  GUI-local workers use QThread/QThreadPool, and immediate GUI-local actions
+  (theme preview, keyring/registry writes, dialogs) run in-process
 - Workbench tab: project selection, doctor + translation workflow status
 """
 from __future__ import annotations
