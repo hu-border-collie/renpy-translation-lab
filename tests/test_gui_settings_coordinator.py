@@ -138,6 +138,21 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             collected["batch_project_analysis_thinking_level"], "high"
         )
 
+    def test_shortcuts_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+        from gui_qt.settings.shortcuts_page import ShortcutsSettingsPage
+
+        self.window._ensure_settings_page("shortcuts")
+        page = self.window._settings_coordinator.page("shortcuts")
+        self.assertIsInstance(page, ShortcutsSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(collected, {})
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("shortcuts"),
+        )
+
     def test_appearance_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.appearance_page import AppearanceSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
