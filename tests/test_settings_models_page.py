@@ -7,14 +7,6 @@ from gui_qt.settings.page_contract import SettingsIssue, SettingsPage
 
 try:
     from PySide6.QtWidgets import QApplication
-
-    from gui_qt.settings.models_page import (
-        ModelsSettingsPage,
-        batch_thinking_value_for_load,
-        batch_thinking_value_for_model_change,
-        should_save_batch_thinking_level,
-        supports_batch_thinking,
-    )
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
@@ -25,6 +17,13 @@ except ImportError as exc:
     supports_batch_thinking = None  # type: ignore[misc,assignment]
 else:
     IMPORT_ERROR = None
+    from gui_qt.settings.models_page import (
+        ModelsSettingsPage,
+        batch_thinking_value_for_load,
+        batch_thinking_value_for_model_change,
+        should_save_batch_thinking_level,
+        supports_batch_thinking,
+    )
 
 from tests import gui_test_support
 
