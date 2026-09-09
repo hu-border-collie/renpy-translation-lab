@@ -353,6 +353,7 @@ from .settings.project_page import ProjectSettingsPage
 from .settings.context_page import ContextSettingsPage
 from .settings.advanced_page import AdvancedSettingsPage
 from .settings.appearance_page import AppearanceSettingsPage
+from .settings.shortcuts_page import ShortcutsSettingsPage, shortcut_catalog
 from .settings.field_widgets import (
     format_setting_text,
 )
@@ -772,49 +773,10 @@ class MainWindow(QMainWindow):
         ]
 
     def _shortcut_catalog(self) -> list[tuple[str, list[tuple[str, str]]]]:
-        """Human-readable shortcut groups for the Settings · 快捷键 page.
-
-        Mirrors the current shell IA (sidebar routes + page-header diagnostics),
-        not the legacy hidden main-tab indices.
-        """
-        nav_rows: list[tuple[str, str]] = []
-        for index, (_route, label) in enumerate(
-            self._shell_nav_shortcut_entries(),
-            start=1,
-        ):
-            if index > 9:
-                break
-            nav_rows.append((f"Ctrl+{index}", f"打开「{label}」"))
-        nav_rows.append(("Ctrl+0", "打开「诊断与运行日志」"))
-
-        return [
-            (
-                "任务",
-                [
-                    ("Ctrl+D", "环境检查（运行中变为停止检查）"),
-                    (
-                        "Ctrl+T",
-                        "开始当前任务（翻译 / 生成模板 / 提取等，取决于当前页）",
-                    ),
-                    (
-                        "Ctrl+K",
-                        "停止当前任务（含环境检查、准备工作目录、生成模板、预建）",
-                    ),
-                ],
-            ),
-            (
-                "导航",
-                nav_rows,
-            ),
-            (
-                "日志与设置",
-                [
-                    ("Ctrl+L", "打开「诊断与运行日志」"),
-                    ("Ctrl+Shift+L", "清空诊断日志输出"),
-                    ("Ctrl+S", "保存设置（仅在「设置」页有效）"),
-                ],
-            ),
-        ]
+        """Human-readable shortcut groups for the Settings · 快捷键 page."""
+        return shortcut_catalog(
+            [label for _route, label in self._shell_nav_shortcut_entries()]
+        )
 
     def _setup_shortcuts(self) -> None:
         """Bind global keyboard shortcuts aligned with the shell information architecture."""
@@ -3203,6 +3165,8 @@ class MainWindow(QMainWindow):
             return self._create_advanced_settings_page()
         if spec.key == "appearance":
             return self._create_appearance_settings_page()
+        if spec.key == "shortcuts":
+            return self._create_shortcuts_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3804,6 +3768,9 @@ class MainWindow(QMainWindow):
     def _appearance_page(self):
         return self.__dict__.get("_appearance_settings_page")
 
+    def _shortcuts_page(self):
+        return self.__dict__.get("_shortcuts_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3869,6 +3836,26 @@ class MainWindow(QMainWindow):
             if surface is not None:
                 self._style_themed_surface(surface)
         self._refresh_font_install_status()
+        return page
+
+    def _create_shortcuts_settings_page(self):
+        """Build the migrated Shortcuts Settings page."""
+        existing = self._shortcuts_page()
+        if existing is not None:
+            return existing
+        page = ShortcutsSettingsPage(
+            self,
+            nav_labels=tuple(
+                label for _route, label in self._shell_nav_shortcut_entries()
+            ),
+        )
+        self.__dict__["_shortcuts_settings_page"] = page
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_shortcuts"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
         return page
 
     def _create_project_settings_page(self):
@@ -4447,31 +4434,8 @@ class MainWindow(QMainWindow):
         return page.widget
 
     def _build_settings_shortcuts_page(self) -> QWidget:
-        """Read-only catalog of global GUI keyboard shortcuts."""
-        page, layout = self._settings_page("settings_shortcuts")
-        intro = QLabel(
-            "以下为图形工作台当前生效的全局快捷键。"
-            "任务类快捷键会在对应按钮禁用时同步关闭；"
-            "导航类快捷键在任务运行中会遵循锁定规则（不可切换到其它任务页）。"
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("config_hint_label")
-        layout.addWidget(intro)
-
-        for group_title, rows in self._shortcut_catalog():
-            box = QGroupBox(group_title)
-            form = self._settings_form(box)
-            for key, meaning in rows:
-                value = QLabel(meaning)
-                value.setWordWrap(True)
-                value.setTextInteractionFlags(
-                    Qt.TextInteractionFlag.TextSelectableByMouse
-                )
-                form.addRow(f"{key}：", value)
-            layout.addWidget(box)
-
-        layout.addStretch(1)
-        return page
+        page = self._shortcuts_page() or self._create_shortcuts_settings_page()
+        return page.widget
 
     def _build_settings_advanced_page(self) -> QWidget:
         page = self._advanced_page() or self._create_advanced_settings_page()
