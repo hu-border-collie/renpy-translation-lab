@@ -68,6 +68,25 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             )
         )
 
+    def test_models_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+        from gui_qt.settings.models_page import ModelsSettingsPage
+
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={"sync": {}, "batch": {}},
+        ):
+            self.window._ensure_settings_page("models")
+        page = self.window._settings_coordinator.page("models")
+        self.assertIsInstance(page, ModelsSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("models"),
+        )
+
     def test_coordinator_tracks_lazy_build_only_target_page(self) -> None:
         self.window._focus_settings_section("advanced")
         coordinator = self.window._settings_coordinator

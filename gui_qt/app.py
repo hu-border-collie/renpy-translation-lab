@@ -344,6 +344,14 @@ from .settings.litellm_page import (
     LiteLLMSettingsPage,
     RETIRED_LITELLM_WARMUP_WORKERS as _RETIRED_LITELLM_WARMUP_WORKERS,
 )
+from .settings.models_page import (
+    MODELS_FORWARDED_ATTRS,
+    ModelsSettingsPage,
+    batch_thinking_value_for_load,
+    batch_thinking_value_for_model_change,
+    should_save_batch_thinking_level,
+    supports_batch_thinking,
+)
 from .settings.registry import (
     CONFIG_SNAPSHOT_KEYS_BY_PAGE as _CONFIG_SNAPSHOT_KEYS_BY_PAGE,
     SETTINGS_CONFIG_PAGE_KEYS as _SETTINGS_CONFIG_PAGE_KEYS,
@@ -3174,6 +3182,8 @@ class MainWindow(QMainWindow):
         """Build one settings page for the coordinator."""
         if spec.key == "litellm":
             return self._create_litellm_settings_page()
+        if spec.key == "models":
+            return self._create_models_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3289,7 +3299,7 @@ class MainWindow(QMainWindow):
         adapter = coordinator.ensure_page(key)
         if adapter is None:
             return
-        if key == "models":
+        if key == "models" and self._models_page() is None:
             self._wire_settings_models_signals()
         if key == "workspace":
             # Inherit current task gate if panel was built after a run started.
@@ -3342,6 +3352,8 @@ class MainWindow(QMainWindow):
                 self._refresh_api_status()
 
     def _wire_settings_models_signals(self) -> None:
+        if self._models_page() is not None:
+            return
         if getattr(self, "_settings_models_signals_wired", False):
             return
         if not hasattr(self, "batch_model_combo") or not hasattr(
@@ -3675,54 +3687,8 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_settings_models_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_models")
-        sync_box = QGroupBox("Gemini 同步翻译")
-        sync_layout = self._settings_form(sync_box)
-
-        self.sync_model_combo = NoWheelComboBox()
-        self.sync_model_combo.setEditable(False)
-        self.sync_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
-        sync_layout.addRow("翻译模型：", self.sync_model_combo)
-
-        self.sync_embedding_combo = NoWheelComboBox()
-        self.sync_embedding_combo.setEditable(False)
-        self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
-        sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
-
-        sync_hint = QLabel(
-            "此处只配置 Gemini 同步/批量所用模型，从下拉列表选择（不可手输）。"
-            "若要增加自定义模型 ID，请到「设置 → 高级 → 模型目录」。"
-            "LiteLLM 已移至左侧独立页面。"
-        )
-        sync_hint.setWordWrap(True)
-        sync_hint.setObjectName("config_hint_label")
-        sync_layout.addRow(sync_hint)
-        layout.addWidget(sync_box)
-
-        batch_box = QGroupBox("批量离线翻译")
-        batch_layout = self._settings_form(batch_box)
-
-        self.batch_model_combo = NoWheelComboBox()
-        self.batch_model_combo.setEditable(False)
-        self.batch_model_combo.addItems(list(BUILTIN_GEMINI_TRANSLATION_MODELS))
-        batch_layout.addRow("翻译模型：", self.batch_model_combo)
-
-        self.batch_embedding_combo = NoWheelComboBox()
-        self.batch_embedding_combo.setEditable(False)
-        self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
-        batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
-
-        self.batch_thinking_combo = NoWheelComboBox()
-        self.batch_thinking_combo.addItem("（不启用）", "")
-        self.batch_thinking_combo.addItem("最小", "minimal")
-        self.batch_thinking_combo.addItem("低", "low")
-        self.batch_thinking_combo.addItem("中", "medium")
-        self.batch_thinking_combo.addItem("高", "high")
-        batch_layout.addRow("思考程度：", self.batch_thinking_combo)
-
-        layout.addWidget(batch_box)
-        layout.addStretch(1)
-        return page
+        page = self._models_page() or self._create_models_settings_page()
+        return page.widget
 
     def _build_settings_extensions_page(self) -> QWidget:
         page, layout = self._settings_page("settings_extensions")
@@ -3912,6 +3878,30 @@ class MainWindow(QMainWindow):
     def _litellm_page(self):
         return self.__dict__.get("_litellm_settings_page")
 
+    def _models_page(self):
+        return self.__dict__.get("_models_settings_page")
+
+    def _create_models_settings_page(self):
+        """Build the migrated Models Settings page and alias its widgets."""
+        existing = self._models_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            return existing
+        page = ModelsSettingsPage(self)
+        for name in MODELS_FORWARDED_ATTRS:
+            if name in self.__dict__:
+                setattr(page, name, self.__dict__.pop(name))
+        self.__dict__["_models_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_models"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        self._apply_gemini_sync_model_gating()
+        return page
+
     def _create_litellm_settings_page(self):
         """Build the migrated LiteLLM Settings page and alias its widgets."""
         from .settings.litellm_page import LiteLLMSettingsPage, LITELLM_FORWARDED_ATTRS
@@ -4027,17 +4017,7 @@ class MainWindow(QMainWindow):
         self._updating_litellm_gating = True
         try:
             backend = backend or self._selected_sync_backend()
-            gemini_sync_model_combo = self._settings_widget("sync_model_combo")
-            set_enabled = getattr(gemini_sync_model_combo, "setEnabled", None)
-            if callable(set_enabled):
-                set_enabled(backend == "gemini")
-                set_tip = getattr(gemini_sync_model_combo, "setToolTip", None)
-                if callable(set_tip):
-                    set_tip(
-                        "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
-                        if backend == "litellm"
-                        else ""
-                    )
+            self._apply_gemini_sync_model_gating(backend)
             if hasattr(self, "translate_btn") and not getattr(
                 self, "_loading_config_to_ui", False
             ):
@@ -4045,6 +4025,28 @@ class MainWindow(QMainWindow):
             self._refresh_litellm_install_action_gating()
         finally:
             self._updating_litellm_gating = False
+
+    def _apply_gemini_sync_model_gating(self, backend: str = "") -> None:
+        """Disable the Gemini sync-model combo while LiteLLM is the sync backend."""
+        backend = backend or self._selected_sync_backend()
+        allowed = backend == "gemini"
+        tooltip = (
+            "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
+            if backend == "litellm"
+            else ""
+        )
+        page = self._models_page()
+        if page is not None:
+            page.set_gemini_sync_allowed(allowed, tooltip=tooltip)
+            return
+        combo = self._settings_widget("sync_model_combo")
+        set_enabled = getattr(combo, "setEnabled", None)
+        if not callable(set_enabled):
+            return
+        set_enabled(allowed)
+        set_tip = getattr(combo, "setToolTip", None)
+        if callable(set_tip):
+            set_tip(tooltip)
 
     def _delegate_litellm_page(self, method_name: str, *args, **kwargs):
         page = self._litellm_page()
@@ -4372,17 +4374,7 @@ class MainWindow(QMainWindow):
                 )
             else:
                 model_button.setText("联网加载模型")
-        gemini_sync_model_combo = self._settings_widget("sync_model_combo")
-        set_enabled = getattr(gemini_sync_model_combo, "setEnabled", None)
-        if callable(set_enabled):
-            set_enabled(backend == "gemini")
-            set_tip = getattr(gemini_sync_model_combo, "setToolTip", None)
-            if callable(set_tip):
-                set_tip(
-                    "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
-                    if backend == "litellm"
-                    else ""
-                )
+        self._apply_gemini_sync_model_gating(backend)
         credential_enabled = litellm_active and bool(provider) and provider != "ollama"
         manage_keys_btn = self._settings_widget("litellm_manage_keys_btn")
         if manage_keys_btn is not None:
@@ -10554,6 +10546,9 @@ class MainWindow(QMainWindow):
             "theme": self._current_theme_preference_from_ui(),
         }
         snapshot.update(self._advanced_settings_values_from_ui())
+        models_page = self._models_page()
+        if models_page is not None:
+            snapshot.update(models_page.collect())
         return snapshot
 
     def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -10594,24 +10589,42 @@ class MainWindow(QMainWindow):
                 if idx >= 0:
                     backend_combo.setCurrentIndex(idx)
 
-            if "sync_model" in snapshot:
-                sync_model = self._settings_widget("sync_model_combo")
-                if sync_model is not None:
-                    self._set_combo_value(sync_model, snapshot["sync_model"])
-            if "batch_model" in snapshot:
-                batch_model = self._settings_widget("batch_model_combo")
-                if batch_model is not None:
-                    self._set_combo_value(batch_model, snapshot["batch_model"])
-            if "sync_embedding_model" in snapshot:
-                sync_emb = self._settings_widget("sync_embedding_combo")
-                if sync_emb is not None:
-                    self._set_combo_value(sync_emb, snapshot["sync_embedding_model"])
-            if "batch_embedding_model" in snapshot:
-                batch_emb = self._settings_widget("batch_embedding_combo")
-                if batch_emb is not None:
-                    self._set_combo_value(batch_emb, snapshot["batch_embedding_model"])
-            if "batch_thinking_level" in snapshot:
-                self._set_batch_thinking_value(str(snapshot.get("batch_thinking_level") or ""))
+            models_page = self._models_page()
+            if models_page is not None:
+                models_snapshot = {
+                    key: snapshot[key]
+                    for key in (
+                        "sync_model",
+                        "sync_embedding_model",
+                        "batch_model",
+                        "batch_embedding_model",
+                        "batch_thinking_level",
+                    )
+                    if key in snapshot
+                }
+                if models_snapshot:
+                    models_page.load(models_snapshot, restore=True)
+            else:
+                if "sync_model" in snapshot:
+                    sync_model = self._settings_widget("sync_model_combo")
+                    if sync_model is not None:
+                        self._set_combo_value(sync_model, snapshot["sync_model"])
+                if "batch_model" in snapshot:
+                    batch_model = self._settings_widget("batch_model_combo")
+                    if batch_model is not None:
+                        self._set_combo_value(batch_model, snapshot["batch_model"])
+                if "sync_embedding_model" in snapshot:
+                    sync_emb = self._settings_widget("sync_embedding_combo")
+                    if sync_emb is not None:
+                        self._set_combo_value(sync_emb, snapshot["sync_embedding_model"])
+                if "batch_embedding_model" in snapshot:
+                    batch_emb = self._settings_widget("batch_embedding_combo")
+                    if batch_emb is not None:
+                        self._set_combo_value(batch_emb, snapshot["batch_embedding_model"])
+                if "batch_thinking_level" in snapshot:
+                    self._set_batch_thinking_value(
+                        str(snapshot.get("batch_thinking_level") or "")
+                    )
             page = self._litellm_page()
             if page is not None:
                 litellm_snapshot = {
@@ -13532,7 +13545,7 @@ class MainWindow(QMainWindow):
         return value.strip() if isinstance(value, str) else ""
 
     def _supports_batch_thinking(self, model_name: Any) -> bool:
-        return self._config_string(model_name).startswith("gemini-3")
+        return supports_batch_thinking(model_name)
 
     def _sync_models_for_save(
         self,
@@ -13563,9 +13576,7 @@ class MainWindow(QMainWindow):
         batch_config: dict[str, Any],
         batch_model: Any,
     ) -> str:
-        if "thinking_level" in batch_config:
-            return self._config_string(batch_config.get("thinking_level", ""))
-        return "minimal" if self._supports_batch_thinking(batch_model) else ""
+        return batch_thinking_value_for_load(batch_config, batch_model)
 
     def _batch_thinking_value_for_model_change(
         self,
@@ -13574,14 +13585,12 @@ class MainWindow(QMainWindow):
         config_has_key: bool,
         user_changed: bool,
     ) -> str | None:
-        if (
-            self._supports_batch_thinking(batch_model)
-            and not self._config_string(current_thinking_level)
-            and not config_has_key
-            and not user_changed
-        ):
-            return "minimal"
-        return None
+        return batch_thinking_value_for_model_change(
+            batch_model,
+            current_thinking_level,
+            config_has_key,
+            user_changed,
+        )
 
     def _should_save_batch_thinking_level(
         self,
@@ -13590,10 +13599,11 @@ class MainWindow(QMainWindow):
         thinking_level: str,
         user_changed: bool,
     ) -> bool:
-        return (
-            bool(thinking_level)
-            or (self._supports_batch_thinking(batch_model) and user_changed)
-            or "thinking_level" in batch_config
+        return should_save_batch_thinking_level(
+            batch_config,
+            batch_model,
+            thinking_level,
+            user_changed,
         )
 
     def _combo_item_texts(self, combo: NoWheelComboBox | None) -> list[str]:
@@ -13674,6 +13684,10 @@ class MainWindow(QMainWindow):
             combo.setCurrentIndex(idx)
 
     def _set_batch_thinking_value(self, value: str):
+        page = self._models_page()
+        if page is not None:
+            page._set_batch_thinking_value(value)
+            return
         idx = self.batch_thinking_combo.findData(value)
         self._updating_batch_thinking_combo = True
         try:
@@ -13872,30 +13886,44 @@ class MainWindow(QMainWindow):
                         config,
                         extra_selected=[sync_emb_val, batch_emb_val],
                     )
-                    sync_model = self._settings_widget("sync_model_combo")
-                    self._repopulate_model_combo(
-                        sync_model,
-                        translation_models,
-                        backend_models.gemini_model,
+                    models_page = self._models_page()
+                    thinking_val = self._batch_thinking_value_for_load(
+                        batch_config, batch_val
                     )
-                    batch_model = self._settings_widget("batch_model_combo")
-                    self._repopulate_model_combo(
-                        batch_model, translation_models, batch_val
-                    )
-                    sync_emb = self._settings_widget("sync_embedding_combo")
-                    self._repopulate_model_combo(
-                        sync_emb, embedding_models, sync_emb_val
-                    )
-                    batch_emb = self._settings_widget("batch_embedding_combo")
-                    self._repopulate_model_combo(
-                        batch_emb, embedding_models, batch_emb_val
-                    )
-                    if batch_model is not None:
-                        self._on_batch_model_changed(batch_val)
-                        thinking_val = self._batch_thinking_value_for_load(
-                            batch_config, batch_val
+                    if models_page is not None:
+                        models_page.set_catalog(translation_models, embedding_models)
+                        models_page.load(
+                            {
+                                "sync_model": backend_models.gemini_model,
+                                "sync_embedding_model": sync_emb_val,
+                                "batch_model": batch_val,
+                                "batch_embedding_model": batch_emb_val,
+                                "batch_thinking_level": thinking_val,
+                            }
                         )
-                        self._set_batch_thinking_value(thinking_val)
+                        self._apply_gemini_sync_model_gating()
+                    else:
+                        sync_model = self._settings_widget("sync_model_combo")
+                        self._repopulate_model_combo(
+                            sync_model,
+                            translation_models,
+                            backend_models.gemini_model,
+                        )
+                        batch_model = self._settings_widget("batch_model_combo")
+                        self._repopulate_model_combo(
+                            batch_model, translation_models, batch_val
+                        )
+                        sync_emb = self._settings_widget("sync_embedding_combo")
+                        self._repopulate_model_combo(
+                            sync_emb, embedding_models, sync_emb_val
+                        )
+                        batch_emb = self._settings_widget("batch_embedding_combo")
+                        self._repopulate_model_combo(
+                            batch_emb, embedding_models, batch_emb_val
+                        )
+                        if batch_model is not None:
+                            self._on_batch_model_changed(batch_val)
+                            self._set_batch_thinking_value(thinking_val)
 
                 if need_litellm:
                     page = self._litellm_page()
@@ -13989,6 +14017,10 @@ class MainWindow(QMainWindow):
             self._set_task_running(bool(getattr(self, "_task_running", False)))
 
     def _on_batch_model_changed(self, text: str):
+        page = self._models_page()
+        if page is not None:
+            page._on_batch_model_changed(text)
+            return
         is_thinking_supported = self._supports_batch_thinking(text)
         thinking_combo = self._settings_widget("batch_thinking_combo")
         if thinking_combo is None:
@@ -14008,6 +14040,10 @@ class MainWindow(QMainWindow):
             self._set_batch_thinking_value(default_value)
 
     def _on_batch_thinking_changed(self, _index: int):
+        page = self._models_page()
+        if page is not None:
+            page._on_batch_thinking_changed(_index)
+            return
         if not self._loading_config_to_ui and not self._updating_batch_thinking_combo:
             self._batch_thinking_user_changed = True
 
@@ -14082,10 +14118,17 @@ class MainWindow(QMainWindow):
                     "启用 LiteLLM 前，请填写带 provider 前缀的模型名称。",
                 )
                 return False
+            models_page = self._models_page()
+            models_values = models_page.collect() if models_page is not None else None
+            gemini_sync_model = (
+                str(models_values["sync_model"])
+                if models_values is not None
+                else self.sync_model_combo.currentText()
+            )
             sync_model = write_sync_backend_models(
                 sync_config,
                 sync_backend,
-                self.sync_model_combo.currentText(),
+                gemini_sync_model,
                 litellm_model,
             )
             custom_entries = self._custom_provider_entries()
@@ -14102,14 +14145,24 @@ class MainWindow(QMainWindow):
                     sync_config["models"] = sync_models
                 else:
                     sync_config.pop("models", None)
-            batch_model = self.batch_model_combo.currentText().strip()
+            if models_values is not None:
+                batch_model = str(models_values["batch_model"]).strip()
+                sync_embedding_model = str(
+                    models_values["sync_embedding_model"]
+                ).strip()
+                batch_embedding_model = str(
+                    models_values["batch_embedding_model"]
+                ).strip()
+                thinking_level = str(models_values["batch_thinking_level"] or "")
+            else:
+                batch_model = self.batch_model_combo.currentText().strip()
+                sync_embedding_model = self.sync_embedding_combo.currentText().strip()
+                batch_embedding_model = self.batch_embedding_combo.currentText().strip()
+                thinking_val = self.batch_thinking_combo.currentData()
+                thinking_level = thinking_val if isinstance(thinking_val, str) else ""
             batch_config["model"] = batch_model
-            sync_embedding_model = self.sync_embedding_combo.currentText().strip()
-            batch_embedding_model = self.batch_embedding_combo.currentText().strip()
             sync_rag_config["embedding_model"] = sync_embedding_model
             batch_rag_config["embedding_model"] = batch_embedding_model
-            thinking_val = self.batch_thinking_combo.currentData()
-            thinking_level = thinking_val if isinstance(thinking_val, str) else ""
             if self._should_save_batch_thinking_level(
                 batch_config,
                 batch_model,
@@ -14264,18 +14317,22 @@ class MainWindow(QMainWindow):
         return self._switch_game_root(value.strip())
 
 
-def _bind_litellm_forward_properties() -> None:
-    """Forward LiteLLM worker/registry attributes onto the migrated page."""
+def _bind_settings_forward_properties() -> None:
+    """Forward migrated page attributes onto MainWindow for tests and glue."""
 
-    for name in LITELLM_FORWARDED_ATTRS:
-        def getter(self, _name=name):
-            page = self.__dict__.get("_litellm_settings_page")
+    mapping: tuple[tuple[str, str], ...] = tuple(
+        [(name, "_litellm_settings_page") for name in LITELLM_FORWARDED_ATTRS]
+        + [(name, "_models_settings_page") for name in MODELS_FORWARDED_ATTRS]
+    )
+    for name, page_attr in mapping:
+        def getter(self, _name=name, _page_attr=page_attr):
+            page = self.__dict__.get(_page_attr)
             if page is not None:
                 return getattr(page, _name)
             return self.__dict__.get(_name)
 
-        def setter(self, value, _name=name):
-            page = self.__dict__.get("_litellm_settings_page")
+        def setter(self, value, _name=name, _page_attr=page_attr):
+            page = self.__dict__.get(_page_attr)
             if page is not None:
                 setattr(page, _name, value)
             else:
@@ -14284,7 +14341,7 @@ def _bind_litellm_forward_properties() -> None:
         setattr(MainWindow, name, property(getter, setter))
 
 
-_bind_litellm_forward_properties()
+_bind_settings_forward_properties()
 
 
 def run_app(argv: list[str] | None = None) -> int:

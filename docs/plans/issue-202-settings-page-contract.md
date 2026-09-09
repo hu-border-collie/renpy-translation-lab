@@ -1,8 +1,9 @@
 # #202 Phase A：Settings 页面契约与现状基线
 
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
-> merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`；Phase D 的其余页面
-> 迁移与保存/dirty/离开保护收口仍未开始，`MainWindow` 仍持有唯一保存事务。
+> merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
+> Phase D 已将「模型」页迁到独立 `ModelsSettingsPage`；其余 8 页与保存/dirty/离开保护
+> 收口仍待继续，`MainWindow` 仍持有唯一保存事务。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -17,7 +18,7 @@
 - 冻结 Phase B 需要的最小页面接口、字段所有权和宿主事件边界。
 - 记录当前 10 个 Settings 页面、字段/即时持久化所有权、局部异步任务、lazy 构建与测试入口。
 - 不定义 #348 的 `model_routing` schema、迁移语义或生产 resolver；Phase A 不实现任何页面。
-- Phase B 的 as-built 状态见下文「Phase B 实现状态」；页面迁移（C/D）仍未开始。
+- Phase B 的 as-built 状态见下文「Phase B 实现状态」；页面迁移见 Phase C/D 实现状态。
 
 ## 当前基线（as-is）
 
@@ -95,12 +96,12 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
   context 主开关，`project` 字段归 project 页。
 - **补建页面被 preserve/restore 覆盖**：Phase B 已修。只保留已加载页面的快照，且恢复只回写
   快照中存在的 advanced 键。
-- **页面不可独立构造**：仍未消除。10 页当前仍经 `LegacySettingsPageAdapter` 调用
-  `MainWindow` builder，页面本身依赖整窗私有状态；Phase C 起逐页迁移为独立 `SettingsPage`。
+- **页面不可独立构造**：部分收敛。LiteLLM 与「模型」页已是独立 `SettingsPage`；其余 8 页仍经
+  `LegacySettingsPageAdapter` 调用 `MainWindow` builder。
 - **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty/错误聚焦合同，
   但唯一保存事务、dirty 基线与离开保护仍在 `MainWindow`；Phase D 继续收口。
-- **局部 worker 归属整窗**：仍未消除。LiteLLM / 字体 / 安装 / registry worker 仍由 `MainWindow`
-  属性和私有回调管理；Phase C 起按 #297 合同迁到页面。
+- **局部 worker 归属整窗**：部分收敛。LiteLLM worker 已由页面持有；字体 / 安装 / registry
+  worker 仍由 `MainWindow` 属性和私有回调管理。
 - **说明性 docstring 过时**：Phase A 已修。`gui_qt/__init__.py` / `gui_qt/app.py` 已区分
   QProcess、QThread/QThreadPool 与 GUI 本地动作。
 
@@ -234,9 +235,9 @@ Coordinator → 页面（只通过上述方法）：
 - 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
   `tests.test_settings_coordinator`（纯 Python）与 `tests.test_gui_settings_coordinator`（GUI 集成）。
 
-仍未落地（Phase D）：
+仍未落地（Phase D 收口）：
 
-- 其余 9 页仍以 `LegacySettingsPageAdapter` 运行。
+- 其余 8 页仍以 `LegacySettingsPageAdapter` 运行。
 - `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
 
 Phase C 已落地：
@@ -247,6 +248,17 @@ Phase C 已落地：
   模块级 retired set。连接测试继续用 `litellm_connection_identity` 丢弃 stale result。
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
 - 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
+
+Phase D（进行中，模型页）：
+
+- `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
+- `gui_qt/settings/models_page.py`：`ModelsSettingsPage` 可脱离 `MainWindow` 构造，拥有 Gemini
+  同步/批量模型与思考程度下拉；目录 extras 仍由宿主 `set_catalog` 注入，保存仍走
+  `MainWindow._on_save_config`。
+- LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
+  `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
+- 测试：`tests.test_settings_models_page`（独立构造）与既有 `test_gui_app_config` /
+  `test_gui_settings_coordinator`。
 
 ## Phase B 验收映射
 
@@ -271,6 +283,8 @@ Phase C 已落地：
 - LiteLLM：`tests.test_settings_litellm_page`（独立构造）、`tests.test_gui_litellm_settings_page`、
   `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、`tests.test_gui_litellm_install`、
   `tests.test_litellm_catalog_cache`、`tests.test_litellm_provider_config`。
+- 模型页：`tests.test_settings_models_page`（独立构造）、`tests.test_gui_settings_coordinator`、
+  `tests.test_gui_app_config`。
 - 生命周期与 worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
   `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、
   `tests.test_gui_games_registry_worker`。

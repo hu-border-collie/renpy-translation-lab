@@ -3,10 +3,11 @@
 本文描述当前 `main` 的维护者边界。面向使用者的操作步骤以快速开始和工作流文档为准；
 规划中的结构以 `docs/plans/` 为准。
 
-> 2026-09-09（#202 Phase A/B/C）核对：Phase A 文档已合并；Phase B 已落地
+> 2026-09-09（#202 Phase A/B/C/D 模型页）核对：Phase A 文档已合并；Phase B 已落地
 > `gui_qt/settings/` 的 page contract、registry、coordinator 与 legacy adapter。Phase C 已将
-> LiteLLM 页迁到独立 `LiteLLMSettingsPage`。其余页面迁移与保存收口属于 Phase D；
-> `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
+> LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将「模型」页迁到独立
+> `ModelsSettingsPage`。其余 8 页与保存收口仍属 Phase D；`MainWindow` 仍持有唯一保存事务、
+> dirty 基线与离开保护。
 
 ## 分层
 
@@ -75,6 +76,8 @@
   安装）与普通项目配置保存边界不同；主题只做即时预览，保存后才写入 `gui.theme`。
 - LiteLLM 页已迁到 `gui_qt/settings/litellm_page.py`：页面持有控件、目录/版本/连接/warmup
   worker，并可脱离 `MainWindow` 构造。凭据对话框、pip 安装控制器和跨页 gating 仍由宿主回调提供。
+- 「模型」页已迁到 `gui_qt/settings/models_page.py`：Gemini 同步/批量模型与思考程度下拉由页面
+  持有，并可脱离 `MainWindow` 构造。目录 extras 与保存事务仍由宿主注入/执行。
 - 字体、扩展安装、工作区刷新等其余局部任务仍由 `MainWindow` 属性与私有回调持有。
 
 Phase B 已消除的 as-is 缺口：
@@ -86,14 +89,14 @@ Phase B 已消除的 as-is 缺口：
 
 仍未消除（Phase D）：
 
-- 其余 9 页仍通过 `LegacySettingsPageAdapter` 依赖 `MainWindow` builder 与私有状态；legacy
+- 其余 8 页仍通过 `LegacySettingsPageAdapter` 依赖 `MainWindow` builder 与私有状态；legacy
   adapter 的 `validate()` 仍返回空列表，共享 advanced 校验继续由旧保存事务负责。
 - 字体/安装/registry 等非 LiteLLM 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
 
 完整页面清单、字段/即时持久化所有权与测试入口见
 [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
-### target（#202 Phase B 最小接线与 Phase C LiteLLM 页已落地；其余页面属于 D）
+### target（#202 Phase B 最小接线、Phase C LiteLLM 页与 Phase D 模型页已落地；其余页面属于 D）
 
 已落地目录：
 
@@ -105,6 +108,8 @@ Phase B 已消除的 as-is 缺口：
 - `gui_qt/settings/legacy.py`：未迁移页面的兼容 adapter。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM 页面；局部 worker 与
   load/collect/validate/reset 由页面持有。
+- `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
+- `gui_qt/settings/models_page.py`：Phase D 迁出的「模型」页面；Gemini 同步/批量模型选择由页面持有。
 - `MainWindow`：仍保留全局 `settings` route、header/sidebar、全局任务锁、runner/log、主题应用、
   唯一保存事务与 shutdown 协调；其余页面 builder 与保存编排在 Phase D 继续迁出。
 
