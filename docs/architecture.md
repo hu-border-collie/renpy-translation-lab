@@ -50,7 +50,7 @@
 - GUI 从原始 JSON 加载并在原对象上修改，以保留未建模字段；
 - API Key 值只来自 `api_keys.json`、环境变量或系统 keyring，不属于项目配置。
 
-#348 将以版本化 `model_routing` 替代模型相关旧字段。迁移期必须选择完整的新或旧事实
+`#348` 将以版本化 `model_routing` 替代模型相关旧字段。迁移期必须选择完整的新或旧事实
 来源，不允许逐字段混合。合同见
 [Model Routing 配置与迁移合同](plans/issue-348-model-routing-config-contract.md)。
 

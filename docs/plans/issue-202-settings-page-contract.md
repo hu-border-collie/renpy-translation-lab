@@ -44,7 +44,7 @@
 | `models` | 模型 | `sync.model` / `sync.litellm_model`（经 `write_sync_backend_models`）、`sync.rag.embedding_model`、`batch.model`、`batch.rag.embedding_model`、`batch.thinking_level` | 点「保存设置」写入 `translator_config.json` | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["models"]` | 无（下拉目录为同步内存数据） |
 | `litellm` | LiteLLM | `sync.backend`、`sync.litellm_model`、`sync.custom_litellm_providers` | 配置项随保存写入；Provider Key 即时写 keyring；目录缓存即时写用户缓存；安装即时执行 | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["litellm"]` | `LiteLLMProviderCatalogWorker`、`LiteLLMModelCatalogWorker`、`LiteLLMVersionWorker`、`LiteLLMConnectionTestWorker`（QThread）；`OptionalFeatureInstallController`（QProcess pip） |
 | `extensions` | 扩展 | 无 `translator_config` 字段；可选能力安装状态来自当前 Python 环境 | 安装完成即生效 | 无 | `OptionalFeatureInstallController`（关系分析器，QProcess pip） |
-| `context` | 上下文 | `project_context_settings.json` 的项目级开关；`context_storage.location`；上下文/项目分析 advanced 字段 | 项目级开关与全局配置在同一次保存中写入；全局失败会回滚已写项目文件 | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["context"]`（含 4 个项目分析键） | 无（上下文库状态 Job 属于工作台 Context 页，不属于 Settings 页） |
+| `context` | 上下文 | `project_context_settings.json` 的项目级开关；`context_storage.location`；上下文/项目分析 advanced 字段 | 项目级开关与全局配置在同一次保存中写入；项目文件失败会回滚已写全局文件 | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["context"]`（含 4 个项目分析键） | 无（上下文库状态 Job 属于工作台 Context 页，不属于 Settings 页） |
 | `appearance` | 外观 | `gui.theme` | 切换主题立即预览但 `persist=False`；点「保存设置」才写入；字体下载/安装即时 | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["appearance"]` | `FontInstallWorker`（QThread + 子进程） |
 | `shortcuts` | 快捷键 | 只读目录 | 无 | 无 | 无 |
 | `advanced` | 高级 | `ADVANCED_SETTING_FIELDS` 中除「项目与资源」「准备流程」和上下文主开关外的字段；模型目录扩展经 `write_model_catalog_extras` 写入 | 点「保存设置」写入 `translator_config.json`；`validate_advanced_settings` 失败时不写盘 | `_CONFIG_SNAPSHOT_KEYS_BY_PAGE["advanced"]`（当前为除 `game_root` 外的全部 advanced 键） | 无 |
@@ -207,7 +207,7 @@ Coordinator → 页面（只通过上述方法）：
 | `check → bound preview → apply` | 现有公共安全层 | 所有翻译写回入口 |
 
 完整边界见 [#348 P0 合同的「#202 / #348 所有权」](issue-348-model-routing-config-contract.md#202--348-所有权)。
-#202 不定义第二套模型迁移语义；#348 不复制 `MainWindow._on_save_config`。
+`#202` 不定义第二套模型迁移语义；`#348` 不复制 `MainWindow._on_save_config`。
 
 ## Phase B 验收映射
 
