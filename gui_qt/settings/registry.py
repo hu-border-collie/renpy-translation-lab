@@ -54,20 +54,6 @@ class SettingsPageSpec:
     immediate_action_ids: frozenset[str] = frozenset()
 
 
-# Legacy ``(key, label, builder)`` shape kept for existing app/tests imports.
-SETTINGS_PAGE_SPECS: tuple[tuple[str, str, str], ...] = (
-    ("workspace", "项目列表", "_build_settings_workspace_page"),
-    ("project", "项目", "_build_settings_project_page"),
-    ("api_keys", "密钥", "_build_settings_api_keys_page"),
-    ("models", "模型", "_build_settings_models_page"),
-    ("litellm", "LiteLLM", "_build_settings_litellm_page"),
-    ("extensions", "扩展", "_build_settings_extensions_page"),
-    ("context", "上下文", "_build_settings_context_page"),
-    ("appearance", "外观", "_build_settings_appearance_page"),
-    ("shortcuts", "快捷键", "_build_settings_shortcuts_page"),
-    ("advanced", "高级", "_build_settings_advanced_page"),
-)
-
 SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "workspace",
@@ -163,6 +149,13 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
         config_page=True,
         config_keys=ADVANCED_CONFIG_KEYS,
     ),
+)
+
+# Legacy ``(key, label, builder)`` shape derived from the spec objects above.
+# Keep this derived so page identity has one source of truth.
+SETTINGS_PAGE_SPECS: tuple[tuple[str, str, str], ...] = tuple(
+    (spec.key, spec.nav_label, spec.builder_name)
+    for spec in SETTINGS_PAGE_SPEC_OBJECTS
 )
 
 SETTINGS_CONFIG_PAGE_KEYS: frozenset[str] = frozenset(

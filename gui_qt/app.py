@@ -484,8 +484,6 @@ _SHELL_TASK_ROUTES = tuple(
     f"{_SHELL_WORKBENCH_PREFIX}{item.value}" for item in WORKBENCH_NAV_ORDER
 )
 
-# Settings sections: (key, nav label, builder method name).
-# Pages are built on first visit (or when config load/save needs them).
 
 
 def _workflow_output_updates_writeback(step_key: str, output: str) -> bool:
@@ -3221,13 +3219,14 @@ class MainWindow(QMainWindow):
         self._on_reload_config()
 
     def _legacy_settings_page_load(self, page_key: str, snapshot) -> None:
-        """Compatibility load for unmigrated pages.
+        """Apply a coordinator-filtered snapshot to an unmigrated page.
 
-        Legacy pages still read the raw config once for the requested section;
-        migrated pages consume the flat snapshot directly. This keeps the
-        adapter honest about the transition without copying dirty/save state.
+        Legacy widgets already exist, so the snapshot is written through the
+        existing restore path without a disk read. ``_restore_config_ui_snapshot``
+        only touches keys present in the snapshot.
         """
-        self._load_config_to_ui(refresh_task_gates=False, pages={page_key})
+        if snapshot:
+            self._restore_config_ui_snapshot(dict(snapshot))
 
     def _legacy_settings_page_collect(self, page_key: str) -> dict[str, object]:
         keys = self._settings_registry.config_keys_for(page_key)
@@ -3242,6 +3241,8 @@ class MainWindow(QMainWindow):
         self._load_config_to_ui(refresh_task_gates=False, pages={page_key})
 
     def _legacy_settings_page_focus(self, page_key: str, field_key: str) -> bool:
+        if not self._settings_coordinator.is_loaded(page_key):
+            self._populate_settings_page(page_key)
         self._focus_settings_section(page_key)
         widget = getattr(self, "_advanced_setting_widgets", {}).get(field_key)
         if widget is None:
@@ -3256,8 +3257,24 @@ class MainWindow(QMainWindow):
     def _legacy_settings_page_set_task_running(
         self, page_key: str, running: bool
     ) -> None:
-        if "settings_action_context_label" in self.__dict__:
-            self._sync_settings_action_bar_enabled(task_running=running)
+        # Legacy pages do not own task chrome yet; _set_task_running already
+        # syncs the global action bar once. Migrated pages will implement this.
+        return None
+
+    def _populate_settings_page(self, key: str) -> None:
+        """Fill one already-built page from the current config or mark it loaded."""
+        if not self._settings_lazy_ready():
+            return
+        if key not in _SETTINGS_CONFIG_PAGE_KEYS:
+            self._settings_coordinator.mark_loaded(key)
+            return
+        if getattr(self, "_loading_config_to_ui", False):
+            return
+        self._load_config_to_ui(refresh_task_gates=False, pages={key})
+        if key == "api_keys" and "api_status_label" in self.__dict__:
+            self._refresh_api_status()
+            self._refresh_litellm_keys_page_status()
+        self._settings_coordinator.mark_loaded(key)
 
     def _ensure_settings_page(self, key: str, *, populate: bool = True) -> None:
         """Build one settings section through the coordinator on first visit.
@@ -3287,20 +3304,8 @@ class MainWindow(QMainWindow):
                 set_gate = getattr(panel, "set_host_task_running", None)
                 if callable(set_gate):
                     set_gate(True)
-        is_config_page = key in _SETTINGS_CONFIG_PAGE_KEYS
-        # Only fill the page we just built — never re-run a full config pass on
-        # every tab visit (that re-read disk + re-applied theme and felt laggy).
-        if (
-            populate
-            and is_config_page
-            and not getattr(self, "_loading_config_to_ui", False)
-        ):
-            self._load_config_to_ui(refresh_task_gates=False, pages={key})
-            if key == "api_keys" and "api_status_label" in self.__dict__:
-                self._refresh_api_status()
-                self._refresh_litellm_keys_page_status()
-        if not is_config_page or populate:
-            self._settings_coordinator.mark_loaded(key)
+        if populate:
+            self._populate_settings_page(key)
 
     def _ensure_settings_pages_for_config(self) -> None:
         """Ensure every section that participates in config load/save/dirty.
@@ -11801,10 +11806,8 @@ class MainWindow(QMainWindow):
                 key: snapshot[key] for key in advanced_keys if key in snapshot
             }
             if advanced_values and self.__dict__.get("_advanced_setting_widgets"):
-                # Merge onto defaults so partial snapshots still apply cleanly,
-                # but only write the keys actually present in the snapshot.
-                # Writing every advanced widget here used to clobber pages that
-                # were materialized after the snapshot with recommended values.
+                # Only write advanced keys present in the snapshot; keys owned
+                # by newly materialized pages must keep their loaded values.
                 merged = recommended_advanced_settings()
                 merged.update(advanced_values)
                 self._load_advanced_settings_to_ui(

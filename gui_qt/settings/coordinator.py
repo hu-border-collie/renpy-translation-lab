@@ -84,6 +84,8 @@ class SettingsCoordinator:
 
         if key in self._pages:
             return self._pages[key]
+        if not self._registry.has(key):
+            return None
         spec = self._registry.get(key)
         if not build:
             return None
@@ -182,13 +184,17 @@ class SettingsCoordinator:
         *,
         pages: Sequence[str] | set[str] | frozenset[str] | None = None,
     ) -> None:
-        """Discard unsaved edits on built pages; never write configuration."""
+        """Discard unsaved edits on built pages; never write configuration.
+
+        A successful reset returns the page to its last loaded/saved baseline,
+        so the page remains loaded. Pages that need a fresh disk read use the
+        host reload path instead.
+        """
 
         for key in self._target_keys(pages):
             resetter = getattr(self._pages[key], "reset", None)
             if callable(resetter):
                 resetter()
-            self._loaded.discard(key)
 
     def focus_issue(self, issue: SettingsIssue) -> bool:
         """Activate the issue page and let it focus/decorate the field."""

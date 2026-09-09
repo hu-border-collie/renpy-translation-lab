@@ -40,6 +40,16 @@ class SettingsRegistryTests(unittest.TestCase):
         )
         self.assertEqual(len(SETTINGS_PAGE_SPECS), 10)
 
+    def test_legacy_tuple_is_derived_from_spec_objects(self) -> None:
+        registry = build_default_registry()
+        self.assertEqual(
+            SETTINGS_PAGE_SPECS,
+            tuple(
+                (spec.key, spec.nav_label, spec.builder_name)
+                for spec in registry.specs()
+            ),
+        )
+
     def test_every_config_key_has_exactly_one_owner(self) -> None:
         registry = build_default_registry()
         owners: dict[str, str] = {}

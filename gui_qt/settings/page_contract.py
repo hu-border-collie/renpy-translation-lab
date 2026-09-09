@@ -1,10 +1,12 @@
 """Frozen Settings page boundary for the #202 Phase B coordinator.
 
 Pages own their widgets, field mapping, local validation, and local actions.
-The coordinator owns navigation, lazy materialization, the single config
-load/collect/validate/save orchestration, dirty baselines, leave protection, and
-error focus. This module deliberately has no Qt dependency so the contract can
-be tested independently from ``MainWindow``.
+The coordinator owns page identity, lazy materialization, in-page navigation,
+and the load/collect/validate/reset/focus contract. ``MainWindow`` uniquely
+owns the single save transaction, dirty baseline, and leave protection until
+Phase D; coordinator save/dirty helpers delegate to host callbacks and never
+write configuration themselves. This module deliberately has no Qt dependency
+so the contract can be tested independently from ``MainWindow``.
 """
 from __future__ import annotations
 

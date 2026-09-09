@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 from unittest import mock
 
 try:
@@ -38,6 +39,14 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
         _process(self._app, 2)
+
+    def _activate_window(self) -> None:
+        self.window.show()
+        self.window.activateWindow()
+        if QApplication.focusWidget() is None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                QApplication.setActiveWindow(self.window)
 
     def test_coordinator_tracks_lazy_build_only_target_page(self) -> None:
         self.window._focus_settings_section("advanced")
@@ -117,13 +126,46 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._settings_coordinator.reset(pages={"project"})
         self.assertEqual(widget.text(), "saved_tl")
 
-    def test_coordinator_focus_issue_switches_page_and_focuses_field(self) -> None:
-        issue = SettingsIssue("project", "glossary_file", "invalid")
-        self.assertTrue(self.window._settings_coordinator.focus_issue(issue))
+    def test_coordinator_load_applies_snapshot_to_legacy_page(self) -> None:
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={"tl_subdir": "disk_tl"},
+        ):
+            self.window._ensure_settings_page("project")
+        # coordinator.load() must use the in-memory snapshot, not re-read disk.
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            side_effect=AssertionError("coordinator.load must not read disk"),
+        ):
+            self.window._settings_coordinator.load(
+                {"tl_subdir": "snapshot_tl"},
+                pages={"project"},
+            )
+        self.assertEqual(
+            self.window._advanced_setting_widgets["tl_subdir"].text(),
+            "snapshot_tl",
+        )
+
+    def test_coordinator_focus_issue_populates_and_switches_page(self) -> None:
+        self._activate_window()
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={"glossary_file": "focused.json"},
+        ):
+            issue = SettingsIssue("project", "glossary_file", "invalid")
+            self.assertTrue(
+                self.window._settings_coordinator.focus_issue(issue)
+            )
         self.assertEqual(
             self.window.settings_nav.currentRow(),
             self.window._settings_nav_rows["project"],
         )
+        widget = self.window._advanced_setting_widgets["glossary_file"]
+        self.assertEqual(widget.text(), "focused.json")
+        self.assertIs(QApplication.focusWidget(), widget)
 
 
 if __name__ == "__main__":

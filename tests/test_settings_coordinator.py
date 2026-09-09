@@ -122,6 +122,26 @@ class SettingsCoordinatorTests(unittest.TestCase):
         self.assertIsNone(self.coordinator.ensure_page("alpha", build=False))
         self.assertEqual(self.built, [])
 
+    def test_unknown_page_returns_none_without_building(self) -> None:
+        self.assertIsNone(self.coordinator.ensure_page("missing"))
+        self.assertIsNone(self.coordinator.activate("missing"))
+        self.assertEqual(self.built, [])
+        self.assertEqual(self.shown, [])
+
+    def test_focus_issue_unknown_page_returns_false(self) -> None:
+        issue = SettingsIssue("missing", "field", "bad")
+        self.assertFalse(self.coordinator.focus_issue(issue))
+        self.assertEqual(self.built, [])
+
+    def test_mark_loaded_tracks_host_loaded_state(self) -> None:
+        self.coordinator.ensure_page("alpha")
+        self.coordinator.mark_loaded("alpha")
+        self.assertTrue(self.coordinator.is_loaded("alpha"))
+        self.coordinator.mark_unloaded("alpha")
+        self.assertFalse(self.coordinator.is_loaded("alpha"))
+        with self.assertRaises(KeyError):
+            self.coordinator.mark_loaded("missing")
+
     def test_load_only_touches_built_pages_and_owned_keys(self) -> None:
         self.coordinator.ensure_page("alpha")
         self.coordinator.load(
@@ -205,13 +225,15 @@ class SettingsCoordinatorTests(unittest.TestCase):
         issue = SettingsIssue("alpha", "outside", "bad")
         self.assertFalse(self.coordinator.focus_issue(issue))
 
-    def test_reset_clears_values_and_loaded_state(self) -> None:
+    def test_reset_clears_values_and_keeps_loaded_state(self) -> None:
         self.coordinator.ensure_page("alpha")
         self.coordinator.load({"alpha_value": 1})
         self.coordinator.reset(pages={"alpha"})
         self.assertEqual(self.coordinator.page("alpha").values, {})
         self.assertEqual(self.coordinator.page("alpha").reset_calls, 1)
-        self.assertEqual(self.coordinator.loaded_keys(), frozenset())
+        # reset() returns the page to its last loaded/saved baseline, so the
+        # page stays loaded for the host preserve snapshot.
+        self.assertEqual(self.coordinator.loaded_keys(), frozenset({"alpha"}))
 
     def test_set_task_running_reaches_built_pages(self) -> None:
         self.coordinator.ensure_page("alpha")

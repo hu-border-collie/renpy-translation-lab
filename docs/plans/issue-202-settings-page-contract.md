@@ -11,12 +11,13 @@
 > [#348 配置与迁移合同](issue-348-model-routing-config-contract.md)、
 > [架构概览](../architecture.md)、[代码路径索引](../code_paths.md)。
 
-## 本阶段范围
+## Phase A 范围（已交付）
 
 - 只补维护者文档与说明性 docstring，不改变运行行为。
 - 冻结 Phase B 需要的最小页面接口、字段所有权和宿主事件边界。
 - 记录当前 10 个 Settings 页面、字段/即时持久化所有权、局部异步任务、lazy 构建与测试入口。
-- 不定义 #348 的 `model_routing` schema、迁移语义或生产 resolver；不实现任何页面。
+- 不定义 #348 的 `model_routing` schema、迁移语义或生产 resolver；Phase A 不实现任何页面。
+- Phase B 的 as-built 状态见下文「Phase B 实现状态」；页面迁移（C/D）仍未开始。
 
 ## 当前基线（as-is）
 
@@ -103,7 +104,7 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
 - **说明性 docstring 过时**：Phase A 已修。`gui_qt/__init__.py` / `gui_qt/app.py` 已区分
   QProcess、QThread/QThreadPool 与 GUI 本地动作。
 
-## Target：Phase B 最小接入合同（已冻结，尚未实现）
+## Phase B 接入合同（已冻结并落地最小接线；页面迁移属于 C/D）
 
 目标目录与职责：
 
@@ -224,6 +225,8 @@ Coordinator → 页面（只通过上述方法）：
   `reset` / `focus_issue` / `set_task_running` / `has_unsaved_changes`，不依赖 Qt。
 - `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator；
   页面仍由 `MainWindow` builder 构建，字段读写委托宿主，旧保存事务不变。
+  `coordinator.load(snapshot)` 经 `_restore_config_ui_snapshot` 应用内存快照（不读盘）；
+  `reset()` 后页面仍视为已加载；`focus_issue()` 会先补填未访问页面再聚焦。
 - `MainWindow`：页面清单、dirty 键和 lazy 映射改由 registry 提供；`_ensure_settings_page` /
   `_on_settings_nav_row_changed` 经 coordinator 补建与切换；项目页首次打开会加载其 owned 字段；
   `_ensure_settings_pages_for_config` 只保留已加载页面的快照，且 `_restore_config_ui_snapshot`
@@ -269,6 +272,7 @@ Coordinator → 页面（只通过上述方法）：
 
 ## 非目标
 
-- 不在本阶段创建 `gui_qt/settings/`、迁移任何页面或改变运行行为。
-- 不顺手修上文的 as-is 产品 bug；若阻塞 Phase B，单独 issue / PR 跟踪。
+- Phase A 未创建 `gui_qt/settings/`；Phase B 只创建 contract/registry/coordinator/legacy adapter，
+  不迁移任何页面。
+- Phase B 不把保存事务、dirty 基线与离开保护搬出 `MainWindow`（Phase D 收口）。
 - 不改变 CLI/workflow、manifest、默认模型、执行策略或 `check → bound preview → apply` 合同。
