@@ -234,7 +234,6 @@ from .font_helpers import optional_fonts_installed, user_fonts_dir
 from .font_worker import FontInstallResult, FontInstallWorker
 
 from .games_registry_actions import handle_post_apply_registry_update
-from .games_registry_panel import GamesRegistryPanel
 from .games_registry_doctor_compare import compare_registry_with_doctor_report
 
 from .manifest_resume_summary import (
@@ -356,6 +355,7 @@ from .settings.appearance_page import AppearanceSettingsPage
 from .settings.shortcuts_page import ShortcutsSettingsPage, shortcut_catalog
 from .settings.api_keys_page import ApiKeysSettingsPage
 from .settings.extensions_page import ExtensionsSettingsPage
+from .settings.workspace_page import WorkspaceSettingsPage
 from .settings.field_widgets import (
     format_setting_text,
 )
@@ -3173,6 +3173,8 @@ class MainWindow(QMainWindow):
             return self._create_api_keys_settings_page()
         if spec.key == "extensions":
             return self._create_extensions_settings_page()
+        if spec.key == "workspace":
+            return self._create_workspace_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3438,46 +3440,8 @@ class MainWindow(QMainWindow):
         return form
 
     def _build_settings_workspace_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_workspace")
-        # Prefer filling the settings viewport so the project table can grow;
-        # the table itself scrolls instead of crushing into a short strip.
-        bodies = getattr(self, "_settings_page_bodies", None)
-        body = bodies.get("settings_workspace") if isinstance(bodies, dict) else None
-        if body is not None:
-            body.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Expanding,
-            )
-        content = page.widget() if hasattr(page, "widget") else None
-        if content is not None:
-            content.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Expanding,
-            )
-        hint = QLabel(
-            "工作区默认未设置，不会自动使用工具目录的上一级。"
-            "先「创建 / 接入工作区…」预览并初始化/接入总表，再扫描、导入或切换项目。"
-            "「切换到此项目」会写入当前 game_root 并留在本页；术语表 / 准备流程等到「项目」分区调整。"
-            "总览表与详情可拖拽分隔；扫描新项目、导入与 GAMES.md 等操作在「维护」中展开。"
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("config_hint_label")
-        layout.addWidget(hint)
-
-        self._games_registry_panel = GamesRegistryPanel(
-            None,
-            workspace_root=self.state.get_workspace_root(),
-            current_game_root=self.state.get_game_root(),
-            get_doctor_report=self._current_registry_doctor_report,
-            on_switch_project=self._on_registry_switch_project,
-            on_workspace_changed=self._on_workspace_changed,
-        )
-        self._games_registry_panel.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        layout.addWidget(self._games_registry_panel, 1)
-        return page
+        page = self._workspace_page() or self._create_workspace_settings_page()
+        return page.widget
 
     def _build_settings_api_keys_page(self) -> QWidget:
         page = self._api_keys_page() or self._create_api_keys_settings_page()
@@ -3636,6 +3600,9 @@ class MainWindow(QMainWindow):
     def _extensions_page(self):
         return self.__dict__.get("_extensions_settings_page")
 
+    def _workspace_page(self):
+        return self.__dict__.get("_workspace_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3772,6 +3739,32 @@ class MainWindow(QMainWindow):
                 self._style_themed_surface(surface)
         self._ensure_relation_analyzer_install_controller()
         self._refresh_relation_analyzer_extension_ui()
+        return page
+
+    def _create_workspace_settings_page(self):
+        """Build the migrated Workspace Settings page and alias its panel."""
+        existing = self._workspace_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            existing.set_task_running(bool(getattr(self, "_task_running", False)))
+            return existing
+        page = WorkspaceSettingsPage(
+            self,
+            workspace_root=self.state.get_workspace_root(),
+            current_game_root=self.state.get_game_root(),
+            get_doctor_report=self._current_registry_doctor_report,
+            on_switch_project=self._on_registry_switch_project,
+            on_workspace_changed=self._on_workspace_changed,
+        )
+        self.__dict__["_workspace_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_workspace"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        page.set_task_running(bool(getattr(self, "_task_running", False)))
         return page
 
     def _create_project_settings_page(self):

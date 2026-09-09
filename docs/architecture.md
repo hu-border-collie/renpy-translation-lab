@@ -3,13 +3,10 @@
 本文描述当前 `main` 的维护者边界。面向使用者的操作步骤以快速开始和工作流文档为准；
 规划中的结构以 `docs/plans/` 为准。
 
-> 2026-09-09（#202 Phase A/B/C/D 模型/项目/上下文/高级/外观/快捷键/密钥/扩展页）核对：Phase A 文档已合并；Phase B 已落地
+> 2026-09-09（#202 Phase A/B/C/D 十页已迁出）核对：Phase A 文档已合并；Phase B 已落地
 > `gui_qt/settings/` 的 page contract、registry、coordinator 与 legacy adapter。Phase C 已将
-> LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将「模型」页迁到独立
-> `ModelsSettingsPage`，「项目」页迁到独立 `ProjectSettingsPage`，「上下文」页迁到独立
-> `ContextSettingsPage`，「高级」页迁到独立 `AdvancedSettingsPage`，「外观」页迁到独立
-> `AppearanceSettingsPage`，「快捷键」页迁到独立 `ShortcutsSettingsPage`，「密钥」页迁到独立
-> `ApiKeysSettingsPage`，「扩展」页迁到独立 `ExtensionsSettingsPage`。其余 1 页与保存收口仍属 Phase D；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
+> LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将 10 个 Settings 页迁到独立
+> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）。保存收口仍属 Phase D；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
 
 ## 分层
 
@@ -95,7 +92,10 @@
   无 translator_config 字段；对话框、keyring 写入与状态刷新仍由宿主回调提供。
 - 「扩展」页已迁到 `gui_qt/settings/extensions_page.py`：关系分析器 chrome 由页面持有，
   无 translator_config 字段；`OptionalFeatureInstallController` 与 pip 安装仍由宿主执行。
-- 字体、扩展安装、工作区刷新、SDK 安装等其余局部任务仍由 `MainWindow` 属性与私有回调持有。
+- 「项目列表」页已迁到 `gui_qt/settings/workspace_page.py`：chrome 与 `GamesRegistryPanel`
+  由页面持有，无 translator_config 字段；刷新/导入 worker 仍在面板内，切换项目与
+  `workspace_root` 写入仍由宿主回调提供。
+- 字体、扩展安装、SDK 安装等其余局部任务仍由 `MainWindow` 属性与私有回调持有。
 
 Phase B 已消除的 as-is 缺口：
 
@@ -106,14 +106,13 @@ Phase B 已消除的 as-is 缺口：
 
 仍未消除（Phase D）：
 
-- 其余 1 页仍通过 `LegacySettingsPageAdapter` 依赖 `MainWindow` builder 与私有状态；legacy
-  adapter 的 `validate()` 仍返回空列表，共享 advanced 校验继续由旧保存事务负责。
+- 10 页均已迁出独立 `SettingsPage`；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
 - 字体/安装/registry 等非 LiteLLM 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
 
 完整页面清单、字段/即时持久化所有权与测试入口见
 [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
-### target（#202 Phase B 最小接线、Phase C LiteLLM 页与 Phase D 模型/项目/上下文/高级/外观/快捷键/密钥/扩展页已落地；其余页面属于 D）
+### target（#202 Phase B 最小接线、Phase C LiteLLM 页与 Phase D 十页已落地；保存收口仍属 D）
 
 已落地目录：
 
@@ -136,8 +135,9 @@ Phase B 已消除的 as-is 缺口：
 - `gui_qt/settings/shortcuts_page.py`：Phase D 迁出的「快捷键」页面；只读目录，导航行由宿主注入。
 - `gui_qt/settings/api_keys_page.py`：Phase D 迁出的「密钥」页面；对话框与 keyring 写入仍由宿主持有。
 - `gui_qt/settings/extensions_page.py`：Phase D 迁出的「扩展」页面；安装控制器仍由宿主持有。
+- `gui_qt/settings/workspace_page.py`：Phase D 迁出的「项目列表」页面；`GamesRegistryPanel` 与刷新/导入 worker 由页面嵌入的面板持有，切换项目仍由宿主回调提供。
 - `MainWindow`：仍保留全局 `settings` route、header/sidebar、全局任务锁、runner/log、主题应用、
-  唯一保存事务与 shutdown 协调；其余页面 builder 与保存编排在 Phase D 继续迁出。
+  唯一保存事务与 shutdown 协调；保存编排在 Phase D 继续收口。
 
 页面只拥有控件、字段读写映射、局部校验和动作；页面通过显式 callback 与宿主交互，不读取其他
 页面控件，也不依赖整窗私有属性才能独立构造。过渡期允许旧页面 adapter，但同一行为只能有一个

@@ -1529,36 +1529,40 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(switched, ["C:/Game/work"])
 
     def test_settings_workspace_panel_enables_auto_discover_on_show(self):
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
-        fake_page = MagicMock()
-        fake_layout = MagicMock()
-        with patch.object(MainWindow, "_settings_page", return_value=(fake_page, fake_layout)):
-            with patch("gui_qt.app.GamesRegistryPanel") as panel_cls:
-                with patch("gui_qt.app.QLabel", return_value=MagicMock()):
-                    self.window.state = type(
-                        "FakeState",
-                        (),
-                        {
-                            "get_tool_root": lambda self: Path("C:/tool"),
-                            "get_game_root": lambda self: Path("C:/Game/work"),
-                            "get_workspace_root": lambda self: Path("C:/workspace"),
-                        },
-                    )()
-                    self.window._current_registry_doctor_report = lambda: None
-                    self.window._on_registry_switch_project = lambda _target: True
-                    self.window._on_workspace_changed = lambda _path: None
+        from PySide6.QtWidgets import QApplication, QWidget
 
-                    self.window._build_settings_workspace_page()
+        from gui_qt.settings.workspace_page import WorkspaceSettingsPage
 
-        panel_cls.assert_called_once()
-        kwargs = panel_cls.call_args.kwargs
-        self.assertEqual(kwargs.get("workspace_root"), Path("C:/workspace"))
-        self.assertNotIn(
-            "auto_discover_on_show",
-            kwargs,
-            "workspace panel should use default auto_discover_on_show=True",
-        )
+        QApplication.instance() or QApplication([])
+
+        class FakePanel(QWidget):
+            last_kwargs: dict = {}
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(args[0] if args else None)
+                type(self).last_kwargs = kwargs
+
+        with patch("gui_qt.settings.workspace_page.GamesRegistryPanel", FakePanel):
+            page = WorkspaceSettingsPage(
+                None,
+                workspace_root=Path("C:/workspace"),
+                current_game_root=Path("C:/Game/work"),
+                get_doctor_report=lambda: None,
+                on_switch_project=lambda _target: True,
+                on_workspace_changed=lambda _path: None,
+            )
+        try:
+            kwargs = FakePanel.last_kwargs
+            self.assertEqual(kwargs.get("workspace_root"), Path("C:/workspace"))
+            self.assertNotIn(
+                "auto_discover_on_show",
+                kwargs,
+                "workspace panel should use default auto_discover_on_show=True",
+            )
+        finally:
+            page.widget.deleteLater()
 
     def test_focus_advanced_setting_navigates_to_workspace_for_game_root(self):
         class FakeNav:
