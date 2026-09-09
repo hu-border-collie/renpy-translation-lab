@@ -75,7 +75,9 @@
 - `gui_qt/settings/registry.py`：`SettingsPageSpec` / `SettingsPageRegistry` / `build_default_registry`；
   10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
 - `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
-  `collect` / `validate` / `reset` / `focus_issue` / `set_task_running`；不依赖 Qt。
+  `collect` / `validate` / `reset` / `focus_issue` / `set_task_running` / `set_baseline` /
+  `is_dirty` / `leave_guard_prompt`；不依赖 Qt。
+- `gui_qt/settings/leave_guard.py`：未保存离开保护文案。
 - `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM `SettingsPage`；局部 worker 复用
   #297 的取消、operation identity、retired ownership 与 shutdown 合同。

@@ -6,7 +6,7 @@
 > 2026-09-09（#202 Phase A/B/C/D 十页已迁出）核对：Phase A 文档已合并；Phase B 已落地
 > `gui_qt/settings/` 的 page contract、registry、coordinator 与 legacy adapter。Phase C 已将
 > LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将 10 个 Settings 页迁到独立
-> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）。保存收口仍属 Phase D；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
+> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）。保存收口仍属 Phase D：dirty 基线与离开保护文案已由 coordinator 持有，`MainWindow` 仍执行唯一保存事务并弹出 Qt 对话框。
 
 ## 分层
 
@@ -106,7 +106,7 @@ Phase B 已消除的 as-is 缺口：
 
 仍未消除（Phase D）：
 
-- 10 页均已迁出独立 `SettingsPage`；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
+- 10 页均已迁出独立 `SettingsPage`；dirty 基线与离开保护文案由 coordinator 持有，`MainWindow` 仍执行唯一保存事务并弹出 Qt 对话框。
 - 字体/安装/registry 等非 LiteLLM 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
 
 完整页面清单、字段/即时持久化所有权与测试入口见
@@ -119,8 +119,9 @@ Phase B 已消除的 as-is 缺口：
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`；
   冻结 `load/collect/validate/reset/focus_issue/set_task_running` 与 `config_keys` 单一所有权。
 - `gui_qt/settings/registry.py`：页面登记、唯一配置键所有权与 lazy 属性映射；强制一键一主。
-- `gui_qt/settings/coordinator.py`：页内导航、lazy 构建、load/collect/validate/reset、错误聚焦与
-  任务锁分发；不依赖 Qt，可脱离 `MainWindow` 测试。
+- `gui_qt/settings/coordinator.py`：页内导航、lazy 构建、load/collect/validate/reset、错误聚焦、
+  任务锁分发、dirty 基线与离开保护文案；不依赖 Qt，可脱离 `MainWindow` 测试。
+- `gui_qt/settings/leave_guard.py`：未保存离开保护的四套文案（workflow / 切项目 / 关窗 / 离开设置页）。
 - `gui_qt/settings/legacy.py`：未迁移页面的兼容 adapter。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM 页面；局部 worker 与
   load/collect/validate/reset 由页面持有。
@@ -137,7 +138,7 @@ Phase B 已消除的 as-is 缺口：
 - `gui_qt/settings/extensions_page.py`：Phase D 迁出的「扩展」页面；安装控制器仍由宿主持有。
 - `gui_qt/settings/workspace_page.py`：Phase D 迁出的「项目列表」页面；`GamesRegistryPanel` 与刷新/导入 worker 由页面嵌入的面板持有，切换项目仍由宿主回调提供。
 - `MainWindow`：仍保留全局 `settings` route、header/sidebar、全局任务锁、runner/log、主题应用、
-  唯一保存事务与 shutdown 协调；保存编排在 Phase D 继续收口。
+  唯一保存事务、Qt 离开保护对话框与 shutdown 协调；保存写盘在 Phase D 继续收口。
 
 页面只拥有控件、字段读写映射、局部校验和动作；页面通过显式 callback 与宿主交互，不读取其他
 页面控件，也不依赖整窗私有属性才能独立构造。过渡期允许旧页面 adapter，但同一行为只能有一个
