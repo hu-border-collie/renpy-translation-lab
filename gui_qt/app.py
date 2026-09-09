@@ -354,6 +354,7 @@ from .settings.context_page import ContextSettingsPage
 from .settings.advanced_page import AdvancedSettingsPage
 from .settings.appearance_page import AppearanceSettingsPage
 from .settings.shortcuts_page import ShortcutsSettingsPage, shortcut_catalog
+from .settings.api_keys_page import ApiKeysSettingsPage
 from .settings.field_widgets import (
     format_setting_text,
 )
@@ -3167,6 +3168,8 @@ class MainWindow(QMainWindow):
             return self._create_appearance_settings_page()
         if spec.key == "shortcuts":
             return self._create_shortcuts_settings_page()
+        if spec.key == "api_keys":
+            return self._create_api_keys_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3474,84 +3477,8 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_settings_api_keys_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_api_keys")
-        api_box, api_layout = self._settings_group("Gemini API Key")
-
-        api_hint = QLabel(
-            "Gemini 密钥保存在本地 api_keys.json 中，不会上传或代理；"
-            "也可通过环境变量配置。可添加多把 Key，供同步/批量轮换使用。"
-        )
-        api_hint.setWordWrap(True)
-        api_hint.setObjectName("config_hint_label")
-        api_layout.addWidget(api_hint)
-
-        self.api_status_label = QLabel()
-        self.api_status_label.setWordWrap(True)
-        self.api_status_label.setObjectName("api_status_label")
-        api_layout.addWidget(self.api_status_label)
-
-        api_actions = QHBoxLayout()
-        self.api_btn = QPushButton("管理 Gemini API Key")
-        self.api_btn.setObjectName("api_btn")
-        self.api_btn.clicked.connect(self._on_manage_api_keys)
-        api_actions.addWidget(self.api_btn)
-        api_actions.addStretch()
-        api_layout.addLayout(api_actions)
-
-        layout.addWidget(api_box)
-
-        litellm_box, litellm_layout = self._settings_group("LiteLLM Provider 密钥")
-        litellm_hint = QLabel(
-            "LiteLLM 各供应商密钥保存在操作系统凭据管理器中，与 Gemini 完全分离，"
-            "不会写入 api_keys.json 或 translator_config.json。\n"
-            "列表包含常用供应商，以及你在 LiteLLM 页联网加载过的供应商；"
-            "也可直接输入任意 Provider id（与 LiteLLM 页一致）。"
-            "每个 Provider 可保存多把 Key，并指定「当前使用」的那一把。"
-        )
-        litellm_hint.setWordWrap(True)
-        litellm_hint.setObjectName("config_hint_label")
-        litellm_layout.addWidget(litellm_hint)
-
-        provider_row = QWidget()
-        provider_layout = QHBoxLayout(provider_row)
-        provider_layout.setContentsMargins(0, 0, 0, 0)
-        provider_layout.setSpacing(8)
-        self.litellm_keys_provider_combo = NoWheelComboBox()
-        self.litellm_keys_provider_combo.setObjectName("litellm_keys_provider_combo")
-        self.litellm_keys_provider_combo.setMinimumWidth(180)
-        self._configure_editable_model_combo(self.litellm_keys_provider_combo)
-        keys_completer = self.litellm_keys_provider_combo.completer()
-        if keys_completer is not None:
-            keys_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            keys_completer.setFilterMode(Qt.MatchFlag.MatchContains)
-            keys_completer.setCompletionMode(
-                QCompleter.CompletionMode.PopupCompletion
-            )
-        self.litellm_keys_provider_combo.currentIndexChanged.connect(
-            lambda _index: self._refresh_litellm_keys_page_status()
-        )
-        self.litellm_keys_provider_combo.lineEdit().editingFinished.connect(
-            self._refresh_litellm_keys_page_status
-        )
-        provider_layout.addWidget(self.litellm_keys_provider_combo, 1)
-        self.litellm_keys_manage_btn = QPushButton("管理 Provider Key")
-        self.litellm_keys_manage_btn.setObjectName("api_btn")
-        self.litellm_keys_manage_btn.clicked.connect(
-            self._on_manage_litellm_keys_from_keys_page
-        )
-        provider_layout.addWidget(self.litellm_keys_manage_btn)
-        litellm_layout.addWidget(provider_row)
-
-        self.litellm_keys_status_label = QLabel()
-        self.litellm_keys_status_label.setWordWrap(True)
-        self.litellm_keys_status_label.setObjectName("api_status_label")
-        litellm_layout.addWidget(self.litellm_keys_status_label)
-
-        layout.addWidget(litellm_box)
-        layout.addStretch(1)
-        self._populate_litellm_keys_provider_combo()
-        self._refresh_litellm_keys_page_status()
-        return page
+        page = self._api_keys_page() or self._create_api_keys_settings_page()
+        return page.widget
 
     def _build_settings_project_page(self) -> QWidget:
         page = self._project_page() or self._create_project_settings_page()
@@ -3771,6 +3698,9 @@ class MainWindow(QMainWindow):
     def _shortcuts_page(self):
         return self.__dict__.get("_shortcuts_settings_page")
 
+    def _api_keys_page(self):
+        return self.__dict__.get("_api_keys_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3856,6 +3786,32 @@ class MainWindow(QMainWindow):
         for surface in (page.widget, page.widget.viewport(), page.body):
             if surface is not None:
                 self._style_themed_surface(surface)
+        return page
+
+    def _create_api_keys_settings_page(self):
+        """Build the migrated API Keys Settings page and alias its widgets."""
+        existing = self._api_keys_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            existing.set_task_running(bool(getattr(self, "_task_running", False)))
+            return existing
+        page = ApiKeysSettingsPage(
+            self,
+            on_manage_gemini_keys=self._on_manage_api_keys,
+            on_manage_litellm_keys=self._on_manage_litellm_keys_from_keys_page,
+            on_provider_changed=self._refresh_litellm_keys_page_status,
+        )
+        self.__dict__["_api_keys_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_api_keys"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        self._refresh_api_status()
+        self._refresh_litellm_keys_page_status()
+        page.set_task_running(bool(getattr(self, "_task_running", False)))
         return page
 
     def _create_project_settings_page(self):

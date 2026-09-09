@@ -16,7 +16,7 @@
   记录 10 个 Settings 页面、字段/即时持久化所有权、局部 worker 与 as-is 缺口，并冻结 Phase B 的
   `load/collect/validate/reset` + 错误聚焦/宿主事件边界；Phase B 的 `gui_qt/settings/` contract、
   registry、coordinator 与 legacy adapter 已合并（PR #434）；Phase C 已将 LiteLLM 页迁到独立
-  `SettingsPage`。Phase D 已将「模型」「项目」「上下文」「高级」「外观」「快捷键」页迁出为独立 `SettingsPage`；其余 3 页
+  `SettingsPage`。Phase D 已将「模型」「项目」「上下文」「高级」「外观」「快捷键」「密钥」页迁出为独立 `SettingsPage`；其余 2 页
   与保存收口仍属 Phase D。
 - [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](issue-348-model-routing-config-contract.md)：
   冻结版本化 `model_routing` schema 与迁移事务；P1 离线 reader、显式暂存迁移/回滚已实现（详见现行手册 [model_config_migration.md](../model_config_migration.md)），P2 生产解析与 P3 设置页待推进。

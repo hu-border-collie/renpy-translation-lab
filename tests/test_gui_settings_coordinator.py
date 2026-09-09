@@ -153,6 +153,25 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._settings_registry.config_keys_for("shortcuts"),
         )
 
+    def test_api_keys_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.api_keys_page import ApiKeysSettingsPage
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+
+        self.window._ensure_settings_page("api_keys")
+        page = self.window._settings_coordinator.page("api_keys")
+        self.assertIsInstance(page, ApiKeysSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(collected, {})
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("api_keys"),
+        )
+        self.assertEqual(self.window.api_btn.text(), "管理 Gemini API Key")
+        self.assertEqual(
+            self.window.litellm_keys_manage_btn.text(), "管理 Provider Key"
+        )
+
     def test_appearance_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.appearance_page import AppearanceSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
