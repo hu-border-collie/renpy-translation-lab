@@ -1,4 +1,4 @@
-"""Settings page contract, registry, and coordinator (#202 Phase B)."""
+"""Settings page contract, registry, coordinator, and migrated pages (#202)."""
 
 from .coordinator import SettingsCoordinator, snapshot_subset
 from .legacy import LegacySettingsHost, LegacySettingsPageAdapter

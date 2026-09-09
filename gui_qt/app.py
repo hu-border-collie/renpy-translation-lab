@@ -338,6 +338,12 @@ from .settings_schema import (
 from .settings.coordinator import SettingsCoordinator
 from .settings.legacy import LegacySettingsPageAdapter
 from .settings.page_contract import SettingsIssue, SettingsPageActions
+from .settings.litellm_page import (
+    LITELLM_FORWARDED_ATTRS,
+    LiteLLMPageHost,
+    LiteLLMSettingsPage,
+    RETIRED_LITELLM_WARMUP_WORKERS as _RETIRED_LITELLM_WARMUP_WORKERS,
+)
 from .settings.registry import (
     CONFIG_SNAPSHOT_KEYS_BY_PAGE as _CONFIG_SNAPSHOT_KEYS_BY_PAGE,
     SETTINGS_CONFIG_PAGE_KEYS as _SETTINGS_CONFIG_PAGE_KEYS,
@@ -463,13 +469,6 @@ _BATCH_STAGE_RESULT = 2  # 写回 / 结果
 _LOG_FLUSH_INTERVAL_MS = 80
 _LAYOUT_SYNC_DEBOUNCE_MS = 32
 _LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS = 400
-
-# Application-level ownership for warmup workers detached from a closing
-# window: MainWindow teardown must never destroy a QThread whose import is
-# still running (Qt aborts the process).  Workers are removed once their
-# thread finished; entries left behind after the window itself is gone are
-# harmless process-exit cleanup.
-_RETIRED_LITELLM_WARMUP_WORKERS: set[LiteLLMModuleWarmupWorker] = set()
 _UI_PROGRESS_FLUSH_INTERVAL_MS = 100
 _CONTEXT_STATUS_CACHE_TTL_S = 2.0
 
@@ -636,14 +635,6 @@ class MainWindow(QMainWindow):
         self._updating_litellm_provider = False
         self._applied_litellm_provider = ""
         self._pending_litellm_model_selection: tuple[str, str] | None = None
-        self._litellm_model_selection_save_timer = QTimer(self)
-        self._litellm_model_selection_save_timer.setSingleShot(True)
-        self._litellm_model_selection_save_timer.setInterval(
-            _LITELLM_MODEL_SELECTION_SAVE_DEBOUNCE_MS
-        )
-        self._litellm_model_selection_save_timer.timeout.connect(
-            self._flush_litellm_model_selection_save
-        )
         self._litellm_saved_key_status: dict[str, str] = {}
         self._custom_litellm_providers: dict[str, CustomLiteLLMProvider] = {}
         self._custom_litellm_providers_load_error = ""
@@ -3081,6 +3072,7 @@ class MainWindow(QMainWindow):
                 reload=self._request_settings_reload,
                 navigate=self._focus_settings_section,
                 show_status=self._show_settings_status,
+                run_immediate=self._run_settings_immediate,
             ),
         )
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
@@ -3179,7 +3171,9 @@ class MainWindow(QMainWindow):
         )
 
     def _build_settings_page_adapter(self, spec):
-        """Build one legacy page adapter for the coordinator."""
+        """Build one settings page for the coordinator."""
+        if spec.key == "litellm":
+            return self._create_litellm_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3914,241 +3908,530 @@ class MainWindow(QMainWindow):
             "请参阅 docs/relation_analysis.md 与 relation_analyzer/README.md。",
         )
 
-    def _build_settings_litellm_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_litellm")
 
-        backend_box = QGroupBox("LiteLLM 同步替代后端")
-        backend_layout = self._settings_form(backend_box)
+    def _litellm_page(self):
+        return self.__dict__.get("_litellm_settings_page")
 
-        self.sync_backend_combo = NoWheelComboBox()
-        self.sync_backend_combo.addItem("Gemini 同步（推荐）", "gemini")
-        self.sync_backend_combo.addItem("启用 LiteLLM 同步替代", "litellm")
-        self.sync_backend_combo.currentIndexChanged.connect(self._on_sync_backend_changed)
-        backend_layout.addRow("同步执行后端：", self.sync_backend_combo)
+    def _create_litellm_settings_page(self):
+        """Build the migrated LiteLLM Settings page and alias its widgets."""
+        from .settings.litellm_page import LiteLLMSettingsPage, LITELLM_FORWARDED_ATTRS
 
-        self.litellm_provider_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.litellm_provider_combo)
-        self.litellm_provider_combo.lineEdit().setPlaceholderText(
-            "搜索或输入自定义 Provider"
+        page = LiteLLMSettingsPage(
+            self,
+            cache=self._litellm_cache,
+            host=self._build_litellm_page_host(),
+            start_warmup=False,
         )
-        provider_completer = self.litellm_provider_combo.completer()
-        if provider_completer is not None:
-            provider_completer.setCaseSensitivity(
-                Qt.CaseSensitivity.CaseInsensitive
-            )
-            provider_completer.setFilterMode(Qt.MatchFlag.MatchContains)
-            provider_completer.setCompletionMode(
-                QCompleter.CompletionMode.PopupCompletion
-            )
-        provider_row = QWidget()
-        provider_layout = QHBoxLayout(provider_row)
-        provider_layout.setContentsMargins(0, 0, 0, 0)
-        provider_layout.setSpacing(8)
-        provider_layout.addWidget(self.litellm_provider_combo, 1)
-        self.litellm_refresh_providers_btn = QPushButton("联网加载供应商")
-        self.litellm_refresh_providers_btn.setObjectName("secondary_btn")
-        self.litellm_refresh_providers_btn.clicked.connect(
-            self._on_refresh_litellm_providers
-        )
-        provider_layout.addWidget(self.litellm_refresh_providers_btn)
-        self.litellm_clear_provider_btn = QPushButton("取消选择")
-        self.litellm_clear_provider_btn.setObjectName("secondary_btn")
-        self.litellm_clear_provider_btn.clicked.connect(self._on_clear_litellm_provider)
-        provider_layout.addWidget(self.litellm_clear_provider_btn)
-        backend_layout.addRow("Provider：", provider_row)
-        self.litellm_provider_catalog_status_label = QLabel()
-        self.litellm_provider_catalog_status_label.setWordWrap(True)
-        self.litellm_provider_catalog_status_label.setObjectName("config_hint_label")
-        backend_layout.addRow(self.litellm_provider_catalog_status_label)
-        self._populate_litellm_providers(
-            self._cached_litellm_provider_values(),
-            selected=self._litellm_cache.selected_provider,
-        )
-
-        self.litellm_model_combo = NoWheelComboBox()
-        self._configure_editable_model_combo(self.litellm_model_combo)
-        self.litellm_model_combo.lineEdit().setPlaceholderText("尚未加载模型")
-        self.litellm_model_combo.currentTextChanged.connect(self._on_litellm_model_changed)
-        model_row = QWidget()
-        model_layout = QHBoxLayout(model_row)
-        model_layout.setContentsMargins(0, 0, 0, 0)
-        model_layout.setSpacing(8)
-        model_layout.addWidget(self.litellm_model_combo, 1)
-        self.litellm_refresh_models_btn = QPushButton("联网加载模型")
-        self.litellm_refresh_models_btn.setObjectName("secondary_btn")
-        self.litellm_refresh_models_btn.clicked.connect(self._on_refresh_litellm_models)
-        model_layout.addWidget(self.litellm_refresh_models_btn)
-        backend_layout.addRow("LiteLLM 模型：", model_row)
-        self.litellm_catalog_status_label = QLabel("模型目录：尚未加载。")
-        self.litellm_catalog_status_label.setWordWrap(True)
-        self.litellm_catalog_status_label.setObjectName("config_hint_label")
-        backend_layout.addRow(self.litellm_catalog_status_label)
-
-        self.sync_backend_hint = QLabel()
-        self.sync_backend_hint.setWordWrap(True)
-        self.sync_backend_hint.setObjectName("config_hint_label")
-        backend_layout.addRow(self.sync_backend_hint)
-
-        version_row = QWidget()
-        version_layout = QHBoxLayout(version_row)
-        version_layout.setContentsMargins(0, 0, 0, 0)
-        version_layout.setSpacing(8)
-        self.litellm_version_label = QLabel()
-        self.litellm_version_label.setWordWrap(True)
-        self.litellm_version_label.setMinimumWidth(0)
-        self.litellm_version_label.setObjectName("config_hint_label")
-        version_layout.addWidget(self.litellm_version_label, 1)
-        self.litellm_check_version_btn = QPushButton("检查更新")
-        self.litellm_check_version_btn.setObjectName("secondary_btn")
-        self.litellm_check_version_btn.clicked.connect(self._on_check_litellm_version)
-        version_layout.addWidget(self.litellm_check_version_btn)
-        self.install_litellm_btn = QPushButton("安装 LiteLLM")
-        self.install_litellm_btn.setObjectName("secondary_btn")
-        self.install_litellm_btn.clicked.connect(self._on_install_litellm)
-        self.install_litellm_btn.setVisible(False)
-        version_layout.addWidget(self.install_litellm_btn)
-        backend_layout.addRow("LiteLLM 版本：", version_row)
-        self._refresh_litellm_version_label()
-
-        self.litellm_install_progress = QProgressBar()
-        self.litellm_install_progress.setObjectName("litellm_install_progress")
-        self.litellm_install_progress.setTextVisible(True)
-        self.litellm_install_progress.setFormat("正在后台安装 LiteLLM…")
-        self.litellm_install_progress.setVisible(False)
-        backend_layout.addRow(self.litellm_install_progress)
-        layout.addWidget(backend_box)
-
-        custom_box, custom_layout = self._settings_group("自定义 OpenAI 兼容 Provider")
-        custom_hint = QLabel(
-            "为 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）"
-            "注册通用 Provider。请求会改写为 openai/<模型> 并逐请求透传 API Base；"
-            "模型列表走 GET {models_url}，密钥保存在系统凭据管理器（可加多把 Key）。"
-            "id 同时用作模型前缀与密钥用户名，创建后不可修改。"
-        )
-        custom_hint.setWordWrap(True)
-        custom_hint.setObjectName("config_hint_label")
-        custom_layout.addWidget(custom_hint)
-
-        self.custom_provider_table = QTableWidget(0, 4)
-        self.custom_provider_table.setObjectName("custom_provider_table")
-        self.custom_provider_table.setHorizontalHeaderLabels(
-            ("Provider id", "显示名称", "API Base", "密钥环境变量")
-        )
-        self.custom_provider_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self.custom_provider_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self.custom_provider_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
-        self.custom_provider_table.verticalHeader().setVisible(False)
-        # Long URLs/ids elide instead of forcing a horizontal scrollbar; hover
-        # tooltips keep the full value readable (set while filling rows).
-        self.custom_provider_table.setWordWrap(False)
-        self.custom_provider_table.setTextElideMode(Qt.TextElideMode.ElideRight)
-        header = self.custom_provider_table.horizontalHeader()
-        header.setStretchLastSection(False)
-        header.setMinimumSectionSize(60)
-        # id / label / env columns stay user-resizable; API Base absorbs the
-        # leftover width so a long endpoint never collapses the other columns.
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        self.custom_provider_table.setColumnWidth(0, 110)
-        self.custom_provider_table.setColumnWidth(1, 110)
-        self.custom_provider_table.setColumnWidth(3, 150)
-        self.custom_provider_table.setMinimumHeight(120)
-        self.custom_provider_table.itemSelectionChanged.connect(
-            self._refresh_custom_provider_actions
-        )
-        custom_layout.addWidget(self.custom_provider_table)
-
-        custom_actions = QHBoxLayout()
-        self.custom_provider_add_btn = QPushButton("添加…")
-        self.custom_provider_add_btn.setObjectName("secondary_btn")
-        self.custom_provider_add_btn.clicked.connect(
-            self._on_add_custom_litellm_provider
-        )
-        custom_actions.addWidget(self.custom_provider_add_btn)
-        self.custom_provider_edit_btn = QPushButton("编辑…")
-        self.custom_provider_edit_btn.setObjectName("secondary_btn")
-        self.custom_provider_edit_btn.setEnabled(False)
-        self.custom_provider_edit_btn.clicked.connect(
-            self._on_edit_custom_litellm_provider
-        )
-        custom_actions.addWidget(self.custom_provider_edit_btn)
-        self.custom_provider_delete_btn = QPushButton("删除")
-        self.custom_provider_delete_btn.setObjectName("secondary_btn")
-        self.custom_provider_delete_btn.setEnabled(False)
-        self.custom_provider_delete_btn.clicked.connect(
-            self._on_delete_custom_litellm_provider
-        )
-        custom_actions.addWidget(self.custom_provider_delete_btn)
-        custom_actions.addStretch(1)
-        custom_layout.addLayout(custom_actions)
-
-        self.custom_provider_status_label = QLabel()
-        self.custom_provider_status_label.setWordWrap(True)
-        self.custom_provider_status_label.setObjectName("config_hint_label")
-        custom_layout.addWidget(self.custom_provider_status_label)
-        layout.addWidget(custom_box)
-
-        credentials_box, credentials_layout = self._settings_group("Provider 凭据")
-        self.litellm_credentials_box = credentials_box
-        credentials_hint = QLabel(
-            "密钥与 Gemini 配置完全分离，并保存到操作系统凭据管理器；"
-            "不会写入 translator_config.json。也可继续使用 LiteLLM 约定的环境变量。\n"
-            "DeepSeek / OpenAI / Anthropic / xAI 等：请先在「密钥」页或下方按钮中"
-            "保存至少一把 API Key，再点「联网加载模型」。支持多 Key，仅显示脱敏后缀。"
-        )
-        credentials_hint.setWordWrap(True)
-        credentials_hint.setObjectName("config_hint_label")
-        credentials_layout.addWidget(credentials_hint)
-        self.litellm_provider_label = QLabel()
-        self.litellm_provider_label.setObjectName("litellm_provider_label")
-        credentials_layout.addWidget(self.litellm_provider_label)
-        self.litellm_credential_status_label = QLabel()
-        self.litellm_credential_status_label.setWordWrap(True)
-        self.litellm_credential_status_label.setObjectName("api_status_label")
-        credentials_layout.addWidget(self.litellm_credential_status_label)
-        credential_actions = QWidget()
-        credential_actions_layout = QHBoxLayout(credential_actions)
-        credential_actions_layout.setContentsMargins(0, 0, 0, 0)
-        credential_actions_layout.setSpacing(8)
-        self.litellm_manage_keys_btn = QPushButton("管理密钥…")
-        self.litellm_manage_keys_btn.setObjectName("api_btn")
-        self.litellm_manage_keys_btn.clicked.connect(self._on_manage_litellm_keys)
-        credential_actions_layout.addWidget(self.litellm_manage_keys_btn)
-        credential_actions_layout.addStretch(1)
-        credentials_layout.addWidget(credential_actions)
-        self.litellm_test_connection_btn = QPushButton("测试连接")
-        self.litellm_test_connection_btn.clicked.connect(self._on_test_litellm_connection)
-        credentials_layout.addWidget(self.litellm_test_connection_btn)
-        self.litellm_connection_status_label = QLabel("尚未测试连接。")
-        self.litellm_connection_status_label.setWordWrap(True)
-        self.litellm_connection_status_label.setObjectName("config_hint_label")
-        credentials_layout.addWidget(self.litellm_connection_status_label)
-        layout.addWidget(credentials_box)
-
-        self.litellm_provider_combo.currentIndexChanged.connect(
-            self._on_litellm_provider_changed
-        )
-        self.litellm_provider_combo.lineEdit().editingFinished.connect(
-            self._on_litellm_provider_changed
-        )
-        self._restore_litellm_cached_selection()
-        self._refresh_litellm_catalog_status()
-        self._refresh_litellm_credential_status()
-        self._refresh_custom_provider_table()
-        # Warm the heavy litellm import in the background so the installed
-        # provider table can be merged into the reserved-id check without
-        # blocking this (or any later) page visit.
-        self._start_litellm_module_warmup()
-        layout.addStretch(1)
+        for name in LITELLM_FORWARDED_ATTRS:
+            if name in self.__dict__:
+                setattr(page, name, self.__dict__.pop(name))
+        self.__dict__["_litellm_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_litellm"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        page._start_litellm_module_warmup()
         return page
+
+    def _build_litellm_page_host(self):
+        from .settings.litellm_page import LiteLLMPageHost
+
+        return LiteLLMPageHost(
+            show_status=lambda message, timeout_ms=5000: self.statusBar().showMessage(
+                message, timeout_ms
+            ),
+            append_log=lambda message: self._append_log(message),
+            dialog_parent=lambda: self,
+            is_shutdown_requested=lambda: bool(
+                getattr(self, "_shutdown_requested", False)
+            ),
+            is_loading_config=lambda: bool(
+                getattr(self, "_loading_config_to_ui", False)
+            ),
+            is_install_running=lambda: self._litellm_install_running(),
+            is_task_running=lambda: bool(getattr(self, "_task_running", False)),
+            load_translator_config=lambda: self.state.load_translator_config(),
+            open_provider_keys=lambda provider: self._open_litellm_provider_key_dialog(
+                provider
+            ),
+            start_install=lambda: self._start_litellm_install_from_page(),
+            on_providers_changed=lambda selected="": (
+                self._populate_litellm_keys_provider_combo(selected=selected)
+            ),
+            on_backend_gating=lambda backend: self._apply_litellm_host_gating(backend),
+            environment=lambda: os.environ,
+            load_api_key=lambda provider: self._host_load_provider_api_key(provider),
+            load_key_store=lambda provider: load_provider_key_store(provider),
+            message_information=lambda title, text: message_box_information(
+                self, title, text
+            ),
+            message_warning=lambda title, text: message_box_warning(
+                self, title, text
+            ),
+            message_question=lambda title, text, **kwargs: message_box_question(
+                self, title, text, **kwargs
+            ),
+            create_provider_catalog_worker=lambda: LiteLLMProviderCatalogWorker(self),
+            create_model_catalog_worker=lambda provider, api_key, custom_providers: (
+                LiteLLMModelCatalogWorker(
+                    provider,
+                    api_key=api_key,
+                    parent=self,
+                    custom_providers=custom_providers,
+                )
+            ),
+            create_version_worker=lambda: LiteLLMVersionWorker(self),
+            create_connection_worker=lambda model, api_key, custom_providers, identity: (
+                LiteLLMConnectionTestWorker(
+                    model,
+                    api_key,
+                    self,
+                    custom_providers=custom_providers,
+                    operation_identity=identity,
+                )
+            ),
+            create_warmup_worker=lambda: LiteLLMModuleWarmupWorker(self),
+            create_custom_provider_dialog=lambda **kwargs: CustomLiteLLMProviderDialog(
+                self, **kwargs
+            ),
+        )
+
+    def _host_load_provider_api_key(self, provider: str) -> str:
+        try:
+            return str(load_provider_api_key(provider) or "")
+        except ProviderCredentialStoreError:
+            return ""
+
+    def _start_litellm_install_from_page(self) -> tuple[bool, str]:
+        controller = self._ensure_litellm_install_controller()
+        if controller.is_running():
+            return False, "正在安装"
+        return controller.start_install()
+
+    def _run_settings_immediate(self, action_id: str, payload) -> bool:
+        if action_id == "manage_provider_keys":
+            provider = str((payload or {}).get("provider") or "")
+            return bool(self._open_litellm_provider_key_dialog(provider))
+        if action_id == "install_litellm":
+            self._on_install_litellm()
+            return True
+        return False
+
+    def _apply_litellm_host_gating(self, backend: str = "") -> None:
+        """Cross-page gating that cannot live on the LiteLLM page."""
+        if getattr(self, "_updating_litellm_gating", False):
+            return
+        self._updating_litellm_gating = True
+        try:
+            backend = backend or self._selected_sync_backend()
+            gemini_sync_model_combo = self._settings_widget("sync_model_combo")
+            set_enabled = getattr(gemini_sync_model_combo, "setEnabled", None)
+            if callable(set_enabled):
+                set_enabled(backend == "gemini")
+                set_tip = getattr(gemini_sync_model_combo, "setToolTip", None)
+                if callable(set_tip):
+                    set_tip(
+                        "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
+                        if backend == "litellm"
+                        else ""
+                    )
+            if hasattr(self, "translate_btn") and not getattr(
+                self, "_loading_config_to_ui", False
+            ):
+                self._set_task_running(bool(getattr(self, "_task_running", False)))
+            self._refresh_litellm_install_action_gating()
+        finally:
+            self._updating_litellm_gating = False
+
+    def _delegate_litellm_page(self, method_name: str, *args, **kwargs):
+        page = self._litellm_page()
+        if page is None:
+            if method_name == "_selected_sync_backend":
+                return "gemini"
+            if method_name in {
+                "_litellm_model_text",
+                "_litellm_provider_combo_value",
+                "_current_litellm_provider",
+                "_litellm_saved_key_message",
+            }:
+                return ""
+            if method_name == "_custom_provider_entries":
+                return []
+            if method_name == "_reserved_custom_provider_ids":
+                return frozenset()
+            return None
+        return getattr(page, method_name)(*args, **kwargs)
+
+
+    def _selected_sync_backend(self, *args, **kwargs):
+        page = self._litellm_page()
+        if page is not None:
+            return page._selected_sync_backend()
+        combo = self._settings_widget("sync_backend_combo")
+        if combo is None:
+            return "gemini"
+        value = combo.currentData()
+        return value if value in {"gemini", "litellm"} else "gemini"
+
+    def _litellm_model_text(self, *args, **kwargs):
+        return self._delegate_litellm_page("_litellm_model_text", *args, **kwargs)
+
+    def _litellm_provider_combo_value(self, *args, **kwargs):
+        return self._delegate_litellm_page("_litellm_provider_combo_value", *args, **kwargs)
+
+    def _current_litellm_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_current_litellm_provider", *args, **kwargs)
+
+    def _ensure_litellm_provider_item(self, *args, **kwargs):
+        return self._delegate_litellm_page("_ensure_litellm_provider_item", *args, **kwargs)
+
+    def _populate_litellm_providers(self, *args, **kwargs):
+        return self._delegate_litellm_page("_populate_litellm_providers", *args, **kwargs)
+
+    def _litellm_snapshot_status(self, *args, **kwargs):
+        return self._delegate_litellm_page("_litellm_snapshot_status", *args, **kwargs)
+
+    def _refresh_litellm_catalog_status(self, *args, **kwargs):
+        return self._delegate_litellm_page("_refresh_litellm_catalog_status", *args, **kwargs)
+
+    def _save_litellm_cache(self, *args, **kwargs):
+        return self._delegate_litellm_page("_save_litellm_cache", *args, **kwargs)
+
+    def _schedule_litellm_model_selection_save(self, *args, **kwargs):
+        return self._delegate_litellm_page("_schedule_litellm_model_selection_save", *args, **kwargs)
+
+    def _cancel_litellm_model_selection_save(self, *args, **kwargs):
+        return self._delegate_litellm_page("_cancel_litellm_model_selection_save", *args, **kwargs)
+
+    def _flush_litellm_model_selection_save(self, *args, **kwargs):
+        return self._delegate_litellm_page("_flush_litellm_model_selection_save", *args, **kwargs)
+
+    def _restore_litellm_cached_selection(self, *args, **kwargs):
+        return self._delegate_litellm_page("_restore_litellm_cached_selection", *args, **kwargs)
+
+    def _restore_configured_litellm_model(self, *args, **kwargs):
+        return self._delegate_litellm_page("_restore_configured_litellm_model", *args, **kwargs)
+
+    def _set_litellm_models(self, *args, **kwargs):
+        return self._delegate_litellm_page("_set_litellm_models", *args, **kwargs)
+
+    def _litellm_saved_key_message(self, *args, **kwargs):
+        return self._delegate_litellm_page("_litellm_saved_key_message", *args, **kwargs)
+
+    def _custom_provider_entries(self, *args, **kwargs):
+        return self._delegate_litellm_page("_custom_provider_entries", *args, **kwargs)
+
+    def _reserved_custom_provider_ids(self, *args, **kwargs):
+        return self._delegate_litellm_page("_reserved_custom_provider_ids", *args, **kwargs)
+
+    def _refresh_custom_provider_table(self, *args, **kwargs):
+        return self._delegate_litellm_page("_refresh_custom_provider_table", *args, **kwargs)
+
+    def _refresh_custom_provider_actions(self, *args, **kwargs):
+        return self._delegate_litellm_page("_refresh_custom_provider_actions", *args, **kwargs)
+
+    def _selected_custom_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_selected_custom_provider", *args, **kwargs)
+
+    def _after_custom_providers_changed(self, *args, **kwargs):
+        return self._delegate_litellm_page("_after_custom_providers_changed", *args, **kwargs)
+
+    def _cached_litellm_provider_values(self, *args, **kwargs):
+        return self._delegate_litellm_page("_cached_litellm_provider_values", *args, **kwargs)
+
+    def _on_add_custom_litellm_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_add_custom_litellm_provider", *args, **kwargs)
+
+    def _on_edit_custom_litellm_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_edit_custom_litellm_provider", *args, **kwargs)
+
+    def _on_delete_custom_litellm_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_delete_custom_litellm_provider", *args, **kwargs)
+
+    def _refresh_litellm_credential_status(self, *args, **kwargs):
+        return self._delegate_litellm_page("_refresh_litellm_credential_status", *args, **kwargs)
+
+    def _on_litellm_model_changed(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_model_changed", *args, **kwargs)
+
+    def _on_clear_litellm_provider(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_clear_litellm_provider", *args, **kwargs)
+
+    def _on_litellm_provider_changed(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_provider_changed", *args, **kwargs)
+
+    def _refresh_litellm_version_label(self, *args, **kwargs):
+        page = self._litellm_page()
+        if page is not None:
+            return page._refresh_litellm_version_label()
+        label = self._settings_widget("litellm_version_label")
+        if label is None:
+            return None
+        installed = installed_litellm_version()
+        latest = str(getattr(self, "_litellm_latest_version", "") or "")
+        compatible = str(
+            getattr(self, "_litellm_latest_compatible_version", "") or ""
+        )
+        requires_python = str(
+            getattr(self, "_litellm_latest_requires_python", "") or ""
+        )
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if not installed:
+            label.setText("尚未安装；可检查 PyPI 最新稳定版。")
+        elif not latest:
+            label.setText(f"本机 {installed}；尚未检查 PyPI。")
+        elif compatible and version_key(compatible) < version_key(latest):
+            requirement = f"（要求 Python {requires_python}）" if requires_python else ""
+            state = (
+                f"建议更新到 {compatible}。"
+                if version_key(installed) < version_key(compatible)
+                else "已是当前 Python 可用最新版。"
+            )
+            label.setText(
+                f"本机 {installed}；PyPI 最新稳定版 {latest}{requirement}不支持当前 "
+                f"Python {python_version}；\n兼容最新版 {compatible}，{state}"
+            )
+        elif compatible and version_key(installed) < version_key(compatible):
+            label.setText(f"本机 {installed}；最新兼容稳定版 {compatible}，建议更新。")
+        elif compatible:
+            label.setText(f"本机 {installed}；已是最新兼容稳定版。")
+        elif version_key(installed) < version_key(latest):
+            label.setText(f"本机 {installed}；最新稳定版 {latest}，建议更新。")
+        else:
+            label.setText(f"本机 {installed}；已是最新稳定版。")
+        return None
+
+    def _request_cancel_litellm_worker(self, *args, **kwargs):
+        return self._delegate_litellm_page("_request_cancel_litellm_worker", *args, **kwargs)
+
+    def _start_litellm_module_warmup(self, *args, **kwargs):
+        return self._delegate_litellm_page("_start_litellm_module_warmup", *args, **kwargs)
+
+    def _on_litellm_module_warmed(self, *args, **kwargs):
+        page = self._litellm_page()
+        if page is None:
+            return None
+        page._on_litellm_module_warmed(*args, **kwargs)
+        if getattr(self, "_shutdown_requested", False):
+            return None
+        if getattr(page, "_custom_litellm_providers_modified", False):
+            return None
+        self._after_custom_providers_changed()
+        return None
+
+    def _detach_litellm_module_warmup(self, *args, **kwargs):
+        return self._delegate_litellm_page("_detach_litellm_module_warmup", *args, **kwargs)
+
+    def _on_litellm_network_progress(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_network_progress", *args, **kwargs)
+
+    def _on_check_litellm_version(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_check_litellm_version", *args, **kwargs)
+
+    def _on_litellm_version_checked(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_version_checked", *args, **kwargs)
+
+    def _on_refresh_litellm_providers(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_refresh_litellm_providers", *args, **kwargs)
+
+    def _on_litellm_providers_loaded(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_providers_loaded", *args, **kwargs)
+
+    def _on_refresh_litellm_models(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_refresh_litellm_models", *args, **kwargs)
+
+    def _on_litellm_models_loaded(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_litellm_models_loaded", *args, **kwargs)
+
+    def _on_test_litellm_connection(self, *args, **kwargs):
+        return self._delegate_litellm_page("_on_test_litellm_connection", *args, **kwargs)
+
+    def _litellm_connection_operation_identity(self, *args, **kwargs):
+        return self._delegate_litellm_page("_litellm_connection_operation_identity", *args, **kwargs)
+
+    def _on_litellm_connection_tested(self, *args, **kwargs):
+        page = self._litellm_page()
+        if page is None:
+            return None
+        kwargs.setdefault('sender', self.sender())
+        return page._on_litellm_connection_tested(*args, **kwargs)
+
+    def _on_sync_backend_changed(self, _index: int = -1) -> None:
+        page = self._litellm_page()
+        if page is not None:
+            page._on_sync_backend_changed(_index)
+            return
+        self._on_sync_backend_changed_without_page(_index)
+
+    def _on_sync_backend_changed_without_page(self, _index: int) -> None:
+        """LiteLLM widget gating for tests that stub MainWindow without a page."""
+        backend = self._selected_sync_backend()
+        hint = self._settings_widget("sync_backend_hint")
+        if hint is None:
+            return
+        install_btn = self._settings_widget("install_litellm_btn")
+        install_progress = self._settings_widget("litellm_install_progress")
+        installing = self._litellm_install_running()
+        installed_version = installed_litellm_version()
+        installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
+        if backend == "litellm":
+            keyring_installed = importlib.util.find_spec("keyring") is not None
+            state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
+            credential_state = "可用" if keyring_installed else "尚未安装"
+            hint.setText(
+                "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
+                f"LiteLLM：{state}；安全凭据支持：{credential_state}。"
+            )
+            if install_btn is not None:
+                latest = str(getattr(self, "_litellm_latest_version", "") or "")
+                compatible = str(
+                    getattr(self, "_litellm_latest_compatible_version", "") or ""
+                )
+                target = compatible if latest else ""
+                up_to_date = bool(
+                    installed
+                    and target
+                    and version_key(installed_version) >= version_key(target)
+                )
+                compatibility_limited = bool(
+                    latest and compatible and version_key(compatible) < version_key(latest)
+                )
+                no_compatible_release = bool(latest and not compatible)
+                install_btn.setVisible(True)
+                install_btn.setEnabled(
+                    not installing
+                    and not no_compatible_release
+                    and not (up_to_date and keyring_installed)
+                )
+                if installing:
+                    install_btn.setText("正在更新…" if installed else "正在安装…")
+                elif not installed:
+                    install_btn.setText("安装 LiteLLM")
+                elif no_compatible_release:
+                    install_btn.setText("当前 Python 无兼容版本")
+                elif up_to_date and keyring_installed:
+                    install_btn.setText(
+                        "当前 Python 可用最新版"
+                        if compatibility_limited
+                        else "已是最新版"
+                    )
+                else:
+                    install_btn.setText("更新 LiteLLM")
+        else:
+            hint.setText(
+                "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
+            )
+            if install_btn is not None:
+                install_btn.setVisible(False)
+        if install_progress is not None:
+            install_progress.setVisible(installing)
+            if installing:
+                install_progress.setRange(0, 0)
+                install_progress.setFormat(
+                    "正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…"
+                )
+
+        model_combo = self._settings_widget("litellm_model_combo")
+        litellm_active = backend == "litellm" and not installing
+        provider = self._current_litellm_provider()
+        model = self._litellm_model_text()
+        provider_combo = self._settings_widget("litellm_provider_combo")
+        if provider_combo is not None:
+            provider_combo.setEnabled(litellm_active)
+        provider_worker = getattr(self, "_litellm_provider_catalog_worker", None)
+        provider_button = self._settings_widget("litellm_refresh_providers_btn")
+        if provider_button is not None:
+            provider_button.setEnabled(litellm_active)
+            if provider_worker is not None:
+                provider_button.setText(
+                    "正在取消…"
+                    if getattr(provider_worker, "is_cancelled", lambda: False)()
+                    else "停止加载"
+                )
+            else:
+                provider_button.setText("联网加载供应商")
+        clear_provider = self._settings_widget("litellm_clear_provider_btn")
+        if clear_provider is not None:
+            clear_provider.setEnabled(litellm_active and bool(provider))
+        if model_combo is not None:
+            set_enabled = getattr(model_combo, "setEnabled", None)
+            if callable(set_enabled):
+                set_enabled(litellm_active and bool(provider))
+        model_worker = getattr(self, "_litellm_catalog_worker", None)
+        model_button = self._settings_widget("litellm_refresh_models_btn")
+        if model_button is not None:
+            model_button.setEnabled(litellm_active and bool(provider))
+            if model_worker is not None:
+                model_button.setText(
+                    "正在取消…"
+                    if getattr(model_worker, "is_cancelled", lambda: False)()
+                    else "停止加载"
+                )
+            else:
+                model_button.setText("联网加载模型")
+        gemini_sync_model_combo = self._settings_widget("sync_model_combo")
+        set_enabled = getattr(gemini_sync_model_combo, "setEnabled", None)
+        if callable(set_enabled):
+            set_enabled(backend == "gemini")
+            set_tip = getattr(gemini_sync_model_combo, "setToolTip", None)
+            if callable(set_tip):
+                set_tip(
+                    "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
+                    if backend == "litellm"
+                    else ""
+                )
+        credential_enabled = litellm_active and bool(provider) and provider != "ollama"
+        manage_keys_btn = self._settings_widget("litellm_manage_keys_btn")
+        if manage_keys_btn is not None:
+            manage_keys_btn.setEnabled(credential_enabled)
+            manage_keys_btn.setToolTip(
+                ""
+                if credential_enabled
+                else (
+                    "该 Provider 不需要 API Key"
+                    if provider == "ollama"
+                    else "请先选择 Provider"
+                )
+            )
+        connection_worker = getattr(self, "_litellm_connection_worker", None)
+        test_button = self._settings_widget("litellm_test_connection_btn")
+        if test_button is not None:
+            test_button.setEnabled(
+                litellm_active
+                and bool(provider)
+                and (bool(model) or connection_worker is not None)
+            )
+            if connection_worker is not None:
+                test_button.setText(
+                    "正在取消…"
+                    if getattr(connection_worker, "is_cancelled", lambda: False)()
+                    else "停止测试"
+                )
+            else:
+                test_button.setText("测试连接")
+        version_worker = getattr(self, "_litellm_version_worker", None)
+        version_button = self._settings_widget("litellm_check_version_btn")
+        if version_button is not None:
+            version_button.setEnabled(not installing or version_worker is not None)
+            if version_worker is not None:
+                version_button.setText(
+                    "正在取消…"
+                    if getattr(version_worker, "is_cancelled", lambda: False)()
+                    else "停止检查"
+                )
+            else:
+                version_button.setText("检查更新")
+        if hasattr(self, "translate_btn") and not getattr(
+            self, "_loading_config_to_ui", False
+        ):
+            self._set_task_running(bool(getattr(self, "_task_running", False)))
+        refresh_credentials = getattr(self, "_refresh_litellm_credential_status", None)
+        if callable(refresh_credentials):
+            refresh_credentials()
+        self._refresh_litellm_install_action_gating()
 
     def _build_settings_appearance_page(self) -> QWidget:
         page, layout = self._settings_page("settings_appearance")
@@ -5869,7 +6152,7 @@ class MainWindow(QMainWindow):
                 self._replace_split_select_button(row, base_column + 5, entry)
             else:
                 self.split_status_table.removeCellWidget(row, base_column + 5)
-            
+
             self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
 
     def _replace_split_select_button(
@@ -5943,15 +6226,15 @@ class MainWindow(QMainWindow):
             self._split_job_text(entry, profile["job_chars"]),
             tooltip=entry.job_name or entry.manifest_path,
         )
-        
+
         show_action_button = entry.selectable and not is_current
-        
+
         # Always set an empty QTableWidgetItem to allow background styling on the cell
         action_item = QTableWidgetItem("")
         action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         self.split_status_table.setItem(row, base_column + 5, action_item)
         self._apply_split_table_row_style(row, entry, base_column=base_column, is_current=is_current)
-        
+
         if show_action_button:
             self._replace_split_select_button(row, base_column + 5, entry)
         else:
@@ -5996,7 +6279,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         dark = self._effective_theme_is_dark()
         bg_color, text_color, status_color = self._split_status_row_colors(entry.status_kind)
-        
+
         # Highlight the currently active/selected split manifest row with neutral colors.
         if is_current:
             bg_color = "#27272a" if dark else "#e4e4e7"
@@ -6005,7 +6288,7 @@ class MainWindow(QMainWindow):
         background = QBrush(QColor(bg_color)) if bg_color != "transparent" else None
         foreground = QBrush(QColor(text_color))
         status_foreground = QBrush(QColor(status_color))
-        
+
         for column in range(base_column, min(base_column + 6, self.split_status_table.columnCount())):
             item = self.split_status_table.item(row, column)
             if item is None:
@@ -7495,358 +7778,6 @@ class MainWindow(QMainWindow):
     def _current_work_mode(self) -> WorkMode:
         return normalize_work_mode(self._work_mode)
 
-    def _selected_sync_backend(self) -> str:
-        # Use __dict__/settings_widget — plain getattr() would lazy-build every
-        # config page via __getattr__ when the LiteLLM section is unvisited.
-        combo = self._settings_widget("sync_backend_combo")
-        if combo is None:
-            return "gemini"
-        value = combo.currentData()
-        return value if value in {"gemini", "litellm"} else "gemini"
-
-    def _litellm_model_text(self) -> str:
-        combo = self._settings_widget("litellm_model_combo")
-        current_text = getattr(combo, "currentText", None)
-        model = str(current_text() or "").strip() if callable(current_text) else ""
-        if not model or "/" in model:
-            return model
-        provider = self._litellm_provider_combo_value()
-        return f"{provider}/{model}" if provider else model
-
-    def _litellm_provider_combo_value(self) -> str:
-        combo = self._settings_widget("litellm_provider_combo")
-        if combo is None:
-            return ""
-        index = combo.currentIndex()
-        if index >= 0 and combo.currentText() == combo.itemText(index):
-            data = str(combo.itemData(index) or "").strip().lower()
-            if data:
-                return data
-        return resolve_provider_id(combo.currentText())
-
-    def _current_litellm_provider(self) -> str:
-        model_provider = provider_from_model(self._litellm_model_text())
-        if model_provider:
-            return model_provider
-        return self._litellm_provider_combo_value()
-
-    def _ensure_litellm_provider_item(self, provider: str) -> int:
-        combo = self._settings_widget("litellm_provider_combo")
-        provider = str(provider or "").strip().lower()
-        if combo is None or not provider:
-            return -1
-        index = combo.findData(provider)
-        if index < 0:
-            combo.addItem(
-                provider_display_label(provider, self._custom_litellm_providers),
-                provider,
-            )
-            index = combo.findData(provider)
-        return index
-
-    def _populate_litellm_providers(
-        self,
-        providers: tuple[str, ...],
-        *,
-        selected: str = "",
-    ) -> None:
-        combo = self._settings_widget("litellm_provider_combo")
-        if combo is None:
-            return
-        selected = str(selected or "").strip().lower()
-        providers = tuple(
-            dict.fromkeys((*providers, *self._custom_litellm_providers))
-        )
-        combo.blockSignals(True)
-        combo.clear()
-        for provider in sort_provider_ids(providers):
-            provider = str(provider or "").strip().lower()
-            if provider:
-                combo.addItem(
-                    provider_display_label(provider, self._custom_litellm_providers),
-                    provider,
-                )
-        if selected:
-            index = self._ensure_litellm_provider_item(selected)
-            combo.setCurrentIndex(index)
-        else:
-            combo.setCurrentIndex(-1)
-            if combo.isEditable():
-                combo.lineEdit().clear()
-        combo.blockSignals(False)
-        self._applied_litellm_provider = selected
-
-    @staticmethod
-    def _litellm_snapshot_status(
-        subject: str,
-        snapshot: CatalogSnapshot,
-        *,
-        source_label: str,
-    ) -> str:
-        if not snapshot.values:
-            return f"{subject}：尚未联网加载。"
-        fetched = f"缓存时间：{snapshot.fetched_at}。" if snapshot.fetched_at else ""
-        version = (
-            f"LiteLLM {snapshot.litellm_version}。"
-            if snapshot.litellm_version
-            else ""
-        )
-        warning = catalog_snapshot_warning(
-            snapshot,
-            current_litellm_version=installed_litellm_version(),
-        )
-        return " ".join(
-            part
-            for part in (
-                f"{subject}：已缓存 {len(snapshot.values)} 项。",
-                source_label,
-                fetched,
-                version,
-                warning,
-            )
-            if part
-        )
-
-    def _refresh_litellm_catalog_status(self) -> None:
-        provider_label = self._settings_widget("litellm_provider_catalog_status_label")
-        if provider_label is not None:
-            message = self._litellm_snapshot_status(
-                "供应商目录",
-                self._litellm_cache.providers,
-                source_label="来源：LiteLLM 官方在线目录。",
-            )
-            if self._litellm_cache.load_error:
-                message = f"{message} {self._litellm_cache.load_error}"
-            provider_label.setText(message)
-        model_label = self._settings_widget("litellm_catalog_status_label")
-        if model_label is not None:
-            provider = self._litellm_provider_combo_value()
-            snapshot = self._litellm_cache.models(provider)
-            message = self._litellm_snapshot_status(
-                "模型目录",
-                snapshot,
-                source_label=catalog_source_label(
-                    snapshot.source,
-                    self._custom_litellm_providers,
-                ),
-            )
-            endpoint = native_catalog_endpoint(
-                provider,
-                self._custom_litellm_providers,
-            )
-            if endpoint is not None and endpoint.require_key:
-                try:
-                    has_key = bool(load_provider_api_key(provider))
-                except ProviderCredentialStoreError:
-                    has_key = False
-                if not has_key:
-                    custom = self._custom_litellm_providers.get(provider)
-                    if custom is not None and custom.api_key_env and os.environ.get(
-                        custom.api_key_env
-                    ):
-                        has_key = True
-                if not has_key:
-                    custom = self._custom_litellm_providers.get(provider)
-                    if custom is not None:
-                        message = (
-                            f"{message} 提示：{endpoint.label} 模型列表需先保存 API Key；"
-                            "自定义 Provider 没有 LiteLLM 子集目录可回退。"
-                        )
-                    else:
-                        message = (
-                            f"{message} 提示：{endpoint.label} 官方列表需先保存 API Key；"
-                            "未保存时只能尝试 LiteLLM 子集目录（可能依赖 GitHub 网络）。"
-                        )
-            model_label.setText(message)
-
-    def _save_litellm_cache(self, action: Callable[[], None]) -> None:
-        try:
-            action()
-        except OSError as exc:
-            self._append_log(
-                LITELLM_CACHE_COPY["save_failed_log"].format(error=exc)
-            )
-            self.statusBar().showMessage(
-                LITELLM_CACHE_COPY["save_failed_status"],
-                6000,
-            )
-        else:
-            fallback_reason = getattr(self._litellm_cache, "fallback_reason", "")
-            if fallback_reason:
-                self._append_log(fallback_reason)
-                self.statusBar().showMessage(
-                    LITELLM_CACHE_COPY["save_status"],
-                    6000,
-                )
-
-    def _schedule_litellm_model_selection_save(self, provider: str, model: str) -> None:
-        provider = str(provider or "").strip().lower()
-        model = str(model or "").strip()
-        if not provider or not model:
-            self._cancel_litellm_model_selection_save()
-            return
-        self._pending_litellm_model_selection = (provider, model)
-        timer = getattr(self, "_litellm_model_selection_save_timer", None)
-        if timer is None:
-            self._flush_litellm_model_selection_save()
-            return
-        timer.start()
-
-    def _cancel_litellm_model_selection_save(self) -> None:
-        timer = getattr(self, "_litellm_model_selection_save_timer", None)
-        if timer is not None:
-            timer.stop()
-        self._pending_litellm_model_selection = None
-
-    def _flush_litellm_model_selection_save(self) -> None:
-        timer = getattr(self, "_litellm_model_selection_save_timer", None)
-        if timer is not None:
-            timer.stop()
-        pending = getattr(self, "_pending_litellm_model_selection", None)
-        self._pending_litellm_model_selection = None
-        if not pending:
-            return
-        provider, model = pending
-        if provider and model:
-            self._save_litellm_cache(
-                lambda p=provider, m=model: self._litellm_cache.select_model(p, m)
-            )
-
-    def _restore_litellm_cached_selection(self) -> None:
-        cache = self.__dict__.get("_litellm_cache")
-        if cache is None:
-            return
-        provider = cache.selected_provider
-        if not provider:
-            self._applied_litellm_provider = ""
-            self._set_litellm_models("", ())
-            return
-        index = self._ensure_litellm_provider_item(provider)
-        combo = self._settings_widget("litellm_provider_combo")
-        if combo is not None:
-            combo.blockSignals(True)
-            combo.setCurrentIndex(index)
-            combo.blockSignals(False)
-        self._applied_litellm_provider = provider
-        snapshot = cache.models(provider)
-        self._set_litellm_models(
-            provider,
-            snapshot.values,
-            selected=self._litellm_cache.selected_model(provider),
-        )
-
-    def _restore_configured_litellm_model(self, model: str) -> None:
-        model = str(model or "").strip()
-        if not model:
-            self._restore_litellm_cached_selection()
-            return
-        provider = provider_from_model(model)
-        if provider:
-            index = self._ensure_litellm_provider_item(provider)
-            combo = self._settings_widget("litellm_provider_combo")
-            if combo is not None:
-                combo.blockSignals(True)
-                combo.setCurrentIndex(index)
-                combo.blockSignals(False)
-            self._applied_litellm_provider = provider
-        cache = self.__dict__.get("_litellm_cache")
-        snapshot = cache.models(provider) if cache is not None else CatalogSnapshot()
-        self._set_litellm_models(provider, snapshot.values, selected=model)
-
-    def _set_litellm_models(
-        self,
-        provider: str,
-        models: tuple[str, ...],
-        *,
-        preserve_current: bool = False,
-        selected: str = "",
-    ) -> None:
-        combo = self._settings_widget("litellm_model_combo")
-        if combo is None:
-            return
-        current = combo.currentText().strip()
-        selected = current if preserve_current else str(selected or "").strip()
-        values = tuple(
-            dict.fromkeys(str(model).strip() for model in models if str(model).strip())
-        )
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItems(list(values))
-        if selected:
-            combo.setEditText(selected)
-        else:
-            combo.setCurrentIndex(-1)
-            if combo.isEditable():
-                combo.lineEdit().clear()
-        combo.blockSignals(False)
-        self._on_litellm_model_changed(combo.currentText())
-
-    def _litellm_saved_key_message(self, provider: str, *, force_reload: bool = False) -> str:
-        """Human status for OS-stored provider keys (masked; never full secret)."""
-        provider = str(provider or "").strip().lower()
-        if not provider or provider == "ollama":
-            return ""
-        if not force_reload:
-            cached = self._litellm_saved_key_status.get(provider)
-            if cached:
-                return cached
-        try:
-            store = load_provider_key_store(provider)
-        except ProviderCredentialStoreError as exc:
-            # Transient failure: never cache it, or a stale error would persist
-            # after the credential store recovers.
-            self._litellm_saved_key_status.pop(provider, None)
-            return str(exc)
-        endpoint = native_catalog_endpoint(provider, self._custom_litellm_providers)
-        needs_official_key = bool(endpoint is not None and endpoint.require_key)
-        env_key_available = ""
-        if not store.keys and needs_official_key:
-            custom = self._custom_litellm_providers.get(provider)
-            if custom is not None and custom.api_key_env and os.environ.get(
-                custom.api_key_env
-            ):
-                env_key_available = custom.api_key_env
-        if store.keys:
-            masked = "、".join(mask_api_key(key) for key in store.keys)
-            active = store.active_key()
-            active_note = (
-                f"当前使用：{mask_api_key(active)}。"
-                if active and len(store.keys) > 1
-                else ""
-            )
-            message = (
-                f"系统凭据管理器中已保存 {len(store.keys)} 把密钥：{masked}。"
-                f"{active_note}"
-                "如同时存在环境变量，请求优先使用已保存的当前密钥。"
-            )
-        elif needs_official_key:
-            label = (
-                endpoint.label
-                if endpoint is not None
-                else provider_display_label(provider, self._custom_litellm_providers)
-            )
-            if env_key_available:
-                message = (
-                    "系统凭据管理器中尚未保存密钥；"
-                    f"已检测到环境变量 {env_key_available}，将作为回退使用。"
-                )
-            else:
-                message = (
-                    f"系统凭据管理器中尚未保存密钥。"
-                    f"加载 {label} 官方模型列表前请先保存 API Key。"
-                )
-        elif provider in self._custom_litellm_providers:
-            custom = self._custom_litellm_providers[provider]
-            message = (
-                CUSTOM_LITELLM_PROVIDER_COPY["keyless_status"]
-                if not custom.requires_key
-                else "系统凭据管理器中尚未保存密钥。"
-            )
-        else:
-            message = "系统凭据管理器中尚未保存密钥。"
-        self._litellm_saved_key_status[provider] = message
-        return message
-
     def _litellm_keys_page_provider(self) -> str:
         combo = self._settings_widget("litellm_keys_provider_combo")
         if combo is None:
@@ -7981,907 +7912,6 @@ class MainWindow(QMainWindow):
     def _on_manage_litellm_keys_from_keys_page(self) -> None:
         self._open_litellm_provider_key_dialog(self._litellm_keys_page_provider())
 
-    def _custom_provider_entries(self) -> list[dict[str, str]]:
-        """Serialize the in-memory registry for config writes / dirty checks."""
-        entries: list[dict[str, object]] = []
-        registry = self.__dict__.get("_custom_litellm_providers") or {}
-        for provider in registry.values():
-            entry = {
-                "id": provider.id,
-                "label": provider.label,
-                "base_url": provider.base_url,
-                "models_url": provider.models_url,
-            }
-            if provider.api_key_env:
-                entry["api_key_env"] = provider.api_key_env
-            if not provider.requires_key:
-                entry["requires_key"] = False
-            entries.append(entry)
-        return entries
-
-    def _reserved_custom_provider_ids(self) -> frozenset[str]:
-        from litellm_provider_config import reserved_litellm_provider_ids
-
-        # Reserved set is based only on known LiteLLM prefixes and the current
-        # registry. Historical catalog cache ids are intentionally excluded:
-        # they are user-level state with no UI to clear, and including them
-        # would block re-adding a deleted provider under the same id.
-        # allow_import=False keeps this call off the ~10s synchronous litellm
-        # import; the background warmup worker merges the installed provider
-        # table into the reserved set as soon as it finishes.
-        return frozenset(
-            {
-                *reserved_litellm_provider_ids(allow_import=False),
-                *self.__dict__.get("_custom_litellm_providers", {}),
-            }
-        )
-
-    def _refresh_custom_provider_table(self) -> None:
-        table = self._settings_widget("custom_provider_table")
-        if table is None:
-            return
-        previous = self._selected_custom_provider()
-        table.setRowCount(0)
-        for provider in self._custom_litellm_providers.values():
-            row = table.rowCount()
-            table.insertRow(row)
-            for column, text in enumerate(
-                (
-                    provider.id,
-                    provider.label,
-                    provider.base_url,
-                    provider.api_key_env or "（未设置）",
-                )
-            ):
-                item = QTableWidgetItem(text)
-                item.setData(Qt.ItemDataRole.UserRole, provider.id)
-                if len(text) > 20:
-                    # Long API Base URLs and labels are elided in the cell;
-                    # keep the full value readable on hover.
-                    item.setToolTip(text)
-                table.setItem(row, column, item)
-            if previous and provider.id == previous:
-                table.selectRow(row)
-        self._refresh_custom_provider_actions()
-        label = self._settings_widget("custom_provider_status_label")
-        if label is not None:
-            load_error = self.__dict__.get("_custom_litellm_providers_load_error")
-            if load_error:
-                # Keep the load-error message visible instead of overwriting it
-                # with the plain empty/count status on every refresh.
-                label.setText(
-                    CUSTOM_LITELLM_PROVIDER_COPY["load_error_status"].format(
-                        error=load_error
-                    )
-                )
-                return
-            count = len(self._custom_litellm_providers)
-            label.setText(
-                CUSTOM_LITELLM_PROVIDER_COPY["table_count"].format(count=count)
-                if count
-                else CUSTOM_LITELLM_PROVIDER_COPY["table_empty"]
-            )
-
-    def _refresh_custom_provider_actions(self) -> None:
-        has_selection = bool(self._selected_custom_provider())
-        edit_btn = self._settings_widget("custom_provider_edit_btn")
-        delete_btn = self._settings_widget("custom_provider_delete_btn")
-        if edit_btn is not None:
-            edit_btn.setEnabled(has_selection)
-        if delete_btn is not None:
-            delete_btn.setEnabled(has_selection)
-
-    def _selected_custom_provider(self) -> str:
-        table = self._settings_widget("custom_provider_table")
-        if table is None:
-            return ""
-        row = table.currentRow()
-        if row < 0:
-            return ""
-        item = table.item(row, 0)
-        return str(item.text()).strip().lower() if item is not None else ""
-
-    def _after_custom_providers_changed(self) -> None:
-        """Re-sync every LiteLLM surface that renders the provider registry."""
-        self._refresh_custom_provider_table()
-        current = self._current_litellm_provider()
-        self._populate_litellm_providers(
-            self._cached_litellm_provider_values(),
-            selected=current,
-        )
-        self._populate_litellm_keys_provider_combo(selected=current)
-        self._refresh_litellm_catalog_status()
-        self._refresh_litellm_credential_status()
-        self._on_sync_backend_changed(-1)
-
-    def _cached_litellm_provider_values(self) -> tuple[str, ...]:
-        """Provider ids from the user-level catalog cache, tolerant of missing
-        or partially loaded snapshots (same contract as _reserved_custom_provider_ids)."""
-        cache = self.__dict__.get("_litellm_cache")
-        if cache is None:
-            return ()
-        providers = getattr(cache, "providers", None)
-        values = getattr(providers, "values", ()) if providers is not None else ()
-        return tuple(values) if values else ()
-
-    def _on_add_custom_litellm_provider(self) -> None:
-        dialog = CustomLiteLLMProviderDialog(
-            self,
-            reserved=self._reserved_custom_provider_ids(),
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        entry = dialog.result_provider()
-        provider = custom_provider_from_mapping(entry, allow_import=False)
-        if provider.id in self._custom_litellm_providers:
-            message_box_warning(
-                self,
-                "重复的 Provider id",
-                f"已存在 id 为 {provider.id} 的自定义 Provider，请先编辑或删除后再添加。",
-            )
-            return
-        self._custom_litellm_providers[provider.id] = provider
-        self._custom_litellm_providers_modified = True
-        self._after_custom_providers_changed()
-        self.statusBar().showMessage(
-            f"已添加自定义 Provider：{provider.label}（{provider.id}）。",
-            6000,
-        )
-        self._append_log(
-            f"添加自定义 LiteLLM Provider：{provider.id} → {provider.base_url}"
-        )
-
-    def _on_edit_custom_litellm_provider(self) -> None:
-        provider_id = self._selected_custom_provider()
-        provider = self._custom_litellm_providers.get(provider_id)
-        if provider is None:
-            return
-        dialog = CustomLiteLLMProviderDialog(
-            self,
-            provider={
-                "id": provider.id,
-                "label": provider.label,
-                "base_url": provider.base_url,
-                "models_url": provider.models_url,
-                "api_key_env": provider.api_key_env,
-                "requires_key": provider.requires_key,
-            },
-            # The edited id is already registered; exclude it from the reserved
-            # set so accept does not report a self-conflict on a locked field.
-            reserved=frozenset(
-                {
-                    *self._reserved_custom_provider_ids(),
-                }
-                - {provider.id}
-            ),
-            title="编辑自定义 Provider",
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        entry = dialog.result_provider()
-        updated = custom_provider_from_mapping(entry, allow_import=False)
-        self._custom_litellm_providers[provider.id] = updated
-        self._custom_litellm_providers_modified = True
-        self._after_custom_providers_changed()
-        self.statusBar().showMessage(
-            f"已更新自定义 Provider：{updated.label}（{updated.id}）。",
-            6000,
-        )
-        self._append_log(
-            f"更新自定义 LiteLLM Provider：{updated.id} → {updated.base_url}"
-        )
-
-    def _on_delete_custom_litellm_provider(self) -> None:
-        provider_id = self._selected_custom_provider()
-        provider = self._custom_litellm_providers.get(provider_id)
-        if provider is None:
-            return
-        is_current = self._current_litellm_provider() == provider_id
-        reply = message_box_question(
-            self,
-            CUSTOM_LITELLM_PROVIDER_COPY["delete_title"],
-            (
-                CUSTOM_LITELLM_PROVIDER_COPY["delete_confirm"].format(
-                    label=provider.label,
-                    id=provider.id,
-                )
-                + (
-                    CUSTOM_LITELLM_PROVIDER_COPY["delete_current_note"]
-                    if is_current
-                    else ""
-                )
-            ),
-            yes_text="删除",
-            no_text="取消",
-            default="no",
-        )
-        if reply != "yes":
-            return
-        del self._custom_litellm_providers[provider_id]
-        self._custom_litellm_providers_modified = True
-        # Also drop the user-level catalog artifacts (models snapshot and any
-        # selection) so the deleted id cannot resurface from the persistent
-        # cache in dropdowns or restores.
-        self._save_litellm_cache(
-            lambda p=provider_id: self._litellm_cache.remove_provider(p)
-        )
-        if is_current:
-            # Drop the ghost selection: the model still references the deleted
-            # id, which would fail on the next sync request after save.
-            self._cancel_litellm_model_selection_save()
-            self._set_litellm_models("", ())
-            combo = self._settings_widget("litellm_provider_combo")
-            if combo is not None:
-                combo.blockSignals(True)
-                combo.setCurrentIndex(-1)
-                if combo.isEditable():
-                    combo.lineEdit().clear()
-                combo.blockSignals(False)
-            self._applied_litellm_provider = ""
-        self._after_custom_providers_changed()
-        self.statusBar().showMessage(
-            f"已删除自定义 Provider：{provider.label}（{provider.id}）。",
-            6000,
-        )
-        self._append_log(f"删除自定义 LiteLLM Provider：{provider.id}")
-
-    def _refresh_litellm_credential_status(self) -> None:
-        provider_label = self._settings_widget("litellm_provider_label")
-        status_label = self._settings_widget("litellm_credential_status_label")
-        if provider_label is None or status_label is None:
-            return
-        provider = self._current_litellm_provider()
-        model = self._litellm_model_text()
-        status = provider_credential_status(
-            model or (f"{provider}/_" if provider else ""),
-            os.environ,
-            self._custom_litellm_providers,
-        )
-        provider_label.setText(
-            f"当前 Provider：{provider_display_label(provider, self._custom_litellm_providers)}"
-            if provider
-            else "当前 Provider：尚未选择"
-        )
-        credentials_box = self._settings_widget("litellm_credentials_box")
-        if credentials_box is not None:
-            credentials_box.setTitle(
-                f"Provider 凭据 — "
-                f"{provider_display_label(provider, self._custom_litellm_providers)}"
-                if provider
-                else "Provider 凭据"
-            )
-        saved_message = self._litellm_saved_key_message(provider) if provider else ""
-        status_label.setText(" ".join(part for part in (saved_message, status.message) if part))
-
-    def _on_litellm_model_changed(self, _text: str) -> None:
-        model = self._litellm_model_text()
-        model_provider = provider_from_model(model)
-        provider_combo = self._settings_widget("litellm_provider_combo")
-        updating = getattr(self, "_updating_litellm_provider", False)
-        if model_provider and provider_combo is not None and not updating:
-            previous_applied = self._applied_litellm_provider
-            index = self._ensure_litellm_provider_item(model_provider)
-            if index != provider_combo.currentIndex():
-                provider_combo.blockSignals(True)
-                provider_combo.setCurrentIndex(index)
-                provider_combo.blockSignals(False)
-            self._applied_litellm_provider = model_provider
-            if not self._loading_config_to_ui:
-                self._save_litellm_cache(
-                    lambda p=model_provider: self._litellm_cache.select_provider(p)
-                )
-            if model_provider != previous_applied:
-                # Same side effects as provider combo switch: reload that
-                # provider's cached catalog and re-gate credential controls,
-                # while keeping the typed model as the selection.
-                self._updating_litellm_provider = True
-                try:
-                    snapshot = self._litellm_cache.models(model_provider)
-                    self._set_litellm_models(
-                        model_provider,
-                        snapshot.values,
-                        selected=model,
-                    )
-                finally:
-                    self._updating_litellm_provider = False
-                self._refresh_litellm_catalog_status()
-                # _set_litellm_models re-enters this handler for save + gating.
-                return
-
-        provider = model_provider or self._litellm_provider_combo_value()
-        if provider and model and not self._loading_config_to_ui:
-            self._schedule_litellm_model_selection_save(provider, model)
-        else:
-            self._cancel_litellm_model_selection_save()
-        # Re-run backend gating so “测试连接” tracks model text changes.
-        self._on_sync_backend_changed(-1)
-
-    def _on_clear_litellm_provider(self) -> None:
-        combo = self._settings_widget("litellm_provider_combo")
-        if combo is None:
-            return
-        self._cancel_litellm_model_selection_save()
-        combo.blockSignals(True)
-        combo.setCurrentIndex(-1)
-        if combo.isEditable():
-            combo.lineEdit().clear()
-        combo.blockSignals(False)
-        self._on_litellm_provider_changed()
-
-    def _on_litellm_provider_changed(self, _value: object = None) -> None:
-        if self._updating_litellm_provider:
-            return
-        provider = self._litellm_provider_combo_value()
-        if provider == self._applied_litellm_provider:
-            return
-        self._cancel_litellm_model_selection_save()
-        self._applied_litellm_provider = provider
-        if not self._loading_config_to_ui:
-            self._save_litellm_cache(
-                lambda p=provider: self._litellm_cache.select_provider(p)
-            )
-        self._updating_litellm_provider = True
-        try:
-            snapshot = self._litellm_cache.models(provider)
-            self._set_litellm_models(
-                provider,
-                snapshot.values,
-                selected=self._litellm_cache.selected_model(provider),
-            )
-        finally:
-            self._updating_litellm_provider = False
-        self._refresh_litellm_catalog_status()
-        self._on_sync_backend_changed(-1)
-
-    def _refresh_litellm_version_label(self) -> None:
-        label = self._settings_widget("litellm_version_label")
-        if label is None:
-            return
-        installed = installed_litellm_version()
-        latest = str(getattr(self, "_litellm_latest_version", "") or "")
-        compatible = str(
-            getattr(self, "_litellm_latest_compatible_version", "") or ""
-        )
-        requires_python = str(
-            getattr(self, "_litellm_latest_requires_python", "") or ""
-        )
-        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-        if not installed:
-            label.setText("尚未安装；可检查 PyPI 最新稳定版。")
-        elif not latest:
-            label.setText(f"本机 {installed}；尚未检查 PyPI。")
-        elif compatible and version_key(compatible) < version_key(latest):
-            requirement = f"（要求 Python {requires_python}）" if requires_python else ""
-            state = (
-                f"建议更新到 {compatible}。"
-                if version_key(installed) < version_key(compatible)
-                else "已是当前 Python 可用最新版。"
-            )
-            label.setText(
-                f"本机 {installed}；PyPI 最新稳定版 {latest}{requirement}不支持当前 "
-                f"Python {python_version}；\n兼容最新版 {compatible}，{state}"
-            )
-        elif compatible and version_key(installed) < version_key(compatible):
-            label.setText(f"本机 {installed}；最新兼容稳定版 {compatible}，建议更新。")
-        elif compatible:
-            label.setText(f"本机 {installed}；已是最新兼容稳定版。")
-        elif version_key(installed) < version_key(latest):
-            label.setText(f"本机 {installed}；最新稳定版 {latest}，建议更新。")
-        else:
-            label.setText(f"本机 {installed}；已是最新稳定版。")
-
-    def _request_cancel_litellm_worker(
-        self,
-        worker: object | None,
-        *,
-        button_name: str,
-        status_message: str,
-    ) -> bool:
-        """If *worker* is running, request cancel and update the toggle button."""
-        if worker is None or not getattr(worker, "isRunning", lambda: False)():
-            return False
-        request_cancel = getattr(worker, "request_cancel", None)
-        if callable(request_cancel):
-            request_cancel()
-        button = self._settings_widget(button_name)
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("正在取消…")
-        self.statusBar().showMessage(status_message, 4000)
-        return True
-
-    def _start_litellm_module_warmup(self) -> None:
-        """Preload the heavy litellm package in a background thread.
-
-        ``import litellm`` can take ~10s cold; running it off the main thread
-        keeps the first LiteLLM settings visit and the custom-provider dialogs
-        responsive.  When the import finishes, the installed provider table is
-        merged into the reserved-id set and any open LiteLLM page is re-read.
-        Idempotent and cheap when litellm is not installed (probe only).
-        """
-        if getattr(self, "_shutdown_requested", False):
-            return
-        if os.environ.get("RTL_DISABLE_LITELLM_WARMUP"):
-            return
-        if getattr(self, "_litellm_module_warmup_worker", None) is not None:
-            return
-        if not litellm_install_probe():
-            return
-        worker = LiteLLMModuleWarmupWorker(self)
-        worker.setPriority(QThread.Priority.LowPriority)
-        worker.completed.connect(self._on_litellm_module_warmed)
-        self._litellm_module_warmup_worker = worker
-        worker.start()
-
-    def _on_litellm_module_warmed(self, _module: object) -> None:
-        worker = getattr(self, "_litellm_module_warmup_worker", None)
-        if worker is not None:
-            self._litellm_module_warmup_worker = None
-            worker.deleteLater()
-        # A worker detached during shutdown finishes in the background; drop
-        # it once the thread is no longer running so teardown stays safe.
-        for retired_worker in tuple(_RETIRED_LITELLM_WARMUP_WORKERS):
-            if not getattr(retired_worker, "isRunning", lambda: False)():
-                _RETIRED_LITELLM_WARMUP_WORKERS.discard(retired_worker)
-                retired_worker.deleteLater()
-        if getattr(self, "_shutdown_requested", False):
-            return
-        # Skip when the user already edited providers unsaved, or when the
-        # page was never opened.
-        if getattr(self, "_custom_litellm_providers_modified", False):
-            return
-        if "litellm" not in self.__dict__.get("_settings_pages_built", ()):
-            return
-        # Re-validate the registry with the now-complete reserved set, then
-        # refresh table/dropdowns/status while preserving the current page
-        # selection.  A full _load_config_to_ui would silently reset any
-        # unsaved edits the user made during the ~10s warmup window.
-        try:
-            config = self.state.load_translator_config()
-            sync_config = self._config_section(config, "sync")
-            self._custom_litellm_providers = custom_provider_registry(
-                sync_config.get("custom_litellm_providers"),
-                allow_import=False,
-            )
-            self._custom_litellm_providers_load_error = ""
-        except Exception:
-            self._custom_litellm_providers = {}
-            self._custom_litellm_providers_load_error = (
-                "后台预热 LiteLLM 后重新校验自定义 Provider 失败，"
-                "请重新加载设置页。"
-            )
-            self._append_log("后台预热 LiteLLM 后重新校验自定义 Provider 失败。")
-        self._after_custom_providers_changed()
-
-    def _detach_litellm_module_warmup(self) -> None:
-        """Detach a still-running warmup thread from window teardown.
-
-        A QThread destroyed while its import is still running aborts the
-        process, so on shutdown the worker is released from the window's
-        ownership but kept alive in the application-level retired set until
-        the import finishes; the completed signal still fires and cleans it up
-        afterwards.  The set lives at module scope so window destruction can
-        never drop the last reference to a running thread.
-        """
-        worker = getattr(self, "_litellm_module_warmup_worker", None)
-        if worker is None:
-            return
-        self._litellm_module_warmup_worker = None
-        if not getattr(worker, "isRunning", lambda: False)():
-            worker.deleteLater()
-            return
-        try:
-            worker.setParent(None)
-        except RuntimeError:
-            pass
-        _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
-
-    def _on_litellm_network_progress(
-        self,
-        message: str,
-        *,
-        worker_attr: str,
-        status_label_name: str = "",
-        worker: object | None = None,
-    ) -> None:
-        """Show mid-flight status for catalog/version/connection workers."""
-        current = getattr(self, worker_attr, None)
-        if current is None:
-            return
-        if worker is not None and worker is not current:
-            return
-        text = str(message or "").strip()
-        if not text:
-            return
-        self.statusBar().showMessage(f"{text}（可再次点击停止）", 0)
-        if status_label_name:
-            label = self._settings_widget(status_label_name)
-            if label is not None:
-                label.setText(text)
-
-    def _on_check_litellm_version(self) -> None:
-        worker = getattr(self, "_litellm_version_worker", None)
-        if self._request_cancel_litellm_worker(
-            worker,
-            button_name="litellm_check_version_btn",
-            status_message="正在取消版本检查…",
-        ):
-            return
-        if worker is not None:
-            return
-        button = self._settings_widget("litellm_check_version_btn")
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("停止检查")
-        worker = LiteLLMVersionWorker(self)
-        worker.progress.connect(
-            lambda message, owned=worker: self._on_litellm_network_progress(
-                message,
-                worker_attr="_litellm_version_worker",
-                status_label_name="litellm_version_label",
-                worker=owned,
-            )
-        )
-        worker.completed.connect(self._on_litellm_version_checked)
-        worker.finished.connect(worker.deleteLater)
-        self._litellm_version_worker = worker
-        worker.start()
-        self.statusBar().showMessage("正在检查 LiteLLM 版本…（可再次点击停止）", 0)
-
-    def _on_litellm_version_checked(
-        self,
-        installed: str,
-        latest: str,
-        compatible: str,
-        requires_python: str,
-        error: object,
-    ) -> None:
-        self._litellm_version_worker = None
-        if getattr(self, "_shutdown_requested", False):
-            return
-        button = self._settings_widget("litellm_check_version_btn")
-        if button is not None:
-            button.setText("检查更新")
-        if is_cancelled_message(error):
-            self.statusBar().showMessage("已取消版本检查。", 4000)
-            self._on_sync_backend_changed(-1)
-            return
-        self._litellm_latest_version = latest
-        self._litellm_latest_compatible_version = compatible
-        self._litellm_latest_requires_python = requires_python
-        self._refresh_litellm_version_label()
-        if error:
-            label = self._settings_widget("litellm_version_label")
-            if label is not None:
-                current = f"本机 {installed}" if installed else "尚未安装"
-                label.setText(f"{current}；检查更新失败，请稍后重试。")
-        self._on_sync_backend_changed(-1)
-
-    def _on_refresh_litellm_providers(self) -> None:
-        worker = self._litellm_provider_catalog_worker
-        if self._request_cancel_litellm_worker(
-            worker,
-            button_name="litellm_refresh_providers_btn",
-            status_message="正在取消供应商列表加载…",
-        ):
-            return
-        if worker is not None:
-            return
-        button = self._settings_widget("litellm_refresh_providers_btn")
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("停止加载")
-        worker = LiteLLMProviderCatalogWorker(self)
-        worker.progress.connect(
-            lambda message, owned=worker: self._on_litellm_network_progress(
-                message,
-                worker_attr="_litellm_provider_catalog_worker",
-                status_label_name="litellm_provider_catalog_status_label",
-                worker=owned,
-            )
-        )
-        worker.completed.connect(self._on_litellm_providers_loaded)
-        worker.finished.connect(worker.deleteLater)
-        self._litellm_provider_catalog_worker = worker
-        worker.start()
-        self.statusBar().showMessage("正在加载供应商…（可再次点击停止）", 0)
-
-    def _on_litellm_providers_loaded(
-        self,
-        providers: object,
-        source: str,
-        error: object,
-    ) -> None:
-        self._litellm_provider_catalog_worker = None
-        if getattr(self, "_shutdown_requested", False):
-            return
-        button = self._settings_widget("litellm_refresh_providers_btn")
-        if button is not None:
-            button.setText("联网加载供应商")
-        self._on_sync_backend_changed(-1)
-        if is_cancelled_message(error):
-            self.statusBar().showMessage("已取消供应商列表加载。", 4000)
-            return
-        if error and not providers:
-            message_box_warning(self, "供应商列表加载失败", str(error))
-            return
-        values = tuple(str(provider).strip().lower() for provider in providers)
-        current = self._litellm_provider_combo_value()
-        self._save_litellm_cache(
-            lambda: self._litellm_cache.update_providers(
-                values,
-                source=source,
-                litellm_version=installed_litellm_version(),
-            )
-        )
-        self._populate_litellm_providers(values, selected=current)
-        self._populate_litellm_keys_provider_combo(selected=current)
-        self._refresh_litellm_catalog_status()
-        if current:
-            status = f"已加载 {len(values)} 个 LiteLLM 供应商；已保留当前选择。"
-        else:
-            status = f"已加载 {len(values)} 个 LiteLLM 供应商；未自动选择。"
-        self.statusBar().showMessage(status, 8000)
-
-    def _on_refresh_litellm_models(self) -> None:
-        worker = self._litellm_catalog_worker
-        if self._request_cancel_litellm_worker(
-            worker,
-            button_name="litellm_refresh_models_btn",
-            status_message="正在取消模型列表加载…",
-        ):
-            return
-        if worker is not None:
-            return
-        provider = self._current_litellm_provider()
-        if not provider:
-            return
-        api_key = ""
-        if provider != "ollama":
-            try:
-                api_key = load_provider_api_key(provider)
-            except ProviderCredentialStoreError:
-                api_key = ""
-        endpoint = native_catalog_endpoint(provider, self._custom_litellm_providers)
-        allow_subset_only = False
-        if endpoint is not None and endpoint.require_key:
-            custom = self._custom_litellm_providers.get(provider)
-            if custom is not None and not api_key and custom.api_key_env:
-                # Same explicit env fallback as the request/connection paths;
-                # never fall back to OPENAI_API_KEY for a third-party endpoint.
-                api_key = str(os.environ.get(custom.api_key_env) or "").strip()
-            if not api_key:
-                if custom is not None:
-                    # LiteLLM's online subset has no entry for user-defined ids,
-                    # so the "subset only" fallback would always fail after a
-                    # confusing prompt. Require a key (keyring or api_key_env).
-                    message_box_information(
-                        self,
-                        CUSTOM_LITELLM_PROVIDER_COPY["missing_key_title"],
-                        (
-                            CUSTOM_LITELLM_PROVIDER_COPY["missing_key_body"].format(
-                                label=endpoint.label
-                            )
-                            + (
-                                CUSTOM_LITELLM_PROVIDER_COPY[
-                                    "missing_key_env_hint"
-                                ].format(env=custom.api_key_env)
-                                if custom.api_key_env
-                                else ""
-                            )
-                        ),
-                    )
-                    return
-                reply = message_box_question(
-                    self,
-                    "建议先保存 API Key",
-                    (
-                        f"{endpoint.label} 的官方模型列表需要已保存的 API Key。\n\n"
-                        "请先在下方「Provider 凭据」中粘贴并保存密钥，再加载官方列表。\n\n"
-                        "若仍继续，将只尝试 LiteLLM 在线子集目录（可能不完整，"
-                        "且通常依赖 GitHub 网络，关代理时可能很慢或失败）。\n\n"
-                        "是否仍使用 LiteLLM 子集目录？"
-                    ),
-                    yes_text="继续",
-                    no_text="取消",
-                    default="no",
-                )
-                if reply != "yes":
-                    self.statusBar().showMessage(
-                        f"已取消：请先保存 {endpoint.label} API Key 再加载官方模型列表。",
-                        6000,
-                    )
-                    return
-                allow_subset_only = True
-        button = self._settings_widget("litellm_refresh_models_btn")
-        if button is not None:
-            button.setEnabled(True)
-            button.setText("停止加载")
-        worker = LiteLLMModelCatalogWorker(
-            provider,
-            api_key=api_key,
-            parent=self,
-            custom_providers=self._custom_litellm_providers,
-        )
-        worker.progress.connect(
-            lambda message, owned=worker: self._on_litellm_network_progress(
-                message,
-                worker_attr="_litellm_catalog_worker",
-                status_label_name="litellm_catalog_status_label",
-                worker=owned,
-            )
-        )
-        worker.completed.connect(
-            lambda models, source, error, selected=provider: self._on_litellm_models_loaded(
-                selected, models, error, source
-            )
-        )
-        worker.finished.connect(worker.deleteLater)
-        self._litellm_catalog_worker = worker
-        worker.start()
-        if allow_subset_only:
-            self.statusBar().showMessage(
-                f"未保存密钥：正在尝试 {provider} 的 LiteLLM 子集目录…"
-                "（可再次点击停止）",
-                0,
-            )
-        else:
-            self.statusBar().showMessage(
-                f"正在加载 {provider} 模型…（可再次点击停止）",
-                0,
-            )
-
-    def _on_litellm_models_loaded(
-        self, provider: str, models: object, error: object, source: str = ""
-    ) -> None:
-        self._litellm_catalog_worker = None
-        if getattr(self, "_shutdown_requested", False):
-            return
-        button = self._settings_widget("litellm_refresh_models_btn")
-        if button is not None:
-            button.setText("联网加载模型")
-        self._on_sync_backend_changed(-1)
-        if is_cancelled_message(error):
-            self.statusBar().showMessage("已取消模型列表加载。", 4000)
-            return
-        if error and not models:
-            message_box_warning(self, "模型列表加载失败", str(error))
-            return
-        values = tuple(str(model) for model in models)
-        self._save_litellm_cache(
-            lambda: self._litellm_cache.update_models(
-                provider,
-                values,
-                source=source,
-                litellm_version=installed_litellm_version(),
-            )
-        )
-        self._refresh_litellm_catalog_status()
-        if self._current_litellm_provider() == provider:
-            self._set_litellm_models(provider, values, preserve_current=True)
-        message = f"已加载 {len(values)} 个 {provider} 模型。"
-        if error:
-            message = f"{message} {error}"
-        self.statusBar().showMessage(message, 8000)
-
-    def _on_test_litellm_connection(self) -> None:
-        worker = self._litellm_connection_worker
-        if self._request_cancel_litellm_worker(
-            worker,
-            button_name="litellm_test_connection_btn",
-            status_message="正在取消连接测试…",
-        ):
-            status = self._settings_widget("litellm_connection_status_label")
-            if status is not None:
-                status.setText("正在取消连接测试…")
-            return
-        if worker is not None:
-            return
-        model = self._litellm_model_text()
-        if not model:
-            message_box_information(self, "缺少模型", "请先选择或填写模型。")
-            return
-        # Empty → backend loads the active key from the OS credential store.
-        provider = self._current_litellm_provider()
-        custom = self._custom_litellm_providers.get(provider)
-        api_key = ""
-        try:
-            api_key = load_provider_api_key(provider)
-        except ProviderCredentialStoreError:
-            api_key = ""
-        if not api_key and custom is not None and custom.requires_key:
-            env_key = (
-                str(os.environ.get(custom.api_key_env) or "").strip()
-                if custom.api_key_env
-                else ""
-            )
-            if env_key:
-                api_key = env_key
-            else:
-                message_box_information(
-                    self,
-                    CUSTOM_LITELLM_PROVIDER_COPY["missing_key_title"],
-                    (
-                        CUSTOM_LITELLM_PROVIDER_COPY[
-                            "missing_connection_key"
-                        ].format(label=custom.label)
-                        + (
-                            CUSTOM_LITELLM_PROVIDER_COPY[
-                                "missing_connection_env_hint"
-                            ].format(env=custom.api_key_env)
-                            if custom.api_key_env
-                            else CUSTOM_LITELLM_PROVIDER_COPY[
-                                "missing_connection_env_suffix"
-                            ]
-                        )
-                    ),
-                )
-                return
-        self.litellm_test_connection_btn.setEnabled(True)
-        self.litellm_test_connection_btn.setText("停止测试")
-        self.litellm_connection_status_label.setText(
-            "正在后台发起最小请求…（可再次点击停止）"
-        )
-        worker = LiteLLMConnectionTestWorker(
-            model,
-            api_key,
-            self,
-            custom_providers=self._custom_litellm_providers,
-            operation_identity=self._litellm_connection_operation_identity(),
-        )
-        worker.progress.connect(
-            lambda message, owned=worker: self._on_litellm_network_progress(
-                message,
-                worker_attr="_litellm_connection_worker",
-                status_label_name="litellm_connection_status_label",
-                worker=owned,
-            )
-        )
-        worker.completed.connect(self._on_litellm_connection_tested)
-        worker.finished.connect(worker.deleteLater)
-        self._litellm_connection_worker = worker
-        worker.start()
-        self.statusBar().showMessage("正在测试 LiteLLM 连接…（可再次点击停止）", 0)
-
-    def _litellm_connection_operation_identity(self) -> str:
-        """Digest the provider/model the LiteLLM settings page currently shows."""
-        return litellm_connection_identity(
-            provider=self._current_litellm_provider(),
-            model=self._litellm_model_text(),
-            custom_providers=getattr(self, "_custom_litellm_providers", None),
-        )
-
-    def _on_litellm_connection_tested(
-        self,
-        success: bool,
-        message: str,
-        operation_identity: str = "",
-    ) -> None:
-        worker = self.sender()
-        current = getattr(self, "_litellm_connection_worker", None)
-        if worker is not None and current is not None and worker is not current:
-            return
-        if current is None or worker is current or worker is None:
-            self._litellm_connection_worker = None
-        if getattr(self, "_shutdown_requested", False):
-            return
-        self.litellm_test_connection_btn.setText("测试连接")
-        if not is_current_identity(
-            operation_identity,
-            self._litellm_connection_operation_identity(),
-        ):
-            stale = LITELLM_CONNECTION_TEST_COPY["stale_result"]
-            self.litellm_connection_status_label.setText(stale)
-            self.statusBar().showMessage(stale, 6000)
-            return
-        self.litellm_connection_status_label.setText(message)
-        self._on_sync_backend_changed(-1)
-        if is_cancelled_message(message):
-            self.statusBar().showMessage("已取消连接测试。", 4000)
-            return
-        if not success:
-            self.statusBar().showMessage("LiteLLM 连接测试失败。", 5000)
-
     def _saved_sync_backend(self) -> str:
         try:
             config = self.state.load_translator_config()
@@ -8892,172 +7922,6 @@ class MainWindow(QMainWindow):
             return "gemini"
         value = str(sync.get("backend") or "gemini").strip().lower()
         return value if value in {"gemini", "litellm"} else "gemini"
-
-    def _on_sync_backend_changed(self, _index: int) -> None:
-        backend = self._selected_sync_backend()
-        hint = self._settings_widget("sync_backend_hint")
-        if hint is None:
-            return
-        install_btn = self._settings_widget("install_litellm_btn")
-        install_progress = self._settings_widget("litellm_install_progress")
-        installing = self._litellm_install_running()
-        installed_version = installed_litellm_version()
-        installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
-        if backend == "litellm":
-            installed_version = installed_litellm_version()
-            installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
-            keyring_installed = importlib.util.find_spec("keyring") is not None
-            state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
-            credential_state = "可用" if keyring_installed else "尚未安装"
-            hint.setText(
-                "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
-                f"LiteLLM：{state}；安全凭据支持：{credential_state}。"
-            )
-            if install_btn is not None:
-                latest = str(getattr(self, "_litellm_latest_version", "") or "")
-                compatible = str(
-                    getattr(self, "_litellm_latest_compatible_version", "") or ""
-                )
-                target = compatible if latest else ""
-                up_to_date = bool(
-                    installed
-                    and target
-                    and version_key(installed_version) >= version_key(target)
-                )
-                compatibility_limited = bool(
-                    latest and compatible and version_key(compatible) < version_key(latest)
-                )
-                no_compatible_release = bool(latest and not compatible)
-                install_btn.setVisible(True)
-                install_btn.setEnabled(
-                    not installing
-                    and not no_compatible_release
-                    and not (up_to_date and keyring_installed)
-                )
-                if installing:
-                    install_btn.setText("正在更新…" if installed else "正在安装…")
-                elif not installed:
-                    install_btn.setText("安装 LiteLLM")
-                elif no_compatible_release:
-                    install_btn.setText("当前 Python 无兼容版本")
-                elif up_to_date and keyring_installed:
-                    install_btn.setText(
-                        "当前 Python 可用最新版"
-                        if compatibility_limited
-                        else "已是最新版"
-                    )
-                else:
-                    install_btn.setText("更新 LiteLLM")
-        else:
-            hint.setText(
-                "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
-            )
-            if install_btn is not None:
-                install_btn.setVisible(False)
-        if install_progress is not None:
-            install_progress.setVisible(installing)
-            if installing:
-                # pip does not expose a trustworthy total; busy mode gives honest
-                # visual feedback without inventing a completion percentage.
-                install_progress.setRange(0, 0)
-                install_progress.setFormat("正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…")
-
-        model_combo = self._settings_widget("litellm_model_combo")
-        litellm_active = backend == "litellm" and not installing
-        provider = self._current_litellm_provider()
-        model = self._litellm_model_text()
-        provider_combo = self._settings_widget("litellm_provider_combo")
-        if provider_combo is not None:
-            provider_combo.setEnabled(litellm_active)
-        provider_worker = getattr(self, "_litellm_provider_catalog_worker", None)
-        provider_button = self._settings_widget("litellm_refresh_providers_btn")
-        if provider_button is not None:
-            # Keep enabled while running so the user can click again to stop.
-            provider_button.setEnabled(litellm_active)
-            if provider_worker is not None:
-                provider_button.setText(
-                    "正在取消…"
-                    if getattr(provider_worker, "is_cancelled", lambda: False)()
-                    else "停止加载"
-                )
-            else:
-                provider_button.setText("联网加载供应商")
-        clear_provider = self._settings_widget("litellm_clear_provider_btn")
-        if clear_provider is not None:
-            clear_provider.setEnabled(litellm_active and bool(provider))
-        if model_combo is not None:
-            model_combo.setEnabled(litellm_active and bool(provider))
-        model_worker = getattr(self, "_litellm_catalog_worker", None)
-        model_button = self._settings_widget("litellm_refresh_models_btn")
-        if model_button is not None:
-            model_button.setEnabled(litellm_active and bool(provider))
-            if model_worker is not None:
-                model_button.setText(
-                    "正在取消…"
-                    if getattr(model_worker, "is_cancelled", lambda: False)()
-                    else "停止加载"
-                )
-            else:
-                model_button.setText("联网加载模型")
-        # Never getattr(sync_model_combo): that would force-build the models page.
-        gemini_sync_model_combo = self._settings_widget("sync_model_combo")
-        if gemini_sync_model_combo is not None:
-            gemini_sync_model_combo.setEnabled(backend == "gemini")
-            gemini_sync_model_combo.setToolTip(
-                "当前同步后端为 LiteLLM；切回 Gemini 后可选择此模型。"
-                if backend == "litellm"
-                else ""
-            )
-        credential_enabled = litellm_active and bool(provider) and provider != "ollama"
-        manage_keys_btn = self._settings_widget("litellm_manage_keys_btn")
-        if manage_keys_btn is not None:
-            manage_keys_btn.setEnabled(credential_enabled)
-            manage_keys_btn.setToolTip(
-                ""
-                if credential_enabled
-                else (
-                    "该 Provider 不需要 API Key"
-                    if provider == "ollama"
-                    else "请先选择 Provider"
-                )
-            )
-        connection_worker = getattr(self, "_litellm_connection_worker", None)
-        test_button = self._settings_widget("litellm_test_connection_btn")
-        if test_button is not None:
-            test_button.setEnabled(
-                litellm_active
-                and bool(provider)
-                and (bool(model) or connection_worker is not None)
-            )
-            if connection_worker is not None:
-                test_button.setText(
-                    "正在取消…"
-                    if getattr(connection_worker, "is_cancelled", lambda: False)()
-                    else "停止测试"
-                )
-            else:
-                test_button.setText("测试连接")
-        version_worker = getattr(self, "_litellm_version_worker", None)
-        version_button = self._settings_widget("litellm_check_version_btn")
-        if version_button is not None:
-            # Stay clickable while a check is in flight so the user can stop it.
-            version_button.setEnabled(not installing or version_worker is not None)
-            if version_worker is not None:
-                version_button.setText(
-                    "正在取消…"
-                    if getattr(version_worker, "is_cancelled", lambda: False)()
-                    else "停止检查"
-                )
-            else:
-                version_button.setText("检查更新")
-        # Skip while loading config into widgets: _load_config_to_ui decides
-        # whether to re-gate after the load (and cold start defers that work).
-        if hasattr(self, "translate_btn") and not getattr(
-            self, "_loading_config_to_ui", False
-        ):
-            self._set_task_running(bool(getattr(self, "_task_running", False)))
-        self._refresh_litellm_credential_status()
-        self._refresh_litellm_install_action_gating()
 
     def _refresh_litellm_install_action_gating(self) -> None:
         """Disable only LiteLLM-backed task actions while installation is active."""
@@ -11675,9 +10539,13 @@ class MainWindow(QMainWindow):
             "sync_backend": self._selected_sync_backend(),
             "sync_model": _combo_text("sync_model_combo"),
             "litellm_model": self._litellm_model_text(),
-            "custom_litellm_providers": tuple(
-                tuple(sorted(entry.items()))
-                for entry in self._custom_provider_entries()
+            "custom_litellm_providers": (
+                self._litellm_page().collect()["custom_litellm_providers"]
+                if self._litellm_page() is not None
+                else tuple(
+                    tuple(sorted(entry.items()))
+                    for entry in self._custom_provider_entries()
+                )
             ),
             "batch_model": _combo_text("batch_model_combo"),
             "sync_embedding_model": _combo_text("sync_embedding_combo"),
@@ -11744,56 +10612,22 @@ class MainWindow(QMainWindow):
                     self._set_combo_value(batch_emb, snapshot["batch_embedding_model"])
             if "batch_thinking_level" in snapshot:
                 self._set_batch_thinking_value(str(snapshot.get("batch_thinking_level") or ""))
-            if "litellm_model" in snapshot:
-                litellm_combo = self._settings_widget("litellm_model_combo")
-                if litellm_combo is not None:
-                    self._set_combo_value(litellm_combo, snapshot["litellm_model"])
-            if (
-                "custom_litellm_providers" in snapshot
-                and "litellm" in self.__dict__.get("_settings_pages_built", ())
-            ):
-                raw_entries = snapshot["custom_litellm_providers"]
-                if isinstance(raw_entries, (list, tuple)):
-                    before = dict(self._custom_litellm_providers)
-                    try:
-                        self._custom_litellm_providers = custom_provider_registry(
-                            [
-                                converted
-                                for entry in raw_entries
-                                if (
-                                    converted := self._mapping_from_entry(entry)
-                                )
-                                is not None
-                            ],
-                            allow_import=False,
-                        )
-                        self._custom_litellm_providers_load_error = ""
-                    except ValueError as exc:
-                        # Degrade like _load_config_to_ui: a snapshot entry that
-                        # no longer validates (e.g. a provider table changed)
-                        # must not crash the config restore path.
-                        self._custom_litellm_providers = {}
-                        self._custom_litellm_providers_load_error = str(exc)
-                        self._append_log(
-                            f"恢复自定义 Provider 快照失败，已忽略：{exc}"
-                        )
-                    self._custom_litellm_providers_modified = (
-                        before != dict(self._custom_litellm_providers)
+            page = self._litellm_page()
+            if page is not None:
+                litellm_snapshot = {
+                    key: snapshot[key]
+                    for key in (
+                        "sync_backend",
+                        "litellm_model",
+                        "custom_litellm_providers",
                     )
-                    self._refresh_custom_provider_table()
-                    self._populate_litellm_providers(
-                        self._cached_litellm_provider_values(),
-                        selected=self._current_litellm_provider(),
-                    )
-                    # Keep every LiteLLM surface in sync after a restore, like
-                    # _after_custom_providers_changed: the keys-page dropdown and
-                    # credential status must not keep showing deleted ids.
-                    current_provider = self._current_litellm_provider()
+                    if key in snapshot
+                }
+                if litellm_snapshot:
+                    page.load(litellm_snapshot, restore=True)
                     self._populate_litellm_keys_provider_combo(
-                        selected=current_provider
+                        selected=page._current_litellm_provider()
                     )
-                    self._refresh_litellm_catalog_status()
-                    self._refresh_litellm_credential_status()
             if "theme" in snapshot:
                 self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
 
@@ -15064,41 +13898,18 @@ class MainWindow(QMainWindow):
                         self._set_batch_thinking_value(thinking_val)
 
                 if need_litellm:
-                    try:
-                        self._custom_litellm_providers = custom_provider_registry(
-                            sync_config.get("custom_litellm_providers"),
-                            allow_import=False,
+                    page = self._litellm_page()
+                    if page is not None:
+                        page.load_from_sync_config(
+                            sync_config,
+                            recommended_gemini=str(
+                                BASIC_RECOMMENDED_VALUES["sync_model"]
+                            ),
                         )
-                        self._custom_litellm_providers_load_error = ""
-                        self._custom_litellm_providers_modified = False
-                    except ValueError as exc:
-                        self._custom_litellm_providers = {}
-                        self._custom_litellm_providers_load_error = str(exc)
-                        self._custom_litellm_providers_modified = False
-                        self._append_log(
-                            f"忽略无效的 custom_litellm_providers 配置：{exc}"
+                        self._populate_litellm_keys_provider_combo(
+                            selected=page._current_litellm_provider()
                         )
-                        self.statusBar().showMessage(
-                            f"translator_config.json 中的 custom_litellm_providers "
-                            f"配置无效，已忽略：{exc}",
-                            8000,
-                        )
-                        status_label = self._settings_widget(
-                            "custom_provider_status_label"
-                        )
-                        if status_label is not None:
-                            status_label.setText(
-                                CUSTOM_LITELLM_PROVIDER_COPY[
-                                    "load_error_status"
-                                ].format(error=exc)
-                            )
-                    self._refresh_custom_provider_table()
-                    self._populate_litellm_providers(
-                        self._cached_litellm_provider_values(),
-                        selected=provider_from_model(backend_models.litellm_model),
-                    )
-                    self._restore_configured_litellm_model(backend_models.litellm_model)
-                    if backend_combo is not None:
+                    elif backend_combo is not None:
                         self._on_sync_backend_changed(backend_idx)
 
             if (
@@ -15246,8 +14057,8 @@ class MainWindow(QMainWindow):
             sync_backend = self._selected_sync_backend()
             litellm_model = self._litellm_model_text()
             if (
-                self.__dict__.get("_custom_litellm_providers_modified")
-                and self.__dict__.get("_custom_litellm_providers_load_error")
+                self._custom_litellm_providers_modified
+                and self._custom_litellm_providers_load_error
             ):
                 # The on-disk list is invalid and was only partially loaded;
                 # saving the in-memory registry would silently drop the valid
@@ -15258,7 +14069,7 @@ class MainWindow(QMainWindow):
                     CUSTOM_LITELLM_PROVIDER_COPY["load_error_title"],
                     (
                         CUSTOM_LITELLM_PROVIDER_COPY["load_error_save_blocked"].format(
-                            error=self.__dict__["_custom_litellm_providers_load_error"]
+                            error=self._custom_litellm_providers_load_error
                         )
                     ),
                 )
@@ -15280,7 +14091,7 @@ class MainWindow(QMainWindow):
             custom_entries = self._custom_provider_entries()
             if custom_entries:
                 sync_config["custom_litellm_providers"] = custom_entries
-            elif self.__dict__.get("_custom_litellm_providers_modified"):
+            elif self._custom_litellm_providers_modified:
                 # Only the user explicitly emptying the registry clears the key.
                 # Unrelated saves must preserve the on-disk configuration even
                 # when the page was never built or the config failed to load.
@@ -15451,6 +14262,29 @@ class MainWindow(QMainWindow):
                 pass
 
         return self._switch_game_root(value.strip())
+
+
+def _bind_litellm_forward_properties() -> None:
+    """Forward LiteLLM worker/registry attributes onto the migrated page."""
+
+    for name in LITELLM_FORWARDED_ATTRS:
+        def getter(self, _name=name):
+            page = self.__dict__.get("_litellm_settings_page")
+            if page is not None:
+                return getattr(page, _name)
+            return self.__dict__.get(_name)
+
+        def setter(self, value, _name=name):
+            page = self.__dict__.get("_litellm_settings_page")
+            if page is not None:
+                setattr(page, _name, value)
+            else:
+                self.__dict__[_name] = value
+
+        setattr(MainWindow, name, property(getter, setter))
+
+
+_bind_litellm_forward_properties()
 
 
 def run_app(argv: list[str] | None = None) -> int:

@@ -1,7 +1,8 @@
 # #202 Phase A：Settings 页面契约与现状基线
 
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
-> merge `3db29ab`）。Phase C/D 的页面迁移与最终收口仍未开始，`MainWindow` 仍持有唯一保存事务。
+> merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`；Phase D 的其余页面
+> 迁移与保存/dirty/离开保护收口仍未开始，`MainWindow` 仍持有唯一保存事务。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -233,11 +234,19 @@ Coordinator → 页面（只通过上述方法）：
 - 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
   `tests.test_settings_coordinator`（纯 Python）与 `tests.test_gui_settings_coordinator`（GUI 集成）。
 
-仍未落地（Phase C/D）：
+仍未落地（Phase D）：
 
-- 10 页仍以 `LegacySettingsPageAdapter` 运行，页面本身尚未脱离 `MainWindow` 构造。
-- LiteLLM 页面局部 worker 的生命周期迁移属于 Phase C。
+- 其余 9 页仍以 `LegacySettingsPageAdapter` 运行。
 - `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
+
+Phase C 已落地：
+
+- `gui_qt/settings/litellm_page.py`：`LiteLLMSettingsPage` 可脱离 `MainWindow` 构造，实现
+  `load/collect/validate/reset/focus_issue/set_task_running`。
+- 目录/版本/连接测试/warmup worker 由页面持有；取消后 retired 到真实 `finished`，warmup 仍使用
+  模块级 retired set。连接测试继续用 `litellm_connection_identity` 丢弃 stale result。
+- 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
+- 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
 ## Phase B 验收映射
 
@@ -259,8 +268,8 @@ Coordinator → 页面（只通过上述方法）：
 - 布局 / 导航 / 配置：`tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`。
-- LiteLLM：`tests.test_gui_litellm_settings_page`、`tests.test_gui_litellm_settings`、
-  `tests.test_gui_litellm_worker`、`tests.test_gui_litellm_install`、
+- LiteLLM：`tests.test_settings_litellm_page`（独立构造）、`tests.test_gui_litellm_settings_page`、
+  `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、`tests.test_gui_litellm_install`、
   `tests.test_litellm_catalog_cache`、`tests.test_litellm_provider_config`。
 - 生命周期与 worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
   `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、

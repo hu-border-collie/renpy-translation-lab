@@ -48,6 +48,26 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
                 warnings.simplefilter("ignore", DeprecationWarning)
                 QApplication.setActiveWindow(self.window)
 
+    def test_litellm_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+        from gui_qt.settings.litellm_page import LiteLLMSettingsPage
+
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={"sync": {}, "batch": {}},
+        ):
+            self.window._ensure_settings_page("litellm")
+        page = self.window._settings_coordinator.page("litellm")
+        self.assertIsInstance(page, LiteLLMSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertTrue(
+            set(collected).issubset(
+                self.window._settings_registry.config_keys_for("litellm")
+            )
+        )
+
     def test_coordinator_tracks_lazy_build_only_target_page(self) -> None:
         self.window._focus_settings_section("advanced")
         coordinator = self.window._settings_coordinator
