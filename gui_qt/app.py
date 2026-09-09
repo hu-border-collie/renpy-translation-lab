@@ -355,6 +355,7 @@ from .settings.advanced_page import AdvancedSettingsPage
 from .settings.appearance_page import AppearanceSettingsPage
 from .settings.shortcuts_page import ShortcutsSettingsPage, shortcut_catalog
 from .settings.api_keys_page import ApiKeysSettingsPage
+from .settings.extensions_page import ExtensionsSettingsPage
 from .settings.field_widgets import (
     format_setting_text,
 )
@@ -3170,6 +3171,8 @@ class MainWindow(QMainWindow):
             return self._create_shortcuts_settings_page()
         if spec.key == "api_keys":
             return self._create_api_keys_settings_page()
+        if spec.key == "extensions":
+            return self._create_extensions_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3493,79 +3496,8 @@ class MainWindow(QMainWindow):
         return page.widget
 
     def _build_settings_extensions_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_extensions")
-        hint = QLabel(
-            "扩展是按需安装的可选能力。是否启用取决于当前 Python 环境中的安装状态，"
-            "不会单独保存“已启用”开关。安装在后台进行，不会阻止普通翻译任务。"
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("config_hint_label")
-        layout.addWidget(hint)
-
-        card, card_layout = self._settings_group("关系分析器")
-        card.setObjectName("relation_analyzer_extension_card")
-
-        purpose = QLabel(
-            "从 Ren'Py TL 目录提取人物关系与语义相似度图。"
-            "包含 NumPy、Matplotlib、scikit-learn、Pillow 等科学/图像组件；"
-            "通过独立 CLI（extract_relations.py）运行，不会把重型库加载进 GUI 进程。"
-        )
-        purpose.setWordWrap(True)
-        purpose.setObjectName("config_hint_label")
-        card_layout.addWidget(purpose)
-
-        components = QLabel(
-            "组件：numpy · matplotlib · scikit-learn · pillow（及 scipy 传递依赖）"
-        )
-        components.setWordWrap(True)
-        components.setObjectName("config_hint_label")
-        card_layout.addWidget(components)
-
-        self.relation_analyzer_status_label = QLabel()
-        self.relation_analyzer_status_label.setObjectName("relation_analyzer_status_label")
-        self.relation_analyzer_status_label.setWordWrap(True)
-        card_layout.addWidget(self.relation_analyzer_status_label)
-
-        self.relation_analyzer_failure_label = QLabel()
-        self.relation_analyzer_failure_label.setObjectName("relation_analyzer_failure_label")
-        self.relation_analyzer_failure_label.setWordWrap(True)
-        self.relation_analyzer_failure_label.setVisible(False)
-        card_layout.addWidget(self.relation_analyzer_failure_label)
-
-        action_row = QWidget()
-        action_layout = QHBoxLayout(action_row)
-        action_layout.setContentsMargins(0, 0, 0, 0)
-        action_layout.setSpacing(8)
-        self.relation_analyzer_install_btn = QPushButton("安装并启用")
-        self.relation_analyzer_install_btn.setObjectName("relation_analyzer_install_btn")
-        self.relation_analyzer_install_btn.clicked.connect(
-            self._on_install_relation_analyzer
-        )
-        action_layout.addWidget(self.relation_analyzer_install_btn)
-        self.relation_analyzer_docs_btn = QPushButton("使用说明")
-        self.relation_analyzer_docs_btn.setObjectName("secondary_btn")
-        self.relation_analyzer_docs_btn.clicked.connect(
-            self._on_open_relation_analyzer_docs
-        )
-        action_layout.addWidget(self.relation_analyzer_docs_btn)
-        action_layout.addStretch(1)
-        card_layout.addWidget(action_row)
-
-        self.relation_analyzer_install_progress = QProgressBar()
-        self.relation_analyzer_install_progress.setObjectName(
-            "relation_analyzer_install_progress"
-        )
-        self.relation_analyzer_install_progress.setTextVisible(True)
-        self.relation_analyzer_install_progress.setFormat("正在后台安装关系分析器…")
-        self.relation_analyzer_install_progress.setVisible(False)
-        card_layout.addWidget(self.relation_analyzer_install_progress)
-
-        layout.addWidget(card)
-        layout.addStretch(1)
-
-        self._ensure_relation_analyzer_install_controller()
-        self._refresh_relation_analyzer_extension_ui()
-        return page
+        page = self._extensions_page() or self._create_extensions_settings_page()
+        return page.widget
 
     def _ensure_relation_analyzer_install_controller(self) -> OptionalFeatureInstallController:
         controller = getattr(self, "_relation_analyzer_install", None)
@@ -3701,6 +3633,9 @@ class MainWindow(QMainWindow):
     def _api_keys_page(self):
         return self.__dict__.get("_api_keys_settings_page")
 
+    def _extensions_page(self):
+        return self.__dict__.get("_extensions_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3812,6 +3747,31 @@ class MainWindow(QMainWindow):
         self._refresh_api_status()
         self._refresh_litellm_keys_page_status()
         page.set_task_running(bool(getattr(self, "_task_running", False)))
+        return page
+
+    def _create_extensions_settings_page(self):
+        """Build the migrated Extensions Settings page and alias its widgets."""
+        existing = self._extensions_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            self._ensure_relation_analyzer_install_controller()
+            self._refresh_relation_analyzer_extension_ui()
+            return existing
+        page = ExtensionsSettingsPage(
+            self,
+            on_install_relation_analyzer=self._on_install_relation_analyzer,
+            on_open_docs=self._on_open_relation_analyzer_docs,
+        )
+        self.__dict__["_extensions_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_extensions"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        self._ensure_relation_analyzer_install_controller()
+        self._refresh_relation_analyzer_extension_ui()
         return page
 
     def _create_project_settings_page(self):

@@ -172,6 +172,25 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window.litellm_keys_manage_btn.text(), "管理 Provider Key"
         )
 
+    def test_extensions_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.extensions_page import ExtensionsSettingsPage
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+
+        self.window._ensure_settings_page("extensions")
+        page = self.window._settings_coordinator.page("extensions")
+        self.assertIsInstance(page, ExtensionsSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(collected, {})
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("extensions"),
+        )
+        self.assertEqual(
+            self.window.relation_analyzer_install_btn.objectName(),
+            "relation_analyzer_install_btn",
+        )
+
     def test_appearance_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.appearance_page import AppearanceSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
