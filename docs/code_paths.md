@@ -77,6 +77,8 @@
 - `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
   `collect` / `validate` / `reset` / `focus_issue` / `set_task_running`；不依赖 Qt。
 - `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator。
+- `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM `SettingsPage`；局部 worker 复用
+  #297 的取消、operation identity、retired ownership 与 shutdown 合同。
 - Settings 页面/字段/异步任务现状与 Phase B 接入合同见
   [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
