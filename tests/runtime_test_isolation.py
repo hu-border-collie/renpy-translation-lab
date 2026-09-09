@@ -56,15 +56,26 @@ def _patch_project_state(config_path: Path) -> None:
         return
 
     original_init = ProjectState.__init__
+    original_load_workspace = ProjectState._load_workspace_root_from_config
+    original_load_game = ProjectState._load_game_root_from_config
 
     def isolated_init(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        self.config_path = config_path
-        self._game_root = None
-        self._workspace_root = None
-        self._game_root_redirect_from = None
+        # Skip default loaders during original __init__ so a developer
+        # translator_config.json is not read or rewritten. Restore the real
+        # methods afterwards: tests that call them on a custom config_path
+        # must still work.
+        ProjectState._load_workspace_root_from_config = lambda _self: None
+        ProjectState._load_game_root_from_config = lambda _self: None
+        try:
+            original_init(self, *args, **kwargs)
+        finally:
+            ProjectState._load_workspace_root_from_config = original_load_workspace
+            ProjectState._load_game_root_from_config = original_load_game
+        default_path = Path(self.tool_root) / "translator_config.json"
+        if Path(self.config_path) == default_path:
+            self.config_path = config_path
+        original_load_workspace(self)
+        original_load_game(self)
 
     ProjectState.__init__ = isolated_init  # type: ignore[method-assign]
-    ProjectState._load_game_root_from_config = lambda self: None  # type: ignore[method-assign]
-    ProjectState._load_workspace_root_from_config = lambda self: None  # type: ignore[method-assign]
     _PROJECT_STATE_PATCHED = True
