@@ -1143,6 +1143,62 @@ def _walk_forbid_credential_slots(payload: object) -> None:
             _walk_forbid_credential_slots(item)
 
 
+_IGNORED_REPO_PATH_NAMES = frozenset(
+    {
+        "__pycache__",
+        "agent-tools",
+        "artifacts",
+        "batch_runs",
+        "build",
+        "dist",
+        "downloads",
+        "history_store",
+        "logs",
+        "mcps",
+        "node_modules",
+        "outputs",
+        "rag_store",
+        "terminals",
+        "tmp",
+        "translation_usage",
+        "venv",
+    }
+)
+
+
+def _is_ignored_repo_path(relative_path: str) -> bool:
+    """Return True for local-only or generated paths that are not source.
+
+    ``Path.rglob`` walks environments such as ``.venv``/``.git`` and caches.
+    Those trees are outside the production contract and may contain files that
+    are not valid UTF-8 (for example joblib's latin-1 test fixture).
+    """
+
+    return any(
+        part.startswith(".") or part in _IGNORED_REPO_PATH_NAMES
+        for part in relative_path.split("/")
+    )
+
+
+def _direct_sync_backend_constructor_hits(repo: Path) -> list[str]:
+    """Find production modules that construct sync backends directly."""
+
+    hits: list[str] = []
+    for path in sorted(repo.rglob("*.py")):
+        rel = path.relative_to(repo).as_posix()
+        if rel.startswith(("gui_qt/", "tests/", "scripts/")) or _is_ignored_repo_path(rel):
+            continue
+        text = path.read_text(encoding="utf-8")
+        for index, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if "LiteLLMSyncBackend(" not in stripped and "GeminiSyncBackend(" not in stripped:
+                continue
+            if rel == "model_profile.py" and "return " in stripped:
+                continue
+            hits.append(f"{rel}:{index}:{stripped}")
+    return hits
+
+
 class SyncEntryWiringTests(unittest.TestCase):
     def _sync_response(self, payload, *, model="stage-explicit-model"):
         text = json.dumps(payload, ensure_ascii=False)
@@ -1378,20 +1434,7 @@ class SyncEntryWiringTests(unittest.TestCase):
         )
 
         repo = Path(__file__).resolve().parents[1]
-        hits: list[str] = []
-        for path in repo.rglob("*.py"):
-            rel = path.relative_to(repo).as_posix()
-            if rel.startswith(("gui_qt/", "tests/", "scripts/")):
-                continue
-            text = path.read_text(encoding="utf-8")
-            for index, line in enumerate(text.splitlines(), start=1):
-                stripped = line.strip()
-                if "LiteLLMSyncBackend(" not in stripped and "GeminiSyncBackend(" not in stripped:
-                    continue
-                if rel == "model_profile.py" and "return " in stripped:
-                    continue
-                hits.append(f"{rel}:{index}:{stripped}")
-        self.assertEqual(hits, [])
+        self.assertEqual(_direct_sync_backend_constructor_hits(repo), [])
         overlay = (repo / "gemini_translate_batch.py").read_text(encoding="utf-8")
         self.assertNotIn("effective_model = SYNC_MODEL or model_name", overlay)
 
@@ -1671,6 +1714,51 @@ class SyncEntryWiringTests(unittest.TestCase):
         finally:
             batch_mod.BATCH_MODEL = previous_batch
             batch_mod.SYNC_MODEL = previous_sync
+
+
+class RepoSourceScanTests(unittest.TestCase):
+    def test_scan_ignores_local_environment_directories(self) -> None:
+        ignored_trees = (
+            (".venv", "lib", "python3.12", "site-packages", "joblib"),
+            (".tox", "py311", "lib"),
+            ("venv", "lib", "python3.12", "site-packages"),
+            ("build", "lib"),
+            ("__pycache__",),
+            ("node_modules", "example-package"),
+            ("engine_adapters", ".cache"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for parts in ignored_trees:
+                fixture_dir = repo.joinpath(*parts)
+                fixture_dir.mkdir(parents=True)
+                # Latin-1 bytes plus a forbidden constructor: the scan must
+                # skip local environment trees without decoding them.
+                (fixture_dir / "fixture.py").write_bytes(
+                    b"# -*- coding: latin-1 -*-\n"
+                    b"backend = LiteLLMSyncBackend(profile)\n"
+                    b"name = '\xa4'\n"
+                )
+            (repo / "production.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            self.assertEqual(_direct_sync_backend_constructor_hits(repo), [])
+
+    def test_scan_still_flags_direct_constructor_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / "production.py").write_text(
+                "first = LiteLLMSyncBackend(profile)\n"
+                "second = GeminiSyncBackend(profile)\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                _direct_sync_backend_constructor_hits(repo),
+                [
+                    "production.py:1:first = LiteLLMSyncBackend(profile)",
+                    "production.py:2:second = GeminiSyncBackend(profile)",
+                ],
+            )
 
 
 if __name__ == "__main__":
