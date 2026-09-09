@@ -95,6 +95,7 @@
 - `gui_qt/settings/shortcuts_page.py`：Phase D 迁出的「快捷键」`SettingsPage`；只读目录，无配置字段。
 - `gui_qt/settings/api_keys_page.py`：Phase D 迁出的「密钥」`SettingsPage`；对话框与 keyring 写入仍由宿主执行，无 translator_config 字段。
 - `gui_qt/settings/extensions_page.py`：Phase D 迁出的「扩展」`SettingsPage`；关系分析器安装仍走宿主 `OptionalFeatureInstallController`，无 translator_config 字段。
+- `gui_qt/settings/workspace_page.py`：Phase D 迁出的「项目列表」`SettingsPage`；嵌入 `GamesRegistryPanel`，刷新/导入 worker 仍在面板内，切换项目由宿主回调执行。
 - Settings 页面/字段/异步任务现状与 Phase B 接入合同见
   [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
@@ -279,7 +280,7 @@
   `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`、`tests.test_settings_litellm_page`、
-  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_settings_context_page`、`tests.test_settings_advanced_page`、`tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、`tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、`tests.test_gui_litellm_settings_page`、
+  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_settings_context_page`、`tests.test_settings_advanced_page`、`tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、`tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、`tests.test_settings_workspace_page`、`tests.test_gui_litellm_settings_page`、
   `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、
   `tests.test_litellm_catalog_cache`、`tests.test_project_context_settings`。
 

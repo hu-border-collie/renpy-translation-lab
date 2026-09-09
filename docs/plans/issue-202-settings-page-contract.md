@@ -2,8 +2,8 @@
 
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
 > merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
-> Phase D 已将「模型」「项目」「上下文」「高级」「外观」「快捷键」「密钥」「扩展」页迁到独立 `SettingsPage`；其余 1 页与保存/dirty/离开保护
-> 收口仍待继续，`MainWindow` 仍持有唯一保存事务。
+> Phase D 已将 10 个 Settings 页迁到独立 `SettingsPage`；保存/dirty/离开保护
+> 收口仍待继续，`MainWindow` 仍持有唯一保存事务。Epic 在保存收口与人工烟测完成前保持打开。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -96,8 +96,8 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
   context 主开关，`project` 字段归 project 页。
 - **补建页面被 preserve/restore 覆盖**：Phase B 已修。只保留已加载页面的快照，且恢复只回写
   快照中存在的 advanced 键。
-- **页面不可独立构造**：部分收敛。LiteLLM、「模型」、「项目」、「上下文」、「高级」、「外观」、「快捷键」、「密钥」与「扩展」页已是独立 `SettingsPage`；其余 1 页仍经
-  `LegacySettingsPageAdapter` 调用 `MainWindow` builder。
+- **页面不可独立构造**：已收敛。10 个 Settings 页均为独立 `SettingsPage`；`LegacySettingsPageAdapter`
+  仍保留但当前无页面使用。
 - **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty/错误聚焦合同，
   但唯一保存事务、dirty 基线与离开保护仍在 `MainWindow`；Phase D 继续收口。
 - **局部 worker 归属整窗**：部分收敛。LiteLLM worker 已由页面持有；字体 / 安装 / registry
@@ -237,8 +237,7 @@ Coordinator → 页面（只通过上述方法）：
 
 仍未落地（Phase D 收口）：
 
-- 其余 1 页仍以 `LegacySettingsPageAdapter` 运行。
-- `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
+- 10 页均已迁出独立 `SettingsPage`；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
 
 Phase C 已落地：
 
@@ -249,7 +248,7 @@ Phase C 已落地：
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
 - 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
-Phase D（进行中，模型页、项目页、上下文页、高级页、外观页、快捷键页、密钥页与扩展页）：
+Phase D（进行中，十页已迁出；保存收口仍待）：
 
 - `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
 - `gui_qt/settings/field_widgets.py`：bool/int/float/str/text/list/json 字段控件工厂。
@@ -275,12 +274,16 @@ Phase D（进行中，模型页、项目页、上下文页、高级页、外观�
 - `gui_qt/settings/extensions_page.py`：`ExtensionsSettingsPage` 可脱离 `MainWindow` 构造；
   关系分析器 chrome 由页面持有，无 translator_config 字段；`OptionalFeatureInstallController`
   与 pip 安装仍由宿主执行。
+- `gui_qt/settings/workspace_page.py`：`WorkspaceSettingsPage` 可脱离 `MainWindow` 构造；
+  嵌入 `GamesRegistryPanel`，无 translator_config 字段；刷新/导入 worker 仍在面板内，
+  切换项目与 `workspace_root` 写入仍由宿主回调提供。
 - LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
   `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
 - 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`、
   `tests.test_settings_context_page`、`tests.test_settings_advanced_page`、
   `tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、
-  `tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`（独立构造）与既有
+  `tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、
+  `tests.test_settings_workspace_page`（独立构造）与既有
   `test_gui_app_config` / `test_gui_settings_coordinator` / `test_gui_settings_context_primary`。
 
 ## Phase B 验收映射
@@ -320,6 +323,8 @@ Phase D（进行中，模型页、项目页、上下文页、高级页、外观�
   `tests.test_gui_litellm_settings_page`。
 - 扩展页：`tests.test_settings_extensions_page`（独立构造）、`tests.test_gui_settings_coordinator`、
   `tests.test_gui_optional_feature_install`。
+- 项目列表页：`tests.test_settings_workspace_page`（独立构造）、`tests.test_gui_settings_coordinator`、
+  `tests.test_gui_games_registry_panel_layout`、`tests.test_gui_startup_perf`。
 - 生命周期与 worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
   `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、
   `tests.test_gui_games_registry_worker`。

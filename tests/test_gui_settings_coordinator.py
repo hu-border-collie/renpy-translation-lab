@@ -191,6 +191,25 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             "relation_analyzer_install_btn",
         )
 
+    def test_workspace_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+        from gui_qt.settings.workspace_page import WorkspaceSettingsPage
+
+        self.window._ensure_settings_page("workspace")
+        page = self.window._settings_coordinator.page("workspace")
+        self.assertIsInstance(page, WorkspaceSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(collected, {})
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("workspace"),
+        )
+        self.assertEqual(
+            self.window._games_registry_panel.objectName(),
+            "games_registry_panel",
+        )
+
     def test_appearance_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.appearance_page import AppearanceSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
