@@ -10207,16 +10207,28 @@ class MainWindow(QMainWindow):
         finally:
             self._loading_config_to_ui = previous_loading
 
+    def _read_settings_ui_snapshot(self) -> dict[str, object] | None:
+        """Return the current settings snapshot, or None for incomplete hosts.
+
+        Only swallows AttributeError / RuntimeError from ``MainWindow.__new__``
+        helpers and deleted Qt objects. Other snapshot failures must propagate
+        so leave-guard cannot treat a broken read as a clean config.
+        """
+        current_fn = getattr(self, "_current_config_ui_snapshot", None)
+        if not callable(current_fn):
+            return None
+        try:
+            current = current_fn()
+        except (AttributeError, RuntimeError):
+            return None
+        if not isinstance(current, dict):
+            return None
+        return current
+
     def _config_tab_has_unsaved_changes(self) -> bool:
         if getattr(self, "_loading_config_to_ui", False):
             return False
-        current_fn = getattr(self, "_current_config_ui_snapshot", None)
-        current: dict[str, object] | None = None
-        if callable(current_fn):
-            try:
-                current = current_fn()
-            except Exception:
-                current = None
+        current = self._read_settings_ui_snapshot()
         coordinator = getattr(self, "_settings_coordinator", None)
         if coordinator is not None and current is not None:
             return bool(coordinator.is_dirty(current))
@@ -10229,13 +10241,7 @@ class MainWindow(QMainWindow):
     def _unsaved_config_choice(self, kind: str) -> str:
         """Return proceed/save/discard/cancel for one leave-guard kind."""
         coordinator = getattr(self, "_settings_coordinator", None)
-        current_fn = getattr(self, "_current_config_ui_snapshot", None)
-        current: dict[str, object] | None = None
-        if callable(current_fn):
-            try:
-                current = current_fn()
-            except Exception:
-                current = None
+        current = self._read_settings_ui_snapshot()
         prompt = None
         if coordinator is not None and current is not None:
             prompt = coordinator.leave_guard_prompt(kind, current=current)
