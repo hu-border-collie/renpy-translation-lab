@@ -54,6 +54,22 @@ class AppearanceSettingsPageContractTests(unittest.TestCase):
         self.page.reset()
         self.assertEqual(self.page.collect()["theme"], THEME_DARK)
 
+    def test_reset_emits_theme_preview_for_host(self) -> None:
+        calls: list[str] = []
+        page = AppearanceSettingsPage(
+            on_theme_preview=lambda preference: calls.append(preference)
+        )
+        try:
+            page.load({"theme": THEME_SYSTEM})
+            page.theme_combo.setCurrentIndex(page.theme_combo.findData(THEME_DARK))
+            self.assertEqual(calls, [THEME_DARK])
+            page.reset()
+            self.assertEqual(page.collect()["theme"], THEME_SYSTEM)
+            self.assertEqual(calls, [THEME_DARK, THEME_SYSTEM])
+        finally:
+            page.widget.deleteLater()
+            self._app.processEvents()
+
     def test_restore_does_not_replace_baseline(self) -> None:
         self.page.load({"theme": THEME_DARK})
         self.page.load({"theme": THEME_SYSTEM}, restore=True)

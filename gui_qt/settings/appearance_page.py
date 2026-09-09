@@ -107,8 +107,12 @@ class AppearanceSettingsPage(QObject):
         return []
 
     def reset(self) -> None:
-        if self._baseline:
-            self.load(self._baseline)
+        if not self._baseline:
+            return
+        self.load(self._baseline)
+        # load() blocks combo signals, so re-apply the baseline preview on
+        # the host (QSS / _theme_preference).
+        self._emit_theme_preview(self.theme_combo.currentIndex())
 
     def focus_issue(self, issue: SettingsIssue) -> bool:
         if issue.field_key == "theme":

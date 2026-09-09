@@ -204,6 +204,21 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         self.assertEqual(page.collect()["theme"], "dark")
         self.assertEqual(self.window._theme_preference, "dark")
 
+    def test_appearance_reset_syncs_host_theme_preference(self) -> None:
+        config = {"gui": {"theme": "system"}}
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("appearance")
+            page = self.window._settings_coordinator.page("appearance")
+            page.theme_combo.setCurrentIndex(page.theme_combo.findData("dark"))
+            self.assertEqual(self.window._theme_preference, "dark")
+            self.window._settings_coordinator.reset(pages={"appearance"})
+        self.assertEqual(page.collect()["theme"], "system")
+        self.assertEqual(self.window._theme_preference, "system")
+
     def test_advanced_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.advanced_page import AdvancedSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
