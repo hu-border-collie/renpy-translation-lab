@@ -1,14 +1,15 @@
 """Navigation, lazy materialization, and config orchestration for Settings pages.
 
 The coordinator is deliberately Qt-free: the host injects a page builder and a
-page-show callback. ``MainWindow`` remains the owner of the single save
-transaction and the global shell route during the migration; the coordinator
-delegates to those host callbacks and never writes configuration itself.
+page-show callback. It owns the dirty baseline and leave-guard copy. ``MainWindow``
+still runs the unique save transaction and shows Qt dialogs; the coordinator
+never writes configuration itself.
 """
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 
+from .leave_guard import SettingsLeaveGuardPrompt, settings_leave_guard_prompt
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SettingsPageRegistry, SettingsPageSpec
 
@@ -33,6 +34,7 @@ class SettingsCoordinator:
         self._pages: dict[str, object] = {}
         self._loaded: set[str] = set()
         self._active_key: str | None = None
+        self._baseline: dict[str, object] = {}
 
     @property
     def registry(self) -> SettingsPageRegistry:
@@ -215,6 +217,43 @@ class SettingsCoordinator:
             setter = getattr(page, "set_task_running", None)
             if callable(setter):
                 setter(running)
+
+    def baseline(self) -> dict[str, object]:
+        """Return a copy of the last captured dirty-check snapshot."""
+
+        return dict(self._baseline)
+
+    def set_baseline(self, snapshot: Mapping[str, object]) -> None:
+        """Replace the dirty-check snapshot after load or a successful save."""
+
+        self._baseline = dict(snapshot)
+
+    def is_dirty(self, current: Mapping[str, object]) -> bool:
+        """Compare a host UI snapshot against the stored baseline.
+
+        An empty baseline means nothing editable has been captured yet (cold
+        start), so the settings are not dirty.
+        """
+
+        if not self._baseline:
+            return False
+        return dict(current) != self._baseline
+
+    def leave_guard_prompt(
+        self,
+        kind: str,
+        *,
+        current: Mapping[str, object] | None = None,
+    ) -> SettingsLeaveGuardPrompt | None:
+        """Return leave-guard copy when dirty; ``None`` when the host may proceed."""
+
+        if current is None:
+            dirty = bool(self._baseline) and self.has_unsaved_changes(self._baseline)
+        else:
+            dirty = self.is_dirty(current)
+        if not dirty:
+            return None
+        return settings_leave_guard_prompt(kind)
 
     def has_unsaved_changes(self, baseline: Mapping[str, object]) -> bool:
         """Compare collected page-owned values against a host baseline."""

@@ -2286,6 +2286,29 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         ):
             self.assertFalse(self.window._confirm_unsaved_config_before_close())
 
+    def test_settings_snapshot_read_swallows_only_incomplete_host_errors(self):
+        self.window._loading_config_to_ui = False
+        self.window._settings_coordinator = None
+        self.window._config_ui_saved_snapshot = {"theme": "dark"}
+
+        self.window._current_config_ui_snapshot = lambda: (_ for _ in ()).throw(
+            AttributeError("missing widget")
+        )
+        self.assertFalse(self.window._config_tab_has_unsaved_changes())
+
+        self.window._current_config_ui_snapshot = lambda: (_ for _ in ()).throw(
+            RuntimeError("deleted qt object")
+        )
+        self.assertFalse(self.window._config_tab_has_unsaved_changes())
+
+        self.window._current_config_ui_snapshot = lambda: (_ for _ in ()).throw(
+            ValueError("broken page collect")
+        )
+        with self.assertRaises(ValueError):
+            self.window._config_tab_has_unsaved_changes()
+        with self.assertRaises(ValueError):
+            self.window._unsaved_config_choice("close")
+
     def test_download_recommended_fonts_starts_background_worker(self):
         class FakeWidget:
             def __init__(self):

@@ -332,6 +332,7 @@ from .settings_schema import (
     validate_advanced_settings,
 )
 from .settings.coordinator import SettingsCoordinator
+from .settings.leave_guard import settings_leave_guard_prompt
 from .settings.legacy import LegacySettingsPageAdapter
 from .settings.page_contract import SettingsIssue, SettingsPageActions
 from .settings.litellm_page import (
@@ -9945,6 +9946,14 @@ class MainWindow(QMainWindow):
             )
         return keys
 
+    def _sync_settings_dirty_baseline(self, snapshot: Mapping[str, object]) -> None:
+        """Keep the host snapshot and coordinator dirty baseline in lockstep."""
+        self._config_ui_saved_snapshot = dict(snapshot)
+        coordinator = getattr(self, "_settings_coordinator", None)
+        setter = getattr(coordinator, "set_baseline", None) if coordinator is not None else None
+        if callable(setter):
+            setter(snapshot)
+
     def _update_config_ui_saved_snapshot(
         self, *, pages: set[str] | None = None
     ) -> None:
@@ -9956,13 +9965,13 @@ class MainWindow(QMainWindow):
         """
         current = self._current_config_ui_snapshot()
         if pages is None:
-            self._config_ui_saved_snapshot = current
+            self._sync_settings_dirty_baseline(current)
             return
         baseline = getattr(self, "_config_ui_saved_snapshot", None) or {}
         if not baseline:
             # First materialization: accept the full current shape (defaults for
             # unbuilt widgets) so later comparisons are well-defined.
-            self._config_ui_saved_snapshot = current
+            self._sync_settings_dirty_baseline(current)
             return
         page_keys = self._config_snapshot_keys_for_pages(pages)
         if not page_keys:
@@ -9971,7 +9980,7 @@ class MainWindow(QMainWindow):
         for key in page_keys:
             if key in current:
                 merged[key] = current[key]
-        self._config_ui_saved_snapshot = merged
+        self._sync_settings_dirty_baseline(merged)
 
     def _mapping_from_entry(self, entry: object) -> dict[str, object] | None:
         """Convert a config-snapshot custom-provider entry to a mapping.
@@ -10198,108 +10207,111 @@ class MainWindow(QMainWindow):
         finally:
             self._loading_config_to_ui = previous_loading
 
+    def _read_settings_ui_snapshot(self) -> dict[str, object] | None:
+        """Return the current settings snapshot, or None for incomplete hosts.
+
+        Only swallows AttributeError / RuntimeError from ``MainWindow.__new__``
+        helpers and deleted Qt objects. Other snapshot failures must propagate
+        so leave-guard cannot treat a broken read as a clean config.
+        """
+        current_fn = getattr(self, "_current_config_ui_snapshot", None)
+        if not callable(current_fn):
+            return None
+        try:
+            current = current_fn()
+        except (AttributeError, RuntimeError):
+            return None
+        if not isinstance(current, dict):
+            return None
+        return current
+
     def _config_tab_has_unsaved_changes(self) -> bool:
         if getattr(self, "_loading_config_to_ui", False):
             return False
-        # Cold start leaves an empty snapshot until settings pages materialize
-        # and load config into widgets — empty means "nothing editable yet".
-        if not getattr(self, "_config_ui_saved_snapshot", None):
+        current = self._read_settings_ui_snapshot()
+        coordinator = getattr(self, "_settings_coordinator", None)
+        if coordinator is not None and current is not None:
+            return bool(coordinator.is_dirty(current))
+        # Cold start / helper tests: empty snapshot means nothing editable yet.
+        saved = getattr(self, "_config_ui_saved_snapshot", None) or {}
+        if not saved or current is None:
             return False
-        return self._current_config_ui_snapshot() != self._config_ui_saved_snapshot
+        return current != saved
 
-    def _confirm_unsaved_config_before_workflow(self) -> bool:
-        if not self._config_tab_has_unsaved_changes():
-            return True
+    def _unsaved_config_choice(self, kind: str) -> str:
+        """Return proceed/save/discard/cancel for one leave-guard kind."""
+        coordinator = getattr(self, "_settings_coordinator", None)
+        current = self._read_settings_ui_snapshot()
+        prompt = None
+        if coordinator is not None and current is not None:
+            prompt = coordinator.leave_guard_prompt(kind, current=current)
+        elif self._config_tab_has_unsaved_changes():
+            prompt = settings_leave_guard_prompt(kind)
+        if prompt is None:
+            return "proceed"
 
         message = QMessageBox(self)
         message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("设置尚未保存")
-        message.setText("设置页有未保存的更改。")
-        message.setInformativeText(
-            "当前任务会读取已保存的 translator_config.json；"
-            "未保存的更改不会生效。"
+        message.setWindowTitle(prompt.title)
+        message.setText(prompt.text)
+        message.setInformativeText(prompt.informative)
+        save_btn = message.addButton(
+            prompt.save_label, QMessageBox.ButtonRole.AcceptRole
         )
-        save_btn = message.addButton("保存并继续", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = message.addButton("不保存继续", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        discard_btn = message.addButton(
+            prompt.discard_label, QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_btn = message.addButton(
+            prompt.cancel_label, QMessageBox.ButtonRole.RejectRole
+        )
         message.setDefaultButton(save_btn)
         message.exec()
         clicked = message.clickedButton()
-
         if clicked is save_btn:
-            return self._on_save_config()
+            return "save"
         if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
+    def _confirm_unsaved_config_before_workflow(self) -> bool:
+        choice = self._unsaved_config_choice("workflow")
+        if choice == "proceed":
+            return True
+        if choice == "save":
+            return self._on_save_config()
+        if choice == "discard":
             return True
         return False
 
     def _confirm_unsaved_config_before_registry_switch(self) -> bool:
-        if not self._config_tab_has_unsaved_changes():
+        choice = self._unsaved_config_choice("registry_switch")
+        if choice == "proceed":
             return True
-
-        message = QMessageBox(self)
-        message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("设置尚未保存")
-        message.setText("设置页有未保存的更改。")
-        message.setInformativeText(
-            "切换工作区项目会重新加载设置，未保存的更改将丢失。"
-        )
-        save_btn = message.addButton("保存并切换", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = message.addButton("不保存切换", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        message.setDefaultButton(save_btn)
-        message.exec()
-        clicked = message.clickedButton()
-
-        if clicked is save_btn:
+        if choice == "save":
             return self._on_save_config()
-        if clicked is discard_btn:
+        if choice == "discard":
             return True
         return False
 
     def _confirm_unsaved_config_before_close(self) -> bool:
         """Return True if the window may close (saved, discarded, or clean)."""
-        if not self._config_tab_has_unsaved_changes():
+        choice = self._unsaved_config_choice("close")
+        if choice == "proceed":
             return True
-
-        message = QMessageBox(self)
-        message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("设置尚未保存")
-        message.setText("设置页有未保存的更改。")
-        message.setInformativeText(
-            "直接关闭窗口会丢失尚未写入 translator_config.json 的修改。"
-            "可先保存、放弃更改后退出，或取消以继续编辑。"
-        )
-        save_btn = message.addButton("保存并退出", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = message.addButton("不保存退出", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        message.setDefaultButton(save_btn)
-        message.exec()
-        clicked = message.clickedButton()
-
-        if clicked is save_btn:
+        if choice == "save":
             return bool(self._on_save_config())
-        if clicked is discard_btn:
+        if choice == "discard":
             return True
         return False
 
     def _confirm_leave_config_tab(self, previous_index: int) -> bool:
-        message = QMessageBox(self)
-        message.setIcon(QMessageBox.Icon.Warning)
-        message.setWindowTitle("设置尚未保存")
-        message.setText("设置页有未保存的更改。")
-        message.setInformativeText("离开前可以保存设置，或留在设置页继续检查。")
-        save_btn = message.addButton("保存并离开", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = message.addButton("不保存离开", QMessageBox.ButtonRole.DestructiveRole)
-        stay_btn = message.addButton("留在设置页", QMessageBox.ButtonRole.RejectRole)
-        message.setDefaultButton(save_btn)
-        message.exec()
-        clicked = message.clickedButton()
-
-        if clicked is save_btn:
+        choice = self._unsaved_config_choice("leave_tab")
+        if choice == "proceed":
+            return True
+        if choice == "save":
             if self._on_save_config():
                 return True
-            clicked = stay_btn
-        elif clicked is discard_btn:
+        elif choice == "discard":
             if _SETTINGS_CONFIG_PAGE_KEYS & getattr(self, "_settings_pages_built", set()):
                 self._load_config_to_ui()
             return True
@@ -13867,7 +13879,7 @@ class MainWindow(QMainWindow):
             if not self._sync_state_game_root_from_settings(config.get("game_root")):
                 self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
                 self._append_log("设置已保存，但同步项目目录到工作台失败。")
-                self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+                self._sync_settings_dirty_baseline(self._current_config_ui_snapshot())
                 if "save_config_btn" in self.__dict__:
                     self._sync_settings_action_bar_enabled(
                         task_running=bool(getattr(self, "_task_running", False))
@@ -13889,7 +13901,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._append_log(f"提示通知显示失败：{exc}")
                 self.statusBar().showMessage("设置已成功保存", 3000)
-            self._config_ui_saved_snapshot = self._current_config_ui_snapshot()
+            self._sync_settings_dirty_baseline(self._current_config_ui_snapshot())
             if "save_config_btn" in self.__dict__:
                 self._sync_settings_action_bar_enabled(
                     task_running=bool(getattr(self, "_task_running", False))

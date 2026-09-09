@@ -417,6 +417,12 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_pages_for_config()
         self.assertEqual(widget.text(), "unsaved_tl")
         self.assertTrue(self.window._config_tab_has_unsaved_changes())
+        current = self.window._current_config_ui_snapshot()
+        self.assertTrue(self.window._settings_coordinator.is_dirty(current))
+        self.assertEqual(
+            self.window._settings_coordinator.baseline().get("tl_subdir"),
+            "saved_tl",
+        )
 
     def test_coordinator_collect_returns_owned_page_keys(self) -> None:
         self.window._focus_settings_section("models")

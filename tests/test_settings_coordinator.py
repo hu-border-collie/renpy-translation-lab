@@ -253,6 +253,33 @@ class SettingsCoordinatorTests(unittest.TestCase):
             self.coordinator.has_unsaved_changes({"alpha_value": 1})
         )
 
+    def test_stored_baseline_is_dirty_against_host_snapshot(self) -> None:
+        self.coordinator.set_baseline({"alpha_value": 1, "theme": "dark"})
+        self.assertFalse(self.coordinator.is_dirty({"alpha_value": 1, "theme": "dark"}))
+        self.assertTrue(self.coordinator.is_dirty({"alpha_value": 2, "theme": "dark"}))
+        self.coordinator.set_baseline({})
+        self.assertFalse(self.coordinator.is_dirty({"alpha_value": 2}))
+
+    def test_leave_guard_prompt_only_when_dirty(self) -> None:
+        current = {"alpha_value": 1}
+        self.assertIsNone(
+            self.coordinator.leave_guard_prompt("workflow", current=current)
+        )
+        self.coordinator.set_baseline({"alpha_value": 1})
+        self.assertIsNone(
+            self.coordinator.leave_guard_prompt("close", current=current)
+        )
+        prompt = self.coordinator.leave_guard_prompt(
+            "close", current={"alpha_value": 2}
+        )
+        self.assertIsNotNone(prompt)
+        assert prompt is not None
+        self.assertEqual(prompt.kind, "close")
+        self.assertEqual(prompt.save_label, "保存并退出")
+        self.assertEqual(prompt.cancel_label, "取消")
+        with self.assertRaises(ValueError):
+            self.coordinator.leave_guard_prompt("not-a-kind", current={"alpha_value": 2})
+
     def test_page_contract_mismatch_is_rejected(self) -> None:
         class WrongPage(_FakeSettingsPage):
             def __init__(self, spec):

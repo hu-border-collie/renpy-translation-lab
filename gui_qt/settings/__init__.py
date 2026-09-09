@@ -1,6 +1,7 @@
 """Settings page contract, registry, coordinator, and migrated pages (#202)."""
 
 from .coordinator import SettingsCoordinator, snapshot_subset
+from .leave_guard import SettingsLeaveGuardPrompt, settings_leave_guard_prompt
 from .legacy import LegacySettingsHost, LegacySettingsPageAdapter
 from .page_contract import SettingsIssue, SettingsPage, SettingsPageActions
 from .registry import (
@@ -29,11 +30,13 @@ __all__ = (
     "SETTINGS_PAGE_SPECS",
     "SettingsCoordinator",
     "SettingsIssue",
+    "SettingsLeaveGuardPrompt",
     "SettingsPage",
     "SettingsPageActions",
     "SettingsPageRegistry",
     "SettingsPageSpec",
     "WORKSPACE_MANAGED_KEYS",
     "build_default_registry",
+    "settings_leave_guard_prompt",
     "snapshot_subset",
 )
