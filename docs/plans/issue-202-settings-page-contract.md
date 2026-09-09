@@ -2,7 +2,7 @@
 
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
 > merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
-> Phase D 已将「模型」页与「项目」页迁到独立 `SettingsPage`；其余 7 页与保存/dirty/离开保护
+> Phase D 已将「模型」「项目」「上下文」页迁到独立 `SettingsPage`；其余 6 页与保存/dirty/离开保护
 > 收口仍待继续，`MainWindow` 仍持有唯一保存事务。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
@@ -96,7 +96,7 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
   context 主开关，`project` 字段归 project 页。
 - **补建页面被 preserve/restore 覆盖**：Phase B 已修。只保留已加载页面的快照，且恢复只回写
   快照中存在的 advanced 键。
-- **页面不可独立构造**：部分收敛。LiteLLM、「模型」与「项目」页已是独立 `SettingsPage`；其余 7 页仍经
+- **页面不可独立构造**：部分收敛。LiteLLM、「模型」、「项目」与「上下文」页已是独立 `SettingsPage`；其余 6 页仍经
   `LegacySettingsPageAdapter` 调用 `MainWindow` builder。
 - **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty/错误聚焦合同，
   但唯一保存事务、dirty 基线与离开保护仍在 `MainWindow`；Phase D 继续收口。
@@ -237,7 +237,7 @@ Coordinator → 页面（只通过上述方法）：
 
 仍未落地（Phase D 收口）：
 
-- 其余 7 页仍以 `LegacySettingsPageAdapter` 运行。
+- 其余 6 页仍以 `LegacySettingsPageAdapter` 运行。
 - `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
 
 Phase C 已落地：
@@ -249,7 +249,7 @@ Phase C 已落地：
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
 - 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
-Phase D（进行中，模型页与项目页）：
+Phase D（进行中，模型页、项目页与上下文页）：
 
 - `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
 - `gui_qt/settings/field_widgets.py`：bool/int/float/str/text/list/json 字段控件工厂，供已迁出
@@ -260,10 +260,13 @@ Phase D（进行中，模型页与项目页）：
 - `gui_qt/settings/project_page.py`：`ProjectSettingsPage` 可脱离 `MainWindow` 构造，拥有
   「项目与资源」「准备流程」字段；`game_root` 只读展示，SDK 浏览/查找/下载仍由宿主对话框与
   `SdkInstallWorker` 执行。
+- `gui_qt/settings/context_page.py`：`ContextSettingsPage` 可脱离 `MainWindow` 构造，拥有项目级
+  RAG/索引/分析开关与上下文主开关键；保存仍走 `MainWindow._on_save_config`。
 - LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
   `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
-- 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`（独立构造）与既有
-  `test_gui_app_config` / `test_gui_settings_coordinator`。
+- 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`、
+  `tests.test_settings_context_page`（独立构造）与既有 `test_gui_app_config` /
+  `test_gui_settings_coordinator` / `test_gui_settings_context_primary`。
 
 ## Phase B 验收映射
 
@@ -291,6 +294,8 @@ Phase D（进行中，模型页与项目页）：
 - 模型页：`tests.test_settings_models_page`（独立构造）、`tests.test_gui_settings_coordinator`、
   `tests.test_gui_app_config`。
 - 项目页：`tests.test_settings_project_page`（独立构造）、`tests.test_gui_settings_coordinator`。
+- 上下文页：`tests.test_settings_context_page`（独立构造）、`tests.test_gui_settings_context_primary`、
+  `tests.test_gui_settings_coordinator`。
 - 生命周期与 worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
   `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、
   `tests.test_gui_games_registry_worker`。

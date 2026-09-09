@@ -68,6 +68,76 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             )
         )
 
+    def test_context_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.context_page import ContextSettingsPage
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={
+                "sync": {"rag": {"enabled": True}},
+                "batch": {},
+            },
+        ):
+            self.window._ensure_settings_page("context")
+        page = self.window._settings_coordinator.page("context")
+        self.assertIsInstance(page, ContextSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("context"),
+        )
+        self.assertTrue(collected["sync_rag_enabled"])
+
+    def test_context_page_first_open_after_other_pages_loads_disk_values(
+        self,
+    ) -> None:
+        config = {
+            "batch": {
+                "rag": {"enabled": True, "bootstrap_on_build": False},
+                "project_analysis": {
+                    "enabled": True,
+                    "inject_published_brief": True,
+                    "model": "analysis-model",
+                    "thinking_level": "high",
+                },
+                "story_memory": {"enabled": True},
+            },
+            "sync": {
+                "rag": {"enabled": True},
+                "story_memory": {"enabled": True},
+                "project_analysis": {"inject_published_brief": True},
+            },
+            "context_storage": {"location": "game"},
+        }
+        with (
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=None,
+            ),
+        ):
+            self.window._ensure_settings_page("advanced")
+            self.assertFalse(self.window._settings_coordinator.is_built("context"))
+            self.window._ensure_settings_page("context")
+        collected = self.window._settings_coordinator.collect()
+        self.assertTrue(collected["rag_enabled"])
+        self.assertFalse(collected["bootstrap_on_build"])
+        self.assertEqual(collected["context_storage_location"], "game")
+        self.assertTrue(collected["sync_rag_enabled"])
+        self.assertTrue(collected["sync_project_analysis_inject_enabled"])
+        self.assertEqual(collected["batch_project_analysis_model"], "analysis-model")
+        self.assertEqual(
+            collected["batch_project_analysis_thinking_level"], "high"
+        )
+
     def test_project_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.project_page import ProjectSettingsPage
