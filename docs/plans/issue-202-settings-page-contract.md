@@ -1,11 +1,10 @@
 # #202 Phase A：Settings 页面契约与现状基线
 
-> 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 的 `gui_qt/settings/`
-> page contract、registry、coordinator 与 legacy adapter 已实现（本 PR，待合并）。
-> Phase C/D 的页面迁移与最终收口仍未开始，`MainWindow` 仍持有唯一保存事务。
+> 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
+> merge `3db29ab`）。Phase C/D 的页面迁移与最终收口仍未开始，`MainWindow` 仍持有唯一保存事务。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
-> 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于合并后的 `main@773014b`。
+> 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
 >
 > 关联：[#202 Epic](https://github.com/hu-border-collie/renpy-translation-lab/issues/202)、
 > [#348 配置与迁移合同](issue-348-model-routing-config-contract.md)、
@@ -214,7 +213,7 @@ Coordinator → 页面（只通过上述方法）：
 完整边界见 [#348 P0 合同的「#202 / #348 所有权」](issue-348-model-routing-config-contract.md#202--348-所有权)。
 `#202` 不定义第二套模型迁移语义；`#348` 不复制 `MainWindow._on_save_config`。
 
-## Phase B 实现状态（本 PR）
+## Phase B 实现状态（已合并）
 
 已落地：
 
