@@ -82,6 +82,9 @@
 - `gui_qt/settings/page_chrome.py`：迁移页共用 chrome。
 - `gui_qt/settings/models_page.py`：Phase D 迁出的「模型」`SettingsPage`；无局部 worker，目录
   extras 由宿主注入，保存仍走 `MainWindow._on_save_config`。
+- `gui_qt/settings/field_widgets.py`：基础 SettingField 控件工厂。
+- `gui_qt/settings/project_page.py`：Phase D 迁出的「项目」`SettingsPage`；SDK 浏览/查找/下载
+  仍由宿主对话框与 `SdkInstallWorker` 执行。
 - Settings 页面/字段/异步任务现状与 Phase B 接入合同见
   [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
@@ -266,7 +269,7 @@
   `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`、`tests.test_settings_litellm_page`、
-  `tests.test_settings_models_page`、`tests.test_gui_litellm_settings_page`、
+  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_gui_litellm_settings_page`、
   `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、
   `tests.test_litellm_catalog_cache`、`tests.test_project_context_settings`。
 

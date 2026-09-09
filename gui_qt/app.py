@@ -352,6 +352,12 @@ from .settings.models_page import (
     should_save_batch_thinking_level,
     supports_batch_thinking,
 )
+from .settings.project_page import ProjectSettingsPage
+from .settings.field_widgets import (
+    create_basic_setting_widget,
+    format_setting_text,
+    setting_placeholder,
+)
 from .settings.registry import (
     CONFIG_SNAPSHOT_KEYS_BY_PAGE as _CONFIG_SNAPSHOT_KEYS_BY_PAGE,
     SETTINGS_CONFIG_PAGE_KEYS as _SETTINGS_CONFIG_PAGE_KEYS,
@@ -3184,6 +3190,8 @@ class MainWindow(QMainWindow):
             return self._create_litellm_settings_page()
         if spec.key == "models":
             return self._create_models_settings_page()
+        if spec.key == "project":
+            return self._create_project_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3212,9 +3220,28 @@ class MainWindow(QMainWindow):
 
     def _show_settings_page_by_key(self, key: str) -> None:
         index = getattr(self, "_settings_nav_rows", {}).get(key)
+        if index is None:
+            return
         stack = getattr(self, "settings_stack", None)
-        if index is not None and stack is not None:
+        if stack is not None:
             stack.setCurrentIndex(index)
+        nav = getattr(self, "settings_nav", None)
+        if nav is not None and nav.currentRow() != index:
+            previous = nav.blockSignals(True)
+            try:
+                nav.setCurrentRow(index)
+            finally:
+                nav.blockSignals(previous)
+        coordinator = getattr(self, "_settings_coordinator", None)
+        if (
+            coordinator is not None
+            and key in _SETTINGS_CONFIG_PAGE_KEYS
+            and coordinator.is_built(key)
+            and not coordinator.is_loaded(key)
+        ):
+            # coordinator.focus_issue() builds via ensure_page without the
+            # host populate path used by ordinary navigation.
+            self._populate_settings_page(key)
 
     def _request_settings_save(self) -> None:
         self._on_save_config()
@@ -3552,47 +3579,8 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_settings_project_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_project")
-        hint = QLabel(
-            "配置当前选中项目的 translator_config.json 参数。"
-            "切换 work 目录请前往「项目列表」；此处只调整术语表、翻译目录、过滤器和准备流程。"
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("config_hint_label")
-        layout.addWidget(hint)
-
-        current_box = QGroupBox("当前项目")
-        current_form = self._settings_form(current_box)
-        self.settings_project_root_value = QLabel("（尚未选择项目）")
-        self.settings_project_root_value.setWordWrap(True)
-        self.settings_project_root_value.setObjectName("settings_project_root_value")
-        current_form.addRow("游戏 work 目录：", self.settings_project_root_value)
-        switch_row = QHBoxLayout()
-        switch_row.addStretch(1)
-        self.settings_go_workspace_btn = QPushButton("在项目列表切换…")
-        self.settings_go_workspace_btn.setObjectName("secondary_btn")
-        self.settings_go_workspace_btn.clicked.connect(self._on_go_to_workspace_for_project_switch)
-        switch_row.addWidget(self.settings_go_workspace_btn)
-        current_form.addRow("", switch_row)
-        layout.addWidget(current_box)
-        # Page may be lazy-built after a project switch; show the live game_root.
-        self._refresh_settings_project_root_display()
-
-        for group_title in ("项目与资源", "准备流程"):
-            group = QGroupBox(group_title)
-            form = self._settings_form(group)
-            for field in [
-                item
-                for item in ADVANCED_SETTING_FIELDS
-                if item.category == group_title and item.key not in _SETTINGS_WORKSPACE_MANAGED_KEYS
-            ]:
-                widget = self._create_advanced_setting_widget(field)
-                self._advanced_setting_widgets[field.key] = widget
-                row = self._advanced_setting_row(field, widget)
-                form.addRow(f"{field.label}：", row)
-            layout.addWidget(group)
-        layout.addStretch(1)
-        return page
+        page = self._project_page() or self._create_project_settings_page()
+        return page.widget
 
     def _build_settings_context_page(self) -> QWidget:
         page, layout = self._settings_page("settings_context")
@@ -3880,6 +3868,36 @@ class MainWindow(QMainWindow):
 
     def _models_page(self):
         return self.__dict__.get("_models_settings_page")
+
+    def _project_page(self):
+        return self.__dict__.get("_project_settings_page")
+
+    def _create_project_settings_page(self):
+        """Build the migrated Project Settings page and alias its widgets."""
+        existing = self._project_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            return existing
+        page = ProjectSettingsPage(
+            self,
+            on_browse_sdk=self._on_browse_renpy_sdk_dir,
+            on_find_sdk=self._on_find_renpy_sdk_dir,
+            on_download_sdk=self._on_download_recommended_sdk,
+            is_sdk_install_running=lambda: bool(
+                getattr(self, "_sdk_install_worker", None) is not None
+                and self._sdk_install_worker.isRunning()
+            ),
+        )
+        self.__dict__["_project_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_project"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        self._refresh_settings_project_root_display()
+        return page
 
     def _create_models_settings_page(self):
         """Build the migrated Models Settings page and alias its widgets."""
@@ -5116,43 +5134,18 @@ class MainWindow(QMainWindow):
         add_editable_combo_popup_action(combo)
 
     def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
-        if field.kind == "bool":
-            widget = QCheckBox()
-            if field.key == "model_rotation_enabled":
-                widget.toggled.connect(self._on_model_rotation_enabled_toggled)
-        elif field.kind == "int":
-            widget = QSpinBox()
-            widget.setAccelerated(True)
-            minimum = int(field.minimum if field.minimum is not None else 0)
-            maximum = int(field.maximum if field.maximum is not None else 9999999)
-            widget.setRange(minimum, maximum)
-        elif field.kind == "float":
-            widget = QDoubleSpinBox()
-            widget.setDecimals(3)
-            widget.setSingleStep(0.01 if field.maximum == 1.0 else 0.1)
-            minimum = float(field.minimum if field.minimum is not None else -999999.0)
-            maximum = float(field.maximum if field.maximum is not None else 999999.0)
-            widget.setRange(minimum, maximum)
-        elif field.kind == "gemini_model_list":
-            widget = self._create_gemini_model_checklist()
-        elif field.kind == "gemini_catalog_list":
+        if field.kind == "gemini_model_list":
+            return self._create_gemini_model_checklist()
+        if field.kind == "gemini_catalog_list":
             kind = (
                 "embedding"
                 if field.key == "catalog_gemini_embedding_models"
                 else "translation"
             )
-            widget = self._create_gemini_catalog_list_editor(kind=kind)
-        elif field.kind in {"text", "list", "json"}:
-            widget = QTextEdit()
-            widget.setAcceptRichText(False)
-            widget.setMinimumHeight(72 if field.kind != "text" else 96)
-            widget.setPlaceholderText(self._advanced_setting_placeholder(field))
-        else:
-            widget = QLineEdit()
-            widget.setClearButtonEnabled(True)
-            if field.allow_empty:
-                widget.setPlaceholderText("留空使用默认路径" if "路径" in field.label else "可留空")
-        widget.setToolTip(field.description)
+            return self._create_gemini_catalog_list_editor(kind=kind)
+        widget = create_basic_setting_widget(field)
+        if field.key == "model_rotation_enabled":
+            widget.toggled.connect(self._on_model_rotation_enabled_toggled)
         return widget
 
     def _create_gemini_catalog_list_editor(self, *, kind: str) -> QWidget:
@@ -5365,13 +5358,7 @@ class MainWindow(QMainWindow):
             checklist.setEnabled(bool(checked))
 
     def _advanced_setting_placeholder(self, field: SettingField) -> str:
-        if field.kind == "list":
-            return "每行一个值，或填写 JSON 数组"
-        if field.kind == "json":
-            return "留空使用默认；可填写字符串预设或 JSON"
-        if field.kind == "text":
-            return "可留空"
-        return ""
+        return setting_placeholder(field)
 
     def _build_log_tab(self) -> None:
         tab = QWidget()
@@ -10284,20 +10271,7 @@ class MainWindow(QMainWindow):
             self._on_model_rotation_enabled_toggled(enabled_widget.isChecked())
 
     def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
-        if field.kind in {"list", "gemini_model_list", "gemini_catalog_list"}:
-            if isinstance(value, (list, tuple, set)):
-                return "\n".join(str(item) for item in value)
-            return str(value or "")
-        if field.kind == "json":
-            if value in (None, ""):
-                return ""
-            if isinstance(value, str):
-                return value
-            try:
-                return json.dumps(value, ensure_ascii=False, indent=2)
-            except TypeError:
-                return str(value)
-        return str(value or "")
+        return format_setting_text(field, value)
 
 
     def _refresh_font_install_status(self) -> None:
@@ -10951,10 +10925,18 @@ class MainWindow(QMainWindow):
 
     def _refresh_settings_project_root_display(self) -> None:
         # Never lazy-materialize the project settings page just to update a label.
+        page = self._project_page()
+        root = None
+        state = getattr(self, "state", None)
+        get_game_root = getattr(state, "get_game_root", None)
+        if callable(get_game_root):
+            root = get_game_root()
+        if page is not None:
+            page.set_game_root_display(root)
+            return
         label = self.__dict__.get("settings_project_root_value")
         if label is None:
             return
-        root = self.state.get_game_root()
         if root:
             label.setText(str(root))
             label.setToolTip(str(root))
@@ -13975,6 +13957,17 @@ class MainWindow(QMainWindow):
                         keys=advanced_keys,
                     )
                     self._clear_advanced_setting_errors()
+                    project_page = self._project_page()
+                    if project_page is not None and (
+                        want is None or "project" in want
+                    ):
+                        project_snapshot = {
+                            key: advanced_values[key]
+                            for key in project_page.config_keys
+                            if key in advanced_values
+                        }
+                        if project_snapshot:
+                            project_page.load(project_snapshot)
 
             if want is None or "project" in want:
                 # Project page is mostly read-only labels; refresh if present.
