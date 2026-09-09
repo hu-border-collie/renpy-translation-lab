@@ -268,7 +268,6 @@ from .litellm_catalog_cache import (
 from .litellm_settings import (
     provider_credential_status,
     read_sync_backend_models,
-    write_sync_backend_models,
 )
 from .custom_provider_dialog import CustomLiteLLMProviderDialog
 from gemini_model_catalog import (
@@ -277,7 +276,6 @@ from gemini_model_catalog import (
     merge_model_lists,
     resolve_gemini_embedding_models,
     resolve_gemini_translation_models,
-    write_model_catalog_extras,
 )
 from litellm_provider_config import (
     CustomLiteLLMProvider,
@@ -325,14 +323,12 @@ from .settings_schema import (
     BASIC_RECOMMENDED_VALUES,
     SettingField,
     allowed_gemini_rotation_models,
-    apply_advanced_settings,
     read_advanced_settings,
     recommended_advanced_settings,
-    resolve_project_analysis_flags_for_save,
-    validate_advanced_settings,
 )
 from .settings.coordinator import SettingsCoordinator
 from .settings.leave_guard import settings_leave_guard_prompt
+from .settings.save_apply import SettingsSaveExtras, apply_collected_settings
 from .settings.legacy import LegacySettingsPageAdapter
 from .settings.page_contract import SettingsIssue, SettingsPageActions
 from .settings.litellm_page import (
@@ -403,7 +399,6 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
-    CUSTOM_LITELLM_PROVIDER_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
@@ -3058,6 +3053,7 @@ class MainWindow(QMainWindow):
                 show_status=self._show_settings_status,
                 run_immediate=self._run_settings_immediate,
             ),
+            persist=self._persist_collected_settings,
         )
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
 
@@ -13666,199 +13662,123 @@ class MainWindow(QMainWindow):
         if not self._loading_config_to_ui and not self._updating_batch_thinking_combo:
             self._batch_thinking_user_changed = True
 
-    def _on_save_config(self) -> bool:
-        if not self.state.get_game_root():
-            message_box_information(self, "未选择项目", "请先选择游戏的 work 目录。")
-            return False
-        self._ensure_settings_pages_for_config()
-        # Persist any debounced LiteLLM model selection before reading widgets.
-        self._flush_litellm_model_selection_save()
+    def _widget_settings_collect(self) -> dict[str, object]:
+        """Collect save values from host widget aliases (helper-test path)."""
 
+        def _checked(name: str, default: bool = False) -> bool:
+            widget = getattr(self, name, None)
+            getter = getattr(widget, "isChecked", None)
+            if not callable(getter):
+                return default
+            return bool(getter())
+
+        def _combo_text(name: str, default: str = "") -> str:
+            widget = getattr(self, name, None)
+            getter = getattr(widget, "currentText", None)
+            if not callable(getter):
+                return default
+            return self._config_string(getter())
+
+        thinking_combo = getattr(self, "batch_thinking_combo", None)
+        thinking_val = (
+            thinking_combo.currentData() if thinking_combo is not None else ""
+        )
+        thinking_level = thinking_val if isinstance(thinking_val, str) else ""
+        storage_cb = getattr(self, "context_storage_game_cb", None)
+        storage_location = (
+            "game"
+            if storage_cb is not None and storage_cb.isChecked()
+            else "tool"
+        )
+        collected: dict[str, object] = {
+            "rag_enabled": _checked("rag_enabled_cb"),
+            "source_index_enabled": _checked("source_index_enabled_cb"),
+            "bootstrap_on_build": _checked("bootstrap_on_build_cb"),
+            "sync_source_index_enabled": _checked("sync_source_index_enabled_cb"),
+            "sync_project_analysis_inject_enabled": _checked(
+                "sync_inject_published_brief_cb"
+            ),
+            "context_storage_location": storage_location,
+            "sync_backend": self._selected_sync_backend(),
+            "sync_model": _combo_text("sync_model_combo"),
+            "litellm_model": self._litellm_model_text(),
+            "batch_model": _combo_text("batch_model_combo"),
+            "sync_embedding_model": _combo_text("sync_embedding_combo"),
+            "batch_embedding_model": _combo_text("batch_embedding_combo"),
+            "batch_thinking_level": thinking_level,
+            "theme": self._current_theme_preference_from_ui(),
+        }
+        collected["custom_litellm_providers"] = self._custom_provider_entries()
+        collected.update(self._advanced_settings_values_from_ui())
+        return collected
+
+    def _settings_save_extras(self) -> SettingsSaveExtras:
+        litellm_page = self._litellm_page() if hasattr(self, "_litellm_page") else None
+        models_page = self._models_page() if hasattr(self, "_models_page") else None
+        game_root = None
+        getter = getattr(getattr(self, "state", None), "get_game_root", None)
+        if callable(getter):
+            root = getter()
+            if root is not None:
+                game_root = str(root)
+        thinking_changed = bool(getattr(self, "_batch_thinking_user_changed", False))
+        if models_page is not None:
+            thinking_changed = bool(
+                getattr(models_page, "_batch_thinking_user_changed", thinking_changed)
+            )
+        return SettingsSaveExtras(
+            game_root=game_root,
+            custom_providers_modified=bool(
+                getattr(litellm_page, "_custom_litellm_providers_modified", False)
+            )
+            if litellm_page is not None
+            else False,
+            custom_providers_load_error=str(
+                getattr(litellm_page, "_custom_litellm_providers_load_error", "") or ""
+            )
+            if litellm_page is not None
+            else "",
+            batch_thinking_user_changed=thinking_changed,
+        )
+
+    def _persist_collected_settings(self, collected: Mapping[str, object]) -> bool:
+        """Apply collected values and run the unique two-file save transaction."""
         try:
             config = self.state.load_translator_config()
             original_config = copy.deepcopy(config)
-            sync_config = self._ensure_config_section(config, "sync")
-            batch_config = self._ensure_config_section(config, "batch")
-            sync_rag_config = self._ensure_config_section(sync_config, "rag")
-            batch_rag_config = self._ensure_config_section(batch_config, "rag")
-            batch_source_index_config = self._ensure_config_section(batch_config, "source_index")
-            context_storage_config = self._ensure_config_section(config, "context_storage")
-
-            context_storage_config["location"] = "game" if self.context_storage_game_cb.isChecked() else "tool"
-            context_storage_config["game_dir_name"] = (
-                self._config_string(
-                    context_storage_config.get(
-                        "game_dir_name",
-                        context_storage_config.get(
-                            "directory_name",
-                            context_storage_config.get("directory", "translation_context"),
-                        ),
-                    )
-                )
-                or "translation_context"
-            )
-            # Context enablement is per-project only; model/budget defaults stay global.
-            # Do not write them into the global translator_config.json.
-            project_context_flags = {
-                "rag_enabled": self.rag_enabled_cb.isChecked(),
-                "source_index_enabled": self.source_index_enabled_cb.isChecked(),
-                "bootstrap_on_build": self.bootstrap_on_build_cb.isChecked(),
-                "sync_source_index_enabled": self.sync_source_index_enabled_cb.isChecked(),
-                "sync_project_analysis_inject_enabled": (
-                    self.sync_inject_published_brief_cb.isChecked()
-                ),
-            }
-
-            sync_backend = self._selected_sync_backend()
-            litellm_model = self._litellm_model_text()
-            if (
-                self._custom_litellm_providers_modified
-                and self._custom_litellm_providers_load_error
-            ):
-                # The on-disk list is invalid and was only partially loaded;
-                # saving the in-memory registry would silently drop the valid
-                # entries that failed to parse. Require fixing the config first.
-                self._focus_settings_section("litellm")
-                message_box_warning(
-                    self,
-                    CUSTOM_LITELLM_PROVIDER_COPY["load_error_title"],
-                    (
-                        CUSTOM_LITELLM_PROVIDER_COPY["load_error_save_blocked"].format(
-                            error=self._custom_litellm_providers_load_error
-                        )
-                    ),
-                )
-                return False
-            if sync_backend == "litellm" and not litellm_model:
-                self._focus_settings_section("litellm")
-                message_box_information(
-                    self,
-                    "请配置 LiteLLM 模型",
-                    "启用 LiteLLM 前，请填写带 provider 前缀的模型名称。",
-                )
-                return False
-            models_page = self._models_page()
-            models_values = models_page.collect() if models_page is not None else None
-            gemini_sync_model = (
-                str(models_values["sync_model"])
-                if models_values is not None
-                else self.sync_model_combo.currentText()
-            )
-            sync_model = write_sync_backend_models(
-                sync_config,
-                sync_backend,
-                gemini_sync_model,
-                litellm_model,
-            )
-            custom_entries = self._custom_provider_entries()
-            if custom_entries:
-                sync_config["custom_litellm_providers"] = custom_entries
-            elif self._custom_litellm_providers_modified:
-                # Only the user explicitly emptying the registry clears the key.
-                # Unrelated saves must preserve the on-disk configuration even
-                # when the page was never built or the config failed to load.
-                sync_config.pop("custom_litellm_providers", None)
-            if "models" in sync_config:
-                sync_models = self._sync_models_for_save(sync_config.get("models"), sync_model)
-                if sync_models:
-                    sync_config["models"] = sync_models
-                else:
-                    sync_config.pop("models", None)
-            if models_values is not None:
-                batch_model = str(models_values["batch_model"]).strip()
-                sync_embedding_model = str(
-                    models_values["sync_embedding_model"]
-                ).strip()
-                batch_embedding_model = str(
-                    models_values["batch_embedding_model"]
-                ).strip()
-                thinking_level = str(models_values["batch_thinking_level"] or "")
-            else:
-                batch_model = self.batch_model_combo.currentText().strip()
-                sync_embedding_model = self.sync_embedding_combo.currentText().strip()
-                batch_embedding_model = self.batch_embedding_combo.currentText().strip()
-                thinking_val = self.batch_thinking_combo.currentData()
-                thinking_level = thinking_val if isinstance(thinking_val, str) else ""
-            batch_config["model"] = batch_model
-            sync_rag_config["embedding_model"] = sync_embedding_model
-            batch_rag_config["embedding_model"] = batch_embedding_model
-            if self._should_save_batch_thinking_level(
-                batch_config,
-                batch_model,
-                thinking_level,
-                self._batch_thinking_user_changed,
-            ):
-                batch_config["thinking_level"] = thinking_level
-
-            write_gui_theme_to_config(config, self._current_theme_preference_from_ui())
-
-            advanced_values = self._advanced_settings_values_from_ui()
-            complete_advanced_values: dict[str, Any] = {}
-            if advanced_values:
-                complete_advanced_values = read_advanced_settings(config)
-                complete_advanced_values.update(advanced_values)
-                current_game_root = self.state.get_game_root()
-                if current_game_root is not None:
-                    complete_advanced_values["game_root"] = str(current_game_root)
-                errors = validate_advanced_settings(
-                    complete_advanced_values,
-                    translator_config=config,
-                )
-                if errors:
-                    self._show_advanced_setting_errors(errors)
-                    self._show_settings_status("高级设置有无效字段，未保存。", 6000)
-                    return False
-                self._clear_advanced_setting_errors()
-                apply_advanced_settings(config, complete_advanced_values)
-                # These two values are persisted in the current project's
-                # project_context_settings.json, not as shared global state.
-                original_project_analysis = self._config_section(
-                    self._config_section(original_config, "batch"),
-                    "project_analysis",
-                )
-                saved_project_analysis = self._ensure_config_section(
-                    batch_config, "project_analysis"
-                )
-                for setting_key in ("enabled", "inject_published_brief"):
-                    if setting_key in original_project_analysis:
-                        saved_project_analysis[setting_key] = original_project_analysis[
-                            setting_key
-                        ]
-                    else:
-                        saved_project_analysis.pop(setting_key, None)
-                # Persist only non-builtin catalog extensions; drop empty keys.
-                write_model_catalog_extras(
-                    config,
-                    translation_models=list(
-                        complete_advanced_values.get("catalog_gemini_models") or []
-                    ),
-                    embedding_models=list(
-                        complete_advanced_values.get("catalog_gemini_embedding_models") or []
-                    ),
-                )
-
-            saved_context_flags = read_batch_context_flags(
+            result = apply_collected_settings(
                 config,
-                game_root=self._game_root_str_for_flags(),
+                collected,
+                original_config=original_config,
+                extras=self._settings_save_extras(),
             )
-            project_context_flags.update(
-                resolve_project_analysis_flags_for_save(
-                    saved_context_flags,
-                    advanced_values,
-                    complete_advanced_values,
-                )
-            )
-            # Validate every field before either settings file is written. This
-            # avoids persisting project flags when the UI reports "未保存".
+            if result.block_page:
+                self._focus_settings_section(result.block_page)
+                if result.block_warning:
+                    message_box_warning(
+                        self,
+                        result.block_title or "无法保存",
+                        result.block_message or "",
+                    )
+                else:
+                    message_box_information(
+                        self,
+                        result.block_title or "无法保存",
+                        result.block_message or "",
+                    )
+                return False
+            if result.advanced_errors:
+                self._show_advanced_setting_errors(result.advanced_errors)
+                self._show_settings_status("高级设置有无效字段，未保存。", 6000)
+                return False
+            self._clear_advanced_setting_errors()
             from project_context_settings import save_project_context_settings
 
-            # Write the global file first. If the project write then fails,
-            # restore the original global config so the two files commit together.
             self.state.save_translator_config(config)
             try:
                 project_settings_path = save_project_context_settings(
                     self.state.get_game_root(),
-                    project_context_flags,
+                    result.project_context_flags,
                 )
             except Exception:
                 try:
@@ -13871,7 +13791,7 @@ class MainWindow(QMainWindow):
             self._context_library_config_snapshot = copy.deepcopy(config)
             self._context_library_flags_cache = (
                 self._game_root_str_for_flags() or "",
-                dict(project_context_flags),
+                dict(result.project_context_flags),
             )
             self._append_log(
                 f"当前项目上下文开关已保存：{project_settings_path}"
@@ -13879,7 +13799,9 @@ class MainWindow(QMainWindow):
             if not self._sync_state_game_root_from_settings(config.get("game_root")):
                 self._show_settings_status("设置已保存，但同步项目目录到工作台失败。", 6000)
                 self._append_log("设置已保存，但同步项目目录到工作台失败。")
-                self._sync_settings_dirty_baseline(self._current_config_ui_snapshot())
+                snapshot_fn = getattr(self, "_current_config_ui_snapshot", None)
+                if callable(snapshot_fn):
+                    self._sync_settings_dirty_baseline(snapshot_fn())
                 if "save_config_btn" in self.__dict__:
                     self._sync_settings_action_bar_enabled(
                         task_running=bool(getattr(self, "_task_running", False))
@@ -13891,7 +13813,6 @@ class MainWindow(QMainWindow):
                 "设置已成功保存（全局项 → translator_config.json；"
                 "RAG/原文索引/项目分析开关 → 当前项目 project_context_settings.json）。"
             )
-            # Refresh select-only model dropdowns / rotation checklist from catalog.
             try:
                 self._load_config_to_ui(refresh_task_gates=False)
             except Exception as refresh_exc:
@@ -13901,7 +13822,9 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._append_log(f"提示通知显示失败：{exc}")
                 self.statusBar().showMessage("设置已成功保存", 3000)
-            self._sync_settings_dirty_baseline(self._current_config_ui_snapshot())
+            snapshot_fn = getattr(self, "_current_config_ui_snapshot", None)
+            if callable(snapshot_fn):
+                self._sync_settings_dirty_baseline(snapshot_fn())
             if "save_config_btn" in self.__dict__:
                 self._sync_settings_action_bar_enabled(
                     task_running=bool(getattr(self, "_task_running", False))
@@ -13912,6 +13835,15 @@ class MainWindow(QMainWindow):
             self._append_log(f"保存设置失败：{exc}")
             return False
 
+    def _on_save_config(self) -> bool:
+        if not self.state.get_game_root():
+            message_box_information(self, "未选择项目", "请先选择游戏的 work 目录。")
+            return False
+        if self._settings_lazy_ready():
+            self._ensure_settings_pages_for_config()
+            self._flush_litellm_model_selection_save()
+            return bool(self._settings_coordinator.save())
+        return self._persist_collected_settings(self._widget_settings_collect())
 
     def _sync_state_game_root_from_settings(self, value: object) -> bool:
         if not isinstance(value, str) or not value.strip():

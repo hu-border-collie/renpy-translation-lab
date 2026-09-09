@@ -253,6 +253,24 @@ class SettingsCoordinatorTests(unittest.TestCase):
             self.coordinator.has_unsaved_changes({"alpha_value": 1})
         )
 
+    def test_save_persists_collected_values(self) -> None:
+        persisted: list[dict[str, object]] = []
+
+        def persist(values):
+            persisted.append(dict(values))
+            return True
+
+        coordinator = SettingsCoordinator(
+            self.registry,
+            builder=lambda spec: _FakeSettingsPage(spec),
+            persist=persist,
+        )
+        coordinator.ensure_page("alpha")
+        coordinator.load({"alpha_value": 7, "alpha_flag": True})
+        self.assertTrue(coordinator.save())
+        self.assertEqual(persisted, [{"alpha_value": 7, "alpha_flag": True}])
+        self.assertFalse(self.coordinator.save())
+
     def test_stored_baseline_is_dirty_against_host_snapshot(self) -> None:
         self.coordinator.set_baseline({"alpha_value": 1, "theme": "dark"})
         self.assertFalse(self.coordinator.is_dirty({"alpha_value": 1, "theme": "dark"}))

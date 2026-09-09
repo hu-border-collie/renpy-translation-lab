@@ -2,6 +2,11 @@
 
 from .coordinator import SettingsCoordinator, snapshot_subset
 from .leave_guard import SettingsLeaveGuardPrompt, settings_leave_guard_prompt
+from .save_apply import (
+    SettingsSaveApplyResult,
+    SettingsSaveExtras,
+    apply_collected_settings,
+)
 from .legacy import LegacySettingsHost, LegacySettingsPageAdapter
 from .page_contract import SettingsIssue, SettingsPage, SettingsPageActions
 from .registry import (
@@ -35,7 +40,10 @@ __all__ = (
     "SettingsPageActions",
     "SettingsPageRegistry",
     "SettingsPageSpec",
+    "SettingsSaveApplyResult",
+    "SettingsSaveExtras",
     "WORKSPACE_MANAGED_KEYS",
+    "apply_collected_settings",
     "build_default_registry",
     "settings_leave_guard_prompt",
     "snapshot_subset",

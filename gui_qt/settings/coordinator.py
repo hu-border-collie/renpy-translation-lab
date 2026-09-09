@@ -1,9 +1,10 @@
 """Navigation, lazy materialization, and config orchestration for Settings pages.
 
 The coordinator is deliberately Qt-free: the host injects a page builder and a
-page-show callback. It owns the dirty baseline and leave-guard copy. ``MainWindow``
-still runs the unique save transaction and shows Qt dialogs; the coordinator
-never writes configuration itself.
+page-show callback. It owns the dirty baseline, leave-guard copy, and the
+collect → persist handoff. ``MainWindow`` still writes files through
+ProjectState / config_store and shows Qt dialogs; the coordinator never
+writes configuration itself.
 """
 from __future__ import annotations
 
@@ -25,12 +26,14 @@ class SettingsCoordinator:
         show_page: Callable[[str], None] | None = None,
         on_page_built: Callable[[SettingsPageSpec, object], None] | None = None,
         actions: SettingsPageActions | None = None,
+        persist: Callable[[Mapping[str, object]], bool] | None = None,
     ) -> None:
         self._registry = registry
         self._builder = builder
         self._show_page = show_page
         self._on_page_built = on_page_built
         self._actions = actions
+        self._persist = persist
         self._pages: dict[str, object] = {}
         self._loaded: set[str] = set()
         self._active_key: str | None = None
@@ -262,6 +265,18 @@ class SettingsCoordinator:
             if baseline.get(key) != value:
                 return True
         return False
+
+    def save(self) -> bool:
+        """Collect page-owned values and persist through the host callback.
+
+        The coordinator never writes configuration itself. ``persist`` must
+        apply values onto the original JSON object and run the unique
+        two-file save transaction.
+        """
+
+        if self._persist is None:
+            return False
+        return bool(self._persist(self.collect()))
 
     def _target_keys(
         self,
