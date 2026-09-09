@@ -2,8 +2,9 @@
 
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
 > merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
-> Phase D 已将 10 个 Settings 页迁到独立 `SettingsPage`；dirty 基线与离开保护文案已由 coordinator 持有，
-> 唯一保存事务仍在 `MainWindow`。Epic 在保存收口与人工烟测完成前保持打开。
+> Phase D 已将 10 个 Settings 页迁到独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist
+> 已由 coordinator 持有；collected 值 apply 在 Qt-free `save_apply.py`，两文件写盘仍在 `MainWindow`。
+> Epic 在写盘收口与人工烟测完成前保持打开。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -69,18 +70,19 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
 所加载页面的 baseline 键。`_ensure_settings_pages_for_config()` 在保存/重载前补建全部配置页，
 先把已打开页面的 UI 快照保存下来，全量加载后再恢复，避免补建其他页面覆盖未保存编辑。
 
-**保存**：`_on_save_config()` 是当前唯一总事务入口：
+**保存**：`_on_save_config()` 仍是入口；apply 已抽到 Qt-free `apply_collected_settings`：
 
 1. 要求已有 `game_root`，补建配置页并 flush LiteLLM 下拉的延迟保存；
-2. `state.load_translator_config()` 取原始对象并深拷贝一份原始配置；
-3. 从控件收集模型、后端、上下文、主题与 advanced 值；
-4. `validate_advanced_settings(...)` 失败则聚焦高级页并中止，不写任何文件；
-5. `ProjectState.save_translator_config(config)` 经 `config_store.write_json_object` 加共用写锁并原子
+2. 有 coordinator 时 `SettingsCoordinator.save()` → host `persist(collect())`；`MainWindow.__new__`
+   helper 走 `_widget_settings_collect()` + 同一 persist；
+3. persist 读取原始 JSON 并深拷贝，再调用 `apply_collected_settings`（含
+   `validate_advanced_settings`）；失败则聚焦对应页并中止，不写任何文件；
+4. `ProjectState.save_translator_config(config)` 经 `config_store.write_json_object` 加共用写锁并原子
    替换；调用方已在原始对象上合并已知修改，未知字段保留；
-6. `save_project_context_settings(game_root, flags)` 写当前项目的
+5. `save_project_context_settings(game_root, flags)` 写当前项目的
    `project_context_settings.json`；项目文件失败时用原始配置回滚全局文件；
-7. 可能经 `_sync_state_game_root_from_settings` 触发项目切换，最后刷新 UI 并把
-   `_config_ui_saved_snapshot` 更新为当前控件快照。
+6. 可能经 `_sync_state_game_root_from_settings` 触发项目切换，最后刷新 UI 并把 dirty 基线
+   更新为当前控件快照。
 
 **dirty 与离开保护**：`_current_config_ui_snapshot()` 生成扁平键值快照，`_config_tab_has_unsaved_changes()`
 与 `_config_ui_saved_snapshot` 比较；`_confirm_unsaved_config_before_workflow()`、
@@ -98,8 +100,8 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
   快照中存在的 advanced 键。
 - **页面不可独立构造**：已收敛。10 个 Settings 页均为独立 `SettingsPage`；`LegacySettingsPageAdapter`
   仍保留但当前无页面使用。
-- **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty 基线/离开保护文案；
-  唯一保存事务与 Qt 对话框仍在 `MainWindow`；Phase D 继续收口。
+- **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty 基线/离开保护文案/
+  collect→persist；apply 在 `save_apply.py`；两文件写盘与 Qt 对话框仍在 `MainWindow`。
 - **局部 worker 归属整窗**：部分收敛。LiteLLM worker 已由页面持有；字体 / 安装 / registry
   worker 仍由 `MainWindow` 属性和私有回调管理。
 - **说明性 docstring 过时**：Phase A 已修。`gui_qt/__init__.py` / `gui_qt/app.py` 已区分
@@ -237,7 +239,8 @@ Coordinator → 页面（只通过上述方法）：
 
 仍未落地（Phase D 收口）：
 
-- 10 页均已迁出独立 `SettingsPage`；dirty 基线与离开保护文案由 coordinator 持有；`MainWindow` 仍执行唯一保存事务并弹出 Qt 对话框。
+- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist 由 coordinator 持有；
+  collected 值 apply 在 `save_apply.py`；两文件写盘与 Qt 对话框仍在 `MainWindow`。
 
 Phase C 已落地：
 
@@ -248,7 +251,7 @@ Phase C 已落地：
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
 - 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
-Phase D（进行中，十页已迁出；保存收口仍待）：
+Phase D（进行中，十页已迁出；apply 已抽到 `save_apply.py`，写盘仍待完全收口）：
 
 - `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
 - `gui_qt/settings/field_widgets.py`：bool/int/float/str/text/list/json 字段控件工厂。
@@ -277,7 +280,8 @@ Phase D（进行中，十页已迁出；保存收口仍待）：
 - `gui_qt/settings/workspace_page.py`：`WorkspaceSettingsPage` 可脱离 `MainWindow` 构造；
   嵌入 `GamesRegistryPanel`，无 translator_config 字段；刷新/导入 worker 仍在面板内，
   切换项目与 `workspace_root` 写入仍由宿主回调提供。
-- `gui_qt/settings/leave_guard.py`：未保存离开保护四套文案；coordinator 持有 dirty 基线并在 dirty 时返回 prompt，宿主弹出 Qt 对话框并执行唯一保存事务。
+- `gui_qt/settings/leave_guard.py`：未保存离开保护四套文案；coordinator 持有 dirty 基线并在 dirty 时返回 prompt，宿主弹出 Qt 对话框。
+- `gui_qt/settings/save_apply.py`：Qt-free `apply_collected_settings`；coordinator `save()` 经 host persist 调用，两文件写盘仍在 `MainWindow`。
 - LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
   `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
 - 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`、
@@ -285,7 +289,8 @@ Phase D（进行中，十页已迁出；保存收口仍待）：
   `tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、
   `tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、
   `tests.test_settings_workspace_page`（独立构造）与既有
-  `test_gui_app_config` / `test_gui_settings_coordinator` / `test_gui_settings_context_primary`。
+  `test_gui_app_config` / `test_gui_settings_coordinator` / `test_gui_settings_context_primary` /
+  `tests.test_settings_save_apply`。
 
 ## Phase B 验收映射
 

@@ -28,7 +28,8 @@
 - `gui_qt/app.py`
   - `_load_config_to_ui()`：当前 Settings 多页面加载协调。
   - `_current_config_ui_snapshot()`：dirty baseline 的扁平快照。
-  - `_on_save_config()`：当前 collect/validate/save 总事务；#202 收缩前的事实入口。
+  - `_on_save_config()`：保存入口（ensure pages / flush LiteLLM / coordinator.save 或 widget collect）。
+  - `_persist_collected_settings()`：调用 Qt-free apply 后执行两文件写盘与回滚。
 
 ## 模型与 Provider
 
@@ -76,8 +77,10 @@
   10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
 - `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
   `collect` / `validate` / `reset` / `focus_issue` / `set_task_running` / `set_baseline` /
-  `is_dirty` / `leave_guard_prompt`；不依赖 Qt。
+  `is_dirty` / `leave_guard_prompt` / `save`（经 host `persist`）；不依赖 Qt。
 - `gui_qt/settings/leave_guard.py`：未保存离开保护文案。
+- `gui_qt/settings/save_apply.py`：`apply_collected_settings` 把 collect() 快照应用到原始 JSON 对象；
+  extras 由宿主注入，写盘仍走 `MainWindow._persist_collected_settings`。
 - `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM `SettingsPage`；局部 worker 复用
   #297 的取消、operation identity、retired ownership 与 shutdown 合同。
@@ -260,14 +263,14 @@
 - 保存：coordinator 的 `SettingsPageActions.save` 委托
   `MainWindow._request_settings_save()` → `_on_save_config()`；
   `_on_save_config()` → `_ensure_settings_pages_for_config()` →
-  `_flush_litellm_model_selection_save()` → `state.load_translator_config()` →
-  `write_sync_backend_models()` / `write_model_catalog_extras()` /
-  `validate_advanced_settings()` / `apply_advanced_settings()` →
+  `_flush_litellm_model_selection_save()` → `SettingsCoordinator.save()` →
+  host `persist(collect())` → `apply_collected_settings()`（Qt-free）→
   `state.save_translator_config()`（`config_store`）→ `save_project_context_settings()`；
-  项目文件失败时回滚全局文件；最后 `_config_ui_saved_snapshot = _current_config_ui_snapshot()`。
-  页面 adapter 的 `collect()` 只返回值、`validate()` 对未迁移页面返回空列表，均不写盘。
-- dirty/离开保护：`_config_tab_has_unsaved_changes()` 与 `_config_ui_saved_snapshot` 仍是唯一
-  基线；coordinator 提供 `has_unsaved_changes(baseline)` 供新页面测试。
+  项目文件失败时回滚全局文件；最后 `_sync_settings_dirty_baseline()`。
+  `__new__` helper 无 coordinator 时走 `_widget_settings_collect()` + 同一 persist。
+  页面 `collect()` 只返回值，均不写盘。
+- dirty/离开保护：coordinator `is_dirty` / `leave_guard_prompt` 与 `_config_ui_saved_snapshot`
+  同步；宿主仍弹出 Qt 对话框。
   `_confirm_unsaved_config_before_workflow()`、`_confirm_unsaved_config_before_registry_switch()`、
   `_confirm_unsaved_config_before_close()`、`_confirm_leave_config_tab()`；
   丢弃修改走 `_on_reload_config()`，恢复推荐值走 `_on_restore_recommended_config()`。
@@ -278,7 +281,7 @@
   扩展 `_on_install_relation_analyzer()` → `OptionalFeatureInstallController`；
   主题 `_on_theme_changed()` → `_set_theme_preference(persist=False)` 仅预览。
 - 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
-  `tests.test_settings_coordinator`、`tests.test_gui_settings_coordinator`、
+  `tests.test_settings_coordinator`、`tests.test_settings_save_apply`、`tests.test_gui_settings_coordinator`、
   `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`、`tests.test_settings_litellm_page`、

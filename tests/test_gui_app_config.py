@@ -582,7 +582,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         with (
             mock.patch(
-                "gui_qt.app.read_batch_context_flags",
+                "gui_qt.settings.save_apply.resolve_batch_context_flags",
                 return_value={
                     "project_analysis_enabled": True,
                     "project_analysis_inject_enabled": True,
