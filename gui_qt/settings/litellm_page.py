@@ -497,6 +497,12 @@ class LiteLLMSettingsPage(QObject):
         callback = self._host.is_install_running
         return bool(callback()) if callback is not None else False
 
+    def _is_global_task_running(self) -> bool:
+        if self._task_running:
+            return True
+        callback = self._host.is_task_running
+        return bool(callback()) if callback is not None else False
+
     def _environ(self) -> Mapping[str, str]:
         callback = self._host.environment
         if callback is not None:
@@ -1339,13 +1345,17 @@ class LiteLLMSettingsPage(QObject):
             )
 
     def _refresh_custom_provider_actions(self) -> None:
+        idle = not self._is_global_task_running()
         has_selection = bool(self._selected_custom_provider())
+        add_btn = getattr(self, "custom_provider_add_btn", None)
+        if add_btn is not None:
+            add_btn.setEnabled(idle)
         edit_btn = getattr(self, "custom_provider_edit_btn", None)
         delete_btn = getattr(self, "custom_provider_delete_btn", None)
         if edit_btn is not None:
-            edit_btn.setEnabled(has_selection)
+            edit_btn.setEnabled(idle and has_selection)
         if delete_btn is not None:
-            delete_btn.setEnabled(has_selection)
+            delete_btn.setEnabled(idle and has_selection)
 
     def _selected_custom_provider(self) -> str:
         table = getattr(self, "custom_provider_table", None)
@@ -2143,6 +2153,7 @@ class LiteLLMSettingsPage(QObject):
         install_btn = getattr(self, "install_litellm_btn", None)
         install_progress = getattr(self, "litellm_install_progress", None)
         installing = self._is_install_running()
+        idle = not self._is_global_task_running()
         installed_version = installed_litellm_version()
         installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
         if backend == "litellm":
@@ -2172,7 +2183,8 @@ class LiteLLMSettingsPage(QObject):
                 no_compatible_release = bool(latest and not compatible)
                 install_btn.setVisible(True)
                 install_btn.setEnabled(
-                    not installing
+                    idle
+                    and not installing
                     and not no_compatible_release
                     and not (up_to_date and keyring_installed)
                 )
@@ -2206,16 +2218,20 @@ class LiteLLMSettingsPage(QObject):
 
         model_combo = getattr(self, "litellm_model_combo", None)
         litellm_active = backend == "litellm" and not installing
+        can_edit = litellm_active and idle
         provider = self._current_litellm_provider()
         model = self._litellm_model_text()
+        backend_combo = getattr(self, "sync_backend_combo", None)
+        if backend_combo is not None:
+            backend_combo.setEnabled(idle)
         provider_combo = getattr(self, "litellm_provider_combo", None)
         if provider_combo is not None:
-            provider_combo.setEnabled(litellm_active)
+            provider_combo.setEnabled(can_edit)
         provider_worker = getattr(self, "_litellm_provider_catalog_worker", None)
         provider_button = getattr(self, "litellm_refresh_providers_btn", None)
         if provider_button is not None:
-            # Keep enabled while running so the user can click again to stop.
-            provider_button.setEnabled(litellm_active)
+            # Keep enabled while a catalog load is in flight so the user can stop.
+            provider_button.setEnabled(can_edit or provider_worker is not None)
             if provider_worker is not None:
                 provider_button.setText(
                     "正在取消…"
@@ -2226,13 +2242,15 @@ class LiteLLMSettingsPage(QObject):
                 provider_button.setText("联网加载供应商")
         clear_provider = getattr(self, "litellm_clear_provider_btn", None)
         if clear_provider is not None:
-            clear_provider.setEnabled(litellm_active and bool(provider))
+            clear_provider.setEnabled(can_edit and bool(provider))
         if model_combo is not None:
-            model_combo.setEnabled(litellm_active and bool(provider))
+            model_combo.setEnabled(can_edit and bool(provider))
         model_worker = getattr(self, "_litellm_catalog_worker", None)
         model_button = getattr(self, "litellm_refresh_models_btn", None)
         if model_button is not None:
-            model_button.setEnabled(litellm_active and bool(provider))
+            model_button.setEnabled(
+                (can_edit and bool(provider)) or model_worker is not None
+            )
             if model_worker is not None:
                 model_button.setText(
                     "正在取消…"
@@ -2241,7 +2259,7 @@ class LiteLLMSettingsPage(QObject):
                 )
             else:
                 model_button.setText("联网加载模型")
-        credential_enabled = litellm_active and bool(provider) and provider != "ollama"
+        credential_enabled = can_edit and bool(provider) and provider != "ollama"
         manage_keys_btn = getattr(self, "litellm_manage_keys_btn", None)
         if manage_keys_btn is not None:
             manage_keys_btn.setEnabled(credential_enabled)
@@ -2258,9 +2276,8 @@ class LiteLLMSettingsPage(QObject):
         test_button = getattr(self, "litellm_test_connection_btn", None)
         if test_button is not None:
             test_button.setEnabled(
-                litellm_active
-                and bool(provider)
-                and (bool(model) or connection_worker is not None)
+                (can_edit and bool(provider) and bool(model))
+                or connection_worker is not None
             )
             if connection_worker is not None:
                 test_button.setText(
@@ -2274,7 +2291,9 @@ class LiteLLMSettingsPage(QObject):
         version_button = getattr(self, "litellm_check_version_btn", None)
         if version_button is not None:
             # Stay clickable while a check is in flight so the user can stop it.
-            version_button.setEnabled(not installing or version_worker is not None)
+            version_button.setEnabled(
+                (idle and not installing) or version_worker is not None
+            )
             if version_worker is not None:
                 version_button.setText(
                     "正在取消…"
@@ -2283,6 +2302,7 @@ class LiteLLMSettingsPage(QObject):
                 )
             else:
                 version_button.setText("检查更新")
+        self._refresh_custom_provider_actions()
         self._refresh_litellm_credential_status()
         if notify_host and not self._is_loading_config():
             self._notify_backend_gating()

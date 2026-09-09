@@ -4,6 +4,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
 from gui_qt.settings.page_contract import SettingsIssue, SettingsPage, SettingsPageActions
 
@@ -95,6 +97,52 @@ class LiteLLMSettingsPageContractTests(unittest.TestCase):
     def test_focus_issue_targets_owned_widget(self) -> None:
         issue = SettingsIssue("litellm", "litellm_model", "missing")
         self.assertTrue(self.page.focus_issue(issue))
+
+    def test_set_task_running_disables_config_and_long_task_controls(self) -> None:
+        self.page.load(
+            {
+                "sync_backend": "litellm",
+                "litellm_model": "openai/gpt-test",
+            }
+        )
+        self.assertTrue(self.page.sync_backend_combo.isEnabled())
+        self.assertTrue(self.page.litellm_test_connection_btn.isEnabled())
+        self.assertTrue(self.page.litellm_check_version_btn.isEnabled())
+        self.assertTrue(self.page.litellm_refresh_providers_btn.isEnabled())
+        self.assertTrue(self.page.custom_provider_add_btn.isEnabled())
+
+        self.page.set_task_running(True)
+        self.assertFalse(self.page.sync_backend_combo.isEnabled())
+        self.assertFalse(self.page.litellm_test_connection_btn.isEnabled())
+        self.assertFalse(self.page.litellm_check_version_btn.isEnabled())
+        self.assertFalse(self.page.litellm_refresh_providers_btn.isEnabled())
+        self.assertFalse(self.page.custom_provider_add_btn.isEnabled())
+
+        self.page.set_task_running(False)
+        self.assertTrue(self.page.sync_backend_combo.isEnabled())
+        self.assertTrue(self.page.litellm_test_connection_btn.isEnabled())
+        self.assertTrue(self.page.litellm_check_version_btn.isEnabled())
+        self.assertTrue(self.page.litellm_refresh_providers_btn.isEnabled())
+        self.assertTrue(self.page.custom_provider_add_btn.isEnabled())
+
+    def test_set_task_running_keeps_in_flight_stop_buttons_enabled(self) -> None:
+        self.page.load(
+            {
+                "sync_backend": "litellm",
+                "litellm_model": "openai/gpt-test",
+            }
+        )
+        worker = mock.Mock()
+        worker.is_cancelled.return_value = False
+        worker.isRunning.return_value = True
+        self.page._litellm_connection_worker = worker
+        self.page._litellm_version_worker = worker
+        self.page.set_task_running(True)
+        self.assertTrue(self.page.litellm_test_connection_btn.isEnabled())
+        self.assertTrue(self.page.litellm_check_version_btn.isEnabled())
+        self.assertFalse(self.page.sync_backend_combo.isEnabled())
+        self.page._litellm_connection_worker = None
+        self.page._litellm_version_worker = None
 
     def test_immediate_actions_go_through_injected_callbacks(self) -> None:
         calls: list[tuple[str, dict]] = []
