@@ -13927,7 +13927,40 @@ class MainWindow(QMainWindow):
                     if context_page is not None and (
                         want is None or "context" in want
                     ):
-                        context_page.load(context_page.collect())
+                        storage_config = self._config_section(
+                            config, "context_storage"
+                        )
+                        storage_location = normalize_context_storage_location(
+                            storage_config.get(
+                                "location",
+                                config.get("context_storage_location", ""),
+                            )
+                        )
+                        context_snapshot = {
+                            "rag_enabled": project_flags["rag_enabled"],
+                            "source_index_enabled": project_flags[
+                                "source_index_enabled"
+                            ],
+                            "bootstrap_on_build": project_flags[
+                                "bootstrap_on_build"
+                            ],
+                            "sync_source_index_enabled": bool(
+                                project_flags.get("sync_source_index_enabled")
+                            ),
+                            "sync_project_analysis_inject_enabled": bool(
+                                project_flags.get(
+                                    "sync_project_analysis_inject_enabled"
+                                )
+                            ),
+                            "context_storage_location": storage_location,
+                        }
+                        for key in context_page.config_keys:
+                            if (
+                                key in advanced_values
+                                and key not in context_snapshot
+                            ):
+                                context_snapshot[key] = advanced_values[key]
+                        context_page.load(context_snapshot)
 
             if want is None or "project" in want:
                 # Project page is mostly read-only labels; refresh if present.
