@@ -335,9 +335,38 @@ from .settings_schema import (
     resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
 )
+from .settings.coordinator import SettingsCoordinator
+from .settings.legacy import LegacySettingsPageAdapter
+from .settings.page_contract import SettingsIssue, SettingsPageActions
+from .settings.registry import (
+    CONFIG_SNAPSHOT_KEYS_BY_PAGE as _CONFIG_SNAPSHOT_KEYS_BY_PAGE,
+    SETTINGS_CONFIG_PAGE_KEYS as _SETTINGS_CONFIG_PAGE_KEYS,
+    SETTINGS_LAZY_ATTR_TO_PAGE as _SETTINGS_LAZY_ATTR_TO_PAGE,
+    SETTINGS_PAGE_SPECS as _SETTINGS_PAGE_SPECS,
+    WORKSPACE_MANAGED_KEYS as _SETTINGS_WORKSPACE_MANAGED_KEYS,
+    build_default_registry,
+)
 
-# Selected on 设置 → 项目列表; shown read-only on 设置 → 项目.
-_SETTINGS_WORKSPACE_MANAGED_KEYS = frozenset({"game_root"})
+# Legacy flat-key -> widget attribute for coordinator error focus. Migrated
+# pages will own this mapping themselves; this table keeps unmigrated pages
+# usable until then.
+_LEGACY_SETTINGS_WIDGET_BY_KEY: dict[str, str] = {
+    "theme": "theme_combo",
+    "sync_model": "sync_model_combo",
+    "sync_embedding_model": "sync_embedding_combo",
+    "batch_model": "batch_model_combo",
+    "batch_embedding_model": "batch_embedding_combo",
+    "batch_thinking_level": "batch_thinking_combo",
+    "sync_backend": "sync_backend_combo",
+    "litellm_model": "litellm_model_combo",
+    "custom_litellm_providers": "custom_provider_table",
+    "rag_enabled": "rag_enabled_cb",
+    "source_index_enabled": "source_index_enabled_cb",
+    "bootstrap_on_build": "bootstrap_on_build_cb",
+    "sync_source_index_enabled": "sync_source_index_enabled_cb",
+    "sync_project_analysis_inject_enabled": "sync_inject_published_brief_cb",
+    "context_storage_location": "context_storage_game_cb",
+}
 from .translation_workflow import WorkflowUpdate
 from .widget_helpers import (
     message_box_information,
@@ -457,116 +486,6 @@ _SHELL_TASK_ROUTES = tuple(
 
 # Settings sections: (key, nav label, builder method name).
 # Pages are built on first visit (or when config load/save needs them).
-_SETTINGS_PAGE_SPECS: tuple[tuple[str, str, str], ...] = (
-    ("workspace", "项目列表", "_build_settings_workspace_page"),
-    ("project", "项目", "_build_settings_project_page"),
-    ("api_keys", "密钥", "_build_settings_api_keys_page"),
-    ("models", "模型", "_build_settings_models_page"),
-    ("litellm", "LiteLLM", "_build_settings_litellm_page"),
-    ("extensions", "扩展", "_build_settings_extensions_page"),
-    ("context", "上下文", "_build_settings_context_page"),
-    ("appearance", "外观", "_build_settings_appearance_page"),
-    ("shortcuts", "快捷键", "_build_settings_shortcuts_page"),
-    ("advanced", "高级", "_build_settings_advanced_page"),
-)
-# Sections that hold translator_config / dirty-snapshot fields.
-_SETTINGS_CONFIG_PAGE_KEYS = frozenset(
-    {
-        "project",
-        "api_keys",
-        "models",
-        "litellm",
-        "context",
-        "appearance",
-        "advanced",
-    }
-)
-# Flat dirty-snapshot keys owned by each config section (not advanced fields).
-_CONFIG_SNAPSHOT_KEYS_BY_PAGE: dict[str, frozenset[str]] = {
-    "context": frozenset(
-        {
-            "rag_enabled",
-            "source_index_enabled",
-            "bootstrap_on_build",
-            "sync_source_index_enabled",
-            "sync_project_analysis_inject_enabled",
-            "context_storage_location",
-            *PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
-        }
-    ),
-    "models": frozenset(
-        {
-            "sync_model",
-            "batch_model",
-            "sync_embedding_model",
-            "batch_embedding_model",
-            "batch_thinking_level",
-        }
-    ),
-    "litellm": frozenset(
-        {
-            "sync_backend",
-            "litellm_model",
-            "custom_litellm_providers",
-        }
-    ),
-    "appearance": frozenset({"theme"}),
-}
-# Attribute → settings section for lazy materialization (tests + direct access).
-_SETTINGS_LAZY_ATTR_TO_PAGE: dict[str, str] = {
-    "_games_registry_panel": "workspace",
-    "api_status_label": "api_keys",
-    "api_btn": "api_keys",
-    "litellm_keys_provider_combo": "api_keys",
-    "litellm_keys_status_label": "api_keys",
-    "litellm_keys_manage_btn": "api_keys",
-    "settings_project_root_value": "project",
-    "settings_go_workspace_btn": "project",
-    "rag_enabled_cb": "context",
-    "source_index_enabled_cb": "context",
-    "bootstrap_on_build_cb": "context",
-    "sync_source_index_enabled_cb": "context",
-    "sync_inject_published_brief_cb": "context",
-    "context_storage_game_cb": "context",
-    "sync_model_combo": "models",
-    "sync_embedding_combo": "models",
-    "batch_model_combo": "models",
-    "batch_embedding_combo": "models",
-    "batch_thinking_combo": "models",
-    "sync_backend_combo": "litellm",
-    "litellm_provider_combo": "litellm",
-    "litellm_refresh_providers_btn": "litellm",
-    "litellm_clear_provider_btn": "litellm",
-    "litellm_provider_catalog_status_label": "litellm",
-    "litellm_model_combo": "litellm",
-    "litellm_refresh_models_btn": "litellm",
-    "litellm_catalog_status_label": "litellm",
-    "sync_backend_hint": "litellm",
-    "litellm_version_label": "litellm",
-    "litellm_check_version_btn": "litellm",
-    "install_litellm_btn": "litellm",
-    "litellm_install_progress": "litellm",
-    "litellm_credentials_box": "litellm",
-    "litellm_provider_label": "litellm",
-    "litellm_manage_keys_btn": "litellm",
-    "litellm_credential_status_label": "litellm",
-    "litellm_test_connection_btn": "litellm",
-    "litellm_connection_status_label": "litellm",
-    "custom_provider_table": "litellm",
-    "custom_provider_add_btn": "litellm",
-    "custom_provider_edit_btn": "litellm",
-    "custom_provider_delete_btn": "litellm",
-    "custom_provider_status_label": "litellm",
-    "relation_analyzer_status_label": "extensions",
-    "relation_analyzer_failure_label": "extensions",
-    "relation_analyzer_install_btn": "extensions",
-    "relation_analyzer_docs_btn": "extensions",
-    "relation_analyzer_install_progress": "extensions",
-    "theme_combo": "appearance",
-    "font_install_status_label": "appearance",
-    "download_fonts_btn": "appearance",
-    "font_install_progress": "appearance",
-}
 
 
 def _workflow_output_updates_writeback(step_key: str, output: str) -> bool:
@@ -3142,6 +3061,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.settings_stack, 1)
 
         self._settings_pages_built = set()
+        self._settings_registry = build_default_registry()
         self._settings_page_builders: dict[str, str] = {
             key: builder for key, _label, builder in _SETTINGS_PAGE_SPECS
         }
@@ -3153,6 +3073,18 @@ class MainWindow(QMainWindow):
             placeholder.setObjectName(f"settings_{key}_placeholder")
             self._style_themed_surface(placeholder)
             self.settings_stack.addWidget(placeholder)
+        self._settings_coordinator = SettingsCoordinator(
+            self._settings_registry,
+            builder=self._build_settings_page_adapter,
+            show_page=self._show_settings_page_by_key,
+            on_page_built=self._install_settings_page,
+            actions=SettingsPageActions(
+                save=self._request_settings_save,
+                reload=self._request_settings_reload,
+                navigate=self._focus_settings_section,
+                show_status=self._show_settings_status,
+            ),
+        )
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
 
         action_bar = QFrame()
@@ -3209,12 +3141,18 @@ class MainWindow(QMainWindow):
 
     def __getattr__(self, name: str) -> Any:
         """Materialize lazy settings pages when tests/code access their widgets."""
-        if name.startswith("_") and name not in _SETTINGS_LAZY_ATTR_TO_PAGE:
+        # Use __dict__ directly: getattr(self, ...) would re-enter __getattr__
+        # while MainWindow is still being constructed.
+        registry = self.__dict__.get("_settings_registry")
+        if registry is not None:
+            page_key = registry.page_for_lazy_attr(name)
+        else:
+            page_key = _SETTINGS_LAZY_ATTR_TO_PAGE.get(name)
+        if name.startswith("_") and page_key is None:
             raise AttributeError(
                 f"{type(self).__name__!s} has no attribute {name!r}"
             )
-        page_key = _SETTINGS_LAZY_ATTR_TO_PAGE.get(name)
-        if page_key is None or getattr(self, "_settings_lazy_resolving", False):
+        if page_key is None or self.__dict__.get("_settings_lazy_resolving", False):
             raise AttributeError(
                 f"{type(self).__name__!s} has no attribute {name!r}"
             )
@@ -3236,12 +3174,93 @@ class MainWindow(QMainWindow):
         """True when the full settings shell exists (not a MainWindow.__new__ stub)."""
         return bool(
             getattr(self, "_settings_page_builders", None)
+            and getattr(self, "_settings_registry", None) is not None
+            and getattr(self, "_settings_coordinator", None) is not None
             and getattr(self, "settings_stack", None) is not None
             and "state" in self.__dict__
         )
 
+    def _build_settings_page_adapter(self, spec):
+        """Build one legacy page adapter for the coordinator."""
+        builder = getattr(self, spec.builder_name, None)
+        if not callable(builder):
+            return None
+        widget = builder()
+        if widget is None:
+            return None
+        return LegacySettingsPageAdapter(self, spec, widget)
+
+    def _install_settings_page(self, spec, page_adapter) -> None:
+        """Swap a freshly built page into the settings stack."""
+        widget = getattr(page_adapter, "widget", page_adapter)
+        rows = getattr(self, "_settings_nav_rows", {})
+        stack = getattr(self, "settings_stack", None)
+        index = rows.get(spec.key)
+        if index is None or stack is None:
+            return
+        old = stack.widget(index)
+        current_index = stack.currentIndex()
+        if old is not None:
+            stack.removeWidget(old)
+            old.deleteLater()
+        stack.insertWidget(index, widget)
+        if current_index == index:
+            stack.setCurrentIndex(index)
+        self._settings_pages_built.add(spec.key)
+
+    def _show_settings_page_by_key(self, key: str) -> None:
+        index = getattr(self, "_settings_nav_rows", {}).get(key)
+        stack = getattr(self, "settings_stack", None)
+        if index is not None and stack is not None:
+            stack.setCurrentIndex(index)
+
+    def _request_settings_save(self) -> None:
+        self._on_save_config()
+
+    def _request_settings_reload(self) -> None:
+        self._on_reload_config()
+
+    def _legacy_settings_page_load(self, page_key: str, snapshot) -> None:
+        """Compatibility load for unmigrated pages.
+
+        Legacy pages still read the raw config once for the requested section;
+        migrated pages consume the flat snapshot directly. This keeps the
+        adapter honest about the transition without copying dirty/save state.
+        """
+        self._load_config_to_ui(refresh_task_gates=False, pages={page_key})
+
+    def _legacy_settings_page_collect(self, page_key: str) -> dict[str, object]:
+        keys = self._settings_registry.config_keys_for(page_key)
+        current = self._current_config_ui_snapshot()
+        return {key: current[key] for key in keys if key in current}
+
+    def _legacy_settings_page_validate(self, page_key: str) -> list[SettingsIssue]:
+        """Shared advanced validation stays in the single save transaction."""
+        return []
+
+    def _legacy_settings_page_reset(self, page_key: str) -> None:
+        self._load_config_to_ui(refresh_task_gates=False, pages={page_key})
+
+    def _legacy_settings_page_focus(self, page_key: str, field_key: str) -> bool:
+        self._focus_settings_section(page_key)
+        widget = getattr(self, "_advanced_setting_widgets", {}).get(field_key)
+        if widget is None:
+            widget_name = _LEGACY_SETTINGS_WIDGET_BY_KEY.get(field_key)
+            if widget_name is not None:
+                widget = self._settings_widget(widget_name)
+        if widget is not None and hasattr(widget, "setFocus"):
+            widget.setFocus()
+            return True
+        return False
+
+    def _legacy_settings_page_set_task_running(
+        self, page_key: str, running: bool
+    ) -> None:
+        if "settings_action_context_label" in self.__dict__:
+            self._sync_settings_action_bar_enabled(task_running=running)
+
     def _ensure_settings_page(self, key: str, *, populate: bool = True) -> None:
-        """Build one settings section and swap it into the settings stack.
+        """Build one settings section through the coordinator on first visit.
 
         Visiting a config section only materializes that section. Building every
         config page at once made tab switches hitch after Advanced grew heavier.
@@ -3251,30 +3270,14 @@ class MainWindow(QMainWindow):
         if not self._settings_lazy_ready():
             return
         built = getattr(self, "_settings_pages_built", None)
-        if built is None:
+        if built is None or key in built:
             return
-        if key in built:
+        coordinator = self._settings_coordinator
+        if not coordinator.registry.has(key):
             return
-        builders = getattr(self, "_settings_page_builders", {})
-        builder_name = builders.get(key)
-        rows = getattr(self, "_settings_nav_rows", {})
-        index = rows.get(key)
-        stack = getattr(self, "settings_stack", None)
-        if builder_name is None or index is None or stack is None:
+        adapter = coordinator.ensure_page(key)
+        if adapter is None:
             return
-        builder = getattr(self, builder_name, None)
-        if not callable(builder):
-            return
-        page = builder()
-        old = stack.widget(index)
-        current_index = stack.currentIndex()
-        if old is not None:
-            stack.removeWidget(old)
-            old.deleteLater()
-        stack.insertWidget(index, page)
-        if current_index == index:
-            stack.setCurrentIndex(index)
-        built.add(key)
         if key == "models":
             self._wire_settings_models_signals()
         if key == "workspace":
@@ -3284,24 +3287,27 @@ class MainWindow(QMainWindow):
                 set_gate = getattr(panel, "set_host_task_running", None)
                 if callable(set_gate):
                     set_gate(True)
+        is_config_page = key in _SETTINGS_CONFIG_PAGE_KEYS
         # Only fill the page we just built — never re-run a full config pass on
         # every tab visit (that re-read disk + re-applied theme and felt laggy).
         if (
             populate
-            and key in _SETTINGS_CONFIG_PAGE_KEYS
+            and is_config_page
             and not getattr(self, "_loading_config_to_ui", False)
         ):
             self._load_config_to_ui(refresh_task_gates=False, pages={key})
             if key == "api_keys" and "api_status_label" in self.__dict__:
                 self._refresh_api_status()
                 self._refresh_litellm_keys_page_status()
+        if not is_config_page or populate:
+            self._settings_coordinator.mark_loaded(key)
 
     def _ensure_settings_pages_for_config(self) -> None:
         """Ensure every section that participates in config load/save/dirty.
 
         Used by save/reload/restore — not by ordinary settings-tab navigation.
-        When some config pages are already open, preserve their current UI values
-        across the full materialization so save does not clobber in-progress edits.
+        Only already-loaded pages contribute a preserve snapshot, so a newly
+        materialized page can never turn its defaults into "user edits".
         """
         if not self._settings_lazy_ready():
             return
@@ -3314,15 +3320,24 @@ class MainWindow(QMainWindow):
         if not pending:
             return
         preserve: dict[str, object] | None = None
-        if built.intersection(_SETTINGS_CONFIG_PAGE_KEYS) and not getattr(
-            self, "_loading_config_to_ui", False
-        ):
-            preserve = self._current_config_ui_snapshot()
+        loading = getattr(self, "_loading_config_to_ui", False)
+        if not loading:
+            loaded_pages = built.intersection(
+                self._settings_coordinator.loaded_keys()
+            )
+            if loaded_pages:
+                owned_keys = self._config_snapshot_keys_for_pages(loaded_pages)
+                current = self._current_config_ui_snapshot()
+                preserve = {
+                    key: value
+                    for key, value in current.items()
+                    if key in owned_keys
+                }
         for key in pending:
             self._ensure_settings_page(key, populate=False)
-        if not getattr(self, "_loading_config_to_ui", False):
+        if not loading:
             self._load_config_to_ui(refresh_task_gates=False)
-            if preserve is not None:
+            if preserve:
                 self._restore_config_ui_snapshot(preserve)
             if "api_status_label" in self.__dict__:
                 self._refresh_api_status()
@@ -11234,7 +11249,13 @@ class MainWindow(QMainWindow):
                 break
         if key is not None:
             self._ensure_settings_page(key)
-        self.settings_stack.setCurrentIndex(row)
+            coordinator = getattr(self, "_settings_coordinator", None)
+            if coordinator is not None:
+                coordinator.activate(key)
+            else:
+                self.settings_stack.setCurrentIndex(row)
+        else:
+            self.settings_stack.setCurrentIndex(row)
         self._sync_settings_action_bar_enabled(task_running=self._task_running, nav_row=row)
         if self._settings_nav_rows.get("workspace") == row and self._is_config_tab_active():
             self._activate_workspace_registry_section()
@@ -11556,6 +11577,9 @@ class MainWindow(QMainWindow):
 
     def _config_snapshot_keys_for_pages(self, pages: set[str]) -> set[str]:
         """Dirty-snapshot keys owned by the given settings sections."""
+        registry = getattr(self, "_settings_registry", None)
+        if registry is not None:
+            return set(registry.config_keys_for_pages(pages))
         keys: set[str] = set()
         for page in pages:
             keys.update(_CONFIG_SNAPSHOT_KEYS_BY_PAGE.get(page, ()))
@@ -11777,10 +11801,16 @@ class MainWindow(QMainWindow):
                 key: snapshot[key] for key in advanced_keys if key in snapshot
             }
             if advanced_values and self.__dict__.get("_advanced_setting_widgets"):
-                # Merge onto defaults so partial snapshots still apply cleanly.
+                # Merge onto defaults so partial snapshots still apply cleanly,
+                # but only write the keys actually present in the snapshot.
+                # Writing every advanced widget here used to clobber pages that
+                # were materialized after the snapshot with recommended values.
                 merged = recommended_advanced_settings()
                 merged.update(advanced_values)
-                self._load_advanced_settings_to_ui(merged)
+                self._load_advanced_settings_to_ui(
+                    merged,
+                    keys=frozenset(advanced_values),
+                )
         finally:
             self._loading_config_to_ui = previous_loading
 
@@ -13723,6 +13753,9 @@ class MainWindow(QMainWindow):
         )
         self._update_split_submit_btn(running=running)
         self._sync_settings_action_bar_enabled(task_running=running)
+        coordinator = getattr(self, "_settings_coordinator", None)
+        if coordinator is not None:
+            coordinator.set_task_running(running)
         writeback_summary = self._current_writeback_summary()
         self.apply_btn.setEnabled(
             not running
@@ -15065,7 +15098,12 @@ class MainWindow(QMainWindow):
                     if backend_combo is not None:
                         self._on_sync_backend_changed(backend_idx)
 
-            if want is None or "advanced" in want or "context" in want:
+            if (
+                want is None
+                or "advanced" in want
+                or "context" in want
+                or "project" in want
+            ):
                 advanced_values = read_advanced_settings(config)
                 project_flags = read_batch_context_flags(
                     config,
@@ -15084,14 +15122,15 @@ class MainWindow(QMainWindow):
                 ):
                     advanced_values["game_root"] = str(current_game_root)
                 if self.__dict__.get("_advanced_setting_widgets"):
-                    context_only = (
-                        want is not None
-                        and "context" in want
-                        and "advanced" not in want
+                    registry = getattr(self, "_settings_registry", None)
+                    advanced_keys = (
+                        registry.config_keys_for_pages(want)
+                        if want is not None and registry is not None
+                        else None
                     )
                     self._load_advanced_settings_to_ui(
                         advanced_values,
-                        keys=CONTEXT_PRIMARY_SETTING_KEYS if context_only else None,
+                        keys=advanced_keys,
                     )
                     self._clear_advanced_setting_errors()
 
@@ -15113,6 +15152,17 @@ class MainWindow(QMainWindow):
             # Partial tab loads must not rewrite the whole baseline — that would
             # treat dirty widgets on other open pages as "already saved".
             self._update_config_ui_saved_snapshot(pages=want)
+        coordinator = getattr(self, "_settings_coordinator", None)
+        if coordinator is not None:
+            built = getattr(self, "_settings_pages_built", set())
+            if want is None:
+                for key in _SETTINGS_CONFIG_PAGE_KEYS:
+                    if key in built:
+                        coordinator.mark_loaded(key)
+            else:
+                for key in want:
+                    if key in _SETTINGS_CONFIG_PAGE_KEYS and key in built:
+                        coordinator.mark_loaded(key)
         # A settings page load can pass through a transient "unsaved changes"
         # state (for example while cached LiteLLM selections are populated
         # before the saved baseline is captured).  Re-sync the workspace action

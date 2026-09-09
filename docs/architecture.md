@@ -3,8 +3,9 @@
 本文描述当前 `main` 的维护者边界。面向使用者的操作步骤以快速开始和工作流文档为准；
 规划中的结构以 `docs/plans/` 为准。
 
-> 2026-09-09（#202 Phase A）核对：`gui_qt/settings/` 与 `SettingsCoordinator` **尚未实现**。
-> 本文明确区分 as-is 与 target；target 结构只作为 Phase B 接入合同，不代表已交付。
+> 2026-09-09（#202 Phase A/B）核对：Phase A 文档已合并；Phase B 已落地
+> `gui_qt/settings/` 的 page contract、registry、coordinator 与 legacy adapter。页面迁移（C/D）
+> 仍未开始；`MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护。
 
 ## 分层
 
@@ -60,10 +61,12 @@
 
 `MainWindow` 仍是 Settings 的实际所有者：
 
-- 10 个页面由 `_SETTINGS_PAGE_SPECS` 登记，按 `_ensure_settings_page` / `__getattr__` lazy materialize；
-  普通切页只补建目标页，保存/重载才经 `_ensure_settings_pages_for_config` 补建全部配置页。
-- `_load_config_to_ui` 负责把 `translator_config.json` 推入控件，`_current_config_ui_snapshot` /
-  `_config_ui_saved_snapshot` 负责 dirty 基线，`_on_save_config` 是唯一保存总事务。
+- 10 个页面由 `gui_qt/settings/registry.py` 的 `SettingsPageSpec` 登记；`SettingsCoordinator`
+  负责页面身份、延迟补建与切换，普通切页只补建目标页。未迁移页面通过
+  `LegacySettingsPageAdapter` 继续使用现有 builder 与控件。
+- `_load_config_to_ui` 负责把 `translator_config.json` 推入控件；项目页首次 materialize 会加载其
+  owned advanced 字段。`_current_config_ui_snapshot` / `_config_ui_saved_snapshot` 仍是 dirty
+  基线，`_on_save_config` 仍是唯一保存总事务。
 - `_confirm_unsaved_config_before_workflow` / `_confirm_unsaved_config_before_registry_switch` /
   `_confirm_unsaved_config_before_close` / `_confirm_leave_config_tab` 覆盖启动任务、切换项目、
   关闭窗口和离开设置页的保护。
@@ -72,28 +75,34 @@
 - LiteLLM、字体、安装、工作区刷新等局部任务由 `MainWindow` 属性与私有回调持有，页面尚不能
   脱离整窗构造或测试。
 
-已核对的 as-is 缺口（Phase B 处理，不在 Phase A 修行为）：
+Phase B 已消除的 as-is 缺口：
 
-- `_load_config_to_ui(pages={"project"})` 不填充项目页 advanced 字段，首次单独打开会看到默认值；
-- `_CONFIG_SNAPSHOT_KEYS_BY_PAGE` 缺少 `project` / `api_keys`，而 `advanced` 键集合包含上下文主开关；
-- builder 直接写 `self.<widget>` 与共享 `_advanced_setting_widgets`，页面依赖整窗私有属性；
-- load/collect/validate/dirty/save/错误聚焦没有页面级 adapter 接口；
+- 项目页首次单独打开不填充 advanced 字段（`_load_config_to_ui` 现按 registry 键加载 project 页）；
+- dirty 键所有权重叠（registry 强制一键一主，`advanced` 不再包含 context 主开关）；
+- 补建页面被 preserve/restore 用推荐值覆盖（只恢复已加载页面、且只回写快照中存在的 advanced 键）；
+- 页面级 load/collect/validate/reset/错误聚焦接口缺失（coordinator + contract 已提供）。
+
+仍未消除（Phase C/D）：
+
+- 10 页仍通过 `LegacySettingsPageAdapter` 依赖 `MainWindow` builder 与私有状态，页面本身尚不能
+  独立构造；legacy adapter 的 `validate()` 仍返回空列表，共享 advanced 校验继续由旧保存事务负责。
 - 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
 
 完整页面清单、字段/即时持久化所有权与测试入口见
 [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
-### target（#202 Phase B 接入合同，尚未实现）
+### target（#202 Phase B 最小接线已落地；页面迁移属于 C/D）
 
-目标目录：
+已落地目录：
 
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`；
   冻结 `load/collect/validate/reset/focus_issue/set_task_running` 与 `config_keys` 单一所有权。
-- `gui_qt/settings/registry.py`：页面登记与 lazy builder；强制一键一主，禁止两页复制 dirty/save。
-- `gui_qt/settings/coordinator.py`：页内导航、load/collect/validate/dirty/save、离开保护、
-  错误聚焦、项目切换失效与 worker 生命周期接线。
-- `MainWindow`：收敛为应用壳与顶层装配，保留全局 `settings` route、header/sidebar、全局任务锁、
-  runner/log、主题应用和 shutdown 协调。
+- `gui_qt/settings/registry.py`：页面登记、唯一配置键所有权与 lazy 属性映射；强制一键一主。
+- `gui_qt/settings/coordinator.py`：页内导航、lazy 构建、load/collect/validate/reset、错误聚焦与
+  任务锁分发；不依赖 Qt，可脱离 `MainWindow` 测试。
+- `gui_qt/settings/legacy.py`：未迁移页面的兼容 adapter。
+- `MainWindow`：仍保留全局 `settings` route、header/sidebar、全局任务锁、runner/log、主题应用、
+  唯一保存事务与 shutdown 协调；页面 builder 与保存编排在 C/D 继续迁出。
 
 页面只拥有控件、字段读写映射、局部校验和动作；页面通过显式 callback 与宿主交互，不读取其他
 页面控件，也不依赖整窗私有属性才能独立构造。过渡期允许旧页面 adapter，但同一行为只能有一个
