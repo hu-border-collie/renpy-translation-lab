@@ -1,7 +1,7 @@
 """Basic SettingField widgets shared by migrated Settings pages (#202 Phase D).
 
-Specialized Gemini catalog/checklist widgets stay on MainWindow until those
-pages migrate. This module only covers bool/int/float/str/text/list/json.
+Gemini catalog extras and rotation-checklist widgets live in
+``gemini_catalog_widgets.py``. This module covers bool/int/float/str/text/list/json.
 """
 from __future__ import annotations
 

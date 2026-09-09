@@ -327,7 +327,6 @@ from .settings_schema import (
     SettingField,
     allowed_gemini_rotation_models,
     apply_advanced_settings,
-    grouped_advanced_fields,
     read_advanced_settings,
     recommended_advanced_settings,
     resolve_project_analysis_flags_for_save,
@@ -352,10 +351,16 @@ from .settings.models_page import (
 )
 from .settings.project_page import ProjectSettingsPage
 from .settings.context_page import ContextSettingsPage
+from .settings.advanced_page import AdvancedSettingsPage
 from .settings.field_widgets import (
-    create_basic_setting_widget,
     format_setting_text,
-    setting_placeholder,
+)
+from .settings.gemini_catalog_widgets import (
+    gemini_catalog_list_values,
+    gemini_model_checklist_values,
+    refresh_gemini_model_checklist,
+    set_gemini_catalog_list_values,
+    set_gemini_model_checklist_values,
 )
 from .settings.registry import (
     CONFIG_SNAPSHOT_KEYS_BY_PAGE as _CONFIG_SNAPSHOT_KEYS_BY_PAGE,
@@ -3193,6 +3198,8 @@ class MainWindow(QMainWindow):
             return self._create_project_settings_page()
         if spec.key == "context":
             return self._create_context_settings_page()
+        if spec.key == "advanced":
+            return self._create_advanced_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3788,6 +3795,9 @@ class MainWindow(QMainWindow):
     def _context_page(self):
         return self.__dict__.get("_context_settings_page")
 
+    def _advanced_page(self):
+        return self.__dict__.get("_advanced_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3805,6 +3815,23 @@ class MainWindow(QMainWindow):
         bodies = getattr(self, "_settings_page_bodies", None)
         if isinstance(bodies, dict):
             bodies["settings_context"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        return page
+
+    def _create_advanced_settings_page(self):
+        """Build the migrated Advanced Settings page and alias its widgets."""
+        existing = self._advanced_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            return existing
+        page = AdvancedSettingsPage(self)
+        self.__dict__["_advanced_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_advanced"] = page.body
         for surface in (page.widget, page.widget.viewport(), page.body):
             if surface is not None:
                 self._style_themed_surface(surface)
@@ -4459,138 +4486,8 @@ class MainWindow(QMainWindow):
         return page
 
     def _build_settings_advanced_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_advanced")
-        hint = QLabel(
-            "高级设置会直接影响请求大小、上下文注入和本地上下文路径。"
-            "无效字段会在本页标出，并阻止保存。"
-        )
-        hint.setWordWrap(True)
-        hint.setObjectName("config_hint_label")
-        layout.addWidget(hint)
-
-        skipped_categories = {
-            "项目与资源",
-            "准备流程",
-            CONTEXT_PRIMARY_SETTING_CATEGORY,
-        }
-        for group_title, fields in grouped_advanced_fields(
-            include_context_primary=False,
-        ):
-            if group_title in skipped_categories:
-                continue
-            if group_title == "模型目录":
-                layout.addWidget(self._build_model_catalog_group(fields))
-                continue
-            group = QGroupBox(group_title)
-            form = self._settings_form(group)
-            for field in fields:
-                if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
-                    continue
-                widget = self._create_advanced_setting_widget(field)
-                self._advanced_setting_widgets[field.key] = widget
-                row = self._advanced_setting_row(field, widget)
-                form.addRow(f"{field.label}：", row)
-            if form.rowCount() == 0:
-                group.deleteLater()
-                continue
-            layout.addWidget(group)
-        layout.addStretch(1)
-        return page
-
-    def _build_model_catalog_group(self, fields: tuple[SettingField, ...]) -> QWidget:
-        """Compact add/remove editors for custom Gemini catalog models."""
-        group = QGroupBox("模型目录")
-        outer = QVBoxLayout(group)
-        outer.setContentsMargins(14, 18, 14, 14)
-        outer.setSpacing(12)
-
-        intro = QLabel(
-            "扩展「设置 → 模型」下拉可选的自定义模型。内置模型始终可用，无需在此添加。"
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("config_hint_label")
-        outer.addWidget(intro)
-
-        for field in fields:
-            if field.key in CONTEXT_PRIMARY_SETTING_KEYS:
-                continue
-            widget = self._create_advanced_setting_widget(field)
-            self._advanced_setting_widgets[field.key] = widget
-            section = QWidget()
-            section_layout = QVBoxLayout(section)
-            section_layout.setContentsMargins(0, 0, 0, 0)
-            section_layout.setSpacing(4)
-            title = QLabel(field.label)
-            title.setObjectName("settings_description_label")
-            section_layout.addWidget(title)
-            section_layout.addWidget(widget)
-            error = QLabel()
-            error.setWordWrap(True)
-            error.setObjectName("settings_error_label")
-            self._advanced_setting_error_labels[field.key] = error
-            section_layout.addWidget(error)
-            outer.addWidget(section)
-        return group
-
-    def _advanced_setting_row(self, field: SettingField, widget: QWidget) -> QWidget:
-        row = QWidget()
-        row_layout = QVBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(4)
-        if field.key == "prepare_renpy_sdk_dir" and isinstance(widget, QLineEdit):
-            row_layout.addWidget(self._wrap_renpy_sdk_path_widget(widget))
-        else:
-            row_layout.addWidget(widget)
-
-        desc = QLabel(field.description)
-        desc.setWordWrap(True)
-        desc.setObjectName("settings_description_label")
-        row_layout.addWidget(desc)
-
-        error = QLabel()
-        error.setWordWrap(True)
-        error.setObjectName("settings_error_label")
-        self._advanced_setting_error_labels[field.key] = error
-        row_layout.addWidget(error)
-        return row
-
-    def _wrap_renpy_sdk_path_widget(self, line_edit: QLineEdit) -> QWidget:
-        """Path field + browse/find actions for prepare.renpy_sdk_dir."""
-        host = QWidget()
-        host.setObjectName("prepare_renpy_sdk_path_row")
-        layout = QHBoxLayout(host)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        layout.addWidget(line_edit, 1)
-
-        browse_btn = QPushButton("浏览…")
-        browse_btn.setObjectName("secondary_btn")
-        browse_btn.setToolTip("手动选择包含 renpy.py 的 Ren'Py SDK 目录。")
-        browse_btn.clicked.connect(lambda: self._on_browse_renpy_sdk_dir(line_edit))
-        layout.addWidget(browse_btn)
-
-        find_btn = QPushButton("查找 SDK")
-        find_btn.setObjectName("secondary_btn")
-        find_btn.setToolTip(
-            "仅在点击后才会扫描：当前项目、已选工作区与工具附近的 renpy-*-sdk / renpy.py。"
-            "平时加载配置与 prepare 不会自动搜其它目录。找到后填入（多结果时可选）。"
-        )
-        find_btn.clicked.connect(lambda: self._on_find_renpy_sdk_dir(line_edit))
-        layout.addWidget(find_btn)
-
-        download_btn = QPushButton("下载推荐 SDK…")
-        download_btn.setObjectName("secondary_btn")
-        download_btn.setToolTip(
-            "仅在确认后从官方 renpy.org 下载本工具维护的推荐稳定版 SDK。"
-            "不会因打开本页或运行 prepare 自动联网。下载中可再次点击取消。"
-        )
-        download_btn.clicked.connect(lambda: self._on_download_recommended_sdk(line_edit))
-        layout.addWidget(download_btn)
-
-        self._prepare_renpy_sdk_find_btn = find_btn
-        self._prepare_renpy_sdk_browse_btn = browse_btn
-        self._prepare_renpy_sdk_download_btn = download_btn
-        return host
+        page = self._advanced_page() or self._create_advanced_settings_page()
+        return page.widget
 
     def _on_browse_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
         current = line_edit.text().strip()
@@ -5071,142 +4968,11 @@ class MainWindow(QMainWindow):
         combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         add_editable_combo_popup_action(combo)
 
-    def _create_advanced_setting_widget(self, field: SettingField) -> QWidget:
-        if field.kind == "gemini_model_list":
-            return self._create_gemini_model_checklist()
-        if field.kind == "gemini_catalog_list":
-            kind = (
-                "embedding"
-                if field.key == "catalog_gemini_embedding_models"
-                else "translation"
-            )
-            return self._create_gemini_catalog_list_editor(kind=kind)
-        widget = create_basic_setting_widget(field)
-        if field.key == "model_rotation_enabled":
-            widget.toggled.connect(self._on_model_rotation_enabled_toggled)
-        return widget
-
-    def _create_gemini_catalog_list_editor(self, *, kind: str) -> QWidget:
-        """Compact custom-model editor: short list + single-line add/remove."""
-        host = QWidget()
-        host.setObjectName(f"gemini_catalog_editor_{kind}")
-        host.setProperty("catalog_kind", kind)
-        layout = QVBoxLayout(host)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        model_list = QListWidget()
-        model_list.setObjectName(f"gemini_catalog_list_{kind}")
-        model_list.setAlternatingRowColors(True)
-        model_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        model_list.setMaximumHeight(110)
-        model_list.setMinimumHeight(72)
-        layout.addWidget(model_list)
-
-        row = QWidget()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(8)
-        entry = QLineEdit()
-        entry.setObjectName(f"gemini_catalog_entry_{kind}")
-        entry.setClearButtonEnabled(True)
-        entry.setPlaceholderText(
-            "例如 gemini-embedding-custom"
-            if kind == "embedding"
-            else "例如 gemini-experimental-foo"
-        )
-        row_layout.addWidget(entry, 1)
-
-        add_btn = QPushButton("添加")
-        add_btn.setObjectName("secondary_btn")
-        add_btn.setToolTip("将上方输入的模型 ID 加入列表（仅非内置 ID）。")
-        row_layout.addWidget(add_btn)
-
-        remove_btn = QPushButton("删除所选")
-        remove_btn.setObjectName("secondary_btn")
-        remove_btn.setToolTip("删除列表中选中的自定义模型。")
-        row_layout.addWidget(remove_btn)
-        layout.addWidget(row)
-
-        def _add_model() -> None:
-            name = entry.text().strip()
-            if not name:
-                return
-            from gemini_model_catalog import extras_beyond_builtins
-
-            extras = extras_beyond_builtins([name], kind=kind)
-            if not extras:
-                self.statusBar().showMessage(
-                    "内置模型无需添加，已在「设置 → 模型」中可选。",
-                    4000,
-                )
-                entry.clear()
-                return
-            cleaned = extras[0]
-            existing = {
-                model_list.item(i).text().strip()
-                for i in range(model_list.count())
-                if model_list.item(i) is not None
-            }
-            if cleaned in existing:
-                self.statusBar().showMessage(f"已在列表中：{cleaned}", 3000)
-                entry.clear()
-                return
-            model_list.addItem(cleaned)
-            entry.clear()
-            model_list.setCurrentRow(model_list.count() - 1)
-
-        def _remove_selected() -> None:
-            for item in model_list.selectedItems():
-                row_index = model_list.row(item)
-                model_list.takeItem(row_index)
-
-        add_btn.clicked.connect(_add_model)
-        entry.returnPressed.connect(_add_model)
-        remove_btn.clicked.connect(_remove_selected)
-        host._catalog_list = model_list  # type: ignore[attr-defined]
-        host._catalog_entry = entry  # type: ignore[attr-defined]
-        return host
-
     def _gemini_catalog_list_values(self, widget: QWidget) -> list[str]:
-        model_list = getattr(widget, "_catalog_list", None)
-        if not isinstance(model_list, QListWidget):
-            return []
-        values: list[str] = []
-        for index in range(model_list.count()):
-            item = model_list.item(index)
-            if item is None:
-                continue
-            text = item.text().strip()
-            if text and text not in values:
-                values.append(text)
-        return values
+        return gemini_catalog_list_values(widget)
 
     def _set_gemini_catalog_list_values(self, widget: QWidget, values: object) -> None:
-        model_list = getattr(widget, "_catalog_list", None)
-        if not isinstance(model_list, QListWidget):
-            return
-        kind = str(widget.property("catalog_kind") or "translation")
-        from gemini_model_catalog import extras_beyond_builtins
-
-        cleaned = extras_beyond_builtins(values, kind=kind)
-        previous = model_list.blockSignals(True)
-        try:
-            model_list.clear()
-            for name in cleaned:
-                model_list.addItem(name)
-        finally:
-            model_list.blockSignals(previous)
-
-    def _create_gemini_model_checklist(self) -> QListWidget:
-        """Multi-select checklist limited to known Gemini translation models."""
-        widget = QListWidget()
-        widget.setObjectName("model_rotation_models_list")
-        widget.setMinimumHeight(160)
-        widget.setMaximumHeight(240)
-        widget.setAlternatingRowColors(True)
-        self._refresh_gemini_model_checklist(widget)
-        return widget
+        set_gemini_catalog_list_values(widget, values)
 
     def _refresh_gemini_model_checklist(
         self,
@@ -5230,73 +4996,27 @@ class MainWindow(QMainWindow):
                 config = loaded if isinstance(loaded, dict) else {}
             except Exception:
                 config = {}
-        models = allowed_gemini_rotation_models(config)
-        previous_block = widget.blockSignals(True)
-        try:
-            widget.clear()
-            selected_set = {
-                str(item).strip()
-                for item in (selected if isinstance(selected, (list, tuple, set)) else [])
-                if str(item).strip()
-            }
-            for name in models:
-                item = QListWidgetItem(name)
-                item.setFlags(
-                    item.flags()
-                    | Qt.ItemFlag.ItemIsUserCheckable
-                    | Qt.ItemFlag.ItemIsEnabled
-                    | Qt.ItemFlag.ItemIsSelectable
-                )
-                item.setCheckState(
-                    Qt.CheckState.Checked
-                    if name in selected_set
-                    else Qt.CheckState.Unchecked
-                )
-                widget.addItem(item)
-        finally:
-            widget.blockSignals(previous_block)
+        refresh_gemini_model_checklist(
+            widget,
+            models=allowed_gemini_rotation_models(config),
+            selected=selected,
+        )
 
     def _gemini_model_checklist_values(self, widget: QListWidget) -> list[str]:
-        selected: list[str] = []
-        for index in range(widget.count()):
-            item = widget.item(index)
-            if item is None:
-                continue
-            if item.checkState() == Qt.CheckState.Checked:
-                text = item.text().strip()
-                if text:
-                    selected.append(text)
-        return selected
+        return gemini_model_checklist_values(widget)
 
     def _set_gemini_model_checklist_values(
         self,
         widget: QListWidget,
         values: object,
     ) -> None:
-        selected = {
-            str(item).strip()
-            for item in (values if isinstance(values, (list, tuple, set)) else [])
-            if str(item).strip()
-        }
-        # Preserve order from the checklist; only toggle known rows.
-        for index in range(widget.count()):
-            item = widget.item(index)
-            if item is None:
-                continue
-            item.setCheckState(
-                Qt.CheckState.Checked
-                if item.text().strip() in selected
-                else Qt.CheckState.Unchecked
-            )
+        set_gemini_model_checklist_values(widget, values)
 
     def _on_model_rotation_enabled_toggled(self, checked: bool) -> None:
         widgets = getattr(self, "_advanced_setting_widgets", {})
         checklist = widgets.get("model_rotation_models")
         if checklist is not None:
             checklist.setEnabled(bool(checked))
-
-    def _advanced_setting_placeholder(self, field: SettingField) -> str:
-        return setting_placeholder(field)
 
     def _build_log_tab(self) -> None:
         tab = QWidget()
@@ -10464,6 +10184,9 @@ class MainWindow(QMainWindow):
         context_page = self._context_page()
         if context_page is not None:
             snapshot.update(context_page.collect())
+        advanced_page = self._advanced_page()
+        if advanced_page is not None:
+            snapshot.update(advanced_page.collect())
         return snapshot
 
     def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -10590,6 +10313,15 @@ class MainWindow(QMainWindow):
                     merged,
                     keys=frozenset(advanced_values),
                 )
+            advanced_page = self._advanced_page()
+            if advanced_page is not None:
+                advanced_snapshot = {
+                    key: snapshot[key]
+                    for key in advanced_page.config_keys
+                    if key in snapshot
+                }
+                if advanced_snapshot:
+                    advanced_page.load(advanced_snapshot, restore=True)
         finally:
             self._loading_config_to_ui = previous_loading
 
@@ -13961,6 +13693,17 @@ class MainWindow(QMainWindow):
                             ):
                                 context_snapshot[key] = advanced_values[key]
                         context_page.load(context_snapshot)
+                    advanced_page = self._advanced_page()
+                    if advanced_page is not None and (
+                        want is None or "advanced" in want
+                    ):
+                        advanced_snapshot = {
+                            key: advanced_values[key]
+                            for key in advanced_page.config_keys
+                            if key in advanced_values
+                        }
+                        if advanced_snapshot:
+                            advanced_page.load(advanced_snapshot)
 
             if want is None or "project" in want:
                 # Project page is mostly read-only labels; refresh if present.
