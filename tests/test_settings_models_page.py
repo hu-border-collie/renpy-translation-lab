@@ -4,26 +4,32 @@ from __future__ import annotations
 import unittest
 
 from gui_qt.settings.page_contract import SettingsIssue, SettingsPage
-from gui_qt.settings.models_page import (
-    ModelsSettingsPage,
-    batch_thinking_value_for_load,
-    batch_thinking_value_for_model_change,
-    should_save_batch_thinking_level,
-    supports_batch_thinking,
-)
 
 try:
     from PySide6.QtWidgets import QApplication
+
+    from gui_qt.settings.models_page import (
+        ModelsSettingsPage,
+        batch_thinking_value_for_load,
+        batch_thinking_value_for_model_change,
+        should_save_batch_thinking_level,
+        supports_batch_thinking,
+    )
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
     ModelsSettingsPage = None  # type: ignore[misc,assignment]
+    batch_thinking_value_for_load = None  # type: ignore[misc,assignment]
+    batch_thinking_value_for_model_change = None  # type: ignore[misc,assignment]
+    should_save_batch_thinking_level = None  # type: ignore[misc,assignment]
+    supports_batch_thinking = None  # type: ignore[misc,assignment]
 else:
     IMPORT_ERROR = None
 
 from tests import gui_test_support
 
 
+@gui_test_support.skip_unless_gui(supports_batch_thinking is None, IMPORT_ERROR)
 class ModelsThinkingHelperTests(unittest.TestCase):
     def test_gemini3_supports_thinking(self) -> None:
         self.assertTrue(supports_batch_thinking("gemini-3.1-flash-lite"))
