@@ -352,6 +352,7 @@ from .settings.models_page import (
 from .settings.project_page import ProjectSettingsPage
 from .settings.context_page import ContextSettingsPage
 from .settings.advanced_page import AdvancedSettingsPage
+from .settings.appearance_page import AppearanceSettingsPage
 from .settings.field_widgets import (
     format_setting_text,
 )
@@ -3200,6 +3201,8 @@ class MainWindow(QMainWindow):
             return self._create_context_settings_page()
         if spec.key == "advanced":
             return self._create_advanced_settings_page()
+        if spec.key == "appearance":
+            return self._create_appearance_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3798,6 +3801,9 @@ class MainWindow(QMainWindow):
     def _advanced_page(self):
         return self.__dict__.get("_advanced_settings_page")
 
+    def _appearance_page(self):
+        return self.__dict__.get("_appearance_settings_page")
+
     def _create_context_settings_page(self):
         """Build the migrated Context Settings page and alias its widgets."""
         existing = self._context_page()
@@ -3835,6 +3841,34 @@ class MainWindow(QMainWindow):
         for surface in (page.widget, page.widget.viewport(), page.body):
             if surface is not None:
                 self._style_themed_surface(surface)
+        return page
+
+    def _create_appearance_settings_page(self):
+        """Build the migrated Appearance Settings page and alias its widgets."""
+        existing = self._appearance_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            return existing
+        page = AppearanceSettingsPage(
+            self,
+            on_theme_preview=lambda preference: self._set_theme_preference(
+                preference, persist=False
+            ),
+            on_download_fonts=self._on_download_recommended_fonts,
+            is_font_install_running=lambda: bool(
+                getattr(self, "_font_install_worker", None) is not None
+                and self._font_install_worker.isRunning()
+            ),
+        )
+        self.__dict__["_appearance_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_appearance"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        self._refresh_font_install_status()
         return page
 
     def _create_project_settings_page(self):
@@ -4409,54 +4443,8 @@ class MainWindow(QMainWindow):
         self._refresh_litellm_install_action_gating()
 
     def _build_settings_appearance_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_appearance")
-        appearance_box = QGroupBox("外观")
-        appearance_layout = self._settings_form(appearance_box)
-        self.theme_combo = NoWheelComboBox()
-        self.theme_combo.addItem("跟随系统", THEME_SYSTEM)
-        self.theme_combo.addItem("浅色", "light")
-        self.theme_combo.addItem("深色", "dark")
-        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        appearance_layout.addRow("主题：", self.theme_combo)
-        hint = QLabel("切换主题会立即预览；点击保存设置后才会写入 translator_config.json。")
-        hint.setWordWrap(True)
-        hint.setObjectName("config_hint_label")
-        appearance_layout.addRow("", hint)
-        layout.addWidget(appearance_box)
-
-        fonts_box = QGroupBox("推荐字体")
-        fonts_layout = self._settings_form(fonts_box)
-        self.font_install_status_label = QLabel()
-        self.font_install_status_label.setWordWrap(True)
-        self.font_install_status_label.setObjectName("config_hint_label")
-        fonts_layout.addRow("安装状态：", self.font_install_status_label)
-
-        font_actions = QWidget()
-        font_actions_layout = QHBoxLayout(font_actions)
-        font_actions_layout.setContentsMargins(0, 0, 0, 0)
-        font_actions_layout.setSpacing(8)
-        self.download_fonts_btn = QPushButton("下载推荐字体")
-        self.download_fonts_btn.setObjectName("secondary_btn")
-        self.download_fonts_btn.setToolTip(
-            "从华为和霞鹜文楷官方来源下载固定版本字体，并执行 SHA-256 校验。"
-            "下载中点击可停止。"
-        )
-        self.download_fonts_btn.clicked.connect(self._on_download_recommended_fonts)
-        font_actions_layout.addWidget(self.download_fonts_btn)
-        font_actions_layout.addStretch(1)
-        fonts_layout.addRow("", font_actions)
-
-        self.font_install_progress = QProgressBar()
-        self.font_install_progress.setObjectName("font_install_progress")
-        self.font_install_progress.setRange(0, 0)
-        self.font_install_progress.setFormat("正在后台下载并校验推荐字体…")
-        self.font_install_progress.setVisible(False)
-        fonts_layout.addRow(self.font_install_progress)
-        layout.addWidget(fonts_box)
-        self._refresh_font_install_status()
-
-        layout.addStretch(1)
-        return page
+        page = self._appearance_page() or self._create_appearance_settings_page()
+        return page.widget
 
     def _build_settings_shortcuts_page(self) -> QWidget:
         """Read-only catalog of global GUI keyboard shortcuts."""
@@ -10187,6 +10175,9 @@ class MainWindow(QMainWindow):
         advanced_page = self._advanced_page()
         if advanced_page is not None:
             snapshot.update(advanced_page.collect())
+        appearance_page = self._appearance_page()
+        if appearance_page is not None:
+            snapshot.update(appearance_page.collect())
         return snapshot
 
     def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -10294,7 +10285,14 @@ class MainWindow(QMainWindow):
                         selected=page._current_litellm_provider()
                     )
             if "theme" in snapshot:
-                self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
+                appearance_page = self._appearance_page()
+                if appearance_page is not None:
+                    appearance_page.load(
+                        {"theme": snapshot.get("theme") or "system"},
+                        restore=True,
+                    )
+                else:
+                    self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
 
             advanced_keys = {
                 field.key
@@ -13459,6 +13457,9 @@ class MainWindow(QMainWindow):
             # Theme QSS is global; only touch appearance widgets / re-apply when needed.
             if want is None or "appearance" in want:
                 self._load_theme_to_ui(config, apply=(want is None or "appearance" in want))
+                appearance_page = self._appearance_page()
+                if appearance_page is not None:
+                    appearance_page.load({"theme": self._theme_preference})
             elif want is not None:
                 # Keep preference in sync without re-applying stylesheets.
                 self._theme_preference = read_gui_theme_from_config(config)

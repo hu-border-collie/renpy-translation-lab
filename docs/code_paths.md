@@ -90,6 +90,8 @@
 - `gui_qt/settings/advanced_page.py`：Phase D 迁出的「高级」`SettingsPage`；Gemini 目录扩展与
   模型轮换清单由页面持有，保存与 `validate_advanced_settings` 仍走 `MainWindow._on_save_config`。
 - `gui_qt/settings/gemini_catalog_widgets.py`：Gemini 目录 extras 与轮换 checklist 控件。
+- `gui_qt/settings/appearance_page.py`：Phase D 迁出的「外观」`SettingsPage`；主题预览 `persist=False`，
+  字体下载仍走宿主 `FontInstallWorker`，保存仍走 `MainWindow._on_save_config`。
 - Settings 页面/字段/异步任务现状与 Phase B 接入合同见
   [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
@@ -274,7 +276,7 @@
   `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`、`tests.test_settings_litellm_page`、
-  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_settings_context_page`、`tests.test_settings_advanced_page`、`tests.test_gui_litellm_settings_page`、
+  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_settings_context_page`、`tests.test_settings_advanced_page`、`tests.test_settings_appearance_page`、`tests.test_gui_litellm_settings_page`、
   `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、
   `tests.test_litellm_catalog_cache`、`tests.test_project_context_settings`。
 
