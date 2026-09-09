@@ -3,8 +3,8 @@
 > 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
 > merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
 > Phase D 已将 10 个 Settings 页迁到独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist
-> 已由 coordinator 持有；collected 值 apply 在 Qt-free `save_apply.py`，两文件写盘仍在 `MainWindow`。
-> Epic 在写盘收口与人工烟测完成前保持打开。
+> 已由 coordinator 持有；collected 值 apply 在 Qt-free `save_apply.py`；legacy adapter 与旧 builder 已删除。
+> 两文件写盘仍在 `MainWindow`。Epic 在全量回归与人工烟测完成前保持打开。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -98,8 +98,8 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
   context 主开关，`project` 字段归 project 页。
 - **补建页面被 preserve/restore 覆盖**：Phase B 已修。只保留已加载页面的快照，且恢复只回写
   快照中存在的 advanced 键。
-- **页面不可独立构造**：已收敛。10 个 Settings 页均为独立 `SettingsPage`；`LegacySettingsPageAdapter`
-  仍保留但当前无页面使用。
+- **页面不可独立构造**：已收敛。10 个 Settings 页均为独立 `SettingsPage`；legacy adapter 与
+  `_build_settings_*_page` 已删除。
 - **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty 基线/离开保护文案/
   collect→persist；apply 在 `save_apply.py`；两文件写盘与 Qt 对话框仍在 `MainWindow`。
 - **局部 worker 归属整窗**：部分收敛。LiteLLM worker 已由页面持有；字体 / 安装 / registry
@@ -226,10 +226,7 @@ Coordinator → 页面（只通过上述方法）：
   `build_default_registry()` 在 `MainWindow` 构造时校验一键一主。
 - `gui_qt/settings/coordinator.py`：`ensure_page` / `activate` / `load` / `collect` / `validate` /
   `reset` / `focus_issue` / `set_task_running` / `has_unsaved_changes`，不依赖 Qt。
-- `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator；
-  页面仍由 `MainWindow` builder 构建，字段读写委托宿主，旧保存事务不变。
-  `coordinator.load(snapshot)` 经 `_restore_config_ui_snapshot` 应用内存快照（不读盘）；
-  `reset()` 后页面仍视为已加载；`focus_issue()` 会先补填未访问页面再聚焦。
+- `gui_qt/settings/legacy.py`：已删除。十页均经 `_create_*_settings_page` 构造独立 `SettingsPage`。
 - `MainWindow`：页面清单、dirty 键和 lazy 映射改由 registry 提供；`_ensure_settings_page` /
   `_on_settings_nav_row_changed` 经 coordinator 补建与切换；项目页首次打开会加载其 owned 字段；
   `_ensure_settings_pages_for_config` 只保留已加载页面的快照，且 `_restore_config_ui_snapshot`
@@ -239,8 +236,8 @@ Coordinator → 页面（只通过上述方法）：
 
 仍未落地（Phase D 收口）：
 
-- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist 由 coordinator 持有；
-  collected 值 apply 在 `save_apply.py`；两文件写盘与 Qt 对话框仍在 `MainWindow`。
+- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；
+  旧 builder / legacy adapter 已删除；两文件写盘与 Qt 对话框仍在 `MainWindow`。
 
 Phase C 已落地：
 
@@ -282,6 +279,8 @@ Phase D（进行中，十页已迁出；apply 已抽到 `save_apply.py`，写盘
   切换项目与 `workspace_root` 写入仍由宿主回调提供。
 - `gui_qt/settings/leave_guard.py`：未保存离开保护四套文案；coordinator 持有 dirty 基线并在 dirty 时返回 prompt，宿主弹出 Qt 对话框。
 - `gui_qt/settings/save_apply.py`：Qt-free `apply_collected_settings`；coordinator `save()` 经 host persist 调用，两文件写盘仍在 `MainWindow`。
+- 旧 `_build_settings_*_page`、`_legacy_settings_page_*`、MainWindow chrome helpers 与
+  `gui_qt/settings/legacy.py` 已删除；registry `builder_name` 指向 `_create_*_settings_page`。
 - LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
   `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
 - 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`、

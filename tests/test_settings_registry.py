@@ -49,6 +49,12 @@ class SettingsRegistryTests(unittest.TestCase):
                 for spec in registry.specs()
             ),
         )
+        for spec in registry.specs():
+            self.assertEqual(
+                spec.builder_name,
+                f"_create_{spec.key}_settings_page",
+                spec.key,
+            )
 
     def test_every_config_key_has_exactly_one_owner(self) -> None:
         registry = build_default_registry()

@@ -66,7 +66,7 @@
 
 进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿迁至 [archive/](archive/README.md)。
 
-- [#202 Phase A：Settings 页面契约与现状基线](plans/issue-202-settings-page-contract.md)：冻结 page adapter/coordinator 合同，记录 10 页字段/即时持久化所有权与 as-is 缺口；Phase B 最小接线已合并（PR #434）；Phase C LiteLLM 垂直迁移已落地独立 `SettingsPage`；Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist 由 coordinator 持有，collected 值 apply 在 Qt-free `save_apply.py`，两文件写盘仍在 `MainWindow`。
+- [#202 Phase A：Settings 页面契约与现状基线](plans/issue-202-settings-page-contract.md)：冻结 page adapter/coordinator 合同，记录 10 页字段/即时持久化所有权与 as-is 缺口；Phase B 最小接线已合并（PR #434）；Phase C LiteLLM 垂直迁移已落地独立 `SettingsPage`；Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；legacy adapter 与旧 builder 已删除；两文件写盘仍在 `MainWindow`。
 - [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力已落地。
 - [#347 → #348 耐久 Sync 产品化交接](plans/issue-347-to-348-handoff.md)：冻结服务/snapshot/CLI/制品接缝与验收边界。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。

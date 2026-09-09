@@ -19,6 +19,35 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow.__new__(MainWindow)
 
+    def test_settings_legacy_builders_and_chrome_helpers_are_removed(self):
+        leftover = (
+            "_build_settings_workspace_page",
+            "_build_settings_project_page",
+            "_build_settings_api_keys_page",
+            "_build_settings_models_page",
+            "_build_settings_litellm_page",
+            "_build_settings_extensions_page",
+            "_build_settings_context_page",
+            "_build_settings_appearance_page",
+            "_build_settings_shortcuts_page",
+            "_build_settings_advanced_page",
+            "_legacy_settings_page_load",
+            "_legacy_settings_page_collect",
+            "_legacy_settings_page_validate",
+            "_legacy_settings_page_reset",
+            "_legacy_settings_page_focus",
+            "_legacy_settings_page_set_task_running",
+            "_settings_page",
+            "_settings_group",
+            "_settings_form",
+        )
+        for name in leftover:
+            self.assertFalse(hasattr(MainWindow, name), name)
+        from gui_qt.settings.registry import SettingsPageSpec
+
+        spec = SettingsPageSpec("missing", "Missing", "_create_missing_settings_page")
+        self.assertIsNone(self.window._build_settings_page_adapter(spec))
+
     def test_cli_channels_keep_progress_out_of_structured_stdout(self):
         from gui_qt.workflow_progress import create_workflow_progress_state
 

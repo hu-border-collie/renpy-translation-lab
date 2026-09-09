@@ -58,7 +58,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "workspace",
         "项目列表",
-        "_build_settings_workspace_page",
+        "_create_workspace_settings_page",
         immediate_action_ids=frozenset(
             {"switch_project", "refresh_registry", "import_projects"}
         ),
@@ -66,14 +66,14 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "project",
         "项目",
-        "_build_settings_project_page",
+        "_create_project_settings_page",
         config_page=True,
         config_keys=PROJECT_CONFIG_KEYS,
     ),
     SettingsPageSpec(
         "api_keys",
         "密钥",
-        "_build_settings_api_keys_page",
+        "_create_api_keys_settings_page",
         config_page=True,
         immediate_action_ids=frozenset(
             {"manage_gemini_keys", "manage_litellm_keys"}
@@ -82,7 +82,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "models",
         "模型",
-        "_build_settings_models_page",
+        "_create_models_settings_page",
         config_page=True,
         config_keys=frozenset(
             {
@@ -97,7 +97,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "litellm",
         "LiteLLM",
-        "_build_settings_litellm_page",
+        "_create_litellm_settings_page",
         config_page=True,
         config_keys=frozenset(
             {
@@ -119,20 +119,20 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "extensions",
         "扩展",
-        "_build_settings_extensions_page",
+        "_create_extensions_settings_page",
         immediate_action_ids=frozenset({"install_relation_analyzer"}),
     ),
     SettingsPageSpec(
         "context",
         "上下文",
-        "_build_settings_context_page",
+        "_create_context_settings_page",
         config_page=True,
         config_keys=CONTEXT_CONFIG_KEYS,
     ),
     SettingsPageSpec(
         "appearance",
         "外观",
-        "_build_settings_appearance_page",
+        "_create_appearance_settings_page",
         config_page=True,
         config_keys=frozenset({"theme"}),
         immediate_action_ids=frozenset({"preview_theme", "download_fonts"}),
@@ -140,12 +140,12 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     SettingsPageSpec(
         "shortcuts",
         "快捷键",
-        "_build_settings_shortcuts_page",
+        "_create_shortcuts_settings_page",
     ),
     SettingsPageSpec(
         "advanced",
         "高级",
-        "_build_settings_advanced_page",
+        "_create_advanced_settings_page",
         config_page=True,
         config_keys=ADVANCED_CONFIG_KEYS,
     ),

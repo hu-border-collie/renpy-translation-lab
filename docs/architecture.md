@@ -4,9 +4,10 @@
 规划中的结构以 `docs/plans/` 为准。
 
 > 2026-09-09（#202 Phase A/B/C/D 十页已迁出）核对：Phase A 文档已合并；Phase B 已落地
-> `gui_qt/settings/` 的 page contract、registry、coordinator 与 legacy adapter。Phase C 已将
+> `gui_qt/settings/` 的 page contract、registry、coordinator。Phase C 已将
 > LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将 10 个 Settings 页迁到独立
-> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）。保存收口仍属 Phase D：dirty 基线与离开保护文案已由 coordinator 持有；collected 值 apply 在 Qt-free `gui_qt/settings/save_apply.py`，`MainWindow` 仍执行两文件写盘并弹出 Qt 对话框。
+> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）；legacy adapter 与旧 builder 已删除。
+> 保存收口仍属 Phase D：`MainWindow` 仍执行两文件写盘并弹出 Qt 对话框。
 
 ## 分层
 
@@ -63,8 +64,7 @@
 `MainWindow` 仍是 Settings 的实际所有者：
 
 - 10 个页面由 `gui_qt/settings/registry.py` 的 `SettingsPageSpec` 登记；`SettingsCoordinator`
-  负责页面身份、延迟补建与切换，普通切页只补建目标页。未迁移页面通过
-  `LegacySettingsPageAdapter` 继续使用现有 builder 与控件。
+  负责页面身份、延迟补建与切换，普通切页只补建目标页。页面经 `_create_*_settings_page` 构造。
 - `_load_config_to_ui` 负责把 `translator_config.json` 推入控件；项目页首次 materialize 会加载其
   owned advanced 字段。coordinator 持有 dirty 基线（与 `_config_ui_saved_snapshot` 同步）；
   `apply_collected_settings` 是 Qt-free apply 入口，`MainWindow._on_save_config` 仍执行两文件写盘。
@@ -106,7 +106,7 @@ Phase B 已消除的 as-is 缺口：
 
 仍未消除（Phase D）：
 
-- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist 已由 coordinator 持有；collected 值 apply 在 `save_apply.py`，两文件写盘与 Qt 对话框仍在 `MainWindow`。
+- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；两文件写盘与 Qt 对话框仍在 `MainWindow`。旧 builder / legacy adapter 已删除。
 - 字体/安装/registry 等非 LiteLLM 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
 
 完整页面清单、字段/即时持久化所有权与测试入口见
@@ -123,7 +123,6 @@ Phase B 已消除的 as-is 缺口：
   任务锁分发、dirty 基线、离开保护文案与 collect→persist；不依赖 Qt，可脱离 `MainWindow` 测试。
 - `gui_qt/settings/leave_guard.py`：未保存离开保护的四套文案（workflow / 切项目 / 关窗 / 离开设置页）。
 - `gui_qt/settings/save_apply.py`：把 collect() 快照应用到原始 `translator_config` 对象；不写盘。
-- `gui_qt/settings/legacy.py`：未迁移页面的兼容 adapter。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM 页面；局部 worker 与
   load/collect/validate/reset 由页面持有。
 - `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
@@ -142,8 +141,8 @@ Phase B 已消除的 as-is 缺口：
   两文件写盘、Qt 离开保护对话框与 shutdown 协调。
 
 页面只拥有控件、字段读写映射、局部校验和动作；页面通过显式 callback 与宿主交互，不读取其他
-页面控件，也不依赖整窗私有属性才能独立构造。过渡期允许旧页面 adapter，但同一行为只能有一个
-实际状态所有者。`gui_qt/workbench/page_contract.py` 与 `gui_qt/workbench/coordinator.py` 是已交付的
+页面控件，也不依赖整窗私有属性才能独立构造。同一行为只能有一个实际状态所有者。
+`gui_qt/workbench/page_contract.py` 与 `gui_qt/workbench/coordinator.py` 是已交付的
 工作台页面化参考实现，Settings 合同复用其“页面报告意图、宿主持有执行与生命周期”的边界。
 
 ## #202 / #348 所有权
