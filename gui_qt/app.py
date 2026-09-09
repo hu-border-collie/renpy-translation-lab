@@ -323,8 +323,6 @@ from .settings_schema import (
     ADVANCED_SETTING_FIELDS,
     CONTEXT_PRIMARY_SETTING_CATEGORY,
     CONTEXT_PRIMARY_SETTING_KEYS,
-    PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
-    context_primary_setting_fields,
     BASIC_RECOMMENDED_VALUES,
     SettingField,
     allowed_gemini_rotation_models,
@@ -353,6 +351,7 @@ from .settings.models_page import (
     supports_batch_thinking,
 )
 from .settings.project_page import ProjectSettingsPage
+from .settings.context_page import ContextSettingsPage
 from .settings.field_widgets import (
     create_basic_setting_widget,
     format_setting_text,
@@ -3192,6 +3191,8 @@ class MainWindow(QMainWindow):
             return self._create_models_settings_page()
         if spec.key == "project":
             return self._create_project_settings_page()
+        if spec.key == "context":
+            return self._create_context_settings_page()
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
@@ -3583,96 +3584,8 @@ class MainWindow(QMainWindow):
         return page.widget
 
     def _build_settings_context_page(self) -> QWidget:
-        page, layout = self._settings_page("settings_context")
-        context_box, context_layout = self._settings_group("批量上下文")
-
-        context_hint = QLabel(
-            "下列三项按【当前项目】保存（work/project_context_settings.json），"
-            "切换游戏不会互相覆盖。启用后先保存设置，再到工作台「上下文库」页预建。"
-            "记忆库用已有译文；原文索引只用模板原文；均不修改游戏脚本。"
-        )
-        context_hint.setWordWrap(True)
-        context_hint.setObjectName("config_hint_label")
-        context_layout.addWidget(context_hint)
-
-        self.rag_enabled_cb = QCheckBox("启用 RAG 记忆库（批量，当前项目）")
-        context_layout.addWidget(self.rag_enabled_cb)
-
-        self.source_index_enabled_cb = QCheckBox("启用原文索引（批量，当前项目）")
-        context_layout.addWidget(self.source_index_enabled_cb)
-
-        self.sync_source_index_enabled_cb = QCheckBox("同步翻译使用原文索引（当前项目）")
-        self.sync_source_index_enabled_cb.setToolTip(
-            "复用已预建的 Source Index Store。关闭时同步初译保持原行为。"
-        )
-        context_layout.addWidget(self.sync_source_index_enabled_cb)
-
-        self.bootstrap_on_build_cb = QCheckBox("开始翻译时自动暖 RAG 库（当前项目）")
-        context_layout.addWidget(self.bootstrap_on_build_cb)
-
-        self.context_storage_game_cb = QCheckBox("上下文库保存到游戏目录")
-        self.context_storage_game_cb.setToolTip(
-            "启用后，默认 RAG / 原文索引 / 剧情图谱路径会使用 work 同级的 translation_context/。"
-        )
-        context_layout.addWidget(self.context_storage_game_cb)
-
-        layout.addWidget(context_box)
-
-        # Primary context fields live here only (schema widgets = single write source).
-        primary_box, primary_layout = self._settings_group("同步与剧情记忆")
-        primary_hint = QLabel(
-            "下列开关与高级页检索参数共用同一配置键；仅在本页编辑主开关，"
-            "高级页只保留调参字段。"
-        )
-        primary_hint.setWordWrap(True)
-        primary_hint.setObjectName("config_hint_label")
-        primary_layout.addWidget(primary_hint)
-        context_fields = context_primary_setting_fields()
-        for field in context_fields:
-            if field.key in PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS:
-                continue
-            widget = self._create_advanced_setting_widget(field)
-            self._advanced_setting_widgets[field.key] = widget
-            row = self._advanced_setting_row(field, widget)
-            primary_layout.addWidget(QLabel(f"{field.label}"))
-            primary_layout.addWidget(row)
-        layout.addWidget(primary_box)
-
-        analysis_box, analysis_layout = self._settings_group("项目剧情分析")
-        analysis_hint = QLabel(
-            "先启用分析并保存，再到「上下文库」开始构建。只有人工确认、"
-            "仍与当前脚本一致且开启“用于翻译”的项目摘要才会进入批量提示词。"
-            "同步翻译需另外开启“同步翻译注入已发布项目摘要”。"
-        )
-        analysis_hint.setWordWrap(True)
-        analysis_hint.setObjectName("config_hint_label")
-        analysis_layout.addWidget(analysis_hint)
-        self.sync_inject_published_brief_cb = QCheckBox(
-            "同步翻译注入已发布项目摘要（当前项目）"
-        )
-        self.sync_inject_published_brief_cb.setToolTip(
-            "仅注入 published 且 fingerprint 匹配的摘要；draft/stale/missing 不会静默注入。"
-        )
-        analysis_layout.addWidget(self.sync_inject_published_brief_cb)
-        for field in context_fields:
-            if field.key not in PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS:
-                continue
-            widget = self._create_advanced_setting_widget(field)
-            self._advanced_setting_widgets[field.key] = widget
-            row = self._advanced_setting_row(field, widget)
-            analysis_layout.addWidget(QLabel(f"{field.label}"))
-            analysis_layout.addWidget(row)
-        analysis_advanced_btn = QPushButton("打开项目分析高级参数")
-        analysis_advanced_btn.setObjectName("secondary_btn")
-        analysis_advanced_btn.clicked.connect(
-            lambda: self._focus_advanced_setting(
-                "batch_project_analysis_max_brief_chars"
-            )
-        )
-        analysis_layout.addWidget(analysis_advanced_btn)
-        layout.addWidget(analysis_box)
-        layout.addStretch(1)
-        return page
+        page = self._context_page() or self._create_context_settings_page()
+        return page.widget
 
     def _build_settings_models_page(self) -> QWidget:
         page = self._models_page() or self._create_models_settings_page()
@@ -3871,6 +3784,31 @@ class MainWindow(QMainWindow):
 
     def _project_page(self):
         return self.__dict__.get("_project_settings_page")
+
+    def _context_page(self):
+        return self.__dict__.get("_context_settings_page")
+
+    def _create_context_settings_page(self):
+        """Build the migrated Context Settings page and alias its widgets."""
+        existing = self._context_page()
+        if existing is not None:
+            existing.attach_widget_aliases(self)
+            return existing
+        page = ContextSettingsPage(
+            self,
+            on_open_analysis_advanced=lambda: self._focus_advanced_setting(
+                "batch_project_analysis_max_brief_chars"
+            ),
+        )
+        self.__dict__["_context_settings_page"] = page
+        page.attach_widget_aliases(self)
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_context"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        return page
 
     def _create_project_settings_page(self):
         """Build the migrated Project Settings page and alias its widgets."""
@@ -10523,6 +10461,9 @@ class MainWindow(QMainWindow):
         models_page = self._models_page()
         if models_page is not None:
             snapshot.update(models_page.collect())
+        context_page = self._context_page()
+        if context_page is not None:
+            snapshot.update(context_page.collect())
         return snapshot
 
     def _restore_config_ui_snapshot(self, snapshot: dict[str, object]) -> None:
@@ -10532,29 +10473,43 @@ class MainWindow(QMainWindow):
         previous_loading = getattr(self, "_loading_config_to_ui", False)
         self._loading_config_to_ui = True
         try:
-            rag_cb = self._settings_widget("rag_enabled_cb")
-            if rag_cb is not None and "rag_enabled" in snapshot:
-                rag_cb.setChecked(bool(snapshot["rag_enabled"]))
-            source_cb = self._settings_widget("source_index_enabled_cb")
-            if source_cb is not None and "source_index_enabled" in snapshot:
-                source_cb.setChecked(bool(snapshot["source_index_enabled"]))
-            sync_source_cb = self._settings_widget("sync_source_index_enabled_cb")
-            if sync_source_cb is not None and "sync_source_index_enabled" in snapshot:
-                sync_source_cb.setChecked(bool(snapshot["sync_source_index_enabled"]))
-            sync_inject_cb = self._settings_widget("sync_inject_published_brief_cb")
-            if (
-                sync_inject_cb is not None
-                and "sync_project_analysis_inject_enabled" in snapshot
-            ):
-                sync_inject_cb.setChecked(
-                    bool(snapshot["sync_project_analysis_inject_enabled"])
-                )
-            bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
-            if bootstrap_cb is not None and "bootstrap_on_build" in snapshot:
-                bootstrap_cb.setChecked(bool(snapshot["bootstrap_on_build"]))
-            storage_cb = self._settings_widget("context_storage_game_cb")
-            if storage_cb is not None and "context_storage_location" in snapshot:
-                storage_cb.setChecked(snapshot["context_storage_location"] == "game")
+            context_page = self._context_page()
+            if context_page is not None:
+                context_snapshot = {
+                    key: snapshot[key]
+                    for key in context_page.config_keys
+                    if key in snapshot
+                }
+                if context_snapshot:
+                    context_page.load(context_snapshot, restore=True)
+            else:
+                rag_cb = self._settings_widget("rag_enabled_cb")
+                if rag_cb is not None and "rag_enabled" in snapshot:
+                    rag_cb.setChecked(bool(snapshot["rag_enabled"]))
+                source_cb = self._settings_widget("source_index_enabled_cb")
+                if source_cb is not None and "source_index_enabled" in snapshot:
+                    source_cb.setChecked(bool(snapshot["source_index_enabled"]))
+                sync_source_cb = self._settings_widget("sync_source_index_enabled_cb")
+                if sync_source_cb is not None and "sync_source_index_enabled" in snapshot:
+                    sync_source_cb.setChecked(
+                        bool(snapshot["sync_source_index_enabled"])
+                    )
+                sync_inject_cb = self._settings_widget("sync_inject_published_brief_cb")
+                if (
+                    sync_inject_cb is not None
+                    and "sync_project_analysis_inject_enabled" in snapshot
+                ):
+                    sync_inject_cb.setChecked(
+                        bool(snapshot["sync_project_analysis_inject_enabled"])
+                    )
+                bootstrap_cb = self._settings_widget("bootstrap_on_build_cb")
+                if bootstrap_cb is not None and "bootstrap_on_build" in snapshot:
+                    bootstrap_cb.setChecked(bool(snapshot["bootstrap_on_build"]))
+                storage_cb = self._settings_widget("context_storage_game_cb")
+                if storage_cb is not None and "context_storage_location" in snapshot:
+                    storage_cb.setChecked(
+                        snapshot["context_storage_location"] == "game"
+                    )
 
             backend_combo = self._settings_widget("sync_backend_combo")
             if backend_combo is not None and "sync_backend" in snapshot:
@@ -13968,6 +13923,11 @@ class MainWindow(QMainWindow):
                         }
                         if project_snapshot:
                             project_page.load(project_snapshot)
+                    context_page = self._context_page()
+                    if context_page is not None and (
+                        want is None or "context" in want
+                    ):
+                        context_page.load(context_page.collect())
 
             if want is None or "project" in want:
                 # Project page is mostly read-only labels; refresh if present.

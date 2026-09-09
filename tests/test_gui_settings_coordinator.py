@@ -68,6 +68,29 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             )
         )
 
+    def test_context_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.context_page import ContextSettingsPage
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={
+                "sync": {"rag": {"enabled": True}},
+                "batch": {},
+            },
+        ):
+            self.window._ensure_settings_page("context")
+        page = self.window._settings_coordinator.page("context")
+        self.assertIsInstance(page, ContextSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("context"),
+        )
+        self.assertTrue(collected["sync_rag_enabled"])
+
     def test_project_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.project_page import ProjectSettingsPage
