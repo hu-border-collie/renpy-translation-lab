@@ -71,6 +71,12 @@
 - `gui_qt/*_workflow.py`：GUI 动作到 CLI/服务调用的包装。
 - `gui_qt/diagnostics_context.py`：CLI 命令参考与诊断入口。
 - `gui_qt/user_copy.py`：共享用户文案；新增产品能力须同步。
+- `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
+- `gui_qt/settings/registry.py`：`SettingsPageSpec` / `SettingsPageRegistry` / `build_default_registry`；
+  10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
+- `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
+  `collect` / `validate` / `reset` / `focus_issue` / `set_task_running`；不依赖 Qt。
+- `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator。
 - Settings 页面/字段/异步任务现状与 Phase B 接入合同见
   [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
@@ -216,22 +222,31 @@
 
 ## Settings 加载、保存、dirty 与离开保护
 
-- 页面身份：`gui_qt/app.py` 的 `_SETTINGS_PAGE_SPECS`、`_SETTINGS_CONFIG_PAGE_KEYS`、
-  `_CONFIG_SNAPSHOT_KEYS_BY_PAGE`、`_SETTINGS_LAZY_ATTR_TO_PAGE`。
-- lazy 构建：`MainWindow.__getattr__` → `_ensure_settings_page()`；
-  普通切页只构建目标页并 `_load_config_to_ui(pages={key})`；
-  保存/重载经 `_ensure_settings_pages_for_config()` 补建全部配置页并保留已打开页面的编辑。
-- 加载：`_load_config_to_ui()` → `ProjectState.load_translator_config()` → 按页面分支填充
-  `models` / `litellm` / `context` / `appearance` / `advanced`（`project` 分支当前只刷新只读 root
-  标签，字段填充缺口见契约文档）→ `_update_config_ui_saved_snapshot()`。
-  `_current_config_ui_snapshot()` / `_restore_config_ui_snapshot()` 负责 dirty 基线与补建时恢复。
-- 保存：`_on_save_config()` → `_ensure_settings_pages_for_config()` →
+- 页面身份：`gui_qt/settings/registry.py` 的 `SettingsPageSpec` / `SettingsPageRegistry` /
+  `build_default_registry()`；`MainWindow._settings_registry` 在构造时校验一键一主。
+  `gui_qt/app.py` 的 `_SETTINGS_PAGE_SPECS` / `_SETTINGS_CONFIG_PAGE_KEYS` /
+  `_SETTINGS_LAZY_ATTR_TO_PAGE` 现在只是 registry 的兼容别名。
+- lazy 构建：`MainWindow.__getattr__` / `_ensure_settings_page()` →
+  `SettingsCoordinator.ensure_page()` → `LegacySettingsPageAdapter` → 现有
+  `_build_settings_*_page()` builder；`_on_settings_nav_row_changed()` →
+  `SettingsCoordinator.activate()`。普通切页只构建目标页；保存/重载经
+  `_ensure_settings_pages_for_config()` 补建全部配置页，并只保留已加载页面的编辑快照。
+- 加载：`_load_config_to_ui()` → `ProjectState.load_translator_config()` → 按 registry 键填充
+  `models` / `litellm` / `context` / `appearance` / `advanced` / `project`（项目页首次
+  materialize 即加载 owned advanced 字段）→ `_update_config_ui_saved_snapshot()`。
+  `_current_config_ui_snapshot()` / `_restore_config_ui_snapshot()` 负责 dirty 基线与补建时恢复；
+  恢复只回写快照中存在的 advanced 键，避免把新补建页面覆盖成推荐值。
+- 保存：coordinator 的 `SettingsPageActions.save` 委托
+  `MainWindow._request_settings_save()` → `_on_save_config()`；
+  `_on_save_config()` → `_ensure_settings_pages_for_config()` →
   `_flush_litellm_model_selection_save()` → `state.load_translator_config()` →
   `write_sync_backend_models()` / `write_model_catalog_extras()` /
   `validate_advanced_settings()` / `apply_advanced_settings()` →
   `state.save_translator_config()`（`config_store`）→ `save_project_context_settings()`；
   项目文件失败时回滚全局文件；最后 `_config_ui_saved_snapshot = _current_config_ui_snapshot()`。
-- dirty/离开保护：`_config_tab_has_unsaved_changes()`；
+  页面 adapter 的 `collect()` 只返回值、`validate()` 对未迁移页面返回空列表，均不写盘。
+- dirty/离开保护：`_config_tab_has_unsaved_changes()` 与 `_config_ui_saved_snapshot` 仍是唯一
+  基线；coordinator 提供 `has_unsaved_changes(baseline)` 供新页面测试。
   `_confirm_unsaved_config_before_workflow()`、`_confirm_unsaved_config_before_registry_switch()`、
   `_confirm_unsaved_config_before_close()`、`_confirm_leave_config_tab()`；
   丢弃修改走 `_on_reload_config()`，恢复推荐值走 `_on_restore_recommended_config()`。
@@ -241,7 +256,9 @@
   `set_workspace_root()`；字体 `_on_download_recommended_fonts()` → `FontInstallWorker`；
   扩展 `_on_install_relation_analyzer()` → `OptionalFeatureInstallController`；
   主题 `_on_theme_changed()` → `_set_theme_preference(persist=False)` 仅预览。
-- 测试：`tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
+- 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
+  `tests.test_settings_coordinator`、`tests.test_gui_settings_coordinator`、
+  `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`、`tests.test_gui_litellm_settings_page`、
   `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、

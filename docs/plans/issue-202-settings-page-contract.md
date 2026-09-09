@@ -1,19 +1,23 @@
 # #202 Phase A：Settings 页面契约与现状基线
 
-> 状态：2026-09-09 于 `main@2b93e43` 核验（issue 记录基线为 `394f9ee`，其后仅两个无关提交）。
-> 本文冻结 Phase B 的最小 page adapter / coordinator 接入合同，并记录 as-is 现状。
-> `gui_qt/settings/`、`SettingsCoordinator` **尚未实现**；本文不把计划结构写成已完成事实。
+> 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 的 `gui_qt/settings/`
+> page contract、registry、coordinator 与 legacy adapter 已实现（本 PR，待合并）。
+> Phase C/D 的页面迁移与最终收口仍未开始，`MainWindow` 仍持有唯一保存事务。
+> 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
+>
+> 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于合并后的 `main@773014b`。
 >
 > 关联：[#202 Epic](https://github.com/hu-border-collie/renpy-translation-lab/issues/202)、
 > [#348 配置与迁移合同](issue-348-model-routing-config-contract.md)、
 > [架构概览](../architecture.md)、[代码路径索引](../code_paths.md)。
 
-## 本阶段范围
+## Phase A 范围（已交付）
 
 - 只补维护者文档与说明性 docstring，不改变运行行为。
 - 冻结 Phase B 需要的最小页面接口、字段所有权和宿主事件边界。
 - 记录当前 10 个 Settings 页面、字段/即时持久化所有权、局部异步任务、lazy 构建与测试入口。
-- 不定义 #348 的 `model_routing` schema、迁移语义或生产 resolver；不实现任何页面。
+- 不定义 #348 的 `model_routing` schema、迁移语义或生产 resolver；Phase A 不实现任何页面。
+- Phase B 的 as-built 状态见下文「Phase B 实现状态」；页面迁移（C/D）仍未开始。
 
 ## 当前基线（as-is）
 
@@ -83,23 +87,24 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
 `_confirm_leave_config_tab()` 分别覆盖启动任务、切换项目、关闭窗口和离开设置页的
 保存/放弃/取消三态。`_on_reload_config()` 是当前丢弃未保存修改的入口。
 
-### 已知 as-is 缺口（Phase B 必须覆盖）
+### 已知 as-is 缺口与处理状态
 
-- **项目页单独打开不会填充字段**：`_load_config_to_ui(pages={"project"})` 只刷新只读 root 标签，
-  advanced 分支只在 `want is None` 或 `"advanced"` / `"context"` 时执行。首次只打开项目页会看到
-  默认值；随后保存触发全量补建时，preserve/restore 可能把默认值当作“用户编辑”写回。
-- **dirty 键所有权不完整**：`_CONFIG_SNAPSHOT_KEYS_BY_PAGE` 没有 `project` / `api_keys` 项；
-  `advanced` 键集合又包含上下文主开关，形成一键多页。
-- **页面不可独立构造**：builder 直接写 `self.<widget>` 和共享的 `_advanced_setting_widgets`，
-  依赖 `MainWindow` 的 `state`、`_load_config_to_ui`、`_on_save_config` 等私有实现。
-- **保存编排集中**：load/collect/validate/dirty/save 全部在 `MainWindow`，没有页面可测试的
-  adapter contract，也没有页面级错误聚焦接口。
-- **局部 worker 归属整窗**：LiteLLM / 字体 / 安装 / registry worker 由 `MainWindow` 属性和
-  私有回调管理，页面无法脱离整窗验证取消、stale result 和关闭语义。
-- **说明性 docstring 过时**：`gui_qt/__init__.py` 与 `gui_qt/app.py` 仍称“所有动作最终经
-  QProcess”，与 QThread / QThreadPool / GUI 本地动作并存不符（本阶段只修说明）。
+- **项目页单独打开不会填充字段**：Phase B 已修。`_load_config_to_ui` 现按 registry 键加载
+  `project` 页的 advanced 字段；首次 materialize 即填入保存值。
+- **dirty 键所有权不完整**：Phase B 已修。registry 强制一键一主；`advanced` 不再包含
+  context 主开关，`project` 字段归 project 页。
+- **补建页面被 preserve/restore 覆盖**：Phase B 已修。只保留已加载页面的快照，且恢复只回写
+  快照中存在的 advanced 键。
+- **页面不可独立构造**：仍未消除。10 页当前仍经 `LegacySettingsPageAdapter` 调用
+  `MainWindow` builder，页面本身依赖整窗私有状态；Phase C 起逐页迁移为独立 `SettingsPage`。
+- **保存编排集中**：部分收敛。coordinator 已提供 load/collect/validate/reset/dirty/错误聚焦合同，
+  但唯一保存事务、dirty 基线与离开保护仍在 `MainWindow`；Phase D 继续收口。
+- **局部 worker 归属整窗**：仍未消除。LiteLLM / 字体 / 安装 / registry worker 仍由 `MainWindow`
+  属性和私有回调管理；Phase C 起按 #297 合同迁到页面。
+- **说明性 docstring 过时**：Phase A 已修。`gui_qt/__init__.py` / `gui_qt/app.py` 已区分
+  QProcess、QThread/QThreadPool 与 GUI 本地动作。
 
-## Target：Phase B 最小接入合同（已冻结，尚未实现）
+## Phase B 接入合同（已冻结并落地最小接线；页面迁移属于 C/D）
 
 目标目录与职责：
 
@@ -209,20 +214,49 @@ Coordinator → 页面（只通过上述方法）：
 完整边界见 [#348 P0 合同的「#202 / #348 所有权」](issue-348-model-routing-config-contract.md#202--348-所有权)。
 `#202` 不定义第二套模型迁移语义；`#348` 不复制 `MainWindow._on_save_config`。
 
+## Phase B 实现状态（本 PR）
+
+已落地：
+
+- `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
+- `gui_qt/settings/registry.py`：10 页 `SettingsPageSpec`、唯一配置键所有权、lazy 属性映射；
+  `build_default_registry()` 在 `MainWindow` 构造时校验一键一主。
+- `gui_qt/settings/coordinator.py`：`ensure_page` / `activate` / `load` / `collect` / `validate` /
+  `reset` / `focus_issue` / `set_task_running` / `has_unsaved_changes`，不依赖 Qt。
+- `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator；
+  页面仍由 `MainWindow` builder 构建，字段读写委托宿主，旧保存事务不变。
+  `coordinator.load(snapshot)` 经 `_restore_config_ui_snapshot` 应用内存快照（不读盘）；
+  `reset()` 后页面仍视为已加载；`focus_issue()` 会先补填未访问页面再聚焦。
+- `MainWindow`：页面清单、dirty 键和 lazy 映射改由 registry 提供；`_ensure_settings_page` /
+  `_on_settings_nav_row_changed` 经 coordinator 补建与切换；项目页首次打开会加载其 owned 字段；
+  `_ensure_settings_pages_for_config` 只保留已加载页面的快照，且 `_restore_config_ui_snapshot`
+  只回写快照中存在的 advanced 键，避免补建页面被推荐值覆盖。
+- 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
+  `tests.test_settings_coordinator`（纯 Python）与 `tests.test_gui_settings_coordinator`（GUI 集成）。
+
+仍未落地（Phase C/D）：
+
+- 10 页仍以 `LegacySettingsPageAdapter` 运行，页面本身尚未脱离 `MainWindow` 构造。
+- LiteLLM 页面局部 worker 的生命周期迁移属于 Phase C。
+- `MainWindow` 仍持有唯一保存事务、dirty 基线与离开保护；coordinator 只提供合同并委托宿主。
+
 ## Phase B 验收映射
 
-- [ ] `gui_qt/settings/` 下的 contract / registry / coordinator 可脱离 `MainWindow` 测试。
-- [ ] 10 页登记后一键一主；`project`、`api_keys` 的字段/即时动作所有权明确，advanced 与 context
+- [x] `gui_qt/settings/` 下的 contract / registry / coordinator 可脱离 `MainWindow` 测试。
+- [x] 10 页登记后一键一主；`project`、`api_keys` 的字段/即时动作所有权明确，advanced 与 context
       不再共享上下文主开关键。
-- [ ] 普通切页只构建并填充目标页；其他页面 materialize 不覆盖已打开页面的未保存编辑。
-- [ ] coordinator 的 load/collect/validate/reset/dirty/save/错误聚焦有独立测试。
-- [ ] 过渡期保存仍只有一份总事务；页面不得直接写 `translator_config.json` 或
+- [x] 普通切页只构建并填充目标页；其他页面 materialize 不覆盖已打开页面的未保存编辑。
+- [x] coordinator 的 load/collect/validate/reset/dirty/save/错误聚焦有独立测试。
+- [x] 过渡期保存仍只有一份总事务；页面不得直接写 `translator_config.json` 或
       `project_context_settings.json`。
-- [ ] #348 可用一个最小 Model Profiles adapter 示例或测试接入 `load/collect/validate/reset`。
-- [ ] 全局 shell route、键盘/焦点可达性和导航防裁切行为无回归。
+- [x] #348 可用一个最小 Model Profiles adapter 示例或测试接入 `load/collect/validate/reset`。
+- [x] 全局 shell route、键盘/焦点可达性和导航防裁切行为无回归。
 
 ## 相关测试入口
 
+- contract / registry / coordinator（纯 Python）：`tests.test_settings_page_contract`、
+  `tests.test_settings_registry`、`tests.test_settings_coordinator`。
+- GUI 集成：`tests.test_gui_settings_coordinator`。
 - 布局 / 导航 / 配置：`tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
   `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
   `tests.test_gui_settings_schema`。
@@ -238,6 +272,7 @@ Coordinator → 页面（只通过上述方法）：
 
 ## 非目标
 
-- 不在本阶段创建 `gui_qt/settings/`、迁移任何页面或改变运行行为。
-- 不顺手修上文的 as-is 产品 bug；若阻塞 Phase B，单独 issue / PR 跟踪。
+- Phase A 未创建 `gui_qt/settings/`；Phase B 只创建 contract/registry/coordinator/legacy adapter，
+  不迁移任何页面。
+- Phase B 不把保存事务、dirty 基线与离开保护搬出 `MainWindow`（Phase D 收口）。
 - 不改变 CLI/workflow、manifest、默认模型、执行策略或 `check → bound preview → apply` 合同。
