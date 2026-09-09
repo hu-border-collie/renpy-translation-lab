@@ -138,6 +138,87 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             collected["batch_project_analysis_thinking_level"], "high"
         )
 
+    def test_appearance_page_is_migrated_settings_page(self) -> None:
+        from gui_qt.settings.appearance_page import AppearanceSettingsPage
+        from gui_qt.settings.legacy import LegacySettingsPageAdapter
+
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value={"gui": {"theme": "dark"}},
+        ):
+            self.window._ensure_settings_page("appearance")
+        page = self.window._settings_coordinator.page("appearance")
+        self.assertIsInstance(page, AppearanceSettingsPage)
+        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(
+            set(collected),
+            self.window._settings_registry.config_keys_for("appearance"),
+        )
+        self.assertEqual(collected["theme"], "dark")
+
+    def test_appearance_page_first_open_after_other_pages_loads_disk_values(
+        self,
+    ) -> None:
+        config = {"gui": {"theme": "light"}}
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("advanced")
+            self.assertFalse(self.window._settings_coordinator.is_built("appearance"))
+            self.window._ensure_settings_page("appearance")
+        collected = self.window._settings_coordinator.collect()
+        self.assertEqual(collected["theme"], "light")
+
+    def test_opening_other_page_keeps_unsaved_theme_preview(self) -> None:
+        config = {"gui": {"theme": "system"}}
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("appearance")
+            page = self.window._settings_coordinator.page("appearance")
+            page.theme_combo.setCurrentIndex(page.theme_combo.findData("dark"))
+            self.assertEqual(page.collect()["theme"], "dark")
+            self.assertEqual(self.window._theme_preference, "dark")
+            self.window._ensure_settings_page("advanced")
+        self.assertEqual(page.collect()["theme"], "dark")
+        self.assertEqual(self.window._theme_preference, "dark")
+
+    def test_materializing_other_pages_restores_unsaved_theme_preview(self) -> None:
+        config = {"gui": {"theme": "system"}}
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("appearance")
+            page = self.window._settings_coordinator.page("appearance")
+            page.theme_combo.setCurrentIndex(page.theme_combo.findData("dark"))
+            self.assertEqual(self.window._theme_preference, "dark")
+            self.window._ensure_settings_pages_for_config()
+        self.assertEqual(page.collect()["theme"], "dark")
+        self.assertEqual(self.window._theme_preference, "dark")
+
+    def test_appearance_reset_syncs_host_theme_preference(self) -> None:
+        config = {"gui": {"theme": "system"}}
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("appearance")
+            page = self.window._settings_coordinator.page("appearance")
+            page.theme_combo.setCurrentIndex(page.theme_combo.findData("dark"))
+            self.assertEqual(self.window._theme_preference, "dark")
+            self.window._settings_coordinator.reset(pages={"appearance"})
+        self.assertEqual(page.collect()["theme"], "system")
+        self.assertEqual(self.window._theme_preference, "system")
+
     def test_advanced_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.advanced_page import AdvancedSettingsPage
         from gui_qt.settings.legacy import LegacySettingsPageAdapter
