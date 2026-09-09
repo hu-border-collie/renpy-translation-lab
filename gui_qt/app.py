@@ -10285,14 +10285,16 @@ class MainWindow(QMainWindow):
                         selected=page._current_litellm_provider()
                     )
             if "theme" in snapshot:
+                theme = str(snapshot.get("theme") or "system")
                 appearance_page = self._appearance_page()
                 if appearance_page is not None:
-                    appearance_page.load(
-                        {"theme": snapshot.get("theme") or "system"},
-                        restore=True,
-                    )
+                    appearance_page.load({"theme": theme}, restore=True)
                 else:
-                    self._set_theme_combo_value(str(snapshot.get("theme") or "system"))
+                    self._set_theme_combo_value(theme)
+                # load(..., restore=True) blocks combo signals, so preview
+                # callbacks never run. Keep the live host preference aligned
+                # with the restored combo (unsaved preview included).
+                self._set_theme_preference(theme, persist=False)
 
             advanced_keys = {
                 field.key
@@ -13460,8 +13462,10 @@ class MainWindow(QMainWindow):
                 appearance_page = self._appearance_page()
                 if appearance_page is not None:
                     appearance_page.load({"theme": self._theme_preference})
-            elif want is not None:
+            elif want is not None and self._appearance_page() is None:
                 # Keep preference in sync without re-applying stylesheets.
+                # Skip when the appearance page is already built: it may be
+                # holding an unsaved preview that a later restore must keep.
                 self._theme_preference = read_gui_theme_from_config(config)
 
             # Nothing else to fill until config-bearing pages exist.
