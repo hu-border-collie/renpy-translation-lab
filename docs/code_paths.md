@@ -81,7 +81,6 @@
 - `gui_qt/settings/leave_guard.py`：未保存离开保护文案。
 - `gui_qt/settings/save_apply.py`：`apply_collected_settings` 把 collect() 快照应用到原始 JSON 对象；
   extras 由宿主注入，写盘仍走 `MainWindow._persist_collected_settings`。
-- `gui_qt/settings/legacy.py`：`LegacySettingsPageAdapter` 把未迁移页面接入 coordinator。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM `SettingsPage`；局部 worker 复用
   #297 的取消、operation identity、retired ownership 与 shutdown 合同。
 - `gui_qt/settings/page_chrome.py`：迁移页共用 chrome。
@@ -251,10 +250,10 @@
   `gui_qt/app.py` 的 `_SETTINGS_PAGE_SPECS` / `_SETTINGS_CONFIG_PAGE_KEYS` /
   `_SETTINGS_LAZY_ATTR_TO_PAGE` 现在只是 registry 的兼容别名。
 - lazy 构建：`MainWindow.__getattr__` / `_ensure_settings_page()` →
-  `SettingsCoordinator.ensure_page()` → `LegacySettingsPageAdapter` → 现有
-  `_build_settings_*_page()` builder；`_on_settings_nav_row_changed()` →
-  `SettingsCoordinator.activate()`。普通切页只构建目标页；保存/重载经
-  `_ensure_settings_pages_for_config()` 补建全部配置页，并只保留已加载页面的编辑快照。
+  `SettingsCoordinator.ensure_page()` → `_create_*_settings_page()`；
+  `_on_settings_nav_row_changed()` → `SettingsCoordinator.activate()`。
+  普通切页只构建目标页；保存/重载经 `_ensure_settings_pages_for_config()` 补建全部配置页，
+  并只保留已加载页面的编辑快照。
 - 加载：`_load_config_to_ui()` → `ProjectState.load_translator_config()` → 按 registry 键填充
   `models` / `litellm` / `context` / `appearance` / `advanced` / `project`（项目页首次
   materialize 即加载 owned advanced 字段）→ `_update_config_ui_saved_snapshot()`。

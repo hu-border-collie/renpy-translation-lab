@@ -49,7 +49,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
                 QApplication.setActiveWindow(self.window)
 
     def test_litellm_page_is_migrated_settings_page(self) -> None:
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.litellm_page import LiteLLMSettingsPage
 
         with mock.patch.object(
@@ -60,7 +59,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("litellm")
         page = self.window._settings_coordinator.page("litellm")
         self.assertIsInstance(page, LiteLLMSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertTrue(
             set(collected).issubset(
@@ -70,7 +68,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
 
     def test_context_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.context_page import ContextSettingsPage
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
 
         with mock.patch.object(
             self.window.state,
@@ -83,7 +80,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("context")
         page = self.window._settings_coordinator.page("context")
         self.assertIsInstance(page, ContextSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(
             set(collected),
@@ -139,13 +135,11 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         )
 
     def test_shortcuts_page_is_migrated_settings_page(self) -> None:
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.shortcuts_page import ShortcutsSettingsPage
 
         self.window._ensure_settings_page("shortcuts")
         page = self.window._settings_coordinator.page("shortcuts")
         self.assertIsInstance(page, ShortcutsSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(collected, {})
         self.assertEqual(
@@ -155,12 +149,10 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
 
     def test_api_keys_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.api_keys_page import ApiKeysSettingsPage
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
 
         self.window._ensure_settings_page("api_keys")
         page = self.window._settings_coordinator.page("api_keys")
         self.assertIsInstance(page, ApiKeysSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(collected, {})
         self.assertEqual(
@@ -174,12 +166,10 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
 
     def test_extensions_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.extensions_page import ExtensionsSettingsPage
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
 
         self.window._ensure_settings_page("extensions")
         page = self.window._settings_coordinator.page("extensions")
         self.assertIsInstance(page, ExtensionsSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(collected, {})
         self.assertEqual(
@@ -192,13 +182,11 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         )
 
     def test_workspace_page_is_migrated_settings_page(self) -> None:
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.workspace_page import WorkspaceSettingsPage
 
         self.window._ensure_settings_page("workspace")
         page = self.window._settings_coordinator.page("workspace")
         self.assertIsInstance(page, WorkspaceSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(collected, {})
         self.assertEqual(
@@ -212,7 +200,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
 
     def test_appearance_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.appearance_page import AppearanceSettingsPage
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
 
         with mock.patch.object(
             self.window.state,
@@ -222,7 +209,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("appearance")
         page = self.window._settings_coordinator.page("appearance")
         self.assertIsInstance(page, AppearanceSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(
             set(collected),
@@ -293,7 +279,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
 
     def test_advanced_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.advanced_page import AdvancedSettingsPage
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
 
         with mock.patch.object(
             self.window.state,
@@ -303,7 +288,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("advanced")
         page = self.window._settings_coordinator.page("advanced")
         self.assertIsInstance(page, AdvancedSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(
             set(collected),
@@ -331,7 +315,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         self.assertEqual(collected["catalog_gemini_models"], ["gemini-experimental-foo"])
 
     def test_project_page_is_migrated_settings_page(self) -> None:
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.project_page import ProjectSettingsPage
 
         with mock.patch.object(
@@ -342,7 +325,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("project")
         page = self.window._settings_coordinator.page("project")
         self.assertIsInstance(page, ProjectSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(
             set(collected),
@@ -351,7 +333,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         self.assertEqual(collected["tl_subdir"], "custom_tl")
 
     def test_models_page_is_migrated_settings_page(self) -> None:
-        from gui_qt.settings.legacy import LegacySettingsPageAdapter
         from gui_qt.settings.models_page import ModelsSettingsPage
 
         with mock.patch.object(
@@ -362,7 +343,6 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("models")
         page = self.window._settings_coordinator.page("models")
         self.assertIsInstance(page, ModelsSettingsPage)
-        self.assertNotIsInstance(page, LegacySettingsPageAdapter)
         collected = self.window._settings_coordinator.collect()
         self.assertEqual(
             set(collected),

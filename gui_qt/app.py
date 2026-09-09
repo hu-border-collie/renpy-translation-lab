@@ -329,8 +329,7 @@ from .settings_schema import (
 from .settings.coordinator import SettingsCoordinator
 from .settings.leave_guard import settings_leave_guard_prompt
 from .settings.save_apply import SettingsSaveExtras, apply_collected_settings
-from .settings.legacy import LegacySettingsPageAdapter
-from .settings.page_contract import SettingsIssue, SettingsPageActions
+from .settings.page_contract import SettingsPageActions
 from .settings.litellm_page import (
     LITELLM_FORWARDED_ATTRS,
     LiteLLMPageHost,
@@ -372,26 +371,6 @@ from .settings.registry import (
     build_default_registry,
 )
 
-# Legacy flat-key -> widget attribute for coordinator error focus. Migrated
-# pages will own this mapping themselves; this table keeps unmigrated pages
-# usable until then.
-_LEGACY_SETTINGS_WIDGET_BY_KEY: dict[str, str] = {
-    "theme": "theme_combo",
-    "sync_model": "sync_model_combo",
-    "sync_embedding_model": "sync_embedding_combo",
-    "batch_model": "batch_model_combo",
-    "batch_embedding_model": "batch_embedding_combo",
-    "batch_thinking_level": "batch_thinking_combo",
-    "sync_backend": "sync_backend_combo",
-    "litellm_model": "litellm_model_combo",
-    "custom_litellm_providers": "custom_provider_table",
-    "rag_enabled": "rag_enabled_cb",
-    "source_index_enabled": "source_index_enabled_cb",
-    "bootstrap_on_build": "bootstrap_on_build_cb",
-    "sync_source_index_enabled": "sync_source_index_enabled_cb",
-    "sync_project_analysis_inject_enabled": "sync_inject_published_brief_cb",
-    "context_storage_location": "context_storage_game_cb",
-}
 from .translation_workflow import WorkflowUpdate
 from .widget_helpers import (
     message_box_information,
@@ -3030,9 +3009,6 @@ class MainWindow(QMainWindow):
 
         self._settings_pages_built = set()
         self._settings_registry = build_default_registry()
-        self._settings_page_builders: dict[str, str] = {
-            key: builder for key, _label, builder in _SETTINGS_PAGE_SPECS
-        }
         # Placeholder stack pages — real content replaces them on first visit.
         for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
             self._settings_nav_rows[key] = index
@@ -3143,42 +3119,18 @@ class MainWindow(QMainWindow):
     def _settings_lazy_ready(self) -> bool:
         """True when the full settings shell exists (not a MainWindow.__new__ stub)."""
         return bool(
-            getattr(self, "_settings_page_builders", None)
-            and getattr(self, "_settings_registry", None) is not None
+            getattr(self, "_settings_registry", None) is not None
             and getattr(self, "_settings_coordinator", None) is not None
             and getattr(self, "settings_stack", None) is not None
             and "state" in self.__dict__
         )
 
     def _build_settings_page_adapter(self, spec):
-        """Build one settings page for the coordinator."""
-        if spec.key == "litellm":
-            return self._create_litellm_settings_page()
-        if spec.key == "models":
-            return self._create_models_settings_page()
-        if spec.key == "project":
-            return self._create_project_settings_page()
-        if spec.key == "context":
-            return self._create_context_settings_page()
-        if spec.key == "advanced":
-            return self._create_advanced_settings_page()
-        if spec.key == "appearance":
-            return self._create_appearance_settings_page()
-        if spec.key == "shortcuts":
-            return self._create_shortcuts_settings_page()
-        if spec.key == "api_keys":
-            return self._create_api_keys_settings_page()
-        if spec.key == "extensions":
-            return self._create_extensions_settings_page()
-        if spec.key == "workspace":
-            return self._create_workspace_settings_page()
+        """Build one migrated Settings page for the coordinator."""
         builder = getattr(self, spec.builder_name, None)
         if not callable(builder):
             return None
-        widget = builder()
-        if widget is None:
-            return None
-        return LegacySettingsPageAdapter(self, spec, widget)
+        return builder()
 
     def _install_settings_page(self, spec, page_adapter) -> None:
         """Swap a freshly built page into the settings stack."""
@@ -3228,49 +3180,6 @@ class MainWindow(QMainWindow):
 
     def _request_settings_reload(self) -> None:
         self._on_reload_config()
-
-    def _legacy_settings_page_load(self, page_key: str, snapshot) -> None:
-        """Apply a coordinator-filtered snapshot to an unmigrated page.
-
-        Legacy widgets already exist, so the snapshot is written through the
-        existing restore path without a disk read. ``_restore_config_ui_snapshot``
-        only touches keys present in the snapshot.
-        """
-        if snapshot:
-            self._restore_config_ui_snapshot(dict(snapshot))
-
-    def _legacy_settings_page_collect(self, page_key: str) -> dict[str, object]:
-        keys = self._settings_registry.config_keys_for(page_key)
-        current = self._current_config_ui_snapshot()
-        return {key: current[key] for key in keys if key in current}
-
-    def _legacy_settings_page_validate(self, page_key: str) -> list[SettingsIssue]:
-        """Shared advanced validation stays in the single save transaction."""
-        return []
-
-    def _legacy_settings_page_reset(self, page_key: str) -> None:
-        self._load_config_to_ui(refresh_task_gates=False, pages={page_key})
-
-    def _legacy_settings_page_focus(self, page_key: str, field_key: str) -> bool:
-        if not self._settings_coordinator.is_loaded(page_key):
-            self._populate_settings_page(page_key)
-        self._focus_settings_section(page_key)
-        widget = getattr(self, "_advanced_setting_widgets", {}).get(field_key)
-        if widget is None:
-            widget_name = _LEGACY_SETTINGS_WIDGET_BY_KEY.get(field_key)
-            if widget_name is not None:
-                widget = self._settings_widget(widget_name)
-        if widget is not None and hasattr(widget, "setFocus"):
-            widget.setFocus()
-            return True
-        return False
-
-    def _legacy_settings_page_set_task_running(
-        self, page_key: str, running: bool
-    ) -> None:
-        # Legacy pages do not own task chrome yet; _set_task_running already
-        # syncs the global action bar once. Migrated pages will implement this.
-        return None
 
     def _populate_settings_page(self, key: str) -> None:
         """Fill one already-built page from the current config or mark it loaded."""
@@ -3372,93 +3281,6 @@ class MainWindow(QMainWindow):
             self._on_batch_thinking_changed
         )
         self._settings_models_signals_wired = True
-
-    def _settings_page(self, object_name: str) -> tuple[QScrollArea, QVBoxLayout]:
-        scroll = QScrollArea()
-        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        scroll.setObjectName(f"{object_name}_scroll")
-        self._style_themed_surface(scroll)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        viewport = scroll.viewport()
-        viewport.setObjectName(f"{object_name}_viewport")
-        self._style_themed_surface(viewport)
-
-        content = QWidget()
-        content.setObjectName(f"{object_name}_content")
-        self._style_themed_surface(content)
-        content_layout = QHBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-
-        body = QWidget()
-        body.setObjectName("settings_page_body")
-        body.setProperty("settingsPage", object_name)
-        # Fill the settings viewport (including fullscreen). A hard 1080px cap
-        # left large empty gutters on wide / maximized windows.
-        body.setMinimumWidth(0)
-        body.setMaximumWidth(16777215)
-        body.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.MinimumExpanding,
-        )
-        self._style_themed_surface(body)
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(20, 18, 20, 20)
-        layout.setSpacing(14)
-        # Consume full viewport width; do not pin body to sizeHint via AlignHCenter.
-        content_layout.addWidget(body, 1)
-        self._settings_page_bodies[object_name] = body
-
-        scroll.setWidget(content)
-        return scroll, layout
-
-    def _settings_group(self, title: str) -> tuple[QGroupBox, QVBoxLayout]:
-        group = QGroupBox(title)
-        layout = QVBoxLayout(group)
-        layout.setSpacing(10)
-        layout.setContentsMargins(14, 18, 14, 14)
-        return group, layout
-
-    def _settings_form(self, group: QGroupBox) -> QFormLayout:
-        form = QFormLayout(group)
-        form.setObjectName("settings_form")
-        form.setContentsMargins(14, 18, 14, 14)
-        form.setHorizontalSpacing(16)
-        form.setVerticalSpacing(10)
-        form.setFieldGrowthPolicy(
-            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
-        )
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        form.setLabelAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
-        )
-        return form
-
-    def _build_settings_workspace_page(self) -> QWidget:
-        page = self._workspace_page() or self._create_workspace_settings_page()
-        return page.widget
-
-    def _build_settings_api_keys_page(self) -> QWidget:
-        page = self._api_keys_page() or self._create_api_keys_settings_page()
-        return page.widget
-
-    def _build_settings_project_page(self) -> QWidget:
-        page = self._project_page() or self._create_project_settings_page()
-        return page.widget
-
-    def _build_settings_context_page(self) -> QWidget:
-        page = self._context_page() or self._create_context_settings_page()
-        return page.widget
-
-    def _build_settings_models_page(self) -> QWidget:
-        page = self._models_page() or self._create_models_settings_page()
-        return page.widget
-
-    def _build_settings_extensions_page(self) -> QWidget:
-        page = self._extensions_page() or self._create_extensions_settings_page()
-        return page.widget
 
     def _ensure_relation_analyzer_install_controller(self) -> OptionalFeatureInstallController:
         controller = getattr(self, "_relation_analyzer_install", None)
@@ -4334,18 +4156,6 @@ class MainWindow(QMainWindow):
         if callable(refresh_credentials):
             refresh_credentials()
         self._refresh_litellm_install_action_gating()
-
-    def _build_settings_appearance_page(self) -> QWidget:
-        page = self._appearance_page() or self._create_appearance_settings_page()
-        return page.widget
-
-    def _build_settings_shortcuts_page(self) -> QWidget:
-        page = self._shortcuts_page() or self._create_shortcuts_settings_page()
-        return page.widget
-
-    def _build_settings_advanced_page(self) -> QWidget:
-        page = self._advanced_page() or self._create_advanced_settings_page()
-        return page.widget
 
     def _on_browse_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
         current = line_edit.text().strip()
