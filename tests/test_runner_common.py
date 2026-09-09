@@ -22,6 +22,9 @@ def ensure_tests_on_path() -> tuple[pathlib.Path, pathlib.Path]:
         sys.path.insert(0, str(root))
     if str(directory) not in sys.path:
         sys.path.insert(0, str(directory))
+    from runtime_test_isolation import isolate_developer_translator_config
+
+    isolate_developer_translator_config()
     return root, directory
 
 

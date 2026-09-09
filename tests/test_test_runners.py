@@ -29,6 +29,20 @@ def _module_names(test_ids: set[str]) -> set[str]:
 
 
 class TestDiscoveryRunners(unittest.TestCase):
+    def test_runner_isolates_developer_translator_config(self):
+        from runtime_test_isolation import (
+            isolate_developer_translator_config,
+            isolated_translator_config_path,
+        )
+        import translator_runtime as runtime
+        from test_runner_common import repo_root
+
+        isolate_developer_translator_config()
+        isolated = isolated_translator_config_path()
+        self.assertEqual(pathlib.Path(runtime.TRANSLATOR_CONFIG), isolated)
+        self.assertNotEqual(isolated, repo_root() / "translator_config.json")
+        self.assertEqual(isolated.read_text(encoding="utf-8").strip(), "{}")
+
     def test_cli_suite_excludes_gui_modules(self):
         names = {case.id() for case in _iter_cases(build_cli_suite())}
         self.assertTrue(names)

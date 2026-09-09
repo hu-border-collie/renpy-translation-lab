@@ -81,6 +81,9 @@ class GuiTaskPageTests(unittest.TestCase):
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
+    def test_mainwindow_does_not_load_developer_game_root(self) -> None:
+        self.assertIsNone(self.window.state.get_game_root())
+
     def test_sync_page_shows_warning_and_start_label(self) -> None:
         self.window._set_work_mode(
             WorkMode.SYNC_TRANSLATION,

@@ -34,6 +34,15 @@ _T = TypeVar("_T", bound=type)
 # QThread destroyed while still importing aborts the process.
 os.environ.setdefault("RTL_DISABLE_LITELLM_WARMUP", "1")
 
+# Isolate GUI tests from the developer's translator_config.json (game_root /
+# LiteLLM backend). Same class of leak as the LiteLLM catalog cache below.
+try:
+    from runtime_test_isolation import isolate_developer_translator_config
+except ImportError:
+    from tests.runtime_test_isolation import isolate_developer_translator_config
+
+isolate_developer_translator_config()
+
 # Isolate GUI tests from the developer/user-level LiteLLM catalog cache.
 # MainWindow constructs LiteLLMCatalogCache() without an explicit path, so on
 # machines with real cached provider/model selections the settings layout tests
