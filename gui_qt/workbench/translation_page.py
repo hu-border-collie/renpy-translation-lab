@@ -149,12 +149,10 @@ class TranslationTargetSection(QFrame):
             is_supported = strategy in supported
             label = strategy_label(strategy)
             if not is_supported:
-                reason = str(
-                    unsupported.get(strategy)
-                    or TRANSLATION_TARGET_COPY["unsupported_reasons"].get(
-                        strategy,
-                        "",
-                    )
+                reason_code = str(unsupported.get(strategy) or "")
+                reason = TRANSLATION_TARGET_COPY["unsupported_reasons"].get(
+                    reason_code,
+                    reason_code,
                 )
                 label = (
                     f"{label}（不可用：{reason}）"
@@ -235,8 +233,8 @@ class TranslationTargetSection(QFrame):
         if not profile_id or not strategy:
             return
         self._refresh_hint()
-        supported = self._entry(profile_id).get("strategies") or ()
-        if strategy not in supported:
-            return
+        # Always report the visible choice; the host owns runnable checks so
+        # an unsupported profile/strategy pair can explain itself instead of
+        # silently keeping the previous profile in app state.
         if self._on_select is not None:
             self._on_select(profile_id, strategy)

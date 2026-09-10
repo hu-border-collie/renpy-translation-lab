@@ -436,7 +436,7 @@ from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
 from .workbench.sync_translation_page import SyncTranslationPage
-from .workbench.translation_page import TranslationTargetSection
+from .workbench.translation_page import TranslationTargetSection, strategy_label
 from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
@@ -580,6 +580,8 @@ class MainWindow(QMainWindow):
             "strategy": "",
         }
         self._translation_routing_active = False
+        self._translation_supported_strategies: dict[str, tuple[str, ...]] = {}
+        self._translation_profile_models: dict[str, str] = {}
         self._workflow_step_output_lines: list[str] = []
         self._final_review_findings_cache_key: tuple[str, int] | None = None
         self._final_review_findings_cache: tuple[str, dict[str, object] | None] | None = None
@@ -8522,6 +8524,7 @@ class MainWindow(QMainWindow):
         if not isinstance(config, dict) or "model_routing" not in config:
             self._translation_routing_active = False
             self._translation_supported_strategies = {}
+            self._translation_profile_models = {}
             self._translation_target = {"profile_id": "", "strategy": mode_strategy}
             for section in sections.values():
                 section.set_target_choices(
@@ -8542,6 +8545,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._translation_routing_active = False
             self._translation_supported_strategies = {}
+            self._translation_profile_models = {}
             self._translation_target = {"profile_id": "", "strategy": mode_strategy}
             for section in sections.values():
                 section.set_target_choices(
@@ -8569,16 +8573,16 @@ class MainWindow(QMainWindow):
                 if default_profile in by_id
                 else (next(iter(by_id), "") if by_id else "")
             )
-        supported = [
-            str(item)
-            for item in (by_id.get(profile_id, {}).get("strategies") or ())
-        ]
-        strategy = (
-            mode_strategy
-            if mode_strategy in supported
-            else (supported[0] if supported else mode_strategy)
-        )
+        # Never silently fall back to another strategy: the visible execution
+        # page must match the selected strategy, otherwise the start command
+        # would contradict the selector. Unsupported pairs stay selected and
+        # are blocked by _translation_target_is_runnable() with a clear hint.
+        strategy = mode_strategy
         self._translation_routing_active = bool(entries)
+        self._translation_profile_models = {
+            str(entry.get("id") or ""): str(entry.get("model") or "")
+            for entry in entries
+        }
         self._translation_supported_strategies = {
             str(entry.get("id") or ""): tuple(
                 str(item) for item in (entry.get("strategies") or ())
@@ -8610,7 +8614,17 @@ class MainWindow(QMainWindow):
         supported = (
             getattr(self, "_translation_supported_strategies", {}) or {}
         ).get(profile_id, ())
-        return bool(profile_id and strategy and strategy in supported)
+        mode_strategy = (
+            "sync"
+            if self._current_work_mode() == WorkMode.SYNC_TRANSLATION
+            else "gemini_batch"
+        )
+        return bool(
+            profile_id
+            and strategy
+            and strategy == mode_strategy
+            and strategy in supported
+        )
 
     def _on_translation_target_selected(self, profile_id: str, strategy: str) -> None:
         """Apply an explicit profile/strategy choice from the unified page."""
@@ -8628,10 +8642,13 @@ class MainWindow(QMainWindow):
         else:
             # Same execution page: keep the hidden sibling selector in sync.
             self._refresh_translation_target_choices()
+            model = (
+                getattr(self, "_translation_profile_models", {}) or {}
+            ).get(profile_id, profile_id)
             self.statusBar().showMessage(
                 TRANSLATION_TARGET_COPY["resolved"].format(
-                    model=profile_id,
-                    strategy=strategy,
+                    model=model,
+                    strategy=strategy_label(strategy),
                 ),
                 4000,
             )
@@ -10882,10 +10899,13 @@ class MainWindow(QMainWindow):
             profile_id = str(
                 (getattr(self, "_translation_target", {}) or {}).get("profile_id") or ""
             )
+            model = (
+                getattr(self, "_translation_profile_models", {}) or {}
+            ).get(profile_id, profile_id)
             message_box_information(
                 self,
                 "执行方式不可用",
-                f"当前主模型（{profile_id}）不支持所选执行方式；"
+                f"当前主模型（{model}）不支持当前执行方式；"
                 "请在「模型与执行方式」中选择该模型支持的执行方式。",
             )
             return

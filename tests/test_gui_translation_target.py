@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -29,6 +30,15 @@ FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
 def routing_config(name: str = "gemini_batch") -> dict:
     payload = json.loads((FIXTURES / (name + ".json")).read_text(encoding="utf-8"))
     return preview_migration(payload).config
+
+
+def litellm_primary_config() -> dict:
+    """Migrated config whose primary profile can only run sync."""
+    config = routing_config("litellm_custom")
+    section = config["model_routing"]
+    section["defaults"]["primary_profile_id"] = "legacy-sync"
+    section["defaults"]["execution_strategy"] = "sync"
+    return config
 
 
 def selector_payload() -> dict:
@@ -100,7 +110,13 @@ class TranslationTargetSectionTests(unittest.TestCase):
         )
         item = self.section.strategy_combo.model().item(gemini_batch_index)
         self.assertFalse(item.isEnabled())
+        self.assertIn("不是 Gemini 直连模型", item.text())
+        self.assertNotIn("missing_gemini_adapter", item.text())
         self.assertIn("不是 Gemini 直连模型", self.section.hint_label.text())
+        self.assertNotIn(
+            "missing_gemini_adapter",
+            self.section.hint_label.text(),
+        )
 
     def test_selecting_supported_strategy_emits_selection(self) -> None:
         self.section.set_target_choices(selector_payload())
@@ -225,6 +241,65 @@ class TranslationTargetAppTests(unittest.TestCase):
                 "--non-interactive",
             ],
         )
+
+    def test_unsupported_profile_on_batch_page_blocks_start(self) -> None:
+        self.window.state.load_translator_config = lambda: litellm_primary_config()  # type: ignore[method-assign]
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        self.assertEqual(
+            self.window._translation_target["strategy"],
+            "gemini_batch",
+        )
+        self.assertFalse(self.window._translation_target_is_runnable())
+        with mock.patch("gui_qt.app.message_box_information") as info:
+            self.window._on_start_translation()
+
+        info.assert_called_once()
+        self.assertEqual(self.runner.calls, [])
+
+    def test_switching_to_sync_makes_litellm_profile_runnable(self) -> None:
+        self.window.state.load_translator_config = lambda: litellm_primary_config()  # type: ignore[method-assign]
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        self.window._on_translation_target_selected("legacy-sync", "sync")
+
+        self.assertEqual(self.window._work_mode, WorkMode.SYNC_TRANSLATION)
+        self.assertTrue(self.window._translation_target_is_runnable())
+        self.window._on_start_translation()
+        self.assertEqual(
+            self.runner.calls[0][1],
+            [
+                "sync-start",
+                "--profile",
+                "legacy-sync",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
+    def test_same_mode_selection_uses_model_name_and_localized_strategy(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        status_bar = self.window.statusBar()
+        with mock.patch.object(status_bar, "showMessage") as show_message:
+            self.window._on_translation_target_selected(
+                "legacy-batch",
+                "gemini_batch",
+            )
+
+        message = show_message.call_args[0][0]
+        self.assertIn("gemini-3.5-flash", message)
+        self.assertIn("Gemini Batch", message)
+        self.assertNotIn("legacy-batch", message)
 
     def test_legacy_config_keeps_default_behavior_without_profile_flag(self) -> None:
         self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
