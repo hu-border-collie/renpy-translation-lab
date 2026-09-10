@@ -107,6 +107,44 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertIn("上下文上限 tokens", self.messages[-1])
         self.assertNotIn("context_limit_tokens", self.messages[-1])
 
+    def test_missing_primary_profile_is_repaired_on_load(self) -> None:
+        section = migrated_section()
+        section["defaults"]["primary_profile_id"] = ""
+        section["defaults"]["execution_strategy"] = "gemini_batch"
+
+        self.page.load({"model_routing": section})
+
+        collected = self.page.collect()["model_routing"]
+        self.assertTrue(collected["defaults"]["primary_profile_id"])
+        self.assertEqual(self.page.validate(), [])
+
+    def test_invalid_integer_keeps_existing_numeric_override(self) -> None:
+        section = migrated_section()
+        profile_id = section["defaults"]["primary_profile_id"]
+        section["profiles"][profile_id]["capability_overrides"] = {
+            "context_limit_tokens": 4096,
+        }
+        self.page.load({"model_routing": section})
+        self.page.profiles_list.setCurrentRow(
+            next(
+                row
+                for row in range(self.page.profiles_list.count())
+                if str(self.page.profiles_list.item(row).data(256)) == profile_id
+            )
+        )
+        self.page._context_edits["context_limit_tokens"].setText("abc")
+        combo = self.page._capability_combos["usage_stats"]
+        combo.setCurrentIndex(combo.findData(False))
+
+        self.page._on_profile_capabilities_changed()
+
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertEqual(overrides["context_limit_tokens"], 4096)
+        self.assertIs(overrides["usage_stats"], False)
+        self.assertTrue(self.messages)
+
     def test_adapter_change_repairs_unsupported_default_strategy(self) -> None:
         section = editor.empty_section()
         section = editor.add_provider(

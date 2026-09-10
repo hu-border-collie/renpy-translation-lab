@@ -531,10 +531,35 @@ class ProfilesSettingsPage(QObject):
                 str(defaults.get("primary_profile_id") or ""),
             )
             default_profile_id = str(self.default_profile_combo.currentData() or "")
+            stored_primary = str(defaults.get("primary_profile_id") or "")
             wanted_strategy = str(defaults.get("execution_strategy") or "")
             supported = list(
                 editor.strategy_choices(self._section).get(default_profile_id, ())
             )
+            if (
+                default_profile_id
+                and stored_primary != default_profile_id
+                and supported
+            ):
+                # A missing/unknown primary otherwise silently falls back to the
+                # first combo row and can never be repaired through the UI.
+                try:
+                    self._section = editor.set_defaults(
+                        self._section,
+                        primary_profile_id=default_profile_id,
+                        execution_strategy=(
+                            wanted_strategy
+                            if wanted_strategy in supported
+                            else supported[0]
+                        ),
+                    )
+                except editor.ModelProfilesEditorError:
+                    pass
+                else:
+                    defaults = dict(self._section.get("defaults") or {})
+                    wanted_strategy = str(
+                        defaults.get("execution_strategy") or wanted_strategy
+                    )
             if wanted_strategy and wanted_strategy not in supported and supported:
                 # An adapter/capability edit can invalidate the stored default;
                 # repair it in memory so the visible value is executable.
@@ -1014,14 +1039,32 @@ class ProfilesSettingsPage(QObject):
             if value is not None:
                 overrides[key] = bool(value)
         invalid_fields: list[str] = []
+        existing_overrides: dict[str, Any] = {}
+        if self._section is not None:
+            existing_entry = next(
+                (
+                    item
+                    for item in editor.editor_view(self._section)["profiles"]
+                    if item["id"] == self._selected_profile_id
+                ),
+                {},
+            )
+            existing_overrides = dict(
+                existing_entry.get("capability_overrides") or {}
+            )
         for key, edit in self._context_edits.items():
             text = edit.text().strip()
             if not text:
+                # Empty means "follow the adapter" and clears the override.
                 continue
             try:
                 overrides[key] = int(text)
             except ValueError:
                 invalid_fields.append(_CONTEXT_LABELS.get(key, key))
+                # Do not delete an existing numeric override because of a
+                # typo: keep the stored value until the user fixes the field.
+                if key in existing_overrides:
+                    overrides[key] = existing_overrides[key]
         if invalid_fields:
             self._show_status(
                 MODEL_PROFILES_PAGE_COPY["invalid_integer"].format(
