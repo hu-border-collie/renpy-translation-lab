@@ -1153,7 +1153,7 @@ def load_rotation_settings(config):
             print("Model rotation: disabled")
 
 
-def load_sync_translation_settings(config):
+def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
     """Load sync translation settings and project-bound Macro content.
 
     Context limits accept non-negative integers and default to 30/10 when
@@ -1172,9 +1172,17 @@ def load_sync_translation_settings(config):
 
     MODEL_ROUTING_CONFIG = None
     if "model_routing" in config:
-        section = checked_section(config)
-        config = runtime_settings_view(config)
-        MODEL_ROUTING_CONFIG = section
+        try:
+            section = checked_section(config)
+            config = runtime_settings_view(config)
+            MODEL_ROUTING_CONFIG = section
+        except (ValueError, TypeError) as exc:
+            if not tolerate_routing_errors:
+                if isinstance(exc, model_profile.ModelRoutingConfigError):
+                    raise
+                raise model_profile.routing_resolution_error(exc) from exc
+            raw = config.get("model_routing")
+            MODEL_ROUTING_CONFIG = copy.deepcopy(raw) if isinstance(raw, dict) else None
     sync = config.get("sync")
     if not isinstance(sync, dict):
         sync = {}
@@ -1755,6 +1763,7 @@ def runtime_config_scope(
     reload_translator_settings: bool = False,
     reload_runtime_config: bool = False,
     persist_corrected_game_root: bool = True,
+    tolerate_routing_errors: bool = False,
     require_api_key: bool = False,
 ):
     """Temporarily publish a job-scoped RuntimeConfig, then restore the previous one.
@@ -1773,6 +1782,9 @@ def runtime_config_scope(
         persist_corrected_game_root: Forwarded to
             :func:`load_translator_settings` when reloading project settings.
             Readonly hosts such as doctor should pass ``False``.
+        tolerate_routing_errors: Forwarded to :func:`load_translator_settings`.
+            Doctor and other readonly hosts should pass ``True`` so an invalid
+            ``model_routing`` section is reported instead of aborting the load.
         require_api_key: Forwarded to :func:`load_runtime_config` when reloading.
     """
     if reload_translator_settings and reload_runtime_config:
@@ -1789,7 +1801,8 @@ def runtime_config_scope(
                 load_runtime_config(require_api_key=require_api_key)
             elif reload_translator_settings:
                 load_translator_settings(
-                    persist_corrected_game_root=persist_corrected_game_root
+                    persist_corrected_game_root=persist_corrected_game_root,
+                    tolerate_routing_errors=tolerate_routing_errors,
                 )
             yield snapshot_runtime_config()
         finally:
@@ -1943,7 +1956,11 @@ def _reset_project_settings_to_defaults():
     _SYNC_STORY_GRAPH_PATH = ""
 
 
-def load_translator_settings(*, persist_corrected_game_root: bool = True):
+def load_translator_settings(
+    *,
+    persist_corrected_game_root: bool = True,
+    tolerate_routing_errors: bool = False,
+):
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env.
 
     Always starts from code defaults for project/path/prepare fields so omitted
@@ -1952,6 +1969,8 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
     When *persist_corrected_game_root* is False (readonly commands such as
     ``project-analysis-status``), a corrected effective root is applied in
     memory only and ``translator_config.json`` is not rewritten.
+    When *tolerate_routing_errors* is True, an invalid ``model_routing`` section
+    is kept for doctor reporting instead of refusing the load.
     """
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
@@ -1970,7 +1989,8 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
         try:
             config = runtime_settings_view(config)
         except (ValueError, TypeError) as exc:
-            raise model_profile.routing_resolution_error(exc) from exc
+            if not tolerate_routing_errors:
+                raise model_profile.routing_resolution_error(exc) from exc
 
     game_root = config.get("game_root")
     if isinstance(game_root, str) and game_root.strip():
@@ -2139,9 +2159,18 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
 
     apply_project_context_settings_to_config(config, BASE_DIR)
     load_include_filters_from_config(config)
-    load_sync_translation_settings(config)
+    load_sync_translation_settings(
+        config,
+        tolerate_routing_errors=tolerate_routing_errors,
+    )
     from model_routing_reader import runtime_settings_view
-    load_sync_rag_settings(runtime_settings_view(config))
+    try:
+        rag_config = runtime_settings_view(config)
+    except (ValueError, TypeError) as exc:
+        if not tolerate_routing_errors:
+            raise model_profile.routing_resolution_error(exc) from exc
+        rag_config = config
+    load_sync_rag_settings(rag_config)
     load_sync_source_index_settings(config)
     load_sync_project_analysis_settings(config)
     load_sync_story_memory_settings(config)

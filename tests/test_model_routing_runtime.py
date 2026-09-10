@@ -161,7 +161,7 @@ class ProductionRoutingTests(TestCase):
     def test_direct_batch_loader_clears_leftover_providers_without_v1(self):
         leftover = {"stale-custom": object()}
         config = {
-            "sync": {"model": "gemini-3.1-flash-lite", "backend": "gemini"},
+            "sync": "obsolete",
             "batch": {"model": "gemini-3.1-flash-lite"},
         }
         with runtime.runtime_config_scope(runtime.RuntimeConfig(
@@ -176,6 +176,24 @@ class ProductionRoutingTests(TestCase):
                 batch.load_batch_settings()
             self.assertIsNone(runtime.MODEL_ROUTING_CONFIG)
             self.assertNotIn("stale-custom", runtime.CUSTOM_LITELLM_PROVIDERS)
+
+    def test_batch_loader_tolerates_invalid_routing_for_doctor(self):
+        config = {
+            "model_routing": {"schema_version": 900},
+            "sync": {"model": "gemini-3.1-flash-lite", "backend": "gemini"},
+            "batch": {"model": "gemini-3.1-flash-lite"},
+        }
+        with runtime.runtime_config_scope(runtime.default_runtime_config()):
+            with patch.object(
+                batch,
+                "load_json_file",
+                side_effect=lambda path: config if path == runtime.TRANSLATOR_CONFIG else {},
+            ), redirect_stdout(io.StringIO()):
+                batch.load_batch_settings(tolerate_routing_errors=True)
+            self.assertEqual(runtime.MODEL_ROUTING_CONFIG, {"schema_version": 900})
+            status = batch.collect_doctor_model_routing_status()
+            self.assertEqual(status["status"], "attention")
+            self.assertTrue(status["issues"])
 
     def test_direct_batch_loader_publishes_v1_snapshot(self):
         config = migrated()
