@@ -1082,6 +1082,27 @@ MODEL_PROFILES_PAGE_COPY = {
     "diagnose": "诊断",
     "add_provider": "新增 Provider",
     "delete_provider": "删除 Provider",
+    "strategy_labels": {
+        "sync": "同步",
+        "gemini_batch": "Gemini Batch",
+    },
+    "strategy_unavailable_suffix": "（不可用）",
+    "embedding_none_option": "（不绑定）",
+    "new_provider_label": "新 Provider",
+    "new_profile_label": "新 ModelProfile",
+    "create_provider_label": "Google Gemini",
+    "create_profile_label": "Gemini Main",
+    "models_placeholder": "逗号分隔；留空只使用主模型",
+    "context_labels": {
+        "context_limit_tokens": "上下文上限 tokens",
+        "context_budget_tokens": "上下文预算 tokens",
+    },
+    "validation_summary": "当前有 {count} 项校验问题，保存会被阻止。",
+    "diagnostics_empty": "没有可显示的诊断项。",
+    "probe_report_title": (
+        "能力探测：{profile}（{adapter}）状态 {status}，请求数 {requests}"
+    ),
+    "probe_capability_line": "- {name}：{status}{detail}",
     "profile_label": "标签 / profile id",
     "provider_label": "Provider",
     "model_label": "模型",

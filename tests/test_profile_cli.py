@@ -57,6 +57,39 @@ class ProfileCliTests(unittest.TestCase):
             envelope = {}
         return exit_code, envelope
 
+    def test_cli_choices_follow_shared_core_constants(self) -> None:
+        import argparse
+
+        import model_profiles_editor as editor
+
+        parser = batch.build_arg_parser()
+        subparsers = next(
+            action
+            for action in parser._actions
+            if isinstance(action, argparse._SubParsersAction)
+        )
+        route_parser = subparsers.choices["profiles-set-route"]
+        default_parser = subparsers.choices["profiles-set-default"]
+        stage_action = next(
+            action for action in route_parser._actions if action.dest == "stage"
+        )
+        route_strategy = next(
+            action for action in route_parser._actions if action.dest == "strategy"
+        )
+        default_strategy = next(
+            action for action in default_parser._actions if action.dest == "strategy"
+        )
+
+        self.assertEqual(tuple(stage_action.choices), tuple(editor.STAGE_ORDER))
+        self.assertEqual(
+            tuple(route_strategy.choices),
+            tuple(editor.STRATEGY_ORDER),
+        )
+        self.assertEqual(
+            tuple(default_strategy.choices),
+            tuple(editor.STRATEGY_ORDER),
+        )
+
     def test_profiles_show_machine_envelope_is_credential_free(self) -> None:
         exit_code, envelope = self._run_json(
             "profiles-show",

@@ -129,13 +129,20 @@ PROFILE_COMMANDS = frozenset(
         'profiles-probe',
     }
 )
-PROFILE_STAGE_CHOICES = (
-    'translation',
-    'keyword',
-    'revision',
-    'project_analysis',
-    'final_review',
-)
+def _profile_stage_choices():
+    """Derive stage choices from the shared editor core (no duplicated enum)."""
+
+    import model_profiles_editor as editor
+
+    return tuple(editor.STAGE_ORDER)
+
+
+def _profile_strategy_choices():
+    """Derive execution-strategy choices from the shared editor core."""
+
+    import model_profiles_editor as editor
+
+    return tuple(editor.STRATEGY_ORDER)
 MACHINE_OUTPUT_COMMANDS = frozenset(
     {
         'doctor',
@@ -18548,7 +18555,7 @@ def build_arg_parser():
     profiles_default_parser.add_argument(
         '--strategy',
         required=True,
-        choices=('sync', 'gemini_batch'),
+        choices=_profile_strategy_choices(),
         help='Default execution strategy for stages without an explicit route.',
     )
 
@@ -18560,7 +18567,7 @@ def build_arg_parser():
     profiles_route_parser.add_argument(
         '--stage',
         required=True,
-        choices=PROFILE_STAGE_CHOICES,
+        choices=_profile_stage_choices(),
         help='Task stage to override.',
     )
     profiles_route_parser.add_argument(
@@ -18572,7 +18579,7 @@ def build_arg_parser():
     profiles_route_parser.add_argument(
         '--strategy',
         default='',
-        choices=('sync', 'gemini_batch'),
+        choices=_profile_strategy_choices(),
         help='Execution strategy for the stage route.',
     )
     profiles_route_parser.add_argument(

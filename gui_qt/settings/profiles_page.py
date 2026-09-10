@@ -54,10 +54,9 @@ _FIELD_WIDGETS = {
     "model_routing": "profiles_list",
 }
 
-_CONTEXT_LABELS = {
-    "context_limit_tokens": "上下文上限 tokens",
-    "context_budget_tokens": "上下文预算 tokens",
-}
+_CONTEXT_LABELS = MODEL_PROFILES_PAGE_COPY["context_labels"]
+
+_STRATEGY_LABELS = MODEL_PROFILES_PAGE_COPY["strategy_labels"]
 
 
 class ProfilesSettingsPage(QObject):
@@ -300,7 +299,9 @@ class ProfilesSettingsPage(QObject):
 
         self.profile_models_edit = QLineEdit()
         self.profile_models_edit.setObjectName("profiles_profile_models_edit")
-        self.profile_models_edit.setPlaceholderText("逗号分隔；留空只使用主模型")
+        self.profile_models_edit.setPlaceholderText(
+            MODEL_PROFILES_PAGE_COPY["models_placeholder"]
+        )
         self.profile_models_edit.editingFinished.connect(self._on_profile_fields_changed)
         layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["models_label"]))
         layout.addWidget(self.profile_models_edit)
@@ -328,8 +329,8 @@ class ProfilesSettingsPage(QObject):
             capabilities_layout.addLayout(row)
             self._capability_combos[key] = combo
         for key, label in (
-            ("context_limit_tokens", "上下文上限 tokens"),
-            ("context_budget_tokens", "上下文预算 tokens"),
+            ("context_limit_tokens", _CONTEXT_LABELS["context_limit_tokens"]),
+            ("context_budget_tokens", _CONTEXT_LABELS["context_budget_tokens"]),
         ):
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
@@ -433,7 +434,9 @@ class ProfilesSettingsPage(QObject):
                 self.hint_label.setText(
                     MODEL_PROFILES_PAGE_COPY["hint"]
                     + " "
-                    + f"当前有 {len(issues)} 项校验问题，保存会被阻止。"
+                    + MODEL_PROFILES_PAGE_COPY["validation_summary"].format(
+                        count=len(issues)
+                    )
                 )
             else:
                 self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["hint"])
@@ -592,12 +595,12 @@ class ProfilesSettingsPage(QObject):
         supported = list(choices.get(profile_id, ()))
         combo.clear()
         for strategy in editor.STRATEGY_ORDER:
-            label = {
-                "sync": "同步",
-                "gemini_batch": "Gemini Batch",
-            }.get(strategy, strategy)
+            label = _STRATEGY_LABELS.get(strategy, strategy)
             if strategy not in supported:
-                label = f"{label}（不可用）"
+                label = (
+                    f"{label}"
+                    f"{MODEL_PROFILES_PAGE_COPY['strategy_unavailable_suffix']}"
+                )
             combo.addItem(label, strategy)
             if strategy not in supported:
                 item = combo.model().item(combo.count() - 1)
@@ -648,7 +651,10 @@ class ProfilesSettingsPage(QObject):
                 "，".join(profile.get("rotation_extras") or ())
             )
             self.profile_embedding_combo.clear()
-            self.profile_embedding_combo.addItem("（不绑定）", "")
+            self.profile_embedding_combo.addItem(
+                MODEL_PROFILES_PAGE_COPY["embedding_none_option"],
+                "",
+            )
             for item in view["profiles"]:
                 if item["purpose"] == "embedding":
                     self.profile_embedding_combo.addItem(item["label"], item["id"])
@@ -773,7 +779,7 @@ class ProfilesSettingsPage(QObject):
         section = editor.empty_section()
         section = editor.add_provider(
             section,
-            label="Google Gemini",
+            label=MODEL_PROFILES_PAGE_COPY["create_provider_label"],
             adapter="gemini",
             provider="gemini",
             credential_kind="api_keys_json",
@@ -783,7 +789,7 @@ class ProfilesSettingsPage(QObject):
         provider_id = editor.provider_ids(section)[0]
         section = editor.add_profile(
             section,
-            label="Gemini Main",
+            label=MODEL_PROFILES_PAGE_COPY["create_profile_label"],
             provider_id=provider_id,
             model=DEFAULT_GEMINI_TRANSLATION_MODEL,
         )
@@ -821,7 +827,7 @@ class ProfilesSettingsPage(QObject):
             try:
                 self._section = editor.add_provider(
                     self._section,
-                    label="Google Gemini",
+                    label=MODEL_PROFILES_PAGE_COPY["create_provider_label"],
                     adapter="gemini",
                     provider="gemini",
                     credential_kind="api_keys_json",
@@ -835,7 +841,7 @@ class ProfilesSettingsPage(QObject):
         try:
             self._section = editor.add_profile(
                 self._section,
-                label="新 ModelProfile",
+                label=MODEL_PROFILES_PAGE_COPY["new_profile_label"],
                 provider_id=providers[0],
                 model="",
             )
@@ -883,7 +889,7 @@ class ProfilesSettingsPage(QObject):
         try:
             self._section = editor.add_provider(
                 self._section,
-                label="新 Provider",
+                label=MODEL_PROFILES_PAGE_COPY["new_provider_label"],
                 adapter="litellm",
                 provider="",
             )
@@ -940,9 +946,12 @@ class ProfilesSettingsPage(QObject):
         if not data:
             return
         lines = [
-            f"能力探测：{data.get('profile_id') or '(unknown)'} "
-            f"（{data.get('adapter') or '?'}）状态 {data.get('status') or 'unknown'}，"
-            f"请求数 {data.get('requests', 0)}"
+            MODEL_PROFILES_PAGE_COPY["probe_report_title"].format(
+                profile=data.get("profile_id") or "(unknown)",
+                adapter=data.get("adapter") or "?",
+                status=data.get("status") or "unknown",
+                requests=data.get("requests", 0),
+            )
         ]
         for item in data.get("capabilities") or ():
             if not isinstance(item, Mapping):
@@ -950,7 +959,11 @@ class ProfilesSettingsPage(QObject):
             detail = str(item.get("detail") or "")
             suffix = f"（{detail}）" if detail else ""
             lines.append(
-                f"- {item.get('name')}：{item.get('status')}{suffix}"
+                MODEL_PROFILES_PAGE_COPY["probe_capability_line"].format(
+                    name=item.get("name"),
+                    status=item.get("status"),
+                    detail=suffix,
+                )
             )
         self.diagnostics_label.setText("\n".join(lines))
 
@@ -986,7 +999,9 @@ class ProfilesSettingsPage(QObject):
                 )
         for issue in editor.section_issues(self._section):
             lines.append(f"[{issue['code']}] {issue['path']}")
-        self.diagnostics_label.setText("\n".join(lines) or "没有可显示的诊断项。")
+        self.diagnostics_label.setText(
+            "\n".join(lines) or MODEL_PROFILES_PAGE_COPY["diagnostics_empty"]
+        )
 
     # -- write-through handlers ------------------------------------------
 
