@@ -3,8 +3,9 @@
 > 状态：P0/P1 已实现；P2 已接入兼容入口的生产读取、冻结路由和 Settings 保存校验。
 > P3 已完成：GUI 耐久 Sync 生命周期（start/resume/status/cancel/derive 与
 > `check <RUN>` → `apply <RUN>`）、统一翻译入口（单一导航项 + ModelProfile/
-> ExecutionStrategy 选择器）以及 `sync-start --profile` / `build --profile`。
-> Settings Model Profiles 页与 CLI 旧命令别名/弃用映射仍待完成。
+> ExecutionStrategy 选择器）、`sync-start --profile` / `build --profile`，以及
+> Settings「模型与 Provider」页（providers / profiles / 默认值与阶段路由编辑）。
+> CLI 旧命令别名/弃用映射与四类真实 smoke matrix 仍待完成。
 > P2 支持边界及旧命令限制见 [P1 操作与限制](../model_config_migration.md)。
 
 本文冻结 #348 第一阶段的长期配置形状、兼容优先级、迁移输入和 #202/#348
@@ -199,7 +200,7 @@ P1 migrator 必须满足：
   CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
 - **P2（生产接线，已实现）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
   使用限制见迁移文档；新任务读取新配置，已有任务优先使用冻结路由。
-- **P3（大部分完成）**：GUI 耐久 Sync 生命周期已接入 #347 服务与公开 snapshot；单一「翻译」入口通过 `model_routing_reader.profile_strategy_choices()` 选择 ModelProfile/ExecutionStrategy，并把 `--profile` 传给 `sync-start` / `build`。Settings Model Profiles 页（#202 coordinator）与 CLI 旧命令别名仍待完成。
+- **P3（接近完成）**：GUI 耐久 Sync 生命周期已接入 #347 服务与公开 snapshot；单一「翻译」入口通过 `model_routing_reader.profile_strategy_choices()` 选择 ModelProfile/ExecutionStrategy，并把 `--profile` 传给 `sync-start` / `build`；Settings「模型与 Provider」页通过 `model_profiles_editor` 编辑 providers/profiles/默认值与阶段路由，保存沿用 #202 coordinator 与 schema 校验。CLI 旧命令别名与真实 smoke matrix 仍待完成。
 - **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。
 
 ## P0 非目标（历史阶段边界，生产激活现已进入 P2）

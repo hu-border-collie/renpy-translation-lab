@@ -154,6 +154,19 @@
   `tests.test_gui_retry_workflow`、`tests.test_gemini_translate_batch_cli_contract`、
   `tests.test_batch_golden_corpus`。
 
+## 设置 · 模型与 Provider（#348 P3）
+
+- `gui_qt/settings/profiles_page.py`（`ProfilesSettingsPage`）持有单一配置键
+  `model_routing`；增删改查通过 Qt-free 的 `model_profiles_editor.py` 完成，保存经
+  #202 coordinator → `gui_qt/settings/save_apply.py` 校验并原位写回，未知字段保留。
+- `model_profiles_editor.editor_view()` 输出无凭据的 provider/profile/能力/阶段路由投影；
+  `section_issues()` 复用 `model_routing_config.validate_model_routing_section()`。
+- CLI 对等入口：`profiles-show` / `profiles-validate` / `profiles-set-default` /
+  `profiles-set-route`（`gemini_translate_batch.py`，离线、原子写回、保留未知字段），
+  与 GUI 页共用同一 editor 核心。
+- 测试：`tests.test_model_profiles_editor`、`tests.test_settings_profiles_page`、
+  `tests.test_settings_registry`、`tests.test_settings_save_apply`。
+
 ## 同步翻译
 
 - 统一入口：`gui_qt/workbench/translation_page.py`（`TranslationTargetSection`）挂在

@@ -5,6 +5,7 @@ The host still writes files through ProjectState / config_store.
 """
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -146,15 +147,28 @@ def apply_collected_settings(
     write and rollback.
     """
 
-    if "model_routing" in config:
+    routing_from_page = "model_routing" in collected
+    effective_routing = (
+        collected.get("model_routing") if routing_from_page else config.get("model_routing")
+    )
+    if effective_routing is not None:
         from model_routing_config import validate_model_routing_section
 
-        if validate_model_routing_section(config["model_routing"]):
+        if not isinstance(effective_routing, Mapping):
             return SettingsSaveApplyResult(
-                block_page="models",
+                block_page="profiles" if routing_from_page else "models",
                 block_title=MODEL_ROUTING_RUNTIME_COPY["invalid_title"],
                 block_message=MODEL_ROUTING_RUNTIME_COPY["invalid_message"],
             )
+        if validate_model_routing_section(dict(effective_routing)):
+            return SettingsSaveApplyResult(
+                block_page="profiles" if routing_from_page else "models",
+                block_title=MODEL_ROUTING_RUNTIME_COPY["invalid_title"],
+                block_message=MODEL_ROUTING_RUNTIME_COPY["invalid_message"],
+            )
+        if routing_from_page:
+            # Preserve the page's unknown fields: apply the edited section as-is.
+            config["model_routing"] = copy.deepcopy(dict(effective_routing))
     extras = extras or SettingsSaveExtras()
     project_context_flags: dict[str, Any] = {}
     for key in _CONTEXT_FLAG_KEYS:

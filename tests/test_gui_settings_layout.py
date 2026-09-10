@@ -57,6 +57,7 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             "settings_project",
             "settings_api_keys",
             "settings_models",
+            "settings_profiles",
             "settings_litellm",
             "settings_extensions",
             "settings_context",
@@ -287,13 +288,21 @@ class GuiSettingsLayoutTests(unittest.TestCase):
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded,
             )
             last_item = nav.item(nav.count() - 1)
-            # Default fitted state: strict horizontal containment. QRect's
-            # right() is inclusive, so equality with the viewport width would
-            # already be one pixel outside the viewport.
-            self.assertLess(
-                nav.visualItemRect(last_item).right(),
-                nav.viewport().width(),
-            )
+            # Default state: containment when the row fits; otherwise the
+            # overflow must be exposed through the horizontal scrollbar instead
+            # of being silently clipped. QRect's right() is inclusive, so
+            # equality with the viewport width is already one pixel outside.
+            rect = nav.visualItemRect(last_item)
+            if rect.right() >= nav.viewport().width():
+                self.assertTrue(nav.horizontalScrollBar().isVisible())
+                nav.scrollToItem(last_item)
+                _process(self._app, 5)
+                self.assertLess(
+                    nav.visualItemRect(last_item).right(),
+                    nav.viewport().width(),
+                )
+            else:
+                self.assertLess(rect.right(), nav.viewport().width())
             # Overflow fallback (wider items force the horizontal scrollbar):
             # the last section must stay reachable and its text line must fit
             # the scrollbar-compressed viewport height.

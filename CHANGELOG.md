@@ -8,6 +8,11 @@
 
 ### 新增
 
+- #348 P3 统一翻译入口：左导航合并为单一「翻译」，先选 primary ModelProfile，再选该 profile 支持的 ExecutionStrategy（同步 / Gemini Batch）；选择通过 `--profile` 传给 `sync-start` / `build`，已有 run 继续使用冻结路由。旧配置（无 `model_routing`）保持原默认行为，选择器禁用并提示迁移。
+- #348 P3 GUI 耐久 Sync 生命周期：`sync-start / sync-status / sync-resume / sync-cancel / sync-derive` 与 `check <RUN>` → `apply <RUN>` 直接接入同步翻译页；「停止」只结束本机进程，取消是独立动作；运行中不读 SQLite、不自行重试，恢复/派生/写回风险提示按公开 snapshot 展示。
+- Windows/Linux 同步与 Batch 均支持选择 ModelProfile：新增 Settings「模型与 Provider」页（provider / profile 新增、复制、编辑、删除、诊断，能力覆盖与阶段路由，凭据只保存引用）与 CLI `profiles-show / profiles-validate / profiles-set-default / profiles-set-route`；写回经共享 config store 原子替换并保留未知字段。
+- 新增有界能力探测：`profiles-probe`（CLI）与「测试所选 Profile 能力」（GUI）发起**恰好一次**已确认计费的 Provider 请求，分别报告 `auth / sync_generation / structured_output / reasoning / usage`，并以 `declared / unsupported` 报告 Batch / embedding 能力；输出不含凭据值或 Provider 异常正文。
+- 新增四类组合验证矩阵文档 [Provider / 执行策略 Smoke Matrix](docs/provider_smoke_matrix.md)，覆盖 Gemini Sync、LiteLLM 内置 Provider、自定义 OpenAI-compatible Provider、Gemini Batch 的命令、离线自动化覆盖和记录口径；`profiles-show --output json --output-file` 可作为脱敏路由诊断摘要。
 - 明确生成目标只支持简体中文：`generation.target_language`（省略即 `schinese`）。`tl_subdir` / `prepare.language` 只表示 Ren'Py 目录/模板语言。不支持的生成目标在 Sync、Batch、订正、关键词和 A/B 调用模型前以 `generation_target.unsupported` 失败；自定义 TL 目录名仍可用。
 - 普通 Sync 可按项目开关消费 Source Index（独立 `RELATED PROJECT CONTEXT` 分区）与 fresh published Project Analysis brief；draft/stale/missing 只报告原因、不注入。Embedding 生产路径统一使用 Gemini / OpenAI-compatible adapters，store 记录 identity，不兼容时拒绝混用并建议重建。
 - 为核心 Batch 命令增加版本化 JSON 结果 envelope、严格语义退出码、非交互显式 target、能力发现与命令 schema。
@@ -38,6 +43,8 @@
 - Sync/Batch `ContextPolicy` 把 Source Index 字符预算放到独立的 `source_index_char_limit`，不再抬高 `history_char_limit`。
 
 ### 变更
+
+- `gemini_translate.py` 兼容入口继续可用，但输出非阻塞弃用提示并给出映射：新任务请使用 `gemini_translate_batch.py sync-start --profile <PROFILE_ID>`，写回改为 `check <RUN>` → `apply <RUN>`。迁移期默认模型、默认 Sync/Batch 策略与旧配置行为均保持不变。
 
 - doctor / Batch banner / GUI 摘要把「目录语言」与「生成目标」分开显示，不再把 `prepare.language` 说成模型会翻成的语言。
 - 局部上下文诊断改为 `scene_aware_window`：多行共享翻译块仍截断，逐句独立 block ID 不再截断。夹心已译邻句进入 `CONTEXT BETWEEN`，诊断增加 `context_between_*` / `context_interleaved`。已有 TranslationPlan 的 prompt/request fingerprint 会变化，旧预览需按现有新鲜度合同重新生成后才能写回。

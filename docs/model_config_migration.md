@@ -97,7 +97,7 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
 四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。P3 由 #202 的页面合同
-承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。
+承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。迁移完成后可在「设置 → 模型与 Provider」统一维护 providers / profiles / 默认值与阶段路由；该页直接编辑 `model_routing` 并保留未知字段。
 
 参见 [配置合同](plans/issue-348-model-routing-config-contract.md)、
 [架构概览](architecture.md)、[代码路径](code_paths.md)。

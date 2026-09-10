@@ -198,5 +198,81 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertTrue(config["batch"]["project_analysis"]["inject_published_brief"])
 
 
+
+class ModelRoutingSaveApplyTests(unittest.TestCase):
+    def test_collected_model_routing_is_applied_with_unknown_fields(self) -> None:
+        section = {
+            "schema_version": 1,
+            "providers": {
+                "gemini-main": {
+                    "label": "Gemini",
+                    "adapter": "gemini",
+                    "provider": "gemini",
+                    "credential_ref": {
+                        "kind": "api_keys_json",
+                        "name": "api_keys",
+                        "env_name": "GEMINI_API_KEY",
+                    },
+                }
+            },
+            "profiles": {
+                "gemini-main": {
+                    "label": "Gemini Main",
+                    "provider_id": "gemini-main",
+                    "model": "gemini-3.5-flash",
+                    "future_profile_field": "keep",
+                }
+            },
+            "defaults": {
+                "primary_profile_id": "gemini-main",
+                "execution_strategy": "sync",
+            },
+            "routes": {},
+            "future_section_field": {"keep": True},
+        }
+        config = {"model_routing": {"schema_version": 1}}
+
+        result = apply_collected_settings(
+            config,
+            {"model_routing": copy.deepcopy(section)},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["model_routing"], section)
+
+    def test_invalid_collected_model_routing_blocks_save(self) -> None:
+        config = {"model_routing": {"schema_version": 1}}
+        invalid = {
+            "schema_version": 1,
+            "providers": {},
+            "profiles": {},
+            "defaults": {"primary_profile_id": "", "execution_strategy": "sync"},
+            "routes": {},
+        }
+
+        result = apply_collected_settings(
+            config,
+            {"model_routing": copy.deepcopy(invalid)},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.block_page, "profiles")
+        self.assertEqual(config["model_routing"], {"schema_version": 1})
+
+    def test_legacy_invalid_section_still_blocks_models_page(self) -> None:
+        config = {"model_routing": {"schema_version": 1}}
+
+        result = apply_collected_settings(
+            config,
+            {"sync_model": "gemini-3.1-flash-lite"},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.block_page, "models")
+
+
 if __name__ == "__main__":
     unittest.main()

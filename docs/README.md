@@ -25,6 +25,7 @@
 | 理解 PR 门禁与定时集成 | [CI 与定时集成检查](ci.md)（含 lint / type / audit） |
 | 在 Codex 沙箱内跑 GUI 测试卡住 | [GUI 测试沙箱环境说明](gui_tests_sandbox_notes.md) |
 | 配置离线迁移与回滚（P1） | [模型配置离线迁移（P1）](model_config_migration.md) |
+| 选择模型/执行方式并做四类 smoke | [Provider / 执行策略 Smoke Matrix](provider_smoke_matrix.md) |
 | 理解依赖所有权与哈希锁 | [依赖输入与哈希锁](dependencies.md) |
 
 ## 文档分组
@@ -38,6 +39,7 @@
 ### 现行：配置与 GUI
 
 - [模型配置迁移（#348 P1/P2）](model_config_migration.md)：配置副本的预览、暂存、备份与回滚；P2 已接入兼容入口的生产读取。
+- [Provider / 执行策略 Smoke Matrix（#348 P3）](provider_smoke_matrix.md)：Gemini Sync、LiteLLM 内置、自定义 OpenAI-compatible、Gemini Batch 的最短验证路径、能力探测与脱敏诊断导出。
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
 - [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（统一侧边导航、项目与环境、任务页、设置、诊断与运行日志、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。

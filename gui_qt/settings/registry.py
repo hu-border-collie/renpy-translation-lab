@@ -95,6 +95,14 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
         ),
     ),
     SettingsPageSpec(
+        "profiles",
+        "模型与 Provider",
+        "_create_profiles_settings_page",
+        config_page=True,
+        config_keys=frozenset({"model_routing"}),
+        immediate_action_ids=frozenset({"probe_profile"}),
+    ),
+    SettingsPageSpec(
         "litellm",
         "LiteLLM",
         "_create_litellm_settings_page",

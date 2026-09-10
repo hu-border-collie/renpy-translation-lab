@@ -135,7 +135,12 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **自定义 OpenAI 兼容 Provider**：LiteLLM 设置页的「自定义 OpenAI 兼容 Provider」区域可**添加 / 编辑 / 删除** OpenCode Go、中转站、本地 vLLM 等 LiteLLM 未内置但兼容 OpenAI 的服务，持久化到 `translator_config.json` 的 `sync.custom_litellm_providers`。添加时填写 `id`（创建后不可改，同时用作模型前缀与密钥用户名）、显示名称、API Base、模型列表 URL（可留空）、可选密钥环境变量，以及「需要 API Key」开关（默认开启；本地无鉴权网关可关闭）。非法 URL 或与内置前缀冲突的 id 会被拒绝。注册后 Provider 下拉与密钥页列表自动合并该条目，选择后即可像内置 provider 一样保存密钥、加载模型与测试连接。实际请求改写为 `openai/<模型>` + `api_base`，`api_key_env` 仅在系统凭据为空时生效；需要密钥但两者均缺失时请求会直接失败，不会把 `OPENAI_API_KEY` 静默发给第三方端点。
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
-- **模型**：同步 / 批量翻译模型、embedding model、批量 thinking level。
+- **模型**：旧配置的同步 / 批量翻译模型、embedding model、批量 thinking level。项目使用 `model_routing` 后此处只作兼容回滚，常规编辑请到「模型与 Provider」。
+- **模型与 Provider**：统一的 Model Profiles 表面，直接读写 `translator_config.json` 的 `model_routing`：
+  - **Provider 连接**：适配器（Gemini 直连 / LiteLLM）、上游 Provider、API Base / 模型目录 URL 与**凭据引用**（本机 `api_keys.json` 槽位、系统安全存储、环境变量引用或无需鉴权）；从不写入或回显密钥值。
+  - **Model Profiles**：新增 / 复制 / 删除 / 诊断；编辑标签、Provider、主模型、轮换模型、embedding profile 绑定与能力覆盖（高级，带风险提示）。
+  - **默认与阶段路由**：设置默认主模型与执行方式，并可为初译、术语、订正、项目分析、最终审校分别覆盖 profile / strategy；未覆盖的阶段跟随默认并显示来源。
+  - 保存前用 schema-v1 合同校验，未通过会阻止保存；删除仍被默认值、阶段路由或 embedding 引用的 profile/provider 会被拒绝。旧配置可直接「创建 Model Routing 配置」从空白开始，或按迁移文档先迁移；迁移前运行行为不变。
 - **高级 · 翻译吞吐**：`同步单请求超时` 统一控制同步翻译、项目分析、关键词、订正、修补和 A/B 对比的每次模型请求等待上限；默认 120 秒，可设 5–600 秒，不是整次任务总时限。`同步前文条目数`（默认 30）与 `同步后文条目数`（默认 10）控制同步初译的局部上下文预算，0 表示关闭对应方向。
 - **高级 · 术语与风格**：`同步风格设定文件` 指定注入同步提示词的 `macro_setting.md` 路径（相对当前 work；留空使用当前 work 下的同名文件）。
 - **上下文**：
@@ -145,7 +150,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **外观**：浅色 / 深色 / 跟随系统。切换主题会立即预览，保存设置后才写入 `translator_config.json`。
 - **快捷键**：只读一览当前全局快捷键：
   - 任务：`Ctrl+D` 环境检查、`Ctrl+T` 开始、`Ctrl+K` 停止
-  - 导航：`Ctrl+1`…`Ctrl+7` 依次为项目与环境 / 批量 / 同步 / 关键词 / 订正 / 上下文库 / 设置；`Ctrl+0` 与 `Ctrl+L` 打开诊断与运行日志
+  - 导航：`Ctrl+1`…`Ctrl+6` 依次为项目与环境 / 翻译 / 关键词与术语 / 订正 / 上下文库 / 设置；`Ctrl+0` 与 `Ctrl+L` 打开诊断与运行日志
   - 其它：`Ctrl+Shift+L` 清空日志、`Ctrl+S` 在设置页保存
   - 任务运行中导航快捷键会遵循锁定规则；任务类快捷键随对应按钮禁用而关闭。
 - **高级**：翻译吞吐、重试、安全设置、术语/风格、关键词提取、订正、RAG / 原文索引 / 剧情记忆的**检索参数**与 store 路径（主开关见「上下文」）。数值字段会按 CLI 语义校验，路径类字段可留空表示使用默认路径。
