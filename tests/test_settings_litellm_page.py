@@ -8,6 +8,7 @@ from unittest import mock
 
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
 from gui_qt.settings.page_contract import SettingsIssue, SettingsPage, SettingsPageActions
+from litellm_provider_config import custom_provider_registry
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -143,6 +144,110 @@ class LiteLLMSettingsPageContractTests(unittest.TestCase):
         self.assertFalse(self.page.sync_backend_combo.isEnabled())
         self.page._litellm_connection_worker = None
         self.page._litellm_version_worker = None
+
+    def test_restore_after_disk_reload_keeps_deleted_provider_modified(self) -> None:
+        provider = {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+        }
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": [provider],
+            }
+        )
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+        self.assertFalse(self.page._custom_litellm_providers_modified)
+
+        self.page._custom_litellm_providers = {}
+        self.page._custom_litellm_providers_modified = True
+        unsaved = self.page.collect()
+        self.assertEqual(unsaved["custom_litellm_providers"], ())
+
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": [provider],
+            }
+        )
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+        self.assertFalse(self.page._custom_litellm_providers_modified)
+
+        self.page.load(unsaved, restore=True)
+        self.assertEqual(self.page.collect()["custom_litellm_providers"], ())
+        self.assertTrue(self.page._custom_litellm_providers_modified)
+
+    def test_restore_same_providers_does_not_mark_modified(self) -> None:
+        provider = {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+        }
+        snapshot = {
+            "sync_backend": "gemini",
+            "litellm_model": "",
+            "custom_litellm_providers": [provider],
+        }
+        self.page.load(snapshot)
+        unsaved = self.page.collect()
+        self.page.load(snapshot)
+        self.page.load(unsaved, restore=True)
+        self.assertFalse(self.page._custom_litellm_providers_modified)
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+
+    def test_restore_keeps_disk_load_error_after_user_edit(self) -> None:
+        valid = {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+        }
+        invalid_disk = [valid, "not-an-object"]
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": invalid_disk,
+            }
+        )
+        self.assertTrue(self.page._custom_litellm_providers_load_error)
+        self.page._custom_litellm_providers = custom_provider_registry(
+            [valid],
+            allow_import=False,
+        )
+        self.page._custom_litellm_providers_modified = True
+        unsaved = self.page.collect()
+        disk_error = self.page._custom_litellm_providers_load_error
+
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": invalid_disk,
+            }
+        )
+        self.page.load(unsaved, restore=True)
+        self.assertEqual(self.page._custom_litellm_providers_load_error, disk_error)
+        self.assertTrue(self.page._custom_litellm_providers_modified)
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+
+    def test_mixed_invalid_disk_entries_are_not_silently_filtered(self) -> None:
+        valid = {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+        }
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": [valid, "not-an-object"],
+            }
+        )
+        self.assertEqual(self.page._custom_litellm_providers, {})
+        self.assertTrue(self.page._custom_litellm_providers_load_error)
+        self.assertIn("必须是对象", self.page._custom_litellm_providers_load_error)
+        self.assertFalse(self.page._custom_litellm_providers_modified)
+        self.assertEqual(self.page.collect()["custom_litellm_providers"], ())
+        self.assertEqual(self.page.validate(), [])
 
     def test_immediate_actions_go_through_injected_callbacks(self) -> None:
         calls: list[tuple[str, dict]] = []

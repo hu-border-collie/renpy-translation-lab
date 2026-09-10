@@ -76,8 +76,8 @@
 - `gui_qt/settings/registry.py`：`SettingsPageSpec` / `SettingsPageRegistry` / `build_default_registry`；
   10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
 - `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
-  `collect` / `validate` / `reset` / `focus_issue` / `set_task_running` / `set_baseline` /
-  `is_dirty` / `leave_guard_prompt` / `save`（经 host `persist`）；不依赖 Qt。
+  `collect` / `validate` / `reset` / `focus_issue` / `set_task_running`（记录并在建页时补发） /
+  `set_baseline` / `is_dirty` / `leave_guard_prompt` / `save`（经 host `persist`）；不依赖 Qt。
 - `gui_qt/settings/leave_guard.py`：未保存离开保护文案。
 - `gui_qt/settings/save_apply.py`：`apply_collected_settings` 把 collect() 快照应用到原始 JSON 对象；
   extras 由宿主注入，写盘仍走 `MainWindow._persist_collected_settings`。

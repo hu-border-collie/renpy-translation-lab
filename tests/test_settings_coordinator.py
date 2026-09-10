@@ -242,6 +242,18 @@ class SettingsCoordinatorTests(unittest.TestCase):
         self.assertTrue(self.coordinator.page("alpha").running)
         self.assertTrue(self.coordinator.page("beta").running)
 
+    def test_ensure_page_inherits_current_task_running(self) -> None:
+        self.coordinator.set_task_running(True)
+        self.assertEqual(self.built, [])
+        alpha = self.coordinator.ensure_page("alpha")
+        beta = self.coordinator.ensure_page("beta")
+        self.assertTrue(alpha.running)
+        self.assertTrue(beta.running)
+        self.coordinator.set_task_running(False)
+        gamma = self.coordinator.ensure_page("gamma")
+        self.assertFalse(self.coordinator.page("alpha").running)
+        self.assertFalse(gamma.running)
+
     def test_has_unsaved_changes_compares_host_baseline(self) -> None:
         self.coordinator.ensure_page("alpha")
         self.coordinator.load({"alpha_value": 1})

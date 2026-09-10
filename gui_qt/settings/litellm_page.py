@@ -198,6 +198,29 @@ def _mapping_from_entry(entry: object) -> dict[str, object] | None:
     return None
 
 
+def _custom_providers_registry_payload(raw: object, *, restore: bool) -> object:
+    """Prepare ``custom_litellm_providers`` for ``custom_provider_registry``.
+
+    Disk loads pass the raw list through so invalid entries still fail
+    validation. Restore snapshots come from ``collect()`` as tuples of pairs
+    and must be converted back to mappings; malformed snapshot rows are
+    skipped because they are not disk config.
+    """
+    if raw is None:
+        return []
+    if restore:
+        if not isinstance(raw, (list, tuple)):
+            return raw
+        return [
+            converted
+            for entry in raw
+            if (converted := _mapping_from_entry(entry)) is not None
+        ]
+    if isinstance(raw, tuple):
+        return list(raw)
+    return raw
+
+
 class LiteLLMSettingsPage(QObject):
     """Settings page for the LiteLLM backend, independently constructible."""
 
@@ -282,7 +305,8 @@ class LiteLLMSettingsPage(QObject):
             if "litellm_model" in snapshot:
                 self._restore_configured_litellm_model(model)
             self._on_sync_backend_changed(-1)
-            self._baseline = dict(self.collect())
+            if not restore:
+                self._baseline = dict(self.collect())
         finally:
             self._loading = previous
 
@@ -403,17 +427,11 @@ class LiteLLMSettingsPage(QObject):
         *,
         restore: bool = False,
     ) -> None:
+        previous_providers = dict(self._custom_litellm_providers)
+        previous_modified = self._custom_litellm_providers_modified
+        previous_load_error = self._custom_litellm_providers_load_error
         try:
-            if raw is None:
-                payload: object = []
-            elif isinstance(raw, (list, tuple)):
-                payload = [
-                    converted
-                    for entry in raw
-                    if (converted := _mapping_from_entry(entry)) is not None
-                ]
-            else:
-                payload = raw
+            payload = _custom_providers_registry_payload(raw, restore=restore)
             self._custom_litellm_providers = custom_provider_registry(
                 payload,
                 allow_import=False,
@@ -434,7 +452,21 @@ class LiteLLMSettingsPage(QObject):
             self.custom_provider_status_label.setText(
                 CUSTOM_LITELLM_PROVIDER_COPY["load_error_status"].format(error=exc)
             )
-        self._custom_litellm_providers_modified = False
+        if restore:
+            restored_ok = not self._custom_litellm_providers_load_error
+            providers_changed = self._custom_litellm_providers != previous_providers
+            if previous_load_error:
+                # Disk was invalid. Restoring UI edits must not drop that
+                # error, or a later save would write a partial list.
+                self._custom_litellm_providers_load_error = previous_load_error
+            if restored_ok and providers_changed:
+                # Save reloads disk then restores unsaved edits. Keep the
+                # user-edit flag so an emptied registry still clears the key.
+                self._custom_litellm_providers_modified = True
+            else:
+                self._custom_litellm_providers_modified = previous_modified
+        else:
+            self._custom_litellm_providers_modified = False
         self._refresh_custom_provider_table()
 
     def _retire_network_worker(self, worker: QThread) -> None:
