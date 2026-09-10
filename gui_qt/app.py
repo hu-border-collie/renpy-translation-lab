@@ -378,6 +378,7 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
+    DURABLE_SYNC_RUN_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
@@ -1921,6 +1922,7 @@ class MainWindow(QMainWindow):
                         resume=self._on_resume_durable_sync,
                         stop=self._on_kill,
                         cancel=self._on_cancel_durable_sync,
+                        derive=self._on_derive_durable_sync,
                         writeback=self._on_apply_sync_translation,
                         action=self._on_task_page_gate_action,
                     )
@@ -11630,6 +11632,99 @@ class MainWindow(QMainWindow):
             self.state.get_batch_script_path(),
             ["apply", manifest_path, "--output", "json", "--non-interactive"],
         )
+
+    def _on_derive_durable_sync(self) -> None:
+        """Derive a new durable run from a terminal run with reusable results."""
+        if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
+            message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
+            return
+        page = getattr(self, "sync_translation_page", None)
+        run_id = page.run_id() if page is not None else ""
+        if not run_id or page is None or not page.current_run_can_derive():
+            message_box_information(
+                self,
+                "没有可派生的运行",
+                "当前没有包含可复用结果的耐久同步运行。",
+            )
+            return
+        if self._task_running or self._cli_runner_is_active():
+            message_box_information(self, "任务运行中", "请先停止或等待当前任务结束。")
+            return
+
+        options = self._prompt_derive_options(
+            run_id,
+            page.outcome_unknown_count(),
+        )
+        if options is None:
+            return
+
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        workflow = SyncTranslationWorkflow.derive_run(run_id, **options)
+        self._begin_translation_workflow(
+            workflow,
+            log_heading=f"正在派生新的同步运行：{run_id}",
+            status_tab=1,
+        )
+
+    def _prompt_derive_options(
+        self,
+        run_id: str,
+        unknown_count: int,
+    ) -> dict[str, bool] | None:
+        """Ask how outcome_unknown requests should be handled before deriving."""
+        copy = DURABLE_SYNC_RUN_COPY
+        if unknown_count <= 0:
+            reply = message_box_question(
+                self,
+                copy["derive_confirm_title"],
+                copy["derive_confirm_body"].format(run_id=run_id),
+                yes_text=copy["derive_button"],
+                no_text="取消",
+                default="no",
+            )
+            return {} if reply == "yes" else None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(copy["derive_unknown_title"])
+        layout = QVBoxLayout(dialog)
+        body = QLabel(
+            copy["derive_unknown_body"].format(
+                run_id=run_id,
+                count=unknown_count,
+            )
+        )
+        body.setWordWrap(True)
+        layout.addWidget(body)
+        hint = QLabel(copy["derive_dialog_hint"])
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        exclude_radio = QRadioButton(copy["derive_exclude_option"])
+        exclude_radio.setChecked(True)
+        retry_radio = QRadioButton(copy["derive_retry_option"])
+        group = QButtonGroup(dialog)
+        group.addButton(exclude_radio)
+        group.addButton(retry_radio)
+        layout.addWidget(exclude_radio)
+        layout.addWidget(retry_radio)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        confirm_btn = QPushButton(copy["derive_button"])
+        confirm_btn.setObjectName("primary_btn")
+        confirm_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(confirm_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        if retry_radio.isChecked():
+            return {"retry_unknown": True}
+        return {"exclude_unknown": True}
 
     def _on_apply_sync_translation(self) -> None:
         if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:

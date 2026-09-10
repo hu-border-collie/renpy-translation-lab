@@ -44,6 +44,9 @@ class SyncTranslationPage(QFrame):
         self._preview_run_id = ""
         self._run_id = ""
         self._run_terminal = False
+        self._run_status = ""
+        self._run_next_action = ""
+        self._run_snapshot: dict[str, Any] = {}
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -110,6 +113,13 @@ class SyncTranslationPage(QFrame):
         self.cancel_btn.clicked.connect(self._trigger_cancel)
         self.cancel_btn.setEnabled(False)
         self.actions.add_action(self.cancel_btn, min_width=88)
+
+        self.derive_btn = QPushButton(DURABLE_SYNC_RUN_COPY["derive_button"])
+        self.derive_btn.setObjectName("sync_translation_derive_btn")
+        self.derive_btn.setToolTip(DURABLE_SYNC_RUN_COPY["derive_button_tooltip"])
+        self.derive_btn.clicked.connect(self._trigger_derive)
+        self.derive_btn.setEnabled(False)
+        self.actions.add_action(self.derive_btn, min_width=104)
 
         self.apply_btn = QPushButton("确认并写回预览")
         self.apply_btn.setObjectName("sync_translation_apply_btn")
@@ -223,7 +233,10 @@ class SyncTranslationPage(QFrame):
         run_id = str(snapshot.get("run_id") or "").strip()
         if run_id:
             self._run_id = run_id
+        self._run_snapshot = dict(snapshot)
         status = str(snapshot.get("run_status") or "").strip()
+        self._run_status = status
+        self._run_next_action = str(snapshot.get("next_action") or "").strip()
         self._run_terminal = status in TERMINAL_RUN_STATUSES
         status_label = DURABLE_SYNC_RUN_COPY["status_labels"].get(
             status,
@@ -242,6 +255,25 @@ class SyncTranslationPage(QFrame):
 
     def current_run_is_terminal(self) -> bool:
         return self._run_terminal
+
+    def current_run_can_derive(self) -> bool:
+        """Whether the current run offers a derive-based recovery path."""
+        if not self._run_id or self._running:
+            return False
+        if self._run_next_action == "derive":
+            return True
+        return self._run_status in {"failed", "cancelled", "completed_with_errors"}
+
+    def outcome_unknown_count(self) -> int:
+        """Return the public outcome_unknown request count for the run."""
+        progress = self._run_snapshot.get("progress")
+        progress = progress if isinstance(progress, Mapping) else {}
+        requests = progress.get("requests")
+        requests = requests if isinstance(requests, Mapping) else {}
+        try:
+            return int(requests.get("outcome_unknown") or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def set_task_running(self, running: bool) -> None:
         self._running = running
@@ -262,6 +294,9 @@ class SyncTranslationPage(QFrame):
     def reset_project(self) -> None:
         self._run_id = ""
         self._run_terminal = False
+        self._run_status = ""
+        self._run_next_action = ""
+        self._run_snapshot = {}
         self.set_start_enabled(False)
         self.clear_preview()
         self.set_task_running(False)
@@ -279,6 +314,9 @@ class SyncTranslationPage(QFrame):
         )
         self.resume_btn.setEnabled(
             self._actions.resume is not None and not self._running
+        )
+        self.derive_btn.setEnabled(
+            self._actions.derive is not None and self.current_run_can_derive()
         )
         self.apply_btn.setEnabled(
             bool(self._preview_manifest_path or self._preview_run_id)
@@ -352,6 +390,14 @@ class SyncTranslationPage(QFrame):
             and self._actions.cancel is not None
         ):
             self._actions.cancel()
+
+    def _trigger_derive(self) -> None:
+        if (
+            not self._running
+            and self.current_run_can_derive()
+            and self._actions.derive is not None
+        ):
+            self._actions.derive()
 
     def _trigger_writeback(self) -> None:
         if self._running:

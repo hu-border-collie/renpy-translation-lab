@@ -305,12 +305,27 @@ class SyncTranslationWorkflow:
     ) -> WorkflowUpdate:
         self._pending_steps.clear()
         facts = [f"退出码：{exit_code}"] if exit_code else []
-        if key in {"sync-start", "sync-resume"}:
-            message = DURABLE_SYNC_RUN_COPY["worker_stopped_message"]
-        else:
-            message = DURABLE_SYNC_RUN_COPY["command_interrupted_message"]
         if output.strip():
             facts.append(DURABLE_SYNC_RUN_COPY["log_hint_fact"])
+        if key in {"sync-start", "sync-resume"} and not self.run_id:
+            # The worker died before any snapshot was rendered. Locate the
+            # persisted run with a read-only status query so the user can
+            # resume or cancel it instead of guessing a run id.
+            self.operation = "recover"
+            self._pending_steps.append("sync-status")
+            return WorkflowUpdate(
+                status="waiting",
+                heading=DURABLE_SYNC_RUN_COPY["interrupted_locate_heading"],
+                message=DURABLE_SYNC_RUN_COPY["interrupted_locate_message"],
+                facts=facts,
+                should_continue=True,
+                timeline_step_key="sync-status",
+            )
+        message = (
+            DURABLE_SYNC_RUN_COPY["worker_stopped_message"]
+            if key in {"sync-start", "sync-resume"}
+            else DURABLE_SYNC_RUN_COPY["command_interrupted_message"]
+        )
         return WorkflowUpdate(
             status="failed",
             heading=DURABLE_SYNC_RUN_COPY["interrupted_heading"],
@@ -419,6 +434,18 @@ class SyncTranslationWorkflow:
         facts = durable_sync_facts(snapshot, run_dir=self.run_dir)
         next_action = str(snapshot.get("next_action") or "").strip()
         status = run_status_of(snapshot)
+        if self.operation == "recover":
+            message = (
+                DURABLE_SYNC_RUN_COPY["recover_located_terminal_message"]
+                if status in TERMINAL_RUN_STATUSES
+                else DURABLE_SYNC_RUN_COPY["recover_located_message"]
+            )
+            return WorkflowUpdate(
+                status="warning",
+                heading=DURABLE_SYNC_RUN_COPY["recover_located_heading"],
+                message=message,
+                facts=facts,
+            )
         if self.operation == "resume":
             if next_action == "resume":
                 self._pending_steps.insert(0, "sync-resume")
@@ -473,10 +500,33 @@ class SyncTranslationWorkflow:
     def _complete_sync_cancel(self, envelope: Mapping[str, Any]) -> WorkflowUpdate:
         snapshot = self._record_snapshot(envelope)
         facts = durable_sync_facts(snapshot, run_dir=self.run_dir)
+        status = run_status_of(snapshot)
+        if status == "cancelled":
+            return WorkflowUpdate(
+                status="warning",
+                heading=DURABLE_SYNC_RUN_COPY["cancelled_heading"],
+                message=DURABLE_SYNC_RUN_COPY["cancel_done_message"],
+                facts=facts,
+            )
+        if status == "cancel_requested":
+            return WorkflowUpdate(
+                status="waiting",
+                heading=DURABLE_SYNC_RUN_COPY["cancel_wait_heading"],
+                message=DURABLE_SYNC_RUN_COPY["cancel_wait_message"],
+                facts=facts,
+                timeline_step_key="sync-cancel",
+            )
+        if status in CHECKABLE_RUN_STATUSES:
+            return WorkflowUpdate(
+                status="warning",
+                heading=DURABLE_SYNC_RUN_COPY["cancel_missed_heading"],
+                message=DURABLE_SYNC_RUN_COPY["cancel_missed_message"],
+                facts=facts,
+            )
         return WorkflowUpdate(
-            status="warning",
-            heading=DURABLE_SYNC_RUN_COPY["cancelled_heading"],
-            message=DURABLE_SYNC_RUN_COPY["cancel_done_message"],
+            status="waiting",
+            heading=DURABLE_SYNC_RUN_COPY["cancel_wait_heading"],
+            message=DURABLE_SYNC_RUN_COPY["cancel_unknown_message"],
             facts=facts,
         )
 

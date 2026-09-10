@@ -927,6 +927,18 @@ DURABLE_SYNC_RUN_COPY = {
     "anomaly_heading": "同步任务状态异常",
     "anomaly_message": "没有正在等待完成的步骤。",
     "interrupted_heading": "本机同步命令已中断",
+    "interrupted_locate_heading": "本机同步命令已中断，正在定位运行记录",
+    "interrupted_locate_message": (
+        "本机进程已停止；正在查询最近一次耐久运行，随后可继续或取消。"
+    ),
+    "recover_located_heading": "已定位最近一次同步运行",
+    "recover_located_message": (
+        "本机进程已停止，耐久运行仍可继续或取消；"
+        "请选择「继续 / 查看最新任务」或「取消任务」。"
+    ),
+    "recover_located_terminal_message": (
+        "最近一次运行已经结束；点击「继续 / 查看最新任务」可生成检查预览。"
+    ),
     "worker_stopped_message": (
         "本机进程已停止，但耐久运行不会被隐式取消；"
         "已提交的请求不会重发，可稍后用「继续 / 查看最新任务」恢复。"
@@ -973,6 +985,26 @@ DURABLE_SYNC_RUN_COPY = {
     "pending_heading": "同步任务仍在运行",
     "pending_message": "可稍后查询最新状态；关闭本机进程不会取消该运行。",
     "cancel_done_message": "取消请求已完成；已完成的结果仍保留在运行记录中。",
+    "cancel_missed_heading": "取消未生效，运行已经结束",
+    "cancel_missed_message": (
+        "运行在取消生效前已经结束；已完成的结果仍保留，可继续生成检查预览。"
+    ),
+    "cancel_unknown_message": "取消请求已发送；请稍后查询最新状态确认结果。",
+    "derive_button": "派生新运行",
+    "derive_button_tooltip": "基于该运行已成功且仍通过校验的结果创建新的耐久运行。",
+    "derive_confirm_title": "派生新的同步运行",
+    "derive_confirm_body": (
+        "将从运行 {run_id} 已成功且仍通过校验的结果继续，创建新的耐久运行；"
+        "原运行记录不会被修改。是否继续？"
+    ),
+    "derive_unknown_title": "选择派生方式",
+    "derive_unknown_body": (
+        "运行 {run_id} 存在 {count} 个结果未知请求。"
+        "它们是否已被服务端执行无法确定，重试可能导致重复调用与计费。"
+    ),
+    "derive_exclude_option": "排除结果未知条目（不重复调用，推荐）",
+    "derive_retry_option": "重试结果未知条目（确认可能重复调用/计费）",
+    "derive_dialog_hint": "派生只会复用已确认成功、且仍通过校验的结果。",
     "derived_heading": "已派生新的同步运行",
     "derived_message": "新运行已结束；正在离线生成检查预览。",
     "check_ready_heading": "检查通过，已生成可写回预览",

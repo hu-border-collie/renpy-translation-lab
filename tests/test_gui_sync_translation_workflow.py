@@ -353,13 +353,72 @@ class DurableSyncRecoveryTests(unittest.TestCase):
         self.assertIn("SYNC_RUN_NOT_FOUND", " ".join(update.facts))
         self.assertIsNone(workflow.current_step())
 
-    def test_worker_interruption_does_not_claim_run_cancelled(self) -> None:
+    def test_worker_interruption_locates_run_without_resuming(self) -> None:
         workflow = SyncTranslationWorkflow.start_new()
 
         update = workflow.complete_current_step(1, "Traceback disconnected\n")
 
+        self.assertTrue(update.should_continue)
+        self.assertIn("定位", update.heading)
+        self.assertEqual(workflow.current_step().key, "sync-status")
+        self.assertEqual(
+            workflow.current_step().args,
+            machine_args("sync-status", "--latest"),
+        )
+
+        update = workflow.complete_current_step(
+            0,
+            success_output(
+                "sync-status",
+                status="running",
+                result=snapshot(status="running", next_action="resume"),
+            ),
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("已定位", update.heading)
+        self.assertEqual(workflow.run_id, RUN_ID)
+        self.assertIsNone(workflow.current_step())
+
+    def test_interruption_after_known_run_keeps_terminal_message(self) -> None:
+        workflow = SyncTranslationWorkflow.resume_run(RUN_ID)
+
+        update = workflow.complete_current_step(1, "")
+
         self.assertEqual(update.status, "failed")
         self.assertIn("不会", update.message)
+        self.assertIsNone(workflow.current_step())
+
+    def test_cancel_requested_reports_waiting_not_cancelled(self) -> None:
+        workflow = SyncTranslationWorkflow.cancel_run(RUN_ID)
+
+        update = workflow.complete_current_step(
+            0,
+            success_output(
+                "sync-cancel",
+                status="cancel_requested",
+                result=snapshot(status="cancel_requested", next_action="wait_cancel"),
+            ),
+        )
+
+        self.assertEqual(update.status, "waiting")
+        self.assertIn("等待", update.heading)
+        self.assertIsNone(workflow.current_step())
+
+    def test_cancel_that_lost_the_race_reports_missed(self) -> None:
+        workflow = SyncTranslationWorkflow.cancel_run(RUN_ID)
+
+        update = workflow.complete_current_step(
+            0,
+            success_output(
+                "sync-cancel",
+                status="completed",
+                result=snapshot(status="completed", next_action="check"),
+            ),
+        )
+
+        self.assertEqual(update.status, "warning")
+        self.assertIn("取消未生效", update.heading)
         self.assertIsNone(workflow.current_step())
 
     def test_cancel_reports_terminal_snapshot(self) -> None:

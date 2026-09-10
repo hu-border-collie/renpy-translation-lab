@@ -30,7 +30,12 @@ from tests import gui_test_support
 RUN_ID = "sync-run-v1-20260910T120000Z"
 
 
-def snapshot(*, status: str = "running", next_action: str = "resume") -> dict:
+def snapshot(
+    *,
+    status: str = "running",
+    next_action: str = "resume",
+    unknown: int = 0,
+) -> dict:
     return {
         "run_id": RUN_ID,
         "run_status": status,
@@ -46,7 +51,7 @@ def snapshot(*, status: str = "running", next_action: str = "resume") -> dict:
                 "retryable_failed": 0,
                 "terminal_failed": 0,
                 "superseded": 0,
-                "outcome_unknown": 0,
+                "outcome_unknown": unknown,
                 "cancelled": 0,
             },
             "items": {"expected": 10, "accepted": 9, "unresolved": 1},
@@ -136,6 +141,22 @@ class DurableSyncPageWidgetTests(unittest.TestCase):
         self.assertFalse(self.page.cancel_btn.isEnabled())
         self.page.set_task_running(False)
         self.assertTrue(self.page.cancel_btn.isEnabled())
+
+    def test_derive_button_tracks_recovery_state(self) -> None:
+        calls: list[str] = []
+        self.page.set_action_callbacks(
+            WorkbenchPageActions(derive=lambda: calls.append("derive"))
+        )
+        self.page.set_run_snapshot(snapshot(status="running", next_action="resume"))
+        self.assertFalse(self.page.derive_btn.isEnabled())
+
+        self.page.set_run_snapshot(snapshot(status="failed", next_action="derive"))
+        self.assertTrue(self.page.derive_btn.isEnabled())
+        self.page.derive_btn.click()
+        self.assertEqual(calls, ["derive"])
+
+        self.page.set_run_snapshot(snapshot(status="completed", next_action="check"))
+        self.assertFalse(self.page.derive_btn.isEnabled())
 
     def test_durable_preview_enables_apply(self) -> None:
         self.page.set_durable_preview(RUN_ID)
@@ -257,17 +278,32 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.assertFalse(self.window.kill_btn.isEnabled())
         self.assertIn("运行 ID", page.status_section.facts_label.text())
 
-    def test_stopping_local_worker_never_cancels_the_run(self) -> None:
+    def test_stopping_local_worker_locates_run_without_resuming(self) -> None:
         self.window._on_start_translation()
 
         self._finish_step("Traceback: local worker killed\n", exit_code=1)
+        QApplication.processEvents()
 
-        args_seen = [args for _script, args in self.runner.calls]
-        cancel_args = ["sync-cancel", RUN_ID, "--output", "json", "--non-interactive"]
-        self.assertNotIn(cancel_args, args_seen)
+        # The locator query is read-only: no resume, no cancel, no check.
+        self.assertEqual(
+            self.runner.calls[1][1],
+            ["sync-status", "--latest", "--output", "json", "--non-interactive"],
+        )
+        commands = [args[0] for _script, args in self.runner.calls]
+        self.assertNotIn("sync-resume", commands)
+        self.assertNotIn("sync-cancel", commands)
+
+        self._finish_step(
+            envelope(
+                "sync-status",
+                status="running",
+                result=snapshot(status="running", next_action="resume"),
+            )
+        )
         page = self.window.sync_translation_page
+        self.assertEqual(page.run_id(), RUN_ID)
         self.assertTrue(page.resume_btn.isEnabled())
-        self.assertFalse(page.cancel_btn.isEnabled())
+        self.assertTrue(page.cancel_btn.isEnabled())
         self.assertIsNone(self.window._workflow)
 
     def test_resume_button_queries_latest_durable_run(self) -> None:
@@ -293,6 +329,42 @@ class DurableSyncAppWiringTests(unittest.TestCase):
             ["sync-resume", RUN_ID, "--output", "json", "--non-interactive"],
         )
 
+    def test_derive_without_unknown_runs_plain_sync_derive(self) -> None:
+        self.window.sync_translation_page.set_run_snapshot(
+            snapshot(status="failed", next_action="derive")
+        )
+        with mock.patch("gui_qt.app.message_box_question", return_value="yes"):
+            self.window._on_derive_durable_sync()
+
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(
+            self.runner.calls[0][1],
+            ["sync-derive", RUN_ID, "--output", "json", "--non-interactive"],
+        )
+
+    def test_derive_with_unknown_uses_explicit_exclude(self) -> None:
+        self.window.sync_translation_page.set_run_snapshot(
+            snapshot(status="failed", next_action="derive", unknown=2)
+        )
+        with mock.patch.object(
+            self.window,
+            "_prompt_derive_options",
+            return_value={"exclude_unknown": True},
+        ):
+            self.window._on_derive_durable_sync()
+
+        self.assertEqual(
+            self.runner.calls[0][1],
+            [
+                "sync-derive",
+                RUN_ID,
+                "--exclude-unknown",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
     def test_resume_requires_the_environment_check(self) -> None:
         self.window._doctor_check_completed = False
         self.window._doctor_summary_status = ""
@@ -302,6 +374,21 @@ class DurableSyncAppWiringTests(unittest.TestCase):
 
         info.assert_called_once()
         self.assertEqual(self.runner.calls, [])
+
+    def test_cancel_not_terminal_cancel_requested_is_reported_as_waiting(self) -> None:
+        self.window.sync_translation_page.set_run_snapshot(snapshot(status="running"))
+        with mock.patch("gui_qt.app.message_box_question", return_value="yes"):
+            self.window._on_cancel_durable_sync()
+
+        self._finish_step(
+            envelope(
+                "sync-cancel",
+                status="cancel_requested",
+                result=snapshot(status="cancel_requested", next_action="wait_cancel"),
+            )
+        )
+        self.assertIn("等待", self.window._workflow_heading_text)
+        self.assertTrue(self.window.sync_translation_page.cancel_btn.isEnabled())
 
     def test_cancel_button_confirms_then_runs_sync_cancel(self) -> None:
         self.window.sync_translation_page.set_run_snapshot(snapshot(status="running"))
