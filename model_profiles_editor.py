@@ -76,7 +76,17 @@ def empty_section() -> dict[str, Any]:
     }
 
 
-def _copy_section(section: Mapping[str, Any] | None) -> dict[str, Any]:
+def _copy_section(
+    section: Mapping[str, Any] | None,
+    *,
+    tolerant: bool = True,
+) -> dict[str, Any]:
+    """Return a detached section.
+
+    Read views use the tolerant mode so a hand-broken container still renders
+    (validation reports it). Mutations use the strict mode so a wrong-typed
+    container is never silently replaced and written back.
+    """
     if section is None:
         return empty_section()
     if not isinstance(section, Mapping):
@@ -88,11 +98,30 @@ def _copy_section(section: Mapping[str, Any] | None) -> dict[str, Any]:
     for key, expected in (("providers", dict), ("profiles", dict), ("defaults", dict)):
         value = result.get(key)
         if not isinstance(value, expected):
-            result[key] = expected()
+            if tolerant:
+                result[key] = expected()
+            else:
+                raise ModelProfilesEditorError(
+                    "INVALID_SECTION_CONTAINER",
+                    f"model_routing.{key} must be an object",
+                    details={"field": key},
+                )
     routes = result.get("routes")
     if routes is not None and not isinstance(routes, dict):
-        result["routes"] = {}
+        if tolerant:
+            result["routes"] = {}
+        else:
+            raise ModelProfilesEditorError(
+                "INVALID_SECTION_CONTAINER",
+                "model_routing.routes must be an object",
+                details={"field": "routes"},
+            )
     return result
+
+
+def _mutation_section(section: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Strict copy used by every mutation so broken containers never persist."""
+    return _copy_section(section, tolerant=False)
 
 
 def slugify(value: str, *, fallback: str = "profile") -> str:
@@ -373,11 +402,23 @@ def editor_view(section: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def section_issues(section: Mapping[str, Any] | None) -> tuple[dict[str, Any], ...]:
-    """Return validator issues as plain dicts for pages and CLI output."""
-    data = _copy_section(section)
+    """Return validator issues as plain dicts for pages and CLI output.
+
+    The raw section is validated without tolerance so a wrong-typed
+    ``providers``/``profiles``/``defaults``/``routes`` container is reported
+    instead of being silently replaced by a normalized copy.
+    """
+    if not isinstance(section, Mapping):
+        return (
+            {
+                "path": "model_routing",
+                "code": "invalid_section",
+                "message": "model_routing must be an object",
+            },
+        )
     return tuple(
         {"path": issue.path, "code": issue.code, "message": issue.message}
-        for issue in validate_model_routing_section(data)
+        for issue in validate_model_routing_section(dict(section))
     )
 
 
@@ -396,7 +437,7 @@ def add_provider(
     credential_name: str = "",
     credential_env_name: str = "",
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     if adapter not in ADAPTERS:
         raise ModelProfilesEditorError("INVALID_ADAPTER", f"Unsupported adapter: {adapter}")
     if credential_kind not in CREDENTIAL_KINDS:
@@ -433,7 +474,7 @@ def update_provider(
     credential_name: str | None = None,
     credential_env_name: str | None = None,
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     entry = _provider_entry(data, provider_id)
     if adapter is not None:
         if adapter not in ADAPTERS:
@@ -469,7 +510,7 @@ def update_provider(
 
 
 def delete_provider(section: Mapping[str, Any] | None, provider_id: str) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     _provider_entry(data, provider_id)
     used_by = [
         str(profile_id)
@@ -502,7 +543,7 @@ def add_profile(
     capability_overrides: Mapping[str, Any] | None = None,
     purpose: str = "generation",
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     _provider_entry(data, provider_id)
     if purpose not in {"generation", "embedding"}:
         raise ModelProfilesEditorError("INVALID_PURPOSE", f"Unsupported purpose: {purpose}")
@@ -526,7 +567,7 @@ def copy_profile(
     *,
     label: str = "",
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     entry = _profile_entry(data, profile_id)
     new_label = str(label or f"{entry.get('label') or profile_id} 副本")
     new_id = unique_id(data["profiles"], slugify(new_label, fallback=profile_id))
@@ -547,7 +588,7 @@ def update_profile(
     params: Mapping[str, Any] | None = None,
     capability_overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     entry = _profile_entry(data, profile_id)
     if provider_id is not None:
         _provider_entry(data, provider_id)
@@ -585,7 +626,7 @@ def update_profile(
 
 
 def delete_profile(section: Mapping[str, Any] | None, profile_id: str) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     _profile_entry(data, profile_id)
     references = _profile_references(data, profile_id)
     if references:
@@ -607,7 +648,7 @@ def set_defaults(
     primary_profile_id: str,
     execution_strategy: str,
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     _profile_entry(data, primary_profile_id)
     if execution_strategy not in STRATEGY_ORDER:
         raise ModelProfilesEditorError(
@@ -641,7 +682,7 @@ def set_route(
     profile_id: str = "",
     strategy: str = "",
 ) -> dict[str, Any]:
-    data = _copy_section(section)
+    data = _mutation_section(section)
     if stage not in STAGE_ORDER:
         raise ModelProfilesEditorError("UNKNOWN_STAGE", f"Unsupported stage: {stage}")
     routes = data.get("routes")

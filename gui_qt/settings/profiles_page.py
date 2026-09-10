@@ -529,57 +529,31 @@ class ProfilesSettingsPage(QObject):
                 if profile["purpose"] == "embedding":
                     continue
                 self.default_profile_combo.addItem(profile["label"], profile["id"])
-            self._set_combo_data(
-                self.default_profile_combo,
-                str(defaults.get("primary_profile_id") or ""),
-            )
-            default_profile_id = str(self.default_profile_combo.currentData() or "")
             stored_primary = str(defaults.get("primary_profile_id") or "")
-            wanted_strategy = str(defaults.get("execution_strategy") or "")
-            supported = list(
-                editor.strategy_choices(self._section).get(default_profile_id, ())
-            )
-            if (
-                default_profile_id
-                and stored_primary != default_profile_id
-                and supported
-            ):
-                # A missing/unknown primary otherwise silently falls back to the
-                # first combo row and can never be repaired through the UI.
-                try:
-                    self._section = editor.set_defaults(
-                        self._section,
-                        primary_profile_id=default_profile_id,
-                        execution_strategy=(
-                            wanted_strategy
-                            if wanted_strategy in supported
-                            else supported[0]
-                        ),
-                    )
-                except editor.ModelProfilesEditorError:
-                    pass
-                else:
-                    defaults = dict(self._section.get("defaults") or {})
-                    wanted_strategy = str(
-                        defaults.get("execution_strategy") or wanted_strategy
-                    )
-            if wanted_strategy and wanted_strategy not in supported and supported:
-                # An adapter/capability edit can invalidate the stored default;
-                # repair it in memory so the visible value is executable.
-                try:
-                    self._section = editor.set_defaults(
-                        self._section,
-                        primary_profile_id=default_profile_id,
-                        execution_strategy=supported[0],
-                    )
-                except editor.ModelProfilesEditorError:
-                    pass
-                else:
-                    wanted_strategy = supported[0]
+            self._set_combo_data(self.default_profile_combo, stored_primary)
+            default_profile_id = str(self.default_profile_combo.currentData() or "")
+            if stored_primary and stored_primary != default_profile_id:
+                # Missing/unknown primary: show an explicit placeholder. The
+                # section is not rewritten on load; validation reports the
+                # problem and the user's selection is what repairs it.
+                self.default_profile_combo.insertItem(
+                    0,
+                    MODEL_PROFILES_PAGE_COPY["profile_placeholder"],
+                    "",
+                )
+                self.default_profile_combo.setCurrentIndex(0)
+                default_profile_id = ""
+            if not stored_primary and self.default_profile_combo.count():
+                self.default_profile_combo.insertItem(
+                    0,
+                    MODEL_PROFILES_PAGE_COPY["profile_placeholder"],
+                    "",
+                )
+                self.default_profile_combo.setCurrentIndex(0)
             self._refresh_strategy_combo(
                 self.default_strategy_combo,
                 default_profile_id,
-                wanted=wanted_strategy or (supported[0] if supported else ""),
+                wanted=str(defaults.get("execution_strategy") or ""),
             )
         finally:
             self._loading = False
@@ -594,6 +568,7 @@ class ProfilesSettingsPage(QObject):
         choices = editor.strategy_choices(self._section)
         supported = list(choices.get(profile_id, ()))
         combo.clear()
+        combo.addItem(MODEL_PROFILES_PAGE_COPY["strategy_placeholder"], "")
         for strategy in editor.STRATEGY_ORDER:
             label = _STRATEGY_LABELS.get(strategy, strategy)
             if strategy not in supported:
@@ -607,10 +582,10 @@ class ProfilesSettingsPage(QObject):
                 if item is not None:
                     item.setEnabled(False)
         index = combo.findData(wanted) if wanted and wanted in supported else -1
-        if index < 0 and supported:
-            index = combo.findData(supported[0])
         if index < 0:
-            index = 0 if combo.count() else -1
+            # Keep the explicit placeholder selected instead of a disabled,
+            # stale entry; the user's next pick writes the repaired value.
+            index = 0
         combo.setCurrentIndex(index)
 
     @staticmethod
@@ -736,34 +711,10 @@ class ProfilesSettingsPage(QObject):
                     profile_combo,
                     str(route.get("profile_id") or ""),
                 )
-                route_profile_id = str(profile_combo.currentData() or "")
-                wanted_route_strategy = str(route.get("strategy") or "")
-                supported = list(
-                    editor.strategy_choices(self._section).get(route_profile_id, ())
-                )
-                if (
-                    route.get("explicit")
-                    and wanted_route_strategy
-                    and wanted_route_strategy not in supported
-                    and supported
-                ):
-                    try:
-                        self._section = editor.set_route(
-                            self._section,
-                            stage,
-                            enabled=True,
-                            profile_id=route_profile_id,
-                            strategy=supported[0],
-                        )
-                    except editor.ModelProfilesEditorError:
-                        pass
-                    else:
-                        wanted_route_strategy = supported[0]
                 self._refresh_strategy_combo(
                     widgets["strategy"],
-                    route_profile_id,
-                    wanted=wanted_route_strategy
-                    or (supported[0] if supported else ""),
+                    str(profile_combo.currentData() or ""),
+                    wanted=str(route.get("strategy") or ""),
                 )
                 editable = bool(route.get("explicit"))
                 profile_combo.setEnabled(editable)

@@ -107,12 +107,24 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertIn("上下文上限 tokens", self.messages[-1])
         self.assertNotIn("context_limit_tokens", self.messages[-1])
 
-    def test_missing_primary_profile_is_repaired_on_load(self) -> None:
+    def test_missing_primary_profile_requires_explicit_selection(self) -> None:
         section = migrated_section()
         section["defaults"]["primary_profile_id"] = ""
         section["defaults"]["execution_strategy"] = "gemini_batch"
-
         self.page.load({"model_routing": section})
+
+        # Loading never rewrites the config; the user must pick a profile.
+        collected = self.page.collect()["model_routing"]
+        self.assertEqual(collected["defaults"]["primary_profile_id"], "")
+        self.assertEqual(self.page.default_profile_combo.currentData(), "")
+        self.assertTrue(self.page.validate())
+
+        target_row = next(
+            row
+            for row in range(self.page.default_profile_combo.count())
+            if self.page.default_profile_combo.itemData(row)
+        )
+        self.page.default_profile_combo.setCurrentIndex(target_row)
 
         collected = self.page.collect()["model_routing"]
         self.assertTrue(collected["defaults"]["primary_profile_id"])
@@ -145,7 +157,7 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertIs(overrides["usage_stats"], False)
         self.assertTrue(self.messages)
 
-    def test_adapter_change_repairs_unsupported_default_strategy(self) -> None:
+    def test_adapter_change_requires_explicit_strategy_reselection(self) -> None:
         section = editor.empty_section()
         section = editor.add_provider(
             section,
@@ -173,12 +185,19 @@ class ProfilesPageTests(unittest.TestCase):
         litellm_index = self.page.provider_adapter_combo.findData("litellm")
         self.page.provider_adapter_combo.setCurrentIndex(litellm_index)
 
+        # The adapter edit invalidates the stored strategy, but the page does
+        # not rewrite it; validation reports it and the placeholder forces an
+        # explicit re-selection.
+        defaults = self.page.collect()["model_routing"]["defaults"]
+        self.assertEqual(defaults["execution_strategy"], "gemini_batch")
+        self.assertEqual(self.page.default_strategy_combo.currentData(), "")
+        self.assertTrue(self.page.validate())
+
+        sync_index = self.page.default_strategy_combo.findData("sync")
+        self.page.default_strategy_combo.setCurrentIndex(sync_index)
+
         defaults = self.page.collect()["model_routing"]["defaults"]
         self.assertEqual(defaults["execution_strategy"], "sync")
-        self.assertEqual(
-            self.page.default_strategy_combo.currentData(),
-            "sync",
-        )
 
     def test_remove_section_is_an_explicit_reversible_action(self) -> None:
         original = migrated_section()

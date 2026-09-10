@@ -1087,6 +1087,8 @@ MODEL_PROFILES_PAGE_COPY = {
         "gemini_batch": "Gemini Batch",
     },
     "strategy_unavailable_suffix": "（不可用）",
+    "strategy_placeholder": "请选择执行方式",
+    "profile_placeholder": "请选择主模型",
     "embedding_none_option": "（不绑定）",
     "new_provider_label": "新 Provider",
     "new_profile_label": "新 ModelProfile",

@@ -363,6 +363,33 @@ class EditorViewTests(unittest.TestCase):
         self.assertIn("missing_profiles", codes)
         self.assertIn("unknown_primary_profile", codes)
 
+    def test_broken_containers_are_reported_and_mutations_refuse(self) -> None:
+        broken = {
+            "schema_version": 1,
+            "providers": [],
+            "profiles": [],
+            "defaults": {"primary_profile_id": "x", "execution_strategy": "sync"},
+            "routes": [],
+        }
+
+        codes = {issue["code"] for issue in editor.section_issues(broken)}
+        self.assertIn("missing_providers", codes)
+        self.assertIn("invalid_routes", codes)
+
+        with self.assertRaises(editor.ModelProfilesEditorError) as caught:
+            editor.add_provider(
+                broken,
+                label="X",
+                adapter="gemini",
+                provider="gemini",
+            )
+        self.assertEqual(caught.exception.code, "INVALID_SECTION_CONTAINER")
+        self.assertEqual(caught.exception.details["field"], "providers")
+
+        # Read-only views still render something instead of crashing.
+        view = editor.editor_view(broken)
+        self.assertEqual(view["profiles"], ())
+
     def test_migrated_fixture_round_trips_through_view(self) -> None:
         payload = json.loads((FIXTURES / "gemini_batch.json").read_text(encoding="utf-8"))
         from model_routing_migration import preview_migration
