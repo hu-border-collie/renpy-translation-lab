@@ -261,6 +261,19 @@ class ModelRoutingSaveApplyTests(unittest.TestCase):
         self.assertEqual(result.block_page, "profiles")
         self.assertEqual(config["model_routing"], {"schema_version": 1})
 
+    def test_explicit_removal_drops_invalid_model_routing(self) -> None:
+        config = {"model_routing": {"schema_version": 1}, "sync": {}}
+
+        result = apply_collected_settings(
+            config,
+            {"model_routing": None, "sync_model": "gemini-3.1-flash-lite"},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertTrue(result.ok, result)
+        self.assertNotIn("model_routing", config)
+        self.assertEqual(config["sync"]["model"], "gemini-3.1-flash-lite")
+
     def test_legacy_invalid_section_still_blocks_models_page(self) -> None:
         config = {"model_routing": {"schema_version": 1}}
 

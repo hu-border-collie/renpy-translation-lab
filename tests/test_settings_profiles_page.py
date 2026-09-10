@@ -71,6 +71,34 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertGreater(self.page.providers_list.count(), 0)
         self.assertTrue(self.page.profiles_add_btn.isEnabled())
 
+    def test_create_section_stores_a_valid_default(self) -> None:
+        from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+
+        self.page.load({})
+        self.page.create_btn.click()
+
+        collected = self.page.collect()["model_routing"]
+        self.assertEqual(self.page.validate(), [])
+        self.assertEqual(
+            collected["profiles"]["gemini-main"]["model"],
+            DEFAULT_GEMINI_TRANSLATION_MODEL,
+        )
+        self.assertEqual(
+            collected["defaults"],
+            {"primary_profile_id": "gemini-main", "execution_strategy": "sync"},
+        )
+
+    def test_remove_section_is_an_explicit_reversible_action(self) -> None:
+        original = migrated_section()
+        self.page.load({"model_routing": original})
+
+        self.page.remove_btn.click()
+        self.assertEqual(self.page.collect(), {"model_routing": None})
+        self.assertTrue(self.page.create_btn.isEnabled())
+
+        self.page.reset()
+        self.assertEqual(self.page.collect()["model_routing"], original)
+
     def test_unknown_fields_survive_edits(self) -> None:
         section = migrated_section()
         section["future_top_level"] = {"keep": True}

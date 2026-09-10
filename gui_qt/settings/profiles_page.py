@@ -75,6 +75,7 @@ class ProfilesSettingsPage(QObject):
         self._task_running = False
         self._section: dict[str, Any] | None = None
         self._baseline: dict[str, Any] | None = None
+        self._remove_requested = False
         self._selected_profile_id = ""
         self._selected_provider_id = ""
         self._capability_combos: dict[str, NoWheelComboBox] = {}
@@ -108,11 +109,16 @@ class ProfilesSettingsPage(QObject):
     def load(self, snapshot: Mapping[str, object], *, restore: bool = False) -> None:
         raw = snapshot.get("model_routing") if isinstance(snapshot, Mapping) else None
         self._section = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else None
+        self._remove_requested = False
         if not restore:
             self._baseline = copy.deepcopy(self._section)
         self._refresh_all()
 
     def collect(self) -> dict[str, object]:
+        if self._remove_requested:
+            # Explicit removal: save_apply drops the key so the user can fall
+            # back to legacy config or re-create a valid section.
+            return {"model_routing": None}
         if self._section is None:
             return {}
         return {"model_routing": copy.deepcopy(self._section)}
@@ -136,6 +142,7 @@ class ProfilesSettingsPage(QObject):
         ]
 
     def reset(self) -> None:
+        self._remove_requested = False
         self._section = copy.deepcopy(self._baseline)
         self._refresh_all()
 
@@ -164,7 +171,12 @@ class ProfilesSettingsPage(QObject):
         self.create_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["create_button"])
         self.create_btn.setObjectName("profiles_create_btn")
         self.create_btn.clicked.connect(self._on_create_section)
+        self.remove_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["remove_button"])
+        self.remove_btn.setObjectName("profiles_remove_btn")
+        self.remove_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["remove_tooltip"])
+        self.remove_btn.clicked.connect(self._on_remove_section)
         layout.addWidget(self.create_btn)
+        layout.addWidget(self.remove_btn)
 
         self.profiles_group, profiles_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["profiles_group"]
@@ -440,6 +452,7 @@ class ProfilesSettingsPage(QObject):
         ):
             widget.setEnabled(editable)
         self.create_btn.setEnabled(not self._task_running and self._section is None)
+        self.remove_btn.setEnabled(not self._task_running and self._section is not None)
         self.profiles_diagnose_btn.setEnabled(self._section is not None)
         self.profiles_probe_btn.setEnabled(
             editable and bool(self._selected_profile_id)
@@ -679,9 +692,11 @@ class ProfilesSettingsPage(QObject):
     # -- user actions ----------------------------------------------------
 
     def _on_create_section(self) -> None:
-        self._section = editor.empty_section()
+        from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+
+        section = editor.empty_section()
         section = editor.add_provider(
-            self._section,
+            section,
             label="Google Gemini",
             adapter="gemini",
             provider="gemini",
@@ -689,16 +704,36 @@ class ProfilesSettingsPage(QObject):
             credential_name="api_keys",
             credential_env_name="GEMINI_API_KEY",
         )
+        provider_id = editor.provider_ids(section)[0]
         section = editor.add_profile(
             section,
             label="Gemini Main",
-            provider_id="google-gemini",
-            model="gemini-3.5-flash",
+            provider_id=provider_id,
+            model=DEFAULT_GEMINI_TRANSLATION_MODEL,
         )
+        profile_id = editor.profile_ids(section)[0]
+        # Store the default explicitly so the created section is valid and the
+        # visible selector matches what will be saved.
+        section = editor.set_defaults(
+            section,
+            primary_profile_id=profile_id,
+            execution_strategy="sync",
+        )
+        self._remove_requested = False
         self._section = section
-        self._selected_profile_id = "gemini-main"
-        self._selected_provider_id = "google-gemini"
+        self._selected_profile_id = profile_id
+        self._selected_provider_id = provider_id
         self._refresh_all()
+
+    def _on_remove_section(self) -> None:
+        if self._section is None:
+            return
+        self._remove_requested = True
+        self._section = None
+        self._selected_profile_id = ""
+        self._selected_provider_id = ""
+        self._refresh_all()
+        self._show_status(MODEL_PROFILES_PAGE_COPY["remove_pending"])
 
     def _on_add_profile(self) -> None:
         if self._section is None:

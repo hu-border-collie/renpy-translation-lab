@@ -148,8 +148,19 @@ def apply_collected_settings(
     """
 
     routing_from_page = "model_routing" in collected
+    routing_removed = routing_from_page and collected.get("model_routing") is None
+    if routing_removed:
+        # Explicit user removal: fall back to legacy config instead of
+        # blocking every save on a broken hand-edited section.
+        config.pop("model_routing", None)
     effective_routing = (
-        collected.get("model_routing") if routing_from_page else config.get("model_routing")
+        None
+        if routing_removed
+        else (
+            collected.get("model_routing")
+            if routing_from_page
+            else config.get("model_routing")
+        )
     )
     if effective_routing is not None:
         from model_routing_config import validate_model_routing_section
@@ -166,7 +177,7 @@ def apply_collected_settings(
                 block_title=MODEL_ROUTING_RUNTIME_COPY["invalid_title"],
                 block_message=MODEL_ROUTING_RUNTIME_COPY["invalid_message"],
             )
-        if routing_from_page:
+        if routing_from_page and not routing_removed:
             # Preserve the page's unknown fields: apply the edited section as-is.
             config["model_routing"] = copy.deepcopy(dict(effective_routing))
     extras = extras or SettingsSaveExtras()
