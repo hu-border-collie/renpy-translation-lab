@@ -92,6 +92,14 @@ class DurableSyncWorkflowPlanningTests(unittest.TestCase):
         self.assertEqual(step.key, "sync-start")
         self.assertEqual(step.args, machine_args("sync-start"))
 
+    def test_start_with_profile_pins_the_run_profile(self) -> None:
+        workflow = SyncTranslationWorkflow.start_new(profile_id="legacy-sync")
+
+        self.assertEqual(
+            workflow.current_step().args,
+            machine_args("sync-start", "--profile", "legacy-sync"),
+        )
+
     def test_query_latest_never_resumes_by_itself(self) -> None:
         workflow = SyncTranslationWorkflow.query_latest()
 

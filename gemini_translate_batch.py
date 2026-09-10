@@ -17784,6 +17784,15 @@ def build_arg_parser():
         action='store_true',
         help='Skip auto prepare steps before collecting tasks.',
     )
+    build_parser.add_argument(
+        '--profile',
+        default='',
+        metavar='PROFILE_ID',
+        help=(
+            'Pin this Batch build to one configured ModelProfile; '
+            'gemini_batch requires a Gemini-adapter profile.'
+        ),
+    )
 
     keyword_build_parser = subparsers.add_parser(
         'build-keywords',
@@ -18433,6 +18442,15 @@ def build_arg_parser():
         default='',
         metavar='TOKEN',
         help='Optional caller-owned idempotency token; blank always creates a new run.',
+    )
+    sync_start_parser.add_argument(
+        '--profile',
+        default='',
+        metavar='PROFILE_ID',
+        help=(
+            'Pin this run to one configured ModelProfile instead of '
+            'model_routing.defaults.primary_profile_id.'
+        ),
     )
 
     sync_resume_parser = subparsers.add_parser(
@@ -19139,18 +19157,21 @@ def run_durable_sync_command(args):
             latest=latest,
         )
     elif command == 'sync-start':
-        service, context = _durable_sync_production_service(require_provider=True)
-        if not context.plan_build.requests:
-            raise cli_contract.MachineContractError(
-                'No pending translations are available for durable Sync.',
-                code_name='SYNC_RUN_NO_WORK',
-                suggested_action='inspect_project_scope',
-                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        from model_routing_reader import primary_profile_override
+
+        with primary_profile_override(getattr(args, 'profile', '') or ''):
+            service, context = _durable_sync_production_service(require_provider=True)
+            if not context.plan_build.requests:
+                raise cli_contract.MachineContractError(
+                    'No pending translations are available for durable Sync.',
+                    code_name='SYNC_RUN_NO_WORK',
+                    suggested_action='inspect_project_scope',
+                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                )
+            snapshot = service.start(
+                context.plan_build,
+                client_token=getattr(args, 'client_token', '') or None,
             )
-        snapshot = service.start(
-            context.plan_build,
-            client_token=getattr(args, 'client_token', '') or None,
-        )
     elif command == 'sync-resume':
         run_id = str(args.run)
         store = SyncRunStore(root_dir, run_id)
@@ -19732,20 +19753,23 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
     require_api_key = command not in OFFLINE_BATCH_COMMANDS
-    try:
-        legacy.load_config(require_api_key=require_api_key)
-    except model_profile.ModelRoutingConfigError as exc:
-        raise model_profile.routing_resolution_error(exc) from exc
-    legacy.load_translator_settings()
-    legacy.load_glossary()
-    load_batch_settings()
-    print_banner()
+    from model_routing_reader import primary_profile_override
 
-    if command == 'build':
-        return create_batch_package(
-            display_name_override=args.display_name,
-            skip_prepare=args.skip_prepare,
-        )
+    with primary_profile_override(getattr(args, 'profile', '') or ''):
+        try:
+            legacy.load_config(require_api_key=require_api_key)
+        except model_profile.ModelRoutingConfigError as exc:
+            raise model_profile.routing_resolution_error(exc) from exc
+        legacy.load_translator_settings()
+        legacy.load_glossary()
+        load_batch_settings()
+        print_banner()
+
+        if command == 'build':
+            return create_batch_package(
+                display_name_override=args.display_name,
+                skip_prepare=args.skip_prepare,
+            )
 
     if command == 'build-keywords':
         return (

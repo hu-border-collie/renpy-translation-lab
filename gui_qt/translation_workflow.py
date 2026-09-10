@@ -232,15 +232,26 @@ class TranslationWorkflow:
         *,
         submit_max_cost: float | None = None,
         retry_parent_manifest_path: str = "",
+        profile_id: str = "",
     ):
         self._pending_steps = list(pending_steps)
         self.manifest_path = manifest_path
         self.submit_max_cost = submit_max_cost
         self.retry_parent_manifest_path = retry_parent_manifest_path
+        self.profile_id = str(profile_id or "").strip()
 
     @classmethod
-    def start_new(cls, *, submit_max_cost: float | None = None) -> "TranslationWorkflow":
-        return cls(["build", "submit", "status"], submit_max_cost=submit_max_cost)
+    def start_new(
+        cls,
+        *,
+        submit_max_cost: float | None = None,
+        profile_id: str = "",
+    ) -> "TranslationWorkflow":
+        return cls(
+            ["build", "submit", "status"],
+            submit_max_cost=submit_max_cost,
+            profile_id=profile_id,
+        )
 
     @classmethod
     def resume_latest(
@@ -544,7 +555,10 @@ class TranslationWorkflow:
         if key == "check-parent":
             return machine_output_args(["check", self.retry_parent_manifest_path])
         if key == "build":
-            return machine_output_args([key])
+            args = [key]
+            if self.profile_id:
+                args.extend(["--profile", self.profile_id])
+            return machine_output_args(args)
         if not self.manifest_path:
             return [key]
         if key == "submit":

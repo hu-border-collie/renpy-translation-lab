@@ -156,9 +156,13 @@
 
 ## 同步翻译
 
+- 统一入口：`gui_qt/workbench/translation_page.py`（`TranslationTargetSection`）挂在
+  `BatchTranslationPage` / `SyncTranslationPage` 顶部 → 读 `model_routing_reader.profile_strategy_choices()`
+  渲染 ModelProfile/ExecutionStrategy；策略切换通过 `_set_work_mode()` 在
+  `WORKBENCH_NAV_ORDER` 的单一 `TRANSLATION` 导航项内切换两个执行页。
 - GUI 耐久运行：`gui_qt/workbench/sync_translation_page.py`（`SyncTranslationPage`）→
   `_on_start_translation()` / `_on_resume_durable_sync()` / `_on_cancel_durable_sync()` →
-  `gui_qt/sync_translation_workflow.py` 的 `SyncTranslationWorkflow` 步骤（`sync-start`、
+  `gui_qt/sync_translation_workflow.py` 的 `SyncTranslationWorkflow` 步骤（`sync-start --profile`、
   `sync-status`、`sync-resume`、`sync-cancel`、`sync-derive`、`check`、`apply`）→
   `CliRunner` → `gemini_translate_batch.py --output json --non-interactive` →
   `run_durable_sync_command()` → `sync_run_service.SyncRunService` →

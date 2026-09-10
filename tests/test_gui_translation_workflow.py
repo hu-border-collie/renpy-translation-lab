@@ -310,5 +310,25 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         self.assertIsNone(workflow.current_step())
 
 
+
+class ProfilePinnedBuildTests(unittest.TestCase):
+    def test_build_passes_profile_to_cli(self) -> None:
+        from gui_qt.translation_workflow import TranslationWorkflow
+
+        workflow = TranslationWorkflow.start_new(profile_id="legacy-batch")
+
+        self.assertEqual(
+            workflow.current_step().args,
+            [
+                "build",
+                "--profile",
+                "legacy-batch",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

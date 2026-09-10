@@ -173,11 +173,13 @@ class SyncTranslationWorkflow:
         *,
         operation: str = "",
         run_id: str = "",
+        profile_id: str = "",
         retry_unknown: bool = False,
         exclude_unknown: bool = False,
     ) -> None:
         self.manifest_path = ""
         self.run_id = str(run_id or "")
+        self.profile_id = str(profile_id or "").strip()
         self.run_dir = ""
         self.run_snapshot: dict[str, Any] | None = None
         self.preview_ready = False
@@ -191,9 +193,9 @@ class SyncTranslationWorkflow:
     # -- constructors -------------------------------------------------
 
     @classmethod
-    def start_new(cls) -> "SyncTranslationWorkflow":
+    def start_new(cls, profile_id: str = "") -> "SyncTranslationWorkflow":
         """Start a fresh durable run and check its results when terminal."""
-        return cls(["sync-start"], operation="start")
+        return cls(["sync-start"], operation="start", profile_id=profile_id)
 
     @classmethod
     def query_latest(cls) -> "SyncTranslationWorkflow":
@@ -255,6 +257,8 @@ class SyncTranslationWorkflow:
     def _step_args(self, key: str) -> list[str]:
         if key == "sync-start":
             args = ["sync-start"]
+            if self.profile_id:
+                args.extend(["--profile", self.profile_id])
         elif key == "sync-status":
             args = ["sync-status", self.run_id] if self.run_id else [
                 "sync-status",

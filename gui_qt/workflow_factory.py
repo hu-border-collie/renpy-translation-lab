@@ -26,14 +26,18 @@ def create_workflow(
     mode: WorkMode | str,
     *,
     submit_max_cost: float | None = None,
+    profile_id: str = "",
 ) -> GuiWorkflow | None:
     spec = work_mode_spec(mode)
     if not spec.implemented:
         return None
     if spec.mode == WorkMode.BATCH_TRANSLATION:
-        return TranslationWorkflow.start_new(submit_max_cost=submit_max_cost)
+        return TranslationWorkflow.start_new(
+            submit_max_cost=submit_max_cost,
+            profile_id=profile_id,
+        )
     if spec.mode == WorkMode.SYNC_TRANSLATION:
-        return SyncTranslationWorkflow.start_new()
+        return SyncTranslationWorkflow.start_new(profile_id=profile_id)
     if spec.mode == WorkMode.KEYWORD_EXTRACTION:
         return KeywordBatchWorkflow.start_new(submit_max_cost=submit_max_cost)
     if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:

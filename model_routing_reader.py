@@ -6,6 +6,9 @@ configuration when it exists, and this module never resolves credentials.
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -54,6 +57,154 @@ def section_custom_providers(section: Mapping[str, Any]) -> dict[str, CustomLite
     return result
 
 
+_PRIMARY_PROFILE_OVERRIDE: ContextVar[str | None] = ContextVar(
+    "model_routing_primary_profile_override",
+    default=None,
+)
+
+
+@contextmanager
+def primary_profile_override(profile_id: str | None) -> Iterator[None]:
+    """Pin translation generation to one ModelProfile for this call stack.
+
+    CLI flags and the GUI selector use this so an explicit user choice wins
+    over ``defaults.primary_profile_id`` without rewriting the config file.
+    The value is scoped, so concurrent callers and later loads are unaffected.
+    """
+
+    token = _PRIMARY_PROFILE_OVERRIDE.set(str(profile_id or "").strip() or None)
+    try:
+        yield
+    finally:
+        _PRIMARY_PROFILE_OVERRIDE.reset(token)
+
+
+def active_primary_profile_override() -> str | None:
+    """Return the scoped ModelProfile override, if one is active."""
+    return _PRIMARY_PROFILE_OVERRIDE.get()
+
+
+def apply_primary_profile_override(
+    config: Mapping[str, Any],
+    *,
+    execution: str,
+    strict: bool = True,
+) -> dict[str, Any]:
+    """Return a detached section with the scoped profile pinned to translation.
+
+    When *strict* is false an incompatible execution strategy leaves the
+    section untouched instead of failing, which lets the compatibility
+    projection render scopes a profile cannot serve.
+    """
+
+    section = checked_section(config)
+    profile_id = active_primary_profile_override()
+    if not profile_id:
+        return section
+    profiles = section.get("profiles") or {}
+    if profile_id not in profiles:
+        raise routing.ModelRoutingConfigError(f"Unknown ModelProfile: {profile_id}")
+    raw = profiles[profile_id]
+    if str(raw.get("purpose") or "generation") == "embedding":
+        raise routing.ModelRoutingConfigError(
+            "Embedding profiles cannot run generation tasks"
+        )
+    strategy = routing.ExecutionStrategy(execution)
+    if strategy is routing.ExecutionStrategy.GEMINI_BATCH:
+        provider = (section.get("providers") or {}).get(raw.get("provider_id")) or {}
+        if provider.get("adapter") != "gemini":
+            if strict:
+                raise routing.ModelRoutingConfigError(
+                    "Selected ModelProfile cannot run the gemini_batch strategy"
+                )
+            return section
+    section = copy.deepcopy(section)
+    defaults = section.setdefault("defaults", {})
+    defaults["primary_profile_id"] = profile_id
+    # Keep the aggregate root valid: the schema requires the default strategy
+    # to be executable by the default profile.
+    defaults["execution_strategy"] = strategy.value
+    routes = dict(section.get("routes") or {})
+    routes["translation"] = {
+        "profile_id": profile_id,
+        "strategy": strategy.value,
+    }
+    section["routes"] = routes
+    return section
+
+
+def _profiles_from_section(
+    section: Mapping[str, Any],
+) -> dict[str, routing.ModelProfile]:
+    """Build the detached ModelProfile map shared by readers and selectors."""
+
+    profiles: dict[str, routing.ModelProfile] = {}
+    for profile_id, raw in section["profiles"].items():
+        provider = section["providers"][raw["provider_id"]]
+        profiles[profile_id] = routing.ModelProfile(
+            id=profile_id, label=raw["label"], adapter=provider["adapter"],
+            provider=provider["provider"], model=raw["model"],
+            credential_ref=routing.CredentialRef.from_manifest_dict(provider["credential_ref"]),
+            models=tuple(raw.get("models") or [raw["model"]]),
+            base_url=provider.get("base_url", ""),
+            capability_overrides=raw.get("capability_overrides", {}),
+            params=raw.get("params", {}), embedding_profile_id=raw.get("embedding_profile_id", ""),
+        )
+    return profiles
+
+
+def profile_strategy_choices(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return credential-free ModelProfile/ExecutionStrategy selector data.
+
+    The result exposes only public profile metadata and machine capability
+    reasons; it never resolves or echoes credentials and is safe to render in
+    the GUI or print in a machine command.
+    """
+
+    section = checked_section(config)
+    profiles = _profiles_from_section(section)
+    custom = section_custom_providers(section)
+    defaults = section.get("defaults") or {}
+    entries = []
+    for profile_id in sorted(profiles):
+        profile = profiles[profile_id]
+        raw = section["profiles"][profile_id]
+        if str(raw.get("purpose") or "generation") == "embedding":
+            continue
+        capabilities = routing.resolve_capabilities(profile, custom_providers=custom)
+        strategies: list[str] = []
+        unsupported: dict[str, str] = {}
+        if capabilities.sync_generation.supported:
+            strategies.append("sync")
+        else:
+            unsupported["sync"] = "missing_sync_generation"
+        if profile.adapter == routing.ADAPTER_GEMINI and capabilities.remote_batch.supported:
+            strategies.append("gemini_batch")
+        else:
+            unsupported["gemini_batch"] = (
+                "missing_gemini_adapter"
+                if profile.adapter != routing.ADAPTER_GEMINI
+                else "missing_remote_batch"
+            )
+        entries.append({
+            "id": profile_id,
+            "label": profile.label,
+            "model": profile.model,
+            "adapter": profile.adapter,
+            "purpose": str(raw.get("purpose") or "generation"),
+            "strategies": tuple(strategies),
+            "unsupported": dict(unsupported),
+            "is_default": profile_id == defaults.get("primary_profile_id"),
+        })
+    return {
+        "defaults": {
+            "primary_profile_id": str(defaults.get("primary_profile_id") or ""),
+            "execution_strategy": str(defaults.get("execution_strategy") or ""),
+        },
+        "profiles": tuple(entries),
+    }
+
+
 def read_routing_plan(
     config: Mapping[str, Any], *, legacy_execution: str | None = None,
     game_config: Mapping[str, Any] | None = None,
@@ -72,18 +223,7 @@ def read_routing_plan(
             custom_providers=custom, game_config=game_config,
         )
     section = checked_section(config)
-    profiles = {}
-    for profile_id, raw in section["profiles"].items():
-        provider = section["providers"][raw["provider_id"]]
-        profiles[profile_id] = routing.ModelProfile(
-            id=profile_id, label=raw["label"], adapter=provider["adapter"],
-            provider=provider["provider"], model=raw["model"],
-            credential_ref=routing.CredentialRef.from_manifest_dict(provider["credential_ref"]),
-            models=tuple(raw.get("models") or [raw["model"]]),
-            base_url=provider.get("base_url", ""),
-            capability_overrides=raw.get("capability_overrides", {}),
-            params=raw.get("params", {}), embedding_profile_id=raw.get("embedding_profile_id", ""),
-        )
+    profiles = _profiles_from_section(section)
     primary = section["defaults"]["primary_profile_id"]
     strategy = section["defaults"]["execution_strategy"]
     base = primary
@@ -160,14 +300,30 @@ def read_embedding_settings(config: Mapping[str, Any], *, execution: str, profil
     })
 
 
-def resolve_runtime_plan(config, *, execution, stage_overrides=None, created_at="", config_origins=()):
+def resolve_runtime_plan(
+    config,
+    *,
+    execution,
+    stage_overrides=None,
+    created_at="",
+    config_origins=(),
+    strict_override=True,
+):
     """Freeze a v1 plan for a legacy entrypoint without consulting old model fields.
 
     Explicit model overrides retain the selected connection and credential reference;
     changing provider requires selecting a profile instead of a model string.
     """
     strategy = routing.ExecutionStrategy(execution)
-    plan = read_routing_plan(config, legacy_execution=strategy.value)
+    section = apply_primary_profile_override(
+        config,
+        execution=execution,
+        strict=strict_override,
+    )
+    plan = read_routing_plan(
+        {"model_routing": section},
+        legacy_execution=strategy.value,
+    )
     # Existing entrypoints cannot execute arbitrary stage strategies yet.
     for stage, expected in (("project_analysis", "sync"), ("final_review", "gemini_batch")):
         if plan.routes[stage].strategy.value != expected:
@@ -216,7 +372,11 @@ def runtime_settings_view(config):
     checked_section(config)
     result = copy.deepcopy(config)
     for scope, execution in (("sync", "sync"), ("batch", "gemini_batch")):
-        plan = resolve_runtime_plan(config, execution=execution)
+        plan = resolve_runtime_plan(
+            config,
+            execution=execution,
+            strict_override=False,
+        )
         route = plan.routes["translation"]
         profile = plan.profiles[route.profile_id]
         if not isinstance(result.get(scope), dict):

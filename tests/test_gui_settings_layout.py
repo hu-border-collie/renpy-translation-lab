@@ -202,10 +202,9 @@ class GuiSettingsLayoutTests(unittest.TestCase):
             "Ctrl+1",
             "Ctrl+2",
             "Ctrl+3",
-            "Ctrl+7",
             "Ctrl+0",
             "项目与环境",
-            "批量翻译",
+            "翻译",
             "设置",
             "诊断与运行日志",
             "导航",
@@ -215,11 +214,11 @@ class GuiSettingsLayoutTests(unittest.TestCase):
     def test_number_shortcuts_activate_shell_routes_not_legacy_tabs(self) -> None:
         """Ctrl+N must follow sidebar IA, not the hidden main tab indices."""
         entries = self.window._shell_nav_shortcut_entries()
-        self.assertGreaterEqual(len(entries), 7)
+        self.assertGreaterEqual(len(entries), 6)
         self.assertEqual(entries[0][0], "project_prepare")
         self.assertEqual(entries[0][1], "项目与环境")
         self.assertTrue(entries[1][0].startswith("workbench:"))
-        self.assertEqual(entries[6][0], "settings")
+        self.assertEqual(entries[5][0], "settings")
 
         self.window._activate_shell_route(entries[0][0])
         self.assertEqual(self.window._current_shell_route(), "project_prepare")

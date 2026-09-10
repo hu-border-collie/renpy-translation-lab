@@ -396,6 +396,9 @@ def work_mode_hint_texts() -> tuple[str, ...]:
 class WorkbenchNavItem(str, Enum):
     """Top-level workbench navigation entries (not the same as WorkMode)."""
 
+    TRANSLATION = "translation"
+    # Legacy route values kept for saved-shell-route compatibility. Both work
+    # modes now render inside the single TRANSLATION entry (#348 P3).
     BATCH_TRANSLATION = "batch_translation"
     SYNC_TRANSLATION = "sync_translation"
     KEYWORDS = "keywords"
@@ -412,15 +415,22 @@ class WorkbenchNavSpec:
 
 
 WORKBENCH_NAV_SPECS: dict[WorkbenchNavItem, WorkbenchNavSpec] = {
+    WorkbenchNavItem.TRANSLATION: WorkbenchNavSpec(
+        item=WorkbenchNavItem.TRANSLATION,
+        label="翻译",
+        work_modes=(WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION),
+        show_submode=False,
+    ),
+    # Saved routes from before the unified entry still resolve to its labels.
     WorkbenchNavItem.BATCH_TRANSLATION: WorkbenchNavSpec(
-        item=WorkbenchNavItem.BATCH_TRANSLATION,
-        label="批量翻译",
+        item=WorkbenchNavItem.TRANSLATION,
+        label="翻译",
         work_modes=(WorkMode.BATCH_TRANSLATION,),
         show_submode=False,
     ),
     WorkbenchNavItem.SYNC_TRANSLATION: WorkbenchNavSpec(
-        item=WorkbenchNavItem.SYNC_TRANSLATION,
-        label="同步翻译",
+        item=WorkbenchNavItem.TRANSLATION,
+        label="翻译",
         work_modes=(WorkMode.SYNC_TRANSLATION,),
         show_submode=False,
     ),
@@ -469,8 +479,7 @@ def work_mode_submode_label(mode: WorkMode | str) -> str:
 
 
 WORKBENCH_NAV_ORDER: tuple[WorkbenchNavItem, ...] = (
-    WorkbenchNavItem.BATCH_TRANSLATION,
-    WorkbenchNavItem.SYNC_TRANSLATION,
+    WorkbenchNavItem.TRANSLATION,
     WorkbenchNavItem.KEYWORDS,
     WorkbenchNavItem.REVISION,
     WorkbenchNavItem.CONTEXT,

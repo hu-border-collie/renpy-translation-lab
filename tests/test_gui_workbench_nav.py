@@ -33,8 +33,16 @@ from tests import gui_test_support
 
 
 class WorkbenchNavMetaTests(unittest.TestCase):
-    def test_nav_order_starts_with_batch(self) -> None:
-        self.assertEqual(WORKBENCH_NAV_ORDER[0], WorkbenchNavItem.BATCH_TRANSLATION)
+    def test_nav_order_starts_with_unified_translation(self) -> None:
+        self.assertEqual(WORKBENCH_NAV_ORDER[0], WorkbenchNavItem.TRANSLATION)
+
+    def test_both_translation_modes_share_one_nav_item(self) -> None:
+        for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    workbench_nav_for_work_mode(mode),
+                    WorkbenchNavItem.TRANSLATION,
+                )
 
     def test_nav_for_work_modes(self) -> None:
         self.assertEqual(
@@ -54,7 +62,7 @@ class WorkbenchNavMetaTests(unittest.TestCase):
 
     def test_keywords_nav_shows_submode(self) -> None:
         self.assertTrue(workbench_nav_spec(WorkbenchNavItem.KEYWORDS).show_submode)
-        self.assertFalse(workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).show_submode)
+        self.assertFalse(workbench_nav_spec(WorkbenchNavItem.TRANSLATION).show_submode)
 
     def test_page_contract_exposes_migration_boundary(self) -> None:
         self.assertIn("supported_modes", WorkbenchPage.__annotations__)
@@ -88,18 +96,20 @@ class GuiWorkbenchNavTests(unittest.TestCase):
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
-    def test_default_nav_is_batch_translation(self) -> None:
+    def test_default_nav_is_unified_translation(self) -> None:
         self.assertEqual(self.window._work_mode, WorkMode.BATCH_TRANSLATION)
         current = self.window.workbench_nav.currentItem()
         self.assertIsNotNone(current)
         assert current is not None
         self.assertEqual(
             current.data(Qt.ItemDataRole.UserRole),
-            WorkbenchNavItem.BATCH_TRANSLATION.value,
+            WorkbenchNavItem.TRANSLATION.value,
         )
 
-    def test_nav_has_five_items(self) -> None:
-        self.assertEqual(self.window.workbench_nav.count(), 5)
+    def test_nav_has_four_items_and_two_translation_pages(self) -> None:
+        self.assertEqual(self.window.workbench_nav.count(), 4)
+        # The unified translation entry keeps both concrete execution pages
+        # in the stack so their page-local chrome stays intact.
         self.assertEqual(self.window.workbench_stack.count(), 5)
 
     def test_switch_nav_preserves_writeback_path_session(self) -> None:

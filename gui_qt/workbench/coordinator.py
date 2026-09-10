@@ -22,6 +22,16 @@ class WorkbenchPageCoordinator:
         self._stack = stack
         self._pages = dict(pages)
 
+    def set_page(self, item: WorkbenchNavItem, page: WorkbenchPage) -> None:
+        """Swap the widget behind a nav item.
+
+        The unified translation entry maps two work modes onto one nav item,
+        so the host replaces the concrete child page before activation.
+        """
+        if item not in self._pages:
+            raise KeyError(item)
+        self._pages[item] = page
+
     def activate(
         self,
         mode: WorkMode,
