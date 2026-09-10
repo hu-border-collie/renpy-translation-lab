@@ -80,6 +80,13 @@ _SAFE_ERROR_MESSAGES = {
     "provider_error": "LiteLLM provider request failed.",
 }
 
+# LiteLLM 1.83.7 treats omitted or empty api_key as OPENAI_API_KEY for rewritten
+# openai/* requests. A truthy placeholder stops that fallback; extra_headers
+# then blank Authorization so the placeholder never reaches a third-party
+# api_base. An empty extra header is the supported no-credential mechanism;
+# passing Authorization=None is rejected by the OpenAI client.
+_KEYLESS_CUSTOM_API_KEY = "none"
+
 
 def _safe_backend_error(
     exc: Exception,
@@ -513,7 +520,10 @@ class LiteLLMSyncBackend:
             if credentials is None
             else credentials
         )
-        if custom is not None and custom.requires_key and not resolved_credentials:
+        keyless = self._credential_ref.get("kind") == "none" or (
+            custom is not None and not custom.requires_key
+        )
+        if custom is not None and not keyless and not resolved_credentials:
             # The model id has been rewritten to openai/<model>, so LiteLLM
             # would otherwise fall back to OPENAI_API_KEY and leak an unrelated
             # OpenAI key to the third-party api_base. Fail before dispatch
@@ -526,6 +536,11 @@ class LiteLLMSyncBackend:
             )
         if custom is not None:
             kwargs["api_base"] = custom.base_url
+            if keyless and not resolved_credentials:
+                kwargs["api_key"] = _KEYLESS_CUSTOM_API_KEY
+                extra_headers = dict(kwargs.get("extra_headers") or {})
+                extra_headers["Authorization"] = ""
+                kwargs["extra_headers"] = extra_headers
         kwargs["timeout"] = normalize_sync_timeout_seconds(config.get("timeout"))
         if "temperature" in config:
             kwargs["temperature"] = config["temperature"]

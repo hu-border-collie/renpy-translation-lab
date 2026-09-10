@@ -536,6 +536,15 @@ def load_batch_settings(*, tolerate_routing_errors=False):
             )
             if runtime_snapshot.model_routing_config is not None:
                 runtime_snapshot.custom_litellm_providers = section_custom_providers(runtime_snapshot.model_routing_config)
+            else:
+                from litellm_provider_config import custom_provider_registry
+
+                try:
+                    runtime_snapshot.custom_litellm_providers = custom_provider_registry(
+                        (translator_config.get("sync") or {}).get("custom_litellm_providers")
+                    )
+                except ValueError:
+                    runtime_snapshot.custom_litellm_providers = {}
             legacy.apply_runtime_config(runtime_snapshot)
     # Per-project RAG / source-index flags (work/project_context_settings.json).
     try:

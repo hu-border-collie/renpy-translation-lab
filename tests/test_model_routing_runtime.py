@@ -73,10 +73,15 @@ class ProductionRoutingTests(TestCase):
             self.assertEqual(restored.to_manifest_dict(), plan.to_manifest_dict())
 
     def test_old_load_clears_new_snapshot(self):
-        with runtime.runtime_config_scope(runtime.RuntimeConfig(model_routing_config=migrated()["model_routing"])):
+        leftover = {"stale-custom": object()}
+        with runtime.runtime_config_scope(runtime.RuntimeConfig(
+            model_routing_config=migrated()["model_routing"],
+            custom_litellm_providers=leftover,
+        )):
             with redirect_stdout(io.StringIO()):
                 runtime.load_sync_translation_settings({"sync": {"model": "gemini-3.1-flash-lite"}})
             self.assertIsNone(runtime.MODEL_ROUTING_CONFIG)
+            self.assertNotIn("stale-custom", runtime.CUSTOM_LITELLM_PROVIDERS)
 
     def test_backend_uses_frozen_custom_connection(self):
         plan = read_routing_plan(migrated("litellm_custom"), legacy_execution="sync")
@@ -153,6 +158,25 @@ class ProductionRoutingTests(TestCase):
             with self.assertRaises(LiteLLMBackendError):
                 backend._resolve_credentials("openai", None)
 
+    def test_direct_batch_loader_clears_leftover_providers_without_v1(self):
+        leftover = {"stale-custom": object()}
+        config = {
+            "sync": {"model": "gemini-3.1-flash-lite", "backend": "gemini"},
+            "batch": {"model": "gemini-3.1-flash-lite"},
+        }
+        with runtime.runtime_config_scope(runtime.RuntimeConfig(
+            model_routing_config=migrated()["model_routing"],
+            custom_litellm_providers=leftover,
+        )):
+            with patch.object(
+                batch,
+                "load_json_file",
+                side_effect=lambda path: config if path == runtime.TRANSLATOR_CONFIG else {},
+            ), redirect_stdout(io.StringIO()):
+                batch.load_batch_settings()
+            self.assertIsNone(runtime.MODEL_ROUTING_CONFIG)
+            self.assertNotIn("stale-custom", runtime.CUSTOM_LITELLM_PROVIDERS)
+
     def test_direct_batch_loader_publishes_v1_snapshot(self):
         config = migrated()
         with patch.dict(batch.__dict__, batch.__dict__.copy()), runtime.runtime_config_scope(runtime.default_runtime_config()):
@@ -189,3 +213,15 @@ class ProductionRoutingTests(TestCase):
         with patch("litellm_sync_backend.LiteLLMSyncBackend") as factory:
             model_profile.build_sync_backend(profile, custom_providers={profile.provider: object()})
         self.assertNotIn(profile.provider, factory.call_args.kwargs["custom_providers"])
+
+    def test_legacy_custom_profile_keeps_configured_endpoint(self):
+        config = json.loads((FIXTURES / "litellm_custom.json").read_text(encoding="utf-8"))
+        plan = read_routing_plan(config, legacy_execution="sync")
+        profile = plan.profiles[plan.routes["translation"].profile_id]
+        self.assertTrue(profile.base_url)
+        other = object()
+        with patch("litellm_sync_backend.LiteLLMSyncBackend") as factory:
+            model_profile.build_sync_backend(profile, custom_providers={"other": other})
+        connections = factory.call_args.kwargs["custom_providers"]
+        self.assertEqual(connections[profile.provider].base_url, profile.base_url)
+        self.assertIs(connections["other"], other)

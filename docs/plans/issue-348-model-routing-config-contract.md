@@ -194,7 +194,7 @@ P1 migrator 必须满足：
 - **P0（本文）**：schema、纯 validator、四类旧 fixture、调用链和所有权合同；不改变运行行为。
 - **P1（已实现）**：幂等 migrator、备份/rollback、离线兼容 reader、legacy/effective-plan 等价测试。
   CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
-- **P2（生产接线）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
+- **P2（生产接线，已实现）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
   使用限制见迁移文档；新任务读取新配置，已有任务优先使用冻结路由。
 - **P3**：统一 CLI/GUI/Settings；复用 #347 服务和 #202 coordinator。
 - **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。

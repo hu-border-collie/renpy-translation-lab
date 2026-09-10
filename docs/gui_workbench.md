@@ -19,9 +19,10 @@
 
 界面用语尽量使用中文说明；「诊断与运行日志」中的「命令参考」仍保留可复制 CLI 子命令，供高级用户对照。
 
-空闲、Sync 和 Batch 的命令参考均包含 [模型配置离线迁移 P1](model_config_migration.md) 的 preview、
+空闲、Sync 和 Batch 的命令参考均包含 [模型配置迁移](model_config_migration.md) 的 preview、
 stage-only migrate 和 rollback 模板，均要求显式配置副本路径。当前 Settings 仍编辑旧
-配置，无需先加载 Batch 任务；不会在加载页面时自动迁移，新模型设置页和生产路由激活属于 #348 后续阶段。
+配置字段，无需先加载 Batch 任务，也不会在打开页面时自动迁移。P2 已接入生产读取；
+统一 Model Profiles 表单属于 P3。
 
 ## 安装与启动
 
@@ -494,7 +495,8 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 ### 模型路由配置兼容期（#348 P2）
 
-配置含 `model_routing` 时，CLI 和 GUI workflow 都使用新配置的模型与阶段路由。
-设置 → 模型页显示兼容说明；旧模型/LiteLLM 字段仅供回滚，新配置暂由配置文件编辑。
+配置含 `model_routing` 时，新任务使用其中的模型与阶段路由；已有任务优先使用冻结路由，
+后续设置修改不会改写它们。设置 → 模型页显示兼容说明；旧模型/LiteLLM 字段仅供回滚，
+新配置暂由配置文件编辑。
 保存不会丢弃新 section 的未知字段，无效 schema 会阻止保存。统一 Model Profiles
 表单与耐久任务恢复页面属于 P3。迁移前请阅读[模型配置迁移](model_config_migration.md)。

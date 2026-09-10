@@ -6,6 +6,7 @@ from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,
     QUALITY_REPORT_EXPORT_LABEL,
     LITELLM_CACHE_COPY,
+    MODEL_ROUTING_RUNTIME_COPY,
     REVISION_CORPUS_COPY,
     REVISION_PROPOSAL_COPY,
     check_status_label,
@@ -144,6 +145,12 @@ class GuiUserCopyTests(unittest.TestCase):
         for code, message in DOCTOR_WORKFLOW_STATE_MESSAGES.items():
             with self.subTest(code=code):
                 self.assertEqual(message, DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES[code])
+
+    def test_model_routing_runtime_hint_states_frozen_route_exception(self):
+        hint = MODEL_ROUTING_RUNTIME_COPY["settings_hint"]
+        self.assertIn("新任务", hint)
+        self.assertIn("冻结路由", hint)
+        self.assertIn("不会改写", hint)
 
     def test_litellm_cache_copy_covers_fallback_and_failure_wording(self):
         reason = LITELLM_CACHE_COPY["fallback_reason"].format(

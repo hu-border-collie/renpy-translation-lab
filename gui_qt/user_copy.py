@@ -891,7 +891,7 @@ STRUCTURE_PROTECTION_COPY = {
 
 
 MODEL_ROUTING_RUNTIME_COPY = {
-    "settings_hint": "若配置包含 model_routing，运行时使用其中的模型与阶段路由；本页及 LiteLLM 页的旧模型字段仅供回滚兼容。请在配置文件中编辑新配置。",
+    "settings_hint": "若配置包含 model_routing，新任务使用其中的模型与阶段路由；已有任务优先使用冻结路由，后续设置修改不会改写它们。本页及 LiteLLM 页的旧模型字段仅供回滚兼容。请在配置文件中编辑新配置。",
     "invalid_title": "模型路由配置无效",
     "invalid_message": "model_routing 校验失败，未保存配置。请修正新配置或按迁移文档回滚；运行时不会退回旧模型。",
 }

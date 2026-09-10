@@ -1,7 +1,10 @@
 import asyncio
 import builtins
+import json
 import os
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
 from litellm_sync_backend import (
@@ -9,6 +12,7 @@ from litellm_sync_backend import (
     LiteLLMCapabilityError,
     LiteLLMSyncBackend,
     LiteLLMUnavailableError,
+    _KEYLESS_CUSTOM_API_KEY,
 )
 from litellm_provider_config import ProviderApiKeyStore, custom_provider_registry
 from sync_model_backend import SyncGenerationRequest, SyncModelBackend
@@ -617,9 +621,121 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         ):
             backend.generate(SyncGenerationRequest("local-vllm/llama-3", "hello"))
 
-        self.assertNotIn("api_key", calls[0])
+        self.assertEqual(calls[0]["api_key"], _KEYLESS_CUSTOM_API_KEY)
+        self.assertEqual(calls[0]["extra_headers"]["Authorization"], "")
         self.assertEqual(calls[0]["api_base"], "http://127.0.0.1:8000/v1")
         self.assertEqual(calls[0]["model"], "openai/llama-3")
+
+    def test_none_credential_ref_does_not_send_ambient_authorization(self):
+        try:
+            import litellm  # noqa: F401
+        except Exception:
+            self.skipTest("litellm is not installed")
+
+        captured: list[dict[str, str]] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(length)
+                captured.append({key: value for key, value in self.headers.items()})
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    "id": "x",
+                    "object": "chat.completion",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1,
+                        "completion_tokens": 1,
+                        "total_tokens": 2,
+                    },
+                }).encode())
+
+            def log_message(self, *_args):
+                return
+
+        httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": f"http://127.0.0.1:{httpd.server_address[1]}/v1",
+                    "requires_key": False,
+                }
+            ]
+        )
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        backend = LiteLLMSyncBackend(
+            custom_providers=registry,
+            credential_ref={"kind": "none"},
+        )
+        try:
+            with (
+                mock.patch(
+                    "litellm_provider_config.load_provider_api_key",
+                    return_value="",
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"OPENAI_API_KEY": "official-openai-key"},
+                ),
+            ):
+                result = backend.generate(
+                    SyncGenerationRequest(
+                        "local-vllm/llama-3",
+                        "hello",
+                        {"timeout": 10},
+                    )
+                )
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+        self.assertEqual(result.response_text, "ok")
+        self.assertEqual(len(captured), 1)
+        authorization = captured[0].get("Authorization")
+        self.assertNotIn("official-openai-key", json.dumps(captured[0]))
+        self.assertTrue(not authorization)
+
+    def test_none_credential_ref_kwargs_blank_authorization(self):
+        calls = []
+        registry = custom_provider_registry(
+            [
+                {
+                    "id": "local-vllm",
+                    "base_url": "http://127.0.0.1:8000/v1",
+                    "requires_key": True,
+                }
+            ]
+        )
+        backend = LiteLLMSyncBackend(
+            completion=lambda **kwargs: calls.append(kwargs) or {"choices": []},
+            custom_providers=registry,
+            credential_ref={"kind": "none"},
+        )
+        with (
+            mock.patch(
+                "litellm_provider_config.load_provider_api_key",
+                return_value="",
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"OPENAI_API_KEY": "official-openai-key"},
+                clear=True,
+            ),
+        ):
+            backend.generate(SyncGenerationRequest("local-vllm/llama-3", "hello"))
+
+        self.assertEqual(calls[0]["api_key"], _KEYLESS_CUSTOM_API_KEY)
+        self.assertEqual(calls[0]["extra_headers"]["Authorization"], "")
+        self.assertNotIn("official-openai-key", json.dumps(calls[0]))
 
 
 if __name__ == "__main__":
