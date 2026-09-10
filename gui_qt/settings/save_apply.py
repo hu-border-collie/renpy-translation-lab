@@ -21,7 +21,7 @@ from ..settings_schema import (
     validate_advanced_settings,
 )
 from ..theme_helpers import write_gui_theme_to_config
-from ..user_copy import CUSTOM_LITELLM_PROVIDER_COPY
+from ..user_copy import CUSTOM_LITELLM_PROVIDER_COPY, MODEL_ROUTING_RUNTIME_COPY
 from .registry import WORKSPACE_MANAGED_KEYS
 
 _CONTEXT_FLAG_KEYS = (
@@ -146,6 +146,15 @@ def apply_collected_settings(
     write and rollback.
     """
 
+    if "model_routing" in config:
+        from model_routing_config import validate_model_routing_section
+
+        if validate_model_routing_section(config["model_routing"]):
+            return SettingsSaveApplyResult(
+                block_page="models",
+                block_title=MODEL_ROUTING_RUNTIME_COPY["invalid_title"],
+                block_message=MODEL_ROUTING_RUNTIME_COPY["invalid_message"],
+            )
     extras = extras or SettingsSaveExtras()
     project_context_flags: dict[str, Any] = {}
     for key in _CONTEXT_FLAG_KEYS:

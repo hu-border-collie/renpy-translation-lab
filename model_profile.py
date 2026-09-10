@@ -1416,6 +1416,7 @@ def override_sync_stage(
 def resolve_routing_plan_from_runtime(
     *,
     sync_backend: str,
+    model_routing_config: Mapping[str, Any] | None = None,
     sync_model: str = "",
     batch_model: str = "",
     project_analysis_model: str = "",
@@ -1431,8 +1432,17 @@ def resolve_routing_plan_from_runtime(
 
     Callers snapshot ``SYNC_MODEL`` / ``BATCH_MODEL`` / stage models into
     this helper *once* at run start. Later mutations of those globals must
-    not be re-read.
+    not be re-read. When model_routing_config is supplied, it is the entire
+    routing source; legacy model arguments are ignored, including defaults.
     """
+    if model_routing_config is not None:
+        from model_routing_reader import resolve_runtime_plan
+
+        return resolve_runtime_plan(
+            {"model_routing": model_routing_config}, execution=execution,
+            stage_overrides=stage_overrides, created_at=created_at,
+            config_origins=config_origins,
+        )
     translator_config: dict[str, Any] = {
         "sync": {"backend": _clean_str(sync_backend) or SYNC_BACKEND_GEMINI},
         "batch": {},
@@ -1506,9 +1516,22 @@ def build_sync_backend(
     if profile.adapter == ADAPTER_LITELLM:
         from litellm_sync_backend import LiteLLMSyncBackend
 
+        connections = dict(custom_providers or {})
+        if profile.base_url:
+            existing = connections.get(profile.provider)
+            connections[profile.provider] = CustomLiteLLMProvider(
+                id=profile.provider, label=existing.label if existing else profile.label,
+                base_url=profile.base_url, models_url=existing.models_url if existing else "",
+                api_key_env=profile.credential_ref.env_name,
+                requires_key=profile.credential_ref.kind != "none",
+            )
+        else:
+            # A native frozen profile must not acquire a newly configured endpoint.
+            connections.pop(profile.provider, None)
         return LiteLLMSyncBackend(
             api_key=str(diagnostic_api_key or "").strip() or None,
-            custom_providers=dict(custom_providers or {}),
+            custom_providers=connections,
+            credential_ref=profile.credential_ref.to_manifest_dict(),
         )
     raise ValueError(
         f"Profile {profile.id} uses adapter {profile.adapter}, which has no "

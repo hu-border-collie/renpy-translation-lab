@@ -37,7 +37,7 @@
 
 ### 现行：配置与 GUI
 
-- [模型配置离线迁移（P1）](model_config_migration.md)：配置副本的预览、暂存、备份与回滚；尚不激活生产路由。
+- [模型配置迁移（#348 P1/P2）](model_config_migration.md)：配置副本的预览、暂存、备份与回滚；P2 已接入兼容入口的生产读取。
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
 - [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（统一侧边导航、项目与环境、任务页、设置、诊断与运行日志、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
@@ -67,7 +67,7 @@
 进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿迁至 [archive/](archive/README.md)。
 
 - [#202 Phase A：Settings 页面契约与现状基线](plans/issue-202-settings-page-contract.md)：冻结 page adapter/coordinator 合同，记录 10 页字段/即时持久化所有权与 as-is 缺口；Phase B 最小接线已合并（PR #434）；Phase C LiteLLM 垂直迁移已落地独立 `SettingsPage`；Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；legacy adapter 与旧 builder 已删除；两文件写盘仍在 `MainWindow`。
-- [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力已落地。
+- [#348 P0–P2：Model Routing 配置、迁移合同与生产读取](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力与 P2 兼容入口生产读取已落地，P3 统一设置页待推进。
 - [#347 → #348 耐久 Sync 产品化交接](plans/issue-347-to-348-handoff.md)：冻结服务/snapshot/CLI/制品接缝与验收边界。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md) · [多引擎生态与工具源码研究](plans/multi_engine_localization_ecosystem_research.md) · [GitHub 本地化项目研究](plans/github_localization_projects_research.md)

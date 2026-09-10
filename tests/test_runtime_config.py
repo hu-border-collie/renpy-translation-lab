@@ -457,7 +457,10 @@ class RuntimeConfigScopeTests(unittest.TestCase):
                 persist_corrected_game_root=False,
             ):
                 pass
-        load_settings.assert_called_once_with(persist_corrected_game_root=False)
+        load_settings.assert_called_once_with(
+            persist_corrected_game_root=False,
+            tolerate_routing_errors=False,
+        )
 
 if __name__ == "__main__":
     unittest.main()

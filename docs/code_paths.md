@@ -41,8 +41,10 @@
   - `validate_routing_plan()`：能力、策略和凭据引用检查。
   - `build_sync_backend()`：从已解析 profile 构造实际 Sync adapter。
 - `model_routing_config.py`
-  - `validate_model_routing_section()`：#348 schema-v1 纯验证器；当前未接入生产。
+  - `validate_model_routing_section()`：#348 schema-v1 纯验证器。
   - `LEGACY_FIELD_MAPPINGS` / `legacy_fields_present()`：P1 migrator 的冻结输入清单。
+- `model_routing_reader.py`
+  - `runtime_settings_view()` / `read_routing_plan()`：P2 生产兼容读取；新任务使用 v1，旧配置保持原读取，已有任务优先冻结路由。
 - `sync_model_backend.py` / `litellm_sync_backend.py`：Sync 请求适配与模型目录解析。
 
 ## TranslationPlan 与任务执行
@@ -308,12 +310,12 @@
   `tests.test_gui_games_registry_worker`、`tests.test_gui_cli_runner`、
   `tests.test_gui_context_library_worker`。
 
-## P1 离线配置迁移
+## P1/P2 配置迁移与生产读取
 
 `model_config_migration.py` → `model_routing_migration_store.py` →
-`model_routing_migration.preview_migration` → schema validator / 离线兼容 reader →
+`model_routing_migration.preview_migration` → schema validator / 兼容 reader →
 `config_store` 备份、报告和原子替换。GUI 的原始 JSON 保存也委托该 store 并共用写锁。
-生产翻译入口尚不消费新 section；步骤与边界见 [迁移说明](model_config_migration.md)。
+P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 [迁移说明](model_config_migration.md)。
 
 ## 测试入口速查
 

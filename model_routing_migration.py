@@ -1,7 +1,7 @@
 """Deterministic, credential-free legacy-to-v1 migration planning (#348 P1).
 
-Production readers are intentionally unchanged until P2. This module prepares
-and checks the complete candidate using the real legacy routing semantics.
+This module prepares and checks a candidate using legacy routing semantics.
+The production runtime consumes installed v1 configurations.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class MigrationPreview:
             "target_schema": 1, "mapped_fields": list(self.mapped_fields),
             "profile_ids": list(self.profile_ids), "provider_ids": list(self.provider_ids),
             "preserved_fields": ["all original fields (legacy and unknown)"],
-            "warnings": ["P1 staged configuration only; production activation requires P2"],
+            "warnings": ["Only the specified file is changed; installed v1 configurations take effect on the next runtime load"],
         }
 
 
@@ -70,7 +70,13 @@ def preview_migration(
     """
     if not isinstance(config, dict):
         raise routing.ModelRoutingConfigError("Configuration must be an object")
-    if _find_sensitive_keys(config, "$"):
+    sensitive = _find_sensitive_keys(config, "$")
+    rotation = config.get("rotation")
+    key_rotation = rotation.get("api_key") if isinstance(rotation, dict) else None
+    if isinstance(key_rotation, dict) and set(key_rotation) <= {"enabled"} and isinstance(key_rotation.get("enabled"), bool):
+        # This exact legacy object is a boolean policy, never a credential value.
+        sensitive = [issue for issue in sensitive if issue.path != "$.rotation.api_key"]
+    if sensitive:
         raise routing.ModelRoutingConfigError("Embedded credential fields prevent migration")
     candidate = copy.deepcopy(config)
     if "model_routing" in config:

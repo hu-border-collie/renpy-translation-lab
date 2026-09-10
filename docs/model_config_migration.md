@@ -3,10 +3,23 @@
 P1 提供可复用迁移器、兼容 reader 与开发者 CLI，用于在配置副本上验证 schema-v1。
 它不会加载密钥、连接模型、执行 prepare 命令或改变游戏文件。
 
-**当前生产入口仍读取旧配置。** `migrate --stage-only` 只添加 `model_routing` 并保留
-全部旧字段；编辑新 section 尚不会改变生产模型。生产 resolver 接线属于 P2，统一
-Settings/翻译页属于 P3。此阶段明确采用分阶段交付，不在 GUI 加第二套模型表单，也
-不把生产 `translator_config.example.json` 切换为尚未激活的新格式。
+**P2 已接入生产读取。** 配置含合法 `model_routing` 时，新任务使用其中的模型、Provider、
+阶段路由与 embedding 连接；保留的旧模型字段不参与补值。缺少新 section 时保持旧行为；
+新 section 无效时拒绝执行。已有 manifest 的冻结路由优先于当前配置。
+
+`migrate --stage-only` 仍只修改指定文件，不启动任务、不自动安装配置；若指定生产配置，
+新 section 在下次加载时生效。请先在副本上预览和验证，再替换生产配置。
+GUI 原有 workflow 调用相同 CLI，因此同样消费新配置；统一 Model Profiles 表单与耐久任务
+页面仍属于 P3。本阶段 GUI 模型页显示兼容说明，保存时校验并保留新 section 和未知字段。
+
+现有兼容命令使用 `legacy_entrypoints` 角色指针；项目分析保持 Sync、最终审校保持 Gemini
+Batch。跨 Provider 的模型字符串覆盖、Gemini 非 `api_keys_json/api_keys` 凭据槽和非空生成
+profile `params` 尚未接入旧命令，会明确拒绝，不能静默忽略。生成请求参数继续保存在
+`sync` / `batch` 执行设置中；embedding profile 的 `params` 已按独立连接读取。
+P3 再提供统一 profile/strategy 选择和完整参数编辑表面。
+
+生产示例 `translator_config.example.json` 已添加等价的 v1 section，旧字段保留用于回滚，
+默认模型和 Sync/Batch 策略不变。
 v1 结构示例见 [合同 fixture](../tests/fixtures/model_routing_config_v1.json)。
 
 ## 操作
@@ -76,14 +89,14 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 ## 开发接口与后续
 
 - `model_routing_migration.preview_migration`：纯内存候选与非敏感报告。
-- `model_routing_reader.read_routing_plan`：离线 legacy/v1 reader；保留现有 ModelRoutingPlan。
+- `model_routing_reader.read_routing_plan`：共用 legacy/v1 reader；保留现有 ModelRoutingPlan。
 - `model_routing_reader.read_embedding_settings`：独立读取对应路径的 embedding 连接与请求参数；
   新 section 存在时不再读取旧 RAG 连接字段。
 - `model_routing_migration_store`：显式 preview/migrate/rollback 文件事务。
 - `config_store`：GUI 与迁移共用原始 JSON 保存边界；不引入另一个配置状态源。
 
-P2 接入生产时必须处理实际 capability/credential probe、入口覆盖和冻结任务兼容，
-验证 v1 的 `purpose` 与 embedding backend，再激活新 reader。P3 由 #202 的页面合同
+P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
+四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。P3 由 #202 的页面合同
 承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。
 
 参见 [配置合同](plans/issue-348-model-routing-config-contract.md)、

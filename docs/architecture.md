@@ -27,9 +27,9 @@
    - `model_profile.py` 把现有 `sync.*` / `batch.*` 只读解析为 provider-neutral
      ModelRoutingPlan。它的 `primary`/`batch` 等 ID 是兼容 slot，不是长期用户 ID。
    - `translation_plan.py` 冻结 source snapshot、模型路由、上下文、prompt/schema 和预算。
-   - #348 的 schema-v1 合同位于 `model_routing_config.py`，目前尚未接入生产读取。
-   - P1 的 `model_routing_reader.py` / `model_routing_migration.py` 提供离线兼容读取和迁移候选，
-     `model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚；生产激活属于 P2。
+   - #348 的 schema-v1 合同位于 `model_routing_config.py`；P2 已在兼容入口接入生产读取。
+   - `model_routing_reader.py` / `model_routing_migration.py` 提供兼容读取和迁移候选，
+     `model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚。
 4. **执行与耐久状态**
    - CLI 耐久路径：`sync-start` → `sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
      `sync_run_contracts.py`，SQLite 细节不暴露给 GUI。

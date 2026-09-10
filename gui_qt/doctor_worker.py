@@ -49,9 +49,10 @@ def run_doctor_check(config: RuntimeConfig | None = None) -> DoctorWorkerResult:
             config,
             reload_translator_settings=config is None,
             persist_corrected_game_root=False,
+            tolerate_routing_errors=True,
         ):
             legacy.load_glossary()
-            batch_mod.load_batch_settings()
+            batch_mod.load_batch_settings(tolerate_routing_errors=True)
             report = batch_mod.collect_doctor_report()
             buffer = io.StringIO()
             with redirect_stdout(buffer):

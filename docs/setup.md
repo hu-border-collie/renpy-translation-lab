@@ -208,6 +208,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 - 同步请求遇到 429 时可在**同一 Provider** 的已保存 Key 集合内有界尝试下一把，并只记录脱敏后缀；401/403 不轮换。该机制与 Gemini keyring 完全分离。
 - 模型列表走 `GET {models_url}`（Bearer 认证），解析 OpenAI 风格 `{data:[{id:...}]}` 响应。
 - `requires_key=true` 且 keyring 与 `api_key_env` 均无密钥时，请求会在发送前失败，杜绝 `OPENAI_API_KEY` 被静默发送到第三方端点。
+- `requires_key=false` 或 `credential_ref.kind=none` 时，自定义端点请求不会携带环境中的 `OPENAI_API_KEY`；LiteLLM 的 openai 改写路径会显式留空 Authorization。
 - 非法 `base_url`、非法字符或与内置前缀冲突的 `id` 会被拒绝；GUI 保存或 CLI 加载配置时均会报错。
 - CLI 与 GUI 读取同一份 `translator_config.json` 配置。
 - 自定义 OpenAI 兼容 Provider 默认使用 JSON object 模式；若端点忽略该参数，提示词仍要求 JSON，响应仍须通过统一合同校验。未知的非自定义 Provider 则保守降级为 prompt-only JSON，不会被假定支持严格 schema。

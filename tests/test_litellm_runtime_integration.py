@@ -3,6 +3,7 @@ import unittest
 from unittest import mock
 
 import model_profile as mp
+from litellm_provider_config import CustomLiteLLMProvider
 import translation_plan
 import translator_runtime as runtime
 
@@ -247,7 +248,14 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         })()
         fake_backend = mock.Mock()
         fake_backend.generate.return_value = fake_result
-        registry = {"opencode-go": object()}
+        registry = {
+            "opencode-go": CustomLiteLLMProvider(
+                id="opencode-go", label="Test compatible provider",
+                base_url="https://models.example.test/v1",
+                models_url="https://models.example.test/v1/models",
+                api_key_env="", requires_key=False,
+            ),
+        }
         previous_backend = runtime.SYNC_BACKEND
         previous_registry = runtime.CUSTOM_LITELLM_PROVIDERS
         try:

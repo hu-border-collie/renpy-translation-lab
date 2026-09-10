@@ -184,7 +184,10 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         ):
             result = run_doctor_check()
         self.assertTrue(result.ok)
-        load_settings.assert_called_once_with(persist_corrected_game_root=False)
+        load_settings.assert_called_once_with(
+            persist_corrected_game_root=False,
+            tolerate_routing_errors=True,
+        )
 
     def test_run_doctor_check_keeps_config_bytes_unchanged(self):
         import json

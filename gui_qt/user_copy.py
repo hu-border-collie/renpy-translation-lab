@@ -870,8 +870,8 @@ def format_bootstrap_fact(key: str, value: str) -> str:
     return f"{label}：{value}"
 MODEL_CONFIG_MIGRATION_COPY = {
     "idle_hint": "无需加载任务即可查看配置迁移命令；开始任务后，这里还会显示任务记录、翻译包和云端任务。",
-    "preview": "模型配置迁移预览（离线 P1）",
-    "migrate": "暂存模型配置（不激活生产路由）",
+    "preview": "模型配置迁移预览（离线副本）",
+    "migrate": "迁移配置副本（生产配置下次加载生效）",
     "rollback": "回滚模型配置迁移（校验指纹）",
 }
 
@@ -887,4 +887,11 @@ STRUCTURE_PROTECTION_COPY = {
     "protection.structure_changed": "恢复后的结构符与原文不一致",
     "protection.structure_order": "标签、格式符或控制符顺序被破坏",
     "protection.unsupported_engine": "此引擎未声明结构保护规则",
+}
+
+
+MODEL_ROUTING_RUNTIME_COPY = {
+    "settings_hint": "若配置包含 model_routing，新任务使用其中的模型与阶段路由；已有任务优先使用冻结路由，后续设置修改不会改写它们。本页及 LiteLLM 页的旧模型字段仅供回滚兼容。请在配置文件中编辑新配置。",
+    "invalid_title": "模型路由配置无效",
+    "invalid_message": "model_routing 校验失败，未保存配置。请修正新配置或按迁移文档回滚；运行时不会退回旧模型。",
 }
