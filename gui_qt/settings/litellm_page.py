@@ -202,20 +202,21 @@ def _custom_providers_registry_payload(raw: object, *, restore: bool) -> object:
     """Prepare ``custom_litellm_providers`` for ``custom_provider_registry``.
 
     Disk loads pass the raw list through so invalid entries still fail
-    validation. Restore snapshots come from ``collect()`` as tuples of pairs
-    and must be converted back to mappings; malformed snapshot rows are
-    skipped because they are not disk config.
+    validation. Internal snapshots (``collect()`` / page baseline) are tuples
+    of sorted item pairs and must be converted back to mappings. Restore of a
+    host UI snapshot skips malformed rows; ``reset()`` uses the same snapshot
+    format but still clears the modified flag via ``restore=False``.
     """
     if raw is None:
         return []
+    if not isinstance(raw, (list, tuple)) or isinstance(raw, (str, bytes)):
+        return raw
+    converted = [_mapping_from_entry(entry) for entry in raw]
     if restore:
-        if not isinstance(raw, (list, tuple)):
-            return raw
-        return [
-            converted
-            for entry in raw
-            if (converted := _mapping_from_entry(entry)) is not None
-        ]
+        return [item for item in converted if item is not None]
+    if all(item is not None for item in converted):
+        # collect()/baseline snapshot (tuple of pairs) or a list of mappings.
+        return converted
     if isinstance(raw, tuple):
         return list(raw)
     return raw
@@ -366,9 +367,16 @@ class LiteLLMSettingsPage(QObject):
         return issues
 
     def reset(self) -> None:
+        """Reload the last loaded/saved collect() snapshot and clear edits.
+
+        The baseline is internal snapshot data, not disk JSON. Provider
+        mappings are converted from collect() tuples; the modified flag is
+        cleared because this is discard, not restore-of-unsaved-edits.
+        """
         self.request_shutdown()
         if self._baseline:
             self.load(self._baseline)
+            self._custom_litellm_providers_modified = False
 
     def focus_issue(self, issue: SettingsIssue) -> bool:
         attr = _FIELD_WIDGETS.get(issue.field_key)

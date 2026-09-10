@@ -235,6 +235,24 @@ class ModelsSettingsPageContractTests(unittest.TestCase):
         self.page.reset()
         self.assertEqual(self.page.collect()["batch_thinking_level"], "minimal")
 
+    def test_restore_empty_thinking_after_disk_default_marks_user_changed(self) -> None:
+        self.page.load(
+            {
+                "batch_model": "gemini-3.1-flash-lite",
+                "batch_thinking_level": "minimal",
+            }
+        )
+        self.assertFalse(self.page._batch_thinking_user_changed)
+        self.page.load(
+            {
+                "batch_model": "gemini-3.1-flash-lite",
+                "batch_thinking_level": "",
+            },
+            restore=True,
+        )
+        self.assertTrue(self.page._batch_thinking_user_changed)
+        self.assertEqual(self.page.collect()["batch_thinking_level"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

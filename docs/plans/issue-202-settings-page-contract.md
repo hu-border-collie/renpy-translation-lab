@@ -246,7 +246,8 @@ Phase C 已落地：
 - `gui_qt/settings/litellm_page.py`：`LiteLLMSettingsPage` 可脱离 `MainWindow` 构造，实现
   `load/collect/validate/reset/focus_issue/set_task_running`。磁盘上的
   `custom_litellm_providers` 完整交给 `custom_provider_registry` 校验，不得先过滤非法条目再当
-  作有效配置保存；`load(..., restore=True)` 恢复未保存编辑时保留 `modified`，避免只打开
+  作有效配置保存；`collect()` / `reset()` 基线是键值对元组快照，加载时先还原成对象，且
+  `reset()` 仍清除 modified；`load(..., restore=True)` 恢复未保存编辑时保留 `modified`，避免只打开
   LiteLLM 页删除最后一项后首次保存仍写回磁盘旧列表。
 - 目录/版本/连接测试/warmup worker 由页面持有；取消后 retired 到真实 `finished`，warmup 仍使用
   模块级 retired set。连接测试继续用 `litellm_connection_identity` 丢弃 stale result。
@@ -260,7 +261,8 @@ Phase D（进行中，十页已迁出；apply 已抽到 `save_apply.py`，写盘
 - `gui_qt/settings/gemini_catalog_widgets.py`：Gemini 目录 extras 与轮换 checklist 控件。
 - `gui_qt/settings/models_page.py`：`ModelsSettingsPage` 可脱离 `MainWindow` 构造，拥有 Gemini
   同步/批量模型与思考程度下拉；目录 extras 仍由宿主 `set_catalog` 注入，保存仍走
-  `MainWindow._on_save_config`。
+  `MainWindow._on_save_config`。保存补建其他页时须保留 `_batch_thinking_user_changed`，否则显式
+  「不启用」思考在首次保存时不会写入空 `thinking_level`。
 - `gui_qt/settings/project_page.py`：`ProjectSettingsPage` 可脱离 `MainWindow` 构造，拥有
   「项目与资源」「准备流程」字段；`game_root` 只读展示，SDK 浏览/查找/下载仍由宿主对话框与
   `SdkInstallWorker` 执行。
