@@ -1129,4 +1129,22 @@ MODEL_PROFILES_PAGE_COPY = {
     ),
     "probe_unavailable": "当前宿主不支持能力探测。",
     "probe_failed": "能力探测失败：{code}。请查看诊断与运行日志。",
+    "reason_labels": {
+        "missing_provider": "该 ModelProfile 引用的 Provider 不存在",
+        "missing_gemini_adapter": "不是 Gemini 直连模型，无法使用 Gemini Batch",
+        "missing_remote_batch": "该模型未声明远程 Batch 能力",
+        "missing_sync_generation": "该模型未声明同步生成能力",
+        "unsupported_strategy": "不支持的执行方式",
+    },
+    "error_messages": {
+        "STRATEGY_NOT_SUPPORTED": "该模型不支持所选执行方式：{reason}。",
+        "UNKNOWN_PROFILE": "找不到该 ModelProfile；请刷新页面后重试。",
+        "UNKNOWN_PROVIDER": "找不到该 Provider；请先修复或重新选择引用。",
+        "PROFILE_IN_USE": "该 ModelProfile 仍被默认值、阶段路由或 embedding 引用，不能删除。",
+        "PROVIDER_IN_USE": "该 Provider 仍被 ModelProfile 使用，不能删除。",
+        "INVALID_STRATEGY": "执行方式无效；请选择同步或 Gemini Batch。",
+        "INVALID_CREDENTIAL_KIND": "凭据引用类型无效；请重新选择。",
+        "UNKNOWN_CAPABILITY_OVERRIDE": "包含不支持的能力覆盖项；请重置该覆盖。",
+        "MODEL_ROUTING_INVALID": "model_routing 校验失败；请先修复校验问题。",
+    },
 }

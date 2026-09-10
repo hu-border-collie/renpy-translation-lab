@@ -225,6 +225,85 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertIn("来源 adapter_default", text)
         self.assertIn("远程 Batch", text)
 
+    def test_default_profile_change_refreshes_strategy_capabilities(self) -> None:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="Acme",
+            adapter="litellm",
+            provider="acme",
+            base_url="https://acme.example/v1",
+            credential_kind="none",
+        )
+        section = editor.add_profile(
+            section,
+            label="Acme Main",
+            provider_id="acme",
+            model="acme/model-a",
+        )
+        section = editor.add_provider(
+            section,
+            label="Gemini",
+            adapter="gemini",
+            provider="gemini",
+            credential_kind="api_keys_json",
+            credential_name="api_keys",
+            credential_env_name="GEMINI_API_KEY",
+        )
+        section = editor.add_profile(
+            section,
+            label="Gemini Main",
+            provider_id="gemini",
+            model="gemini-3.5-flash",
+        )
+        section = editor.set_defaults(
+            section,
+            primary_profile_id="acme-main",
+            execution_strategy="sync",
+        )
+        self.page.load({"model_routing": section})
+
+        gemini_index = self.page.default_profile_combo.findData("gemini-main")
+        self.page.default_profile_combo.setCurrentIndex(gemini_index)
+
+        batch_index = self.page.default_strategy_combo.findData("gemini_batch")
+        item = self.page.default_strategy_combo.model().item(batch_index)
+        self.assertTrue(item.isEnabled())
+
+    def test_add_profile_without_providers_preserves_existing_section(self) -> None:
+        section = editor.empty_section()
+        section["future_top_level"] = {"keep": True}
+        section["profiles"]["orphan"] = {
+            "label": "Orphan",
+            "provider_id": "missing-provider",
+            "model": "acme/model-a",
+        }
+        self.page.load({"model_routing": section})
+
+        self.page.profiles_add_btn.click()
+
+        collected = self.page.collect()["model_routing"]
+        self.assertEqual(collected["future_top_level"], {"keep": True})
+        self.assertIn("orphan", collected["profiles"])
+        self.assertTrue(collected["providers"])
+
+    def test_editor_errors_map_to_localized_reasons(self) -> None:
+        error = editor.ModelProfilesEditorError(
+            "STRATEGY_NOT_SUPPORTED",
+            "nope",
+            details={
+                "profile_id": "acme-main",
+                "strategy": "gemini_batch",
+                "reason": "missing_gemini_adapter",
+            },
+        )
+
+        message = self.page._editor_error_message(error)
+
+        self.assertIn("不是 Gemini 直连模型", message)
+        self.assertNotIn("missing_gemini_adapter", message)
+        self.assertIn("Gemini Batch", message)
+
     def test_probe_button_wires_immediate_action(self) -> None:
         calls: list[tuple[str, object]] = []
         self.page.set_action_callbacks(

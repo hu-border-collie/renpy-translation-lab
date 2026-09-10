@@ -705,8 +705,22 @@ class ProfilesSettingsPage(QObject):
             return
         providers = editor.provider_ids(self._section)
         if not providers:
-            self._on_create_section()
-            return
+            # Keep the existing profiles/routes/defaults/unknown fields and add
+            # a usable default connection instead of rebuilding the section.
+            try:
+                self._section = editor.add_provider(
+                    self._section,
+                    label="Google Gemini",
+                    adapter="gemini",
+                    provider="gemini",
+                    credential_kind="api_keys_json",
+                    credential_name="api_keys",
+                    credential_env_name="GEMINI_API_KEY",
+                )
+            except editor.ModelProfilesEditorError as exc:
+                self._show_error(exc)
+                return
+            providers = editor.provider_ids(self._section)
         try:
             self._section = editor.add_profile(
                 self._section,
@@ -974,11 +988,12 @@ class ProfilesSettingsPage(QObject):
                 execution_strategy=strategy,
             )
         except editor.ModelProfilesEditorError as exc:
-            self._show_status(
-                MODEL_PROFILES_PAGE_COPY["unknown_error"].format(reason=exc.code)
-            )
+            self._show_status(self._editor_error_message(exc))
             self._refresh_defaults()
             return
+        # The profile changed, so the supported-strategy set must be rebuilt
+        # before the user picks the default execution strategy.
+        self._refresh_defaults()
         self._refresh_routes()
 
     def _on_route_changed(self, stage: str) -> None:
@@ -995,9 +1010,7 @@ class ProfilesSettingsPage(QObject):
                 strategy=str(widgets["strategy"].currentData() or ""),
             )
         except editor.ModelProfilesEditorError as exc:
-            self._show_status(
-                MODEL_PROFILES_PAGE_COPY["unknown_error"].format(reason=exc.code)
-            )
+            self._show_status(self._editor_error_message(exc))
         self._refresh_routes()
 
     # -- feedback --------------------------------------------------------
@@ -1008,7 +1021,17 @@ class ProfilesSettingsPage(QObject):
         else:
             self.diagnostics_label.setText(message)
 
-    def _show_error(self, exc: editor.ModelProfilesEditorError) -> None:
-        self._show_status(
-            MODEL_PROFILES_PAGE_COPY["unknown_error"].format(reason=exc.code)
+    def _editor_error_message(self, exc: editor.ModelProfilesEditorError) -> str:
+        """Map a structured editor refusal to actionable, localized copy."""
+        reason_code = str((exc.details or {}).get("reason") or "")
+        reason = MODEL_PROFILES_PAGE_COPY["reason_labels"].get(
+            reason_code,
+            reason_code,
         )
+        template = MODEL_PROFILES_PAGE_COPY["error_messages"].get(exc.code)
+        if template:
+            return template.format(reason=reason) if "{reason}" in template else template
+        return MODEL_PROFILES_PAGE_COPY["unknown_error"].format(reason=exc.code)
+
+    def _show_error(self, exc: editor.ModelProfilesEditorError) -> None:
+        self._show_status(self._editor_error_message(exc))
