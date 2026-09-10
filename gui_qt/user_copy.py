@@ -897,6 +897,32 @@ MODEL_ROUTING_RUNTIME_COPY = {
 }
 
 
+# Unified translation entry copy (#348 P3): choose a ModelProfile first, then
+# the ExecutionStrategy that profile supports.
+TRANSLATION_TARGET_COPY = {
+    "section_title": "模型与执行方式",
+    "profile_label": "主模型",
+    "strategy_label": "执行方式",
+    "strategy_labels": {
+        "sync": "同步",
+        "gemini_batch": "Gemini Batch",
+    },
+    "resolved": "当前选择：{model} · {strategy}",
+    "legacy_hint": (
+        "当前项目仍是旧模型配置；迁移到 model_routing 后，可在这里选择"
+        "ModelProfile 与执行方式。迁移前保持原有默认行为不变。"
+    ),
+    "invalid_hint": "model_routing 配置无效，已禁用模型选择：{reason}",
+    "unsupported_hint": "该模型不支持{strategy}：{reason}",
+    "unsupported_reasons": {
+        "missing_sync_generation": "缺少同步生成能力",
+        "missing_gemini_adapter": "不是 Gemini 直连模型，无法提交 Gemini Batch",
+        "missing_remote_batch": "未声明远程 Batch 能力",
+    },
+    "empty_profiles": "model_routing 中没有可用的生成 ModelProfile。",
+}
+
+
 # Durable Sync run GUI copy (#348 P3). The GUI only shows public snapshot
 # fields; it never reads the run's SQLite state or invents retry/freshness
 # semantics. Command-reference labels stay in ``DURABLE_SYNC_COPY`` above.

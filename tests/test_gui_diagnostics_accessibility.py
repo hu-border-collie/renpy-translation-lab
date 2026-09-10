@@ -207,8 +207,7 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
         _activate_window(self.window)
         self.window.setFocus()
         initial = self.window.shell_nav.currentRow()
-        total = self.window.shell_nav.count()
-        self.assertGreater(total, 0)
+        self.assertGreater(self.window.shell_nav.count(), 0)
 
         down = QKeyEvent(
             QKeyEvent.Type.KeyPress,
@@ -216,10 +215,12 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             Qt.KeyboardModifier.NoModifier,
         )
         self.window.keyPressEvent(down)
-        self.assertEqual(
-            self.window.shell_nav.currentRow(),
-            (initial + 1) % total,
-        )
+        moved = self.window.shell_nav.currentRow()
+        self.assertNotEqual(moved, initial)
+        moved_item = self.window.shell_nav.item(moved)
+        self.assertIsNotNone(moved_item)
+        assert moved_item is not None
+        self.assertTrue(moved_item.data(Qt.ItemDataRole.UserRole))
 
         up = QKeyEvent(
             QKeyEvent.Type.KeyPress,

@@ -20,7 +20,7 @@ except ImportError as exc:
 else:
     IMPORT_ERROR = None
 
-from gui_qt.work_modes import WorkMode, WorkbenchNavItem
+from gui_qt.work_modes import WORKBENCH_NAV_ORDER, WorkMode, WorkbenchNavItem
 from tests import gui_test_support
 
 
@@ -47,14 +47,14 @@ class GuiShellNavigationTests(unittest.TestCase):
         return self.window.shell_nav.item(row)
 
     def test_single_primary_sidebar_and_default_batch_route(self) -> None:
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
 
         self.assertFalse(self.window.shell_nav.isHidden())
         self.assertTrue(self.window.tab_widget.tabBar().isHidden())
         self.assertTrue(self.window.workbench_nav.isHidden())
         # Settings categories remain a horizontal page-local selector.
         self.assertFalse(self.window.settings_nav.isHidden())
-        self.assertEqual(len(self.window._shell_nav_rows), 7)
+        self.assertEqual(len(self.window._shell_nav_rows), 6)
         self.assertEqual(self.window._current_shell_route(), batch_route)
         self.assertEqual(
             self.window.shell_nav.currentRow(),
@@ -168,14 +168,14 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertEqual(self.window.shell_nav.currentRow(), -1)
 
     def test_running_lock_preserves_diagnostics_and_active_task_access(self) -> None:
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         self.window._activate_shell_route(batch_route)
         self.window._set_task_running(True)
 
         self.assertTrue(
             bool(self._route_item(batch_route).flags() & Qt.ItemFlag.ItemIsEnabled)
         )
-        for nav_item in WorkbenchNavItem:
+        for nav_item in WORKBENCH_NAV_ORDER:
             route = _workbench_route(nav_item)
             if route == batch_route:
                 continue
@@ -249,7 +249,7 @@ class GuiShellNavigationTests(unittest.TestCase):
 
         keywords_route = _workbench_route(WorkbenchNavItem.KEYWORDS)
         settings_route = "settings"
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
 
         self.window._activate_shell_route(keywords_route)
         self.assertEqual(self.window._current_shell_route(), keywords_route)
@@ -321,7 +321,7 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.window._activate_shell_route("project_prepare")
         self.window._on_run_doctor()
 
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         self.window._activate_shell_route(batch_route)
         # Idle-style chrome: start remains visible (disabled), stop is not armed.
         start = self.window.batch_translation_page.buttons["start"]
@@ -395,7 +395,7 @@ class GuiShellNavigationTests(unittest.TestCase):
             )
 
     def test_route_owns_environment_progress_and_optional_writeback_tabs(self) -> None:
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         self.window._activate_shell_route(batch_route)
         tab_bar = self.window.workbench_status_tabs.tabBar()
 
@@ -437,7 +437,7 @@ class GuiShellNavigationTests(unittest.TestCase):
 
     def test_workflow_empty_cta_navigates_to_project_prepare(self) -> None:
         """Task-page empty CTA must open 项目与环境, not a hidden status tab."""
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         self.window._activate_shell_route(batch_route)
         self.window.state.get_game_root = lambda: None  # type: ignore[method-assign]
         self.window._workflow = None
@@ -463,7 +463,7 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertFalse(self.window.global_project_bar.isHidden())
 
     def test_project_route_does_not_pollute_task_status_sessions(self) -> None:
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         keyword_route = _workbench_route(WorkbenchNavItem.KEYWORDS)
         self.window._activate_shell_route(batch_route)
         self.window.workbench_status_tabs.setCurrentIndex(2)
@@ -480,7 +480,7 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
 
     def test_project_switch_resets_saved_task_status_behind_special_route(self) -> None:
-        batch_route = _workbench_route(WorkbenchNavItem.BATCH_TRANSLATION)
+        batch_route = _workbench_route(WorkbenchNavItem.TRANSLATION)
         self.window._activate_shell_route(batch_route)
         self.window.workbench_status_tabs.setCurrentIndex(2)
         self.window._activate_shell_route("project_prepare")

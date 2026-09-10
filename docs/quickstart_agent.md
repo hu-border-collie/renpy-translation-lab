@@ -72,6 +72,7 @@ python gemini_translate_batch.py final-review-create-revisions <manifest> --outp
 
 ```powershell
 python gemini_translate_batch.py sync-start --json --strict-exit-codes
+python gemini_translate_batch.py sync-start --profile <PROFILE_ID> --json  # 本项目已有 model_routing 时可选
 python gemini_translate_batch.py sync-status <RUN> --json --strict-exit-codes
 python gemini_translate_batch.py sync-resume <RUN> --json --strict-exit-codes
 python gemini_translate_batch.py sync-cancel <RUN> --json --strict-exit-codes

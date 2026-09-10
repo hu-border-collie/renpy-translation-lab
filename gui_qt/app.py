@@ -379,6 +379,7 @@ from .widget_helpers import (
 )
 from .user_copy import (
     DURABLE_SYNC_RUN_COPY,
+    TRANSLATION_TARGET_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
@@ -435,6 +436,7 @@ from .workbench.context_library_page import ContextLibraryPage
 from .workbench.keywords_page import KeywordsPage
 from .workbench.revision_page import RevisionPage
 from .workbench.sync_translation_page import SyncTranslationPage
+from .workbench.translation_page import TranslationTargetSection, strategy_label
 from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
 from .batch_workflow_support import resolve_submit_max_cost
@@ -564,12 +566,22 @@ class MainWindow(QMainWindow):
         self._viewing_completed_manifest = False
         self._work_mode = WorkMode.BATCH_TRANSLATION
         self._mode_sessions: dict[WorkMode, WorkbenchModeSession] = {}
-        self._workbench_nav_item = WorkbenchNavItem.BATCH_TRANSLATION
+        self._workbench_nav_item = WorkbenchNavItem.TRANSLATION
         # Session emptiness is not navigation state: a user can choose 同步
         # before it has produced any workflow or manifest to save.
         self._last_mode_by_nav: dict[WorkbenchNavItem, WorkMode] = {
             item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
         }
+        # Unified translation entry state (#348 P3): profile/strategy are
+        # resolved from model_routing when present; legacy configs keep the
+        # empty selection so defaults behave exactly as before.
+        self._translation_target: dict[str, str] = {
+            "profile_id": "",
+            "strategy": "",
+        }
+        self._translation_routing_active = False
+        self._translation_supported_strategies: dict[str, tuple[str, ...]] = {}
+        self._translation_profile_models: dict[str, str] = {}
         self._workflow_step_output_lines: list[str] = []
         self._final_review_findings_cache_key: tuple[str, int] | None = None
         self._final_review_findings_cache: tuple[str, dict[str, object] | None] | None = None
@@ -728,12 +740,8 @@ class MainWindow(QMainWindow):
         return [
             (_SHELL_ROUTE_PROJECT_PREPARE, "项目与环境"),
             (
-                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}",
-                workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).label,
-            ),
-            (
-                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}",
-                workbench_nav_spec(WorkbenchNavItem.SYNC_TRANSLATION).label,
+                f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.TRANSLATION.value}",
+                workbench_nav_spec(WorkbenchNavItem.TRANSLATION).label,
             ),
             (
                 f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}",
@@ -1170,12 +1178,8 @@ class MainWindow(QMainWindow):
             "项目与环境",
         )
         self._add_shell_route(
-            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}",
-            workbench_nav_spec(WorkbenchNavItem.BATCH_TRANSLATION).label,
-        )
-        self._add_shell_route(
-            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}",
-            workbench_nav_spec(WorkbenchNavItem.SYNC_TRANSLATION).label,
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.TRANSLATION.value}",
+            workbench_nav_spec(WorkbenchNavItem.TRANSLATION).label,
         )
 
         self._add_shell_section("翻译资产")
@@ -1296,7 +1300,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "tab_widget"):
             return (
                 f"{_SHELL_WORKBENCH_PREFIX}"
-                f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+                f"{WorkbenchNavItem.TRANSLATION.value}"
             )
         current = self.tab_widget.currentWidget()
         if current is getattr(self, "_config_tab", None):
@@ -1311,7 +1315,7 @@ class MainWindow(QMainWindow):
             return f"{_SHELL_WORKBENCH_PREFIX}{nav.value}"
         return (
             f"{_SHELL_WORKBENCH_PREFIX}"
-            f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+            f"{WorkbenchNavItem.TRANSLATION.value}"
         )
 
     def _sync_shell_nav_selection(self) -> None:
@@ -1342,15 +1346,10 @@ class MainWindow(QMainWindow):
                 "项目与环境",
                 "选择项目、检查环境并准备 work/game 工作目录。",
             ),
-            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}": (
-                "工作流 / 批量翻译",
-                "批量翻译",
-                "配置批量任务、跟踪进度，并在检查通过后安全写回。",
-            ),
-            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.SYNC_TRANSLATION.value}": (
-                "工作流 / 同步翻译",
-                "同步翻译",
-                "直接运行同步翻译，并在同一工作台查看状态与结果。",
+            f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.TRANSLATION.value}": (
+                "工作流 / 翻译",
+                "翻译",
+                "先选择主模型与执行方式，再运行；检查通过后安全写回。",
             ),
             f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}": (
                 "翻译资产 / 关键词与术语",
@@ -1382,7 +1381,7 @@ class MainWindow(QMainWindow):
             route,
             descriptions[
                 f"{_SHELL_WORKBENCH_PREFIX}"
-                f"{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+                f"{WorkbenchNavItem.TRANSLATION.value}"
             ],
         )
         if route == _SHELL_ROUTE_SETTINGS and hasattr(self, "settings_nav"):
@@ -1572,7 +1571,7 @@ class MainWindow(QMainWindow):
         if not pages:
             return None
         nav = workbench_nav_for_work_mode(self._current_work_mode())
-        if nav == WorkbenchNavItem.BATCH_TRANSLATION:
+        if self._current_work_mode() == WorkMode.BATCH_TRANSLATION:
             return None
         return pages.get(nav)
 
@@ -1622,8 +1621,8 @@ class MainWindow(QMainWindow):
         )
         project_route = current_route == _SHELL_ROUTE_PROJECT_PREPARE
         batch_route = (
-            current_route
-            == f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.BATCH_TRANSLATION.value}"
+            current_route.startswith(_SHELL_WORKBENCH_PREFIX)
+            and self._current_work_mode() == WorkMode.BATCH_TRANSLATION
         )
         # Only the batch workflow keeps the shared progress/writeback card;
         # every other task page owns its own status chrome (#298).
@@ -1890,12 +1889,41 @@ class MainWindow(QMainWindow):
         self.workbench_stack.setMinimumWidth(340)
         self._workbench_stack_pages: dict[WorkbenchNavItem, QWidget] = {}
         for nav_item in WORKBENCH_NAV_ORDER:
-            if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
-                page = BatchTranslationPage()
-                page.set_action_callbacks(
+            if nav_item == WorkbenchNavItem.TRANSLATION:
+                batch_page = BatchTranslationPage()
+                batch_page.set_action_callbacks(
                     WorkbenchPageActions(action=self._on_batch_translation_page_action)
                 )
-                self.batch_translation_page = page
+                sync_page = SyncTranslationPage()
+                sync_page.set_action_callbacks(
+                    WorkbenchPageActions(
+                        start=self._on_start_translation,
+                        resume=self._on_resume_durable_sync,
+                        stop=self._on_kill,
+                        cancel=self._on_cancel_durable_sync,
+                        derive=self._on_derive_durable_sync,
+                        writeback=self._on_apply_sync_translation,
+                        action=self._on_task_page_gate_action,
+                    )
+                )
+                self.batch_translation_page = batch_page
+                self.sync_translation_page = sync_page
+                self._translation_target_sections = {}
+                for mode, child in (
+                    (WorkMode.BATCH_TRANSLATION, batch_page),
+                    (WorkMode.SYNC_TRANSLATION, sync_page),
+                ):
+                    section = TranslationTargetSection(child)
+                    section.set_select_callback(self._on_translation_target_selected)
+                    child.layout().insertWidget(0, section)
+                    self._translation_target_sections[mode] = section
+                # One nav item owns both execution pages; the stack still holds
+                # concrete children so page-local chrome and ownership keep
+                # their existing semantics (#348 P3).
+                self._workbench_stack_pages[nav_item] = batch_page
+                self.workbench_stack.addWidget(batch_page)
+                self.workbench_stack.addWidget(sync_page)
+                continue
             elif nav_item == WorkbenchNavItem.CONTEXT:
                 page = ContextLibraryPage()
                 page.set_action_callbacks(
@@ -1914,20 +1942,6 @@ class MainWindow(QMainWindow):
                 self.context_bootstrap_rag_btn = page.bootstrap_rag_btn
                 self.context_bootstrap_source_index_btn = page.bootstrap_source_index_btn
                 self.context_open_settings_btn = page.open_settings_btn
-            elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
-                page = SyncTranslationPage()
-                page.set_action_callbacks(
-                    WorkbenchPageActions(
-                        start=self._on_start_translation,
-                        resume=self._on_resume_durable_sync,
-                        stop=self._on_kill,
-                        cancel=self._on_cancel_durable_sync,
-                        derive=self._on_derive_durable_sync,
-                        writeback=self._on_apply_sync_translation,
-                        action=self._on_task_page_gate_action,
-                    )
-                )
-                self.sync_translation_page = page
             elif nav_item == WorkbenchNavItem.KEYWORDS:
                 page = KeywordsPage()
                 page.set_action_callbacks(
@@ -7470,6 +7484,16 @@ class MainWindow(QMainWindow):
         mode = self._current_work_mode()
         nav_item = workbench_nav_for_work_mode(mode)
         self._workbench_nav_item = nav_item
+        if nav_item == WorkbenchNavItem.TRANSLATION:
+            active_child = (
+                self.batch_translation_page
+                if mode == WorkMode.BATCH_TRANSLATION
+                else self.sync_translation_page
+            )
+            self._workbench_stack_pages[nav_item] = active_child
+            coordinator = getattr(self, "_workbench_coordinator", None)
+            if coordinator is not None:
+                coordinator.set_page(nav_item, active_child)
 
         if hasattr(self, "workbench_nav"):
             blocked = self.workbench_nav.blockSignals(True)
@@ -7487,9 +7511,8 @@ class MainWindow(QMainWindow):
             session or WorkbenchModeSession(),
             running=self._task_page_running_chrome(),
         )
-        if nav_item == WorkbenchNavItem.BATCH_TRANSLATION:
+        if nav_item == WorkbenchNavItem.TRANSLATION:
             self._sync_batch_translation_page_controls()
-        elif nav_item == WorkbenchNavItem.SYNC_TRANSLATION:
             self._sync_sync_translation_page_controls()
         elif nav_item == WorkbenchNavItem.KEYWORDS:
             self._sync_keywords_page_controls()
@@ -8481,6 +8504,155 @@ class MainWindow(QMainWindow):
             )
         sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
+    def _refresh_translation_target_choices(self) -> None:
+        """Sync the unified translation selector with the routing config."""
+        sections = getattr(self, "_translation_target_sections", None)
+        if not sections:
+            return
+        target = dict(getattr(self, "_translation_target", {}) or {})
+        current_mode = self._current_work_mode()
+        mode_strategy = (
+            "sync"
+            if current_mode == WorkMode.SYNC_TRANSLATION
+            else "gemini_batch"
+        )
+        try:
+            config = self.state.load_translator_config()
+        except Exception:
+            config = None
+
+        if not isinstance(config, dict) or "model_routing" not in config:
+            self._translation_routing_active = False
+            self._translation_supported_strategies = {}
+            self._translation_profile_models = {}
+            self._translation_target = {"profile_id": "", "strategy": mode_strategy}
+            for section in sections.values():
+                section.set_target_choices(
+                    {
+                        "profiles": [],
+                        "hint": TRANSLATION_TARGET_COPY["legacy_hint"],
+                        "selected_profile_id": "",
+                        "selected_strategy": mode_strategy,
+                        "disabled": True,
+                    }
+                )
+            return
+
+        from model_routing_reader import profile_strategy_choices
+
+        try:
+            choices = profile_strategy_choices(config)
+        except Exception as exc:
+            self._translation_routing_active = False
+            self._translation_supported_strategies = {}
+            self._translation_profile_models = {}
+            self._translation_target = {"profile_id": "", "strategy": mode_strategy}
+            for section in sections.values():
+                section.set_target_choices(
+                    {
+                        "profiles": [],
+                        "hint": TRANSLATION_TARGET_COPY["invalid_hint"].format(
+                            reason=type(exc).__name__,
+                        ),
+                        "selected_profile_id": "",
+                        "selected_strategy": mode_strategy,
+                        "disabled": True,
+                    }
+                )
+            return
+
+        entries = [dict(entry) for entry in choices.get("profiles") or ()]
+        by_id = {str(entry.get("id") or ""): entry for entry in entries}
+        profile_id = str(target.get("profile_id") or "")
+        if profile_id not in by_id:
+            default_profile = str(
+                (choices.get("defaults") or {}).get("primary_profile_id") or ""
+            )
+            profile_id = (
+                default_profile
+                if default_profile in by_id
+                else (next(iter(by_id), "") if by_id else "")
+            )
+        # Never silently fall back to another strategy: the visible execution
+        # page must match the selected strategy, otherwise the start command
+        # would contradict the selector. Unsupported pairs stay selected and
+        # are blocked by _translation_target_is_runnable() with a clear hint.
+        strategy = mode_strategy
+        self._translation_routing_active = bool(entries)
+        self._translation_profile_models = {
+            str(entry.get("id") or ""): str(entry.get("model") or "")
+            for entry in entries
+        }
+        self._translation_supported_strategies = {
+            str(entry.get("id") or ""): tuple(
+                str(item) for item in (entry.get("strategies") or ())
+            )
+            for entry in entries
+        }
+        self._translation_target = {"profile_id": profile_id, "strategy": strategy}
+        for section in sections.values():
+            section.set_target_choices(
+                {
+                    "profiles": entries,
+                    "selected_profile_id": profile_id,
+                    "selected_strategy": strategy,
+                }
+            )
+
+    def _selected_translation_profile_id(self) -> str:
+        if not getattr(self, "_translation_routing_active", False):
+            return ""
+        target = getattr(self, "_translation_target", {}) or {}
+        return str(target.get("profile_id") or "")
+
+    def _translation_target_is_runnable(self) -> bool:
+        if not getattr(self, "_translation_routing_active", False):
+            return True
+        target = getattr(self, "_translation_target", {}) or {}
+        profile_id = str(target.get("profile_id") or "")
+        strategy = str(target.get("strategy") or "")
+        supported = (
+            getattr(self, "_translation_supported_strategies", {}) or {}
+        ).get(profile_id, ())
+        mode_strategy = (
+            "sync"
+            if self._current_work_mode() == WorkMode.SYNC_TRANSLATION
+            else "gemini_batch"
+        )
+        return bool(
+            profile_id
+            and strategy
+            and strategy == mode_strategy
+            and strategy in supported
+        )
+
+    def _on_translation_target_selected(self, profile_id: str, strategy: str) -> None:
+        """Apply an explicit profile/strategy choice from the unified page."""
+        self._translation_target = {
+            "profile_id": str(profile_id or ""),
+            "strategy": str(strategy or ""),
+        }
+        target_mode = (
+            WorkMode.SYNC_TRANSLATION
+            if strategy == "sync"
+            else WorkMode.BATCH_TRANSLATION
+        )
+        if target_mode != self._current_work_mode():
+            self._set_work_mode(target_mode, refresh_manifest_writeback=True)
+        else:
+            # Same execution page: keep the hidden sibling selector in sync.
+            self._refresh_translation_target_choices()
+            model = (
+                getattr(self, "_translation_profile_models", {}) or {}
+            ).get(profile_id, profile_id)
+            self.statusBar().showMessage(
+                TRANSLATION_TARGET_COPY["resolved"].format(
+                    model=model,
+                    strategy=strategy_label(strategy),
+                ),
+                4000,
+            )
+
     def _apply_work_mode_ui(
         self,
         *,
@@ -8490,6 +8662,11 @@ class MainWindow(QMainWindow):
         spec = work_mode_spec(self._current_work_mode())
         self._update_timeline_steps(spec.mode)
         self.timeline.setVisible(False)
+        if spec.mode in {
+            WorkMode.BATCH_TRANSLATION,
+            WorkMode.SYNC_TRANSLATION,
+        }:
+            self._refresh_translation_target_choices()
         self._sync_task_selectors_from_work_mode()
         self.translate_group_label.setText(spec.task_group_label)
         self._update_translate_button_label()
@@ -10718,6 +10895,20 @@ class MainWindow(QMainWindow):
                 "请先选择游戏的 work 目录。",
             )
             return
+        if not self._translation_target_is_runnable():
+            profile_id = str(
+                (getattr(self, "_translation_target", {}) or {}).get("profile_id") or ""
+            )
+            model = (
+                getattr(self, "_translation_profile_models", {}) or {}
+            ).get(profile_id, profile_id)
+            message_box_information(
+                self,
+                "执行方式不可用",
+                f"当前主模型（{model}）不支持当前执行方式；"
+                "请在「模型与执行方式」中选择该模型支持的执行方式。",
+            )
+            return
         if self._translation_requires_doctor_check(spec.mode) and not self._doctor_allows_translate_action():
             if not self._doctor_check_completed:
                 detail = "批量翻译与同步翻译需要先完成环境检查，确认项目状态后再开始。"
@@ -10762,12 +10953,14 @@ class MainWindow(QMainWindow):
                     )
                     return
 
+        profile_id = self._selected_translation_profile_id()
         if spec.mode == WorkMode.SYNC_TRANSLATION:
-            workflow = SyncTranslationWorkflow.start_new()
+            workflow = SyncTranslationWorkflow.start_new(profile_id=profile_id)
         else:
             workflow = create_workflow(
                 spec.mode,
                 submit_max_cost=self._submit_max_cost_from_config(),
+                profile_id=profile_id,
             )
         if workflow is None:
             message_box_information(self, "无法开始任务", spec.not_implemented_message)
