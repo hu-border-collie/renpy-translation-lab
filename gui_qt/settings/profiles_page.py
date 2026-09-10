@@ -54,6 +54,11 @@ _FIELD_WIDGETS = {
     "model_routing": "profiles_list",
 }
 
+_CONTEXT_LABELS = {
+    "context_limit_tokens": "上下文上限 tokens",
+    "context_budget_tokens": "上下文预算 tokens",
+}
+
 
 class ProfilesSettingsPage(QObject):
     """Settings page for Model Profiles, providers and stage routes."""
@@ -525,10 +530,28 @@ class ProfilesSettingsPage(QObject):
                 self.default_profile_combo,
                 str(defaults.get("primary_profile_id") or ""),
             )
+            default_profile_id = str(self.default_profile_combo.currentData() or "")
+            wanted_strategy = str(defaults.get("execution_strategy") or "")
+            supported = list(
+                editor.strategy_choices(self._section).get(default_profile_id, ())
+            )
+            if wanted_strategy and wanted_strategy not in supported and supported:
+                # An adapter/capability edit can invalidate the stored default;
+                # repair it in memory so the visible value is executable.
+                try:
+                    self._section = editor.set_defaults(
+                        self._section,
+                        primary_profile_id=default_profile_id,
+                        execution_strategy=supported[0],
+                    )
+                except editor.ModelProfilesEditorError:
+                    pass
+                else:
+                    wanted_strategy = supported[0]
             self._refresh_strategy_combo(
                 self.default_strategy_combo,
-                str(self.default_profile_combo.currentData() or ""),
-                wanted=str(defaults.get("execution_strategy") or ""),
+                default_profile_id,
+                wanted=wanted_strategy or (supported[0] if supported else ""),
             )
         finally:
             self._loading = False
@@ -555,10 +578,12 @@ class ProfilesSettingsPage(QObject):
                 item = combo.model().item(combo.count() - 1)
                 if item is not None:
                     item.setEnabled(False)
-        index = combo.findData(wanted) if wanted else -1
+        index = combo.findData(wanted) if wanted and wanted in supported else -1
+        if index < 0 and supported:
+            index = combo.findData(supported[0])
         if index < 0:
-            index = combo.findData(supported[0]) if supported else 0
-        combo.setCurrentIndex(max(0, index))
+            index = 0 if combo.count() else -1
+        combo.setCurrentIndex(index)
 
     @staticmethod
     def _set_combo_data(combo: NoWheelComboBox, value: str) -> None:
@@ -594,7 +619,9 @@ class ProfilesSettingsPage(QObject):
                 )
             self._set_combo_data(self.profile_provider_combo, profile["provider_id"])
             self.profile_model_edit.setText(profile["model"])
-            self.profile_models_edit.setText("，".join(profile["models"]))
+            self.profile_models_edit.setText(
+                "，".join(profile.get("rotation_extras") or ())
+            )
             self.profile_embedding_combo.clear()
             self.profile_embedding_combo.addItem("（不绑定）", "")
             for item in view["profiles"]:
@@ -678,10 +705,34 @@ class ProfilesSettingsPage(QObject):
                     profile_combo,
                     str(route.get("profile_id") or ""),
                 )
+                route_profile_id = str(profile_combo.currentData() or "")
+                wanted_route_strategy = str(route.get("strategy") or "")
+                supported = list(
+                    editor.strategy_choices(self._section).get(route_profile_id, ())
+                )
+                if (
+                    route.get("explicit")
+                    and wanted_route_strategy
+                    and wanted_route_strategy not in supported
+                    and supported
+                ):
+                    try:
+                        self._section = editor.set_route(
+                            self._section,
+                            stage,
+                            enabled=True,
+                            profile_id=route_profile_id,
+                            strategy=supported[0],
+                        )
+                    except editor.ModelProfilesEditorError:
+                        pass
+                    else:
+                        wanted_route_strategy = supported[0]
                 self._refresh_strategy_combo(
                     widgets["strategy"],
-                    str(profile_combo.currentData() or ""),
-                    wanted=str(route.get("strategy") or ""),
+                    route_profile_id,
+                    wanted=wanted_route_strategy
+                    or (supported[0] if supported else ""),
                 )
                 editable = bool(route.get("explicit"))
                 profile_combo.setEnabled(editable)
@@ -962,6 +1013,7 @@ class ProfilesSettingsPage(QObject):
             value = combo.currentData()
             if value is not None:
                 overrides[key] = bool(value)
+        invalid_fields: list[str] = []
         for key, edit in self._context_edits.items():
             text = edit.text().strip()
             if not text:
@@ -969,8 +1021,13 @@ class ProfilesSettingsPage(QObject):
             try:
                 overrides[key] = int(text)
             except ValueError:
-                self._show_status(f"{key} 需要整数；已忽略该覆盖值。")
-                return
+                invalid_fields.append(_CONTEXT_LABELS.get(key, key))
+        if invalid_fields:
+            self._show_status(
+                MODEL_PROFILES_PAGE_COPY["invalid_integer"].format(
+                    fields="、".join(invalid_fields)
+                )
+            )
         try:
             self._section = editor.update_profile(
                 self._section,

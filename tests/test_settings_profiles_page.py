@@ -88,6 +88,60 @@ class ProfilesPageTests(unittest.TestCase):
             {"primary_profile_id": "gemini-main", "execution_strategy": "sync"},
         )
 
+    def test_invalid_integer_keeps_other_capability_overrides(self) -> None:
+        self.page.load({"model_routing": migrated_section()})
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+        self.page._context_edits["context_limit_tokens"].setText("abc")
+        combo = self.page._capability_combos["usage_stats"]
+        combo.setCurrentIndex(combo.findData(False))
+
+        self.page._on_profile_capabilities_changed()
+
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertIs(overrides["usage_stats"], False)
+        self.assertNotIn("context_limit_tokens", overrides)
+        self.assertTrue(self.messages)
+        self.assertIn("上下文上限 tokens", self.messages[-1])
+        self.assertNotIn("context_limit_tokens", self.messages[-1])
+
+    def test_adapter_change_repairs_unsupported_default_strategy(self) -> None:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="Google Gemini",
+            adapter="gemini",
+            provider="gemini",
+            credential_kind="api_keys_json",
+            credential_name="api_keys",
+            credential_env_name="GEMINI_API_KEY",
+        )
+        section = editor.add_profile(
+            section,
+            label="Gemini Main",
+            provider_id="google-gemini",
+            model="gemini-3.5-flash",
+        )
+        section = editor.set_defaults(
+            section,
+            primary_profile_id="gemini-main",
+            execution_strategy="gemini_batch",
+        )
+        self.page.load({"model_routing": section})
+        self.page.providers_list.setCurrentRow(0)
+
+        litellm_index = self.page.provider_adapter_combo.findData("litellm")
+        self.page.provider_adapter_combo.setCurrentIndex(litellm_index)
+
+        defaults = self.page.collect()["model_routing"]["defaults"]
+        self.assertEqual(defaults["execution_strategy"], "sync")
+        self.assertEqual(
+            self.page.default_strategy_combo.currentData(),
+            "sync",
+        )
+
     def test_remove_section_is_an_explicit_reversible_action(self) -> None:
         original = migrated_section()
         self.page.load({"model_routing": original})

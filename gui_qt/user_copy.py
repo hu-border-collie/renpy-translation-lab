@@ -1130,6 +1130,7 @@ MODEL_PROFILES_PAGE_COPY = {
         "发起恰好 1 次真实 Provider 请求，分别报告鉴权、同步生成、结构化输出、"
         "reasoning、usage，并显示 Batch/embedding 的声明能力；会产生少量费用。"
     ),
+    "invalid_integer": "以下字段需要整数，已忽略对应覆盖值：{fields}。",
     "no_supported_strategy": (
         "该 ModelProfile 没有可用执行方式：请检查能力覆盖或 Provider 配置。"
     ),

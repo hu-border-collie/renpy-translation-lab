@@ -111,6 +111,24 @@ def unique_id(existing: Mapping[str, Any], base: str) -> str:
     return candidate
 
 
+def _rotation_pool(model: str, models: Sequence[str] = ()) -> list[str]:
+    """Return the stored rotation pool with the primary model first.
+
+    ``ModelProfile.models`` is the full candidate pool and holds ``(model,)``
+    when no rotation list is configured, matching ``_sync_profile`` and the
+    migration output. Editor inputs treat *models* as the extra rotation list.
+    """
+    pool: list[str] = []
+    primary = str(model or "").strip()
+    if primary:
+        pool.append(primary)
+    for item in models or ():
+        candidate = str(item).strip()
+        if candidate and candidate not in pool:
+            pool.append(candidate)
+    return pool
+
+
 def profile_ids(section: Mapping[str, Any] | None) -> tuple[str, ...]:
     return tuple(str(key) for key in (_copy_section(section).get("profiles") or {}))
 
@@ -306,6 +324,11 @@ def editor_view(section: Mapping[str, Any] | None) -> dict[str, Any]:
                 "adapter": str(provider.get("adapter") or ""),
                 "model": str(raw.get("model") or ""),
                 "models": tuple(str(item) for item in raw.get("models") or ()),
+                "rotation_extras": tuple(
+                    str(item)
+                    for item in raw.get("models") or ()
+                    if str(item) != str(raw.get("model") or "")
+                ),
                 "embedding_profile_id": str(raw.get("embedding_profile_id") or ""),
                 "capability_overrides": dict(raw.get("capability_overrides") or {}),
                 "params": dict(raw.get("params") or {}),
@@ -484,12 +507,11 @@ def add_profile(
     if purpose not in {"generation", "embedding"}:
         raise ModelProfilesEditorError("INVALID_PURPOSE", f"Unsupported purpose: {purpose}")
     profile_id = unique_id(data["profiles"], slugify(label, fallback="profile"))
-    models_tuple = tuple(str(item).strip() for item in models if str(item).strip())
     data["profiles"][profile_id] = {
         "label": str(label or profile_id),
         "provider_id": str(provider_id),
         "model": str(model or ""),
-        "models": [item for item in models_tuple if item != str(model or "")],
+        "models": _rotation_pool(str(model or ""), models),
         "capability_overrides": dict(capability_overrides or {}),
         "params": dict(params or {}),
         "embedding_profile_id": str(embedding_profile_id or ""),
@@ -532,10 +554,19 @@ def update_profile(
         entry["provider_id"] = str(provider_id)
     if label is not None:
         entry["label"] = str(label)
-    if model is not None:
-        entry["model"] = str(model)
-    if models is not None:
-        entry["models"] = [str(item).strip() for item in models if str(item).strip()]
+    if model is not None or models is not None:
+        current_model = str(entry.get("model") or "")
+        target_model = current_model if model is None else str(model)
+        if models is None:
+            extras = [
+                str(item)
+                for item in entry.get("models") or ()
+                if str(item) != current_model
+            ]
+        else:
+            extras = [str(item) for item in models]
+        entry["model"] = target_model
+        entry["models"] = _rotation_pool(target_model, extras)
     if embedding_profile_id is not None:
         entry["embedding_profile_id"] = str(embedding_profile_id)
     if params is not None:

@@ -219,6 +219,47 @@ class StrategyGatingTests(unittest.TestCase):
         routes = {row["stage"]: row for row in editor.resolved_routes(section)}
         self.assertFalse(routes["final_review"]["explicit"])
 
+    def test_models_pool_always_includes_primary_model(self) -> None:
+        section = editor.add_provider(
+            editor.empty_section(),
+            label="Gemini",
+            adapter="gemini",
+            provider="gemini",
+            credential_kind="api_keys_json",
+            credential_name="api_keys",
+        )
+        section = editor.add_profile(
+            section,
+            label="Main",
+            provider_id="gemini",
+            model="gemini-primary",
+            models=["gemini-extra", "gemini-primary"],
+        )
+
+        self.assertEqual(
+            section["profiles"]["main"]["models"],
+            ["gemini-primary", "gemini-extra"],
+        )
+        view = editor.editor_view(section)
+        self.assertEqual(view["profiles"][0]["models"], ("gemini-primary", "gemini-extra"))
+        self.assertEqual(view["profiles"][0]["rotation_extras"], ("gemini-extra",))
+
+        updated = editor.update_profile(section, "main", label="Renamed")
+        self.assertEqual(
+            updated["profiles"]["main"]["models"],
+            ["gemini-primary", "gemini-extra"],
+        )
+
+        rotated = editor.update_profile(
+            updated,
+            "main",
+            models=["gemini-new"],
+        )
+        self.assertEqual(
+            rotated["profiles"]["main"]["models"],
+            ["gemini-primary", "gemini-new"],
+        )
+
     def test_sync_capability_override_gates_strategies(self) -> None:
         section = gemini_section()
         section = editor.update_profile(
