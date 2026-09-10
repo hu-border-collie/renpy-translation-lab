@@ -53,8 +53,8 @@
 - `translator_runtime.py`：生产 Sync plan/build 与 backend 接线。
 - `gemini_translate_batch.py`：Batch build/submit/status/download/check/apply 与阶段请求入口。
 - `sync_run_service.py`：CLI `sync-start` 等命令使用的耐久 Sync start/resume/status/cancel/derive 服务。
-- `gui_qt/sync_translation_workflow.py` → `gemini_translate.py`：当前 GUI Sync 入口；
-  尚不持久化可恢复 run，#348 P3 再接入 #347 服务。
+- `gui_qt/sync_translation_workflow.py` → `gemini_translate_batch.py sync-*`：当前 GUI Sync
+  入口；步骤状态机只消费 schema-v1 envelope，运行/恢复/取消均经 #347 服务。
 - `sync_run_contracts.py`：状态、退出码、错误码和合法转换。
 - `sync_run_store.py`：SQLite/WAL 持久层；产品 UI 不应直接读取。
 
@@ -156,25 +156,23 @@
 
 ## 同步翻译
 
-- GUI 预览：`gui_qt/workbench/sync_translation_page.py`（`SyncTranslationPage`）→
-  `_on_start_translation()` → `create_workflow(SYNC_TRANSLATION)` →
-  `gui_qt/sync_translation_workflow.py` 的 `SyncTranslationWorkflow.start_new()`（步骤 `preview`，
-  `gemini_translate.py` 无参数）→ `CliRunner` → `gemini_translate.py` →
-  `translator_runtime.run_translation()` → `translation_plan.py` → `model_profile.build_sync_backend()` /
-  `sync_model_backend.py` / `litellm_sync_backend.py` → `sync_translation_preview.create_sync_preview()`
-  生成可审查 preview 与 manifest。
-- GUI 写回：用户确认后 `_on_apply_sync_translation()` → `SyncTranslationWorkflow.apply_existing()` →
-  `gemini_translate.py --apply <manifest>` → `translator_runtime.apply_sync_translation_preview()` →
-  `sync_translation_preview.load_sync_preview()` / `apply_sync_preview()`；apply 重新校验项目、
-  source snapshot、macro fingerprint、质量策略和 preview 制品，任一不一致即拒绝。
-- 耐久 CLI（#347，GUI 尚未接入）：`gemini_translate_batch.py sync-start|sync-resume|sync-status|
-  sync-cancel|sync-derive` → `run_durable_sync_command()` → `sync_run_service.SyncRunService` →
-  `durable_sync_executor.DurableSyncExecutor` → `sync_run_store.SyncRunStore`（SQLite/WAL）→
-  `sync_result_export`；状态机在 `sync_run_contracts.py`。
-- 测试：`tests.test_gui_sync_translation_workflow`、`tests.test_gui_sync_translation_report`、
-  `tests.test_translator_runtime`、`tests.test_translation_plan`、
-  `tests.test_sync_translation_preview`、`tests.test_sync_run_service`、
-  `tests.test_durable_sync_workflow`、`tests.test_durable_sync_executor`。
+- GUI 耐久运行：`gui_qt/workbench/sync_translation_page.py`（`SyncTranslationPage`）→
+  `_on_start_translation()` / `_on_resume_durable_sync()` / `_on_cancel_durable_sync()` →
+  `gui_qt/sync_translation_workflow.py` 的 `SyncTranslationWorkflow` 步骤（`sync-start`、
+  `sync-status`、`sync-resume`、`sync-cancel`、`sync-derive`、`check`、`apply`）→
+  `CliRunner` → `gemini_translate_batch.py --output json --non-interactive` →
+  `run_durable_sync_command()` → `sync_run_service.SyncRunService` →
+  `durable_sync_executor.DurableSyncExecutor` → `sync_run_store.SyncRunStore`（SQLite/WAL）。
+- GUI 只渲染公开 snapshot（进度、`next_action`、usage、制品路径）；不读数据库、不自行重试，
+  也不改写 freshness / 写回判定。停止本机 worker 不会取消 run；取消是单独的 `sync-cancel`。
+- GUI 写回：`check <RUN>` 在 `writeback_gate=allow` 时生成绑定预览，用户确认后
+  `_on_apply_sync_translation()` → `apply <RUN>`，由 `apply_durable_sync_results()` 复核
+  run/results/targets/check 制品哈希、源快照与预览绑定；重复 apply 为无副作用
+  `already_applied`。旧 `gemini_translate.py` 入口仍保留为 CLI 兼容路径，不再是 GUI 主流程。
+- 测试：`tests.test_gui_sync_translation_workflow`、`tests.test_gui_durable_sync_page`、
+  `tests.test_gui_sync_translation_report`、`tests.test_sync_run_service`、
+  `tests.test_durable_sync_workflow`、`tests.test_durable_sync_executor`、
+  `tests.test_durable_sync_subprocess_recovery`、`tests.test_sync_translation_preview`。
 
 ## 关键词提取与合并
 

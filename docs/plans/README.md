@@ -19,7 +19,7 @@
   `SettingsPage`。Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案、
   collect→persist 与 Qt-free apply 已落地；legacy adapter 与旧 builder 已删除；两文件写盘仍属 Phase D。
 - [#348 P0/P1：Model Routing 配置、迁移合同与离线迁移](issue-348-model-routing-config-contract.md)：
-  冻结版本化 `model_routing` schema 与迁移事务；P1 离线 reader、显式暂存迁移/回滚与 P2 兼容入口生产读取已实现（详见现行手册 [model_config_migration.md](../model_config_migration.md)），P3 统一设置页待推进。
+  冻结版本化 `model_routing` schema 与迁移事务；P1 离线 reader、显式暂存迁移/回滚与 P2 兼容入口生产读取已实现（详见现行手册 [model_config_migration.md](../model_config_migration.md)）；P3 已接入 GUI 耐久 Sync 生命周期（消费 #347 公开 snapshot、`check <RUN>` → `apply <RUN>`），ModelProfile/策略选择器与 Settings Model Profiles 页待推进。
 - [#347 → #348 耐久 Sync 产品化交接](issue-347-to-348-handoff.md)：
   冻结服务/snapshot/CLI/制品接缝、Provider 中断 smoke 与 #348 的 GUI、配置迁移和
   最终命令别名验收边界。

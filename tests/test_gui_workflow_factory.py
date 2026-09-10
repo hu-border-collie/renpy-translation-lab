@@ -27,7 +27,11 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         workflow = create_workflow(WorkMode.SYNC_TRANSLATION)
 
         self.assertIsInstance(workflow, SyncTranslationWorkflow)
-        self.assertEqual(workflow.current_step().script_basename, "gemini_translate.py")
+        self.assertEqual(
+            workflow.current_step().script_basename,
+            "gemini_translate_batch.py",
+        )
+        self.assertEqual(workflow.current_step().key, "sync-start")
 
     def test_create_workflow_returns_keyword_batch_workflow(self):
         workflow = create_workflow(WorkMode.KEYWORD_EXTRACTION)

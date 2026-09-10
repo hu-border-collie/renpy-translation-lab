@@ -122,7 +122,13 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
+GUI「同步翻译」页使用同一服务边界：启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
+
 ### 1. 生成预览
+
+> 迁移期说明：新 GUI 任务与需要恢复/取消/机器输出的场景应使用上面的耐久入口
+> （`sync-start` → `check <RUN>`）。下面保留 `gemini_translate.py` 兼容入口的行为说明，
+> 它不持久化可恢复 run。
 
 ```powershell
 python gemini_translate.py

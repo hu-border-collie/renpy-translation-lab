@@ -11,7 +11,7 @@
 图形工作台是现有 CLI 和 JSON 配置之上的**可选外壳**：
 
 - 普通用户走「项目与环境 → 设置 → 检查 → 翻译 → 写回」；任务页保留当前操作和状态，完整日志、任务上下文与命令参考集中在「诊断与运行日志」。
-- 底层仍调用现有 CLI 脚本，不重写翻译核心：**批量翻译**走 `gemini_translate_batch.py`；**同步翻译**走 `gemini_translate.py`。
+- 底层仍调用现有 CLI 脚本，不重写翻译核心：**批量翻译**走 `gemini_translate_batch.py` 的 Batch 命令；**同步翻译**走同一脚本的 `sync-start` / `sync-resume` / `check` / `apply` 耐久命令。
 - GUI 调用 Batch 的 `build / submit / status / download / check / apply` 时，使用版本化 JSON envelope 读取结果、状态、制品和错误；stdout 只承载结构化结果，stderr 的进度、prepare 子进程输出与诊断会实时进入「运行日志」。旧版文本输出解析仅保留为兼容回退。
 - **开发与功能约定**：新能力须 CLI / GUI 同步交付，见根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 - 配置仍用 `api_keys.json`、`translator_config.json`；批量写回以 CLI 的 `check -> apply` 安全合约为准，同步模式默认生成 preview，只有显式确认并通过源快照与制品复核后才写回。
@@ -99,7 +99,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 |------|--------|------------|
 | **项目与环境** | 切换项目 / 指定本地目录 / 环境检查 / 准备工作目录 | 仅显示项目状态与环境检查 |
 | **批量翻译** | 开始翻译 / 继续 · 停止；高级工具 | **翻译进度 / 写回**；「写回翻译」与**问题处理**折叠 |
-| **同步翻译** | 开始同步翻译 · 停止 · 确认并写回预览 | 默认生成 diff 预览；项目与源文件复核通过后才显式写回 |
+| **同步翻译** | 开始同步翻译 · 继续 / 查看最新任务 · 停止 · 取消任务 · 确认并写回预览 | 耐久运行可中断恢复；停止本机进程不会取消运行，检查通过后才生成绑定预览，写回需显式确认 |
 | **关键词 / 术语** | 模式：批量 \| 同步 · 提取关键词 · 继续（批量）· 停止 | **提取进度 / 结果说明**；主入口「合并到 glossary」 |
 | **订正** | 模式：批量 \| 同步 · 生成订正预览 · 继续（批量）· 停止 | **订正进度 / 写回订正**；与普通翻译写回分离 |
 | **上下文库** | 记忆库 / 原文索引预建 · 项目分析生命周期 · 打开设置·上下文 | 状态行与审查工作区；不开无意义的写回页 |
@@ -276,13 +276,16 @@ build -> submit -> status -> download -> check
 
 ### 同步翻译
 
-在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 先无参数调用 `gemini_translate.py`，在 `logs/sync_runs/` 生成绑定当前项目的 manifest、源文件快照、候选文件和 `preview.diff`，此时不会修改项目脚本。预览包含变更时，页面启用「**确认并写回预览**」；若模型结果仍有缺失/无效 ID，或部分文件未通过 adapter 写回计划校验，GUI 显示「部分完成」警告和结果完整率、定点重试、未解决项，只允许写回 manifest 中其余已生成的安全预览。同步摘要还区分 completion、reasoning 和 Provider 可提供时的正文输出 Token；reasoning 吃满输出预算造成空正文或截断时会显示告警。用户确认后 GUI 调用 `gemini_translate.py --apply MANIFEST`，写回前重新核对当前项目、翻译目录、manifest 中所有预览文件对应的源快照哈希和预览制品哈希。任何项目切换、源文件变化或制品篡改都会阻止写回。配置仍来自 `translator_config.json` 的 `sync.*` 段；其中 `timeout_seconds` 是单请求上限并会写入同步 manifest 的设置诊断。Gemini 后端使用现有 Gemini API Key，LiteLLM 后端使用「设置 → LiteLLM」中保存的供应商凭据或 LiteLLM 约定的环境变量。
+在左导航选择 **同步翻译**，点击「**开始同步翻译**」。GUI 调用 `gemini_translate_batch.py sync-start --output json` 启动 #347 的耐久运行；进度、请求/条目计数、`outcome_unknown`、usage 和 `next_action` 只来自服务返回的公开 snapshot，GUI 不读取运行数据库，也不自行重试或改写 freshness 判定。运行结束后 GUI 自动执行离线 `check <RUN>`，由 `writeback_gate` 决定能否生成绑定预览；通过后页面启用「**确认并写回预览**」，写回调用 `apply <RUN>`，会重新校验源快照、run/results/targets 制品、检查清单与预览绑定，任一变化都会拒绝，重复 apply 无副作用。
 
-模型返回先经过统一命名对象合同（翻译 `translations`、订正 `revisions`、关键词 `candidates`）。旧任务中的裸数组可继续读取；新请求只使用命名对象。有效结果会立即保留，只对缺失或无效 ID 做定点重试；重试仍不完整时 GUI 明确显示部分完成，不会把不完整结果误报为全部成功。详细合同与 Provider 降级策略见 [同步翻译工作流](sync_workflow.md#模型结果合同与定点重试)。
+- **停止与取消是两件事**：「停止」只结束本机进程，耐久运行不会被隐式取消，已提交的请求不会重发；「继续 / 查看最新任务」先查询最新运行的公开状态，未结束则 `sync-resume`，已结束则生成检查预览。
+- **显式取消**：只有「取消任务」会调用 `sync-cancel <RUN>` 请求执行器停止后续调度；已完成结果仍保留在运行记录中。
+- **未解决与未知结果**：`failed` / `completed_with_errors` 的运行不会自动继续；存在 `outcome_unknown` 时必须显式确认重复调用/计费风险，或排除 unknown 条目后派生新运行。中断恢复不能承诺所有情形都绝不重复计费。
+- **配置来源**：模型与阶段路由来自 `model_routing`（迁移期旧 `sync.*` 字段仅供回滚兼容）；`timeout_seconds` 仍是单请求等待上限。
 
-#### LiteLLM 同步替代边界
+#### LiteLLM 同步配置边界
 
-- **默认与回退**：Gemini Batch 始终是推荐的批量主路径。要停止使用 LiteLLM，在「设置 → LiteLLM」把同步执行后端切回「Gemini 同步（推荐）」并保存；这不会改动 Batch 模型或 RAG Embedding 配置。
+- **切换方式**：Sync / Gemini Batch 是执行策略，Gemini 直连、LiteLLM 内置 Provider 与自定义 OpenAI-compatible Provider 是模型连接方式；要停用 LiteLLM，在「设置 → LiteLLM」把同步连接切回 Gemini 并保存。切换不会改动 Batch 模型或 RAG Embedding 配置。
 - **目录与运行配置**：用户级目录缓存只帮助恢复 GUI 选择；项目实际运行仍以 `translator_config.json` 的 `sync.backend` / `sync.litellm_model` 为准，已保存模型优先于 GUI 历史。只选择 Provider 而不选择模型时不能保存为可运行的 LiteLLM 配置。取消 Provider 不会清除目录缓存或系统凭据。
 - **费用与吞吐**：LiteLLM 同步请求按所选供应商和模型计费，不具有 Gemini Batch 的远程排队、恢复或 Batch 折扣语义；大项目可能更贵且吞吐量更低。工具不为任意供应商提供统一价格保证，正式运行前应查看供应商定价并先做小样本。
 - **Reasoning 参数**：项目不把 Gemini 的 `thinking_level` / `thinking_config` 伪装成跨 Provider 通用选项；LiteLLM 请求会忽略该 Gemini 专属字段并留下安全能力诊断。需要供应商专属 reasoning 参数时，应等待显式 capability/provider options 支持。

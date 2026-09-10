@@ -21,6 +21,7 @@ class WorkbenchPageActions:
     start: Callable[[], None] | None = None
     resume: Callable[[], None] | None = None
     stop: Callable[[], None] | None = None
+    cancel: Callable[[], None] | None = None
     writeback: Callable[[], None] | None = None
     prebuild: Callable[[str], None] | None = None
     open_settings: Callable[[], None] | None = None

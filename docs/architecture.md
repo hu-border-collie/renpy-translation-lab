@@ -33,8 +33,10 @@
 4. **执行与耐久状态**
    - CLI 耐久路径：`sync-start` → `sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
      `sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
-   - GUI Sync 页仍由 `gui_qt/sync_translation_workflow.py` 启动 `gemini_translate.py`，
-     不持久化可恢复 run；统一页接入 #347 服务属于 #348 P3。
+   - GUI Sync 页由 `gui_qt/sync_translation_workflow.py` 驱动 #347 的
+     `sync-start` / `sync-resume` / `sync-status` / `sync-cancel` / `sync-derive`，
+     写回经 `check <RUN>` → `apply <RUN>`；GUI 不读取运行数据库，也不复制任务状态机。
+     统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。
    - Gemini Batch 继续使用 Batch 生命周期，但与 Sync 消费相同 TranslationPlan 合同。
 5. **检查与写回**
    - 模型结果先规范化并检查，再生成绑定 preview，最后由公共 apply 安全层写回。
