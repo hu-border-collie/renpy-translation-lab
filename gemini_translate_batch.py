@@ -520,6 +520,23 @@ def load_batch_settings(*, tolerate_routing_errors=False):
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
+    from model_routing_reader import runtime_settings_view
+    try:
+        translator_config = runtime_settings_view(translator_config)
+    except (ValueError, TypeError) as exc:
+        raise model_profile.routing_resolution_error(exc) from exc
+    # Batch loaders can also be invoked directly by embedded callers.
+    # Publish the validated section into the shared job-scoped runtime snapshot.
+    from model_routing_reader import checked_section, section_custom_providers
+    if "model_routing" in translator_config or legacy.MODEL_ROUTING_CONFIG is not None:
+        with legacy.locked_runtime_state():
+            runtime_snapshot = legacy.snapshot_runtime_config()
+            runtime_snapshot.model_routing_config = (
+                checked_section(translator_config) if "model_routing" in translator_config else None
+            )
+            if runtime_snapshot.model_routing_config is not None:
+                runtime_snapshot.custom_litellm_providers = section_custom_providers(runtime_snapshot.model_routing_config)
+            legacy.apply_runtime_config(runtime_snapshot)
     # Per-project RAG / source-index flags (work/project_context_settings.json).
     try:
         from project_context_settings import apply_project_context_settings_to_config
@@ -14797,6 +14814,7 @@ def freeze_runtime_routing_plan(
     custom_providers = _runtime_custom_providers()
     try:
         plan = model_profile.resolve_routing_plan_from_runtime(
+            model_routing_config=legacy.MODEL_ROUTING_CONFIG,
             sync_backend=SYNC_BACKEND,
             sync_model=SYNC_MODEL,
             batch_model=BATCH_MODEL,
@@ -14809,6 +14827,9 @@ def freeze_runtime_routing_plan(
             created_at=created_at,
             config_origins=_routing_config_origins(),
         )
+        from model_routing_reader import require_entrypoint_strategy
+        if legacy.MODEL_ROUTING_CONFIG is not None:
+            require_entrypoint_strategy(plan, execution=execution, stages=required_stages)
     except (ValueError, TypeError) as exc:
         stages = tuple(sorted(str(item) for item in (required_stages or ())))
         stage = stages[0] if stages else ''
@@ -17048,6 +17069,7 @@ def collect_doctor_model_routing_status():
     ):
         try:
             plan = model_profile.resolve_routing_plan_from_runtime(
+                model_routing_config=legacy.MODEL_ROUTING_CONFIG,
                 sync_backend=SYNC_BACKEND,
                 sync_model=SYNC_MODEL,
                 batch_model=BATCH_MODEL,

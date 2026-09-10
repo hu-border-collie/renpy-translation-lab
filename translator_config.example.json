@@ -213,7 +213,7 @@
         },
         "gemini-3.5-flash": {
           "input_per_million": 0.75,
-          "output_per_million": 4.50
+          "output_per_million": 4.5
         },
         "gemini-3.5-flash-lite": {
           "input_per_million": 0.15,
@@ -224,9 +224,138 @@
           "output_per_million": 0.75
         },
         "gemini-3-flash-preview": {
-          "input_per_million": 0.50,
-          "output_per_million": 3.00
+          "input_per_million": 0.5,
+          "output_per_million": 3.0
         }
+      }
+    }
+  },
+  "model_routing": {
+    "schema_version": 1,
+    "providers": {
+      "gemini-gemini": {
+        "label": "gemini",
+        "adapter": "gemini",
+        "provider": "gemini",
+        "credential_ref": {
+          "kind": "api_keys_json",
+          "name": "api_keys",
+          "env_name": ""
+        },
+        "base_url": "",
+        "models_url": ""
+      },
+      "litellm-opencode-go": {
+        "label": "OpenCode Go",
+        "adapter": "litellm",
+        "provider": "opencode-go",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "models_url": "https://opencode.ai/zen/go/v1/models",
+        "credential_ref": {
+          "kind": "keyring",
+          "name": "opencode-go",
+          "env_name": "OPENCODE_GO_API_KEY"
+        }
+      },
+      "embedding-sync": {
+        "label": "sync embedding",
+        "provider": "google_ai",
+        "adapter": "gemini",
+        "base_url": "",
+        "credential_ref": {
+          "kind": "api_keys_json",
+          "name": "api_keys"
+        }
+      },
+      "embedding-batch": {
+        "label": "batch embedding",
+        "provider": "google_ai",
+        "adapter": "gemini",
+        "base_url": "",
+        "credential_ref": {
+          "kind": "api_keys_json",
+          "name": "api_keys"
+        }
+      }
+    },
+    "profiles": {
+      "legacy-sync": {
+        "label": "Primary sync model",
+        "provider_id": "gemini-gemini",
+        "model": "gemini-3.1-flash-lite",
+        "models": [
+          "gemini-3.1-flash-lite"
+        ],
+        "params": {},
+        "capability_overrides": {},
+        "embedding_profile_id": "legacy-sync-embedding"
+      },
+      "legacy-batch": {
+        "label": "Gemini Batch",
+        "provider_id": "gemini-gemini",
+        "model": "gemini-3.1-flash-lite",
+        "models": [
+          "gemini-3.1-flash-lite"
+        ],
+        "params": {},
+        "capability_overrides": {},
+        "embedding_profile_id": "legacy-batch-embedding"
+      },
+      "legacy-sync-embedding": {
+        "label": "sync embedding",
+        "provider_id": "embedding-sync",
+        "model": "gemini-embedding-001",
+        "models": [],
+        "purpose": "embedding",
+        "capability_overrides": {
+          "embedding": true,
+          "sync_generation": false,
+          "remote_batch": false
+        },
+        "params": {
+          "backend": "gemini",
+          "output_dimension": 768,
+          "timeout_seconds": 30.0,
+          "native_query_task_type": "RETRIEVAL_QUERY",
+          "native_document_task_type": "RETRIEVAL_DOCUMENT"
+        }
+      },
+      "legacy-batch-embedding": {
+        "label": "batch embedding",
+        "provider_id": "embedding-batch",
+        "model": "gemini-embedding-001",
+        "models": [],
+        "purpose": "embedding",
+        "capability_overrides": {
+          "embedding": true,
+          "sync_generation": false,
+          "remote_batch": false
+        },
+        "params": {
+          "backend": "gemini",
+          "output_dimension": 768,
+          "timeout_seconds": 30.0,
+          "native_query_task_type": "RETRIEVAL_QUERY",
+          "native_document_task_type": "RETRIEVAL_DOCUMENT"
+        }
+      }
+    },
+    "defaults": {
+      "primary_profile_id": "legacy-batch",
+      "execution_strategy": "gemini_batch"
+    },
+    "legacy_entrypoints": {
+      "sync_profile_id": "legacy-sync",
+      "batch_profile_id": "legacy-batch"
+    },
+    "routes": {
+      "project_analysis": {
+        "profile_id": "legacy-sync",
+        "strategy": "sync"
+      },
+      "final_review": {
+        "profile_id": "legacy-batch",
+        "strategy": "gemini_batch"
       }
     }
   }

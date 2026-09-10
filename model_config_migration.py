@@ -1,4 +1,4 @@
-"""Developer-only, explicit P1 migration CLI; production activation is P2."""
+"""Explicit offline migration CLI; installed v1 configurations are used by the runtime."""
 from __future__ import annotations
 
 import argparse
@@ -36,12 +36,12 @@ def refusal_details(exc: Exception) -> tuple[str, str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="模型配置离线迁移（P1 暂存工具；生产 reader/GUI 激活属于 P2/P3）",
+        description="模型配置离线迁移（配置副本工具；v1 配置安装后由生产入口读取）",
     )
     sub = parser.add_subparsers(dest="action", required=True)
     for name, help_text in (
         ("preview", "只读检查并返回源指纹"),
-        ("migrate", "备份并暂存 v1；保留旧字段，暂不改变生产路由"),
+        ("migrate", "备份并暂存 v1 配置副本；保留旧字段用于回滚"),
         ("rollback", "校验指纹并恢复原配置字节"),
     ):
         command = sub.add_parser(name, help=help_text, description=help_text)
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "migrate":
             command.add_argument("--expected-fingerprint", required=True, help="preview 返回的 source_fingerprint")
             command.add_argument("--stage-only", action="store_true", required=True,
-                                 help="确认本阶段只暂存 schema，不激活生产路由")
+                                 help="只修改指定文件，不启动任务；生产配置中的 v1 会在下次加载时生效")
         elif name == "rollback":
             command.add_argument("--report", type=Path, required=True, help="迁移生成的报告路径")
     return parser

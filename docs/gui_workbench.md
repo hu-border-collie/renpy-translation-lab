@@ -490,3 +490,11 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 ## 结构保护
 
 新建翻译请求默认保护引擎结构 token，恢复后再校验；CLI 与 GUI 使用相同实现和诊断。旧请求不补造映射，结构失败不能绕过写回门禁。规则、制品追溯与兼容边界见[结构 token 保护说明](structure_protection.md)。
+
+
+### 模型路由配置兼容期（#348 P2）
+
+配置含 `model_routing` 时，CLI 和 GUI workflow 都使用新配置的模型与阶段路由。
+设置 → 模型页显示兼容说明；旧模型/LiteLLM 字段仅供回滚，新配置暂由配置文件编辑。
+保存不会丢弃新 section 的未知字段，无效 schema 会阻止保存。统一 Model Profiles
+表单与耐久任务恢复页面属于 P3。迁移前请阅读[模型配置迁移](model_config_migration.md)。

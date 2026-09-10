@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+import copy
 import io
 import ast
 import json
@@ -24,6 +25,7 @@ from typing import Any, Optional
 # runtime_config_scope without deadlocking (GUI workers hold the outer lock).
 _runtime_state_lock = threading.RLock()
 _active_runtime_config: Optional["RuntimeConfig"] = None
+MODEL_ROUTING_CONFIG = None
 
 
 @contextmanager
@@ -1165,6 +1167,14 @@ def load_sync_translation_settings(config):
     global SYNC_CONTEXT_BEFORE, SYNC_CONTEXT_AFTER
     global SYNC_MACRO_SETTING_FILE, SYNC_MACRO_SETTING, SYNC_MACRO_FINGERPRINT
 
+    global MODEL_ROUTING_CONFIG
+    from model_routing_reader import checked_section, runtime_settings_view, section_custom_providers
+
+    MODEL_ROUTING_CONFIG = None
+    if "model_routing" in config:
+        section = checked_section(config)
+        config = runtime_settings_view(config)
+        MODEL_ROUTING_CONFIG = section
     sync = config.get("sync")
     if not isinstance(sync, dict):
         sync = {}
@@ -1192,6 +1202,8 @@ def load_sync_translation_settings(config):
             flush=True,
         )
 
+    if MODEL_ROUTING_CONFIG is not None:
+        CUSTOM_LITELLM_PROVIDERS = section_custom_providers(MODEL_ROUTING_CONFIG)
     load_rotation_settings(config)
 
     custom_models = sync.get("models")
@@ -1361,6 +1373,7 @@ class RuntimeConfig:
     as a CLI compatibility facade via :func:`apply_runtime_config`.
     """
 
+    model_routing_config: Any = None
     env_game_root: str = ""
     base_dir: str = ""
     tl_subdir: str = field(default_factory=lambda: DEFAULT_TL_SUBDIR)
@@ -1444,6 +1457,7 @@ class RuntimeConfig:
         """Return a deep-ish copy so nested containers are not shared."""
         return replace(
             self,
+            model_routing_config=copy.deepcopy(self.model_routing_config),
             api_keys=list(self.api_keys),
             models=list(self.models),
             model_rotation_models=list(self.model_rotation_models),
@@ -1506,6 +1520,7 @@ def default_runtime_config() -> RuntimeConfig:
 def snapshot_runtime_config() -> RuntimeConfig:
     """Capture the current module-level globals into a RuntimeConfig object."""
     return RuntimeConfig(
+        model_routing_config=copy.deepcopy(MODEL_ROUTING_CONFIG),
         env_game_root=ENV_GAME_ROOT or "",
         base_dir=BASE_DIR,
         tl_subdir=TL_SUBDIR,
@@ -1590,6 +1605,7 @@ def snapshot_runtime_config() -> RuntimeConfig:
 
 def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
     """Publish a RuntimeConfig onto module-level globals (CLI compatibility)."""
+    global MODEL_ROUTING_CONFIG
     global ENV_GAME_ROOT, BASE_DIR, TL_SUBDIR, TL_DIR, WORK_GAME_DIR, SOURCE_GAME_DIR
     global GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE
@@ -1628,6 +1644,7 @@ def apply_runtime_config(config: RuntimeConfig) -> RuntimeConfig:
 
     applied = config.copy()
     with locked_runtime_state():
+        MODEL_ROUTING_CONFIG = copy.deepcopy(applied.model_routing_config)
         ENV_GAME_ROOT = applied.env_game_root or None
         BASE_DIR = applied.base_dir
         TL_SUBDIR = applied.tl_subdir
@@ -1947,6 +1964,13 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
     _reset_project_settings_to_defaults()
 
     config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
+    if "model_routing" in config:
+        from model_routing_reader import runtime_settings_view
+
+        try:
+            config = runtime_settings_view(config)
+        except (ValueError, TypeError) as exc:
+            raise model_profile.routing_resolution_error(exc) from exc
 
     game_root = config.get("game_root")
     if isinstance(game_root, str) and game_root.strip():
@@ -2116,7 +2140,8 @@ def load_translator_settings(*, persist_corrected_game_root: bool = True):
     apply_project_context_settings_to_config(config, BASE_DIR)
     load_include_filters_from_config(config)
     load_sync_translation_settings(config)
-    load_sync_rag_settings(config)
+    from model_routing_reader import runtime_settings_view
+    load_sync_rag_settings(runtime_settings_view(config))
     load_sync_source_index_settings(config)
     load_sync_project_analysis_settings(config)
     load_sync_story_memory_settings(config)
@@ -5670,10 +5695,12 @@ def freeze_translation_routing_plan(*, stage_overrides=None):
     """Snapshot and validate the translation route before task side effects."""
     current = get_current_model()
     overrides = dict(stage_overrides or {})
-    overrides.setdefault(model_profile.STAGE_TRANSLATION, current)
+    if MODEL_ROUTING_CONFIG is None:
+        overrides.setdefault(model_profile.STAGE_TRANSLATION, current)
     custom_providers = _routing_custom_providers(CUSTOM_LITELLM_PROVIDERS)
     try:
         plan = model_profile.resolve_routing_plan_from_runtime(
+            model_routing_config=MODEL_ROUTING_CONFIG,
             sync_backend=SYNC_BACKEND,
             sync_model=current,
             sync_models=tuple(MODELS),
@@ -5681,6 +5708,9 @@ def freeze_translation_routing_plan(*, stage_overrides=None):
             execution=model_profile.ExecutionStrategy.SYNC,
             stage_overrides=overrides,
         )
+        from model_routing_reader import require_entrypoint_strategy
+        if MODEL_ROUTING_CONFIG is not None:
+            require_entrypoint_strategy(plan, execution="sync", stages={model_profile.STAGE_TRANSLATION})
     except (ValueError, TypeError) as exc:
         raise model_profile.routing_resolution_error(
             exc,

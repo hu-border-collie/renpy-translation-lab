@@ -16,6 +16,7 @@ from gemini_model_catalog import (
     BUILTIN_GEMINI_TRANSLATION_MODELS,
 )
 
+from ..user_copy import MODEL_ROUTING_RUNTIME_COPY
 from ..widget_helpers import NoWheelComboBox
 from .page_chrome import build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
@@ -322,6 +323,9 @@ class ModelsSettingsPage(QObject):
 
     def _build_widgets(self) -> tuple[QScrollArea, QWidget]:
         page, body, layout = build_settings_scroll_page("settings_models")
+        routing_hint = QLabel(MODEL_ROUTING_RUNTIME_COPY["settings_hint"])
+        routing_hint.setWordWrap(True)
+        layout.addWidget(routing_hint)
 
         sync_box = QGroupBox("Gemini 同步翻译")
         sync_layout = settings_form(sync_box)

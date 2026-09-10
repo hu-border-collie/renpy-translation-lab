@@ -1,7 +1,7 @@
 # #348 P0：Model Routing 配置与迁移合同
 
-> 状态：P0 合同与 P1 离线兼容 reader、显式暂存迁移/回滚已实现；尚未激活生产读取或
-> 新模型设置页。当前生产行为仍以旧 `sync.*` / `batch.*` 配置为准。见
+> 状态：P0/P1 已实现；P2 已接入兼容入口的生产读取、冻结路由和 Settings 保存校验。
+> P3 统一页面尚未实现；P2 支持边界及旧命令限制见
 > [P1 操作与限制](../model_config_migration.md)。
 
 本文冻结 #348 第一阶段的长期配置形状、兼容优先级、迁移输入和 #202/#348
@@ -194,11 +194,12 @@ P1 migrator 必须满足：
 - **P0（本文）**：schema、纯 validator、四类旧 fixture、调用链和所有权合同；不改变运行行为。
 - **P1（已实现）**：幂等 migrator、备份/rollback、离线兼容 reader、legacy/effective-plan 等价测试。
   CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
-- **P2**：生产 resolver 和服务消费 schema-v1；旧配置兼容入口保留弃用诊断。
+- **P2（生产接线）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
+  使用限制见迁移文档；新任务读取新配置，已有任务优先使用冻结路由。
 - **P3**：统一 CLI/GUI/Settings；复用 #347 服务和 #202 coordinator。
 - **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。
 
-## P0 非目标
+## P0 非目标（历史阶段边界，生产激活现已进入 P2）
 
 - 不修改 `translator_config.example.json` 的生产示例；它必须在 P1 reader/migrator
   可用且 P2 生产激活完成后再切换。本阶段 schema 示例保留在合同 fixture，避免暗示生产已支持。

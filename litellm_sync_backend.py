@@ -193,6 +193,7 @@ class LiteLLMSyncBackend:
         async_completion: Optional[Callable[..., Any]] = None,
         custom_providers: Optional[Mapping[str, CustomLiteLLMProvider]] = None,
         sleep: Callable[[float], None] = time.sleep,
+        credential_ref: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._completion = completion
         self._async_completion = async_completion
@@ -201,6 +202,7 @@ class LiteLLMSyncBackend:
             dict(custom_providers) if isinstance(custom_providers, Mapping) else {}
         )
         self._sleep = sleep
+        self._credential_ref = dict(credential_ref or {})
 
     def _resolve_completion(self) -> Callable[..., Any]:
         if self._completion is not None:
@@ -272,6 +274,9 @@ class LiteLLMSyncBackend:
     ) -> tuple[_ResolvedCredential, ...]:
         """Resolve credentials in precedence order for one provider.
 
+        Frozen env/none references are authoritative and never fall back to a
+        provider keyring. A keyring reference selects its named slot; absent
+        references keep legacy provider-local lookup and rotation.
         Precedence: the explicit constructor API key first; otherwise the
         provider keyring with the active key ordered first (rotation only
         considers keys belonging to this provider); then the custom-provider
@@ -286,6 +291,15 @@ class LiteLLMSyncBackend:
                     "explicit",
                 ),
             )
+        ref = self._credential_ref
+        if ref.get("kind") == "none":
+            return ()
+        if ref.get("kind") == "env":
+            key = str(os.environ.get(ref.get("name", "")) or "").strip()
+            if not key:
+                raise LiteLLMBackendError("LiteLLM authentication failed.", category="authentication")
+            return (_ResolvedCredential(key, _masked_key_identity(provider, key), "env"),)
+        credential_provider = ref.get("name") if ref.get("kind") == "keyring" else provider
         try:
             from litellm_provider_config import (
                 load_provider_api_key,
@@ -296,7 +310,7 @@ class LiteLLMSyncBackend:
             load_provider_key_store = None
         try:
             active_key = (
-                str(load_provider_api_key(provider) or "").strip()
+                str(load_provider_api_key(credential_provider or provider) or "").strip()
                 if load_provider_api_key is not None
                 else ""
             )
@@ -305,7 +319,7 @@ class LiteLLMSyncBackend:
         if active_key:
             try:
                 store = (
-                    load_provider_key_store(provider).normalized()
+                    load_provider_key_store(credential_provider or provider).normalized()
                     if load_provider_key_store is not None
                     else None
                 )

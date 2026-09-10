@@ -1,4 +1,4 @@
-"""Offline compatibility reader for #348 P1; production wiring belongs to P2.
+"""Compatibility reader and production snapshots for versioned model routing.
 
 The new section is an all-or-nothing source. No field falls back to legacy
 configuration when it exists, and this module never resolves credentials.
@@ -6,6 +6,7 @@ configuration when it exists, and this module never resolves credentials.
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from typing import Any, Mapping
 
 import model_profile as routing
@@ -57,7 +58,7 @@ def read_routing_plan(
     config: Mapping[str, Any], *, legacy_execution: str | None = None,
     game_config: Mapping[str, Any] | None = None,
 ) -> routing.ModelRoutingPlan:
-    """Read legacy or v1 routing without activating it in the runtime.
+    """Read legacy or v1 routing without I/O or mutating runtime settings.
 
     ``legacy_execution`` selects a migrated old command's base profile; it
     changes translation/keyword/revision only. Explicit stage routes win.
@@ -120,7 +121,7 @@ def read_routing_plan(
     )
 
 
-def read_embedding_settings(config: Mapping[str, Any], *, execution: str) -> EmbeddingRuntimeSettings:
+def read_embedding_settings(config: Mapping[str, Any], *, execution: str, profile_id: str | None = None) -> EmbeddingRuntimeSettings:
     """Read one path's embedding connection entirely from legacy or v1 fields."""
     if execution not in ("sync", "gemini_batch"):
         raise routing.ModelRoutingConfigError("Unsupported embedding execution")
@@ -130,6 +131,7 @@ def read_embedding_settings(config: Mapping[str, Any], *, execution: str) -> Emb
     section = checked_section(config)
     key = "sync_profile_id" if execution == "sync" else "batch_profile_id"
     base = section.get("legacy_entrypoints", {}).get(key, section["defaults"]["primary_profile_id"])
+    base = profile_id or base
     embedding_id = section["profiles"][base].get("embedding_profile_id")
     if not embedding_id:
         raise routing.ModelRoutingConfigError("Missing embedding profile")
@@ -156,3 +158,102 @@ def read_embedding_settings(config: Mapping[str, Any], *, execution: str) -> Emb
         "query_task_type": params.get("native_query_task_type"),
         "document_task_type": params.get("native_document_task_type"),
     })
+
+
+def resolve_runtime_plan(config, *, execution, stage_overrides=None, created_at="", config_origins=()):
+    """Freeze a v1 plan for a legacy entrypoint without consulting old model fields.
+
+    Explicit model overrides retain the selected connection and credential reference;
+    changing provider requires selecting a profile instead of a model string.
+    """
+    strategy = routing.ExecutionStrategy(execution)
+    plan = read_routing_plan(config, legacy_execution=strategy.value)
+    # Existing entrypoints cannot execute arbitrary stage strategies yet.
+    for stage, expected in (("project_analysis", "sync"), ("final_review", "gemini_batch")):
+        if plan.routes[stage].strategy.value != expected:
+            raise routing.ModelRoutingConfigError("Unsupported legacy stage execution strategy")
+    generation_ids = {route.profile_id for route in plan.routes.values()}
+    for profile in plan.profiles.values():
+        if profile.id in generation_ids and profile.params:
+            raise routing.ModelRoutingConfigError("Profile params are not supported by legacy entrypoints; retain execution parameters in sync/batch")
+        if profile.credential_ref.kind == "api_keys_json" and profile.credential_ref.name != "api_keys":
+            raise routing.ModelRoutingConfigError("Unsupported Gemini credential slot")
+        if profile.adapter == "gemini" and profile.credential_ref.kind != "api_keys_json":
+            raise routing.ModelRoutingConfigError("Gemini legacy entrypoints require api_keys_json credentials")
+    profiles, routes, capabilities = dict(plan.profiles), dict(plan.routes), dict(plan.capabilities)
+    for stage, model in (stage_overrides or {}).items():
+        if not str(model or "").strip():
+            continue
+        route = routes[stage]
+        profile = profiles[route.profile_id]
+        model = str(model).strip()
+        if model == profile.model:
+            continue
+        if profile.adapter == "litellm":
+            if model.split("/", 1)[0] != profile.provider or "/" not in model:
+                raise routing.ModelRoutingConfigError("Model override must retain the selected provider")
+        elif routing.is_provider_prefixed_model_id(model):
+            raise routing.ModelRoutingConfigError("Gemini profile requires a Gemini model")
+        profile_id = f"{stage}_override"
+        profiles[profile_id] = replace(profile, id=profile_id, model=model, models=(model,))
+        routes[stage] = replace(route, profile_id=profile_id, source=routing.ROUTE_SOURCE_EXPLICIT)
+        capabilities[profile_id] = routing.resolve_capabilities(
+            profiles[profile_id], custom_providers=section_custom_providers(checked_section(config)),
+        )
+    return replace(plan, profiles=profiles, routes=routes, capabilities=capabilities,
+                   created_at=created_at or plan.created_at, config_origins=tuple(config_origins))
+
+
+def runtime_settings_view(config):
+    """Project v1 connections into legacy loader fields in memory only.
+
+    Execution policy stays in sync/batch. Model and embedding connection fields
+    are replaced as a unit, so obsolete retained fields cannot affect requests.
+    The original mapping is never mutated or persisted.
+    """
+    if "model_routing" not in config:
+        return config
+    checked_section(config)
+    result = copy.deepcopy(config)
+    for scope, execution in (("sync", "sync"), ("batch", "gemini_batch")):
+        plan = resolve_runtime_plan(config, execution=execution)
+        route = plan.routes["translation"]
+        profile = plan.profiles[route.profile_id]
+        if not isinstance(result.get(scope), dict):
+            result[scope] = {}
+        target = result[scope]
+        target["model"] = profile.model
+        if scope == "sync":
+            target["backend"] = profile.adapter
+            target["models"] = [profile.model, *(model for model in profile.models if model != profile.model)]
+            target["custom_litellm_providers"] = []
+        for stage in ("project_analysis", "final_review"):
+            stage_route = plan.routes[stage]
+            if not isinstance(result.get("batch"), dict):
+                result["batch"] = {}
+            if not isinstance(result["batch"].get(stage), dict):
+                result["batch"][stage] = {}
+            result["batch"][stage]["model"] = plan.profiles[stage_route.profile_id].model
+        embedding = read_embedding_settings(config, execution=execution, profile_id=profile.id)
+        if not isinstance(target.get("rag"), dict):
+            target["rag"] = {}
+        rag = target["rag"]
+        for key in tuple(rag):
+            if key.startswith("embedding_") or key in ("output_dimensionality", "query_task_type", "document_task_type"):
+                del rag[key]
+        rag.update(embedding_backend=embedding.backend, embedding_provider=embedding.provider,
+                   embedding_model=embedding.model, embedding_endpoint=embedding.endpoint,
+                   embedding_api_key_env=embedding.api_key_env,
+                   embedding_timeout_seconds=embedding.timeout_seconds,
+                   output_dimensionality=embedding.output_dimension,
+                   query_task_type=embedding.native_query_task_type,
+                   document_task_type=embedding.native_document_task_type)
+    return result
+
+
+def require_entrypoint_strategy(plan, *, execution, stages):
+    """Refuse routes that the selected legacy command cannot execute."""
+    for stage in stages or ():
+        expected = {"project_analysis": "sync", "final_review": "gemini_batch"}.get(stage, routing.ExecutionStrategy(execution).value)
+        if stage in plan.routes and plan.routes[stage].strategy.value != expected:
+            raise routing.ModelRoutingConfigError("Selected command cannot execute the configured stage strategy")
