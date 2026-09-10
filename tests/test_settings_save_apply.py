@@ -145,6 +145,23 @@ class SettingsSaveApplyTests(unittest.TestCase):
             [{"id": "keep-me"}],
         )
 
+    def test_explicit_disabled_thinking_writes_empty_key(self) -> None:
+        config: dict = {
+            "sync": {},
+            "batch": {"model": "gemini-3.1-flash-lite"},
+        }
+        result = apply_collected_settings(
+            config,
+            {
+                "batch_model": "gemini-3.1-flash-lite",
+                "batch_thinking_level": "",
+            },
+            original_config=copy.deepcopy(config),
+            extras=SettingsSaveExtras(batch_thinking_user_changed=True),
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(config["batch"]["thinking_level"], "")
+
     def test_advanced_validation_errors_do_not_apply(self) -> None:
         config: dict = {"sync": {}, "batch": {}}
         original = copy.deepcopy(config)

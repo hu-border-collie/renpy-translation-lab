@@ -555,6 +555,52 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         saved_payload = save_config.call_args.args[0]
         self.assertNotIn("custom_litellm_providers", saved_payload["sync"])
 
+    def test_first_save_keeps_explicit_disabled_thinking(self) -> None:
+        config = {
+            "sync": {},
+            "batch": {"model": "gemini-3.1-flash-lite"},
+        }
+        with mock.patch.object(
+            self.window.state,
+            "load_translator_config",
+            return_value=config,
+        ):
+            self.window._ensure_settings_page("models")
+        empty_index = self.window.batch_thinking_combo.findData("")
+        self.window.batch_thinking_combo.setCurrentIndex(empty_index)
+        self.assertTrue(self.window._batch_thinking_user_changed)
+        self.assertEqual(
+            set(self.window._settings_pages_built).intersection(
+                self.window._settings_registry.config_page_keys()
+            ),
+            {"models"},
+        )
+
+        with (
+            mock.patch.object(
+                self.window.state,
+                "get_game_root",
+                return_value=Path("C:/Game/work"),
+            ),
+            mock.patch.object(
+                self.window.state,
+                "load_translator_config",
+                return_value=config,
+            ),
+            mock.patch.object(
+                self.window.state,
+                "save_translator_config",
+            ) as save_config,
+            mock.patch("gui_qt.app.message_box_information"),
+            mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
+            mock.patch("gui_qt.app.load_provider_key_store"),
+            mock.patch("project_context_settings.save_project_context_settings"),
+        ):
+            saved = self.window._on_save_config()
+        self.assertTrue(saved)
+        saved_payload = save_config.call_args.args[0]
+        self.assertEqual(saved_payload["batch"]["thinking_level"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3233,6 +3233,9 @@ class MainWindow(QMainWindow):
         Used by save/reload/restore — not by ordinary settings-tab navigation.
         Only already-loaded pages contribute a preserve snapshot, so a newly
         materialized page can never turn its defaults into "user edits".
+        The thinking-level user-changed flag is captured before the disk
+        reload and restored afterward so an explicit empty choice survives
+        first save.
         """
         if not self._settings_lazy_ready():
             return
@@ -3246,6 +3249,7 @@ class MainWindow(QMainWindow):
             return
         preserve: dict[str, object] | None = None
         loading = getattr(self, "_loading_config_to_ui", False)
+        thinking_changed = bool(getattr(self, "_batch_thinking_user_changed", False))
         if not loading:
             loaded_pages = built.intersection(
                 self._settings_coordinator.loaded_keys()
@@ -3264,6 +3268,11 @@ class MainWindow(QMainWindow):
             self._load_config_to_ui(refresh_task_gates=False)
             if preserve:
                 self._restore_config_ui_snapshot(preserve)
+                if thinking_changed:
+                    # Disk reload in _load_config_to_ui clears this flag. Keep
+                    # the user's explicit thinking choice so first save can
+                    # write an empty thinking_level.
+                    self._batch_thinking_user_changed = True
             if "api_status_label" in self.__dict__:
                 self._refresh_api_status()
 

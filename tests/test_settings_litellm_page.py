@@ -95,6 +95,28 @@ class LiteLLMSettingsPageContractTests(unittest.TestCase):
         self.assertEqual(collected["sync_backend"], "gemini")
         self.assertEqual(collected["litellm_model"], "openai/kept")
 
+    def test_reset_restores_collect_snapshot_providers(self) -> None:
+        provider = {
+            "id": "opencode-go",
+            "base_url": "https://opencode.ai/zen/go/v1",
+        }
+        self.page.load(
+            {
+                "sync_backend": "gemini",
+                "litellm_model": "",
+                "custom_litellm_providers": [provider],
+            }
+        )
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+        self.page._custom_litellm_providers = {}
+        self.page._custom_litellm_providers_modified = True
+        self.page.reset()
+        self.assertIn("opencode-go", self.page._custom_litellm_providers)
+        self.assertFalse(self.page._custom_litellm_providers_modified)
+        self.assertFalse(self.page._custom_litellm_providers_load_error)
+        restored = dict(self.page.collect()["custom_litellm_providers"][0])
+        self.assertEqual(restored["id"], "opencode-go")
+
     def test_focus_issue_targets_owned_widget(self) -> None:
         issue = SettingsIssue("litellm", "litellm_model", "missing")
         self.assertTrue(self.page.focus_issue(issue))

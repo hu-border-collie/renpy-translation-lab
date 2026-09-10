@@ -191,9 +191,11 @@ class ModelsSettingsPage(QObject):
                     config_string(snapshot.get("batch_model", ""))
                 )
             if "batch_thinking_level" in snapshot:
-                self._set_batch_thinking_value(
-                    config_string(snapshot.get("batch_thinking_level", ""))
-                )
+                previous_level = config_string(self.batch_thinking_combo.currentData())
+                restored_level = config_string(snapshot.get("batch_thinking_level", ""))
+                self._set_batch_thinking_value(restored_level)
+                if restore and restored_level != previous_level:
+                    self._batch_thinking_user_changed = True
             if not restore:
                 self._batch_thinking_user_changed = False
                 self._baseline = dict(self.collect())
