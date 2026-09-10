@@ -219,6 +219,63 @@ class StrategyGatingTests(unittest.TestCase):
         routes = {row["stage"]: row for row in editor.resolved_routes(section)}
         self.assertFalse(routes["final_review"]["explicit"])
 
+    def test_sync_capability_override_gates_strategies(self) -> None:
+        section = gemini_section()
+        section = editor.update_profile(
+            section,
+            "gemini-main",
+            capability_overrides={"sync_generation": False},
+        )
+
+        choices = editor.strategy_choices(section)
+        self.assertEqual(choices["gemini-main"], ("gemini_batch",))
+        with self.assertRaises(editor.ModelProfilesEditorError) as caught:
+            editor.set_defaults(
+                section,
+                primary_profile_id="gemini-main",
+                execution_strategy="sync",
+            )
+        self.assertEqual(
+            caught.exception.details["reason"],
+            "missing_sync_generation",
+        )
+
+    def test_embedding_profile_cannot_serve_generation_stages(self) -> None:
+        section = gemini_section()
+        section = editor.add_profile(
+            section,
+            label="Embedding",
+            provider_id="gemini-main",
+            model="gemini-embedding-001",
+            purpose="embedding",
+        )
+
+        choices = editor.strategy_choices(section)
+        self.assertEqual(choices["embedding"], ())
+        with self.assertRaises(editor.ModelProfilesEditorError) as caught:
+            editor.set_route(
+                section,
+                "translation",
+                enabled=True,
+                profile_id="embedding",
+                strategy="sync",
+            )
+        self.assertEqual(
+            caught.exception.details["reason"],
+            "embedding_profile",
+        )
+
+    def test_corrupt_profile_entry_does_not_crash_views(self) -> None:
+        section = gemini_section()
+        section["profiles"]["broken"] = "not-an-object"
+
+        view = editor.editor_view(section)
+        choices = editor.strategy_choices(section)
+
+        self.assertIn("broken", {item["id"] for item in view["profiles"]})
+        self.assertEqual(choices["broken"], ())
+        self.assertTrue(editor.section_issues(section))
+
     def test_unknown_capability_override_is_rejected(self) -> None:
         with self.assertRaises(editor.ModelProfilesEditorError) as caught:
             editor.update_profile(

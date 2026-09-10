@@ -38,8 +38,9 @@ def section_custom_providers(section: Mapping[str, Any]) -> dict[str, CustomLite
     not shadow a built-in or custom generation provider with the same name.
     """
     generation_providers = {
-        profile["provider_id"] for profile in section["profiles"].values()
-        if profile.get("purpose") != "embedding"
+        profile["provider_id"]
+        for profile in section["profiles"].values()
+        if isinstance(profile, Mapping) and profile.get("purpose") != "embedding"
     }
     result = {}
     for provider_id, provider in section["providers"].items():

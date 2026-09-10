@@ -122,12 +122,16 @@ def provider_ids(section: Mapping[str, Any] | None) -> tuple[str, ...]:
 def _profile_entry(section: Mapping[str, Any], profile_id: str) -> dict[str, Any]:
     profiles = section.get("profiles") or {}
     raw = profiles.get(profile_id)
-    if not isinstance(raw, Mapping):
+    if raw is None:
         raise ModelProfilesEditorError(
             "UNKNOWN_PROFILE",
             f"Unknown ModelProfile: {profile_id}",
             details={"profile_id": str(profile_id)},
         )
+    if not isinstance(raw, Mapping):
+        # A hand-broken entry must not crash read-only views; validation
+        # reports the malformed profile while mutations repair it.
+        return {}
     return dict(raw)
 
 
@@ -160,21 +164,25 @@ def _profile_references(section: Mapping[str, Any], profile_id: str) -> list[str
 def _strategy_supported(section: Mapping[str, Any], profile_id: str, strategy: str) -> str:
     """Return "" when supported, else a machine reason code."""
     raw = _profile_entry(section, profile_id)
+    if str(raw.get("purpose") or "generation") == "embedding":
+        return "embedding_profile"
     provider = (section.get("providers") or {}).get(
         str(raw.get("provider_id") or "")
     )
     if not isinstance(provider, Mapping):
         return "missing_provider"
-    if strategy == routing.ExecutionStrategy.SYNC.value:
-        return ""
-    if strategy != routing.ExecutionStrategy.GEMINI_BATCH.value:
+    if strategy not in STRATEGY_ORDER:
         return "unsupported_strategy"
-    if provider.get("adapter") != routing.ADAPTER_GEMINI:
-        return "missing_gemini_adapter"
     try:
         capabilities = _capabilities_for(section, profile_id)
     except ModelProfilesEditorError:
-        return "missing_remote_batch"
+        return "missing_provider"
+    if strategy == routing.ExecutionStrategy.SYNC.value:
+        if not capabilities.get("sync_generation"):
+            return "missing_sync_generation"
+        return ""
+    if provider.get("adapter") != routing.ADAPTER_GEMINI:
+        return "missing_gemini_adapter"
     return "" if capabilities.get("remote_batch") else "missing_remote_batch"
 
 

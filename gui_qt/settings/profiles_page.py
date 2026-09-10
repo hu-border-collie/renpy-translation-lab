@@ -979,8 +979,20 @@ class ProfilesSettingsPage(QObject):
             return
         profile_id = str(self.default_profile_combo.currentData() or "")
         strategy = str(self.default_strategy_combo.currentData() or "")
-        if not profile_id or not strategy:
+        if not profile_id:
             return
+        supported = editor.strategy_choices(self._section).get(profile_id, ())
+        if strategy not in supported:
+            # The strategy combo can still show the previous profile's value
+            # while the profile combo is switching; fall back to a supported
+            # strategy instead of rejecting and rolling the profile back.
+            if not supported:
+                self._show_status(
+                    MODEL_PROFILES_PAGE_COPY["no_supported_strategy"]
+                )
+                self._refresh_defaults()
+                return
+            strategy = supported[0]
         try:
             self._section = editor.set_defaults(
                 self._section,
@@ -1001,13 +1013,27 @@ class ProfilesSettingsPage(QObject):
             return
         widgets = self._route_widgets[stage]
         enabled = widgets["override"].isChecked()
+        profile_id = str(widgets["profile"].currentData() or "")
+        strategy = str(widgets["strategy"].currentData() or "")
+        if enabled:
+            supported = editor.strategy_choices(self._section).get(profile_id, ())
+            if strategy not in supported:
+                # Stage-route profile switches hit the same stale-strategy
+                # window as the defaults row; resolve instead of refusing.
+                if not supported:
+                    self._show_status(
+                        MODEL_PROFILES_PAGE_COPY["no_supported_strategy"]
+                    )
+                    self._refresh_routes()
+                    return
+                strategy = supported[0]
         try:
             self._section = editor.set_route(
                 self._section,
                 stage,
                 enabled=enabled,
-                profile_id=str(widgets["profile"].currentData() or ""),
-                strategy=str(widgets["strategy"].currentData() or ""),
+                profile_id=profile_id,
+                strategy=strategy,
             )
         except editor.ModelProfilesEditorError as exc:
             self._show_status(self._editor_error_message(exc))

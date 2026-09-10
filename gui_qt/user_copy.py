@@ -1127,10 +1127,14 @@ MODEL_PROFILES_PAGE_COPY = {
         "发起恰好 1 次真实 Provider 请求，分别报告鉴权、同步生成、结构化输出、"
         "reasoning、usage，并显示 Batch/embedding 的声明能力；会产生少量费用。"
     ),
+    "no_supported_strategy": (
+        "该 ModelProfile 没有可用执行方式：请检查能力覆盖或 Provider 配置。"
+    ),
     "probe_unavailable": "当前宿主不支持能力探测。",
     "probe_failed": "能力探测失败：{code}。请查看诊断与运行日志。",
     "reason_labels": {
         "missing_provider": "该 ModelProfile 引用的 Provider 不存在",
+        "embedding_profile": "embedding profile 不能用于生成阶段",
         "missing_gemini_adapter": "不是 Gemini 直连模型，无法使用 Gemini Batch",
         "missing_remote_batch": "该模型未声明远程 Batch 能力",
         "missing_sync_generation": "该模型未声明同步生成能力",

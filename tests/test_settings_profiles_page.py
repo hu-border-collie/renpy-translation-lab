@@ -270,6 +270,52 @@ class ProfilesPageTests(unittest.TestCase):
         item = self.page.default_strategy_combo.model().item(batch_index)
         self.assertTrue(item.isEnabled())
 
+    def test_profile_switch_falls_back_to_supported_strategy(self) -> None:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="Gemini",
+            adapter="gemini",
+            provider="gemini",
+            credential_kind="api_keys_json",
+            credential_name="api_keys",
+            credential_env_name="GEMINI_API_KEY",
+        )
+        section = editor.add_profile(
+            section,
+            label="Gemini Main",
+            provider_id="gemini",
+            model="gemini-3.5-flash",
+        )
+        section = editor.add_provider(
+            section,
+            label="Acme",
+            adapter="litellm",
+            provider="acme",
+            base_url="https://acme.example/v1",
+            credential_kind="none",
+        )
+        section = editor.add_profile(
+            section,
+            label="Acme Main",
+            provider_id="acme",
+            model="acme/model-a",
+        )
+        section = editor.set_defaults(
+            section,
+            primary_profile_id="gemini-main",
+            execution_strategy="gemini_batch",
+        )
+        self.page.load({"model_routing": section})
+
+        acme_index = self.page.default_profile_combo.findData("acme-main")
+        self.page.default_profile_combo.setCurrentIndex(acme_index)
+
+        defaults = self.page.collect()["model_routing"]["defaults"]
+        self.assertEqual(defaults["primary_profile_id"], "acme-main")
+        self.assertEqual(defaults["execution_strategy"], "sync")
+        self.assertEqual(self.messages, [])
+
     def test_add_profile_without_providers_preserves_existing_section(self) -> None:
         section = editor.empty_section()
         section["future_top_level"] = {"keep": True}
