@@ -65,4 +65,8 @@ class SettingsPage(Protocol):
         """Focus/scroll/decorate the issue field; return whether handled."""
 
     def set_task_running(self, running: bool) -> None:
-        """Reflect the global task lock without owning it."""
+        """Reflect the global task lock without owning it.
+
+        The coordinator records the current flag and replays it when a page
+        is first built, not only when the host later toggles the lock.
+        """

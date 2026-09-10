@@ -114,7 +114,7 @@ JSON，按页面过滤后填充控件，并调用 `_update_config_ui_saved_snaps
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
 - `gui_qt/settings/registry.py`：页面 key / label / builder / 字段所有权登记，强制一键一主。
 - `gui_qt/settings/coordinator.py`：页内导航、lazy materialize、load/collect/validate/dirty/save、
-  离开保护、错误聚焦与项目切换失效。
+  离开保护、错误聚焦、任务锁记录与建页补发、项目切换失效。
 - `MainWindow`：只保留应用壳、全局 `settings` route、header/sidebar、全局任务锁、runner/log、
   主题应用、顶层装配和 shutdown 协调。
 
@@ -163,6 +163,8 @@ class SettingsPageActions:
 - `focus_issue(issue)`：聚焦、滚动或标注 `field_key` 对应控件，成功返回 `True`；coordinator 在
   校验失败后先切到 `issue.page_key` 再调用它。
 - `set_task_running(running)`：响应全局任务锁，禁用会改变配置或触发长任务的控件；不管理锁本身。
+  Coordinator 记录当前 `running`，并在 `ensure_page` 新建页面后立即补发，避免任务运行中
+  首次打开的设置页控件仍可编辑。
 - 有局部 worker 的页面必须复用 #297 设施：operation identity、retired ownership 到真实
   `finished`、`ShutdownParticipant` 注册、禁止 GUI 线程固定等待、丢弃 stale result。Phase B
   先用 adapter 兼容未迁移页面；Phase C 首个 worker 页面必须落地生命周期接入，不允许另建框架。
@@ -173,7 +175,7 @@ Coordinator → 页面（只通过上述方法）：
 
 - `load`：配置加载、保存成功、项目切换后的重新填充。
 - `reset`：放弃修改、重载、项目切换或页面销毁前。
-- `set_task_running`：全局任务锁变化。
+- `set_task_running`：全局任务锁变化；新建页面时补发当前锁。
 - `focus_issue`：校验失败后的错误聚焦。
 
 页面 → 宿主（`SettingsPageActions`，由 coordinator 注入；页面不得直接调用 `MainWindow` 私有方法）：
@@ -225,7 +227,7 @@ Coordinator → 页面（只通过上述方法）：
 - `gui_qt/settings/registry.py`：10 页 `SettingsPageSpec`、唯一配置键所有权、lazy 属性映射；
   `build_default_registry()` 在 `MainWindow` 构造时校验一键一主。
 - `gui_qt/settings/coordinator.py`：`ensure_page` / `activate` / `load` / `collect` / `validate` /
-  `reset` / `focus_issue` / `set_task_running` / `has_unsaved_changes`，不依赖 Qt。
+  `reset` / `focus_issue` / `set_task_running`（含新建页补发） / `has_unsaved_changes`，不依赖 Qt。
 - `gui_qt/settings/legacy.py`：已删除。十页均经 `_create_*_settings_page` 构造独立 `SettingsPage`。
 - `MainWindow`：页面清单、dirty 键和 lazy 映射改由 registry 提供；`_ensure_settings_page` /
   `_on_settings_nav_row_changed` 经 coordinator 补建与切换；项目页首次打开会加载其 owned 字段；
@@ -242,7 +244,10 @@ Coordinator → 页面（只通过上述方法）：
 Phase C 已落地：
 
 - `gui_qt/settings/litellm_page.py`：`LiteLLMSettingsPage` 可脱离 `MainWindow` 构造，实现
-  `load/collect/validate/reset/focus_issue/set_task_running`。
+  `load/collect/validate/reset/focus_issue/set_task_running`。磁盘上的
+  `custom_litellm_providers` 完整交给 `custom_provider_registry` 校验，不得先过滤非法条目再当
+  作有效配置保存；`load(..., restore=True)` 恢复未保存编辑时保留 `modified`，避免只打开
+  LiteLLM 页删除最后一项后首次保存仍写回磁盘旧列表。
 - 目录/版本/连接测试/warmup worker 由页面持有；取消后 retired 到真实 `finished`，warmup 仍使用
   模块级 retired set。连接测试继续用 `litellm_connection_identity` 丢弃 stale result。
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。

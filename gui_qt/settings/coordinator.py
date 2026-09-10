@@ -1,10 +1,11 @@
 """Navigation, lazy materialization, and config orchestration for Settings pages.
 
 The coordinator is deliberately Qt-free: the host injects a page builder and a
-page-show callback. It owns the dirty baseline, leave-guard copy, and the
-collect → persist handoff. ``MainWindow`` still writes files through
-ProjectState / config_store and shows Qt dialogs; the coordinator never
-writes configuration itself.
+page-show callback. It owns the dirty baseline, leave-guard copy, the
+collect → persist handoff, and the current task-lock flag so newly built
+pages inherit it. ``MainWindow`` still writes files through ProjectState /
+config_store and shows Qt dialogs; the coordinator never writes
+configuration itself.
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ class SettingsCoordinator:
         self._loaded: set[str] = set()
         self._active_key: str | None = None
         self._baseline: dict[str, object] = {}
+        self._task_running = False
 
     @property
     def registry(self) -> SettingsPageRegistry:
@@ -85,7 +87,11 @@ class SettingsCoordinator:
                 setter(actions)
 
     def ensure_page(self, key: str, *, build: bool = True) -> object | None:
-        """Build one page on first use; never build sibling pages."""
+        """Build one page on first use; never build sibling pages.
+
+        Newly built pages inherit the recorded task-lock flag so first open
+        during a running task still disables config controls.
+        """
 
         if key in self._pages:
             return self._pages[key]
@@ -106,6 +112,7 @@ class SettingsCoordinator:
         self._loaded.discard(key)
         if self._on_page_built is not None:
             self._on_page_built(spec, page)
+        self._apply_task_running(page)
         return page
 
     def activate(self, key: str, *, build: bool = True) -> object | None:
@@ -216,10 +223,16 @@ class SettingsCoordinator:
         return bool(focus(issue))
 
     def set_task_running(self, running: bool) -> None:
+        """Record the host task lock and apply it to every built page."""
+
+        self._task_running = bool(running)
         for page in self._pages.values():
-            setter = getattr(page, "set_task_running", None)
-            if callable(setter):
-                setter(running)
+            self._apply_task_running(page)
+
+    def _apply_task_running(self, page: object) -> None:
+        setter = getattr(page, "set_task_running", None)
+        if callable(setter):
+            setter(self._task_running)
 
     def baseline(self) -> dict[str, object]:
         """Return a copy of the last captured dirty-check snapshot."""

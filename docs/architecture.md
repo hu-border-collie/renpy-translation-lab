@@ -120,7 +120,8 @@ Phase B 已消除的 as-is 缺口：
   冻结 `load/collect/validate/reset/focus_issue/set_task_running` 与 `config_keys` 单一所有权。
 - `gui_qt/settings/registry.py`：页面登记、唯一配置键所有权与 lazy 属性映射；强制一键一主。
 - `gui_qt/settings/coordinator.py`：页内导航、lazy 构建、load/collect/validate/reset、错误聚焦、
-  任务锁分发、dirty 基线、离开保护文案与 collect→persist；不依赖 Qt，可脱离 `MainWindow` 测试。
+  任务锁分发（含新建页补发）、dirty 基线、离开保护文案与 collect→persist；不依赖 Qt，可脱离
+  `MainWindow` 测试。
 - `gui_qt/settings/leave_guard.py`：未保存离开保护的四套文案（workflow / 切项目 / 关窗 / 离开设置页）。
 - `gui_qt/settings/save_apply.py`：把 collect() 快照应用到原始 `translator_config` 对象；不写盘。
 - `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM 页面；局部 worker 与
