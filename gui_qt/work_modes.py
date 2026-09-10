@@ -122,7 +122,10 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="翻译进度",
         writeback_tab_label="写回说明",
         idle_workflow_heading="尚未开始同步翻译",
-        idle_workflow_message="适合小范围试译或局部修改；默认先生成差异预览，确认后才写回。",
+        idle_workflow_message=(
+            "耐久同步任务支持中断恢复与显式取消；运行结束并通过检查后才生成绑定预览，"
+            "确认后才写回项目脚本。"
+        ),
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,

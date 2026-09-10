@@ -1,8 +1,10 @@
 # #348 P0：Model Routing 配置与迁移合同
 
 > 状态：P0/P1 已实现；P2 已接入兼容入口的生产读取、冻结路由和 Settings 保存校验。
-> P3 统一页面尚未实现；P2 支持边界及旧命令限制见
-> [P1 操作与限制](../model_config_migration.md)。
+> P3 已实现第一增量：GUI 同步翻译页改为消费 #347 服务/RunSnapshot，
+> 支持 start/resume/status/cancel/derive 与 `check <RUN>` → `apply <RUN>`；
+> 模型/策略选择器、Settings Model Profiles 页与 CLI 别名仍待完成。
+> P2 支持边界及旧命令限制见 [P1 操作与限制](../model_config_migration.md)。
 
 本文冻结 #348 第一阶段的长期配置形状、兼容优先级、迁移输入和 #202/#348
 所有权边界。可执行验证器位于 `model_routing_config.py`；schema-v1 示例与四类旧配置
@@ -196,7 +198,7 @@ P1 migrator 必须满足：
   CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
 - **P2（生产接线，已实现）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
   使用限制见迁移文档；新任务读取新配置，已有任务优先使用冻结路由。
-- **P3**：统一 CLI/GUI/Settings；复用 #347 服务和 #202 coordinator。
+- **P3（进行中）**：GUI 耐久 Sync 生命周期（start/resume/status/cancel/derive + check/apply）已接入 #347 服务与公开 snapshot；统一 ModelProfile/ExecutionStrategy 选择器、Settings Model Profiles 页（#202 coordinator）和 CLI 映射仍待完成。
 - **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。
 
 ## P0 非目标（历史阶段边界，生产激活现已进入 P2）

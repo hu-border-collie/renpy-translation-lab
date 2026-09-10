@@ -378,6 +378,7 @@ from .widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
+    DURABLE_SYNC_RUN_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     APP_SHUTDOWN_COPY,
@@ -1918,7 +1919,10 @@ class MainWindow(QMainWindow):
                 page.set_action_callbacks(
                     WorkbenchPageActions(
                         start=self._on_start_translation,
+                        resume=self._on_resume_durable_sync,
                         stop=self._on_kill,
+                        cancel=self._on_cancel_durable_sync,
+                        derive=self._on_derive_durable_sync,
                         writeback=self._on_apply_sync_translation,
                         action=self._on_task_page_gate_action,
                     )
@@ -10758,10 +10762,13 @@ class MainWindow(QMainWindow):
                     )
                     return
 
-        workflow = create_workflow(
-            spec.mode,
-            submit_max_cost=self._submit_max_cost_from_config(),
-        )
+        if spec.mode == WorkMode.SYNC_TRANSLATION:
+            workflow = SyncTranslationWorkflow.start_new()
+        else:
+            workflow = create_workflow(
+                spec.mode,
+                submit_max_cost=self._submit_max_cost_from_config(),
+            )
         if workflow is None:
             message_box_information(self, "无法开始任务", spec.not_implemented_message)
             return
@@ -11626,21 +11633,118 @@ class MainWindow(QMainWindow):
             ["apply", manifest_path, "--output", "json", "--non-interactive"],
         )
 
+    def _on_derive_durable_sync(self) -> None:
+        """Derive a new durable run from a terminal run with reusable results."""
+        if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
+            message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
+            return
+        page = getattr(self, "sync_translation_page", None)
+        run_id = page.run_id() if page is not None else ""
+        if not run_id or page is None or not page.current_run_can_derive():
+            message_box_information(
+                self,
+                "没有可派生的运行",
+                "当前没有包含可复用结果的耐久同步运行。",
+            )
+            return
+        if self._task_running or self._cli_runner_is_active():
+            message_box_information(self, "任务运行中", "请先停止或等待当前任务结束。")
+            return
+
+        options = self._prompt_derive_options(
+            run_id,
+            page.outcome_unknown_count(),
+        )
+        if options is None:
+            return
+
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        workflow = SyncTranslationWorkflow.derive_run(run_id, **options)
+        self._begin_translation_workflow(
+            workflow,
+            log_heading=f"正在派生新的同步运行：{run_id}",
+            status_tab=1,
+        )
+
+    def _prompt_derive_options(
+        self,
+        run_id: str,
+        unknown_count: int,
+    ) -> dict[str, bool] | None:
+        """Ask how outcome_unknown requests should be handled before deriving."""
+        copy = DURABLE_SYNC_RUN_COPY
+        if unknown_count <= 0:
+            reply = message_box_question(
+                self,
+                copy["derive_confirm_title"],
+                copy["derive_confirm_body"].format(run_id=run_id),
+                yes_text=copy["derive_button"],
+                no_text="取消",
+                default="no",
+            )
+            return {} if reply == "yes" else None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(copy["derive_unknown_title"])
+        layout = QVBoxLayout(dialog)
+        body = QLabel(
+            copy["derive_unknown_body"].format(
+                run_id=run_id,
+                count=unknown_count,
+            )
+        )
+        body.setWordWrap(True)
+        layout.addWidget(body)
+        hint = QLabel(copy["derive_dialog_hint"])
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        exclude_radio = QRadioButton(copy["derive_exclude_option"])
+        exclude_radio.setChecked(True)
+        retry_radio = QRadioButton(copy["derive_retry_option"])
+        group = QButtonGroup(dialog)
+        group.addButton(exclude_radio)
+        group.addButton(retry_radio)
+        layout.addWidget(exclude_radio)
+        layout.addWidget(retry_radio)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(dialog.reject)
+        buttons.addWidget(cancel_btn)
+        confirm_btn = QPushButton(copy["derive_button"])
+        confirm_btn.setObjectName("primary_btn")
+        confirm_btn.clicked.connect(dialog.accept)
+        buttons.addWidget(confirm_btn)
+        layout.addLayout(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        if retry_radio.isChecked():
+            return {"retry_unknown": True}
+        return {"exclude_unknown": True}
+
     def _on_apply_sync_translation(self) -> None:
         if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
             message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
             return
-        manifest_path = self.sync_translation_page.preview_manifest_path()
-        if not manifest_path:
-            message_box_information(self, "无法写回", "请先生成包含变更的同步翻译预览。")
+        run_id = self.sync_translation_page.preview_run_id()
+        if not run_id:
+            message_box_information(
+                self,
+                "无法写回",
+                "请先完成耐久同步运行并通过检查，生成绑定预览。",
+            )
             return
 
         reply = message_box_question(
             self,
             "确认写回同步翻译",
-            "即将重新校验项目、源文件和预览制品，然后修改项目脚本。\n\n"
-            f"预览清单：{manifest_path}\n\n"
-            "如果脚本在预览后发生变化，写回会自动拒绝。是否继续？",
+            "即将重新校验源快照、检查绑定与预览制品，然后修改项目脚本。\n\n"
+            f"运行 ID：{run_id}\n\n"
+            "如果脚本、结果或检查制品在预览后发生变化，写回会自动拒绝。是否继续？",
             yes_text="确认写回",
             no_text="取消",
             default="no",
@@ -11651,10 +11755,99 @@ class MainWindow(QMainWindow):
         self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        workflow = SyncTranslationWorkflow.apply_existing(manifest_path)
+        workflow = SyncTranslationWorkflow.apply_run(run_id)
         self._begin_translation_workflow(
             workflow,
             log_heading="正在写回同步翻译预览",
+            status_tab=1,
+        )
+
+    def _on_resume_durable_sync(self) -> None:
+        """Query the latest durable run and resume or check it when appropriate."""
+        if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
+            message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
+            return
+        if self._task_running or self._cli_runner_is_active():
+            message_box_information(self, "任务运行中", "请先停止或等待当前任务结束。")
+            return
+        if not self.state.get_game_root():
+            message_box_information(
+                self,
+                "请先选择项目",
+                "请先选择游戏的 work 目录。",
+            )
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+        if (
+            self._translation_requires_doctor_check(WorkMode.SYNC_TRANSLATION)
+            and not self._doctor_allows_translate_action()
+        ):
+            message_box_information(
+                self,
+                "请先运行环境检查",
+                "继续耐久同步任务会重新校验项目与源文件；"
+                "请先完成环境检查并处理阻塞项。",
+            )
+            return
+        if self._litellm_install_blocks_mode(WorkMode.SYNC_TRANSLATION):
+            message_box_information(
+                self,
+                "LiteLLM 正在安装",
+                "请等待 LiteLLM 后台安装完成后再继续同步任务。",
+            )
+            return
+
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        workflow = SyncTranslationWorkflow.resume_latest()
+        self._begin_translation_workflow(
+            workflow,
+            log_heading="正在查询 / 继续耐久同步任务",
+            status_tab=1,
+        )
+
+    def _on_cancel_durable_sync(self) -> None:
+        """Explicitly cancel a non-terminal durable run (never implicit on stop)."""
+        if self._current_work_mode() != WorkMode.SYNC_TRANSLATION:
+            message_box_information(self, "当前模式不支持", "请先切换到同步翻译。")
+            return
+        page = getattr(self, "sync_translation_page", None)
+        run_id = page.run_id() if page is not None else ""
+        if not run_id or page.current_run_is_terminal():
+            message_box_information(
+                self,
+                "没有可取消的任务",
+                "当前没有正在运行的耐久同步任务，或任务已经结束。",
+            )
+            return
+        if self._task_running or self._cli_runner_is_active():
+            message_box_information(
+                self,
+                "请先停止本机任务",
+                "取消运行不会中断本机进程；请先点击「停止」，再执行「取消任务」。",
+            )
+            return
+
+        reply = message_box_question(
+            self,
+            "确认取消同步任务",
+            f"将请求执行器停止后续调度，运行 ID：{run_id}。\n\n"
+            "已经完成的结果仍会保留；取消不会回滚已写回内容，"
+            "也不会自动重试结果未知（outcome_unknown）的请求。是否继续？",
+            yes_text="确认取消",
+            no_text="返回",
+            default="no",
+        )
+        if reply != "yes":
+            return
+
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        workflow = SyncTranslationWorkflow.cancel_run(run_id)
+        self._begin_translation_workflow(
+            workflow,
+            log_heading="正在取消同步任务",
             status_tab=1,
         )
 
@@ -12771,14 +12964,21 @@ class MainWindow(QMainWindow):
             page = getattr(self, "revision_page", None)
             if page is not None:
                 page.set_proposal_stage_result(workflow.stage_result)
-        if is_sync_translation_workflow and step_key == "preview" and exit_code == 0:
-            preview_count_match = re.search(r"^Preview files:\s*(\d+)\s*$", step_output, re.MULTILINE)
-            preview_count = int(preview_count_match.group(1)) if preview_count_match else 0
-            self.sync_translation_page.set_preview_ready(
-                self._workflow.manifest_path if preview_count > 0 else ""
-            )
-        elif is_sync_translation_workflow and step_key == "apply" and update.status == "done":
-            self.sync_translation_page.clear_preview()
+        if is_sync_translation_workflow:
+            snapshot = getattr(workflow, "run_snapshot", None)
+            if isinstance(snapshot, dict) and snapshot:
+                self.sync_translation_page.set_run_snapshot(snapshot)
+            if not update.should_continue:
+                if step_key == "check":
+                    if bool(getattr(workflow, "preview_ready", False)):
+                        self.sync_translation_page.set_durable_preview(
+                            getattr(workflow, "run_id", ""),
+                            check_manifest=getattr(workflow, "check_manifest", ""),
+                        )
+                    else:
+                        self.sync_translation_page.clear_preview()
+                elif step_key == "apply" and update.status == "done":
+                    self.sync_translation_page.clear_preview()
 
         if restore_latest_manifest_path and not update.should_continue:
             try:
@@ -12830,6 +13030,7 @@ class MainWindow(QMainWindow):
             not is_project_analysis_workflow
             and not is_revision_corpus_export_workflow
             and not is_revision_proposal_workflow
+            and not is_sync_translation_workflow
             and not update.should_continue
             and update.status == "done"
         )
@@ -12864,6 +13065,7 @@ class MainWindow(QMainWindow):
         if (
             not finish_spec.supports_translation_writeback
             and finish_spec.mode not in self._revision_writeback_modes()
+            and not is_sync_translation_workflow
         ):
             if finish_spec.mode == WorkMode.KEYWORD_EXTRACTION and keyword_export_completed:
                 self._refresh_writeback_from_latest_manifest()
@@ -12892,7 +13094,7 @@ class MainWindow(QMainWindow):
             message = (
                 update.heading
                 if is_project_analysis_workflow or is_revision_corpus_export_workflow
-                or is_revision_proposal_workflow
+                or is_revision_proposal_workflow or is_sync_translation_workflow
                 else "翻译任务流程完成。"
             )
             self.statusBar().showMessage(message, 6000)

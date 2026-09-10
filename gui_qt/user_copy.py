@@ -895,3 +895,130 @@ MODEL_ROUTING_RUNTIME_COPY = {
     "invalid_title": "模型路由配置无效",
     "invalid_message": "model_routing 校验失败，未保存配置。请修正新配置或按迁移文档回滚；运行时不会退回旧模型。",
 }
+
+
+# Durable Sync run GUI copy (#348 P3). The GUI only shows public snapshot
+# fields; it never reads the run's SQLite state or invents retry/freshness
+# semantics. Command-reference labels stay in ``DURABLE_SYNC_COPY`` above.
+DURABLE_SYNC_RUN_COPY = {
+    "run_label": "运行 ID",
+    "run_dir_label": "运行目录",
+    "check_manifest_label": "检查清单",
+    "status_label": "运行状态",
+    "status_unknown": "未知",
+    "status_labels": {
+        "planned": "已创建，等待执行",
+        "running": "执行中",
+        "cancel_requested": "正在取消",
+        "completed": "已完成",
+        "completed_with_errors": "完成但有未解决项",
+        "failed": "失败",
+        "cancelled": "已取消",
+    },
+    "next_action_label": "下一步",
+    "next_action_labels": {
+        "resume": "继续运行",
+        "check": "生成检查预览",
+        "derive": "派生新运行",
+        "wait_cancel": "等待取消完成",
+    },
+    "outcome_unknown_fact": "结果未知请求（可能已计费，重试需显式确认）",
+    "cancel_requested_fact": "已请求取消，执行器会在安全点停止调度",
+    "anomaly_heading": "同步任务状态异常",
+    "anomaly_message": "没有正在等待完成的步骤。",
+    "interrupted_heading": "本机同步命令已中断",
+    "interrupted_locate_heading": "本机同步命令已中断，正在定位运行记录",
+    "interrupted_locate_message": (
+        "本机进程已停止；正在查询最近一次耐久运行，随后可继续或取消。"
+    ),
+    "recover_located_heading": "已定位最近一次同步运行",
+    "recover_located_message": (
+        "本机进程已停止，耐久运行仍可继续或取消；"
+        "请选择「继续 / 查看最新任务」或「取消任务」。"
+    ),
+    "recover_located_terminal_message": (
+        "最近一次运行已经结束；点击「继续 / 查看最新任务」可生成检查预览。"
+    ),
+    "recover_located_derive_message": (
+        "最近一次运行存在未解决或结果未知项；如需继续，请使用「派生新运行」"
+        "（默认排除结果未知条目，不重复调用）。"
+    ),
+    "worker_stopped_message": (
+        "本机进程已停止，但耐久运行不会被隐式取消；"
+        "已提交的请求不会重发，可稍后用「继续 / 查看最新任务」恢复。"
+    ),
+    "command_interrupted_message": "本机命令已中断；可稍后重试，已持久化的运行记录不受影响。",
+    "log_hint_fact": "原始输出已保留在诊断与运行日志中",
+    "error_fallback": "同步命令执行失败（{code}），请查看诊断与运行日志。",
+    "error_messages": {
+        "SYNC_RUN_NOT_FOUND": "没有找到耐久同步运行记录；请先启动一次同步翻译。",
+        "SYNC_RUN_BUSY": "该运行正在被另一个进程使用；请等待其结束后重试。",
+        "SYNC_RUN_STORAGE_ERROR": "运行存储校验失败；请查看诊断日志，必要时从备份恢复。",
+        "SYNC_RUN_ARTIFACT_MISSING": "运行制品缺失；请重新生成检查预览。",
+        "SYNC_RUN_ARTIFACT_STALE": "运行制品已变化；请重新生成检查预览。",
+        "SYNC_RUN_NOT_TERMINAL": "运行尚未结束，暂时不能生成检查预览；请先继续运行。",
+        "SYNC_RUN_NO_WORK": "当前没有待翻译内容，无需启动同步任务。",
+        "SYNC_RUN_FRESHNESS_MISMATCH": (
+            "项目、源文件或配置已变化，不能继续复用该运行；请重新启动同步翻译。"
+        ),
+        "INVALID_RUN_SELECTOR": "运行选择参数无效；请重新从「继续 / 查看最新任务」进入。",
+        "STALE_CHECK": "上次检查已失效；请重新生成检查预览后再写回。",
+        "UNSAFE_CHECK_STATUS": "检查未通过，不能写回；请先处理阻塞项。",
+    },
+    "no_run_heading": "没有可继续的同步任务",
+    "failed_heading": "同步任务失败",
+    "run_failed_message": "运行已失败；请查看诊断日志与公开制品，修正后可派生新运行。",
+    "started": "同步任务已启动",
+    "resumed": "同步任务已恢复",
+    "terminal_heading": "同步执行已完成",
+    "terminal_message": "执行器已停止调度；正在离线生成检查预览，不会修改项目脚本。",
+    "cancelled_heading": "同步任务已取消",
+    "cancelled_message": "运行已取消；已完成的结果仍保留在运行记录中。",
+    "cancel_wait_heading": "正在等待取消完成",
+    "cancel_wait_message": "已请求取消；执行器会在安全点停止，请稍后查询最新状态。",
+    "run_pending_message": "运行尚未结束；可稍后查询最新状态或继续运行。",
+    "recover_heading": "正在恢复同步任务",
+    "recover_message": "将从已持久化的进度继续，不会重发已提交的请求。",
+    "completed_heading": "同步任务已完成",
+    "completed_message": "运行已结束；点击「继续 / 查看最新任务」可生成检查预览。",
+    "derive_heading": "同步任务已结束，可派生新运行",
+    "derive_message": (
+        "该运行存在未解决项或未知结果，默认不能直接继续；"
+        "请确认重复调用/计费风险，或在排除 unknown 条目后派生新运行。"
+    ),
+    "pending_heading": "同步任务仍在运行",
+    "pending_message": "可稍后查询最新状态；关闭本机进程不会取消该运行。",
+    "cancel_done_message": "取消请求已完成；已完成的结果仍保留在运行记录中。",
+    "cancel_missed_heading": "取消未生效，运行已经结束",
+    "cancel_missed_message": (
+        "运行在取消生效前已经结束；已完成的结果仍保留，可继续生成检查预览。"
+    ),
+    "cancel_unknown_message": "取消请求已发送；请稍后查询最新状态确认结果。",
+    "derive_button": "派生新运行",
+    "derive_button_tooltip": "基于该运行已成功且仍通过校验的结果创建新的耐久运行。",
+    "derive_confirm_title": "派生新的同步运行",
+    "derive_confirm_body": (
+        "将从运行 {run_id} 已成功且仍通过校验的结果继续，创建新的耐久运行；"
+        "原运行记录不会被修改。是否继续？"
+    ),
+    "derive_unknown_title": "选择派生方式",
+    "derive_unknown_body": (
+        "运行 {run_id} 存在 {count} 个结果未知请求。"
+        "它们是否已被服务端执行无法确定，重试可能导致重复调用与计费。"
+    ),
+    "derive_exclude_option": "排除结果未知条目（不重复调用，推荐）",
+    "derive_retry_option": "重试结果未知条目（确认可能重复调用/计费）",
+    "derive_dialog_hint": "派生只会复用已确认成功、且仍通过校验的结果。",
+    "derived_heading": "已派生新的同步运行",
+    "derived_message": "新运行已结束；正在离线生成检查预览。",
+    "check_ready_heading": "检查通过，已生成可写回预览",
+    "check_ready_message": (
+        "结果、结构与质量门禁已通过检查；项目脚本尚未修改，请审查后确认写回。"
+    ),
+    "check_blocked_heading": "检查未通过，不能写回",
+    "check_blocked_message": "写回门禁已拒绝该结果；请处理阻塞项后重新生成检查预览。",
+    "applied_heading": "同步翻译已写回",
+    "applied_message": "预览已通过源快照与绑定校验，并原子写入项目脚本。",
+    "already_applied_heading": "该预览已写回过",
+    "already_applied_message": "重复写回不会重复修改文件或计入用量。",
+}
