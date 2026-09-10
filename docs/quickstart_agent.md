@@ -88,6 +88,22 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 `--retry-unknown --ack-duplicate-billing-risk`，或当前 scope 已排除 unknown ID 后使用
 `--exclude-unknown` 才会继续。
 
+模型配置（`model_routing`）也提供离线机器接口，不需要 API Key 或项目文件；查询与校验只读，
+`set-*` 命令经共享 config store 原子写回并保留未知字段：
+
+```powershell
+python gemini_translate_batch.py profiles-show --output json
+python gemini_translate_batch.py profiles-validate --output json
+python gemini_translate_batch.py profiles-set-default --profile <PROFILE_ID> --strategy sync --output json
+python gemini_translate_batch.py profiles-set-route --stage final_review --profile <PROFILE_ID> --strategy gemini_batch --output json
+python gemini_translate_batch.py profiles-set-route --stage final_review --clear --output json
+```
+
+`profiles-show` 只输出 provider/profile 元数据与**凭据引用**，不会解析或回显密钥值；
+`profiles-validate` 校验失败返回 `error.code=MODEL_ROUTING_INVALID` 与 `details.issues`；
+配置不存在时返回 `MODEL_ROUTING_NOT_CONFIGURED`。这些命令与 GUI「设置 → 模型与 Provider」
+共用 `model_profiles_editor` 核心语义。
+
 注意：
 
 - `preview-revisions` 与 `final-review-create-revisions` 的 `status` 使用与 `check` 相同的

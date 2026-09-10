@@ -120,6 +120,29 @@ SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
 DURABLE_SYNC_COMMANDS = frozenset(
     {'sync-start', 'sync-resume', 'sync-status', 'sync-cancel', 'sync-derive'}
 )
+PROFILE_COMMANDS = frozenset(
+    {
+        'profiles-show',
+        'profiles-validate',
+        'profiles-set-default',
+        'profiles-set-route',
+        'profiles-probe',
+    }
+)
+def _profile_stage_choices():
+    """Derive stage choices from the shared editor core (no duplicated enum)."""
+
+    import model_profiles_editor as editor
+
+    return tuple(editor.STAGE_ORDER)
+
+
+def _profile_strategy_choices():
+    """Derive execution-strategy choices from the shared editor core."""
+
+    import model_profiles_editor as editor
+
+    return tuple(editor.STRATEGY_ORDER)
 MACHINE_OUTPUT_COMMANDS = frozenset(
     {
         'doctor',
@@ -156,6 +179,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'final-review-ingest-results',
         'final-review-create-revisions',
         *DURABLE_SYNC_COMMANDS,
+        *PROFILE_COMMANDS,
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset(
@@ -182,6 +206,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
     {
         'check',
         'apply',
+        *PROFILE_COMMANDS,
         'estimate-cost',
         'preview-revisions',
         'apply-revisions',
@@ -18504,6 +18529,101 @@ def build_arg_parser():
         help='Acknowledge duplicate execution/billing risk required by --retry-unknown.',
     )
 
+    profiles_show_parser = subparsers.add_parser(
+        'profiles-show',
+        help='Show credential-free ModelProfile/Provider/route configuration (model_routing).',
+    )
+    add_machine_output_argument(profiles_show_parser)
+
+    profiles_validate_parser = subparsers.add_parser(
+        'profiles-validate',
+        help='Validate the versioned model_routing section without writing files.',
+    )
+    add_machine_output_argument(profiles_validate_parser)
+
+    profiles_default_parser = subparsers.add_parser(
+        'profiles-set-default',
+        help='Set defaults.primary_profile_id and defaults.execution_strategy.',
+    )
+    add_machine_output_argument(profiles_default_parser)
+    profiles_default_parser.add_argument(
+        '--profile',
+        required=True,
+        metavar='PROFILE_ID',
+        help='ModelProfile id to use as the default primary profile.',
+    )
+    profiles_default_parser.add_argument(
+        '--strategy',
+        required=True,
+        choices=_profile_strategy_choices(),
+        help='Default execution strategy for stages without an explicit route.',
+    )
+
+    profiles_route_parser = subparsers.add_parser(
+        'profiles-set-route',
+        help='Set or clear one explicit task-stage route.',
+    )
+    add_machine_output_argument(profiles_route_parser)
+    profiles_route_parser.add_argument(
+        '--stage',
+        required=True,
+        choices=_profile_stage_choices(),
+        help='Task stage to override.',
+    )
+    profiles_route_parser.add_argument(
+        '--profile',
+        default='',
+        metavar='PROFILE_ID',
+        help='ModelProfile id for the stage route.',
+    )
+    profiles_route_parser.add_argument(
+        '--strategy',
+        default='',
+        choices=_profile_strategy_choices(),
+        help='Execution strategy for the stage route.',
+    )
+    profiles_route_parser.add_argument(
+        '--clear',
+        action='store_true',
+        help='Remove the explicit route so the stage inherits the defaults.',
+    )
+
+    profiles_probe_parser = subparsers.add_parser(
+        'profiles-probe',
+        help=(
+            'Issue one bounded, billable request and report per-capability results '
+            'for one ModelProfile.'
+        ),
+    )
+    add_machine_output_argument(profiles_probe_parser)
+    profiles_probe_parser.add_argument(
+        '--profile',
+        required=True,
+        metavar='PROFILE_ID',
+        help='ModelProfile id to probe.',
+    )
+    profiles_probe_parser.add_argument(
+        '--acknowledge-billable-request',
+        required=True,
+        metavar='TOKEN',
+        help=(
+            'Must equal I_ACKNOWLEDGE_ONE_BILLABLE_PROVIDER_REQUEST; '
+            'probing sends exactly one real provider request.'
+        ),
+    )
+    profiles_probe_parser.add_argument(
+        '--timeout-seconds',
+        type=int,
+        default=30,
+        help='Single request timeout in seconds (1-120).',
+    )
+    profiles_probe_parser.add_argument(
+        '--max-output-tokens',
+        type=int,
+        default=64,
+        help='Response token cap for the probe request (1-256).',
+    )
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     add_machine_output_argument(submit_parser)
     submit_parser.add_argument(
@@ -19220,6 +19340,213 @@ def run_durable_sync_command(args):
     return snapshot
 
 
+def _translator_config_path():
+    from pathlib import Path
+
+    return Path(legacy.TRANSLATOR_CONFIG)
+
+
+def _read_model_routing_config():
+    """Return (config object, detached section); CLI never loads runtime settings."""
+
+    import copy as _copy
+
+    import config_store
+
+    config = config_store.read_json_object(
+        _translator_config_path(),
+        'translator config',
+    )
+    section = config.get('model_routing')
+    if section is None:
+        raise cli_contract.MachineContractError(
+            'model_routing is not configured in translator_config.json.',
+            code_name='MODEL_ROUTING_NOT_CONFIGURED',
+            suggested_action='run_model_config_migration',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        )
+    if not isinstance(section, dict):
+        raise cli_contract.MachineContractError(
+            'model_routing must be a JSON object.',
+            code_name='MODEL_ROUTING_INVALID',
+            suggested_action='fix_translator_config',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+        )
+    return config, _copy.deepcopy(section)
+
+
+def _require_valid_routing_section(section, command):
+    import model_profiles_editor as profiles_editor
+
+    issues = profiles_editor.section_issues(section)
+    if issues:
+        raise cli_contract.MachineContractError(
+            f'model_routing has {len(issues)} validation issue(s).',
+            code_name='MODEL_ROUTING_INVALID',
+            suggested_action='fix_translator_config',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            details={'command': command, 'issues': [dict(issue) for issue in issues[:20]]},
+        )
+    return ()
+
+
+def _write_model_routing_section(config, section, *, changed, summary=None):
+    import config_store
+
+    _require_valid_routing_section(section, 'profiles-write')
+    if changed:
+        updated = dict(config)
+        updated['model_routing'] = section
+        config_store.write_json_object(_translator_config_path(), updated)
+    payload = {'changed': bool(changed), **dict(summary or {})}
+    return payload
+
+
+def run_profile_command(args):
+    """Run one ModelProfile configuration command (offline, no provider calls)."""
+
+    import model_profiles_editor as profiles_editor
+
+    command = str(args.command or '')
+    config, section = _read_model_routing_config()
+
+    if command == 'profiles-show':
+        issues = profiles_editor.section_issues(section)
+        view = profiles_editor.editor_view(section)
+        payload = {
+            'status': 'invalid' if issues else 'ready',
+            **view,
+            'issues': [dict(issue) for issue in issues],
+        }
+        print(f"ModelProfiles: {len(payload['profiles'])}")
+        for provider in payload['providers']:
+            print(
+                f"- provider {provider['id']}: {provider['adapter']}/"
+                f"{provider['provider'] or '?'} "
+                f"credential_ref={provider['credential_ref']['kind']}"
+            )
+        for profile in payload['profiles']:
+            print(
+                f"- profile {profile['id']}: {profile['model'] or '(unset)'} "
+                f"strategies={','.join(profile['strategies']) or 'none'}"
+            )
+        return payload
+
+    if command == 'profiles-validate':
+        _require_valid_routing_section(section, command)
+        print('model_routing is valid.')
+        return {'issues': []}
+
+    if command == 'profiles-probe':
+        import model_capability_probe as capability_probe
+
+        if str(getattr(args, 'acknowledge_billable_request', '') or '') != (
+            capability_probe.BILLABLE_ACK_TOKEN
+        ):
+            raise cli_contract.MachineContractError(
+                'Probing sends one real provider request and needs explicit acknowledgement.',
+                code_name='BILLABLE_ACK_REQUIRED',
+                suggested_action='pass_billable_acknowledgement',
+                semantic_exit_code=cli_contract.EXIT_USAGE,
+            )
+        try:
+            report = capability_probe.probe_profile(
+                section,
+                str(args.profile),
+                acknowledge=capability_probe.BILLABLE_ACK_TOKEN,
+                timeout_seconds=int(getattr(args, 'timeout_seconds', 30) or 30),
+                max_output_tokens=int(getattr(args, 'max_output_tokens', 64) or 64),
+            )
+        except profiles_editor.ModelProfilesEditorError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code,
+                suggested_action='fix_translator_config',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                details=dict(exc.details),
+            ) from exc
+        print(f"Probe {report['status']}: profile={report['profile_id']} "
+              f"model={report['model']} requests={report['requests']}")
+        for item in report['capabilities']:
+            detail = f" ({item['detail']})" if item["detail"] else ""
+            print(f"- {item['name']}: {item['status']}{detail}")
+        return report
+
+    if command == 'profiles-set-default':
+        try:
+            updated = profiles_editor.set_defaults(
+                section,
+                primary_profile_id=str(args.profile),
+                execution_strategy=str(args.strategy),
+            )
+        except profiles_editor.ModelProfilesEditorError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code,
+                suggested_action='fix_translator_config',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                details=dict(exc.details),
+            ) from exc
+        payload = _write_model_routing_section(
+            config,
+            updated,
+            changed=updated != section,
+            summary={'defaults': dict(updated.get('defaults') or {})},
+        )
+        print(
+            'Defaults: '
+            f"{payload['defaults'].get('primary_profile_id')} "
+            f"({payload['defaults'].get('execution_strategy')}) "
+            f"changed={payload['changed']}"
+        )
+        return payload
+
+    if command == 'profiles-set-route':
+        clear = bool(getattr(args, 'clear', False))
+        profile_id = str(getattr(args, 'profile', '') or '')
+        strategy = str(getattr(args, 'strategy', '') or '')
+        if clear and (profile_id or strategy):
+            raise cli_contract.MachineContractError(
+                '--clear cannot be combined with --profile or --strategy.',
+                code_name='INVALID_ROUTE_ARGUMENTS',
+                suggested_action='pass_clear_or_route_values',
+                semantic_exit_code=cli_contract.EXIT_USAGE,
+            )
+        if not clear and (not profile_id or not strategy):
+            raise cli_contract.MachineContractError(
+                'Setting a route requires both --profile and --strategy.',
+                code_name='INVALID_ROUTE_ARGUMENTS',
+                suggested_action='pass_profile_and_strategy',
+                semantic_exit_code=cli_contract.EXIT_USAGE,
+            )
+        try:
+            updated = profiles_editor.set_route(
+                section,
+                str(args.stage),
+                enabled=not clear,
+                profile_id=profile_id,
+                strategy=strategy,
+            )
+        except profiles_editor.ModelProfilesEditorError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code,
+                suggested_action='fix_translator_config',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                details=dict(exc.details),
+            ) from exc
+        payload = _write_model_routing_section(
+            config,
+            updated,
+            changed=updated != section,
+            summary={'routes': dict(updated.get('routes') or {})},
+        )
+        print(f"Route {args.stage}: changed={payload['changed']}")
+        return payload
+
+    raise SystemExit(f'Unknown ModelProfile command: {command}')
+
+
 def dispatch_command(parser, args):
     command = args.command
     if command is None:
@@ -19255,6 +19582,9 @@ def dispatch_command(parser, args):
 
     if command in DURABLE_SYNC_COMMANDS:
         return run_durable_sync_command(args)
+
+    if command in PROFILE_COMMANDS:
+        return run_profile_command(args)
 
     if command == 'doctor':
         # doctor is read-only: never persist auto-corrected game_root.
@@ -20081,6 +20411,16 @@ def _load_machine_manifest(command, value, args):
 
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
+
+    if command in PROFILE_COMMANDS:
+        payload = dict(value or {})
+        status = str(payload.pop('status', 'completed'))
+        return cli_contract.success_envelope(
+            command,
+            status=status,
+            result=payload,
+            artifacts={},
+        )
 
     if command in DURABLE_SYNC_COMMANDS:
         snapshot = dict(value or {})

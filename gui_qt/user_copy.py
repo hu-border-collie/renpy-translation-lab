@@ -1048,3 +1048,134 @@ DURABLE_SYNC_RUN_COPY = {
     "already_applied_heading": "该预览已写回过",
     "already_applied_message": "重复写回不会重复修改文件或计入用量。",
 }
+
+
+# Settings · Model Profiles page copy (#348 P3). Credential references only.
+MODEL_PROFILES_PAGE_COPY = {
+    "hint": (
+        "统一的模型与 Provider 配置：一个 Provider 可被多个 ModelProfile 复用，"
+        "凭据只保存引用，不写入配置文件。保存前会用 schema-v1 合同校验。"
+    ),
+    "legacy_hint": (
+        "当前项目仍是旧模型配置。可点击「创建 Model Routing 配置」从空白开始，"
+        "或先按迁移文档把旧 sync.* / batch.model 迁移为 model_routing；"
+        "迁移前运行行为不会改变。"
+    ),
+    "invalid_hint": "model_routing 配置无效，已禁用编辑：{reason}。请修正或回滚后再编辑。",
+    "profiles_group": "Model Profiles",
+    "providers_group": "Provider 连接",
+    "defaults_group": "默认主模型与执行方式",
+    "routes_group": "任务阶段路由",
+    "capabilities_group": "能力覆盖（高级）",
+    "capability_risk": (
+        "覆盖值会直接改变运行时能力判定，可能让不受支持的组合通过预检；"
+        "仅在确认 Provider 实际能力后使用。"
+    ),
+    "diagnostics_group": "诊断",
+    "create_button": "创建 Model Routing 配置",
+    "remove_button": "移除 Model Routing 配置",
+    "remove_tooltip": "保存后删除 model_routing，运行时回退到旧配置；可用「重新加载」撤销。",
+    "remove_pending": "已标记移除 model_routing；保存设置后生效，重新加载可撤销。",
+    "add_profile": "新增",
+    "copy_profile": "复制",
+    "delete_profile": "删除",
+    "diagnose": "诊断",
+    "add_provider": "新增 Provider",
+    "delete_provider": "删除 Provider",
+    "strategy_labels": {
+        "sync": "同步",
+        "gemini_batch": "Gemini Batch",
+    },
+    "strategy_unavailable_suffix": "（不可用）",
+    "strategy_placeholder": "请选择执行方式",
+    "profile_placeholder": "请选择主模型",
+    "embedding_none_option": "（不绑定）",
+    "new_provider_label": "新 Provider",
+    "new_profile_label": "新 ModelProfile",
+    "create_provider_label": "Google Gemini",
+    "create_profile_label": "Gemini Main",
+    "models_placeholder": "逗号分隔；留空只使用主模型",
+    "context_labels": {
+        "context_limit_tokens": "上下文上限 tokens",
+        "context_budget_tokens": "上下文预算 tokens",
+    },
+    "validation_summary": "当前有 {count} 项校验问题，保存会被阻止。",
+    "diagnostics_empty": "没有可显示的诊断项。",
+    "probe_report_title": (
+        "能力探测：{profile}（{adapter}）状态 {status}，请求数 {requests}"
+    ),
+    "probe_capability_line": "- {name}：{status}{detail}",
+    "profile_label": "标签 / profile id",
+    "provider_label": "Provider",
+    "model_label": "模型",
+    "models_label": "轮换模型",
+    "embedding_label": "Embedding Profile",
+    "override_label": "覆盖",
+    "inherit_value": "跟随适配器",
+    "force_on": "强制支持",
+    "force_off": "强制不支持",
+    "default_profile_label": "主模型",
+    "default_strategy_label": "默认执行方式",
+    "route_stage_labels": {
+        "translation": "初译",
+        "keyword": "术语",
+        "revision": "订正",
+        "project_analysis": "项目分析",
+        "final_review": "最终审校",
+    },
+    "route_profile": "Profile",
+    "route_strategy": "执行方式",
+    "route_inherited": "跟随默认",
+    "provider_fields": {
+        "label": "标签",
+        "adapter": "适配器",
+        "upstream": "上游 Provider",
+        "base_url": "API Base",
+        "models_url": "模型目录 URL",
+        "credential_kind": "凭据引用",
+        "credential_name": "引用名称 / 环境变量",
+        "credential_env": "备用环境变量",
+    },
+    "credential_kind_labels": {
+        "api_keys_json": "本机 api_keys.json 槽位",
+        "keyring": "系统安全存储（keyring）",
+        "env": "环境变量引用",
+        "none": "无需鉴权",
+    },
+    "no_selection": "尚未选择 ModelProfile。",
+    "saved_hint": "修改会随「保存设置」一起写入 translator_config.json。",
+    "delete_profile_blocked": "该 ModelProfile 仍被默认值、阶段路由或 embedding 引用，不能删除。",
+    "delete_provider_blocked": "该 Provider 仍被 ModelProfile 使用，不能删除。",
+    "unknown_error": "操作失败：{reason}",
+    "probe_button": "测试所选 Profile 能力",
+    "probe_running": "正在测试能力…",
+    "probe_tooltip": (
+        "发起恰好 1 次真实 Provider 请求，分别报告鉴权、同步生成、结构化输出、"
+        "reasoning、usage，并显示 Batch/embedding 的声明能力；会产生少量费用。"
+    ),
+    "invalid_integer": "以下字段需要整数，已忽略对应覆盖值：{fields}。",
+    "no_supported_strategy": (
+        "该 ModelProfile 没有可用执行方式：请检查能力覆盖或 Provider 配置。"
+    ),
+    "probe_unavailable": "当前宿主不支持能力探测。",
+    "probe_failed": "能力探测失败：{code}。请查看诊断与运行日志。",
+    "reason_labels": {
+        "missing_provider": "该 ModelProfile 引用的 Provider 不存在",
+        "embedding_profile": "embedding profile 不能用于生成阶段",
+        "missing_gemini_adapter": "不是 Gemini 直连模型，无法使用 Gemini Batch",
+        "missing_remote_batch": "该模型未声明远程 Batch 能力",
+        "missing_sync_generation": "该模型未声明同步生成能力",
+        "unsupported_strategy": "不支持的执行方式",
+    },
+    "error_messages": {
+        "STRATEGY_NOT_SUPPORTED": "该模型不支持所选执行方式：{reason}。",
+        "UNKNOWN_PROFILE": "找不到该 ModelProfile；请刷新页面后重试。",
+        "UNKNOWN_PROVIDER": "找不到该 Provider；请先修复或重新选择引用。",
+        "PROFILE_IN_USE": "该 ModelProfile 仍被默认值、阶段路由或 embedding 引用，不能删除。",
+        "PROVIDER_IN_USE": "该 Provider 仍被 ModelProfile 使用，不能删除。",
+        "INVALID_STRATEGY": "执行方式无效；请选择同步或 Gemini Batch。",
+        "INVALID_CREDENTIAL_KIND": "凭据引用类型无效；请重新选择。",
+        "UNKNOWN_CAPABILITY_OVERRIDE": "包含不支持的能力覆盖项；请重置该覆盖。",
+        "MODEL_ROUTING_INVALID": "model_routing 校验失败；请先修复校验问题。",
+    },
+}

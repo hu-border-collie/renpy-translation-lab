@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
+import model_capability_probe as capability_probe
 from sync_run_contracts import ErrorCode, SyncRunError
 
 
@@ -42,6 +43,26 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "proposals.jsonl"]
         if command == "confirm-revision-proposals":
             return [command, "staged_selection.json", "--selection-file", "selection.json"]
+        if command == "profiles-probe":
+            return [
+                command,
+                "--profile",
+                "legacy-batch",
+                "--acknowledge-billable-request",
+                "I_ACKNOWLEDGE_ONE_BILLABLE_PROVIDER_REQUEST",
+            ]
+        if command == "profiles-set-default":
+            return [command, "--profile", "legacy-batch", "--strategy", "sync"]
+        if command == "profiles-set-route":
+            return [
+                command,
+                "--stage",
+                "translation",
+                "--profile",
+                "legacy-batch",
+                "--strategy",
+                "sync",
+            ]
         if command == "merge-keywords-to-glossary":
             return [command, "candidates.jsonl"]
         if command in {
@@ -2387,8 +2408,60 @@ class BatchCliContractTests(unittest.TestCase):
         for command in sorted(batch.OFFLINE_BATCH_COMMANDS):
             with self.subTest(command=command):
                 load_config = mock.Mock()
+                profile_section = {
+                    "schema_version": 1,
+                    "providers": {
+                        "gemini-direct": {
+                            "label": "Gemini",
+                            "adapter": "gemini",
+                            "provider": "gemini",
+                            "credential_ref": {
+                                "kind": "api_keys_json",
+                                "name": "api_keys",
+                                "env_name": "GEMINI_API_KEY",
+                            },
+                        }
+                    },
+                    "profiles": {
+                        "gemini-main": {
+                            "label": "Gemini Main",
+                            "provider_id": "gemini-direct",
+                            "model": "gemini-3.5-flash",
+                        }
+                    },
+                    "defaults": {
+                        "primary_profile_id": "gemini-main",
+                        "execution_strategy": "sync",
+                    },
+                    "routes": {},
+                }
                 with (
                     mock.patch.object(batch, "initialize_batch_logging"),
+                    mock.patch.object(
+                        batch,
+                        "_read_model_routing_config",
+                        return_value=(
+                            {"model_routing": profile_section},
+                            profile_section,
+                        ),
+                    ),
+                    mock.patch("config_store.write_json_object"),
+                    mock.patch.object(
+                        capability_probe,
+                        "default_generator",
+                        return_value=capability_probe.ProbeResponse(
+                            text=(
+                                '{"translations": [{"id": "probe-1", '
+                                '"translation": "ok"}]}'
+                            ),
+                            usage={"total_tokens": 1},
+                        ),
+                    ),
+                    mock.patch.object(
+                        capability_probe,
+                        "default_credential_loader",
+                        return_value="test-key",
+                    ),
                     mock.patch.object(batch.legacy, "load_config", load_config),
                     mock.patch.object(batch.legacy, "load_translator_settings"),
                     mock.patch.object(batch.legacy, "load_glossary"),
@@ -2644,6 +2717,36 @@ class BatchCliContractTests(unittest.TestCase):
                                 "reuse.json",
                                 "manifest.json",
                             ]
+                        elif command == "profiles-show":
+                            argv = ["profiles-show"]
+                        elif command == "profiles-validate":
+                            argv = ["profiles-validate"]
+                        elif command == "profiles-probe":
+                            argv = [
+                                "profiles-probe",
+                                "--profile",
+                                "gemini-main",
+                                "--acknowledge-billable-request",
+                                capability_probe.BILLABLE_ACK_TOKEN,
+                            ]
+                        elif command == "profiles-set-default":
+                            argv = [
+                                "profiles-set-default",
+                                "--profile",
+                                "gemini-main",
+                                "--strategy",
+                                "sync",
+                            ]
+                        elif command == "profiles-set-route":
+                            argv = [
+                                "profiles-set-route",
+                                "--stage",
+                                "translation",
+                                "--profile",
+                                "gemini-main",
+                                "--strategy",
+                                "sync",
+                            ]
                         else:
                             argv = [command, "manifest.json"]
                         exit_code = batch.main(argv)
@@ -2659,6 +2762,7 @@ class BatchCliContractTests(unittest.TestCase):
                     "build-reuse-candidates",
                     "import-reuse-decisions",
                     "export-reuse-results",
+                    *batch.PROFILE_COMMANDS,
                 }:
                     # Read-only export takes an early dispatch path that must
                     # not load (or rewrite) API-key / translator config.

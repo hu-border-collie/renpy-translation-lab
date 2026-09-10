@@ -46,7 +46,9 @@ class DurableProviderSmokeTests(unittest.TestCase):
             }
             store = SyncRunStore(values['--_worker-root'], values['--_worker-run'])
             owner = 'mock-abrupt-child'
-            store.acquire_lease(owner_token=owner, ttl_seconds=1)
+            # Long enough to survive a second-boundary crossing on slow CI
+            # runners; the test expires the lease explicitly below.
+            store.acquire_lease(owner_token=owner, ttl_seconds=60)
             attempt_id = store.prepare_attempt(request_id='req-1', owner_token=owner)
             store.dispatch_attempt(attempt_id=attempt_id, owner_token=owner)
             with store._tx() as conn:

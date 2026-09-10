@@ -21,7 +21,7 @@ from gui_qt.settings_schema import (
 
 
 class SettingsRegistryTests(unittest.TestCase):
-    def test_default_registry_has_the_ten_current_pages(self) -> None:
+    def test_default_registry_has_the_eleven_current_pages(self) -> None:
         registry = build_default_registry()
         self.assertEqual(
             registry.keys(),
@@ -30,6 +30,7 @@ class SettingsRegistryTests(unittest.TestCase):
                 "project",
                 "api_keys",
                 "models",
+                "profiles",
                 "litellm",
                 "extensions",
                 "context",
@@ -38,7 +39,7 @@ class SettingsRegistryTests(unittest.TestCase):
                 "advanced",
             ),
         )
-        self.assertEqual(len(SETTINGS_PAGE_SPECS), 10)
+        self.assertEqual(len(SETTINGS_PAGE_SPECS), 11)
 
     def test_legacy_tuple_is_derived_from_spec_objects(self) -> None:
         registry = build_default_registry()
@@ -74,6 +75,7 @@ class SettingsRegistryTests(unittest.TestCase):
                 "batch_model",
                 "batch_embedding_model",
                 "batch_thinking_level",
+                "model_routing",
                 "sync_backend",
                 "litellm_model",
                 "custom_litellm_providers",
@@ -123,6 +125,7 @@ class SettingsRegistryTests(unittest.TestCase):
                     "project",
                     "api_keys",
                     "models",
+                    "profiles",
                     "litellm",
                     "context",
                     "appearance",

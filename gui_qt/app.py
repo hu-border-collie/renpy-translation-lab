@@ -588,6 +588,7 @@ class MainWindow(QMainWindow):
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
+        self._profile_probe_output_lines: list[str] = []
         self._compare_variants_output_lines: list[str] = []
         self._compare_variants_names = ""
         self._compare_variants_temp_file = ""
@@ -3661,6 +3662,27 @@ class MainWindow(QMainWindow):
         self._apply_gemini_sync_model_gating()
         return page
 
+    def _create_profiles_settings_page(self):
+        """Build the Model Profiles Settings page (#348 P3)."""
+        from .settings.profiles_page import ProfilesSettingsPage
+
+        existing = self.__dict__.get("_profiles_settings_page")
+        if existing is not None:
+            return existing
+        page = ProfilesSettingsPage(self)
+        self.__dict__["_profiles_settings_page"] = page
+        bodies = getattr(self, "_settings_page_bodies", None)
+        if isinstance(bodies, dict):
+            bodies["settings_profiles"] = page.body
+        for surface in (page.widget, page.widget.viewport(), page.body):
+            if surface is not None:
+                self._style_themed_surface(surface)
+        return page
+
+    def _profiles_page(self):
+        """Return the built Model Profiles page without materializing it."""
+        return self.__dict__.get("_profiles_settings_page")
+
     def _create_litellm_settings_page(self):
         """Build the migrated LiteLLM Settings page and alias its widgets."""
         from .settings.litellm_page import LiteLLMSettingsPage, LITELLM_FORWARDED_ATTRS
@@ -3767,7 +3789,52 @@ class MainWindow(QMainWindow):
         if action_id == "install_litellm":
             self._on_install_litellm()
             return True
+        if action_id == "probe_profile":
+            return self._on_profile_probe(payload)
         return False
+
+    def _on_profile_probe(self, payload) -> bool:
+        """Confirm and run one bounded capability probe through the CLI."""
+        profile_id = str((payload or {}).get("profile_id") or "")
+        if not profile_id:
+            message_box_information(self, "无法测试", "请先选择一个 ModelProfile。")
+            return True
+        reply = message_box_question(
+            self,
+            "确认能力探测",
+            f"将对 ModelProfile「{profile_id}」发起恰好 1 次真实 Provider 请求，"
+            "可能产生少量费用。\n\n"
+            "探测分别报告鉴权、同步生成、结构化输出、reasoning 与 usage；"
+            "Batch/embedding 只显示声明能力，不会提交 Batch 任务。是否继续？",
+            yes_text="开始探测",
+            no_text="取消",
+            default="no",
+        )
+        if reply != "yes":
+            return True
+
+        from model_capability_probe import BILLABLE_ACK_TOKEN
+
+        self._profile_probe_output_lines = []
+        page = self._profiles_page()
+        if page is not None:
+            page.set_probe_running(True)
+        self._append_log(f"=== 正在探测 ModelProfile 能力：{profile_id} ===\n")
+        self._start_cli_command(
+            "profile_probe",
+            self.state.get_batch_script_path(),
+            [
+                "profiles-probe",
+                "--profile",
+                profile_id,
+                "--acknowledge-billable-request",
+                BILLABLE_ACK_TOKEN,
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        return True
 
     def _apply_litellm_host_gating(self, backend: str = "") -> None:
         """Cross-page gating that cannot live on the LiteLLM page."""
@@ -10047,6 +10114,9 @@ class MainWindow(QMainWindow):
         models_page = self._models_page()
         if models_page is not None:
             snapshot.update(models_page.collect())
+        profiles_page = self.__dict__.get("_profiles_settings_page")
+        if profiles_page is not None:
+            snapshot.update(profiles_page.collect())
         context_page = self._context_page()
         if context_page is not None:
             snapshot.update(context_page.collect())
@@ -12168,6 +12238,8 @@ class MainWindow(QMainWindow):
             pass
         elif self._active_command == "probe":
             self._probe_output_lines.append(text)
+        elif self._active_command == "profile_probe":
+            self._profile_probe_output_lines.append(text)
         elif self._active_command == "compare_variants":
             self._compare_variants_output_lines.append(text)
         elif self._active_command == "split":
@@ -12710,6 +12782,42 @@ class MainWindow(QMainWindow):
                     self.statusBar().showMessage("重新检查完成，当前禁止写回。", 6000)
                 else:
                     self.statusBar().showMessage("重新检查完成。", 6000)
+            return
+
+        if self._active_command == "profile_probe":
+            output = "\n".join(self._profile_probe_output_lines)
+            try:
+                envelope = cli_contract.parse_result_envelope(output)
+            except ValueError:
+                envelope = None
+            page = self._profiles_page()
+            if envelope is not None and envelope.get("ok"):
+                raw_result = envelope.get("result")
+                report = dict(raw_result) if isinstance(raw_result, Mapping) else {}
+                report.setdefault("status", str(envelope.get("status") or ""))
+                if page is not None:
+                    page.set_probe_report(report)
+                self.statusBar().showMessage(
+                    f"能力探测完成：{report.get('status') or 'unknown'}",
+                    6000,
+                )
+            else:
+                code = ""
+                if envelope is not None:
+                    error = envelope.get("error")
+                    if isinstance(error, Mapping):
+                        code = str(error.get("code") or "")
+                if page is not None:
+                    page.set_probe_error(code or f"exit_{exit_code}")
+                self.statusBar().showMessage(
+                    "能力探测失败，请查看诊断与运行日志。",
+                    8000,
+                )
+            if page is not None:
+                page.set_probe_running(False)
+            self._active_command = ""
+            self._set_task_running(False)
+            self._refresh_diagnostics_context()
             return
 
         if self._active_command == "probe":
@@ -13571,8 +13679,17 @@ class MainWindow(QMainWindow):
                 and self._settings_widget("sync_backend_combo") is None
                 and not self.__dict__.get("_advanced_setting_widgets")
                 and self._settings_widget("theme_combo") is None
+                and self.__dict__.get("_profiles_settings_page") is None
             ):
                 return
+
+            profiles_page = self.__dict__.get("_profiles_settings_page")
+            if profiles_page is not None and (
+                want is None or "profiles" in want
+            ):
+                profiles_page.load(
+                    {"model_routing": config.get("model_routing")}
+                )
 
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")
@@ -13923,6 +14040,9 @@ class MainWindow(QMainWindow):
             "theme": self._current_theme_preference_from_ui(),
         }
         collected["custom_litellm_providers"] = self._custom_provider_entries()
+        profiles_page = self.__dict__.get("_profiles_settings_page")
+        if profiles_page is not None:
+            collected.update(profiles_page.collect())
         collected.update(self._advanced_settings_values_from_ui())
         return collected
 
