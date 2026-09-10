@@ -1196,7 +1196,10 @@ class BatchRagRegressionTests(unittest.TestCase):
 
         load_config_mock.assert_not_called()
         logging_mock.assert_not_called()
-        load_settings.assert_called_once_with(persist_corrected_game_root=False)
+        load_settings.assert_called_once_with(
+            persist_corrected_game_root=False,
+            tolerate_routing_errors=True,
+        )
 
     def test_doctor_command_does_not_persist_corrected_game_root(self):
         with tempfile.TemporaryDirectory() as tmp:
