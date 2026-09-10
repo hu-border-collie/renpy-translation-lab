@@ -435,11 +435,12 @@ class SyncTranslationWorkflow:
         next_action = str(snapshot.get("next_action") or "").strip()
         status = run_status_of(snapshot)
         if self.operation == "recover":
-            message = (
-                DURABLE_SYNC_RUN_COPY["recover_located_terminal_message"]
-                if status in TERMINAL_RUN_STATUSES
-                else DURABLE_SYNC_RUN_COPY["recover_located_message"]
-            )
+            if next_action == "derive":
+                message = DURABLE_SYNC_RUN_COPY["recover_located_derive_message"]
+            elif status in TERMINAL_RUN_STATUSES:
+                message = DURABLE_SYNC_RUN_COPY["recover_located_terminal_message"]
+            else:
+                message = DURABLE_SYNC_RUN_COPY["recover_located_message"]
             return WorkflowUpdate(
                 status="warning",
                 heading=DURABLE_SYNC_RUN_COPY["recover_located_heading"],

@@ -380,6 +380,22 @@ class DurableSyncRecoveryTests(unittest.TestCase):
         self.assertEqual(workflow.run_id, RUN_ID)
         self.assertIsNone(workflow.current_step())
 
+    def test_recover_derives_wording_from_next_action(self) -> None:
+        workflow = SyncTranslationWorkflow.start_new()
+        workflow.complete_current_step(1, "")
+
+        update = workflow.complete_current_step(
+            0,
+            success_output(
+                "sync-status",
+                status="failed",
+                result=snapshot(status="failed", next_action="derive"),
+            ),
+        )
+
+        self.assertIn("派生", update.message)
+        self.assertNotIn("检查预览", update.message)
+
     def test_interruption_after_known_run_keeps_terminal_message(self) -> None:
         workflow = SyncTranslationWorkflow.resume_run(RUN_ID)
 

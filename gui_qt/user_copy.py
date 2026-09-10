@@ -939,6 +939,10 @@ DURABLE_SYNC_RUN_COPY = {
     "recover_located_terminal_message": (
         "最近一次运行已经结束；点击「继续 / 查看最新任务」可生成检查预览。"
     ),
+    "recover_located_derive_message": (
+        "最近一次运行存在未解决或结果未知项；如需继续，请使用「派生新运行」"
+        "（默认排除结果未知条目，不重复调用）。"
+    ),
     "worker_stopped_message": (
         "本机进程已停止，但耐久运行不会被隐式取消；"
         "已提交的请求不会重发，可稍后用「继续 / 查看最新任务」恢复。"

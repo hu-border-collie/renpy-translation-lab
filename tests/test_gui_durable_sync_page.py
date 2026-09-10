@@ -142,6 +142,22 @@ class DurableSyncPageWidgetTests(unittest.TestCase):
         self.page.set_task_running(False)
         self.assertTrue(self.page.cancel_btn.isEnabled())
 
+    def test_host_resume_gate_survives_internal_refreshes(self) -> None:
+        self.page.set_action_callbacks(
+            WorkbenchPageActions(resume=lambda: None)
+        )
+        self.page.set_resume_enabled(False)
+        self.assertFalse(self.page.resume_btn.isEnabled())
+
+        self.page.set_run_snapshot(snapshot(status="running"))
+        self.assertFalse(self.page.resume_btn.isEnabled())
+        self.page.set_task_running(True)
+        self.page.set_task_running(False)
+        self.assertFalse(self.page.resume_btn.isEnabled())
+
+        self.page.set_resume_enabled(True)
+        self.assertTrue(self.page.resume_btn.isEnabled())
+
     def test_derive_button_tracks_recovery_state(self) -> None:
         calls: list[str] = []
         self.page.set_action_callbacks(

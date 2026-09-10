@@ -47,6 +47,7 @@ class SyncTranslationPage(QFrame):
         self._run_status = ""
         self._run_next_action = ""
         self._run_snapshot: dict[str, Any] = {}
+        self._host_resume_enabled = True
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -289,7 +290,9 @@ class SyncTranslationPage(QFrame):
         self.start_btn.setText(text)
 
     def set_resume_enabled(self, enabled: bool) -> None:
-        self.resume_btn.setEnabled(bool(enabled) and not self._running)
+        """Host-owned gate (project readiness / environment check) for resume."""
+        self._host_resume_enabled = bool(enabled)
+        self._refresh_run_controls()
 
     def reset_project(self) -> None:
         self._run_id = ""
@@ -313,7 +316,9 @@ class SyncTranslationPage(QFrame):
             and self._actions.cancel is not None
         )
         self.resume_btn.setEnabled(
-            self._actions.resume is not None and not self._running
+            self._host_resume_enabled
+            and self._actions.resume is not None
+            and not self._running
         )
         self.derive_btn.setEnabled(
             self._actions.derive is not None and self.current_run_can_derive()
