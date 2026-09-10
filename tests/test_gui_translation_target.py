@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+
+import cli_contract
 from unittest import mock
 
 try:
@@ -168,11 +170,59 @@ class TranslationTargetAppTests(unittest.TestCase):
         self.window._append_log = lambda _text: None  # type: ignore[method-assign]
         self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
         self.window._show_workbench_log_drawer = lambda: None  # type: ignore[method-assign]
-        self.window._refresh_diagnostics_context = lambda: None  # type: ignore[method-assign]
+        self.window._refresh_diagnostics_context = lambda **_kwargs: None  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
+
+    @staticmethod
+    def _preflight_envelope(
+        *,
+        status: str = "ready",
+        risks: list[dict[str, str]] | None = None,
+    ) -> str:
+        payload = {
+            "strategy": "sync",
+            "profile": {"id": "legacy-batch", "model": "gemini-3.5-flash"},
+            "project": {"root": "C:/game/work"},
+            "counts": {
+                "files_with_pending": 1,
+                "pending_items": 12,
+                "chunks": 2,
+            },
+            "chunk_policy": {"max_items": 60, "max_chars": 18000},
+            "context_sources": {
+                "rag": False,
+                "source_index": False,
+                "story_memory": False,
+                "project_analysis_brief": False,
+                "local_context": {"before": 30, "after": 10},
+            },
+            "risks": risks or [],
+        }
+        return json.dumps(
+            cli_contract.success_envelope(
+                "translate-preflight",
+                status=status,
+                result=payload,
+            )
+        )
+
+    def _finish_preflight(self, *, confirmed: bool = True) -> None:
+        self.window._translate_preflight_output_lines = [self._preflight_envelope()]
+        with mock.patch(
+            "gui_qt.app.message_box_question",
+            return_value="yes" if confirmed else "no",
+        ):
+            self.window._on_finished(0)
+            QApplication.processEvents()
+
+    def test_preflight_envelope_hoists_status_out_of_result(self) -> None:
+        envelope = json.loads(self._preflight_envelope(status="blocked"))
+
+        self.assertEqual(envelope["status"], "blocked")
+        self.assertNotIn("status", envelope["result"])
 
     def test_routing_config_populates_both_selector_sections(self) -> None:
         self.window._set_work_mode(
@@ -202,46 +252,6 @@ class TranslationTargetAppTests(unittest.TestCase):
             self.window.sync_translation_page,
         )
 
-    def test_sync_start_passes_selected_profile(self) -> None:
-        self.window._set_work_mode(
-            WorkMode.SYNC_TRANSLATION,
-            refresh_manifest_writeback=False,
-        )
-
-        self.window._on_start_translation()
-
-        self.assertEqual(
-            self.runner.calls[0][1],
-            [
-                "sync-start",
-                "--profile",
-                "legacy-batch",
-                "--output",
-                "json",
-                "--non-interactive",
-            ],
-        )
-
-    def test_batch_build_passes_selected_profile(self) -> None:
-        self.window._set_work_mode(
-            WorkMode.BATCH_TRANSLATION,
-            refresh_manifest_writeback=False,
-        )
-
-        self.window._on_start_translation()
-
-        self.assertEqual(
-            self.runner.calls[0][1],
-            [
-                "build",
-                "--profile",
-                "legacy-batch",
-                "--output",
-                "json",
-                "--non-interactive",
-            ],
-        )
-
     def test_unsupported_profile_on_batch_page_blocks_start(self) -> None:
         self.window.state.load_translator_config = lambda: litellm_primary_config()  # type: ignore[method-assign]
         self.window._set_work_mode(
@@ -259,6 +269,7 @@ class TranslationTargetAppTests(unittest.TestCase):
 
         info.assert_called_once()
         self.assertEqual(self.runner.calls, [])
+        self.assertIsNone(self.window._pending_translation_start)
 
     def test_switching_to_sync_makes_litellm_profile_runnable(self) -> None:
         self.window.state.load_translator_config = lambda: litellm_primary_config()  # type: ignore[method-assign]
@@ -272,8 +283,10 @@ class TranslationTargetAppTests(unittest.TestCase):
         self.assertEqual(self.window._work_mode, WorkMode.SYNC_TRANSLATION)
         self.assertTrue(self.window._translation_target_is_runnable())
         self.window._on_start_translation()
+        self._finish_preflight()
+
         self.assertEqual(
-            self.runner.calls[0][1],
+            self.runner.calls[1][1],
             [
                 "sync-start",
                 "--profile",
@@ -301,6 +314,158 @@ class TranslationTargetAppTests(unittest.TestCase):
         self.assertIn("Gemini Batch", message)
         self.assertNotIn("legacy-batch", message)
 
+    def test_start_runs_preflight_before_the_workflow(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        self.window._on_start_translation()
+
+        self.assertEqual(
+            self.runner.calls[0][1],
+            [
+                "translate-preflight",
+                "--strategy",
+                "sync",
+                "--profile",
+                "legacy-batch",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        self._finish_preflight()
+        self.assertEqual(
+            self.runner.calls[1][1],
+            [
+                "sync-start",
+                "--profile",
+                "legacy-batch",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
+    def test_workflow_start_is_deferred_out_of_the_finished_callback(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._on_start_translation()
+        self.window._translate_preflight_output_lines = [self._preflight_envelope()]
+        with mock.patch("gui_qt.app.message_box_question", return_value="yes"):
+            self.window._on_finished(0)
+
+            # Starting the next QProcess from inside runner.finished is unsafe;
+            # the chain must resume on the next event-loop turn.
+            self.assertEqual(len(self.runner.calls), 1)
+
+            QApplication.processEvents()
+
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_rejected_preflight_start_clears_pending_and_warns(self) -> None:
+        class _RejectingRunner(_FakeRunner):
+            def run(self, script, args) -> bool:
+                super().run(script, args)
+                return False
+
+        self.window.runner = _RejectingRunner()
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        with mock.patch("gui_qt.app.message_box_information") as info:
+            self.window._on_start_translation()
+
+        self.assertEqual(len(self.window.runner.calls), 1)
+        self.assertIsNone(self.window._pending_translation_start)
+        self.assertIn("无法开始预检", info.call_args[0][1])
+
+    def test_blocked_preflight_never_starts_the_workflow(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._on_start_translation()
+        self.window._translate_preflight_output_lines = [
+            self._preflight_envelope(
+                status="blocked",
+                risks=[
+                    {
+                        "code": "CREDENTIAL_UNAVAILABLE",
+                        "severity": "error",
+                        "message": "missing",
+                    }
+                ],
+            )
+        ]
+        with mock.patch("gui_qt.app.message_box_information") as info:
+            self.window._on_finished(0)
+
+        info.assert_called_once()
+        message = info.call_args[0][2]
+        self.assertIn("错误", message)
+        self.assertIn("CREDENTIAL_UNAVAILABLE", message)
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIsNone(self.window._pending_translation_start)
+
+    def test_cancelled_preflight_never_starts_the_workflow(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        self.window._on_start_translation()
+
+        self._finish_preflight(confirmed=False)
+
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIsNone(self.window._pending_translation_start)
+
+    def test_sync_start_passes_selected_profile(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.SYNC_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        self.window._on_start_translation()
+        self._finish_preflight()
+
+        self.assertEqual(
+            self.runner.calls[1][1],
+            [
+                "sync-start",
+                "--profile",
+                "legacy-batch",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
+    def test_batch_build_passes_selected_profile(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+
+        self.window._on_start_translation()
+        self._finish_preflight()
+
+        self.assertEqual(
+            self.runner.calls[1][1],
+            [
+                "build",
+                "--profile",
+                "legacy-batch",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+
     def test_legacy_config_keeps_default_behavior_without_profile_flag(self) -> None:
         self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
         self.window._set_work_mode(
@@ -310,9 +475,10 @@ class TranslationTargetAppTests(unittest.TestCase):
 
         self.assertFalse(self.window._translation_routing_active)
         self.window._on_start_translation()
+        self._finish_preflight()
 
         self.assertEqual(
-            self.runner.calls[0][1],
+            self.runner.calls[1][1],
             ["sync-start", "--output", "json", "--non-interactive"],
         )
 

@@ -120,6 +120,7 @@ SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
 DURABLE_SYNC_COMMANDS = frozenset(
     {'sync-start', 'sync-resume', 'sync-status', 'sync-cancel', 'sync-derive'}
 )
+TRANSLATE_PREFLIGHT_COMMAND = 'translate-preflight'
 PROFILE_COMMANDS = frozenset(
     {
         'profiles-show',
@@ -180,6 +181,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'final-review-create-revisions',
         *DURABLE_SYNC_COMMANDS,
         *PROFILE_COMMANDS,
+        TRANSLATE_PREFLIGHT_COMMAND,
     }
 )
 EXPLICIT_TARGET_COMMANDS = frozenset(
@@ -207,6 +209,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'check',
         'apply',
         *PROFILE_COMMANDS,
+        TRANSLATE_PREFLIGHT_COMMAND,
         'estimate-cost',
         'preview-revisions',
         'apply-revisions',
@@ -362,6 +365,9 @@ _RAG_PRESERVED_TERMS_CACHE_KEY = None
 SOURCE_INDEX_ENABLED = False
 SOURCE_INDEX_STORE_DIR = ''
 _SOURCE_INDEX_STORE = None
+# Cache (config identity -> binding present) so per-chunk embedding calls do
+# not re-freeze the whole routing plan.
+_BATCH_EMBEDDING_BINDING_CACHE: tuple[object, bool] | None = None
 SOURCE_INDEX_SCHEMA_VERSION = 1
 SOURCE_INDEX_TOP_K = 4
 SOURCE_INDEX_MIN_SIMILARITY = 0.72
@@ -1934,9 +1940,49 @@ def build_rag_query_text(target_items, context_past):
     return '\n\n'.join(parts)
 
 
+def _require_batch_embedding_binding_for_retrieval():
+    """Refuse Batch embedding calls when v1 retrieval has no bound profile."""
+
+    global _BATCH_EMBEDDING_BINDING_CACHE
+
+    if not (RAG_ENABLED or SOURCE_INDEX_ENABLED):
+        return
+    section = legacy.MODEL_ROUTING_CONFIG
+    if not isinstance(section, dict):
+        return
+    cached = _BATCH_EMBEDDING_BINDING_CACHE
+    if cached is None or cached[0] is not section:
+        try:
+            plan = freeze_runtime_routing_plan(
+                execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+            )
+            route = plan.routes[model_profile.STAGE_TRANSLATION]
+            profile = model_profile.profile_for_route(plan, route)
+            bound = bool(
+                str(getattr(profile, 'embedding_profile_id', '') or '').strip()
+            )
+        except Exception as exc:
+            _BATCH_EMBEDDING_BINDING_CACHE = (section, False)
+            raise model_profile.ModelRoutingConfigError(
+                'Cannot resolve the Batch routing plan while RAG / Source Index '
+                'is enabled; fix model_routing or disable retrieval before '
+                'embedding.'
+            ) from exc
+        _BATCH_EMBEDDING_BINDING_CACHE = (section, bound)
+        cached = _BATCH_EMBEDDING_BINDING_CACHE
+    if not cached[1]:
+        raise model_profile.ModelRoutingConfigError(
+            'Batch RAG / Source Index is enabled but the selected ModelProfile '
+            'has no embedding profile binding; bind one or disable retrieval.'
+        )
+
+
 def embed_texts(contents, task_type):
+    """Batch-side embedding entry; Sync has its own translator_runtime entry."""
+
     if not contents:
         return []
+    _require_batch_embedding_binding_for_retrieval()
     settings = current_batch_embedding_settings()
     api_key_count = len(getattr(legacy, 'API_KEYS', []) or [])
     key_attempts = (
@@ -17819,6 +17865,30 @@ def build_arg_parser():
         ),
     )
 
+    preflight_parser = subparsers.add_parser(
+        'translate-preflight',
+        help=(
+            'Scan the project and report the shared TranslationPlan, context '
+            'sources and risks without any provider or embedding call.'
+        ),
+    )
+    add_machine_output_argument(preflight_parser)
+    preflight_parser.add_argument(
+        '--strategy',
+        default='',
+        choices=_profile_strategy_choices(),
+        help=(
+            'Execution strategy to preflight; defaults to '
+            'model_routing.defaults.execution_strategy (legacy default: gemini_batch).'
+        ),
+    )
+    preflight_parser.add_argument(
+        '--profile',
+        default='',
+        metavar='PROFILE_ID',
+        help='Pin this preflight to one configured ModelProfile.',
+    )
+
     keyword_build_parser = subparsers.add_parser(
         'build-keywords',
         help='Build a keyword extraction batch package without changing translation files.',
@@ -19230,6 +19300,18 @@ def _durable_sync_production_service(*, require_provider):
     return service, context
 
 
+def _emit_durable_run_id(run_id):
+    """Emit the run identity as a stable stderr marker before execution ends.
+
+    stdout stays reserved for the machine result envelope. ``CliRunner`` mirrors
+    stderr lines onto its combined ``line_ready`` signal, so the GUI can bind
+    live ``sync-status --latest`` polls to the new run without parsing human
+    prose or reading the durable store.
+    """
+
+    print(f"RTL_DURABLE_RUN_ID={run_id}", file=sys.stderr, flush=True)
+
+
 def _print_durable_sync_snapshot(snapshot):
     progress = dict((snapshot or {}).get('progress') or {})
     items = dict(progress.get('items') or {})
@@ -19291,6 +19373,7 @@ def run_durable_sync_command(args):
             snapshot = service.start(
                 context.plan_build,
                 client_token=getattr(args, 'client_token', '') or None,
+                on_run_created=_emit_durable_run_id,
             )
     elif command == 'sync-resume':
         run_id = str(args.run)
@@ -19304,6 +19387,7 @@ def run_durable_sync_command(args):
             service, _context = _durable_sync_production_service(
                 require_provider=True
             )
+        _emit_durable_run_id(run_id)
         snapshot = service.resume(run_id)
     elif command == 'sync-cancel':
         class _NoDispatchBackend:
@@ -19333,6 +19417,7 @@ def run_durable_sync_command(args):
                 getattr(args, 'ack_duplicate_billing_risk', False)
             ),
             exclude_unknown=bool(getattr(args, 'exclude_unknown', False)),
+            on_run_created=_emit_durable_run_id,
         )
     else:
         raise SystemExit(f'Unknown durable Sync command: {command}')
@@ -19545,6 +19630,270 @@ def run_profile_command(args):
         return payload
 
     raise SystemExit(f'Unknown ModelProfile command: {command}')
+
+
+def _preflight_risk(code, severity, message):
+    return {
+        'code': str(code),
+        'severity': str(severity),
+        'message': str(message),
+    }
+
+
+def run_translate_preflight(args):
+    """Run the preflight under the profile selected on the command line."""
+
+    from model_routing_reader import (
+        active_primary_profile_override,
+        primary_profile_override,
+    )
+
+    profile_id = str(getattr(args, 'profile', '') or '').strip()
+    if not profile_id or active_primary_profile_override() == profile_id:
+        return _run_translate_preflight(args)
+    with primary_profile_override(profile_id):
+        return _run_translate_preflight(args)
+
+
+def _run_translate_preflight(args):
+    """Scan the project and describe the shared plan without provider calls."""
+
+    import os
+
+    from model_capability_probe import default_credential_loader
+    from project_context_settings import resolve_batch_context_flags
+
+    strategy = str(getattr(args, 'strategy', '') or '').strip()
+    section = legacy.MODEL_ROUTING_CONFIG
+    if not strategy and isinstance(section, dict):
+        defaults = section.get('defaults')
+        defaults = dict(defaults) if isinstance(defaults, dict) else {}
+        strategy = str(defaults.get('execution_strategy') or '').strip()
+    strategy = strategy or 'gemini_batch'
+
+    context = legacy.prepare_sync_translation_execution_context(
+        prepare=False,
+        require_provider=False,
+        persist_corrected_game_root=False,
+        preflight=True,
+    )
+    plan_build = context.plan_build
+    plan = plan_build.plan
+    routing_plan = context.routing_plan
+    if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value and (
+        not isinstance(section, dict) or section.get('legacy_entrypoints')
+    ):
+        # The scan/counts above come from the shared Sync plan, but Batch must
+        # display and validate the profile that ``build`` will actually use.
+        # A v1 section without legacy entrypoints cannot express a distinct
+        # legacy Batch command route, so the default plan already applies.
+        routing_plan = freeze_runtime_routing_plan(
+            execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+        )
+    route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    profile = model_profile.profile_for_route(routing_plan, route)
+    requests = list(plan_build.requests or ())
+    documents = list(context.adapter_snapshot.project.source_documents)
+    pending_items = sum(len(list(request.expected_ids or ())) for request in requests)
+    source_identity = getattr(plan, 'source_identity', None)
+    identity_dict = (
+        source_identity.to_dict()
+        if hasattr(source_identity, 'to_dict')
+        else dict(source_identity or {})
+    )
+
+    provider_entry = None
+    if isinstance(section, dict):
+        raw_profile = (section.get('profiles') or {}).get(route.profile_id)
+        if isinstance(raw_profile, dict):
+            provider_entry = (section.get('providers') or {}).get(
+                raw_profile.get('provider_id')
+            )
+    if not isinstance(provider_entry, dict):
+        provider_entry = {
+            'adapter': profile.adapter,
+            'provider': profile.provider,
+            'credential_ref': profile.credential_ref.to_manifest_dict(),
+        }
+    api_key = ''
+    try:
+        api_key = str(default_credential_loader(provider_entry) or '').strip()
+    except Exception:
+        api_key = ''
+    needs_key = profile.credential_ref.kind != model_profile.CREDENTIAL_KIND_NONE
+
+    capabilities = routing_plan.capabilities.get(route.profile_id)
+    context_budget = getattr(capabilities, 'context_budget_tokens', None)
+
+    config = _read_translator_config_object()
+    if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        batch_flags = resolve_batch_context_flags(config, game_root=legacy.BASE_DIR)
+        context_sources = {
+            'rag': bool(batch_flags.get('rag_enabled')),
+            'source_index': bool(batch_flags.get('source_index_enabled')),
+            'project_analysis_brief': bool(
+                batch_flags.get('project_analysis_inject_enabled')
+            ),
+            'story_memory': bool(batch_flags.get('story_memory_enabled')),
+            'local_context': {'before': 0, 'after': 0},
+            'macro_setting_file': '',
+        }
+    else:
+        context_sources = {
+            'rag': bool(getattr(legacy, 'SYNC_RAG_ENABLED', False)),
+            'source_index': bool(getattr(legacy, 'SYNC_SOURCE_INDEX_ENABLED', False)),
+            'story_memory': bool(getattr(legacy, 'SYNC_STORY_MEMORY_ENABLED', False)),
+            'project_analysis_brief': bool(
+                getattr(legacy, 'SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF', False)
+            ),
+            'local_context': {
+                'before': int(getattr(legacy, 'SYNC_CONTEXT_BEFORE', 0) or 0),
+                'after': int(getattr(legacy, 'SYNC_CONTEXT_AFTER', 0) or 0),
+            },
+            'macro_setting_file': str(
+                getattr(legacy, 'SYNC_MACRO_SETTING_FILE', '') or ''
+            ),
+        }
+
+    risks = []
+    if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        if profile.adapter != model_profile.ADAPTER_GEMINI:
+            risks.append(_preflight_risk(
+                'STRATEGY_NOT_SUPPORTED',
+                'error',
+                '所选 ModelProfile 不是 Gemini 直连，无法使用 Gemini Batch。',
+            ))
+    if needs_key and not api_key:
+        # Batch build only creates a local package; credentials are required
+        # later at submit/execute time. Keep that offline path runnable while
+        # still surfacing the pending credential work.
+        batch_strategy = (
+            strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value
+        )
+        risks.append(_preflight_risk(
+            'CREDENTIAL_UNAVAILABLE',
+            'warning' if batch_strategy else 'error',
+            (
+                '未找到该 ModelProfile 的可用凭据；Gemini Batch 构建本身不需要凭据，'
+                '但提交/执行前必须先在安全存储或环境变量中配置。'
+                if batch_strategy
+                else '未找到该 ModelProfile 的可用凭据；请先在安全存储或环境变量中配置。'
+            ),
+        ))
+    if context_budget is None:
+        risks.append(_preflight_risk(
+            'CONTEXT_BUDGET_UNKNOWN',
+            'warning',
+            '该模型未声明 context_budget_tokens，无法预估上下文/输出上限；'
+            '必要时调小 sync.chunk_size / sync.max_source_chars。',
+        ))
+    retrieval_enabled = any(
+        bool(context_sources.get(feature))
+        for feature in (
+            'rag',
+            'source_index',
+            'story_memory',
+            'project_analysis_brief',
+        )
+    )
+    embedding_retrieval_enabled = any(
+        bool(context_sources.get(feature))
+        for feature in ('rag', 'source_index')
+    )
+    if (
+        isinstance(section, dict)
+        and embedding_retrieval_enabled
+        and not str(getattr(profile, 'embedding_profile_id', '') or '').strip()
+    ):
+        risks.append(_preflight_risk(
+            'EMBEDDING_PROFILE_UNAVAILABLE',
+            'error',
+            '已启用 RAG / Source Index，但当前 ModelProfile 未绑定 embedding profile；'
+            '请先绑定一个 embedding profile，或关闭对应检索功能。',
+        ))
+    if retrieval_enabled:
+        risks.append(_preflight_risk(
+            'RETRIEVAL_PREFLIGHT_SKIPPED',
+            'info',
+            '预检不调用 embedding/检索存储；实际运行时会在首个模型请求前物化上下文。',
+        ))
+    if getattr(legacy, 'PREP_ENABLED', False):
+        risks.append(_preflight_risk(
+            'PREPARE_PREFLIGHT_SKIPPED',
+            'info',
+            '预检不执行 prepare 步骤；文件/条目/chunk 计数基于当前 TL 模板，'
+            '实际运行可能在 prepare 后变化。',
+        ))
+    if not requests:
+        risks.append(_preflight_risk(
+            'NO_PENDING_WORK',
+            'info',
+            '当前范围没有待翻译条目。',
+        ))
+
+    status = 'blocked' if any(risk['severity'] == 'error' for risk in risks) else 'ready'
+    payload = {
+        'schema_version': 1,
+        'status': status,
+        'strategy': strategy,
+        'plan_contract': 'shared_translation_plan',
+        'profile': {
+            'id': profile.id,
+            'label': profile.label,
+            'model': profile.model,
+            'adapter': profile.adapter,
+            'provider': profile.provider,
+        },
+        'project': {
+            'root': str(getattr(legacy, 'BASE_DIR', '') or ''),
+            'tl_dir': str(getattr(legacy, 'TL_DIR', '') or ''),
+            'target_language': str(
+                getattr(legacy, 'GENERATION_TARGET_LANGUAGE', '') or ''
+            ),
+            'file_count': len(documents),
+        },
+        'counts': {
+            'files_with_pending': len(list(context.pending_jobs or ())),
+            'pending_items': pending_items,
+            'chunks': len(list(plan.chunks or ())),
+        },
+        'chunk_policy': {
+            'max_items': int(getattr(legacy, 'MAX_ITEMS', 0) or 0),
+            'max_chars': int(getattr(legacy, 'MAX_CHARS', 0) or 0),
+        },
+        'source_snapshot': {
+            'engine': str(identity_dict.get('engine') or ''),
+            'adapter_version': str(identity_dict.get('adapter_version') or ''),
+            'project_identity_digest': str(
+                identity_dict.get('project_identity_digest') or ''
+            ),
+            'source_snapshot_fingerprint': str(
+                identity_dict.get('source_snapshot_fingerprint') or ''
+            ),
+            'file_count': len(dict(identity_dict.get('file_digests') or {})),
+        },
+        'context_sources': context_sources,
+        'credential_available': bool(api_key) if needs_key else True,
+        'risks': risks,
+        'environment': {
+            'python': str(sys.version.split()[0]),
+            'platform': os.name,
+        },
+    }
+    if str(getattr(args, 'output', '') or '') != 'json':
+        print(
+            f"Preflight {status}: strategy={strategy} "
+            f"profile={profile.id} model={profile.model}"
+        )
+        print(
+            '  files_with_pending='
+            f"{payload['counts']['files_with_pending']} "
+            f"pending_items={payload['counts']['pending_items']} "
+            f"chunks={payload['counts']['chunks']}"
+        )
+        for risk in risks:
+            print(f"  [{risk['severity']}] {risk['code']}: {risk['message']}")
+    return payload
 
 
 def dispatch_command(parser, args):
@@ -20095,6 +20444,9 @@ def dispatch_command(parser, args):
         load_batch_settings()
         print_banner()
 
+        if command == 'translate-preflight':
+            return run_translate_preflight(args)
+
         if command == 'build':
             return create_batch_package(
                 display_name_override=args.display_name,
@@ -20412,7 +20764,7 @@ def _load_machine_manifest(command, value, args):
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
 
-    if command in PROFILE_COMMANDS:
+    if command in PROFILE_COMMANDS or command == TRANSLATE_PREFLIGHT_COMMAND:
         payload = dict(value or {})
         status = str(payload.pop('status', 'completed'))
         return cli_contract.success_envelope(

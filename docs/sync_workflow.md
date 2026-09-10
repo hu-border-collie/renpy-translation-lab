@@ -108,6 +108,11 @@ python gemini_translate_batch.py sync-cancel <RUN> --json
 python gemini_translate_batch.py sync-derive <RUN> --json
 ```
 
+`sync-start` / `sync-resume` / `sync-derive` 在执行前向 stderr 输出稳定的
+`RTL_DURABLE_RUN_ID=<RUN>` 标记；stdout 仍只包含机器结果 envelope。GUI 的实时进度
+轮询依赖该标记把 `sync-status --latest` 快照绑定到本次运行，避免冷启动期间误显示
+历史 run。
+
 `sync-start --profile <PROFILE_ID>` 只用该 ModelProfile 覆盖本次运行的 translation 路由，不写回配置文件；profile 不存在、是 embedding profile 或与命令策略不兼容时启动前拒绝。
 
 `sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
@@ -124,6 +129,8 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 耐久执行器把一次 attempt 严格绑定为一次 Provider 调用，因此会显式关闭普通 Gemini Sync 在单次调用内部进行的 API Key 轮换，也不会在 adapter 内部隐藏 timeout 重试。鉴权或凭据配置失败会按该 attempt 的稳定分类落库；修正凭据后应使用 `sync-derive` 创建新 run，新 run 可复用旧 run 已成功且仍通过校验的结果。这个限制不影响普通非耐久 Sync 的既有 Key 轮换行为。
 
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
+
+启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源与风险；GUI 的「开始」会先跑该命令并展示确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。
 
 GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程并自动用只读 `sync-status --latest` 定位该运行。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
 

@@ -131,7 +131,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **密钥**：
   - **Gemini**：读取 / 保存 `api_keys.json`；可添加多把 Key；环境变量 Key 只读提示。
   - **LiteLLM Provider**：按供应商保存在操作系统凭据管理器（与 Gemini 分离）。密钥页 Provider 列表含常用供应商（OpenAI / Anthropic / Gemini / OpenRouter / DeepSeek / xAI / Azure / Vertex 等），并合并 LiteLLM 页**已联网加载**的供应商；可搜索或手填自定义 id。每个 Provider 可用与 Gemini 相同的多 Key 对话框管理（添加 / 删除 / 显示明文核对 / **设为当前使用**），状态显示全部脱敏后缀与当前 Key。
-- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步替代后端。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。连接测试绑定当前 Provider / 模型 / 自定义端点身份：改完设置后迟到的成功或失败不会写到当前状态，只会提示本次结果已忽略。连接测试使用 64 Token 上限、有界 timeout 与最小 JSON 合同，只有收到非空且精确匹配 `{"ok":true}` 的响应才会成功；空正文、不可解析 JSON 或字段不匹配均会报告失败。启动前路由检查失败（缺少 `provider/model` 前缀、不支持的执行方式、凭据引用缺失）显示对应稳定错误码，而不是 JSON 能力失败。结果和错误文案不回显 Provider 原始异常或凭据。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
+- **LiteLLM**：按“联网加载供应商 → 选择 Provider → **在密钥页或凭据区管理并保存 API Key** → 联网加载模型 → 选择模型 → 保存设置”配置同步执行的 Provider 连接。DeepSeek / OpenAI / Anthropic / xAI 等官方模型列表需要**先保存至少一把 API Key**；未保存时会提示，可取消或显式选择仅用 LiteLLM 子集目录（可能依赖 GitHub）。加载供应商 / 模型、检查更新、测试连接运行中可**再次点击同一按钮停止**；过程中状态栏会显示阶段（如「正在请求官方列表」「官方失败，正在改用子集」）。连接测试绑定当前 Provider / 模型 / 自定义端点身份：改完设置后迟到的成功或失败不会写到当前状态，只会提示本次结果已忽略。连接测试使用 64 Token 上限、有界 timeout 与最小 JSON 合同，只有收到非空且精确匹配 `{"ok":true}` 的响应才会成功；空正文、不可解析 JSON 或字段不匹配均会报告失败。启动前路由检查失败（缺少 `provider/model` 前缀、不支持的执行方式、凭据引用缺失）显示对应稳定错误码，而不是 JSON 能力失败。结果和错误文案不回显 Provider 原始异常或凭据。模型列表整次操作有约 **35 秒**总时限，单次 HTTP 约 **20 秒**上限，避免官方+回退叠成近一分钟无反馈。首次打开不会默认选择 OpenAI 或模型，也不会静默联网；Provider 下拉列表优先显示常用供应商，输入任意片段可搜索，也可手动填写自定义 Provider / 模型。
 - **自定义 OpenAI 兼容 Provider**：LiteLLM 设置页的「自定义 OpenAI 兼容 Provider」区域可**添加 / 编辑 / 删除** OpenCode Go、中转站、本地 vLLM 等 LiteLLM 未内置但兼容 OpenAI 的服务，持久化到 `translator_config.json` 的 `sync.custom_litellm_providers`。添加时填写 `id`（创建后不可改，同时用作模型前缀与密钥用户名）、显示名称、API Base、模型列表 URL（可留空）、可选密钥环境变量，以及「需要 API Key」开关（默认开启；本地无鉴权网关可关闭）。非法 URL 或与内置前缀冲突的 id 会被拒绝。注册后 Provider 下拉与密钥页列表自动合并该条目，选择后即可像内置 provider 一样保存密钥、加载模型与测试连接。实际请求改写为 `openai/<模型>` + `api_base`，`api_key_env` 仅在系统凭据为空时生效；需要密钥但两者均缺失时请求会直接失败，不会把 `OPENAI_API_KEY` 静默发给第三方端点。
 - **扩展**：按需安装 / 修复 / 更新关系分析器的独立依赖。安装状态来自当前 Python 环境，不另存“已启用”开关；安装在后台运行，普通翻译不会加载这些科学计算与图像依赖。关系分析器的运行入口和边界见 [关系与语义分析](relation_analysis.md)。
 - **项目**：术语表、翻译目录、include filters，以及准备流程的 source game、Ren'Py SDK、Python、launcher 和自定义命令。Ren'Py SDK 须显式配置： **查找 SDK**（用户点击后才扫描附近）、**浏览…**，或确认后 **下载推荐 SDK…**（官方固定版本）；留空不会自动搜其它目录或联网。结果写入 `prepare.renpy_sdk_dir`，保存设置后生效。当前 `game_root` 只读展示；需换项目请用「项目与环境」或「项目列表」。
@@ -275,7 +275,9 @@ GUI 不引入新的主配置系统。
 1. **主模型**：来自 `model_routing.profiles` 的 ModelProfile 列表（Gemini 直连、LiteLLM 内置 Provider、自定义 OpenAI-compatible Provider 使用同一表面）。
 2. **执行方式**：该 profile 支持 `sync` 或 `gemini_batch`；不支持的组合会禁用并在提示中说明缺失能力与解决办法（例如 LiteLLM profile 没有 `gemini_batch`）。
 
-选择会通过 `--profile <PROFILE_ID>` 传给实际命令（Batch 用 `build --profile`，同步用 `sync-start --profile`）；执行方式选中 `sync` 时页面切换到同步执行页，选中 `gemini_batch` 时切换到 Batch 执行页。项目仍是旧配置（没有 `model_routing`）时选择器禁用并显示迁移提示，原有默认行为保持不变；已有运行的冻结路由不会被后续选择改写。命令参考与机器合同见 [同步翻译工作流](sync_workflow.md#耐久-sync可恢复-cli)。
+选择会通过 `--profile <PROFILE_ID>` 传给实际命令（Batch 用 `build --profile`，同步用 `sync-start --profile`）；执行方式选中 `sync` 时页面切换到同步执行页，选中 `gemini_batch` 时切换到 Batch 执行页。
+
+点击开始后会先执行 `translate-preflight`：只扫描项目与共享 TranslationPlan，不调用 Provider/embedding，并在确认框展示模型、执行方式、项目、待处理文件/条目/chunk、上下文来源与风险；确认后才会进入真正的运行步骤。运行期间同步任务会旁路轮询 `sync-status --latest`，持续刷新请求/条目/unknown/usage 摘要而不读取运行数据库。各任务页还会显示该阶段实际 resolved profile（显式覆盖或继承默认）。项目仍是旧配置（没有 `model_routing`）时选择器禁用并显示迁移提示，原有默认行为保持不变；已有运行的冻结路由不会被后续选择改写。命令参考与机器合同见 [同步翻译工作流](sync_workflow.md#耐久-sync可恢复-cli)。
 
 ### Batch 执行
 
@@ -500,7 +502,7 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 仓库 CI：`unittest`（含 GUI 依赖）、`cli-without-gui`（排除 `test_gui_*`）、`gui`（offscreen）。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/gui_test_support.py`。
 
-**烟测**：GUI **批量翻译**主路径曾在数千待译行的私有项目副本上跑通。兼容 Provider 的同步翻译也在隔离的最小 Ren'Py 项目副本上完成过小规模真实调用烟测，确认系统凭据读取、JSON 返回以及占位符和 Ren'Py 标签保留正常。该记录只验证小规模同步替代链路，不等于批量吞吐、成本或完整项目 QA。关键词 / 订正 / A/B 仍只有单元测试，建议在副本上小范围试跑。
+**烟测**：GUI **批量翻译**主路径曾在数千待译行的私有项目副本上跑通。兼容 Provider 的同步翻译也在隔离的最小 Ren'Py 项目副本上完成过小规模真实调用烟测，确认系统凭据读取、JSON 返回以及占位符和 Ren'Py 标签保留正常。该记录只验证小规模同步链路，不等于批量吞吐、成本或完整项目 QA。关键词 / 订正 / A/B 仍只有单元测试，建议在副本上小范围试跑。
 
 **2026-07-12 #176 P7 五页往返烟测**：在已配置的本地项目上以可见窗口逐页检查批量翻译、同步翻译、关键词 / 术语、订正、上下文库；确认页面本地动作与状态区不串页，关键词合并与订正写回入口分离，上下文双状态卡可见。订正子模式切换到「同步」后离开并返回仍保持。窗口在最小约束约 `963 × 791` 与最大化 `1707 × 1019` 下无横向溢出或页面重叠。为避免对真实项目发起翻译或写回，本次未点击执行型 CTA；运行中导航/项目/子模式门控、项目切换 session 失效和 `check → apply` 安全边界均有 GUI 自动化回归覆盖；2026-07-16 本地运行 `python tests/run_gui_tests.py -q` 为 736 / 736 通过。
 

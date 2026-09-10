@@ -8,6 +8,9 @@
 
 ### 新增
 
+- 新增启动前预检 `translate-preflight`：只扫描项目并构建共享 TranslationPlan，不调用 Provider/embedding，输出模型/策略、待处理文件/条目/chunk、source snapshot、上下文来源与风险；GUI「翻译」页开始任务前会执行该预检并展示确认框。
+- 同步运行页新增旁路实时进度：运行中轮询 `sync-status --latest`，持续刷新请求/条目/结果未知/usage 摘要；停止本机进程或任务结束即停止轮询，不影响耐久运行状态。
+- 各任务页（翻译、关键词、订正、项目分析、最终审校）现在显示该阶段实际 resolved ModelProfile、执行方式以及「显式覆盖 / 继承默认」来源。
 - #348 P3 统一翻译入口：左导航合并为单一「翻译」，先选 primary ModelProfile，再选该 profile 支持的 ExecutionStrategy（同步 / Gemini Batch）；选择通过 `--profile` 传给 `sync-start` / `build`，已有 run 继续使用冻结路由。旧配置（无 `model_routing`）保持原默认行为，选择器禁用并提示迁移。
 - #348 P3 GUI 耐久 Sync 生命周期：`sync-start / sync-status / sync-resume / sync-cancel / sync-derive` 与 `check <RUN>` → `apply <RUN>` 直接接入同步翻译页；「停止」只结束本机进程，取消是独立动作；运行中不读 SQLite、不自行重试，恢复/派生/写回风险提示按公开 snapshot 展示。
 - Windows/Linux 同步与 Batch 均支持选择 ModelProfile：新增 Settings「模型与 Provider」页（provider / profile 新增、复制、编辑、删除、诊断，能力覆盖与阶段路由，凭据只保存引用）与 CLI `profiles-show / profiles-validate / profiles-set-default / profiles-set-route`；写回经共享 config store 原子替换并保留未知字段。
@@ -32,6 +35,9 @@
 
 ### 修复
 
+- 生成 Profile 不再强制绑定 embedding profile：RAG / Source Index 关闭时，LiteLLM 内置或自定义 OpenAI-compatible Profile 可以直接启动完整同步初译；对应检索开关开启但仍无 embedding 绑定时，配置投影与只读命令保持可用，真正物化检索/发起 embedding（含 Batch 计划与 apply 后的 store 更新）前以稳定错误拒绝，不会静默借道旧 embedding 配置。
+- `translate-preflight` 与 `profiles-probe` 现在会按 `credential_ref.kind=env` 的 `name` 读取命名环境变量，不再只依赖 Provider keyring 或派生的 `<PROVIDER>_API_KEY` 名称，避免把已配置的环境凭据误报为 `CREDENTIAL_UNAVAILABLE`。
+
 - 局部前后文不再把逐句独立的 Ren'Py translate 块当成场景边界；跨批次和补译可以引用同一文件里的已译邻句。同一请求内夹在待译句中间的已译邻句会进入 `CONTEXT BETWEEN`。多行共享翻译块和显式路线/场景标记仍会截断。模型仍然只返回 TARGET ID。
 
 - 空的 Ren'Py 目标模板（`e ""` / `new ""`）不再被标成 `already_translated`。只要注释原文或 `old` 行仍有可译原文，就会进入待译并走现有 preview / check / 安全写回；原文为空或缺少原文证据不会被计为已完成。
@@ -44,6 +50,7 @@
 
 ### 变更
 
+- 新用户 / 新项目的默认主模型与执行策略**保持不变**；是否调整默认值将在四类真实 Provider smoke 与 A/B 数据完成后单独决定，不隐藏在本次迁移或 UI 改动中。
 - `gemini_translate.py` 兼容入口继续可用，但输出非阻塞弃用提示并给出映射：新任务请使用 `gemini_translate_batch.py sync-start --profile <PROFILE_ID>`，写回改为 `check <RUN>` → `apply <RUN>`。迁移期默认模型、默认 Sync/Batch 策略与旧配置行为均保持不变。
 
 - doctor / Batch banner / GUI 摘要把「目录语言」与「生成目标」分开显示，不再把 `prepare.language` 说成模型会翻成的语言。

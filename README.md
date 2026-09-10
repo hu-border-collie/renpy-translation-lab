@@ -8,7 +8,8 @@
 
 - **GUI**（`python -m gui_qt`）：普通用户的推荐入口，覆盖项目准备、翻译、检查、问题处理和安全写回。
 - **Batch CLI**（`gemini_translate_batch.py`）：Agent 与自动化主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
-- **同步 CLI**（`gemini_translate.py`）：小范围即时翻译、补译、局部修复与 smoke test；默认只生成可审查预览，详见 [同步翻译工作流](docs/sync_workflow.md)。
+- **统一翻译（GUI/CLI）**：先选主模型（ModelProfile），再选执行方式（同步 / Gemini Batch）；同一模型与凭据可切换策略而不复制配置。CLI 用 `gemini_translate_batch.py sync-start --profile <ID>` / `build --profile <ID>`，模型与阶段路由在 GUI「设置 → 模型与 Provider」或 `profiles-*` 命令维护。
+- **同步 CLI**（`gemini_translate.py`，兼容入口）：保留可用，但不再持久化可恢复 run；新任务请使用耐久 `sync-start` → `check <RUN>` → `apply <RUN>`，详见 [同步翻译工作流](docs/sync_workflow.md)。
 - **上下文**：glossary / macro setting、RAG（`rag_memory.py`）、可选 Story Memory（`story_memory.py`）。
 - **共用 runtime**（`translator_runtime.py`）：配置、SDK、校验、响应解析与文件处理。
 - **可选分析**（`extract_relations.py` / `relation_analyzer/`）：关系与语义分析。
@@ -34,8 +35,16 @@
 | 通过图形界面完成第一次翻译 | [GUI 快速开始](docs/quickstart_gui.md) |
 | 让 Agent 或脚本通过 CLI 操作 | [Agent / CLI 快速开始](docs/quickstart_agent.md) |
 | 查完整 Batch 命令与恢复流程 | [Batch 工作流与安全检查](docs/batch_workflows.md) |
-| 小批量使用同步 CLI 并审查后写回 | [同步翻译工作流](docs/sync_workflow.md) |
+| 小批量使用同步执行并审查后写回 | [同步翻译工作流](docs/sync_workflow.md) |
+| 选择模型与执行方式、跑四类 smoke | [Provider / 执行策略 Smoke Matrix](docs/provider_smoke_matrix.md) |
 | 修改本仓库代码或文档 | [AGENTS.md](AGENTS.md) → [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+### 选择模型与执行方式
+
+1. **主模型（ModelProfile）**：在 GUI 左导航「翻译」页首选择；Provider 连接、模型、能力覆盖与阶段路由在「设置 → 模型与 Provider」维护。
+2. **执行方式（ExecutionStrategy）**：该 profile 支持「同步」或「Gemini Batch」；不支持的组合会禁用并给出缺失能力说明。
+3. **CLI 对等**：`--profile` 选择本次运行的主模型（`sync-start --profile` / `build --profile`）；`profiles-show / profiles-validate / profiles-set-default / profiles-set-route` 用于查看与修改配置；`translate-preflight` 在不调用 Provider 的前提下预览条目、chunk、上下文来源与风险。
+4. **旧配置**：仍使用旧 `sync.*` / `batch.model` 的项目行为不变；迁移说明见 [模型配置迁移](docs/model_config_migration.md)。
 
 ### 安装基础环境
 

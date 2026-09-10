@@ -136,6 +136,44 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(status['next_action'], 'check')
         self.assertEqual(status['freshness']['source'], 'fresh')
 
+    def test_start_reports_run_identity_before_execution(self):
+        observed: list[str] = []
+
+        snapshot = self.service.start(
+            plan_build(),
+            on_run_created=observed.append,
+        )
+
+        self.assertEqual(observed, [snapshot['run_id']])
+        self.assertTrue(
+            SyncRunStore(self.root, observed[0]).get_run()['status']
+            in {RunStatus.PLANNED.value, RunStatus.COMPLETED.value}
+        )
+
+    def test_run_created_observer_failure_does_not_abort_execution(self):
+        snapshot = self.service.start(
+            plan_build(),
+            on_run_created=lambda _run_id: (_ for _ in ()).throw(
+                BrokenPipeError("closed stderr")
+            ),
+        )
+
+        self.assertEqual(snapshot['run_status'], RunStatus.COMPLETED.value)
+        self.assertEqual(self.backend.calls, 1)
+
+    def test_derive_reports_the_new_run_identity(self):
+        source = self.service.start(plan_build())
+        observed: list[str] = []
+
+        derived = self.service.derive(
+            source['run_id'],
+            plan_build(),
+            on_run_created=observed.append,
+        )
+
+        self.assertEqual(observed, [derived['run_id']])
+        self.assertNotEqual(derived['run_id'], source['run_id'])
+
     def test_client_token_reopens_without_second_provider_call(self):
         first = self.service.start(plan_build(), client_token='stable-token')
         second = self.service.start(plan_build(), client_token='stable-token')

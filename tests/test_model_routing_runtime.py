@@ -114,6 +114,100 @@ class ProductionRoutingTests(TestCase):
         with self.assertRaisesRegex(model_profile.ModelRoutingConfigError, "params"):
             runtime_settings_view(config)
 
+    def test_generation_profile_without_embedding_binding_keeps_legacy_fields(self):
+        config = migrated()
+        config["model_routing"]["profiles"]["legacy-batch"]["embedding_profile_id"] = ""
+        config["model_routing"]["legacy_entrypoints"]["sync_profile_id"] = "legacy-batch"
+        legacy_rag = {"enabled": False, "embedding_model": "legacy-embedding", "future_policy": 1}
+        config["sync"]["rag"] = copy.deepcopy(legacy_rag)
+        config["batch"]["rag"] = copy.deepcopy(legacy_rag)
+
+        view = runtime_settings_view(config)
+
+        self.assertEqual(view["sync"]["rag"], legacy_rag)
+        self.assertEqual(view["batch"]["rag"], legacy_rag)
+        self.assertEqual(view["sync"]["model"], config["batch"]["model"])
+
+    def test_graph_only_context_does_not_require_embedding_binding(self):
+        config = migrated()
+        config["model_routing"]["profiles"]["legacy-batch"]["embedding_profile_id"] = ""
+        config["model_routing"]["legacy_entrypoints"]["sync_profile_id"] = "legacy-batch"
+        config["sync"]["story_memory"] = {"enabled": True}
+
+        view = runtime_settings_view(config)
+
+        self.assertEqual(view["sync"]["model"], config["batch"]["model"])
+        self.assertNotIn("rag", view["sync"])
+
+    def test_retrieval_projection_stays_available_without_embedding_binding(self):
+        for scope, feature in (("sync", "source_index"), ("batch", "rag")):
+            with self.subTest(scope=scope, feature=feature):
+                config = migrated()
+                config["model_routing"]["profiles"]["legacy-batch"]["embedding_profile_id"] = ""
+                if scope == "sync":
+                    config["model_routing"]["legacy_entrypoints"]["sync_profile_id"] = "legacy-batch"
+                config.setdefault(scope, {})[feature] = {"enabled": True}
+
+                view = runtime_settings_view(config)
+
+                self.assertEqual(view[scope]["model"], config["batch"]["model"])
+                self.assertNotIn("embedding_backend", view[scope].get("rag", {}))
+
+    def test_legacy_config_keeps_legacy_retrieval_behavior(self):
+        with (
+            patch.object(runtime, "MODEL_ROUTING_CONFIG", None),
+            patch.object(runtime, "SYNC_RAG_ENABLED", True),
+            patch.object(runtime, "SYNC_SOURCE_INDEX_ENABLED", False),
+            patch.object(runtime, "freeze_translation_routing_plan") as freeze,
+        ):
+            runtime._require_sync_embedding_binding_for_retrieval()
+
+        freeze.assert_not_called()
+
+    def test_sync_embedding_refuses_missing_binding_when_retrieval_enabled(self):
+        config = migrated()
+        section = config["model_routing"]
+        section["profiles"]["legacy-batch"]["embedding_profile_id"] = ""
+        section["legacy_entrypoints"]["sync_profile_id"] = "legacy-batch"
+        plan = read_routing_plan({"model_routing": section}, legacy_execution="sync")
+
+        with (
+            patch.object(runtime, "MODEL_ROUTING_CONFIG", section),
+            patch.object(runtime, "SYNC_RAG_ENABLED", True),
+            patch.object(runtime, "SYNC_SOURCE_INDEX_ENABLED", False),
+            patch.object(runtime, "freeze_translation_routing_plan", return_value=plan),
+            self.assertRaisesRegex(
+                model_profile.ModelRoutingConfigError,
+                "no embedding profile binding",
+            ),
+        ):
+            runtime.embed_texts(["hello"], "RETRIEVAL_QUERY")
+
+    def test_sync_prepare_refuses_retrieval_without_embedding_binding(self):
+        config = migrated()
+        section = config["model_routing"]
+        section["profiles"]["legacy-batch"]["embedding_profile_id"] = ""
+        section["legacy_entrypoints"]["sync_profile_id"] = "legacy-batch"
+        plan = read_routing_plan({"model_routing": section}, legacy_execution="sync")
+
+        with (
+            patch.object(runtime, "load_config"),
+            patch.object(runtime, "load_translator_settings"),
+            patch.object(runtime, "require_supported_generation_target"),
+            patch.object(runtime, "MODEL_ROUTING_CONFIG", section),
+            patch.object(runtime, "SYNC_RAG_ENABLED", True),
+            patch.object(runtime, "SYNC_SOURCE_INDEX_ENABLED", False),
+            patch.object(runtime, "freeze_translation_routing_plan", return_value=plan),
+            self.assertRaisesRegex(
+                model_profile.ModelRoutingConfigError,
+                "no embedding profile binding",
+            ),
+        ):
+            runtime.prepare_sync_translation_execution_context(
+                require_provider=False,
+                preflight=False,
+            )
+
     def test_explicit_override_keeps_connection_and_rejects_provider_switch(self):
         config = migrated("litellm_custom")["model_routing"]
         plan = model_profile.resolve_routing_plan_from_runtime(

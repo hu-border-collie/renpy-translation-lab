@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 import model_capability_probe as probe
 import model_profiles_editor as editor
@@ -188,6 +189,34 @@ class ProbeReportTests(unittest.TestCase):
         text = json.dumps(report)
         self.assertNotIn(secret, text)
         self.assertNotIn("api_key", text.lower())
+
+    def test_litellm_credential_falls_back_to_native_env(self) -> None:
+        import os
+
+        with mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "env-key"}, clear=False):
+            value = probe.default_credential_loader(
+                {
+                    "adapter": "litellm",
+                    "provider": "openrouter",
+                    "credential_ref": {"kind": "keyring", "name": "openrouter"},
+                }
+            )
+
+        self.assertEqual(value, "env-key")
+
+    def test_env_credential_ref_reads_the_named_variable(self) -> None:
+        import os
+
+        with mock.patch.dict(os.environ, {"ACME_CUSTOM_KEY": "env-key"}, clear=False):
+            value = probe.default_credential_loader(
+                {
+                    "adapter": "litellm",
+                    "provider": "acme",
+                    "credential_ref": {"kind": "env", "name": "ACME_CUSTOM_KEY"},
+                }
+            )
+
+        self.assertEqual(value, "env-key")
 
     def test_request_is_bounded(self) -> None:
         seen: list[probe.ProbeRequest] = []

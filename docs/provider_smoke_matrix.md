@@ -66,6 +66,29 @@ CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI �
 - 端到端结果必须经过 `check <RUN>` / `check <manifest>` 的 `writeback_gate=allow` 才能
   `apply`；`--force` 不能绕过 stale check、源快照或结构阻断。
 
+## 真实执行记录（2026-09-10）
+
+环境：Linux CLI（WSL）；测试项目为真实 Ren'Py 项目的只读副本，范围限定到 1 个文件、
+8 条待译对白、2 个 TranslationPlan chunk。所有真实调用均显式确认计费；下表不含凭据、
+请求正文或完整本机路径。
+
+| 组合 | Profile / Provider | 能力探测（各 1 次请求） | 端到端 | 写回结果 |
+|---|---|---|---|---|
+| LiteLLM 内置 | `openrouter` / `openrouter/deepseek/deepseek-v4-flash-0731` | `auth`、`sync_generation`、`structured_output`、`usage` 均 `pass` | `sync-start`：items 8/8、requests 2/2、tokens 2996 | `check=ready`；`apply` 1 文件 8 条；quality gate `pass`，warning 0 |
+| 自定义 OpenAI-compatible | `custom-openrouter`，模型 `<id>/deepseek/deepseek-v4-flash-0731`，env 凭据引用 | 四项同步能力均 `pass` | `sync-start`：items 8/8、requests 2/2 | `check=ready`；`apply` 1 文件 8 条；quality gate `pass`，warning 0 |
+| Gemini Sync / Batch | Gemini adapter profile | 未执行 | 未执行 | 本环境对 Gemini REST 返回 HTTP 400 `FAILED_PRECONDITION: User location is not supported for the API use.`；需在支持地区按上表手工执行 |
+
+记录说明：
+
+- 自定义 Provider 使用一个 OpenAI-compatible 端点验证了注册、`<id>/<模型>` 改写、
+  `api_base` 逐请求透传和 env 凭据读取；当时未取得 OpenCode Go 的独立密钥，因此本记录
+  不代表 OpenCode Go 上游已经通过真实 smoke。
+- 本轮 smoke 暴露并修复了两个统一入口问题：生成 Profile 不再强制绑定 embedding profile
+  （RAG / Source Index 关闭时即可启动完整初译）；`kind=env` 凭据现在按 `name` 读取环境变量，
+  preflight / probe 不再误报不可用。
+- 离线自动化测试、假适配器测试和真实 Provider 结果是三类不同证据；未执行的组合保持
+  「未执行」，不能用离线结果替代。
+
 ## 诊断摘要（可脱敏导出）
 
 ```powershell
@@ -82,3 +105,15 @@ python gemini_translate_batch.py doctor --output json --output-file doctor-diagn
 - 真实 smoke 结果按「日期 / 组合 / profile id / 命令 / 状态 / 请求数 / 备注」记录到
   issue #348 或发布说明；不要在记录中粘贴密钥、请求正文或完整本机路径。
 - 未取得真实凭据的组合保持「未执行」状态，不能用离线测试结果冒充真实 smoke。
+
+## 执行策略差异（成本 / 延迟 / 可靠性 / 能力）
+
+| 维度 | 同步（sync） | Gemini Batch（gemini_batch） |
+|---|---|---|
+| 计费 | 按即时调用计费，无 Batch 折扣 | 可能享受 Batch 折扣，按提交的批量请求计费 |
+| 延迟 | 请求级即时返回，受单请求 timeout 限制 | 云端排队与异步处理，完成时间取决于任务量与配额 |
+| 可靠性 / 恢复 | 耐久运行持久化 request/attempt，可 status/resume/cancel/derive | manifest + job state + download/check 恢复 |
+| 能力前提 | profile 需声明 `sync_generation`；RAG/embedding 可即时参与 | profile 需为 Gemini adapter 且声明 `remote_batch` |
+| 典型用途 | 小批量、补译、需要即时反馈或分阶段路由 | 大规模初译、可等待排队、需要 Batch 折扣 |
+
+Sync / Batch 是执行策略，没有“主流/备选”之分；同一 ModelProfile 可以同时支持两者，切换不复制模型或凭据。

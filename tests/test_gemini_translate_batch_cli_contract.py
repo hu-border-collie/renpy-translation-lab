@@ -11,6 +11,7 @@ from unittest import mock
 
 import gemini_translate_batch as batch
 import model_capability_probe as capability_probe
+import model_profile
 from sync_run_contracts import ErrorCode, SyncRunError
 
 
@@ -43,6 +44,8 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "proposals.jsonl"]
         if command == "confirm-revision-proposals":
             return [command, "staged_selection.json", "--selection-file", "selection.json"]
+        if command == "translate-preflight":
+            return [command, "--strategy", "sync"]
         if command == "profiles-probe":
             return [
                 command,
@@ -125,6 +128,104 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertTrue(derive.retry_unknown)
         self.assertTrue(derive.ack_duplicate_billing_risk)
         self.assertEqual(derive.output, 'json')
+
+    def test_sync_start_emits_run_identity_marker_before_execution(self):
+        observed: list[str] = []
+
+        def fake_start(_plan_build, **kwargs):
+            observed.append("execute")
+            kwargs["on_run_created"]("sync-run-v1-demo")
+            return {"run_id": "sync-run-v1-demo", "run_status": "completed"}
+
+        service = SimpleNamespace(start=fake_start)
+        context = SimpleNamespace(plan_build=SimpleNamespace(requests=[object()]))
+        stderr = io.StringIO()
+        args = batch.build_arg_parser().parse_args(
+            ["sync-start", "--output", "json"]
+        )
+        with (
+            mock.patch.object(
+                batch,
+                "_durable_sync_production_service",
+                return_value=(service, context),
+            ),
+            mock.patch.object(batch, "_print_durable_sync_snapshot"),
+            contextlib.redirect_stderr(stderr),
+        ):
+            snapshot = batch.run_durable_sync_command(args)
+
+        self.assertEqual(snapshot["run_id"], "sync-run-v1-demo")
+        self.assertIn("RTL_DURABLE_RUN_ID=sync-run-v1-demo", stderr.getvalue())
+
+    def test_batch_embedding_refuses_unresolvable_v1_plan_when_retrieval_enabled(self):
+        with (
+            mock.patch.object(batch.legacy, "MODEL_ROUTING_CONFIG", {}),
+            mock.patch.object(batch, "RAG_ENABLED", True),
+            mock.patch.object(
+                batch,
+                "freeze_runtime_routing_plan",
+                side_effect=ValueError("bad routing"),
+            ),
+            self.assertRaisesRegex(
+                model_profile.ModelRoutingConfigError,
+                "Cannot resolve the Batch routing plan",
+            ),
+        ):
+            batch.embed_texts(["hello"], "RETRIEVAL_DOCUMENT")
+
+    def test_translate_preflight_json_stdout_stays_a_pure_envelope(self):
+        def fake_dispatch(_parser, _args):
+            print("Preflight ready: human summary")
+            return {"status": "ready", "profile": {"id": "gemini-main"}}
+
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(batch, "dispatch_command", side_effect=fake_dispatch),
+            contextlib.redirect_stdout(stdout),
+            contextlib.redirect_stderr(stderr),
+        ):
+            exit_code = batch.main(
+                [
+                    "translate-preflight",
+                    "--strategy",
+                    "sync",
+                    "--output",
+                    "json",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "ready")
+        self.assertIn("Preflight ready", stderr.getvalue())
+
+    def test_batch_embedding_refuses_missing_binding_when_retrieval_enabled(self):
+        plan = SimpleNamespace(
+            routes={
+                model_profile.STAGE_TRANSLATION: SimpleNamespace(
+                    stage=model_profile.STAGE_TRANSLATION,
+                    profile_id="custom-profile",
+                )
+            },
+            profiles={
+                "custom-profile": SimpleNamespace(embedding_profile_id="")
+            },
+        )
+        with (
+            mock.patch.object(batch.legacy, "MODEL_ROUTING_CONFIG", {}),
+            mock.patch.object(batch, "RAG_ENABLED", True),
+            mock.patch.object(
+                batch,
+                "freeze_runtime_routing_plan",
+                return_value=plan,
+            ),
+            self.assertRaisesRegex(
+                model_profile.ModelRoutingConfigError,
+                "no embedding profile binding",
+            ),
+        ):
+            batch.embed_texts(["hello"], "RETRIEVAL_DOCUMENT")
 
     def test_sync_derive_invalid_ack_option_has_usage_envelope(self):
         stdout = io.StringIO()
@@ -2644,6 +2745,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 return_value={"paths": {}},
                             )
                         )
+                    elif command == "translate-preflight":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_translate_preflight",
+                                return_value={"status": "ready"},
+                            )
+                        )
                     elif command == "merge-keywords-to-glossary":
                         handler_patches.extend(
                             [
@@ -2717,6 +2826,8 @@ class BatchCliContractTests(unittest.TestCase):
                                 "reuse.json",
                                 "manifest.json",
                             ]
+                        elif command == "translate-preflight":
+                            argv = ["translate-preflight", "--strategy", "sync"]
                         elif command == "profiles-show":
                             argv = ["profiles-show"]
                         elif command == "profiles-validate":

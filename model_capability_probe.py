@@ -123,21 +123,35 @@ def default_credential_loader(provider_entry: Mapping[str, Any]) -> str:
     kind = str(ref.get("kind") or routing.CREDENTIAL_KIND_NONE)
     if kind == routing.CREDENTIAL_KIND_NONE:
         return ""
-    if adapter == routing.ADAPTER_GEMINI:
-        if kind == routing.CREDENTIAL_KIND_ENV:
-            import os
+    if kind == routing.CREDENTIAL_KIND_ENV:
+        import os
 
-            return str(os.environ.get(str(ref.get("name") or "")) or "").strip()
+        return str(os.environ.get(str(ref.get("name") or "")) or "").strip()
+    if adapter == routing.ADAPTER_GEMINI:
         return _resolve_gemini_api_key()
-    try:
-        from litellm_provider_config import load_provider_api_key
-    except Exception:
-        return ""
     provider_id = str(ref.get("name") or provider_entry.get("provider") or "")
     try:
-        return str(load_provider_api_key(provider_id) or "").strip()
+        from litellm_provider_config import load_provider_api_key
+
+        value = str(load_provider_api_key(provider_id) or "").strip()
     except Exception:
-        return ""
+        value = ""
+    if value:
+        return value
+    # LiteLLM also reads each provider's native environment variable; probes
+    # must not report "credential unavailable" when only that path is set.
+    import os
+
+    for env_name in (
+        str(ref.get("env_name") or ""),
+        f"{provider_id.upper().replace('-', '_')}_API_KEY",
+    ):
+        if not env_name:
+            continue
+        candidate = str(os.environ.get(env_name) or "").strip()
+        if candidate:
+            return candidate
+    return ""
 
 
 def _classify_exception(exc: Exception) -> str:
