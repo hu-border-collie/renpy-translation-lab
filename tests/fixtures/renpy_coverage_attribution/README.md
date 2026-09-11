@@ -14,9 +14,10 @@ Original synthetic fixture for issue
 
 - cross-line extraction cases (multi-line triple-quoted and backslash-continued
   strings, extracted as multiline candidates since #460);
-- structures that currently produce `parse_error` or `unsupported` inventory
-  candidates (dynamic f-strings, non-standard `old` markers, orphan `old`
-  rows, and trailing quoted comments);
+- structures that exercise the #464 policy: a trailing quoted comment without a
+  later target is excluded as a non-player-visible comment, while orphan `old`
+  rows stay fail-closed and non-standard `old` markers stay unsupported;
+- a dynamic f-string inventory candidate;
 - an unmarked single-quoted translated dialogue span (classified `already_translated` since #462);
 - legitimate exclusions (`voice`, asset paths);
 - negative controls that must stay extractable: normal paired dialogue, a

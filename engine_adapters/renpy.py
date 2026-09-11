@@ -56,7 +56,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.6"
+ADAPTER_VERSION = "1.1.7"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -214,6 +214,31 @@ def _tokenize_document_lines(
         tokens_by_line[line_index] = tokens
         consumed.add(line_index)
     return tokens_by_line, line_errors
+
+
+def _tokens_have_string(tokens: Sequence[tokenize.TokenInfo]) -> bool:
+    fstring_start = getattr(tokenize, "FSTRING_START", -1)
+    return any(token.type in {tokenize.STRING, fstring_start} for token in tokens)
+
+
+def _comment_has_following_target(
+    lines: Sequence[str],
+    tokens_by_line: Mapping[int, Sequence[tokenize.TokenInfo]],
+    line_index: int,
+) -> bool:
+    """Return whether a block has a later string statement after this comment."""
+
+    for later_index in range(line_index + 1, len(lines)):
+        stripped = lines[later_index].strip()
+        if not stripped:
+            continue
+        if stripped.startswith("translate "):
+            return False
+        if stripped.startswith("#"):
+            continue
+        if _tokens_have_string(tokens_by_line.get(later_index, ())):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -882,6 +907,22 @@ class RenPyAdapter:
                         )
                     elif line_index not in paired_source_marker_lines:
                         candidate_ordinal += 1
+                        has_following_target = _comment_has_following_target(
+                            lines,
+                            tokens_by_line,
+                            line_index,
+                        )
+                        if has_following_target:
+                            reason_code = "renpy.source_marker_unpaired"
+                            classification = "parse_error"
+                            structure_kind = "source_comment"
+                        else:
+                            # A quoted comment without any later target in the
+                            # block is a player-invisible comment, not a marker
+                            # for missing text (#464).
+                            reason_code = "renpy.non_player_visible_literal"
+                            classification = "explicitly_excluded"
+                            structure_kind = "comment_without_target"
                         candidates.append(
                             self._marker_candidate(
                                 project,
@@ -889,9 +930,9 @@ class RenPyAdapter:
                                 line_index=line_index,
                                 line=line,
                                 candidate_ordinal=candidate_ordinal,
-                                reason_code="renpy.source_marker_unpaired",
-                                classification="parse_error",
-                                structure_kind="source_comment",
+                                reason_code=reason_code,
+                                classification=classification,
+                                structure_kind=structure_kind,
                                 source_marker_kind="comment",
                                 block_name=marker_block,
                                 block_occurrence=marker_block_occurrence,
