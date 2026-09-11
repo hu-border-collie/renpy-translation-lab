@@ -13695,6 +13695,29 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
                     'recovery_state': 'state_pending',
                 },
             )
+        if matching_entry is not None and pending_entries:
+            other_pending = [
+                entry
+                for entry in pending_entries
+                if entry.get('operation_identity')
+                != matching_entry.get('operation_identity')
+            ]
+            if other_pending:
+                pending = other_pending[0]
+                raise cli_contract.MachineContractError(
+                    'Another committed apply-export operation in this package is '
+                    'awaiting state recovery.',
+                    code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                    suggested_action='inspect_apply_export_record',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={
+                        'mode': 'apply-export',
+                        'record_path': record_path,
+                        'record_apply_identity': pending.get('apply_identity', ''),
+                        'record_export_root': pending.get('export_root', ''),
+                        'recovery_state': 'state_pending',
+                    },
+                )
         if matching_entry is not None:
             identity = require_manifest_project_match(manifest, 'apply')
             if dual_requested:
@@ -13753,6 +13776,19 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
                 # Files, receipt, and state are complete; this is an idempotent
                 # replay and must not touch either output tree again.
                 return manifest
+            if export_only_requested:
+                raise cli_contract.MachineContractError(
+                    'Manifest was already applied with --export-dir; export-only '
+                    'from an applied result is not supported. Use a new task record.',
+                    code_name='APPLY_EXPORT_ALREADY_APPLIED',
+                    suggested_action='use_new_manifest_or_export_directory',
+                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                    details={
+                        'mode': 'apply-export',
+                        'record_path': record_path,
+                        'export_root': matching_entry.get('export_root', ''),
+                    },
+                )
 
     if manifest.get('applied_at') and not force:
         message = (

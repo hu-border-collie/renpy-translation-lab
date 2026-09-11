@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 try:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QDialog
 
     from gui_qt.app import (
         MainWindow,
@@ -12,10 +13,21 @@ try:
         _BATCH_STAGE_PREPARE,
         _BATCH_STAGE_RESULT,
     )
+    from gui_qt.check_report import WritebackSummary
+    from gui_qt.export_writeback_dialog import (
+        APPLY_EXPORT_MODE,
+        ExportPreviewFacts,
+        ExportWritebackChoice,
+    )
     from gui_qt.work_modes import WorkMode
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
+    QDialog = None  # type: ignore[assignment,misc]
+    WritebackSummary = None  # type: ignore[assignment,misc]
+    ExportPreviewFacts = None  # type: ignore[assignment,misc]
+    APPLY_EXPORT_MODE = "apply-export"
+    ExportWritebackChoice = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
@@ -172,6 +184,81 @@ class GuiBatchStageTests(unittest.TestCase):
             refresh_manifest_writeback=False,
         )
         self.assertTrue(page.isHidden())
+
+    def test_export_writeback_button_starts_shared_apply_export_cli(self) -> None:
+        self.window._set_work_mode(
+            WorkMode.BATCH_TRANSLATION,
+            refresh_manifest_writeback=False,
+        )
+        manifest_path = "C:/jobs/demo/manifest.json"
+        self.window._writeback_manifest_path = manifest_path
+        summary = WritebackSummary(
+            status="safe",
+            heading="可以写回翻译",
+            message="ok",
+            facts=[],
+            findings=[],
+            can_apply=True,
+            manifest_path=manifest_path,
+        )
+        dialog = mock.MagicMock()
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        dialog.choice.return_value = ExportWritebackChoice(
+            mode=APPLY_EXPORT_MODE,
+            export_root="C:/exports/demo",
+        )
+        with (
+            mock.patch.object(
+                self.window,
+                "_current_writeback_summary",
+                return_value=summary,
+            ),
+            mock.patch.object(
+                self.window,
+                "_export_preview_facts",
+                return_value=ExportPreviewFacts(
+                    game_root="C:/game",
+                    tl_dir="C:/game/game/tl/schinese",
+                    package_dir="C:/jobs/demo",
+                    pending_files=2,
+                    pending_lines=6,
+                    gate_label="可以写回翻译",
+                    files=(("chapter.rpy", 2),),
+                ),
+            ),
+            mock.patch(
+                "gui_qt.app.ExportWritebackDialog",
+                return_value=dialog,
+            ),
+            mock.patch(
+                "gui_qt.app.message_box_question",
+                return_value="yes",
+            ),
+            mock.patch.object(
+                self.window,
+                "_start_cli_command",
+                return_value=True,
+            ) as start_command,
+        ):
+            self.window._on_open_export_writeback()
+
+        start_command.assert_called_once()
+        self.assertEqual(
+            start_command.call_args.args[2],
+            [
+                "apply",
+                manifest_path,
+                "--export-dir",
+                "C:/exports/demo",
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        self.assertEqual(
+            self.window._active_apply_export_mode,
+            APPLY_EXPORT_MODE,
+        )
 
 
 if __name__ == "__main__":
