@@ -292,6 +292,10 @@ def _locator_payload(candidate: Any, *, include_excerpts: bool) -> dict[str, Any
         "source_marker_kind": str(locator.get("source_marker_kind") or ""),
         "candidate_ordinal": int(locator.get("candidate_ordinal") or 0),
     }
+    if locator.get("multiline"):
+        payload["multiline"] = True
+    if locator.get("end_line_hint") is not None:
+        payload["end_line_hint"] = int(locator.get("end_line_hint") or 0)
     if include_excerpts:
         payload["raw_excerpt"] = _bounded_excerpt(candidate.raw_excerpt)
     return payload
@@ -542,14 +546,32 @@ def _scan_completeness(snapshot: Any, *, include_excerpts: bool) -> dict[str, An
     for candidate in snapshot.inventory.candidates:
         locator = candidate.locator.locator
         file_rel_path = str(locator.get("file_rel_path") or "")
-        line_index = max(int(locator.get("line_hint") or 0) - 1, 0)
-        candidate_spans.setdefault(file_rel_path, {}).setdefault(line_index, []).append(
-            (
-                int(locator.get("start_col_hint") or 0),
-                int(locator.get("end_col_hint") or 0),
-                str(candidate.classification),
-            )
+        start_line_index = max(int(locator.get("line_hint") or 0) - 1, 0)
+        end_line_index = max(
+            int(locator.get("end_line_hint") or start_line_index + 1) - 1,
+            start_line_index,
         )
+        document = documents.get(file_rel_path)
+        for line_index in range(start_line_index, end_line_index + 1):
+            if line_index == start_line_index:
+                start_col = int(locator.get("start_col_hint") or 0)
+            else:
+                start_col = 0
+            if document is not None and line_index < len(document.lines()):
+                line_length = len(document.lines()[line_index].rstrip("\r\n"))
+            else:
+                line_length = 0
+            if line_index == end_line_index:
+                end_col = int(locator.get("end_col_hint") or 0)
+            else:
+                end_col = line_length
+            candidate_spans.setdefault(file_rel_path, {}).setdefault(line_index, []).append(
+                (
+                    start_col,
+                    max(end_col, start_col + 1),
+                    str(candidate.classification),
+                )
+            )
 
     files: list[dict[str, Any]] = []
     total_raw = 0

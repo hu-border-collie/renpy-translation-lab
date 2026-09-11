@@ -12,10 +12,11 @@ Original synthetic fixture for issue
 
 `game/tl/schinese/attribution_samples.rpy` intentionally mixes:
 
+- cross-line extraction cases (multi-line triple-quoted and backslash-continued
+  strings, extracted as multiline candidates since #460);
 - structures that currently produce `parse_error` or `unsupported` inventory
-  candidates (multi-line triple-quoted strings, backslash-continued strings,
-  dynamic f-strings, non-standard `old` markers, orphan `old` rows, and
-  trailing quoted comments);
+  candidates (dynamic f-strings, non-standard `old` markers, orphan `old`
+  rows, and trailing quoted comments);
 - an `unknown` single-quoted dialogue span;
 - legitimate exclusions (`voice`, asset paths);
 - negative controls that must stay extractable: normal paired dialogue, a
