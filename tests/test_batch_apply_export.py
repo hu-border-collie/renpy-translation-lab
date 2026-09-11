@@ -277,7 +277,7 @@ class BatchApplyExportTests(unittest.TestCase):
 
     def test_strict_recovery_refuses_to_overwrite_out_of_transaction_change(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(tmp := temporary)
+            root = Path(temporary)
             target = root / "chapter.rpy"
             backup = root / ".chapter.rpy.txn.bak"
             staged = root / ".chapter.rpy.txn.tmp"  # missing: treated as committed
