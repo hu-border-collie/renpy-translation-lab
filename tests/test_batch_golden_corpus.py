@@ -654,6 +654,195 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 self._restore_batch_environment(old_values)
 
 
+    def test_golden_batch_apply_export_progress_failure_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-progress',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                export_root = root / 'exports'
+                real_update_progress = batch_mod.update_progress
+                calls = {'count': 0}
+
+                def fail_first_progress(*args, **kwargs):
+                    calls['count'] += 1
+                    if calls['count'] == 1:
+                        raise OSError('progress disk full')
+                    return real_update_progress(*args, **kwargs)
+
+                with mock.patch.object(
+                    batch_mod,
+                    'update_progress',
+                    side_effect=fail_first_progress,
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertNotIn('applied_at', raw_manifest)
+                record_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                self.assertEqual(
+                    json.loads(record_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'pending',
+                )
+
+                resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertIn('applied_at', resumed)
+                self.assertEqual(
+                    resumed['apply_state_advancement']['status'],
+                    'complete',
+                )
+                progress = json.loads(
+                    Path(batch_mod.PROGRESS_LOG).read_text(encoding='utf-8')
+                )
+                for line_numbers in progress.values():
+                    self.assertEqual(len(line_numbers), len(set(line_numbers)))
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_export_manifest_save_failure_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-manifest',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                export_root = root / 'exports'
+
+                def fail_first_manifest(*args, **kwargs):
+                    raise OSError('manifest fsync failed')
+
+                with mock.patch.object(
+                    batch_mod,
+                    'save_manifest',
+                    side_effect=fail_first_manifest,
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertNotIn('applied_at', raw_manifest)
+
+                resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertIn('applied_at', resumed)
+                self.assertEqual(
+                    resumed['apply_state_advancement']['status'],
+                    'complete',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_export_receipt_complete_failure_recovers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-receipt',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                export_root = root / 'exports'
+                real_mark_complete = batch_mod._mark_apply_export_state_complete
+
+                def fail_first_mark(*args, **kwargs):
+                    raise OSError('receipt complete marker failed')
+
+                with mock.patch.object(
+                    batch_mod,
+                    '_mark_apply_export_state_complete',
+                    side_effect=fail_first_mark,
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertIn('applied_at', raw_manifest)
+                progress_path = Path(batch_mod.PROGRESS_LOG)
+                progress_after_failure = (
+                    progress_path.read_bytes() if progress_path.exists() else None
+                )
+
+                resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertEqual(
+                    resumed['apply_state_advancement']['status'],
+                    'complete',
+                )
+                record_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                self.assertEqual(
+                    json.loads(record_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'complete',
+                )
+                self.assertEqual(
+                    progress_path.read_bytes(),
+                    progress_after_failure,
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+
     def test_golden_batch_apply_rejects_changed_source_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

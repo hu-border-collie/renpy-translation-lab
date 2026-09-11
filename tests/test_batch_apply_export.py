@@ -639,3 +639,207 @@ class BatchApplyExportFaultInjectionTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"committed new\n")
             self.assertFalse(journal.exists())
             self.assertFalse(backup.exists())
+
+
+class BatchApplyExportRecoveryGuardTests(unittest.TestCase):
+    def _setup(self, root: Path):
+        game_root = root / "project"
+        package_dir = root / "package"
+        game_root.mkdir()
+        package_dir.mkdir()
+        source = game_root / "game" / "tl" / "schinese" / "chapter.rpy"
+        source.parent.mkdir(parents=True)
+        source_bytes = b"old\n"
+        source.write_bytes(source_bytes)
+        export_root = batch_export.validate_apply_export_root(
+            str(root / "exports"),
+            game_root=str(game_root),
+            package_dir=str(package_dir),
+        )
+        workspace_payloads = [
+            {
+                "target_path": str(source),
+                "source_path": str(source),
+                "source_bytes": source_bytes,
+                "content": b"new\n",
+                "file_key": "chapter.rpy",
+            }
+        ]
+        export_payloads = [
+            {
+                "source_path": str(source),
+                "source_bytes": source_bytes,
+                "content": b"new\n",
+            }
+        ]
+        state_advancement = {
+            "manifest_path": str(package_dir / "manifest.json"),
+            "apply_summary": {"applied_files": 1, "applied_lines": 1},
+            "progress": [{"file_key": "chapter.rpy", "line_numbers": [0]}],
+            "rag_jobs": [],
+            "quality_state": "batch_applied",
+            "latest_target": "",
+            "should_update_latest": False,
+            "next_split_manifest_path": "",
+            "applied_at": "2026-01-01T00:00:00",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+        return {
+            "game_root": game_root,
+            "package_dir": package_dir,
+            "source": source,
+            "source_bytes": source_bytes,
+            "export_root": export_root,
+            "workspace_payloads": workspace_payloads,
+            "export_payloads": export_payloads,
+            "state_advancement": state_advancement,
+            "journal_path": str(package_dir / ".apply_export_transaction.json"),
+        }
+
+    def test_receipt_replace_failure_rolls_back_both_sides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            setup = self._setup(root)
+            source = setup["source"]
+            record_path = setup["export_root"].record_path
+            real_replace = atomic_io.os.replace
+            failed = False
+
+            def fail_receipt(source_path, destination_path):
+                nonlocal failed
+                if (
+                    not failed
+                    and os.path.abspath(os.fspath(destination_path))
+                    == os.path.abspath(record_path)
+                ):
+                    failed = True
+                    raise OSError("receipt replace failed")
+                return real_replace(source_path, destination_path)
+
+            with mock.patch.object(
+                atomic_io.os,
+                "replace",
+                side_effect=fail_receipt,
+            ):
+                with self.assertRaises(batch_export.ApplyExportError) as raised:
+                    batch_export.apply_and_export(
+                        setup["export_root"],
+                        game_root=str(setup["game_root"]),
+                        workspace_root=str(source.parent),
+                        package_dir=str(setup["package_dir"]),
+                        workspace_payloads=setup["workspace_payloads"],
+                        export_payloads=setup["export_payloads"],
+                        request_payload={"check": "receipt"},
+                        apply_identity="f" * 64,
+                        state_advancement=setup["state_advancement"],
+                        journal_path=setup["journal_path"],
+                    )
+            self.assertIn(
+                raised.exception.reason_code,
+                {"apply_export.commit_failed", "apply_export.recovery_required"},
+            )
+            self.assertEqual(source.read_bytes(), setup["source_bytes"])
+            self.assertFalse(Path(record_path).exists())
+            self.assertFalse((root / "exports").exists())
+
+    def test_prepared_journal_write_failure_leaves_no_side_effects(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            setup = self._setup(root)
+            source = setup["source"]
+            with mock.patch.object(
+                atomic_io,
+                "atomic_write_json",
+                side_effect=OSError("journal unavailable"),
+            ):
+                with self.assertRaises(batch_export.ApplyExportError) as raised:
+                    batch_export.apply_and_export(
+                        setup["export_root"],
+                        game_root=str(setup["game_root"]),
+                        workspace_root=str(source.parent),
+                        package_dir=str(setup["package_dir"]),
+                        workspace_payloads=setup["workspace_payloads"],
+                        export_payloads=setup["export_payloads"],
+                        request_payload={"check": "journal"},
+                        apply_identity="1" * 64,
+                        state_advancement=setup["state_advancement"],
+                        journal_path=setup["journal_path"],
+                    )
+            self.assertEqual(raised.exception.reason_code, "apply_export.commit_failed")
+            self.assertEqual(source.read_bytes(), setup["source_bytes"])
+            self.assertFalse(Path(setup["export_root"].record_path).exists())
+            self.assertFalse(Path(setup["journal_path"]).exists())
+
+    def test_workspace_tamper_after_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            setup = self._setup(root)
+            source = setup["source"]
+            batch_export.apply_and_export(
+                setup["export_root"],
+                game_root=str(setup["game_root"]),
+                workspace_root=str(source.parent),
+                package_dir=str(setup["package_dir"]),
+                workspace_payloads=setup["workspace_payloads"],
+                export_payloads=setup["export_payloads"],
+                request_payload={"check": "tamper"},
+                apply_identity="2" * 64,
+                state_advancement=setup["state_advancement"],
+                journal_path=setup["journal_path"],
+            )
+            source.write_bytes(b"out-of-transaction\n")
+            with self.assertRaises(batch_export.ApplyExportError) as raised:
+                batch_export.apply_and_export(
+                    setup["export_root"],
+                    game_root=str(setup["game_root"]),
+                    workspace_root=str(source.parent),
+                    package_dir=str(setup["package_dir"]),
+                    workspace_payloads=setup["workspace_payloads"],
+                    export_payloads=setup["export_payloads"],
+                    request_payload={"check": "tamper"},
+                    apply_identity="2" * 64,
+                    state_advancement=setup["state_advancement"],
+                    journal_path=setup["journal_path"],
+                )
+            self.assertEqual(
+                raised.exception.reason_code,
+                "apply_export.workspace_conflict",
+            )
+            self.assertEqual(source.read_bytes(), b"out-of-transaction\n")
+
+    def test_export_tree_tamper_after_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            setup = self._setup(root)
+            source = setup["source"]
+            batch_export.apply_and_export(
+                setup["export_root"],
+                game_root=str(setup["game_root"]),
+                workspace_root=str(source.parent),
+                package_dir=str(setup["package_dir"]),
+                workspace_payloads=setup["workspace_payloads"],
+                export_payloads=setup["export_payloads"],
+                request_payload={"check": "tamper-export"},
+                apply_identity="3" * 64,
+                state_advancement=setup["state_advancement"],
+                journal_path=setup["journal_path"],
+            )
+            exported = (
+                root / "exports" / "game" / "tl" / "schinese" / "chapter.rpy"
+            )
+            exported.write_bytes(b"tampered\n")
+            with self.assertRaises(batch_export.ApplyExportError) as raised:
+                batch_export.apply_and_export(
+                    setup["export_root"],
+                    game_root=str(setup["game_root"]),
+                    workspace_root=str(source.parent),
+                    package_dir=str(setup["package_dir"]),
+                    workspace_payloads=setup["workspace_payloads"],
+                    export_payloads=setup["export_payloads"],
+                    request_payload={"check": "tamper-export"},
+                    apply_identity="3" * 64,
+                    state_advancement=setup["state_advancement"],
+                    journal_path=setup["journal_path"],
+                )
+            self.assertEqual(raised.exception.reason_code, "apply_export.tree_conflict")
+            self.assertEqual(exported.read_bytes(), b"tampered\n")
