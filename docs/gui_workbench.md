@@ -466,10 +466,10 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 「写回翻译」按钮只在最近一次检查满足**写回门禁**时启用（`writeback_gate.decision=allow`；批量翻译 · 结果区主按钮）。质量报警默认不阻止写回，但会单独显示在写回摘要中。
 
 同一门禁下，结果区还提供「导出…」：
-- **仅导出**：选择不存在或为空的目录，调用 `apply --export-only <PATH>`；不修改游戏文件、进度或 latest。
-- **写回并导出**：调用 `apply --export-dir <PATH>`，同一份已验证渲染结果同时写回工作区和导出树，使用一个可恢复 journal；文件全部提交后才推进 progress/RAG/latest。
+- **仅导出**：选择不存在或为空的目录，调用 `apply --export-only <PATH>`；不修改游戏文件、进度或 latest。若同 package 有未决 P2 journal 或 pending receipt，会结构化拒绝而不执行 P2 回滚/状态补记。
+- **写回并导出**：调用 `apply --export-dir <PATH>`，同一份已验证渲染结果同时写回工作区和导出树，使用一个可恢复 journal；文件全部提交后才推进 progress、RAG、latest（前值条件推进）与 manifest/receipt。complete receipt 重放会重新复核两边输出，删/改/增返回 `APPLY_EXPORT_OUTPUT_CHANGED`；RAG 未成功时摘要显示 `APPLY_EXPORT_STATE_PENDING` 与待补记步骤，下一次 apply 重试。
 - 对话框展示源根（游戏根）、目标根、受管文件树与当前门禁；目标目录非空且没有匹配导出记录时会阻止继续，已有导出记录则提示执行时会复核回执/受管树/源快照。
-- 预览只是预检，不授权绕过执行时复核。项目/任务切换、源文件或结果变化会使旧预览失效；CLI 仍会重新校验 stale check、源快照、结构阻断、plan 绑定和目录冲突。
+- 预览只是预检，不授权绕过执行时复核。项目/任务切换、源文件或结果变化会使旧预览失效；CLI 仍会重新校验 stale check、源快照、结构阻断、plan 绑定、输出复核和目录冲突。latest 已被其它操作推进时，重放会保留新值并在摘要中显示 `retained_newer`。
 
 `writeback_gate=allow` 只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。界面明确区分「可写回」与「可交付」：`quality_gate` 会输出机械质量报警；写回后仍须按报警处理，并对错译、术语、语气与上下文进行人工/LLM 通读。
 

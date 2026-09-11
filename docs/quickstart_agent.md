@@ -37,7 +37,7 @@ python gemini_translate_batch.py apply <manifest> --export-only <EXPORT_ROOT> --
 python gemini_translate_batch.py apply <manifest> --export-dir <EXPORT_ROOT> --output json --non-interactive --strict-exit-codes
 ```
 
-`result.apply.mode=export-only` 时读取 `status=exported` 或 `no-op`、`export_root`、`record_path`、`exported_files`、`applied_files=0` 和 `recovery_state`。`result.apply.mode=apply-export` 时读取 `status=applied_and_exported` 或 `no-op`、`exported_files`、`applied_files`、`actual_applied_files`、`applied_lines`、`recovery_state` 与 `state_advancement_status`。目标目录首次必须不存在或为空；重复调用只接受匹配回执与完整受管树；已提交但状态待补记时，下一次 apply 会按 receipt 幂等恢复，不会重复推进 progress/RAG/latest。两个选项互斥，都不接受 Durable Sync、revision 或其它非 translation manifest；`--force` 不绕过 stale check、源快照、结构阻断、plan 绑定或导出目录冲突。
+`result.apply.mode=export-only` 时读取 `status=exported` 或 `no-op`、`export_root`、`record_path`、`exported_files`、`applied_files=0` 和 `recovery_state`。`result.apply.mode=apply-export` 时读取 `status=applied_and_exported` 或 `no-op`、`exported_files`、`applied_files`、`actual_applied_files`、`applied_lines`、`recovery_state`、`pending_steps`、`latest_cursor` 与 `state_advancement_status`。目标目录首次必须不存在或为空；重复调用只接受匹配回执与完整受管树，且任何幂等成功出口都会重新复核输出，删/改/增输出返回 `APPLY_EXPORT_OUTPUT_CHANGED`。RAG 返回 error 时文件已提交但收到 `APPLY_EXPORT_STATE_PENDING`，下一次 apply 会重跑 RAG；latest 游标只在前值仍匹配时条件推进，其它操作已推进时保留新值并报告 `retained_newer`。`--export-only` 遇到未决 P2 journal/pending receipt 时结构化拒绝，不执行 P2 恢复或状态补记。两个选项互斥，都不接受 Durable Sync、revision 或其它非 translation manifest；`--force` 不绕过 stale check、源快照、结构阻断、plan 绑定、输出复核或导出目录冲突。
 
 P3/P4 的版本资产与译文复用命令也使用同一 envelope：
 
