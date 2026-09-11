@@ -418,6 +418,242 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             finally:
                 self._restore_batch_environment(old_values)
 
+    def test_golden_batch_apply_export_end_to_end_and_idempotent_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                checked = batch_mod.check_results(str(manifest_path))
+                self.assertEqual(
+                    checked['last_check_summary']['writeback_gate']['decision'],
+                    'allow',
+                )
+                export_root = root / 'exports'
+                applied = batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+
+                self.assertIn('applied_at', applied)
+                self.assertEqual(applied['export_summary']['mode'], 'apply-export')
+                self.assertEqual(
+                    applied['export_summary']['status'],
+                    'applied_and_exported',
+                )
+                self.assertEqual(applied['export_summary']['exported_files'], 2)
+                self.assertEqual(applied['apply_summary']['applied_files'], 2)
+                self.assertEqual(applied['apply_summary']['applied_lines'], 6)
+                self.assertEqual(
+                    applied['apply_state_advancement']['status'],
+                    'complete',
+                )
+                for relative in (
+                    'chapter01/dialogue.rpy',
+                    'chapter02/strings.rpy',
+                ):
+                    expected = (
+                        GOLDEN_BATCH_FIXTURE_DIR
+                        / 'expected'
+                        / 'applied'
+                        / relative
+                    ).read_bytes()
+                    self.assertEqual((tl_dir / relative).read_bytes(), expected)
+                    self.assertEqual(
+                        (
+                            export_root
+                            / 'game'
+                            / 'tl'
+                            / 'schinese'
+                            / relative
+                        ).read_bytes(),
+                        expected,
+                    )
+
+                progress = json.loads(
+                    Path(batch_mod.PROGRESS_LOG).read_text(encoding='utf-8')
+                )
+                self.assertTrue(progress)
+                self.assertTrue(Path(batch_mod.LATEST_MANIFEST_FILE).is_file())
+
+                second = batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                self.assertEqual(
+                    second['export_summary']['status'],
+                    'applied_and_exported',
+                )
+                self.assertEqual(
+                    second['export_summary']['state_advancement_status'],
+                    'complete',
+                )
+
+                with self.assertRaisesRegex(SystemExit, 'already applied'):
+                    batch_mod.apply_results(str(manifest_path))
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_export_state_recovery_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-recovery',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                export_root = root / 'exports'
+                with mock.patch.object(
+                    batch_mod,
+                    '_finish_apply_export_state',
+                    side_effect=RuntimeError('simulated state save failure'),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, 'simulated state save'):
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+
+                record_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                self.assertEqual(
+                    json.loads(record_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'pending',
+                )
+                progress_path = Path(batch_mod.PROGRESS_LOG)
+                progress_before = (
+                    progress_path.read_bytes() if progress_path.exists() else None
+                )
+
+                resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertIn('applied_at', resumed)
+                self.assertEqual(
+                    resumed['export_summary']['state_advancement_status'],
+                    'complete',
+                )
+                progress_after_once = Path(batch_mod.PROGRESS_LOG).read_bytes()
+                self.assertNotEqual(progress_before, progress_after_once)
+
+                deadline = batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                self.assertEqual(
+                    deadline['export_summary']['state_advancement_status'],
+                    'complete',
+                )
+                self.assertEqual(
+                    Path(batch_mod.PROGRESS_LOG).read_bytes(),
+                    progress_after_once,
+                )
+                self.assertEqual(
+                    json.loads(record_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'complete',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_export_force_does_not_bypass_stale_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-stale',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                source = tl_dir / 'chapter01' / 'dialogue.rpy'
+                source.write_bytes(source.read_bytes() + b'# external drift\n')
+                export_root = root / 'exports'
+                with self.assertRaises(SystemExit):
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        force=True,
+                        export_dir=str(export_root),
+                    )
+                self.assertFalse(export_root.exists())
+                self.assertTrue(source.read_bytes().endswith(b'# external drift\n'))
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_batch_apply_export_rejects_non_empty_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            game_root = root / 'project'
+            tl_dir = self._copy_fixture_tl(game_root)
+            old_values = self._patch_batch_environment(game_root, tl_dir)
+            try:
+                manifest_path = Path(
+                    batch_mod.create_batch_package(
+                        display_name_override='golden-batch-apply-export-conflict',
+                        skip_prepare=True,
+                    )
+                )
+                self._write_mock_results(manifest_path)
+                batch_mod.check_results(str(manifest_path))
+                export_root = root / 'exports'
+                export_root.mkdir()
+                (export_root / 'unrelated.txt').write_bytes(b'keep')
+                before = {
+                    path.relative_to(tl_dir).as_posix(): path.read_bytes()
+                    for path in tl_dir.rglob('*')
+                    if path.is_file()
+                }
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as raised:
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        force=True,
+                        export_dir=str(export_root),
+                    )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_DESTINATION_CONFLICT',
+                )
+                self.assertEqual(
+                    (export_root / 'unrelated.txt').read_bytes(),
+                    b'keep',
+                )
+                self.assertEqual(
+                    {
+                        path.relative_to(tl_dir).as_posix(): path.read_bytes()
+                        for path in tl_dir.rglob('*')
+                        if path.is_file()
+                    },
+                    before,
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+
     def test_golden_batch_apply_rejects_changed_source_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

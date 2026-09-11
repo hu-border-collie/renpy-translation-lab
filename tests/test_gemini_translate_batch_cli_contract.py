@@ -940,6 +940,38 @@ class BatchCliContractTests(unittest.TestCase):
                     )
                 self.assertEqual(raised.exception.code_name, expected_code)
 
+    def test_apply_export_error_codes_keep_one_stable_prefix(self):
+        for reason_code, expected_code in (
+            ("apply_export.path_required", "APPLY_EXPORT_PATH_REQUIRED"),
+            (
+                "apply_export.destination_conflict",
+                "APPLY_EXPORT_DESTINATION_CONFLICT",
+            ),
+            ("apply_export.recovery_required", "APPLY_EXPORT_RECOVERY_REQUIRED"),
+            ("", "APPLY_EXPORT_FAILED"),
+        ):
+            with self.subTest(reason_code=reason_code):
+                with self.assertRaises(batch.cli_contract.MachineContractError) as raised:
+                    batch._apply_export_error(
+                        SimpleNamespace(reason_code=reason_code, details={})
+                    )
+                self.assertEqual(raised.exception.code_name, expected_code)
+
+    def test_apply_parser_export_options_are_mutually_exclusive(self):
+        parser = batch.build_arg_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "apply",
+                    "manifest.json",
+                    "--export-only",
+                    "exports-a",
+                    "--export-dir",
+                    "exports-b",
+                ]
+            )
+
+
     def test_typed_core_error_bypasses_message_classifier_in_machine_mode(self):
         stdout = io.StringIO()
 
@@ -967,6 +999,55 @@ class BatchCliContractTests(unittest.TestCase):
             payload["error"]["suggested_action"],
             "rebuild_or_repair_manifest",
         )
+    def test_machine_result_builder_covers_apply_export_summary(self):
+        manifest = {
+            "_manifest_path": "C:/jobs/demo/manifest.json",
+            "mode": "translation",
+            "applied_at": "2026-08-01T12:00:00",
+            "next_split_manifest_path": "C:/jobs/part02/manifest.json",
+            "apply_summary": {
+                "applied_files": 2,
+                "applied_lines": 6,
+                "actual_applied_files": 2,
+            },
+            "export_summary": {
+                "mode": "apply-export",
+                "operation": "apply_export",
+                "status": "applied_and_exported",
+                "applied_files": 2,
+                "actual_applied_files": 2,
+                "applied_lines": 6,
+                "exported_files": 2,
+                "recovery_state": "none",
+                "export_root": "D:/exports/demo",
+                "record_path": "C:/jobs/demo/apply_export_record.json",
+                "state_advancement_status": "complete",
+            },
+        }
+        envelope = batch.build_machine_success_envelope(
+            "apply",
+            manifest,
+            SimpleNamespace(target=""),
+        )
+
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["status"], "applied_and_exported")
+        self.assertEqual(envelope["result"]["apply"]["mode"], "apply-export")
+        self.assertEqual(envelope["result"]["apply"]["actual_applied_files"], 2)
+        self.assertEqual(
+            envelope["result"]["apply"]["next_split_manifest"],
+            "C:/jobs/part02/manifest.json",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["export_root"],
+            "D:/exports/demo",
+        )
+        self.assertEqual(
+            envelope["artifacts"]["export_record"],
+            "C:/jobs/demo/apply_export_record.json",
+        )
+
+
     def test_machine_result_builder_covers_manifest_workflow(self):
         args = SimpleNamespace(target="")
         base_manifest = {

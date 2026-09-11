@@ -433,3 +433,93 @@ class BatchArtifactAtomicTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
+    def test_prepared_recovery_blocks_uncommitted_external_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            backup = root / '.script.rpy.demo.txn.bak'
+            staged = root / '.script.rpy.demo.txn.tmp'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('out-of-transaction\n', encoding='utf-8')
+            backup.write_text('preimage\n', encoding='utf-8')
+            staged.write_text('transaction-new\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'transaction_kind': 'apply',
+                        'state': 'prepared',
+                        'entries': [
+                            {
+                                'target': str(target),
+                                'staged_path': str(staged),
+                                'backup_path': str(backup),
+                                'existed': True,
+                                'staged_sha256': atomic_io.sha256_text('transaction-new\n'),
+                                'target_preimage_sha256': atomic_io.sha256_text('preimage\n'),
+                            }
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(atomic_io.AtomicWritePreimageConflict):
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind='apply',
+                    verify_targets=True,
+                )
+            self.assertEqual(target.read_text(encoding='utf-8'), 'out-of-transaction\n')
+            self.assertTrue(journal.exists())
+            self.assertTrue(staged.exists())
+
+    def test_committed_recovery_never_rolls_back_external_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            backup = root / '.script.rpy.demo.txn.bak'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('external change after commit\n', encoding='utf-8')
+            backup.write_text('preimage\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'transaction_kind': 'apply',
+                        'state': 'committed',
+                        'entries': [
+                            {
+                                'target': str(target),
+                                'staged_path': str(root / 'consumed.tmp'),
+                                'backup_path': str(backup),
+                                'existed': True,
+                                'staged_sha256': atomic_io.sha256_text('committed\n'),
+                                'target_preimage_sha256': atomic_io.sha256_text('preimage\n'),
+                            }
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind='apply',
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(
+                target.read_text(encoding='utf-8'),
+                'external change after commit\n',
+            )
+            self.assertFalse(journal.exists())
+            self.assertFalse(backup.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

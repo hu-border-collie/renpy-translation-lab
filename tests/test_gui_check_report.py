@@ -320,6 +320,38 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("未修改", summary.message)
         self.assertFalse(summary.can_apply)
 
+    def test_summarize_apply_export_envelope_reports_both_sides(self):
+        summary = summarize_apply_envelope(
+            {
+                "ok": True,
+                "status": "applied_and_exported",
+                "result": {
+                    "apply": {
+                        "mode": "apply-export",
+                        "status": "applied_and_exported",
+                        "export_root": r"C:\exports",
+                        "record_path": r"C:\pkg\apply_export_record.json",
+                        "exported_files": 2,
+                        "applied_files": 2,
+                        "actual_applied_files": 2,
+                        "applied_lines": 6,
+                        "recovery_state": "none",
+                        "state_advancement_status": "complete",
+                    }
+                },
+            },
+            exit_code=0,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        self.assertEqual(summary.status, "applied_and_exported")
+        self.assertIn("导出目录：C:\\exports", "\n".join(summary.facts))
+        self.assertIn("导出完整文件：2 个", "\n".join(summary.facts))
+        self.assertIn("写回工作区文件：2 个", "\n".join(summary.facts))
+        self.assertIn("写回译文行：6 处", "\n".join(summary.facts))
+        self.assertIn("已写回游戏脚本并导出", summary.message)
+        self.assertFalse(summary.can_apply)
+
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
             APPLY_OUTPUT,

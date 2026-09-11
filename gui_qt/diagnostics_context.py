@@ -808,6 +808,16 @@ def build_cli_commands(
                 ),
             )
         )
+        commands.append(
+            DiagnosticsCommand(
+                label="写回并导出翻译文件（CLI）",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    ["apply", manifest_path, "--export-dir", "<EXPORT_ROOT>"],
+                ),
+            )
+        )
 
     if safety_level == "warn":
         commands.extend(
