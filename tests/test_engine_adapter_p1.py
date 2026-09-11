@@ -72,7 +72,7 @@ class TestRenPyAdapterP1(unittest.TestCase):
         self.assertTrue(capabilities.relocation)
         self.assertEqual(capabilities.declarative_writeback, ("text_span_replace",))
         self.assertTrue(capabilities.native_catalog_required_for_writeback)
-        self.assertEqual(capabilities.adapter_version, "1.1.5")
+        self.assertEqual(capabilities.adapter_version, "1.1.6")
         self.assertNotEqual(adapter.behavior_digest(), "")
 
 

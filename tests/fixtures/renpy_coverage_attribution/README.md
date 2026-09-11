@@ -17,7 +17,7 @@ Original synthetic fixture for issue
 - structures that currently produce `parse_error` or `unsupported` inventory
   candidates (dynamic f-strings, non-standard `old` markers, orphan `old`
   rows, and trailing quoted comments);
-- an `unknown` single-quoted dialogue span;
+- an unmarked single-quoted translated dialogue span (classified `already_translated` since #462);
 - legitimate exclusions (`voice`, asset paths);
 - negative controls that must stay extractable: normal paired dialogue, a
   translated speaker label, an empty target that is still pending, a dialogue
