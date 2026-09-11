@@ -10,6 +10,15 @@ import atomic_io
 import batch_export
 
 
+def _same_path(first, second) -> bool:
+    """Case/short-name tolerant path comparison for Windows CI."""
+
+    def canonical(value):
+        return os.path.normcase(os.path.realpath(os.path.abspath(os.fspath(value))))
+
+    return canonical(first) == canonical(second)
+
+
 class BatchApplyExportTests(unittest.TestCase):
     def _setup_paths(self, root: Path):
         game_root = root / "project"
@@ -226,11 +235,7 @@ class BatchApplyExportTests(unittest.TestCase):
 
             def fail_export_replace(source_path, destination_path):
                 nonlocal failed
-                if (
-                    not failed
-                    and os.path.abspath(os.fspath(destination_path))
-                    == os.path.abspath(destination)
-                ):
+                if not failed and _same_path(destination_path, destination):
                     failed = True
                     raise OSError("disk full")
                 return real_replace(source_path, destination_path)
@@ -452,11 +457,7 @@ class BatchApplyExportFaultInjectionTests(unittest.TestCase):
 
                     def fail_once(source_path, destination_path):
                         nonlocal failed
-                        if (
-                            not failed
-                            and os.path.abspath(os.fspath(destination_path))
-                            == os.path.abspath(target)
-                        ):
+                        if not failed and _same_path(destination_path, target):
                             failed = True
                             raise OSError("injected replace failure")
                         return real_replace(source_path, destination_path)
@@ -505,8 +506,17 @@ class BatchApplyExportFaultInjectionTests(unittest.TestCase):
             originals = {source: source.read_bytes() for source in sources}
             real_stage = atomic_io._stage_bytes
 
+            exports_prefix = os.path.normcase(
+                os.path.realpath(os.path.abspath(str(root / "exports")))
+            )
+
             def fail_export_stage(target, content):
-                if str(target).startswith(str(root / "exports")):
+                target_text = os.path.normcase(
+                    os.path.realpath(os.path.abspath(str(target)))
+                )
+                if target_text == exports_prefix or target_text.startswith(
+                    exports_prefix + os.sep
+                ):
                     raise OSError("stage failed")
                 return real_stage(target, content)
 
@@ -707,11 +717,7 @@ class BatchApplyExportRecoveryGuardTests(unittest.TestCase):
 
             def fail_receipt(source_path, destination_path):
                 nonlocal failed
-                if (
-                    not failed
-                    and os.path.abspath(os.fspath(destination_path))
-                    == os.path.abspath(record_path)
-                ):
+                if not failed and _same_path(destination_path, record_path):
                     failed = True
                     raise OSError("receipt replace failed")
                 return real_replace(source_path, destination_path)
