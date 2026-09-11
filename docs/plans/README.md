@@ -41,8 +41,9 @@
   基于三项目真实语料与人工标注的机械质量规则校准数据，支撑 #364 规则默认值调整。
 - [#426 Ren'Py coverage block 归因报告](renpy_coverage_block_attribution.md)：
   用原创合成 fixture 与只读 `scripts/coverage_block_attribution.py` 归因 unknown / unsupported /
-  parse_error 的语法根因、漏扫检查与后续修复拆单草案；P1 跨行字符串 inventory（#460）与
-  source marker 级联（#461）已实现，真实大型项目频率与其余运行时修复仍未完成。
+  parse_error 的语法根因、漏扫检查与后续修复拆单草案；P1 跨行字符串 inventory（#460）、
+  source marker 级联（#461）与 digest canonicalization（#463）已实现，真实大型项目频率与
+  其余运行时修复仍未完成。
 
 ## 已交付并归档的设计与调研
 
