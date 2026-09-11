@@ -1,4 +1,4 @@
-"""Targeted tests for Ren'Py source marker pairing (issue #461)."""
+"""Policy tests for quoted comments and orphan old rows (issue #464)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from engine_adapters.contracts import ProjectDiscoveryRequest
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 
 
-class RenPySourceMarkerPairingTests(unittest.TestCase):
+class RenPyCommentPolicyTests(unittest.TestCase):
     def make_project(self, text: str):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -32,56 +32,9 @@ class RenPySourceMarkerPairingTests(unittest.TestCase):
             ),
         )
 
-    def test_unsupported_dynamic_string_keeps_source_marker_paired(self):
+    def test_comment_without_target_is_excluded_not_parse_error(self):
         snapshot = self.snapshot_for(
             "translate schinese chapter:\n"
-            '    # e "Dynamic greeting."\n'
-            '    e f"动态问候 {player_name}"\n'
-        )
-
-        self.assertEqual(snapshot.report.classification_counts["parse_error"], 0)
-        self.assertNotIn("renpy.source_marker_unpaired", snapshot.report.reason_counts)
-        candidate = next(
-            candidate
-            for candidate in snapshot.inventory.candidates
-            if candidate.classification == "unsupported"
-        )
-        self.assertEqual(candidate.structure_kind, "dynamic_string_expression")
-        self.assertIn("renpy.dynamic_string_expression", candidate.reason_codes)
-
-    def test_old_marker_does_not_pair_with_non_new_statement(self):
-        snapshot = self.snapshot_for(
-            "translate schinese start:\n"
-            '    # "Dangling source"\n'
-            '    old "Old without new"\n'
-            '    text f"Dynamic {name}"\n'
-            '    "unterminated\n'
-        )
-
-        parse_errors = [
-            candidate
-            for candidate in snapshot.inventory.candidates
-            if candidate.classification == "parse_error"
-        ]
-        self.assertGreaterEqual(len(parse_errors), 3)
-        self.assertTrue(
-            any(
-                "renpy.source_marker_unpaired" in candidate.reason_codes
-                for candidate in parse_errors
-            )
-        )
-        self.assertTrue(
-            any(
-                "renpy.tokenize_error" in candidate.reason_codes
-                for candidate in parse_errors
-            )
-        )
-
-    def test_trailing_quoted_comment_without_target_is_non_player_visible(self):
-        snapshot = self.snapshot_for(
-            "translate schinese chapter:\n"
-            '    # e "Hello."\n'
-            '    e "你好。"\n'
             '    # TODO "internal-only-note"\n'
         )
 
@@ -93,23 +46,64 @@ class RenPySourceMarkerPairingTests(unittest.TestCase):
         )
         self.assertEqual(candidate.classification, "explicitly_excluded")
         self.assertIn("renpy.non_player_visible_literal", candidate.reason_codes)
+        self.assertEqual(candidate.translation_scope, "exclude")
 
-    def test_voice_statement_does_not_consume_comment_marker(self):
+    def test_dangling_source_like_comment_with_later_target_stays_parse_error(self):
         snapshot = self.snapshot_for(
             "translate schinese chapter:\n"
-            '    # e "Hello."\n'
-            '    voice "voice/sample.ogg"\n'
-            '    e "你好。"\n'
+            '    # "Dangling source"\n'
+            '    old "Old without new"\n'
+            '    text f"Dynamic {name}"\n'
+            '    "unterminated\n'
         )
 
-        self.assertEqual(snapshot.report.classification_counts["parse_error"], 0)
-        dialogue = next(
+        parse_errors = [
             candidate
             for candidate in snapshot.inventory.candidates
-            if candidate.unit is not None and candidate.unit.text == "你好。"
+            if candidate.classification == "parse_error"
+        ]
+        self.assertGreaterEqual(len(parse_errors), 2)
+        self.assertTrue(
+            any(
+                "renpy.source_marker_unpaired" in candidate.reason_codes
+                for candidate in parse_errors
+            )
         )
-        self.assertEqual(dialogue.classification, "already_translated")
-        self.assertIn("renpy.translate_comment_pair", dialogue.reason_codes)
+        self.assertFalse(
+            any(
+                candidate.structure_kind == "comment_without_target"
+                for candidate in snapshot.inventory.candidates
+            )
+        )
+
+    def test_orphan_old_row_stays_fail_closed_parse_error(self):
+        snapshot = self.snapshot_for(
+            "translate schinese strings:\n"
+            '    old "Only an old row remains."\n'
+        )
+
+        parse_errors = [
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.classification == "parse_error"
+        ]
+        self.assertEqual(len(parse_errors), 1)
+        self.assertEqual(parse_errors[0].structure_kind, "old_source_marker")
+        self.assertIn("renpy.source_marker_unpaired", parse_errors[0].reason_codes)
+
+    def test_old_marker_with_extra_token_is_unsupported(self):
+        snapshot = self.snapshot_for(
+            "translate schinese strings:\n"
+            '    old weird "Extra token"\n'
+        )
+
+        candidate = next(
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.classification == "unsupported"
+        )
+        self.assertEqual(candidate.structure_kind, "nonstandard_old_source_marker")
+        self.assertIn("renpy.custom_statement_unsupported", candidate.reason_codes)
 
 
 if __name__ == "__main__":
