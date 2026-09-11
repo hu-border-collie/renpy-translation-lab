@@ -80,7 +80,7 @@ _SAFE_ERROR_MESSAGES = {
     "provider_error": "LiteLLM provider request failed.",
 }
 
-# LiteLLM 1.83.7 treats omitted or empty api_key as OPENAI_API_KEY for rewritten
+# LiteLLM (verified through 1.84.0) treats omitted or empty api_key as OPENAI_API_KEY for rewritten
 # openai/* requests. A truthy placeholder stops that fallback; extra_headers
 # then blank Authorization so the placeholder never reaches a third-party
 # api_base. An empty extra header is the supported no-credential mechanism;
