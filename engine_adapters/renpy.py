@@ -55,7 +55,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.2"
+ADAPTER_VERSION = "1.1.3"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -88,6 +88,131 @@ def _first_comment_literal(raw_text: str) -> str:
         out.append(char)
         index += 1
     return raw_text
+
+
+MAX_MULTILINE_STRING_LINES = 200
+
+
+def _open_string_quote(text: str) -> str | None:
+    """Return the delimiter when a physical line ends inside a string literal."""
+
+    index = 0
+    quote: str | None = None
+    while index < len(text):
+        char = text[index]
+        if quote is None:
+            if char == "#":
+                return None
+            if text.startswith('"""', index):
+                quote = '"""'
+                index += 3
+                continue
+            if text.startswith("'''", index):
+                quote = "'''"
+                index += 3
+                continue
+            if char in {'"', "'"}:
+                quote = char
+            index += 1
+            continue
+        if len(quote) == 3:
+            if text.startswith(quote, index):
+                quote = None
+                index += 3
+                continue
+            index += 1
+            continue
+        if char == "\\":
+            index += 2
+            continue
+        if char == quote:
+            quote = None
+        index += 1
+    return quote
+
+
+def _ends_with_unescaped_backslash(text: str) -> bool:
+    stripped = text.rstrip("\r\n")
+    backslashes = 0
+    for char in reversed(stripped):
+        if char != "\\":
+            break
+        backslashes += 1
+    return backslashes % 2 == 1
+
+
+def _has_legal_multiline_string_start(line: str) -> bool:
+    quote = _open_string_quote(line)
+    if quote is None:
+        return False
+    if len(quote) == 3:
+        return True
+    return _ends_with_unescaped_backslash(line)
+
+
+def _tokenize_multiline_region(
+    lines: Sequence[str],
+    start_index: int,
+) -> tuple[list[tokenize.TokenInfo], int] | None:
+    """Tokenize the smallest logical region that closes an open string."""
+
+    if not _has_legal_multiline_string_start(lines[start_index]):
+        return None
+    end_limit = min(len(lines), start_index + MAX_MULTILINE_STRING_LINES)
+    for end_index in range(start_index + 1, end_limit):
+        chunk = "".join(lines[start_index : end_index + 1])
+        try:
+            tokens = list(tokenize.generate_tokens(io.StringIO(chunk).readline))
+        except (IndentationError, SyntaxError, tokenize.TokenError):
+            continue
+        if not any(token.end[0] > token.start[0] for token in tokens):
+            return None
+        return tokens, end_index
+    return None
+
+
+def _tokenize_document_lines(
+    lines: Sequence[str],
+) -> tuple[dict[int, list[tokenize.TokenInfo]], dict[int, Exception]]:
+    """Tokenize physical lines, carrying legal open strings into next lines.
+
+    Token positions are kept in coordinates relative to the physical line where
+    the token starts, so existing per-line helpers keep working while a token's
+    relative ``end`` row can still describe its physical span.
+    """
+
+    tokens_by_line: dict[int, list[tokenize.TokenInfo]] = {}
+    line_errors: dict[int, Exception] = {}
+    consumed: set[int] = set()
+    for line_index in range(len(lines)):
+        if line_index in consumed:
+            continue
+        line = lines[line_index]
+        try:
+            tokens = list(tokenize.generate_tokens(io.StringIO(line).readline))
+        except (IndentationError, SyntaxError, tokenize.TokenError) as exc:
+            region = _tokenize_multiline_region(lines, line_index)
+            if region is None:
+                line_errors[line_index] = exc
+                continue
+            region_tokens, end_index = region
+            for token in region_tokens:
+                global_start_line = line_index + token.start[0] - 1
+                relative_end_row = 1 + token.end[0] - token.start[0]
+                tokens_by_line.setdefault(global_start_line, []).append(
+                    tokenize.TokenInfo(
+                        token.type,
+                        token.string,
+                        (1, token.start[1]),
+                        (relative_end_row, token.end[1]),
+                        token.line,
+                    )
+                )
+            consumed.update(range(line_index, end_index + 1))
+            continue
+        tokens_by_line[line_index] = tokens
+        consumed.add(line_index)
+    return tokens_by_line, line_errors
 
 
 @dataclass(frozen=True)
@@ -444,6 +569,7 @@ class RenPyAdapter:
             identity_by_span[(int(line_index), int(start_col), int(end_col))] = identity
 
         is_translation_file = any(line.lstrip().startswith("translate ") for line in lines)
+        tokens_by_line, line_tokenize_errors = _tokenize_document_lines(lines)
         candidates: list[Candidate] = []
         paired_source_marker_lines: set[int] = set()
         character_display_spans: list[tuple[int, int, int, int]] = []
@@ -556,12 +682,8 @@ class RenPyAdapter:
                     identity_ordinal = 0
                     candidate_block_ordinal = 0
 
-            tokens: list[tokenize.TokenInfo] = []
-            tokenize_error: Exception | None = None
-            try:
-                tokens.extend(tokenize.generate_tokens(io.StringIO(line).readline))
-            except (IndentationError, SyntaxError, tokenize.TokenError) as exc:
-                tokenize_error = exc
+            tokens: list[tokenize.TokenInfo] = list(tokens_by_line.get(line_index, ()))
+            tokenize_error: Exception | None = line_tokenize_errors.get(line_index)
             if tokenize_error is not None and line_index not in valid_character_definition_lines:
                 candidate_ordinal += 1
                 candidate_block_ordinal += 1
@@ -671,7 +793,8 @@ class RenPyAdapter:
                 )
 
                 marker = None
-                if identity is not None or legacy_item is not None:
+                token_is_multiline = token.end[0] > token.start[0]
+                if identity is not None or legacy_item is not None or token_is_multiline:
                     marker = self._source_marker_evidence(
                         legacy,
                         lines,
@@ -863,6 +986,7 @@ class RenPyAdapter:
         prefix, quote = legacy.parse_string_literal_format(token.string)
         literal_prefix = token.string[: len(token.string) - len(token.string.lstrip("rRuUbBfF"))]
         is_dynamic = "f" in literal_prefix.lower()
+        is_multiline = token.end[0] > token.start[0]
         try:
             text_value = ast.literal_eval(token.string)
             literal_error: Exception | None = None
@@ -988,6 +1112,23 @@ class RenPyAdapter:
             classification = "explicitly_excluded"
             reasons = ["renpy.asset_path"]
             structure_kind = "asset_literal"
+        elif is_multiline and not is_translation_file:
+            classification = "translatable"
+            reasons = [supported_reason]
+        elif is_multiline:
+            if marker is None:
+                classification = "unknown"
+                reasons = ["renpy.visibility_unknown"]
+                structure_kind = "unknown_string_structure"
+            elif pending_from_empty is not None:
+                classification = "translatable"
+                reasons = [supported_reason, "renpy.empty_target"]
+            elif legacy.contains_chinese(live_catalog_text):
+                classification = "already_translated"
+                reasons = [supported_reason, "renpy.catalog.translation_present"]
+            else:
+                classification = "translatable"
+                reasons = [supported_reason]
         else:
             classification = "unknown"
             reasons = ["renpy.visibility_unknown"]
@@ -1061,20 +1202,24 @@ class RenPyAdapter:
             structure_kind,
         )
 
+        locator_payload: dict[str, Any] = {
+            "file_rel_path": document.file_rel_path,
+            "translate_block": block_name,
+            "block_occurrence": block_occurrence,
+            "ordinal": ordinal,
+            "line_hint": line_index + 1,
+            "start_col_hint": token.start[1],
+            "end_col_hint": token.end[1],
+            "source_marker_kind": source_marker_kind,
+            "candidate_ordinal": candidate_ordinal,
+        }
+        if is_multiline:
+            locator_payload["end_line_hint"] = line_index + token.end[0] - token.start[0] + 1
+            locator_payload["multiline"] = True
         locator = OpaqueLocator(
             engine=self.engine,
             locator_schema_version=self.locator_schema_version,
-            locator={
-                "file_rel_path": document.file_rel_path,
-                "translate_block": block_name,
-                "block_occurrence": block_occurrence,
-                "ordinal": ordinal,
-                "line_hint": line_index + 1,
-                "start_col_hint": token.start[1],
-                "end_col_hint": token.end[1],
-                "source_marker_kind": source_marker_kind,
-                "candidate_ordinal": candidate_ordinal,
-            },
+            locator=locator_payload,
         )
         evidence: dict[str, Any] = {
             "literal": _bounded_excerpt(token.string),
@@ -1096,13 +1241,16 @@ class RenPyAdapter:
             evidence["source_text"] = _bounded_excerpt(source_text)
         if literal_error is not None:
             evidence["parse_error"] = f"{type(literal_error).__name__}: {literal_error}"
+        if is_multiline:
+            evidence["multiline"] = True
+            evidence["end_line_hint"] = line_index + token.end[0] - token.start[0] + 1
         return Candidate(
             candidate_id=_candidate_id(project, locator),
             engine=self.engine,
             adapter_version=self.adapter_version,
             source_fingerprint=project.source_fingerprint,
             locator=locator,
-            raw_excerpt=_bounded_excerpt(line.strip()),
+            raw_excerpt=_bounded_excerpt(token.string if is_multiline else line.strip()),
             structure_kind=structure_kind,
             classification=classification,
             reason_codes=tuple(dict.fromkeys(reasons)),

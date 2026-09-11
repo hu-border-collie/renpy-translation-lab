@@ -117,27 +117,24 @@ class CoverageAttributionTests(unittest.TestCase):
     def test_fixture_exposes_major_root_causes_and_legitimate_controls(self):
         payload = self.payload()
 
-        tokenize_groups = [
-            group
+        self.assertNotIn("renpy.tokenize_error", payload["candidate_reason_counts"])
+        multiline_locators = [
+            locator
             for group in payload["groups"]
-            if "renpy.tokenize_error" in group["reason_codes"]
+            for locator in group["locators"]
+            if locator.get("multiline")
         ]
-        self.assertTrue(tokenize_groups)
         self.assertEqual(
-            sum(group["count"] for group in tokenize_groups),
-            payload["candidate_reason_counts"]["renpy.tokenize_error"],
+            {
+                (locator["line_hint"], locator["end_line_hint"])
+                for locator in multiline_locators
+            },
+            {(22, 23), (27, 28)},
         )
-        self.assertEqual(payload["candidate_reason_counts"]["renpy.tokenize_error"], 4)
-        for group in tokenize_groups:
-            # Python tokenize versions can split the same gap between
-            # tokenize_region and string_literal structure kinds.
-            self.assertEqual(
-                group["automatic_evidence"]["category"],
-                "parser_defect_candidate",
-            )
-            self.assertTrue(group["requires_human_review"])
-            self.assertTrue(group["follow_up_needed"])
-            self.assertEqual(group["review_flags"], [])
+        for group in payload["groups"]:
+            if any(locator.get("multiline") for locator in group["locators"]):
+                self.assertEqual(group["classification"], "already_translated")
+                self.assertEqual(group["effective_category"], "translated")
 
         orphan_old = self.find_group(
             payload,
@@ -228,8 +225,8 @@ class CoverageAttributionTests(unittest.TestCase):
 
         self.assertEqual(scan["uncovered_span_count"], 0)
         self.assertEqual(scan["raw_span_count"], 17)
-        self.assertEqual(scan["matched_span_count"], 12)
-        self.assertEqual(scan["parse_error_region_span_count"], 5)
+        self.assertEqual(scan["matched_span_count"], 16)
+        self.assertEqual(scan["parse_error_region_span_count"], 1)
         self.assertEqual(scan["status"], "parse_error_regions")
         self.assertEqual(len(scan["files"]), 1)
         file_entry = scan["files"][0]
@@ -239,22 +236,14 @@ class CoverageAttributionTests(unittest.TestCase):
             (span["line_hint"], span["quote"])
             for span in file_entry["parse_error_region_spans"]
         }
-        self.assertEqual(
-            regions,
-            {
-                (22, '"""'),
-                (23, '"""'),
-                (27, '"'),
-                (28, '"'),
-                (34, '"'),
-            },
-        )
+        self.assertEqual(regions, {(34, '"')})
 
     def test_manual_decisions_override_automatic_categories(self):
-        tokenize_key = attribution.group_key(
-            "parse_error",
-            "tokenize_region",
-            ("renpy.tokenize_error",),
+        dynamic_key = attribution.group_key(
+            "unsupported",
+            "dynamic_string_expression",
+            ("renpy.dynamic_string_expression",),
+            ("dynamic_text_may_be_player_visible",),
         )
         with tempfile.TemporaryDirectory() as tmp:
             decisions_path = Path(tmp) / "decisions.json"
@@ -265,9 +254,9 @@ class CoverageAttributionTests(unittest.TestCase):
                         "reviewer": {"type": "human", "id": "fixture-reviewer"},
                         "decisions": [
                             {
-                                "group_key": tokenize_key,
-                                "category": "parser_defect",
-                                "rationale": "Synthetic fixture confirms multi-line string loss.",
+                                "group_key": dynamic_key,
+                                "category": "unknown",
+                                "rationale": "Reviewer cannot confirm the dynamic text is player-visible.",
                             }
                         ],
                     }
@@ -281,13 +270,14 @@ class CoverageAttributionTests(unittest.TestCase):
         self.assertEqual(payload["manual_decisions"]["reviewer"]["id"], "fixture-reviewer")
         group = self.find_group(
             payload,
-            "parse_error",
-            "tokenize_region",
-            ("renpy.tokenize_error",),
+            "unsupported",
+            "dynamic_string_expression",
+            ("renpy.dynamic_string_expression",),
+            ("dynamic_text_may_be_player_visible",),
         )
-        self.assertEqual(group["human_judgment"]["category"], "parser_defect")
-        self.assertEqual(group["effective_category"], "parser_defect")
-        self.assertFalse(group["requires_human_review"])
+        self.assertEqual(group["human_judgment"]["category"], "unknown")
+        self.assertEqual(group["effective_category"], "unknown")
+        self.assertTrue(group["requires_human_review"])
 
     def test_unknown_decision_group_and_invalid_schema_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -394,30 +384,28 @@ class CoverageAttributionTests(unittest.TestCase):
             self.payload()["coverage"]["classification_counts"],
         )
 
-    def test_current_multiline_parser_gap_is_characterized(self):
-        # Characterization for #426: this test pins current behavior on purpose.
-        # A follow-up parser fix, not this spike, must turn these into
-        # extractable candidates and update this expectation.
+    def test_multiline_strings_are_inventory_candidates_not_parse_errors(self):
         candidates_by_line = {}
         for candidate in self.snapshot.inventory.candidates:
             line = int(candidate.locator.locator.get("line_hint") or 0)
             candidates_by_line.setdefault(line, []).append(candidate)
+
         for line_hint in (22, 23, 27, 28):
-            self.assertTrue(candidates_by_line[line_hint])
-            self.assertTrue(
-                all(
+            self.assertFalse(
+                any(
                     candidate.classification == "parse_error"
-                    and "renpy.tokenize_error" in candidate.reason_codes
-                    for candidate in candidates_by_line[line_hint]
+                    for candidate in candidates_by_line.get(line_hint, [])
                 ),
                 line_hint,
             )
-            self.assertTrue(
-                all(
-                    not str(candidate.evidence.get("literal") or "")
-                    for candidate in candidates_by_line[line_hint]
-                )
-            )
+        multiline = candidates_by_line[22][0]
+        self.assertTrue(multiline.locator.locator.get("multiline"))
+        self.assertEqual(multiline.locator.locator.get("end_line_hint"), 23)
+        self.assertEqual(multiline.unit.text if multiline.unit else "", "多行对白第一行\n第二行")
+        continued = candidates_by_line[27][0]
+        self.assertTrue(continued.locator.locator.get("multiline"))
+        self.assertEqual(continued.locator.locator.get("end_line_hint"), 28)
+        self.assertEqual(continued.unit.text if continued.unit else "", "续行对白第一段第二段")
 
     def test_scan_document_string_spans_handles_comments_and_escapes(self):
         lines = [
