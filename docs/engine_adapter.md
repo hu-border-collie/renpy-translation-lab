@@ -293,7 +293,7 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 
 仍需另开 follow-up 的问题：
 
-1. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`。
+1. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`；#426 的只读归因脚本、原创合成 fixture 与后续修复拆单草案见 [coverage block 归因报告](plans/renpy_coverage_block_attribution.md)，真实项目频率与运行时修复仍未完成。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
