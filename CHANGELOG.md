@@ -40,6 +40,7 @@
 - canonicalize Ren'Py parse-error evidence：异常文本中的进程内存地址会被规范化，相同输入/规则/adapter 下的 `inventory_digest` 与 `coverage_digest` 跨进程稳定，归因脚本重新输出这两个 digest；adapter version 升至 `1.1.5`（#463）。
 - Ren'Py TL 缺少 generated source comment 时，目标语言的 say/narration 字符串不再落到 `unknown`：新增 allowlist reason `renpy.catalog.translation_present_without_marker`，按 Ren'Py 8.5.3 parser 证据分类为 `already_translated` 并记录 `source_marker_missing`；非目标语言/动态 f-string 仍保留 `unknown` / `unsupported`。adapter version 升至 `1.1.6`（#462）。
 - Ren'Py quoted comment 分类按 #464 policy：同 translate block 没有任何后继字符串 target 的 `# "…"` 注释归为 `explicitly_excluded` + `renpy.non_player_visible_literal`；仍有后继 target 的 dangling marker 保持 `renpy.source_marker_unpaired` parse_error，孤儿 `old` 行继续保持 parse_error，`old` 行含额外 token 保持 unsupported。adapter version 升至 `1.1.7`（#464）。
+- Ren'Py 支持跨行字符串 writeback：adapter 为 multiline occurrence 生成 `multiline_text_span_replace`（`line/start_col` + `end_line/end_col` 半开区间），公共消费者校验跨行 expected fragment hash、越界/重叠/stale 并复用既有 atomic writer；adapter version 升至 `1.1.8`（#471）。
 - 生成 Profile 不再强制绑定 embedding profile：RAG / Source Index 关闭时，LiteLLM 内置或自定义 OpenAI-compatible Profile 可以直接启动完整同步初译；对应检索开关开启但仍无 embedding 绑定时，配置投影与只读命令保持可用，真正物化检索/发起 embedding（含 Batch 计划与 apply 后的 store 更新）前以稳定错误拒绝，不会静默借道旧 embedding 配置。
 - `translate-preflight` 与 `profiles-probe` 现在会按 `credential_ref.kind=env` 的 `name` 读取命名环境变量，不再只依赖 Provider keyring 或派生的 `<PROVIDER>_API_KEY` 名称，避免把已配置的环境凭据误报为 `CREDENTIAL_UNAVAILABLE`。
 

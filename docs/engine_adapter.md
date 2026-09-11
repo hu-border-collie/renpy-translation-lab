@@ -37,10 +37,11 @@ source/context evidence 做唯一重定位；content evidence 还需达到最低
 发生行移动时只接受同一 `.ks`、同一 parser 值和同一 tag/parameter 语义的唯一候选；
 重复文本无法唯一定位时同样拒绝。`validate_translation()`
 输出版本化 `ValidationResult`。Ren'Py 的 `build_writeback_plan()` 产生
-`text_span_replace`；TyranoScript 只对既有原生 catalog row 产生
+`text_span_replace`（单行）或 `multiline_text_span_replace`（跨行，使用 `end_line`
+与半开 `end_col`）；TyranoScript 只对既有原生 catalog row 产生
 `json_catalog_set`，不会直接改写 `.ks`。公共消费者会在 check 和 apply 的二次源重读
 后再次校验 source snapshot、文件 hash、半开 span或 JSON path、目标当前值、相对路径和
-plan digest；adapter 没有文件写入权限。keyword、Project Analysis 与 Final Review 的
+plan digest；旧消费者遇到未知 operation kind 会 fail closed，adapter 没有文件写入权限。keyword、Project Analysis 与 Final Review 的
 独立扫描入口不在本阶段扩大范围。
 
 ## 扫描与等价性

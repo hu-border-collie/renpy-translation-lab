@@ -1,9 +1,9 @@
 # Ren'Py coverage block 归因报告（#426 spike）
 
-> **状态**：合成 fixture 归因完成；#460–#464 五条 follow-up 已全部实现并反映在本文；
-> **未完成真实大型项目频率归因**，跨行 writeback span 仍未支持。
+> **状态**：合成 fixture 归因完成；#460–#464 五条 follow-up 与跨行 writeback（#471）已全部实现并反映在本文；
+> **未完成真实大型项目频率归因**（#470）。
 > **输入**：原创合成 fixture [`tests/fixtures/renpy_coverage_attribution/`](../../tests/fixtures/renpy_coverage_attribution/README.md)，
-> adapter `renpy@1.1.7`，classification rules digest `c3db8146…300b`（#462 新增 `translation_present_without_marker`）。
+> adapter `renpy@1.1.8`，classification rules digest `c3db8146…300b`（#462 新增 `translation_present_without_marker`）。
 > **运行方式**：[`scripts/coverage_block_attribution.py`](../../scripts/coverage_block_attribution.py)，只读；不写项目、不调用模型。
 > **证据边界**：本环境没有获得授权的真实大型项目只读副本，因此本报告的频率与分布结论不得外推为真实项目归因。
 > 公开材料只包含脱敏汇总与原创 fixture，不含私有游戏名、脚本、地图、路径、对白或 Batch 结果。
@@ -73,9 +73,9 @@ python scripts/coverage_block_attribution.py `
 | `source_fingerprint` | `e9a8e502173f4afef5b78b41f92666af5e679a40fbf0eee2b5ba6aea534c9b86` |
 | `project_snapshot_fingerprint` | `eaa3def51f888454db52ef8ade9d93aa4b2f020017fcf0c76e4f0ad2b6d9d922` |
 | `classification_rules_digest` | `3cce9a4dddf9664568ebaba04131984295a1d1667363d03493704abb084ff410` |
-| `inventory_digest` | `ed8cf30562eeaed78407b3bbf0f6fe37c9b70b4a24f0094e71a75ab88cef56ef` |
-| `coverage_digest` | `176a3c1754b8bb4b5cec5bfb82e2e751ee9745ed447aec7995fec1b864559e65` |
-| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.7` 固定运行） | `5d4cb84c0b0bf51337fb7a6976add5405555d7e199364967521bbe942223c622` |
+| `inventory_digest` | `6d1516a5f24033ac7ed8934fdb63d15cdca7ea2cfdf16ca72bc30f7b1e3bf17d` |
+| `coverage_digest` | `923ba053a6ccb8b00e0639d934690698ab0d59d2b3ecdbc7b4301b3be3d335f3` |
+| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.8` 固定运行） | `0d86f856c4f2348154e1dc73b6f52aa5213519cff4297d5bd8975fcd6fd403ee` |
 
 ## 3. 分类报告
 
@@ -143,13 +143,15 @@ python scripts/coverage_block_attribution.py `
 
 ### 5.1 P1：支持跨行字符串的 inventory tokenization（已实现 / #460）
 
-> **状态：已实现。** `_inventory_document()` 现在通过 `_tokenize_document_lines()` 把合法的
-> triple-quote / 反斜杠续行区域与后续物理行合并 tokenize；multiline locator 增加
-> `end_line_hint` 与 `multiline=true`，TL 中 paired source marker 的分类由新分支处理。
-> 跨行 candidate 的 writeback 仍是单行 span 合同：`build_writeback_plan()` 会因 span 超出物理行而
-> fail closed，不写坏文件，但完整的跨行写回需要另立 follow-up。
-> #460 实现时版本为 `renpy@1.1.3`（当前 `renpy@1.1.4`，含 #461）；新增测试
-> `tests/test_engine_adapter_multiline_strings.py`，并更新了本 fixture 的 characterization。
+> **状态：已实现，并由 #471 补齐写回。** `_inventory_document()` 现在通过
+> `_tokenize_document_lines()` 把合法的 triple-quote / 反斜杠续行区域与后续物理行合并 tokenize；
+> multiline locator 增加 `end_line_hint` 与 `multiline=true`，TL 中 paired source marker 的分类由新分支处理。
+> `build_writeback_plan()` 现在产生 `multiline_text_span_replace`，公共消费者校验
+> `line/start_col/end_line/end_col` 半开区间、跨行 expected fragment hash 与 plan digest，
+> 再由既有 atomic writer 写回；非法/重叠/越界跨行 span 仍 fail closed。
+> #460 实现时版本为 `renpy@1.1.3`（当前 `renpy@1.1.8`，含 #461–#471）；新增测试
+> `tests/test_engine_adapter_multiline_strings.py` / `tests/test_engine_adapter_multiline_writeback.py`，
+> 并更新了本 fixture 的 characterization。
 
 - **问题**：`_inventory_document()` 逐物理行 `tokenize.generate_tokens(io.StringIO(line))`；多行三引号与
   行尾反斜杠在行内是未闭合字符串，产生 `renpy.tokenize_error`，玩家可见对白没有 candidate/unit。
@@ -259,8 +261,8 @@ python scripts/coverage_block_attribution.py `
 
 ## 7. 边界与仍未做的事
 
-- #426 的 5 条 follow-up（#460–#464）已全部实现（当前 `renpy@1.1.7`）；跨行 writeback span 仍未支持，
-  multiline candidate 在 `build_writeback_plan()` 仍 fail closed。
-- 没有改变 GUI、doctor 或 TyranoScript adapter；真实大型项目频率归因仍缺授权样本。
+- #426 的 5 条 follow-up（#460–#464）与跨行 writeback（#471）已全部实现（当前 `renpy@1.1.8`）；
+  multiline candidate 现在可进入 `check -> apply`。
+- 没有改变 GUI、doctor 或 TyranoScript adapter；真实大型项目频率归因仍缺授权样本（见 #470）。
 - 按 #464 策略合法排除的只有「同 block 没有任何后继 target 的 quoted comment」；
   证据不足或结构异常仍保持 parse_error / unsupported，不伪装成 `ready`。

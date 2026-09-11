@@ -75,6 +75,21 @@ def _operation_payload(operation: WritebackOperation) -> dict:
     return payload
 
 
+def _text_fragment(
+    lines: Sequence[str],
+    start_line: int,
+    start_col: int,
+    end_line: int,
+    end_col: int,
+) -> str:
+    if start_line == end_line:
+        return lines[start_line][start_col:end_col]
+    pieces = [lines[start_line][start_col:]]
+    pieces.extend(lines[start_line + 1 : end_line])
+    pieces.append(lines[end_line][:end_col])
+    return "".join(pieces)
+
+
 def _fail(reason_code: str, message: str) -> NoReturn:
     raise WritebackPlanError(reason_code, message)
 
@@ -82,12 +97,16 @@ def _fail(reason_code: str, message: str) -> NoReturn:
 def _validate_operation(
     operation: WritebackOperation,
     documents: Mapping[str, SourceDocument],
-    spans: list[tuple[str, int, int, int]],
+    spans: list[tuple[str, int, int, int, int]],
     json_targets: set[tuple[str, tuple[str, ...]]],
     target_kinds: dict[str, str],
     json_documents: dict[str, object],
 ) -> tuple[str, SourceDocument, list[str]]:
-    if operation.kind not in {"text_span_replace", "json_catalog_set"}:
+    if operation.kind not in {
+        "text_span_replace",
+        "multiline_text_span_replace",
+        "json_catalog_set",
+    }:
         _fail(
             "common.writeback.operation_unsupported",
             f"Unsupported writeback operation kind: {operation.kind!r}",
@@ -140,8 +159,9 @@ def _validate_operation(
             f"Writeback target file changed: {rel_path}",
         )
 
-    existing_kind = target_kinds.setdefault(rel_path, operation.kind)
-    if existing_kind != operation.kind:
+    kind_family = "json" if operation.kind == "json_catalog_set" else "text"
+    existing_family = target_kinds.setdefault(rel_path, kind_family)
+    if existing_family != kind_family:
         _fail(
             "common.writeback.plan_invalid",
             f"Writeback target mixes incompatible operation kinds: {rel_path}",
@@ -215,27 +235,76 @@ def _validate_operation(
             f"Text-span operation has an unexpected JSON target path: {rel_path}",
         )
     lines = document.lines()
-    if operation.line < 0 or operation.line >= len(lines):
-        _fail(
-            "common.writeback.span_invalid",
-            f"Writeback line is outside the live file: {rel_path}:{operation.line}",
-        )
-    line = lines[operation.line]
-    if (
-        operation.start_col < 0
-        or operation.end_col <= operation.start_col
-        or operation.end_col > len(line)
+    is_multiline = operation.kind == "multiline_text_span_replace"
+    if is_multiline:
+        if operation.end_line is None:
+            _fail(
+                "common.writeback.span_invalid",
+                f"Multiline writeback operation is missing end_line: {rel_path}",
+            )
+        end_line = int(operation.end_line)
+        if (
+            operation.line < 0
+            or operation.line >= len(lines)
+            or end_line < operation.line
+            or end_line >= len(lines)
+        ):
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback lines are outside the live file: {rel_path}:{operation.line}-{end_line}",
+            )
+        if operation.start_col < 0 or operation.start_col > len(lines[operation.line]):
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback start column is outside the live line: {rel_path}:{operation.line}",
+            )
+        if operation.end_col < 0 or operation.end_col > len(lines[end_line]):
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback end column is outside the live line: {rel_path}:{end_line}",
+            )
+        if operation.line == end_line and operation.end_col <= operation.start_col:
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback span is empty: {rel_path}:{operation.line}",
+            )
+    else:
+        if operation.end_line is not None:
+            _fail(
+                "common.writeback.plan_invalid",
+                f"Single-line operation has an unexpected end_line: {rel_path}",
+            )
+        if operation.line < 0 or operation.line >= len(lines):
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback line is outside the live file: {rel_path}:{operation.line}",
+            )
+        line = lines[operation.line]
+        if (
+            operation.start_col < 0
+            or operation.end_col <= operation.start_col
+            or operation.end_col > len(line)
+        ):
+            _fail(
+                "common.writeback.span_invalid",
+                f"Writeback span is outside the live line: {rel_path}:{operation.line}",
+            )
+        end_line = operation.line
+    if not is_multiline and (
+        "\n" in operation.replacement_fragment
+        or "\r" in operation.replacement_fragment
     ):
-        _fail(
-            "common.writeback.span_invalid",
-            f"Writeback span is outside the live line: {rel_path}:{operation.line}",
-        )
-    if "\n" in operation.replacement_fragment or "\r" in operation.replacement_fragment:
         _fail(
             "common.writeback.replacement_invalid",
             f"Writeback replacement must stay on one line: {rel_path}:{operation.line}",
         )
-    raw_fragment = line[operation.start_col : operation.end_col]
+    raw_fragment = _text_fragment(
+        lines,
+        operation.line,
+        operation.start_col,
+        end_line,
+        operation.end_col,
+    )
     if _sha256_text(raw_fragment) != operation.expected_fragment_sha256:
         _fail(
             "common.writeback.span_mismatch",
@@ -247,18 +316,19 @@ def _validate_operation(
             f"Writeback operation has no validation digest: {operation.occurrence_id}",
         )
 
-    span = (rel_path, operation.line, operation.start_col, operation.end_col)
+    span_start = (operation.line, operation.start_col)
+    span_end = (end_line, operation.end_col)
     for existing in spans:
-        if (
-            existing[0] == span[0]
-            and existing[1] == span[1]
-            and max(existing[2], span[2]) < min(existing[3], span[3])
-        ):
+        if existing[0] != rel_path:
+            continue
+        existing_start = (existing[1], existing[2])
+        existing_end = (existing[3], existing[4])
+        if span_start < existing_end and existing_start < span_end:
             _fail(
                 "common.writeback.span_overlap",
                 f"Overlapping writeback spans: {rel_path}:{operation.line}",
             )
-    spans.append(span)
+    spans.append((rel_path, operation.line, operation.start_col, end_line, operation.end_col))
     return rel_path, document, lines
 
 
@@ -302,7 +372,7 @@ def validate_writeback_plan(
                 f"Duplicate live source document: {rel_path}",
             )
         documents[rel_path] = document
-    spans: list[tuple[str, int, int, int]] = []
+    spans: list[tuple[str, int, int, int, int]] = []
     json_targets: set[tuple[str, tuple[str, ...]]] = set()
     target_kinds: dict[str, str] = {}
     json_documents: dict[str, object] = {}
@@ -331,34 +401,52 @@ def render_writeback_plan(
     """
 
     validated = validate_writeback_plan(plan, live_sources)
-    validated = tuple(
-        sorted(
-            validated,
-            key=lambda item: (item[0], item[1].line, item[1].start_col),
-            reverse=True,
-        )
-    )
-    rendered: dict[str, list[str]] = {}
-    json_documents: dict[str, object] = {}
-    json_source_documents: dict[str, SourceDocument] = {}
+    text_operations: dict[str, list[WritebackOperation]] = {}
+    text_documents: dict[str, SourceDocument] = {}
+    json_items: list[tuple[str, WritebackOperation, SourceDocument]] = []
     for rel_path, operation, document in validated:
         if operation.kind == "json_catalog_set":
-            data = json_documents.setdefault(
-                rel_path,
-                copy.deepcopy(json.loads(document.text())),
-            )
-            json_source_documents[rel_path] = document
-            current = data
-            for part in operation.target_json_path[:-1]:
-                current = current[part]
-            current[operation.target_json_path[-1]] = operation.replacement_fragment
+            json_items.append((rel_path, operation, document))
             continue
-        lines = rendered.setdefault(rel_path, list(document.lines()))
-        lines[operation.line] = (
-            lines[operation.line][: operation.start_col]
-            + operation.replacement_fragment
-            + lines[operation.line][operation.end_col :]
+        text_operations.setdefault(rel_path, []).append(operation)
+        text_documents[rel_path] = document
+
+    rendered: dict[str, list[str]] = {}
+    for rel_path, operations in text_operations.items():
+        document = text_documents[rel_path]
+        lines = document.lines()
+        line_starts = [0]
+        for line in lines:
+            line_starts.append(line_starts[-1] + len(line))
+        positioned: list[tuple[int, int, WritebackOperation]] = []
+        for operation in operations:
+            end_line = operation.end_line if operation.end_line is not None else operation.line
+            start_offset = line_starts[operation.line] + operation.start_col
+            end_offset = line_starts[end_line] + operation.end_col
+            positioned.append((start_offset, end_offset, operation))
+        positioned.sort(key=lambda item: (item[0], item[1]))
+        file_text = "".join(lines)
+        pieces: list[str] = []
+        cursor = 0
+        for start_offset, end_offset, operation in positioned:
+            pieces.append(file_text[cursor:start_offset])
+            pieces.append(operation.replacement_fragment)
+            cursor = end_offset
+        pieces.append(file_text[cursor:])
+        rendered[rel_path] = "".join(pieces).splitlines(keepends=True)
+
+    json_documents: dict[str, object] = {}
+    json_source_documents: dict[str, SourceDocument] = {}
+    for rel_path, operation, document in json_items:
+        data = json_documents.setdefault(
+            rel_path,
+            copy.deepcopy(json.loads(document.text())),
         )
+        json_source_documents[rel_path] = document
+        current = data
+        for part in operation.target_json_path[:-1]:
+            current = current[part]
+        current[operation.target_json_path[-1]] = operation.replacement_fragment
     for rel_path, data in json_documents.items():
         document = json_source_documents[rel_path]
         source_text = document.text()
@@ -377,22 +465,4 @@ def render_writeback_plan(
         if source_text.endswith(("\n", "\r")):
             serialized += newline
         rendered[rel_path] = serialized.splitlines(keepends=True)
-
-    # ``SourceDocument.text()`` intentionally uses utf-8-sig for adapter
-    # parsing, which removes a source BOM.  Reattach it to every rendered
-    # document so the final byte representation remains comparable with the
-    # live source and can be exported without changing its encoding contract.
-    documents_by_path = {
-        _normal_relative_path(document.file_rel_path): document
-        for document in live_sources
-    }
-    for rel_path, lines in rendered.items():
-        document = documents_by_path.get(rel_path)
-        if document is None or not document.content.startswith(b"\xef\xbb\xbf"):
-            continue
-        if lines:
-            if not lines[0].startswith("\ufeff"):
-                lines[0] = "\ufeff" + lines[0]
-        else:
-            lines.append("\ufeff")
     return rendered
