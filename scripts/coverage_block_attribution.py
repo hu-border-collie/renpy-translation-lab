@@ -746,9 +746,8 @@ def build_attribution_report(
             f"{len(unresolved_groups)} group(s) still have no manual judgment."
         )
     evidence_gaps.append(
-        "Adapter inventory/coverage digests are intentionally omitted: some parse-error evidence "
-        "text embeds Python object addresses, so those derived digests can vary between identical "
-        "runs.  Stable source, project snapshot, and classification-rules fingerprints are included."
+        "Adapter inventory/coverage digests are included and, after #463, parse-error evidence is "
+        "canonicalized so they are reproducible across processes for the same input/rules/version."
     )
     evidence_gaps.append(
         "This run does not assert real-project frequency.  Only run it on an authorized "
@@ -773,6 +772,8 @@ def build_attribution_report(
             "include_prefixes": list(request.include_prefixes),
             "source_fingerprint": snapshot.project.source_fingerprint,
             "project_snapshot_fingerprint": snapshot.project.project_snapshot_fingerprint,
+            "inventory_digest": report.inventory_digest,
+            "coverage_digest": report.coverage_digest,
             "classification_rules_digest": report.classification_rules_digest,
         },
         "coverage": _coverage_payload(report),

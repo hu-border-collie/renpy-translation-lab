@@ -16,6 +16,7 @@ import hashlib
 import io
 import os
 from pathlib import Path
+import re
 import tokenize
 from types import ModuleType
 from typing import Any, Iterable, Mapping, Sequence
@@ -55,7 +56,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.4"
+ADAPTER_VERSION = "1.1.5"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -280,6 +281,17 @@ def _bounded_excerpt(value: str, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+
+_MEMORY_ADDRESS_RE = re.compile(r"\s+at\s+0x[0-9a-fA-F]+")
+_HEX_ADDRESS_RE = re.compile(r"0x[0-9a-fA-F]+")
+
+
+def _stable_error_text(value: object) -> str:
+    """Return exception text without process-specific memory addresses."""
+
+    text = _MEMORY_ADDRESS_RE.sub("", str(value or ""))
+    return _HEX_ADDRESS_RE.sub("0x<addr>", text)
 
 
 def _normalize_fingerprint_text(value: str) -> str:
@@ -522,7 +534,7 @@ class RenPyAdapter:
                 ordinal=1,
                 reason_code="renpy.tokenize_error",
                 structure_kind="source_decode_error",
-                excerpt=f"{type(exc).__name__}: {exc}",
+                excerpt=_stable_error_text(f"{type(exc).__name__}: {exc}"),
             )
             return [candidate], {"translated_count": 0}
 
@@ -597,7 +609,7 @@ class RenPyAdapter:
                     ordinal=candidate_ordinal,
                     reason_code="renpy.ast_parse_error",
                     structure_kind="legacy_scan_error",
-                    excerpt=(f"{stage}: {type(scan_exception).__name__}: {scan_exception}"),
+                    excerpt=_stable_error_text(f"{stage}: {type(scan_exception).__name__}: {scan_exception}"),
                 )
             )
 
@@ -632,7 +644,7 @@ class RenPyAdapter:
                             ordinal=candidate_block_ordinal,
                             reason_code="renpy.ast_parse_error",
                             structure_kind="character_definition",
-                            excerpt=f"{type(exc).__name__}: {exc}",
+                            excerpt=_stable_error_text(f"{type(exc).__name__}: {exc}"),
                         )
                     )
                 if definition is None and not definition_failed:
@@ -704,7 +716,7 @@ class RenPyAdapter:
                         ordinal=candidate_block_ordinal,
                         reason_code="renpy.tokenize_error",
                         structure_kind="tokenize_region",
-                        excerpt=(f"{type(tokenize_error).__name__}: {tokenize_error}"),
+                        excerpt=_stable_error_text(f"{type(tokenize_error).__name__}: {tokenize_error}"),
                     )
                 )
 
@@ -1249,7 +1261,7 @@ class RenPyAdapter:
             evidence["source_marker_line"] = marker_line_number
             evidence["source_text"] = _bounded_excerpt(source_text)
         if literal_error is not None:
-            evidence["parse_error"] = f"{type(literal_error).__name__}: {literal_error}"
+            evidence["parse_error"] = _stable_error_text(f"{type(literal_error).__name__}: {literal_error}")
         if is_multiline:
             evidence["multiline"] = True
             evidence["end_line_hint"] = line_index + token.end[0] - token.start[0] + 1

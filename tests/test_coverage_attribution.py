@@ -340,12 +340,20 @@ class CoverageAttributionTests(unittest.TestCase):
         self.assertNotIn(str(PROJECT_ROOT), serialized)
         self.assertNotIn("基线对白", serialized)
         self.assertNotIn('"raw_excerpt"', serialized)
-        self.assertNotIn('"inventory_digest"', serialized)
-        self.assertNotIn('"coverage_digest"', serialized)
         self.assertEqual(
             first["inputs"]["source_fingerprint"],
             self.snapshot.report.source_fingerprint,
         )
+        self.assertEqual(
+            first["inputs"]["inventory_digest"],
+            self.snapshot.report.inventory_digest,
+        )
+        self.assertEqual(
+            first["inputs"]["coverage_digest"],
+            self.snapshot.report.coverage_digest,
+        )
+        self.assertTrue(first["inputs"]["inventory_digest"])
+        self.assertTrue(first["inputs"]["coverage_digest"])
 
         markdown = attribution.render_markdown(first)
         self.assertIn("# Ren'Py coverage block attribution", markdown)

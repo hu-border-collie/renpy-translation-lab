@@ -1,9 +1,9 @@
 # Ren'Py coverage block 归因报告（#426 spike）
 
-> **状态**：合成 fixture 归因完成；P1 跨行字符串（#460）与 source marker 级联（#461）已实现并反映在本文；
-> #463 / #462 / #464 仍待处理；**未完成真实大型项目频率归因**。
+> **状态**：合成 fixture 归因完成；P1 跨行字符串（#460）、source marker 级联（#461）与 digest
+> canonicalization（#463）已实现并反映在本文；#462 / #464 仍待处理；**未完成真实大型项目频率归因**。
 > **输入**：原创合成 fixture [`tests/fixtures/renpy_coverage_attribution/`](../../tests/fixtures/renpy_coverage_attribution/README.md)，
-> adapter `renpy@1.1.4`，classification rules digest `3cce9a4d…f410`。
+> adapter `renpy@1.1.5`，classification rules digest `3cce9a4d…f410`。
 > **运行方式**：[`scripts/coverage_block_attribution.py`](../../scripts/coverage_block_attribution.py)，只读；不写项目、不调用模型。
 > **证据边界**：本环境没有获得授权的真实大型项目只读副本，因此本报告的频率与分布结论不得外推为真实项目归因。
 > 公开材料只包含脱敏汇总与原创 fixture，不含私有游戏名、脚本、地图、路径、对白或 Batch 结果。
@@ -69,7 +69,9 @@ python scripts/coverage_block_attribution.py `
 | `source_fingerprint` | `e9a8e502173f4afef5b78b41f92666af5e679a40fbf0eee2b5ba6aea534c9b86` |
 | `project_snapshot_fingerprint` | `eaa3def51f888454db52ef8ade9d93aa4b2f020017fcf0c76e4f0ad2b6d9d922` |
 | `classification_rules_digest` | `3cce9a4dddf9664568ebaba04131984295a1d1667363d03493704abb084ff410` |
-| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.4` 固定运行） | `74bc524343b620166133f1bb6483e767bb5c4614a2109a852b1892e041c28155` |
+| `inventory_digest` | `ea110a54ebd60c2eed1f11daf56391ac365c1e6880b8ae4f2387cbbe72e30fac` |
+| `coverage_digest` | `2c4e8fc655cd70c16b2980df494d89d56d92e72ecd9b6d938d37f1ece74b44d5` |
+| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.5` 固定运行） | `f6c0b3963112d3fd7e1b4e8a905410d95bf7917cdb53860cb5f9604ff00e544f` |
 
 ## 3. 分类报告
 
@@ -199,7 +201,13 @@ python scripts/coverage_block_attribution.py `
   2. 如改为合法排除，必须有有效 reason code 和人工 review 证据；
   3. 不把代码/断言/颜色/内部 ID 无条件移出 inventory。
 
-### 5.5 P2：canonicalize parse-error evidence，恢复 coverage digest 可复现
+### 5.5 P2：canonicalize parse-error evidence，恢复 coverage digest 可复现（已实现 / #463）
+
+> **状态：已实现。** `_stable_error_text()` 会移除异常文本中的 `at 0x…` 等进程地址，再写入
+> parse-error evidence / exception excerpt；相同输入、规则与 adapter 版本下 `inventory_digest` /
+> `coverage_digest` 跨进程稳定。adapter version `renpy@1.1.5`，新增测试
+> `tests/test_engine_adapter_digest_stability.py`；归因脚本重新输出两个 digest。
+> 该修复只规范化错误文本，不改变 classification、reason code 或 writeback。
 
 - **问题**：动态 f-string 的 `evidence["parse_error"]` 含 `<ast.JoinedStr object at 0x…>` 地址，
   导致相同输入的 `inventory_digest` / `coverage_digest` 在不同进程间漂移；本脚本才不得不省略这两个派生 digest。
@@ -218,14 +226,14 @@ python scripts/coverage_block_attribution.py `
    parser 或真实项目证据；当前只证明 adapter fixture 行为。
 3. **独立扫描是启发式**：quote-run state machine 可能对嵌套 f-string、转义和注释过度/不足计数；
    `uncovered_span_count=0` 只说明本 fixture 没发现静默漏扫，不等于全局证明。
-4. **派生 digest 不可复现**：见 §5.5；当前脚本用稳定输入指纹与 `aggregation_digest` 固定聚合结果，
-   但不输出历史 adapter coverage digest。
+4. **digest 跨版本会变化是设计行为**：同一 adapter / rules / 输入下 digest 已可复现（#463）；
+   升级 adapter version、classification rules 或 source 内容后，digest 变化用于 freshness 校验，不能跨版本比较。
 
 ## 7. 边界与仍未做的事
 
-- #426 spike 本身未改生产行为；后续 #460 已实现跨行字符串 inventory 提取、#461 已修复 source marker
-  级联（当前 `renpy@1.1.4`）。跨行 writeback span、#462 分类策略、#463 digest 可复现、#464 quoted
-  comment / 孤儿 `old` 仍按各自 issue 推进。
+- #426 spike 本身未改生产行为；后续 #460 已实现跨行字符串 inventory 提取、#461 修复 source marker
+  级联、#463 恢复 digest 可复现（当前 `renpy@1.1.5`）。跨行 writeback span、#462 分类策略、
+  #464 quoted comment / 孤儿 `old` 仍按各自 issue 推进。
 - #460 没有改变 writeback、GUI、doctor 或 TyranoScript adapter；multiline writeback 仍 fail closed。
 - 未把疑似 false-positive 的 candidate 排除，也未把 unsupported / parse_error 伪装成 `ready`；
   真实大型项目频率归因仍缺授权样本。
