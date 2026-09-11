@@ -1,16 +1,16 @@
 # Ren'Py coverage block 归因报告（#426 spike）
 
-> **状态**：合成 fixture 归因完成；P1 跨行字符串 inventory 已由 #460 实现并反映在本文；
-> #461 / #463 / #462 / #464 仍待处理；**未完成真实大型项目频率归因**。
+> **状态**：合成 fixture 归因完成；P1 跨行字符串（#460）与 source marker 级联（#461）已实现并反映在本文；
+> #463 / #462 / #464 仍待处理；**未完成真实大型项目频率归因**。
 > **输入**：原创合成 fixture [`tests/fixtures/renpy_coverage_attribution/`](../../tests/fixtures/renpy_coverage_attribution/README.md)，
-> adapter `renpy@1.1.3`，classification rules digest `3cce9a4d…f410`。
+> adapter `renpy@1.1.4`，classification rules digest `3cce9a4d…f410`。
 > **运行方式**：[`scripts/coverage_block_attribution.py`](../../scripts/coverage_block_attribution.py)，只读；不写项目、不调用模型。
 > **证据边界**：本环境没有获得授权的真实大型项目只读副本，因此本报告的频率与分布结论不得外推为真实项目归因。
 > 公开材料只包含脱敏汇总与原创 fixture，不含私有游戏名、脚本、地图、路径、对白或 Batch 结果。
 
 ## 1. 摘要结论
 
-同一份 fixture 上（`renpy@1.1.3`，含 #460 修复），coverage 自动状态仍为 `block`，17 个 candidate 的分类为：
+同一份 fixture 上（`renpy@1.1.4`，含 #460/#461 修复），coverage 自动状态仍为 `block`，16 个 candidate 的分类为：
 
 | classification | candidates | 对 block 的作用 |
 |---|---:|---|
@@ -19,7 +19,7 @@
 | `translatable` | 1 | 否 |
 | `unknown` | 1 | 是 |
 | `unsupported` | 2 | 否（使状态为 attention 级风险；当前 fixture 的 block 来自 unknown/parse_error） |
-| `parse_error` | 3 | 是 |
+| `parse_error` | 2 | 是 |
 
 自动归因得到的主要根因：
 
@@ -27,9 +27,10 @@
    现在各产生 1 个带 `end_line_hint` / `multiline=true` 的 candidate：三引号保留换行原文，
    反斜杠续行按 Python 字符串语义拼接；TL 中 paired source marker + 中文译文分类为 `already_translated`。
    修复前它们是 4 个 `renpy.tokenize_error` 并连带 2 个 source marker parse_error。
-2. **source marker 级联（剩余 #461）**：动态 f-string 这类 unsupported candidate 上方合法的
-   `# "…"` marker 仍会被记成 `renpy.source_marker_unpaired`；当前剩余 2 个该类 parse_error
-   （动态 f-string marker + 尾部 TODO comment），需要按 #461 由语句结构决定 pairing。
+2. **source marker 级联：已由 #461 修复**。marker pairing 不再依赖 candidate 是否为
+   identity/legacy/multiline：动态 f-string 这类 unsupported/unknown candidate 上方合法的 `# "…"` 仍会与逻辑
+   语句配对，不再产生额外 `renpy.source_marker_unpaired`。当前剩余 2 个 parse_error 是孤儿 `old` 行
+   （34 行）和没有后继字符串的尾部 quoted comment（39 行），分别由 #464 复核。
 3. **当前确认不支持的结构**：动态 f-string（`renpy.dynamic_string_expression`）与非标准 `old` 标记行
    （`renpy.custom_statement_unsupported`）各 1 个，均为 `unsupported`。
 4. **无法判定**：没有 paired source marker 的已译单引号对白进入 `unknown / renpy.visibility_unknown`；
@@ -68,7 +69,7 @@ python scripts/coverage_block_attribution.py `
 | `source_fingerprint` | `e9a8e502173f4afef5b78b41f92666af5e679a40fbf0eee2b5ba6aea534c9b86` |
 | `project_snapshot_fingerprint` | `eaa3def51f888454db52ef8ade9d93aa4b2f020017fcf0c76e4f0ad2b6d9d922` |
 | `classification_rules_digest` | `3cce9a4dddf9664568ebaba04131984295a1d1667363d03493704abb084ff410` |
-| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.3` 固定运行） | `6e3171bf176ffe6885e16e8cb02e9e8f185c2f1d8aa5fa3d199ed552ece2385a` |
+| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.4` 固定运行） | `74bc524343b620166133f1bb6483e767bb5c4614a2109a852b1892e041c28155` |
 
 ## 3. 分类报告
 
@@ -77,7 +78,7 @@ python scripts/coverage_block_attribution.py `
 | 跨行字符串（已修复 #460） | 自动（`already_translated` + `translate_comment_pair`） | `dialogue_string` 中 2 个 multiline locator（22→23、27→28） | 已提取为 candidate；writeback 仍按单行 span 处理 |
 | 不支持结构（动态文本） | 自动（reason code 已登记） | `dynamic_string_expression` ×1 | 当前确认不支持；产品策略见 §5.3 |
 | 不支持结构（非标准 `old`） | 自动（reason code 已登记） | `nonstandard_old_source_marker` ×1 | 当前确认不支持；见 §5.3 |
-| source marker 级联（剩余 #461） | 自动 + heuristic | `source_comment` ×2 | 需按语句结构修复 pairing |
+| source marker 级联（已修复 #461） | 自动 | `source_comment` ×1（39 行 TODO；34 行为 old 行单独复核） | marker pairing 不再因 candidate 分类丢失 |
 | 孤儿 `old` 行 | heuristic | `old_source_marker` ×1 | 疑似 false-positive/结构异常；见 §5.4 |
 | 未标记已译对白 | heuristic | `unknown_string_structure` ×1 | 无法判定；见 §5.3 |
 | 合法排除 | 自动 | `voice_statement` ×1、`asset_literal` ×1 | 不需修复 |
@@ -139,7 +140,7 @@ python scripts/coverage_block_attribution.py `
 > `end_line_hint` 与 `multiline=true`，TL 中 paired source marker 的分类由新分支处理。
 > 跨行 candidate 的 writeback 仍是单行 span 合同：`build_writeback_plan()` 会因 span 超出物理行而
 > fail closed，不写坏文件，但完整的跨行写回需要另立 follow-up。
-> 当前实现版本 `renpy@1.1.3`，新增测试
+> #460 实现时版本为 `renpy@1.1.3`（当前 `renpy@1.1.4`，含 #461）；新增测试
 > `tests/test_engine_adapter_multiline_strings.py`，并更新了本 fixture 的 characterization。
 
 - **问题**：`_inventory_document()` 逐物理行 `tokenize.generate_tokens(io.StringIO(line))`；多行三引号与
@@ -155,7 +156,12 @@ python scripts/coverage_block_attribution.py `
   4. 现有 P1/P2 adapter 等价性测试通过；
   5. 不改变 writeback；若需要 adapter 行为版本升级，单独按既有规则处理。
 
-### 5.2 P2：修复 source marker 级联 parse_error
+### 5.2 P2：修复 source marker 级联 parse_error（已实现 / #461）
+
+> **状态：已实现。** 所有 string/f-string 候选都会基于逻辑语句尝试 pairing：`old` marker 只配 `new` 行，
+> voice 行不消费 comment marker，真正没有后继字符串的 quoted comment 仍保持
+> `renpy.source_marker_unpaired`。没有新增 reason code，沿用 #420 allowlist。
+> 当前实现版本 `renpy@1.1.4`，新增测试 `tests/test_engine_adapter_marker_pairing.py`。
 
 - **问题**：字符串 candidate 一旦是 `unsupported` / `unknown` / tokenize 失败，上方合法 marker comment 不会被加入
   `paired_source_marker_lines`，随后作为 `renpy.source_marker_unpaired` 再记一个 `parse_error`，使 block 计数虚高。
@@ -217,9 +223,9 @@ python scripts/coverage_block_attribution.py `
 
 ## 7. 边界与仍未做的事
 
-- #426 spike 本身未改生产行为；后续 #460 已实现跨行字符串的 inventory 提取（`renpy@1.1.3`）。
-  跨行 writeback span、#461 marker 级联、#462 分类策略、#463 digest 可复现、#464 quoted comment /
-  孤儿 `old` 仍按各自 issue 推进。
+- #426 spike 本身未改生产行为；后续 #460 已实现跨行字符串 inventory 提取、#461 已修复 source marker
+  级联（当前 `renpy@1.1.4`）。跨行 writeback span、#462 分类策略、#463 digest 可复现、#464 quoted
+  comment / 孤儿 `old` 仍按各自 issue 推进。
 - #460 没有改变 writeback、GUI、doctor 或 TyranoScript adapter；multiline writeback 仍 fail closed。
 - 未把疑似 false-positive 的 candidate 排除，也未把 unsupported / parse_error 伪装成 `ready`；
   真实大型项目频率归因仍缺授权样本。
