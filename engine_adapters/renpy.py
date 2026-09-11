@@ -56,7 +56,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.7"
+ADAPTER_VERSION = "1.1.8"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -368,7 +368,7 @@ class RenPyAdapter:
             source_inventory=True,
             native_catalog=True,
             relocation=True,
-            declarative_writeback=("text_span_replace",),
+            declarative_writeback=("text_span_replace", "multiline_text_span_replace"),
             native_catalog_required_for_writeback=True,
         )
 
@@ -1265,6 +1265,9 @@ class RenPyAdapter:
             unit_item = dict(item)
             unit_item["source"] = source_text
             unit_item["live_catalog_text"] = live_catalog_text
+            if is_multiline:
+                unit_item["multiline"] = True
+                unit_item["end_line"] = line_index + token.end[0] - token.start[0]
             if source_marker_missing:
                 unit_item["source_marker_missing"] = True
             if marker is not None:
@@ -1683,6 +1686,31 @@ class RenPyAdapter:
         return None
 
     @staticmethod
+    def _multiline_fragment(
+        lines: Sequence[str],
+        start_line: int,
+        start_col: int,
+        end_line: int,
+        end_col: int,
+    ) -> str:
+        if start_line == end_line:
+            return lines[start_line][start_col:end_col]
+        pieces = [lines[start_line][start_col:]]
+        pieces.extend(lines[start_line + 1 : end_line])
+        pieces.append(lines[end_line][:end_col])
+        return "".join(pieces)
+
+    @staticmethod
+    def _literal_from_fragment(fragment: str) -> tuple[str, str] | None:
+        try:
+            value = ast.literal_eval(fragment)
+        except (SyntaxError, ValueError):
+            return None
+        if isinstance(value, str):
+            return value, fragment
+        return None
+
+    @staticmethod
     def _relocation_score(original: Occurrence, candidate: Occurrence) -> int | None:
         original_unit = original.unit
         candidate_unit = candidate.unit
@@ -2001,7 +2029,7 @@ class RenPyAdapter:
         documents = {document.file_rel_path: document for document in live_sources}
         live_source_fingerprint = source_snapshot_fingerprint(live_sources)
         operations: list[WritebackOperation] = []
-        spans: list[tuple[str, int, int, int]] = []
+        spans: list[tuple[str, int, int, int, int]] = []
         legacy = self._legacy()
         for item in validated:
             occurrence = item.occurrence
@@ -2018,29 +2046,64 @@ class RenPyAdapter:
             if document is None:
                 raise ValueError(f"Writeback source document missing: {rel_path}")
             lines = document.lines()
+            metadata = unit.metadata if isinstance(unit.metadata, Mapping) else {}
+            is_multiline = bool(metadata.get("multiline"))
+            end_line = int(metadata.get("end_line") or unit.line)
             if unit.line < 0 or unit.line >= len(lines):
                 raise ValueError(f"Writeback source line missing: {rel_path}:{unit.line}")
-            if unit.start < 0 or unit.end > len(lines[unit.line]) or unit.start >= unit.end:
-                raise ValueError(f"Writeback span invalid: {rel_path}:{unit.line}:{unit.start}-{unit.end}")
-            raw_fragment = lines[unit.line][unit.start:unit.end]
-            literal = self._literal_at_span(lines[unit.line], unit.start, unit.end)
+            if is_multiline:
+                if end_line < unit.line or end_line >= len(lines):
+                    raise ValueError(
+                        f"Writeback end line invalid: {rel_path}:{unit.line}-{end_line}"
+                    )
+                if unit.start < 0 or unit.start > len(lines[unit.line]):
+                    raise ValueError(
+                        f"Writeback start span invalid: {rel_path}:{unit.line}:{unit.start}"
+                    )
+                if unit.end < 0 or unit.end > len(lines[end_line]):
+                    raise ValueError(
+                        f"Writeback end span invalid: {rel_path}:{end_line}:{unit.end}"
+                    )
+                raw_fragment = self._multiline_fragment(
+                    lines,
+                    unit.line,
+                    unit.start,
+                    end_line,
+                    unit.end,
+                )
+                literal = self._literal_from_fragment(raw_fragment)
+            else:
+                if (
+                    unit.start < 0
+                    or unit.end > len(lines[unit.line])
+                    or unit.start >= unit.end
+                ):
+                    raise ValueError(
+                        f"Writeback span invalid: {rel_path}:{unit.line}:{unit.start}-{unit.end}"
+                    )
+                raw_fragment = lines[unit.line][unit.start:unit.end]
+                literal = self._literal_at_span(lines[unit.line], unit.start, unit.end)
             expected_live_text = self._writeback_expected_live_text(unit)
             if literal is None or literal[0] != expected_live_text:
                 raise ValueError(f"Writeback span/source mismatch: {rel_path}:{unit.line}")
-            span = (rel_path, unit.line, unit.start, unit.end)
-            if any(
-                existing[0] == rel_path
-                and existing[1] == unit.line
-                and max(existing[2], unit.start) < min(existing[3], unit.end)
-                for existing in spans
-            ):
-                raise ValueError(f"Overlapping writeback span: {rel_path}:{unit.line}")
-            spans.append(span)
+            span_start = (unit.line, unit.start)
+            span_end = (end_line, unit.end)
+            for existing in spans:
+                if existing[0] != rel_path:
+                    continue
+                existing_start = (existing[1], existing[2])
+                existing_end = (existing[3], existing[4])
+                if span_start < existing_end and existing_start < span_end:
+                    raise ValueError(f"Overlapping writeback span: {rel_path}:{unit.line}")
+            spans.append((rel_path, unit.line, unit.start, end_line, unit.end))
             replacement_fragment = self._render_literal(
                 legacy, item.translated_text, unit.prefix, unit.quote
             )
+            operation_kind = (
+                "multiline_text_span_replace" if is_multiline else "text_span_replace"
+            )
             operation_payload = {
-                "kind": "text_span_replace",
+                "kind": operation_kind,
                 "occurrence_id": occurrence.occurrence_id,
                 "target_root": "localization_catalog",
                 "target_rel_path": rel_path,
@@ -2053,6 +2116,8 @@ class RenPyAdapter:
                 "replacement_fragment": replacement_fragment,
                 "validation_digest": digest_json(item.validation.to_dict()),
             }
+            if is_multiline:
+                operation_payload["end_line"] = end_line
             operations.append(
                 WritebackOperation(
                     operation_id="op1:" + digest_json(operation_payload),
@@ -2064,6 +2129,7 @@ class RenPyAdapter:
                 operation.target_rel_path,
                 operation.line,
                 operation.start_col,
+                operation.end_line if operation.end_line is not None else operation.line,
                 operation.operation_id,
             )
         )

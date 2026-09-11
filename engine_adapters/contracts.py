@@ -310,12 +310,17 @@ class WritebackOperation:
     """Declarative replacement emitted by an engine adapter.
 
     ``expected_fragment_sha256`` is the common consumer's live value guard. For
-    ``text_span_replace`` it covers the raw source span; for
-    ``json_catalog_set`` it covers the current string value at
+    ``text_span_replace`` / ``multiline_text_span_replace`` it covers the raw
+    source span; for ``json_catalog_set`` it covers the current string value at
     ``target_json_path``.
     ``expected_text_digest`` binds the adapter-decoded source text into the
     operation and plan digests; the engine-neutral consumer deliberately does
     not decode engine-specific literals a second time.
+
+    ``end_line`` is only serialized for ``multiline_text_span_replace``; when
+    present, ``line``/``start_col`` are the start and ``end_line``/``end_col``
+    are the exclusive end.  Leaving it unset keeps single-line payloads
+    byte-for-byte compatible with persisted schema-v1 plans.
     """
     operation_id: str
     kind: str
@@ -331,6 +336,7 @@ class WritebackOperation:
     replacement_fragment: str
     validation_digest: str
     target_json_path: tuple[str, ...] = ()
+    end_line: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = {
@@ -352,6 +358,8 @@ class WritebackOperation:
         # persisted plans created before semantic catalog operations existed.
         if self.target_json_path:
             payload["target_json_path"] = list(self.target_json_path)
+        if self.end_line is not None:
+            payload["end_line"] = self.end_line
         return payload
 
 

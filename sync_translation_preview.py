@@ -228,6 +228,9 @@ def _deserialize_writeback_plan(payload: Any):
             values["line"] = int(values["line"])
             values["start_col"] = int(values["start_col"])
             values["end_col"] = int(values["end_col"])
+            raw_end_line = raw_operation.get("end_line")
+            if raw_end_line is not None:
+                values["end_line"] = int(raw_end_line)
             raw_json_path = raw_operation.get("target_json_path", [])
             if not isinstance(raw_json_path, list) or any(
                 not isinstance(part, str) for part in raw_json_path

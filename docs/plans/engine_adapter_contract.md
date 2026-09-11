@@ -447,7 +447,9 @@ validation 校验并拼接，不得再次调用 `render_replacement_lines()`、`
 其他 engine renderer 二次渲染。
 
 v1 只允许 common 层实现并注册的 operation kinds。Ren'Py 使用
-`text_span_replace`；TyranoScript 原生语言 JSON 使用 `json_catalog_set`，并增加
+`text_span_replace`，并在 #471 后在同一个 v1 plan 内新增
+`multiline_text_span_replace`（`end_line` + 半开 `end_col`；旧消费者按未知 kind
+fail closed）；TyranoScript 原生语言 JSON 使用 `json_catalog_set`，并增加
 `target_json_path` 字符串数组。后者的 `line/start_col/end_col` 固定为 `-1`，
 `expected_fragment_sha256` 绑定目标 path 的当前字符串值；目标 path 或 row 缺失时
 不得自动创建。plan：
