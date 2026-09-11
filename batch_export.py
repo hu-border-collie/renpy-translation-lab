@@ -809,6 +809,12 @@ def _normalize_apply_export_state_advancement(
             "export_only.record_invalid",
             "Apply-export state plan has an invalid manifest path.",
         )
+    record_path = payload.get("record_path")
+    if not isinstance(record_path, str) or not record_path or not os.path.isabs(record_path):
+        raise ExportOnlyError(
+            "export_only.record_invalid",
+            "Apply-export state plan has an invalid record path.",
+        )
     apply_summary = payload.get("apply_summary")
     if not isinstance(apply_summary, dict):
         raise ExportOnlyError(
