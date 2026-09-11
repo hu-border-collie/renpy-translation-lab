@@ -131,6 +131,15 @@ class CliRunnerChannelTests(unittest.TestCase):
         self.assertEqual(self.finished_codes, [0])
         self.assertIsNone(self.runner._proc)
 
+    def test_stderr_run_id_marker_reaches_the_combined_line_signal(self):
+        marker = "RTL_DURABLE_RUN_ID=sync-run-v1-marker"
+        self.runner._proc = _FakeProcess(stderr=(marker.encode() + b"\n",))
+
+        self.runner._on_stderr_ready()
+
+        self.assertEqual(self.stderr_lines, [marker])
+        self.assertEqual(self.all_lines, [marker])
+
     def test_finished_drains_unread_process_bytes_before_flushing(self):
         self.runner._proc = _FakeProcess(
             stdout=(b'{"status":"completed"}',),

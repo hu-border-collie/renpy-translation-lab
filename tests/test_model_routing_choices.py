@@ -173,6 +173,45 @@ class ProfileCliWiringTests(unittest.TestCase):
         create.assert_called_once()
         self.assertIsNone(reader.active_primary_profile_override())
 
+    def test_translate_preflight_profile_is_active_while_loading_runtime(self) -> None:
+        parser = batch.build_arg_parser()
+        args = parser.parse_args(
+            [
+                "translate-preflight",
+                "--strategy",
+                "sync",
+                "--profile",
+                "legacy-sync",
+                "--output",
+                "json",
+            ]
+        )
+        seen: dict[str, object] = {}
+
+        def fake_load_config(*, require_api_key=True):
+            seen["override"] = reader.active_primary_profile_override()
+            seen["require_api_key"] = require_api_key
+
+        with (
+            mock.patch.object(batch.legacy, "load_config", side_effect=fake_load_config),
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(
+                batch,
+                "run_translate_preflight",
+                return_value={"status": "ready"},
+            ) as run_preflight,
+        ):
+            result = batch.dispatch_command(parser, args)
+
+        self.assertEqual(seen["override"], "legacy-sync")
+        self.assertFalse(bool(seen["require_api_key"]))
+        self.assertEqual(result, {"status": "ready"})
+        run_preflight.assert_called_once()
+        self.assertIsNone(reader.active_primary_profile_override())
+
     def test_sync_start_profile_is_active_while_building_service(self) -> None:
         parser = batch.build_arg_parser()
         args = parser.parse_args(

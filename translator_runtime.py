@@ -3532,9 +3532,27 @@ def build_sync_rag_query_text(target_items):
     return "Target:\n" + "\n".join(f"- {text}" for text in target_lines)
 
 
+def _require_sync_embedding_binding_for_retrieval():
+    """Refuse embedding calls when v1 retrieval is enabled without a binding."""
+
+    if not (SYNC_RAG_ENABLED or SYNC_SOURCE_INDEX_ENABLED):
+        return
+    if not isinstance(MODEL_ROUTING_CONFIG, dict):
+        return
+    plan = freeze_translation_routing_plan()
+    route = plan.routes[model_profile.STAGE_TRANSLATION]
+    profile = model_profile.profile_for_route(plan, route)
+    if not str(getattr(profile, 'embedding_profile_id', '') or '').strip():
+        raise model_profile.ModelRoutingConfigError(
+            'Sync RAG / Source Index is enabled but the selected ModelProfile '
+            'has no embedding profile binding; bind one or disable retrieval.'
+        )
+
+
 def embed_texts(contents, task_type):
     if not contents:
         return []
+    _require_sync_embedding_binding_for_retrieval()
     settings = current_sync_embedding_settings()
     last_error = None
     key_attempts = api_key_rotation_attempts()
@@ -5078,8 +5096,20 @@ def _render_sync_retrieval_reference_text(history_hits, story_hits, source_hits=
     )
 
 
-def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, run_id=''):
-    """Build the ordinary Sync initial-translation plan and retrieval captures."""
+def build_sync_translation_plan(
+    file_jobs,
+    adapter_snapshot,
+    routing_plan,
+    *,
+    run_id='',
+    preflight=False,
+):
+    """Build the ordinary Sync initial-translation plan and retrieval captures.
+
+    With ``preflight=True`` the same fixed chunking and prompts are built but
+    every retrieval provider short-circuits to empty context, so a preflight
+    never queries RAG stores or calls embedding endpoints.
+    """
     route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
     profile = model_profile.profile_for_route(routing_plan, route)
     captures = []
@@ -5171,7 +5201,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         preflight_build = build_plan(None)
         validate_budget(preflight_build, phase='pre-retrieval')
 
-    if file_jobs and retrieval_enabled:
+    if file_jobs and retrieval_enabled and not preflight:
         print(
             'Preparing Sync TranslationPlan context: retrieval for all fixed '
             'chunks runs before the first model request.',
@@ -5179,6 +5209,43 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
         )
 
     def retrieval_provider(chunk_input):
+        if preflight:
+            captures.append({
+                'file_rel_path': chunk_input.file_rel_path,
+                'expected_ids': [unit.id for unit in chunk_input.target_units],
+                'target_items': [dict(item) for item in chunk_input.target_items],
+                'target_units': list(chunk_input.target_units),
+                'context_window': chunk_input.context_window,
+                'local_context_diagnostics': dict(
+                    chunk_input.local_context_diagnostics or {}
+                ),
+                'retrieval_blocks_text': '',
+                'analysis_blocks_text': '',
+                'rag_stats': {
+                    'enabled': bool(SYNC_RAG_ENABLED),
+                    'reason': 'preflight_skipped',
+                },
+                'source_index_stats': {
+                    'enabled': bool(SYNC_SOURCE_INDEX_ENABLED),
+                    'reason': 'preflight_skipped',
+                },
+                'project_analysis': {
+                    'reason': 'preflight_skipped',
+                    'injectable': False,
+                    'labels': [],
+                    'routes': [],
+                    'local_diagnostics': '',
+                },
+                'history_hit_count': 0,
+                'source_hit_count': 0,
+                'story_memory_applied': False,
+                'context_policy': context_policy,
+                'preserve_terms': preserve_terms,
+                'normalize_map': normalize_map,
+                'non_translatable_exact': non_translatable_exact,
+                'macro_setting': macro_setting,
+            })
+            return {'text': '', 'diagnostics': {'reason': 'preflight_skipped'}}
         history_hits, rag_stats = (
             retrieve_sync_history_hits(chunk_input.target_items)
             if SYNC_RAG_ENABLED
@@ -5329,7 +5396,7 @@ def build_sync_translation_plan(file_jobs, adapter_snapshot, routing_plan, *, ru
                 f'index={index}, request={request.request_id}.'
             )
     validate_budget(plan_build, phase='materialized-context')
-    if retrieval_enabled:
+    if retrieval_enabled and not preflight:
         history_hit_count = sum(
             int((item.get('rag_stats') or {}).get('hit_count') or 0)
             for item in captures
@@ -5494,6 +5561,7 @@ def prepare_sync_translation_execution_context(
     require_provider=True,
     persist_corrected_game_root=True,
     run_id='',
+    preflight=False,
 ):
     """Build the ordinary Sync plan plus restart-safe production adapters.
 
@@ -5517,6 +5585,9 @@ def prepare_sync_translation_execution_context(
     load_glossary()
     routing_plan = freeze_translation_routing_plan()
     route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    profile = model_profile.profile_for_route(routing_plan, route)
+    if not preflight:
+        _require_sync_embedding_binding_for_retrieval()
     if prepare:
         run_prepare_steps()
     elif PREP_ENABLED:
@@ -5582,6 +5653,7 @@ def prepare_sync_translation_execution_context(
         adapter_snapshot,
         routing_plan,
         run_id=run_id,
+        preflight=preflight,
     )
     items_by_id = {}
     request_contexts = {}

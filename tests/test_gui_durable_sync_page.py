@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import cli_contract
@@ -231,7 +232,7 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.window._append_log = lambda _text: None  # type: ignore[method-assign]
         self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
         self.window._show_workbench_log_drawer = lambda: None  # type: ignore[method-assign]
-        self.window._refresh_diagnostics_context = lambda: None  # type: ignore[method-assign]
+        self.window._refresh_diagnostics_context = lambda **_kwargs: None  # type: ignore[method-assign]
         self.window._sync_work_modes_requiring_api_key = lambda: frozenset()  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
@@ -242,17 +243,43 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.window._workflow_step_output_lines = [output]
         self.window._on_workflow_step_finished(exit_code)
 
+    def _finish_preflight(self, *, confirmed: bool = True) -> None:
+        payload = {
+            "strategy": "sync",
+            "profile": {"id": RUN_ID, "model": "gemini-3.5-flash"},
+            "project": {"root": "C:/game/work"},
+            "counts": {
+                "files_with_pending": 1,
+                "pending_items": 4,
+                "chunks": 1,
+            },
+            "chunk_policy": {"max_items": 60, "max_chars": 18000},
+            "context_sources": {"local_context": {"before": 30, "after": 10}},
+            "risks": [],
+        }
+        self.window._translate_preflight_output_lines = [
+            envelope("translate-preflight", status="ready", result=payload)
+        ]
+        with mock.patch(
+            "gui_qt.app.message_box_question",
+            return_value="yes" if confirmed else "no",
+        ):
+            self.window._on_finished(0)
+            QApplication.processEvents()
+
     def test_start_sync_translation_runs_durable_sync_start(self) -> None:
         self.window._on_start_translation()
+        self._finish_preflight()
 
-        self.assertEqual(len(self.runner.calls), 1)
-        script, args = self.runner.calls[0]
+        self.assertEqual(len(self.runner.calls), 2)
+        script, args = self.runner.calls[1]
         self.assertEqual(script, Path("C:/tool/gemini_translate_batch.py"))
         self.assertEqual(args, ["sync-start", "--output", "json", "--non-interactive"])
         self.assertIsInstance(self.window._workflow, SyncTranslationWorkflow)
 
     def test_completed_start_chains_check_and_exposes_preview(self) -> None:
         self.window._on_start_translation()
+        self._finish_preflight()
         self._finish_step(
             envelope(
                 "sync-start",
@@ -266,9 +293,9 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         # should_continue schedules the check step on the next event-loop turn.
         QApplication.processEvents()
 
-        self.assertEqual(len(self.runner.calls), 2)
+        self.assertEqual(len(self.runner.calls), 3)
         self.assertEqual(
-            self.runner.calls[1][1],
+            self.runner.calls[2][1],
             ["check", RUN_ID, "--output", "json", "--non-interactive"],
         )
         page = self.window.sync_translation_page
@@ -296,13 +323,14 @@ class DurableSyncAppWiringTests(unittest.TestCase):
 
     def test_stopping_local_worker_locates_run_without_resuming(self) -> None:
         self.window._on_start_translation()
+        self._finish_preflight()
 
         self._finish_step("Traceback: local worker killed\n", exit_code=1)
         QApplication.processEvents()
 
         # The locator query is read-only: no resume, no cancel, no check.
         self.assertEqual(
-            self.runner.calls[1][1],
+            self.runner.calls[2][1],
             ["sync-status", "--latest", "--output", "json", "--non-interactive"],
         )
         commands = [args[0] for _script, args in self.runner.calls]
@@ -321,6 +349,168 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.assertTrue(page.resume_btn.isEnabled())
         self.assertTrue(page.cancel_btn.isEnabled())
         self.assertIsNone(self.window._workflow)
+
+    def test_status_polling_is_skipped_for_unit_test_runners(self) -> None:
+        self.window._on_start_translation()
+        self._finish_preflight()
+
+        self.assertFalse(self.window._durable_status_poll_active)
+        self.assertFalse(self.window._durable_status_poll_timer.isActive())
+
+    def test_sync_start_step_starts_live_status_poll(self) -> None:
+        with mock.patch.object(
+            self.window,
+            "_durable_status_polling_supported",
+            return_value=True,
+        ):
+            self.window._on_start_translation()
+            self._finish_preflight()
+
+        self.assertTrue(self.window._durable_status_poll_active)
+        self.assertTrue(self.window._durable_status_poll_timer.isActive())
+        self.window._stop_durable_status_poll()
+
+    def test_terminal_run_step_stops_live_status_poll(self) -> None:
+        with mock.patch.object(
+            self.window,
+            "_durable_status_polling_supported",
+            return_value=True,
+        ):
+            self.window._on_start_translation()
+            self._finish_preflight()
+            self.assertTrue(self.window._durable_status_poll_active)
+
+            self._finish_step(
+                envelope(
+                    "sync-start",
+                    result={**snapshot(status="completed", next_action="check")},
+                )
+            )
+            QApplication.processEvents()
+
+        self.assertFalse(self.window._durable_status_poll_active)
+        self.assertFalse(self.window._durable_status_poll_timer.isActive())
+
+    def test_sync_output_captures_live_run_identity(self) -> None:
+        self.window._active_command = "translation_workflow"
+        self.window._durable_status_poll_active = True
+
+        self.window._on_cli_line_ready(f"RTL_DURABLE_RUN_ID={RUN_ID}")
+
+        self.assertEqual(self.window._durable_status_run_id, RUN_ID)
+
+    def test_status_poll_ignores_snapshot_before_run_identity_is_known(self) -> None:
+        self.window._durable_status_poll_active = True
+        self.window._durable_status_run_id = ""
+        self.window._durable_status_output_lines = [
+            envelope(
+                "sync-status",
+                status="running",
+                result=snapshot(status="running", next_action="resume"),
+            )
+        ]
+
+        with mock.patch.object(self.window, "_append_log") as append_log:
+            self.window._on_durable_status_finished(0)
+
+        self.assertEqual(self.window.sync_translation_page.run_id(), "")
+        append_log.assert_called_once()
+
+    def test_poll_identity_inherits_the_active_workflow_run_id(self) -> None:
+        self.window._workflow = SimpleNamespace(run_id=RUN_ID)
+
+        with mock.patch.object(
+            self.window,
+            "_durable_status_polling_supported",
+            return_value=True,
+        ):
+            self.window._maybe_start_durable_status_poll(
+                SimpleNamespace(key="sync-resume")
+            )
+
+        self.assertEqual(self.window._durable_status_run_id, RUN_ID)
+        self.assertTrue(self.window._durable_status_poll_active)
+        self.window._stop_durable_status_poll()
+
+    def test_status_poll_ignores_a_different_run_identity(self) -> None:
+        self.window._durable_status_poll_active = True
+        self.window._durable_status_run_id = "sync-run-v1-other"
+        self.window._durable_status_output_lines = [
+            envelope(
+                "sync-status",
+                status="running",
+                result=snapshot(status="running", next_action="resume"),
+            )
+        ]
+
+        self.window._on_durable_status_finished(0)
+
+        self.assertEqual(self.window.sync_translation_page.run_id(), "")
+
+    def test_rejected_cli_start_does_not_start_live_status_poll(self) -> None:
+        class _RejectingRunner(_FakeRunner):
+            def run(self, script, args) -> bool:
+                super().run(script, args)
+                return False
+
+        self.window.runner = _RejectingRunner()
+        with (
+            mock.patch.object(
+                self.window,
+                "_durable_status_polling_supported",
+                return_value=True,
+            ),
+            mock.patch("gui_qt.app.message_box_information") as info,
+        ):
+            self.window._on_start_translation()
+            self._finish_preflight()
+
+        info.assert_called_once()
+        self.assertFalse(self.window._durable_status_poll_active)
+        self.assertFalse(self.window._durable_status_poll_timer.isActive())
+
+    def test_status_poll_updates_page_with_live_snapshot(self) -> None:
+        class _StatusRunner:
+            def __init__(self) -> None:
+                self.calls: list[list[str]] = []
+
+            def is_active(self) -> bool:
+                return False
+
+            def run(self, _script, args):
+                self.calls.append(list(args))
+                return True
+
+            def kill(self) -> None:
+                return None
+
+        status_runner = _StatusRunner()
+        self.window._durable_status_runner = status_runner
+        self.window._durable_status_poll_active = True
+        self.window._durable_status_run_id = RUN_ID
+
+        self.window._poll_durable_status()
+        self.assertEqual(
+            status_runner.calls[0],
+            ["sync-status", "--latest", "--output", "json", "--non-interactive"],
+        )
+        self.window._durable_status_output_lines = [
+            envelope(
+                "sync-status",
+                status="running",
+                result=snapshot(status="running", next_action="resume"),
+                artifacts={"run_dir": "C:/runs/run1"},
+            )
+        ]
+        self.window._on_durable_status_finished(0)
+
+        page = self.window.sync_translation_page
+        self.assertEqual(page.run_id(), RUN_ID)
+        self.assertIn("3/4", page.status_section.facts_label.text())
+
+        self.window._stop_durable_status_poll()
+        self.assertFalse(self.window._durable_status_poll_active)
+        self.assertFalse(self.window._durable_status_poll_timer.isActive())
 
     def test_resume_button_queries_latest_durable_run(self) -> None:
         self.window._on_resume_durable_sync()

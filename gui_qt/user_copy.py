@@ -908,6 +908,11 @@ TRANSLATION_TARGET_COPY = {
         "gemini_batch": "Gemini Batch",
     },
     "resolved": "当前选择：{model} · {strategy}",
+    "resolved_stage": "本阶段模型：{label}{model} · {strategy} · {origin}",
+    "resolved_stage_model_suffix": "（{model}）",
+    "resolved_stage_origin_explicit": "显式覆盖",
+    "resolved_stage_origin_inherited": "继承默认",
+    "resolved_stage_unavailable": "本阶段模型：无法解析（请检查模型路由配置）",
     "legacy_hint": (
         "当前项目仍是旧模型配置；迁移到 model_routing 后，可在这里选择"
         "ModelProfile 与执行方式。迁移前保持原有默认行为不变。"
@@ -920,6 +925,52 @@ TRANSLATION_TARGET_COPY = {
         "missing_remote_batch": "未声明远程 Batch 能力",
     },
     "empty_profiles": "model_routing 中没有可用的生成 ModelProfile。",
+}
+
+
+# Pre-start preflight dialog copy (#348 P3 increment A). Counts come from the
+# shared TranslationPlan scan; no provider/embedding call is made.
+TRANSLATION_PREFLIGHT_COPY = {
+    "title": "开始前确认",
+    "blocked_title": "预检未通过",
+    "body": (
+        "模型：{model}（{profile}）\n"
+        "执行方式：{strategy}\n"
+        "项目：{root}\n"
+        "待处理：{files} 个文件 / {items} 个条目 / {chunks} 个 chunk（{max_items} 条 / {max_chars} 字符）\n"
+        "上下文来源：{contexts}\n"
+        "风险与提示：\n{risks}"
+    ),
+    "no_risks": "无",
+    "context_labels": {
+        "rag": "RAG 记忆库",
+        "source_index": "原文索引",
+        "story_memory": "剧情记忆",
+        "project_analysis_brief": "项目摘要",
+        "local_context": "局部前后文",
+        "macro_setting": "风格设定",
+    },
+    "context_on": "启用",
+    "context_off": "关闭",
+    "context_local_window": "前 {before} / 后 {after}",
+    "severity_labels": {
+        "error": "错误",
+        "warning": "警告",
+        "info": "提示",
+    },
+    "risk_line": "- [{severity}] {message}（{code}）",
+    "strategy_labels": {
+        "sync": "同步",
+        "gemini_batch": "Gemini Batch",
+    },
+    "blocked_message": "预检发现阻塞项，已取消启动：\n\n{facts}",
+    "failed_message": "预检命令没有返回可用的机器结果，已取消启动。请查看诊断与运行日志。",
+    "confirm_question": "确认开始任务？",
+    "confirm_yes": "开始任务",
+    "confirm_no": "取消",
+    "cancel_hint": "已取消启动。",
+    "start_failed_title": "无法开始预检",
+    "start_failed_message": "预检命令未能启动。请检查工具路径与当前任务状态后重试。",
 }
 
 

@@ -44,6 +44,27 @@ class MigrationPlanTests(unittest.TestCase):
                 self.assertEqual(list(profile.models), runtime.MODELS)
                 self.assertEqual(profile.adapter, runtime.SYNC_BACKEND)
 
+    def test_migration_binds_embedding_for_enabled_legacy_retrieval(self):
+        config = fixture("gemini_sync")
+        for scope in ("sync", "batch"):
+            rag = config.setdefault(scope, {}).setdefault("rag", {})
+            rag["enabled"] = True
+
+        migrated = preview_migration(config).config
+        section = migrated["model_routing"]
+        for execution, entrypoint_key in (
+            ("sync", "sync_profile_id"),
+            ("gemini_batch", "batch_profile_id"),
+        ):
+            with self.subTest(execution=execution):
+                entrypoint_profile = section["profiles"][
+                    section["legacy_entrypoints"][entrypoint_key]
+                ]
+                self.assertTrue(entrypoint_profile["embedding_profile_id"])
+                plan = read_routing_plan(migrated, legacy_execution=execution)
+                profile = plan.profiles[plan.routes["translation"].profile_id]
+                self.assertTrue(profile.embedding_profile_id)
+
     def test_gui_diagnostics_templates_match_cli_parser(self):
         from gui_qt.diagnostics_context import build_cli_commands
         commands = build_cli_commands(python_exe="python", batch_script_path="/tool/gemini_translate_batch.py",

@@ -30,6 +30,29 @@ from sync_run_contracts import (
 from sync_run_store import SyncRunStore
 
 
+def _notify_run_created(
+    callback: Callable[[str], None] | None,
+    run_id: str,
+) -> None:
+    """Announce a durable run before its synchronous execution starts.
+
+    Observers are advisory: a broken log/UI pipe must not abort a run that has
+    already been durably created.
+    """
+
+    if callback is None:
+        return
+    try:
+        callback(str(run_id))
+    except Exception as exc:
+        import sys as _sys
+
+        _sys.stderr.write(
+            "Warning: durable run-created observer failed: "
+            f"{type(exc).__name__}\n"
+        )
+
+
 BackendFactory = Callable[[SyncRunStore], Any]
 DerivedBuilderFactory = Callable[[SyncRunStore], Callable]
 ReservationFactory = Callable[[SyncRunStore], Callable[[Mapping[str, Any]], Mapping[str, Any]]]
@@ -153,6 +176,7 @@ class SyncRunService:
         policy: ExecutorPolicy | Mapping[str, Any] | None = None,
         client_token: str | None = None,
         wait_for_backoff: bool = True,
+        on_run_created: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         plan, requests = _plan_build_payload(plan_build)
         if not requests:
@@ -178,6 +202,7 @@ class SyncRunService:
         )
         if created:
             self._ensure_run_artifacts(store)
+        _notify_run_created(on_run_created, run_id)
         before = int(store.get_run()['revision'])
         snapshot = self._execute(store, wait_for_backoff=wait_for_backoff)
         snapshot['changed'] = bool(created or int(snapshot['revision']) != before)
@@ -248,6 +273,7 @@ class SyncRunService:
         ack_duplicate_billing_risk: bool = False,
         exclude_unknown: bool = False,
         wait_for_backoff: bool = True,
+        on_run_created: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """Create and execute a new run without mutating ``run_id``.
 
@@ -339,6 +365,7 @@ class SyncRunService:
                 'derivation': derivation,
             },
         )
+        _notify_run_created(on_run_created, derived_run_id)
         self._ensure_run_artifacts(target)
         self._seed_reusable_results(
             source,

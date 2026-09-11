@@ -368,11 +368,15 @@ def runtime_settings_view(config):
 
     Execution policy stays in sync/batch. Model and embedding connection fields
     are replaced as a unit, so obsolete retained fields cannot affect requests.
+    A generation profile without an embedding binding keeps legacy embedding
+    fields untouched; commands that only project configuration or read durable
+    state stay usable, and paths that actually materialize retrieval enforce
+    the binding before any embedding request.
     The original mapping is never mutated or persisted.
     """
     if "model_routing" not in config:
         return config
-    checked_section(config)
+    section = checked_section(config)
     result = copy.deepcopy(config)
     for scope, execution in (("sync", "sync"), ("batch", "gemini_batch")):
         plan = resolve_runtime_plan(
@@ -397,6 +401,13 @@ def runtime_settings_view(config):
             if not isinstance(result["batch"].get(stage), dict):
                 result["batch"][stage] = {}
             result["batch"][stage]["model"] = plan.profiles[stage_route.profile_id].model
+        raw_profile = section["profiles"][profile.id]
+        embedding_id = str(raw_profile.get("embedding_profile_id") or "").strip()
+        if not embedding_id:
+            # Configuration projection must stay usable for retrieval-free
+            # commands. Paths that actually materialize RAG/source-index
+            # retrieval enforce the binding before their provider calls.
+            continue
         embedding = read_embedding_settings(config, execution=execution, profile_id=profile.id)
         if not isinstance(target.get("rag"), dict):
             target["rag"] = {}
