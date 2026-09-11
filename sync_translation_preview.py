@@ -710,7 +710,7 @@ def apply_sync_preview(
 ) -> dict[str, Any]:
     manifest_file = Path(manifest_path).resolve()
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
-    recover_atomic_write_transaction(transaction_path)
+    recover_atomic_write_transaction(transaction_path, verify_targets=True)
     manifest, prepared = prepare_sync_preview_apply(
         manifest_path,
         active_project_root=active_project_root,

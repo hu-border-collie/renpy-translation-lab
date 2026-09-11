@@ -528,6 +528,7 @@ def recover_export_only_transaction(
         return recover_atomic_write_transaction(
             journal_path,
             expected_transaction_kind=EXPORT_TRANSACTION_KIND,
+            verify_targets=True,
         )
     except Exception as exc:
         if isinstance(exc, ExportOnlyError):
@@ -878,6 +879,12 @@ def _normalize_apply_export_state_advancement(
         raise ExportOnlyError(
             "export_only.record_invalid",
             "Apply-export latest target must be absolute when present.",
+        )
+    latest_previous_value = payload.get("latest_previous_value", "")
+    if not isinstance(latest_previous_value, str):
+        raise ExportOnlyError(
+            "export_only.record_invalid",
+            "Apply-export state plan has an invalid previous latest cursor.",
         )
     for field in ("next_split_manifest_path", "applied_at", "quality_state", "updated_at"):
         value = payload.get(field)

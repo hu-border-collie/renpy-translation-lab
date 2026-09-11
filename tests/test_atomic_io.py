@@ -523,3 +523,182 @@ class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AtomicWriteRollbackPhaseTests(unittest.TestCase):
+    def _strict_journal(self, root: Path, targets):
+        entries = []
+        for target, preimage in targets:
+            backup = root / f".{target.name}.txn.bak"
+            backup.write_text(preimage, encoding="utf-8")
+            entries.append(
+                {
+                    "target": str(target),
+                    "staged_path": str(root / f".{target.name}.txn.tmp"),
+                    "backup_path": str(backup),
+                    "existed": True,
+                    "staged_sha256": atomic_io.sha256_text(target.read_text(encoding="utf-8")),
+                    "target_preimage_sha256": atomic_io.sha256_text(preimage),
+                }
+            )
+        journal = root / "writeback-transaction.json"
+        journal.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "transaction_kind": "apply",
+                    "state": "prepared",
+                    "entries": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return journal
+
+    def test_strict_rollback_resumes_after_partial_restore_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.rpy"
+            second = root / "second.rpy"
+            first.write_text("first new\n", encoding="utf-8")
+            second.write_text("second new\n", encoding="utf-8")
+            journal = self._strict_journal(
+                root,
+                ((first, "first old\n"), (second, "second old\n")),
+            )
+            real_restore = atomic_io._restore_backup_copy
+            calls = {"count": 0}
+
+            def fail_second_restore(backup, target):
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise OSError("injected rollback interruption")
+                return real_restore(backup, target)
+
+            with mock.patch.object(
+                atomic_io,
+                "_restore_backup_copy",
+                side_effect=fail_second_restore,
+            ):
+                with self.assertRaisesRegex(OSError, "rollback interruption"):
+                    atomic_io.recover_atomic_write_transaction(
+                        journal,
+                        expected_transaction_kind="apply",
+                        verify_targets=True,
+                    )
+
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(payload["state"], "rolling_back")
+            # Recovery walks entries in reverse; the second target was restored
+            # before the injected failure interrupted the first target.
+            self.assertEqual(first.read_text(encoding="utf-8"), "first new\n")
+            self.assertEqual(second.read_text(encoding="utf-8"), "second old\n")
+            self.assertTrue(
+                any(
+                    entry.get("rollback_state") == "rolled_back"
+                    for entry in payload["entries"]
+                )
+            )
+
+            # The already-restored target must be recognized as a legal
+            # rollback phase; retry converges without treating it as external.
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(first.read_text(encoding="utf-8"), "first old\n")
+            self.assertEqual(second.read_text(encoding="utf-8"), "second old\n")
+            self.assertFalse(journal.exists())
+
+    def test_strict_rollback_phase_still_fails_closed_on_external_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.rpy"
+            second = root / "second.rpy"
+            first.write_text("first new\n", encoding="utf-8")
+            second.write_text("second new\n", encoding="utf-8")
+            journal = self._strict_journal(
+                root,
+                ((first, "first old\n"), (second, "second old\n")),
+            )
+            real_restore = atomic_io._restore_backup_copy
+            calls = {"count": 0}
+
+            def fail_second_restore(backup, target):
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise OSError("injected rollback interruption")
+                return real_restore(backup, target)
+
+            with mock.patch.object(
+                atomic_io,
+                "_restore_backup_copy",
+                side_effect=fail_second_restore,
+            ):
+                with self.assertRaises(OSError):
+                    atomic_io.recover_atomic_write_transaction(
+                        journal,
+                        expected_transaction_kind="apply",
+                        verify_targets=True,
+                    )
+
+            first.write_text("external change\n", encoding="utf-8")
+            with self.assertRaises(atomic_io.AtomicWritePreimageConflict):
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            self.assertEqual(first.read_text(encoding="utf-8"), "external change\n")
+            self.assertTrue(journal.exists())
+
+    def test_committed_cleanup_failure_is_recoverable_without_rollback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            journal = root / "writeback-transaction.json"
+            real_remove = atomic_io._remove_if_present
+
+            def fail_journal_removal(path):
+                if os.path.abspath(os.fspath(path)) == os.path.abspath(journal):
+                    raise OSError("journal cleanup failed")
+                return real_remove(path)
+
+            with (
+                mock.patch.object(
+                    atomic_io,
+                    "_cleanup_transaction_entries",
+                    side_effect=OSError("cleanup failed"),
+                ),
+                mock.patch.object(
+                    atomic_io,
+                    "_remove_if_present",
+                    side_effect=fail_journal_removal,
+                ),
+            ):
+                atomic_io.atomic_write_many_bytes(
+                    [(target, b"new\n")],
+                    journal_path=journal,
+                    transaction_kind="apply",
+                )
+            # The commit is durable even when cleanup fails; the leftover
+            # committed journal is cleaned on the next recovery pass without
+            # touching the committed target.
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertTrue(journal.exists())
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertFalse(journal.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

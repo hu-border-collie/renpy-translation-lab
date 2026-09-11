@@ -948,6 +948,8 @@ class BatchCliContractTests(unittest.TestCase):
                 "APPLY_EXPORT_DESTINATION_CONFLICT",
             ),
             ("apply_export.recovery_required", "APPLY_EXPORT_RECOVERY_REQUIRED"),
+            ("apply_export.output_changed", "APPLY_EXPORT_OUTPUT_CHANGED"),
+            ("apply_export.state_pending", "APPLY_EXPORT_STATE_PENDING"),
             ("", "APPLY_EXPORT_FAILED"),
         ):
             with self.subTest(reason_code=reason_code):

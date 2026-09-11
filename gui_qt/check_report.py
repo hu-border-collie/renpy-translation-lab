@@ -414,6 +414,18 @@ def summarize_apply_envelope(
         record_path = apply_summary.get("record_path")
         if isinstance(record_path, str) and record_path.strip():
             facts.append(f"导出记录：{record_path.strip()}")
+        pending_steps = apply_summary.get("pending_steps")
+        if isinstance(pending_steps, list) and pending_steps:
+            facts.append(
+                "待补记步骤："
+                + "、".join(str(step) for step in pending_steps)
+            )
+        latest_cursor = apply_summary.get("latest_cursor")
+        if (
+            isinstance(latest_cursor, Mapping)
+            and latest_cursor.get("status") == "retained_newer"
+        ):
+            facts.append("latest 游标：已保留其它操作推进的新值，未回退覆盖")
         recovery_state = apply_summary.get("recovery_state")
         if isinstance(recovery_state, str) and recovery_state not in {"", "none"}:
             facts.append(f"恢复状态：{recovery_state}")

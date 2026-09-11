@@ -394,50 +394,95 @@ def _verify_target_before_replace(entry: dict[str, Any]) -> None:
         )
 
 
-def _verify_prepared_target_state(entry: dict[str, Any]) -> None:
-    """Preflight one prepared entry without mutating any target."""
+def _classify_prepared_entry(entry: dict[str, Any]) -> str:
+    """Classify one prepared journal entry without mutating any target.
+
+    Returns one of ``legacy`` (no content digest), ``uncommitted``,
+    ``committed`` or ``rolled_back``.  Any state that matches neither the
+    staged nor the preimage bytes is an external modification and raises
+    :class:`AtomicWritePreimageConflict`.
+    """
 
     staged_sha256 = entry.get("staged_sha256")
     if not staged_sha256:
-        # Legacy journal: no content guard available; callers that require
-        # strict recovery must reject rather than guess when hashes are absent.
-        return
+        return "legacy"
     target = entry["target"]
     staged_path = entry["staged_path"]
     preimage = entry.get("target_preimage_sha256")
-    # ``os.replace`` consumes the staged path. Its absence means the replace
-    # had already happened before the interruption.
-    if not os.path.exists(staged_path):
-        try:
-            current = file_sha256(target)
-        except OSError as exc:
-            raise AtomicWriteTransactionError(
-                f"Committed target is missing during recovery: {target}"
-            ) from exc
-        if current != staged_sha256:
-            raise AtomicWritePreimageConflict(
-                "Committed target changed outside the pending transaction; "
-                f"refusing to overwrite it: {target}"
-            )
-        return
-    if entry["existed"]:
-        if preimage:
-            try:
-                current = file_sha256(target)
-            except OSError as exc:
+    recorded = entry.get("rollback_state")
+    staged_exists = os.path.exists(staged_path)
+    target_exists = os.path.lexists(target)
+    if target_exists and (os.path.islink(target) or not os.path.isfile(target)):
+        raise AtomicWritePreimageConflict(
+            f"Recovery target is not a regular file: {target}"
+        )
+    current = file_sha256(target) if target_exists else None
+    expected_rolled_back = preimage if entry["existed"] else None
+
+    if recorded == "rolled_back":
+        if current == expected_rolled_back:
+            return "rolled_back"
+        raise AtomicWritePreimageConflict(
+            "Previously rolled-back target changed outside the pending "
+            f"transaction; refusing to continue recovery: {target}"
+        )
+
+    if staged_exists:
+        # The staged file still exists, so this target was not replaced.
+        if entry["existed"]:
+            if preimage is None:
                 raise AtomicWriteTransactionError(
-                    f"Uncommitted target is missing during recovery: {target}"
-                ) from exc
-            if current != preimage:
-                raise AtomicWritePreimageConflict(
-                    "Uncommitted target changed outside the pending transaction; "
-                    f"refusing to overwrite it: {target}"
+                    f"Prepared entry has no preimage digest: {target}"
                 )
-    elif os.path.lexists(target):
+            if current == preimage:
+                return "uncommitted"
+            raise AtomicWritePreimageConflict(
+                "Uncommitted target changed outside the pending transaction; "
+                f"refusing to roll it back: {target}"
+            )
+        if current is None:
+            return "uncommitted"
         raise AtomicWritePreimageConflict(
             "Uncommitted target was created outside the pending transaction; "
             f"refusing to remove it: {target}"
         )
+
+    # The staged file is gone: the replace for this target already happened, or
+    # an earlier rollback already restored it.
+    if entry["existed"]:
+        if current == staged_sha256:
+            return "committed"
+        if preimage is not None and current == preimage:
+            return "rolled_back"
+        raise AtomicWritePreimageConflict(
+            "Committed target is missing or changed outside the pending "
+            f"transaction; refusing to overwrite it: {target}"
+        )
+    if current is None:
+        return "rolled_back"
+    if current == staged_sha256:
+        return "committed"
+    raise AtomicWritePreimageConflict(
+        "Target was created outside the pending transaction after a new-file "
+        f"commit; refusing to remove it: {target}"
+    )
+
+
+def _verify_prepared_target_state(entry: dict[str, Any]) -> None:
+    """Preflight one prepared entry without mutating any target."""
+
+    _classify_prepared_entry(entry)
+
+
+def _journal_entries_are_strict(entries: Iterable[dict[str, Any]]) -> bool:
+    """Return True when every entry carries content digests for strict recovery."""
+
+    entry_list = list(entries)
+    return bool(entry_list) and all(entry.get("staged_sha256") for entry in entry_list)
+
+
+def _write_transaction_journal(journal: str, payload: dict[str, Any]) -> None:
+    atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
 
 
 def _cleanup_committed_transaction(
@@ -530,7 +575,7 @@ def _validate_transaction_journal(
 
     state = payload.get("state")
     entries = payload.get("entries")
-    if state not in {"prepared", "committed"} or not isinstance(entries, list):
+    if state not in {"prepared", "committed", "rolling_back", "rolled_back"} or not isinstance(entries, list):
         raise AtomicWriteTransactionError(
             f"Invalid writeback transaction journal: {journal}"
         )
@@ -589,11 +634,22 @@ def _validate_transaction_journal(
             raise AtomicWriteTransactionError(
                 f"Invalid preimage digest in entry {index} of writeback journal: {journal}"
             )
+        rollback_state = entry.get("rollback_state")
+        if rollback_state is not None and rollback_state not in {"pending", "rolled_back"}:
+            raise AtomicWriteTransactionError(
+                f"Invalid rollback state in entry {index} of writeback journal: {journal}"
+            )
 
     metadata = payload.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         raise AtomicWriteTransactionError(
             f"Invalid metadata in writeback transaction journal: {journal}"
+        )
+
+    recovery = payload.get("recovery")
+    if recovery is not None and not isinstance(recovery, dict):
+        raise AtomicWriteTransactionError(
+            f"Invalid recovery phase in writeback transaction journal: {journal}"
         )
 
     return state, transaction_kind, entries
@@ -660,14 +716,20 @@ def recover_atomic_write_transaction(
 ) -> bool:
     """Recover an interrupted multi-file write transaction.
 
-    Prepared transactions are rolled back. Committed transactions only need
-    leftover temporary files removed. Returns True when a journal was found.
+    Prepared transactions are rolled back. Committed or already-rolled-back
+    transactions only need leftover temporary files removed. Returns True when
+    a journal was found.
 
-    When ``verify_targets`` is true, prepared entries that carry content
-    digests are preflighted first: a target that changed outside the pending
-    transaction makes recovery fail without overwriting that change. Entries
-    from legacy journals without digests fall back to the historical rollback
-    behavior.
+    Strict recovery (new journals with content digests) persists the rollback
+    phase in the journal before mutating targets and records each entry as
+    ``rolled_back`` as it is restored.  A recovery pass interrupted by injected
+    failures or a process stop is therefore replayable: already-restored
+    entries are recognized as a legal state instead of being mistaken for
+    external modifications.  A target that matches neither the staged bytes
+    nor the preimage bytes still fails closed and is never overwritten.
+
+    Legacy journals without content digests fall back to the historical
+    rollback behavior.
     """
 
     journal = os.path.abspath(os.fspath(journal_path))
@@ -680,10 +742,96 @@ def recover_atomic_write_transaction(
     state = str(payload["state"])
     entries = list(payload["entries"])
 
-    if state == "prepared":
+    strict_entries = _journal_entries_are_strict(entries)
+    use_rollback_phase = state == "rolling_back" or (
+        state == "prepared" and verify_targets and strict_entries
+    )
+    if use_rollback_phase:
+        if state == "prepared":
+            # Preflight all targets and persist the rollback phase before any
+            # mutation, so a crash during rollback is replayable.
+            classifications = [
+                _classify_prepared_entry(entry) for entry in entries
+            ]
+            for entry, classification in zip(entries, classifications):
+                entry["rollback_state"] = (
+                    "rolled_back"
+                    if classification in {"uncommitted", "rolled_back"}
+                    else "pending"
+                )
+            payload["state"] = "rolling_back"
+            recovery = payload.get("recovery")
+            if not isinstance(recovery, dict):
+                recovery = {}
+            recovery["started_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            payload["recovery"] = recovery
+            _write_transaction_journal(journal, payload)
+        else:
+            # Resume: repair any marker whose target was restored before the
+            # process stopped while that entry's journal update was pending.
+            repaired = False
+            for entry in entries:
+                classification = _classify_prepared_entry(entry)
+                if classification in {"uncommitted", "rolled_back"} and (
+                    entry.get("rollback_state") != "rolled_back"
+                ):
+                    entry["rollback_state"] = "rolled_back"
+                    repaired = True
+            if repaired:
+                _write_transaction_journal(journal, payload)
+
+        for entry in reversed(entries):
+            if entry.get("rollback_state") == "rolled_back":
+                continue
+            classification = _classify_prepared_entry(entry)
+            if classification in {"uncommitted", "rolled_back"}:
+                entry["rollback_state"] = "rolled_back"
+                continue
+            if classification != "committed":
+                raise AtomicWriteTransactionError(
+                    "Recovery cannot classify transaction target: "
+                    f"{entry.get('target', '')}"
+                )
+            target = entry["target"]
+            backup_path = entry["backup_path"]
+            if entry["existed"]:
+                if not backup_path or not os.path.isfile(backup_path):
+                    raise AtomicWriteTransactionError(
+                        f"Missing rollback backup for {target}: {backup_path or '(none)'}"
+                    )
+                _restore_backup_copy(backup_path, target)
+                expected_preimage = entry.get("target_preimage_sha256")
+                if expected_preimage and file_sha256(target) != expected_preimage:
+                    raise AtomicWritePreimageConflict(
+                        "Rollback restored bytes that do not match the recorded "
+                        f"preimage: {target}"
+                    )
+            else:
+                _remove_if_present(target)
+                if os.path.lexists(target):
+                    raise AtomicWritePreimageConflict(
+                        f"Rollback could not remove newly committed target: {target}"
+                    )
+            entry["rollback_state"] = "rolled_back"
+            _write_transaction_journal(journal, payload)
+
+        # Mark the whole journal as rolled back before removing temporary files
+        # and the journal itself. A later pass recognizes this terminal phase.
+        payload["state"] = "rolled_back"
+        recovery = payload.get("recovery")
+        if not isinstance(recovery, dict):
+            recovery = {}
+        recovery["completed_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+        )
+        payload["recovery"] = recovery
+        _write_transaction_journal(journal, payload)
+    elif state == "prepared":
+        # Legacy rollback path (no content digests): preserve historical
+        # behavior for journals written before strict target guards existed.
         if verify_targets:
-            # Validate every target before touching any of them. A blocked
-            # recovery must leave the journal and all visible state in place.
             for entry in entries:
                 _verify_prepared_target_state(entry)
         for entry in reversed(entries):

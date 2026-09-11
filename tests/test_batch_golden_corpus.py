@@ -790,7 +790,6 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 self._write_mock_results(manifest_path)
                 batch_mod.check_results(str(manifest_path))
                 export_root = root / 'exports'
-                real_mark_complete = batch_mod._mark_apply_export_state_complete
 
                 def fail_first_mark(*args, **kwargs):
                     raise OSError('receipt complete marker failed')
@@ -842,6 +841,383 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             finally:
                 self._restore_batch_environment(old_values)
 
+
+    def _prepare_apply_export_case(self, temporary, name):
+        root = Path(temporary)
+        game_root = root / 'project'
+        tl_dir = self._copy_fixture_tl(game_root)
+        old_values = self._patch_batch_environment(game_root, tl_dir)
+        manifest_path = Path(
+            batch_mod.create_batch_package(
+                display_name_override=name,
+                skip_prepare=True,
+            )
+        )
+        self._write_mock_results(manifest_path)
+        batch_mod.check_results(str(manifest_path))
+        return root, manifest_path, tl_dir, old_values
+
+    def test_golden_export_only_rejects_pending_apply_export_journal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-export-only-p2-journal'
+            )
+            try:
+                package_dir = Path(manifest_path).parent
+                journal = package_dir / '.apply_export_transaction.json'
+                journal.write_text('{}', encoding='utf-8')
+                source = tl_dir / 'chapter01' / 'dialogue.rpy'
+                source.write_bytes(b'transaction-new\n')
+                progress_path = Path(batch_mod.PROGRESS_LOG)
+                progress_before = (
+                    progress_path.read_bytes() if progress_path.exists() else None
+                )
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_before = (
+                    latest_path.read_bytes() if latest_path.exists() else None
+                )
+                target = root / 'export-only-target'
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as raised:
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_only=str(target),
+                    )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_RECOVERY_REQUIRED',
+                )
+                self.assertEqual(
+                    raised.exception.details.get('recovery_state'),
+                    'recovery_required',
+                )
+                self.assertEqual(source.read_bytes(), b'transaction-new\n')
+                self.assertFalse(target.exists())
+                self.assertEqual(
+                    progress_path.read_bytes() if progress_path.exists() else None,
+                    progress_before,
+                )
+                self.assertEqual(
+                    latest_path.read_bytes() if latest_path.exists() else None,
+                    latest_before,
+                )
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertNotIn('applied_at', raw_manifest)
+                self.assertTrue(journal.exists())
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_export_only_rejects_pending_apply_export_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-export-only-p2-pending'
+            )
+            try:
+                export_root = root / 'exports'
+                with mock.patch.object(
+                    batch_mod,
+                    '_finish_apply_export_state',
+                    side_effect=RuntimeError('simulated state failure'),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, 'simulated state'):
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                source = tl_dir / 'chapter01' / 'dialogue.rpy'
+                committed_bytes = source.read_bytes()
+                progress_path = Path(batch_mod.PROGRESS_LOG)
+                progress_before = (
+                    progress_path.read_bytes() if progress_path.exists() else None
+                )
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_before = (
+                    latest_path.read_bytes() if latest_path.exists() else None
+                )
+                target = root / 'export-only-after-pending'
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as raised:
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_only=str(target),
+                    )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_RECOVERY_REQUIRED',
+                )
+                self.assertEqual(
+                    raised.exception.details.get('recovery_state'),
+                    'state_pending',
+                )
+                self.assertEqual(source.read_bytes(), committed_bytes)
+                self.assertFalse(target.exists())
+                self.assertEqual(
+                    progress_path.read_bytes() if progress_path.exists() else None,
+                    progress_before,
+                )
+                self.assertEqual(
+                    latest_path.read_bytes() if latest_path.exists() else None,
+                    latest_before,
+                )
+                record_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                self.assertEqual(
+                    json.loads(record_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'pending',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_complete_replay_revalidates_outputs(self):
+        scenarios = ('missing_export', 'modified_workspace', 'extra_export_entry')
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                root, manifest_path, tl_dir, old_values = (
+                    self._prepare_apply_export_case(tmp, f'golden-replay-{scenario}')
+                )
+                try:
+                    export_root = root / 'exports'
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_dir=str(export_root),
+                    )
+                    exported = (
+                        export_root
+                        / 'game'
+                        / 'tl'
+                        / 'schinese'
+                        / 'chapter01'
+                        / 'dialogue.rpy'
+                    )
+                    workspace = tl_dir / 'chapter01' / 'dialogue.rpy'
+                    if scenario == 'missing_export':
+                        exported.unlink()
+                    elif scenario == 'modified_workspace':
+                        workspace.write_bytes(workspace.read_bytes() + b'# drift\n')
+                    else:
+                        (export_root / 'rogue').mkdir()
+                        (export_root / 'rogue' / 'extra.txt').write_bytes(b'extra')
+
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                    self.assertEqual(
+                        raised.exception.code_name,
+                        'APPLY_EXPORT_OUTPUT_CHANGED',
+                    )
+                    self.assertEqual(
+                        raised.exception.details.get('recovery_state'),
+                        'state_conflict',
+                    )
+                    self.assertIn(
+                        'changed',
+                        raised.exception.details,
+                    )
+
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as forced:
+                        batch_mod.apply_results(str(manifest_path), force=True)
+                    self.assertEqual(
+                        forced.exception.code_name,
+                        'APPLY_EXPORT_OUTPUT_CHANGED',
+                    )
+                finally:
+                    self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_rag_error_stays_pending_and_retries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-rag-pending'
+            )
+            try:
+                export_root = root / 'exports'
+                rag_calls = []
+
+                def fake_rag(jobs, quality_state='batch_applied'):
+                    rag_calls.append(list(jobs))
+                    if len(rag_calls) == 1:
+                        return {'enabled': True, 'error': 'store unavailable'}
+                    return {'enabled': True, 'upserted': 0, 'pending': 0}
+
+                with (
+                    mock.patch.object(batch_mod, 'RAG_ENABLED', True),
+                    mock.patch.object(
+                        batch_mod,
+                        'sync_rag_store_for_jobs',
+                        side_effect=fake_rag,
+                    ),
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                    self.assertEqual(
+                        raised.exception.code_name,
+                        'APPLY_EXPORT_STATE_PENDING',
+                    )
+                    self.assertEqual(
+                        raised.exception.details.get('pending_steps'),
+                        ['rag'],
+                    )
+                    self.assertTrue(
+                        raised.exception.details.get('files_committed')
+                    )
+                    self.assertEqual(len(rag_calls), 1)
+
+                    raw_manifest = json.loads(
+                        Path(manifest_path).read_text(encoding='utf-8')
+                    )
+                    advancement = raw_manifest.get('apply_state_advancement') or {}
+                    self.assertEqual(advancement.get('status'), 'pending')
+                    self.assertEqual(advancement.get('pending_steps'), ['rag'])
+                    self.assertNotIn('applied_at', raw_manifest)
+                    record_path = (
+                        Path(manifest_path).parent
+                        / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                    )
+                    self.assertEqual(
+                        json.loads(record_path.read_text(encoding='utf-8'))[
+                            'exports'
+                        ][0]['state_advancement']['status'],
+                        'pending',
+                    )
+
+                    resumed = batch_mod.apply_results(str(manifest_path))
+                    self.assertEqual(len(rag_calls), 2)
+                    self.assertIn('applied_at', resumed)
+                    self.assertEqual(
+                        resumed['apply_state_advancement']['status'],
+                        'complete',
+                    )
+                    self.assertEqual(
+                        json.loads(record_path.read_text(encoding='utf-8'))[
+                            'exports'
+                        ][0]['state_advancement']['status'],
+                        'complete',
+                    )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_latest_cursor_replay_is_conditional(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-latest-normal'
+            )
+            try:
+                export_root = root / 'exports'
+                previous_manifest = (
+                    Path(manifest_path).parent / 'previous' / 'manifest.json'
+                )
+                previous_manifest.parent.mkdir(parents=True, exist_ok=True)
+                previous_manifest.write_text('{}', encoding='utf-8')
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_path.write_text(str(previous_manifest), encoding='utf-8')
+
+                first = batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                latest_after_first = latest_path.read_text(encoding='utf-8').strip()
+                self.assertEqual(
+                    first['apply_state_advancement']['latest_cursor']['status'],
+                    'advanced',
+                )
+                self.assertEqual(
+                    latest_after_first,
+                    str(Path(manifest_path).resolve()),
+                )
+
+                second = batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8').strip(),
+                    latest_after_first,
+                )
+                self.assertIn(
+                    second['apply_state_advancement']['latest_cursor']['status'],
+                    {'advanced', 'already_advanced'},
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_latest_cursor_retains_newer_value(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-latest-newer'
+            )
+            try:
+                export_root = root / 'exports'
+                with mock.patch.object(
+                    batch_mod,
+                    '_mark_apply_export_state_complete',
+                    side_effect=OSError('receipt marker failed'),
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                receipt_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                self.assertEqual(
+                    json.loads(receipt_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'pending',
+                )
+
+                third_manifest = Path(manifest_path).parent / 'part_third' / 'manifest.json'
+                third_manifest.parent.mkdir(parents=True, exist_ok=True)
+                third_manifest.write_text('{}', encoding='utf-8')
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_path.write_text(str(third_manifest), encoding='utf-8')
+
+                resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8').strip(),
+                    str(third_manifest),
+                )
+                latest_cursor = resumed['apply_state_advancement']['latest_cursor']
+                self.assertEqual(latest_cursor['status'], 'retained_newer')
+                self.assertEqual(
+                    resumed['apply_summary']['latest_cursor']['status'],
+                    'retained_newer',
+                )
+                self.assertIn('newer', latest_cursor['message'])
+                self.assertEqual(
+                    json.loads(receipt_path.read_text(encoding='utf-8'))['exports'][0][
+                        'state_advancement'
+                    ]['status'],
+                    'complete',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
 
     def test_golden_batch_apply_rejects_changed_source_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -849,3 +849,94 @@ class BatchApplyExportRecoveryGuardTests(unittest.TestCase):
                 )
             self.assertEqual(raised.exception.reason_code, "apply_export.tree_conflict")
             self.assertEqual(exported.read_bytes(), b"tampered\n")
+
+
+class BatchApplyExportRollbackPhaseTests(unittest.TestCase):
+    def test_apply_export_rollback_phase_resumes_after_partial_delete(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            game_root = root / "project"
+            package_dir = root / "package"
+            game_root.mkdir()
+            package_dir.mkdir()
+            source = game_root / "game" / "tl" / "schinese" / "chapter.rpy"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"transaction new\n")
+            backup = source.parent / ".chapter.rpy.txn.bak"
+            backup.write_bytes(b"old\n")
+            exported = root / "exports" / "game" / "tl" / "schinese" / "chapter.rpy"
+            exported.parent.mkdir(parents=True)
+            exported.write_bytes(b"transaction new\n")
+            journal = package_dir / ".apply_export_transaction.json"
+            journal.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "transaction_kind": batch_export.APPLY_EXPORT_TRANSACTION_KIND,
+                        "state": "prepared",
+                        "entries": [
+                            {
+                                "target": str(source),
+                                "staged_path": str(source.parent / "missing.txn.tmp"),
+                                "backup_path": str(backup),
+                                "existed": True,
+                                "staged_sha256": hashlib.sha256(
+                                    b"transaction new\n"
+                                ).hexdigest(),
+                                "target_preimage_sha256": hashlib.sha256(
+                                    b"old\n"
+                                ).hexdigest(),
+                            },
+                            {
+                                "target": str(exported),
+                                "staged_path": str(exported.parent / "missing.txn.tmp"),
+                                "backup_path": "",
+                                "existed": False,
+                                "staged_sha256": hashlib.sha256(
+                                    b"transaction new\n"
+                                ).hexdigest(),
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            export_root = batch_export.validate_apply_export_root(
+                str(root / "exports"),
+                game_root=str(game_root),
+                package_dir=str(package_dir),
+            )
+
+            with mock.patch.object(
+                atomic_io,
+                "_restore_backup_copy",
+                side_effect=OSError("injected rollback interruption"),
+            ):
+                with self.assertRaises(batch_export.ApplyExportError):
+                    batch_export.recover_apply_export_transaction(
+                        export_root,
+                        str(journal),
+                        workspace_root=str(source.parent),
+                        game_root=str(game_root),
+                        package_dir=str(package_dir),
+                    )
+
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(payload["state"], "rolling_back")
+            self.assertFalse(exported.exists())
+            self.assertEqual(source.read_bytes(), b"transaction new\n")
+
+            # The deleted export target and the still-new workspace target are
+            # both legal rollback-phase states; retry converges.
+            self.assertTrue(
+                batch_export.recover_apply_export_transaction(
+                    export_root,
+                    str(journal),
+                    workspace_root=str(source.parent),
+                    game_root=str(game_root),
+                    package_dir=str(package_dir),
+                )
+            )
+            self.assertEqual(source.read_bytes(), b"old\n")
+            self.assertFalse(exported.exists())
+            self.assertFalse(journal.exists())

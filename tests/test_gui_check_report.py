@@ -352,6 +352,40 @@ class GuiCheckReportTests(unittest.TestCase):
         self.assertIn("已写回游戏脚本并导出", summary.message)
         self.assertFalse(summary.can_apply)
 
+    def test_summarize_apply_export_reports_pending_and_cursor_conflict(self):
+        summary = summarize_apply_envelope(
+            {
+                "ok": True,
+                "status": "applied_and_exported",
+                "result": {
+                    "apply": {
+                        "mode": "apply-export",
+                        "status": "applied_and_exported",
+                        "export_root": r"C:\exports",
+                        "record_path": r"C:\pkg\apply_export_record.json",
+                        "exported_files": 2,
+                        "applied_files": 2,
+                        "actual_applied_files": 2,
+                        "applied_lines": 6,
+                        "recovery_state": "none",
+                        "state_advancement_status": "complete",
+                        "pending_steps": ["rag"],
+                        "latest_cursor": {
+                            "status": "retained_newer",
+                            "message": "kept newer",
+                        },
+                    }
+                },
+            },
+            exit_code=0,
+            manifest_path=r"C:\pkg\manifest.json",
+        )
+
+        facts = "\n".join(summary.facts)
+        self.assertIn("待补记步骤：rag", facts)
+        self.assertIn("latest 游标", facts)
+        self.assertIn("保留其它操作", facts)
+
     def test_summarize_apply_output_marks_completed(self):
         summary = summarize_apply_output(
             APPLY_OUTPUT,
