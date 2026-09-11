@@ -55,7 +55,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.3"
+ADAPTER_VERSION = "1.1.4"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -793,14 +793,23 @@ class RenPyAdapter:
                 )
 
                 marker = None
-                token_is_multiline = token.end[0] > token.start[0]
-                if identity is not None or legacy_item is not None or token_is_multiline:
+                stripped_for_marker = line.strip()
+                if (
+                    not stripped_for_marker.startswith("old ")
+                    and not legacy.is_voice_statement_line(stripped_for_marker)
+                ):
                     marker = self._source_marker_evidence(
                         legacy,
                         lines,
                         line_index,
                         is_translation_file=is_translation_file,
                     )
+                    if (
+                        marker is not None
+                        and marker.get("kind") == "old_new"
+                        and not stripped_for_marker.startswith("new ")
+                    ):
+                        marker = None
                 if marker is not None:
                     paired_source_marker_lines.add(int(marker["line_index"]))
 
