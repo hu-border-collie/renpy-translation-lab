@@ -99,7 +99,7 @@ class DependencyLockTests(unittest.TestCase):
                 locks.REPO_ROOT
                 / locks.platform_lock_relative_path(platform, "litellm")
             ).read_text(encoding="utf-8")
-            self.assertIn("litellm==1.83.7", litellm)
+            self.assertIn("litellm==1.84.0", litellm)
             self.assertIn("keyring==25.7.0", litellm)
             for package in locks.ANALYZER_ONLY_DISTRIBUTIONS:
                 self.assertNotIn(f"{package}==", litellm, package)
