@@ -1,24 +1,26 @@
 # Ren'Py coverage block 归因报告（#426 spike）
 
-> **状态**：合成 fixture 归因完成；P1 跨行字符串（#460）、source marker 级联（#461）与 digest
-> canonicalization（#463）已实现并反映在本文；#462 / #464 仍待处理；**未完成真实大型项目频率归因**。
+> **状态**：合成 fixture 归因完成；P1 跨行字符串（#460）、source marker 级联（#461）、TL 缺 marker
+> 分类策略（#462）与 digest canonicalization（#463）已实现并反映在本文；#464 仍待处理；
+> **未完成真实大型项目频率归因**。
 > **输入**：原创合成 fixture [`tests/fixtures/renpy_coverage_attribution/`](../../tests/fixtures/renpy_coverage_attribution/README.md)，
-> adapter `renpy@1.1.5`，classification rules digest `3cce9a4d…f410`。
+> adapter `renpy@1.1.6`，classification rules digest `c3db8146…300b`（新增 `translation_present_without_marker` 后）。
 > **运行方式**：[`scripts/coverage_block_attribution.py`](../../scripts/coverage_block_attribution.py)，只读；不写项目、不调用模型。
 > **证据边界**：本环境没有获得授权的真实大型项目只读副本，因此本报告的频率与分布结论不得外推为真实项目归因。
 > 公开材料只包含脱敏汇总与原创 fixture，不含私有游戏名、脚本、地图、路径、对白或 Batch 结果。
 
 ## 1. 摘要结论
 
-同一份 fixture 上（`renpy@1.1.4`，含 #460/#461 修复），coverage 自动状态仍为 `block`，16 个 candidate 的分类为：
+同一份 fixture 上（`renpy@1.1.6`，含 #460/#461/#462 修复），coverage 自动状态仍为 `block`，
+16 个 candidate 的分类为：
 
 | classification | candidates | 对 block 的作用 |
 |---|---:|---|
-| `already_translated` | 8 | 否 |
+| `already_translated` | 9 | 否 |
 | `explicitly_excluded` | 2 | 否 |
 | `translatable` | 1 | 否 |
-| `unknown` | 1 | 是 |
-| `unsupported` | 2 | 否（使状态为 attention 级风险；当前 fixture 的 block 来自 unknown/parse_error） |
+| `unknown` | 0 | 否 |
+| `unsupported` | 2 | 否（使状态为 attention 级风险；当前 fixture 的 block 来自 parse_error） |
 | `parse_error` | 2 | 是 |
 
 自动归因得到的主要根因：
@@ -33,9 +35,11 @@
    （34 行）和没有后继字符串的尾部 quoted comment（39 行），分别由 #464 复核。
 3. **当前确认不支持的结构**：动态 f-string（`renpy.dynamic_string_expression`）与非标准 `old` 标记行
    （`renpy.custom_statement_unsupported`）各 1 个，均为 `unsupported`。
-4. **无法判定**：没有 paired source marker 的已译单引号对白进入 `unknown / renpy.visibility_unknown`；
-   它可能暴露「合法 TL catalog 缺少注释标记」与「单引号 say 语句官方是否接受」两个待决问题，
-   inventory 不改变该分类，后续见 #462。
+4. **缺少 source marker 的已译 TL 字符串：已由 #462 定义策略**。Ren'Py 8.5.3 lint 证据表明：单引号 say、
+   三引号/续行字符串与动态 f-string 都是官方接受的语法；TL 文件缺少生成的 `# "…"` 注释不影响运行时按
+   block identity 翻译。目标语言文本 + say/narration 结构现在走明确的
+   `renpy.catalog.translation_present_without_marker`，classification 为 `already_translated`；
+   证据不足的字符串仍保留 `unknown`，不静默清零。
 5. **疑似 false-positive（仅提示，不排除）**：尾部 `# TODO "…"`（39 行）与只有 `old` 没有 `new`
    的孤儿行（34 行）值得后续用 catalog 证据确认；本报告不把它们改写成合法排除，见 #464。
 6. **合法排除与负控未被破坏**：`voice` / asset path 保持 `explicitly_excluded`；
@@ -69,9 +73,9 @@ python scripts/coverage_block_attribution.py `
 | `source_fingerprint` | `e9a8e502173f4afef5b78b41f92666af5e679a40fbf0eee2b5ba6aea534c9b86` |
 | `project_snapshot_fingerprint` | `eaa3def51f888454db52ef8ade9d93aa4b2f020017fcf0c76e4f0ad2b6d9d922` |
 | `classification_rules_digest` | `3cce9a4dddf9664568ebaba04131984295a1d1667363d03493704abb084ff410` |
-| `inventory_digest` | `ea110a54ebd60c2eed1f11daf56391ac365c1e6880b8ae4f2387cbbe72e30fac` |
-| `coverage_digest` | `2c4e8fc655cd70c16b2980df494d89d56d92e72ecd9b6d938d37f1ece74b44d5` |
-| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.5` 固定运行） | `f6c0b3963112d3fd7e1b4e8a905410d95bf7917cdb53860cb5f9604ff00e544f` |
+| `inventory_digest` | `60ff0ee6cb48b6c9059b8e16e7665e8b4dba31903d80379237cfae7c805319b0` |
+| `coverage_digest` | `5828d3062e6bbce8a9bc1e2b3ed43e61ca9983b9a0ff4f0ce9114340aa918f18` |
+| `aggregation_digest`（2026-09-11 Python 3.12、`renpy@1.1.6` 固定运行） | `14a3e3d0580d1417a57723ce3ae1d742f7fc06f9fe5150694976349d9ebae13f` |
 
 ## 3. 分类报告
 
@@ -82,7 +86,7 @@ python scripts/coverage_block_attribution.py `
 | 不支持结构（非标准 `old`） | 自动（reason code 已登记） | `nonstandard_old_source_marker` ×1 | 当前确认不支持；见 §5.3 |
 | source marker 级联（已修复 #461） | 自动 | `source_comment` ×1（39 行 TODO；34 行为 old 行单独复核） | marker pairing 不再因 candidate 分类丢失 |
 | 孤儿 `old` 行 | heuristic | `old_source_marker` ×1 | 疑似 false-positive/结构异常；见 §5.4 |
-| 未标记已译对白 | heuristic | `unknown_string_structure` ×1 | 无法判定；见 §5.3 |
+| 未标记已译对白（已实现 #462） | 自动 + heuristic | `dialogue_string` ×1，reason `renpy.catalog.translation_present_without_marker` | 目标语言 say/narration 分类为 `already_translated`；非目标语言仍保持 `unknown` |
 | 合法排除 | 自动 | `voice_statement` ×1、`asset_literal` ×1 | 不需修复 |
 | 已译负控 | 自动 | 普通 dialogue ×6（含 2 个 multiline）、speaker label ×1、narration ×1 | 行为保持；含 asset 路径子串的可见对白未被过度排除 |
 | 待译负控 | 自动 | empty target ×1 | 仍在 `translatable`，未因覆盖归因被排除 |
@@ -175,7 +179,19 @@ python scripts/coverage_block_attribution.py `
   3. reason code 必须先登记 allowlist（沿用 #420 合同）；
   4. P1/P2 测试与 coverage 计数对应关系保持。
 
-### 5.3 P2：定义 TL 字符串缺少 source marker / 动态文本的分类策略
+### 5.3 P2：定义 TL 字符串缺少 source marker / 动态文本的分类策略（已实现 / #462）
+
+> **官方 parser 证据（2026-09-11，Ren'Py 8.5.3.26051504）**：用最小项目执行
+> `renpy.sh /tmp/project translate schinese` 生成 TL 文件后，删除某个 block 的 `# e "…"` source comment
+> 并把目标改成单引号中文，再执行 `renpy.sh /tmp/project lint`：lint 不报语法错误，统计仍把该行计为
+> schinese translation；单引号 say、三引号跨行、反斜杠续行与 say-position f-string 都被官方 parser 接受。
+> 因此「TL + say/narration + 目标语言文本」有足够证据视为已译，而不是仅凭 `contains_chinese()` 的静默扩大。
+>
+> **策略**：新增登记 allowlist 的 `renpy.catalog.translation_present_without_marker`，只在前述窄条件下
+> 把 candidate 标为 `already_translated`，并在 evidence / unit metadata 记录 `source_marker_missing=true`；
+> dynamic f-string 仍保持 `unsupported`，按结构化支持计划处理，不自动翻译；非目标语言或证据不足的字符串
+> 仍保留 `unknown` 供人工 review/repair。
+> 当前实现版本 `renpy@1.1.6`，新增测试 `tests/test_engine_adapter_unmarked_translation.py`。
 
 - **问题**：没有 paired comment 的已译 TL 字符串落到 `unknown / renpy.visibility_unknown`（本 fixture 的单引号对白）；
   动态 f-string 落到 `unsupported`。两者都会使 coverage `block`，但当前没有「官方 parser 接受性 + catalog provenance」
@@ -222,8 +238,8 @@ python scripts/coverage_block_attribution.py `
 
 1. **真实大型项目频率未知**：没有授权副本，无法确认 unknown / unsupported / parse_error 的真实数量级与语法分布；
    本报告不能被称为「真实大型项目归因完成」。
-2. **官方 parser 证据不足**：三引号跨行、反斜杠续行、单引号 say 语句在具体 Ren'Py 版本上的接受性仍需官方
-   parser 或真实项目证据；当前只证明 adapter fixture 行为。
+2. **官方 parser 证据已有最小复现**：Ren'Py 8.5.3 接受单引号 say、三引号/续行、动态 f-string，且 TL 缺少
+   source comment 不影响 runtime 翻译；但真实大型项目是否依赖其他 Ren'Py 版本/工具链仍需样本确认。
 3. **独立扫描是启发式**：quote-run state machine 可能对嵌套 f-string、转义和注释过度/不足计数；
    `uncovered_span_count=0` 只说明本 fixture 没发现静默漏扫，不等于全局证明。
 4. **digest 跨版本会变化是设计行为**：同一 adapter / rules / 输入下 digest 已可复现（#463）；
@@ -232,8 +248,8 @@ python scripts/coverage_block_attribution.py `
 ## 7. 边界与仍未做的事
 
 - #426 spike 本身未改生产行为；后续 #460 已实现跨行字符串 inventory 提取、#461 修复 source marker
-  级联、#463 恢复 digest 可复现（当前 `renpy@1.1.5`）。跨行 writeback span、#462 分类策略、
-  #464 quoted comment / 孤儿 `old` 仍按各自 issue 推进。
+  级联、#462 定义缺 marker 分类策略、#463 恢复 digest 可复现（当前 `renpy@1.1.6`）。跨行 writeback
+  span 与 #464 quoted comment / 孤儿 `old` 仍按各自 issue 推进。
 - #460 没有改变 writeback、GUI、doctor 或 TyranoScript adapter；multiline writeback 仍 fail closed。
 - 未把疑似 false-positive 的 candidate 排除，也未把 unsupported / parse_error 伪装成 `ready`；
   真实大型项目频率归因仍缺授权样本。

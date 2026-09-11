@@ -174,18 +174,15 @@ class CoverageAttributionTests(unittest.TestCase):
         self.assertEqual(legacy_old["count"], 1)
         self.assertEqual(legacy_old["effective_category"], "unsupported_structure")
 
-        single_quote_unknown = self.find_group(
-            payload,
-            "unknown",
-            "unknown_string_structure",
-            ("renpy.visibility_unknown",),
-            (
-                "single_quote_literal_needs_official_parser_check",
-                "unmarked_string_needs_source_evidence",
-            ),
-        )
-        self.assertEqual(single_quote_unknown["count"], 1)
-        self.assertEqual(single_quote_unknown["effective_category"], "unknown")
+        unmarked_translation = [
+            group
+            for group in payload["groups"]
+            if "renpy.catalog.translation_present_without_marker" in group["reason_codes"]
+        ]
+        self.assertEqual(len(unmarked_translation), 1)
+        self.assertEqual(unmarked_translation[0]["classification"], "already_translated")
+        self.assertEqual(unmarked_translation[0]["effective_category"], "translated")
+        self.assertEqual(unmarked_translation[0]["count"], 1)
 
         voice = self.find_group(
             payload,

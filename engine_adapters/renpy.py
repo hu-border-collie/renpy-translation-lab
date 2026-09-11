@@ -56,7 +56,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.5"
+ADAPTER_VERSION = "1.1.6"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -1133,6 +1133,20 @@ class RenPyAdapter:
             classification = "explicitly_excluded"
             reasons = ["renpy.asset_path"]
             structure_kind = "asset_literal"
+        elif (
+            is_translation_file
+            and marker is None
+            and legacy.contains_chinese(live_catalog_text)
+        ):
+            # Ren'Py runtime keys translations by block identity, not by the
+            # generated source comment. A target-language say/narration string
+            # in a translation file is therefore already translated even when
+            # the optional marker comment is missing (#462).
+            classification = "already_translated"
+            reasons = [
+                supported_reason,
+                "renpy.catalog.translation_present_without_marker",
+            ]
         elif is_multiline and not is_translation_file:
             classification = "translatable"
             reasons = [supported_reason]
@@ -1166,6 +1180,11 @@ class RenPyAdapter:
 
         source_marker_kind = "direct_source"
         source_text = str(text_value) if isinstance(text_value, str) else ""
+        source_marker_missing = (
+            is_translation_file
+            and marker is None
+            and "renpy.catalog.translation_present_without_marker" in reasons
+        )
         marker_line_number = 0
         if marker is not None:
             source_text = str(marker.get("text") or source_text)
@@ -1205,6 +1224,8 @@ class RenPyAdapter:
             unit_item = dict(item)
             unit_item["source"] = source_text
             unit_item["live_catalog_text"] = live_catalog_text
+            if source_marker_missing:
+                unit_item["source_marker_missing"] = True
             if marker is not None:
                 unit_item["current_translation"] = live_catalog_text
             if speaker_id:
@@ -1260,6 +1281,8 @@ class RenPyAdapter:
         if marker is not None:
             evidence["source_marker_line"] = marker_line_number
             evidence["source_text"] = _bounded_excerpt(source_text)
+        if source_marker_missing:
+            evidence["source_marker_missing"] = True
         if literal_error is not None:
             evidence["parse_error"] = _stable_error_text(f"{type(literal_error).__name__}: {literal_error}")
         if is_multiline:

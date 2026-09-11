@@ -38,6 +38,7 @@
 - Ren'Py adapter inventory 支持合法多行字符串：多行三引号与反斜杠续行现在按逻辑语句生成可定位 candidate，locator 记录 `end_line_hint` / `multiline`，TL 中 paired source marker 的译文按现有启发式分类；非法未闭合字符串仍保持 `parse_error`。adapter version 升至 `1.1.3`（#460）。
 - Ren'Py TL source marker pairing 不再依赖 candidate 分类：unsupported / unknown 字符串上方合法标记不再级联为 `renpy.source_marker_unpaired`；`old` marker 只配 `new` 行，voice 行不消费 comment marker，没有后继字符串的 quoted comment 仍 fail closed；adapter version 升至 `1.1.4`（#461）。
 - canonicalize Ren'Py parse-error evidence：异常文本中的进程内存地址会被规范化，相同输入/规则/adapter 下的 `inventory_digest` 与 `coverage_digest` 跨进程稳定，归因脚本重新输出这两个 digest；adapter version 升至 `1.1.5`（#463）。
+- Ren'Py TL 缺少 generated source comment 时，目标语言的 say/narration 字符串不再落到 `unknown`：新增 allowlist reason `renpy.catalog.translation_present_without_marker`，按 Ren'Py 8.5.3 parser 证据分类为 `already_translated` 并记录 `source_marker_missing`；非目标语言/动态 f-string 仍保留 `unknown` / `unsupported`。adapter version 升至 `1.1.6`（#462）。
 - 生成 Profile 不再强制绑定 embedding profile：RAG / Source Index 关闭时，LiteLLM 内置或自定义 OpenAI-compatible Profile 可以直接启动完整同步初译；对应检索开关开启但仍无 embedding 绑定时，配置投影与只读命令保持可用，真正物化检索/发起 embedding（含 Batch 计划与 apply 后的 store 更新）前以稳定错误拒绝，不会静默借道旧 embedding 配置。
 - `translate-preflight` 与 `profiles-probe` 现在会按 `credential_ref.kind=env` 的 `name` 读取命名环境变量，不再只依赖 Provider keyring 或派生的 `<PROVIDER>_API_KEY` 名称，避免把已配置的环境凭据误报为 `CREDENTIAL_UNAVAILABLE`。
 
