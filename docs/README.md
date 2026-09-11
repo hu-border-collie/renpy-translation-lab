@@ -74,6 +74,7 @@
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md) · [多引擎生态与工具源码研究](plans/multi_engine_localization_ecosystem_research.md) · [GitHub 本地化项目研究](plans/github_localization_projects_research.md)
 - [#364 真实项目质量规则校准执行手册](plans/issue-364-calibration-runbook.md) · [校准基线](plans/quality_calibration_baseline.md)
+- [#426 Ren'Py coverage block 归因报告](plans/renpy_coverage_block_attribution.md)：只读脚本与原创 fixture 的 unknown / unsupported / parse_error 归因、漏扫检查和后续拆单草案。
 
 
 ### 历史参考（已归档）

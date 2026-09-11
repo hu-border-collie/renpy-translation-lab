@@ -39,6 +39,9 @@
   A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤。
 - [真实项目机械质量校准基线](quality_calibration_baseline.md)：
   基于三项目真实语料与人工标注的机械质量规则校准数据，支撑 #364 规则默认值调整。
+- [#426 Ren'Py coverage block 归因报告](renpy_coverage_block_attribution.md)：
+  用原创合成 fixture 与只读 `scripts/coverage_block_attribution.py` 归因 unknown / unsupported /
+  parse_error 的语法根因、漏扫检查与后续修复拆单草案；真实大型项目频率与运行时修复仍未完成。
 
 ## 已交付并归档的设计与调研
 

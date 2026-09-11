@@ -1,0 +1,214 @@
+# Ren'Py coverage block 归因报告（#426 spike）
+
+> **状态**：合成 fixture 归因完成；**未完成真实大型项目频率归因**，也**未做任何运行时修复**。
+> **输入**：原创合成 fixture [`tests/fixtures/renpy_coverage_attribution/`](../../tests/fixtures/renpy_coverage_attribution/README.md)，
+> adapter `renpy@1.1.2`，classification rules digest `3cce9a4d…f410`。
+> **运行方式**：[`scripts/coverage_block_attribution.py`](../../scripts/coverage_block_attribution.py)，只读；不写项目、不调用模型。
+> **证据边界**：本环境没有获得授权的真实大型项目只读副本，因此本报告的频率与分布结论不得外推为真实项目归因。
+> 公开材料只包含脱敏汇总与原创 fixture，不含私有游戏名、脚本、地图、路径、对白或 Batch 结果。
+
+## 1. 摘要结论
+
+同一份 fixture 上，coverage 自动状态为 `block`，21 个 candidate 的分类为：
+
+| classification | candidates | 对 block 的作用 |
+|---|---:|---|
+| `already_translated` | 6 | 否 |
+| `explicitly_excluded` | 2 | 否 |
+| `translatable` | 1 | 否 |
+| `unknown` | 1 | 是 |
+| `unsupported` | 2 | 是 |
+| `parse_error` | 9 | 是 |
+
+自动归因得到的主要根因：
+
+1. **逐行 tokenize 无法处理跨行字符串**：多行 `"""…"""` 与行尾反斜杠续行共产生 4 个 `parse_error / renpy.tokenize_error`，
+   原文不可提取，并连带产生 2 个 source marker `parse_error`。这是 fixture 中可稳定复现的 parser gap 候选；
+   Python 3.12 全部落在 `tokenize_region`，Python 3.11 会把其中续行尾行拆成 1 个 `string_literal` quote error，
+   但 classification 与 reason 总数不变。
+2. **source marker 级联**：当某个字符串 candidate 是 `unsupported` / `unknown` / parse 失败时，其上方合法的
+   `# "…"` source marker 不会被标记为 paired，随后又被单独记成 `renpy.source_marker_unpaired`。
+   本 fixture 中该级联占 4 个 `parse_error`，会放大 coverage block。
+3. **当前确认不支持的结构**：动态 f-string（`renpy.dynamic_string_expression`）与非标准 `old` 标记行
+   （`renpy.custom_statement_unsupported`）各 1 个，均为 `unsupported`。
+4. **无法判定**：没有 paired source marker 的已译单引号对白进入 `unknown / renpy.visibility_unknown`；
+   它可能暴露「合法 TL catalog 缺少注释标记」与「单引号 say 语句官方是否接受」两个待决问题，
+   在本 spike 中不改变生产分类。
+5. **疑似 false-positive（仅提示，不排除）**：4 个 quoted comment marker 中的尾部 `# TODO "…"`、以及只有 `old` 没有
+   `new` 的孤儿行，值得后续用 catalog 证据确认；本报告不把它们改写成合法排除。
+6. **合法排除与负控未被破坏**：`voice` / asset path 保持 `explicitly_excluded`；
+   paired dialogue、speaker label、空 target pending 对白仍是可提取或已译候选；
+   含 asset 路径子串的可见对白没有被过度排除。
+
+## 2. 复现与聚合口径
+
+```powershell
+python scripts/coverage_block_attribution.py `
+  tests/fixtures/renpy_coverage_attribution/game/tl/schinese `
+  --project-root tests/fixtures/renpy_coverage_attribution/game `
+  --target-language schinese `
+  --generated-at 2026-09-11T00:00:00+00:00 `
+  --json-output logs/attribution/coverage_attribution.json `
+  --markdown-output logs/attribution/coverage_attribution.md
+```
+
+- 聚合按 `classification | structure_kind | reason_codes | review_flags` 分组；每个 group 保留**全部** candidate locator，
+  `sum(group.count) == coverage candidate_count` 由模块内 invariant 拒绝不满足的情况。
+- 输出分别记录自动证据（`automatic_evidence`）、人工判断（`human_judgment`，可选 `--decisions`）与
+  `evidence_gaps`；没有人工判断时不会被伪装成已确认结论。
+- `--generated-at` 固定时间戳后，JSON 与 Markdown 可跨进程逐字节复现；`aggregation_digest` 只覆盖
+  稳定输入与聚合结果。
+- 默认输出不含原文摘录；本地排查可用 `--include-excerpts`，但带摘录的输出不得公开。
+
+输入指纹（fixture）。 除特别说明外，下表与分组表记录 Python 3.12 运行值；不同 Python tokenize 版本可能
+改变个别 structure kind 的拆分与 `aggregation_digest`，但 classification / reason 总计数保持一致。
+
+| 项目 | 值 |
+|---|---|
+| `source_fingerprint` | `e9a8e502173f4afef5b78b41f92666af5e679a40fbf0eee2b5ba6aea534c9b86` |
+| `project_snapshot_fingerprint` | `eaa3def51f888454db52ef8ade9d93aa4b2f020017fcf0c76e4f0ad2b6d9d922` |
+| `classification_rules_digest` | `3cce9a4dddf9664568ebaba04131984295a1d1667363d03493704abb084ff410` |
+| `aggregation_digest`（2026-09-11 Python 3.12 固定运行） | `43e835ed39340f76ba7eaf168f14fe22a6206ae0e8c2a65d288da56108d1ee41` |
+
+## 3. 分类报告
+
+| 归因类别 | 证据等级 | group / 数量 | 结论状态 |
+|---|---|---|---|
+| parser gap（跨行字符串） | 自动（`renpy.tokenize_error`，fixture 复现） | `renpy.tokenize_error` 合计 ×4（3.12：`tokenize_region` ×4；3.11：`tokenize_region` ×3 + `string_literal` ×1） | 待人工确认 parser defect；最小修复设计见 §5.1 |
+| 不支持结构（动态文本） | 自动（reason code 已登记） | `dynamic_string_expression` ×1 | 当前确认不支持；产品策略见 §5.3 |
+| 不支持结构（非标准 `old`） | 自动（reason code 已登记） | `nonstandard_old_source_marker` ×1 | 当前确认不支持；见 §5.3 |
+| source marker 级联 | 自动 + heuristic | `source_comment` ×4 | 需 catalog / 语法证据；见 §5.2 |
+| 孤儿 `old` 行 | heuristic | `old_source_marker` ×1 | 疑似 false-positive/结构异常；见 §5.4 |
+| 未标记已译对白 | heuristic | `unknown_string_structure` ×1 | 无法判定；见 §5.3 |
+| 合法排除 | 自动 | `voice_statement` ×1、`asset_literal` ×1 | 不需修复 |
+| 已译负控 | 自动 | 普通 dialogue ×4、speaker label ×1、narration ×1 | 行为保持；含 asset 路径子串的可见对白未被过度排除 |
+| 待译负控 | 自动 | empty target ×1 | 仍在 `translatable`，未因覆盖归因被排除 |
+
+定位依据（fixture 相对路径 `game/tl/schinese/attribution_samples.rpy`）：
+
+| 根因 | 行 |
+|---|---|
+| 多行三引号对白 | 22–23 |
+| 反斜杠续行对白 | 27–28 |
+| 动态 f-string 及 source marker | 17–18 |
+| 非标准 `old` 标记 | 31 |
+| 孤儿 `old` 行 | 34 |
+| 尾部 quoted comment | 39 |
+| 未标记单引号对白 | 43 |
+| 合法排除 | 46–47 |
+| 负控（paired / speaker label / pending / exclusions 后对白 / asset-lookalike） | 6、10、14、38、49、53 |
+
+完整的 candidate ID、block occurrence、列号与 reason code 见脚本 JSON 输出；Markdown 默认每组列出最多
+`--max-locators`（默认 10）条 locator。
+
+### 3.1 漏扫确认
+
+脚本另外用独立 quote-run state machine 扫描源文本，不调用 adapter tokenizer：
+
+| 指标 | 值 |
+|---|---:|
+| 独立扫描 quote spans | 17 |
+| 由非 `parse_error` candidate 覆盖 | 12 |
+| 仅由 `parse_error` candidate 覆盖（文本不可提取） | 5 |
+| 无任何 candidate 覆盖 | **0** |
+
+因此在本 fixture 上，当前 inventory 没有漏掉「完全没有 candidate」的字符串；5 个 parse-error 文本区域属于
+「被标记但尚不可提取」，不是静默漏扫。扫描器本身是启发式（见 §6），不能替代官方 parser 证据。
+
+## 4. 自动证据 vs 人工判断 vs 未知
+
+- **自动证据**：classification、structure kind、已登记 reason code、coverage 计数与独立扫描结果。
+- **heuristic 提示**：`review_flags` 只提示复核方向，例如
+  `comment_span_may_be_non_player_visible`、`orphan_old_row_needs_catalog_evidence`、
+  `dynamic_text_may_be_player_visible`、`single_quote_literal_needs_official_parser_check`；
+  它们不改变 classification，也不构成排除理由。
+- **人工判断**：通过 `--decisions` 导入，必须提供 reviewer、category、rationale；
+  group key 在当前输入中不存在时 fail closed，避免旧判断静默套用到新规则。
+  本报告本身没有人工 judgement 输入，所以「归因类别」仍按自动/heuristic 标记。
+
+## 5. 后续修复拆单草案
+
+> 以下只是草案，不在本 spike 自动发布 issue，也不代表运行时已经修复。
+> 每个拆单都必须区分「归因完成」与「运行时修复完成」。
+
+### 5.1 P1：支持跨行字符串的 inventory tokenization
+
+- **问题**：`_inventory_document()` 逐物理行 `tokenize.generate_tokens(io.StringIO(line))`；多行三引号与
+  行尾反斜杠在行内是未闭合字符串，产生 `renpy.tokenize_error`，玩家可见对白没有 candidate/unit。
+- **预期行为**：合法跨行字符串产生一个可定位（起始行 + 列、结束行 + 列）的 `dialogue_string` / `narration_string`
+  candidate；译文原文保留换行语义；source marker pairing 仍按逻辑语句工作。
+- **最小修复设计**：对文档使用整文件/逻辑行 tokenizer（保留每个 token 的 `(line, col)` 或映射回物理行），
+  或在现有逐行路径显式累积未闭合的 triple-quote / 反斜杠续行区域；不得用全局正则替换 parser。
+- **验收**：
+  1. fixture 22–28 行不再产生 `renpy.tokenize_error`，且出现可提取 candidate；
+  2. 更新 `tests/test_coverage_attribution.py` 的 characterization 期望；
+  3. 保留非法未闭合字符串的 `parse_error` 行为；
+  4. 现有 P1/P2 adapter 等价性测试通过；
+  5. 不改变 writeback；若需要 adapter 行为版本升级，单独按既有规则处理。
+
+### 5.2 P2：修复 source marker 级联 parse_error
+
+- **问题**：字符串 candidate 一旦是 `unsupported` / `unknown` / tokenize 失败，上方合法 marker comment 不会被加入
+  `paired_source_marker_lines`，随后作为 `renpy.source_marker_unpaired` 再记一个 `parse_error`，使 block 计数虚高。
+- **预期行为**：marker comment 与紧随逻辑语句的字符串绑定应由语句结构决定；即使该字符串当前不可译，
+  marker 也不应因为 candidate 分类而丢失 pairing。仍不为随机 quoted comment 自动生成可译文本。
+- **验收**：
+  1. fixture 中 3 个「marker + 跨行/动态字符串」不再产生额外 `source_marker_unpaired`；
+  2. 尾部 `# TODO "…"` 仍有明确、可复核的 reason code / review 状态；
+  3. reason code 必须先登记 allowlist（沿用 #420 合同）；
+  4. P1/P2 测试与 coverage 计数对应关系保持。
+
+### 5.3 P2：定义 TL 字符串缺少 source marker / 动态文本的分类策略
+
+- **问题**：没有 paired comment 的已译 TL 字符串落到 `unknown / renpy.visibility_unknown`（本 fixture 的单引号对白）；
+  动态 f-string 落到 `unsupported`。两者都会使 coverage `block`，但当前没有「官方 parser 接受性 + catalog provenance」
+  的可执行判定。
+- **预期行为**：先用 Ren'Py 官方 parser / 真实 catalog 证据确认结构和语义，再决定：
+  - 有可靠 catalog/provenance 证据的已译字符串：走明确 reason code 的 `already_translated`；
+  - 确属动态生成的玩家可见文本：进入结构化 unsupported 支持计划；
+  - 证据不足：保持 `unknown`，但提供人工 review/repair 入口，不静默清零。
+- **验收**：
+  1. 文档记录 Ren'Py 版本与最小复现证据；
+  2. 新 reason code 登记 allowlist，classification 变化同步 adapter version 规则与测试；
+  3. 不允许仅凭 `contains_chinese()` 静默扩大 `already_translated`；
+  4. 与 #416 speaker-label 规则不冲突。
+
+### 5.4 P3：quoted comment / 孤儿 `old` 行的 false-positive 复核
+
+- **问题**：尾部 `# TODO "…"` 与只有 `old` 没有 `new` 的行目前不能区分「开发者注释」与「真实 source marker
+  缺失」，都会进入 parse_error 并 block。
+- **预期行为**：基于 Ren'Py TL 语法与 catalog 证据给出明确分类；不满足 source marker 的结构不得被静默丢弃，
+  `old` 行仍 fail closed，直到有可靠修复路径。
+- **验收**：
+  1. 至少覆盖 TODO 注释、`old` 无 `new`、`old` 行含额外 token 三类 fixture；
+  2. 如改为合法排除，必须有有效 reason code 和人工 review 证据；
+  3. 不把代码/断言/颜色/内部 ID 无条件移出 inventory。
+
+### 5.5 P2：canonicalize parse-error evidence，恢复 coverage digest 可复现
+
+- **问题**：动态 f-string 的 `evidence["parse_error"]` 含 `<ast.JoinedStr object at 0x…>` 地址，
+  导致相同输入的 `inventory_digest` / `coverage_digest` 在不同进程间漂移；本脚本才不得不省略这两个派生 digest。
+- **预期行为**：parse-error evidence 序列化稳定（去掉对象地址等非确定内容），adapter inventory/coverage digest
+  在同一输入同一规则下跨进程一致；不改变 classification、reason code 或 writeback。
+- **验收**：
+  1. 对同一 fixture 连续两次完整扫描得到相同 digest；
+  2. 现有 adapter/coverage 测试通过；
+  3. `scripts/coverage_block_attribution.py` 重新纳入 coverage/inventory digest 字段并保留 `--generated-at` 复现测试。
+
+## 6. 未知与证据缺口
+
+1. **真实大型项目频率未知**：没有授权副本，无法确认 unknown / unsupported / parse_error 的真实数量级与语法分布；
+   本报告不能被称为「真实大型项目归因完成」。
+2. **官方 parser 证据不足**：三引号跨行、反斜杠续行、单引号 say 语句在具体 Ren'Py 版本上的接受性仍需官方
+   parser 或真实项目证据；当前只证明 adapter fixture 行为。
+3. **独立扫描是启发式**：quote-run state machine 可能对嵌套 f-string、转义和注释过度/不足计数；
+   `uncovered_span_count=0` 只说明本 fixture 没发现静默漏扫，不等于全局证明。
+4. **派生 digest 不可复现**：见 §5.5；当前脚本用稳定输入指纹与 `aggregation_digest` 固定聚合结果，
+   但不输出历史 adapter coverage digest。
+
+## 7. 本 spike 明确未做的事
+
+- 未改变生产 classification / coverage 语义、writeback、GUI、doctor 或 TyranoScript adapter；
+- 未新增正式 CLI 子命令或 GUI 页面，只新增离线只读脚本、fixture、测试与本研究记录；
+- 未把疑似 false-positive 的 candidate 排除，也未把 unsupported / parse_error 伪装成 `ready`；
+- 未创建或批量发布后续 issue；§5 只是拆单草案。
