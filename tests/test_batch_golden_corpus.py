@@ -1139,8 +1139,8 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     'advanced',
                 )
                 self.assertEqual(
-                    latest_after_first,
-                    str(Path(manifest_path).resolve()),
+                    os.path.normcase(os.path.realpath(latest_after_first)),
+                    os.path.normcase(os.path.realpath(str(manifest_path))),
                 )
 
                 second = batch_mod.apply_results(

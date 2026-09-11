@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import tempfile
@@ -530,15 +531,15 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
         entries = []
         for target, preimage in targets:
             backup = root / f".{target.name}.txn.bak"
-            backup.write_text(preimage, encoding="utf-8")
+            backup.write_bytes(preimage)
             entries.append(
                 {
                     "target": str(target),
                     "staged_path": str(root / f".{target.name}.txn.tmp"),
                     "backup_path": str(backup),
                     "existed": True,
-                    "staged_sha256": atomic_io.sha256_text(target.read_text(encoding="utf-8")),
-                    "target_preimage_sha256": atomic_io.sha256_text(preimage),
+                    "staged_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    "target_preimage_sha256": hashlib.sha256(preimage).hexdigest(),
                 }
             )
         journal = root / "writeback-transaction.json"
@@ -560,11 +561,11 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
             root = Path(tmp)
             first = root / "first.rpy"
             second = root / "second.rpy"
-            first.write_text("first new\n", encoding="utf-8")
-            second.write_text("second new\n", encoding="utf-8")
+            first.write_bytes(b"first new\n")
+            second.write_bytes(b"second new\n")
             journal = self._strict_journal(
                 root,
-                ((first, "first old\n"), (second, "second old\n")),
+                ((first, b"first old\n"), (second, b"second old\n")),
             )
             real_restore = atomic_io._restore_backup_copy
             calls = {"count": 0}
@@ -591,8 +592,8 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
             self.assertEqual(payload["state"], "rolling_back")
             # Recovery walks entries in reverse; the second target was restored
             # before the injected failure interrupted the first target.
-            self.assertEqual(first.read_text(encoding="utf-8"), "first new\n")
-            self.assertEqual(second.read_text(encoding="utf-8"), "second old\n")
+            self.assertEqual(first.read_bytes(), b"first new\n")
+            self.assertEqual(second.read_bytes(), b"second old\n")
             self.assertTrue(
                 any(
                     entry.get("rollback_state") == "rolled_back"
@@ -609,8 +610,8 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
                     verify_targets=True,
                 )
             )
-            self.assertEqual(first.read_text(encoding="utf-8"), "first old\n")
-            self.assertEqual(second.read_text(encoding="utf-8"), "second old\n")
+            self.assertEqual(first.read_bytes(), b"first old\n")
+            self.assertEqual(second.read_bytes(), b"second old\n")
             self.assertFalse(journal.exists())
 
     def test_strict_rollback_phase_still_fails_closed_on_external_change(self):
@@ -618,11 +619,11 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
             root = Path(tmp)
             first = root / "first.rpy"
             second = root / "second.rpy"
-            first.write_text("first new\n", encoding="utf-8")
-            second.write_text("second new\n", encoding="utf-8")
+            first.write_bytes(b"first new\n")
+            second.write_bytes(b"second new\n")
             journal = self._strict_journal(
                 root,
-                ((first, "first old\n"), (second, "second old\n")),
+                ((first, b"first old\n"), (second, b"second old\n")),
             )
             real_restore = atomic_io._restore_backup_copy
             calls = {"count": 0}
@@ -645,14 +646,14 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
                         verify_targets=True,
                     )
 
-            first.write_text("external change\n", encoding="utf-8")
+            first.write_bytes(b"external change\n")
             with self.assertRaises(atomic_io.AtomicWritePreimageConflict):
                 atomic_io.recover_atomic_write_transaction(
                     journal,
                     expected_transaction_kind="apply",
                     verify_targets=True,
                 )
-            self.assertEqual(first.read_text(encoding="utf-8"), "external change\n")
+            self.assertEqual(first.read_bytes(), b"external change\n")
             self.assertTrue(journal.exists())
 
     def test_committed_cleanup_failure_is_recoverable_without_rollback(self):
