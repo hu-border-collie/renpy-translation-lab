@@ -158,8 +158,10 @@ def exclusive_file_lock(
                     else None
                 )
                 if preempt_dead_owner and owner_alive is False:
-                    # Re-check the owner before unlinking so a replacement lock
-                    # created between read and unlink is never deleted.
+                    # Re-check the owner/type before unlinking to reduce the
+                    # chance of deleting a replacement lock.  A second
+                    # preemptor can still race between this read and unlink;
+                    # the latest service avoids preemption entirely.
                     try:
                         replacement_stat = os.lstat(target)
                     except FileNotFoundError:
