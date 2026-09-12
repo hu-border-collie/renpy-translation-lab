@@ -61,6 +61,34 @@ class WorkflowUpdate:
     timeline_step_key: str | None = None
 
 
+def build_export_writeback_cli_args(
+    manifest_path: str,
+    *,
+    mode: str,
+    export_root: str,
+    output_json: bool = True,
+    non_interactive: bool = True,
+) -> list[str]:
+    """Build the shared apply CLI args for the GUI export executor."""
+
+    normalized_mode = str(mode or "").strip()
+    if normalized_mode not in {"export-only", "apply-export"}:
+        raise ValueError(f"Unsupported export writeback mode: {mode!r}")
+    manifest = str(manifest_path or "").strip()
+    destination = str(export_root or "").strip()
+    if not manifest or not destination:
+        raise ValueError("manifest_path and export_root are required")
+    option = "--export-only" if normalized_mode == "export-only" else "--export-dir"
+    args = ["apply", manifest, option, destination]
+    if output_json:
+        args.extend(["--output", "json"])
+    if non_interactive:
+        args.append("--non-interactive")
+    return args
+
+
+
+
 STEP_TEXT = {
     "build": ("正在准备翻译内容", "正在扫描待翻译文本并准备待提交内容。"),
     "submit": ("正在提交翻译任务", "正在上传请求文件并创建云端批量任务。"),

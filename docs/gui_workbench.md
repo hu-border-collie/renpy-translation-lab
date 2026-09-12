@@ -176,7 +176,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 **上方内层 Tab**（`任务上下文` / `命令参考` / `任务记录`）：
 
 - **任务上下文**：任务记录路径、翻译包、云端任务状态、最近检查结果、是否已写回；报告路径逐行展示并支持复制。
-- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`quality-report`、`apply` 等）；翻译任务在满足门禁时还会显示 `apply --export-only <EXPORT_ROOT>` 的 CLI 模板。该模板仅用于复制到终端，当前 GUI 没有导出目录选择或真实执行入口，不把 CLI-only P1 宣称为 GUI 交付。提交 journal 已记录远端 job、但 manifest 尚未落盘时会显示 `recover-submit`。#265 P3 还提供 `export-project-snapshot` 与 `reconcile-project-snapshots` 模板，用于导出 source-only 版本快照和只读版本差异；P4 追加 `build-translation-records`、`build-reuse-candidates`、`import-reuse-decisions` 与 `export-reuse-results` 复用模板；P6 之前这里只提供高级命令，不提供快照浏览或匹配确认界面。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令以及 revision（`build-revisions` / `preview-revisions` / `sync-revisions`）、keyword（`build-keywords` / `export-keywords` / `sync-keywords` / `merge-keywords-to-glossary`）和 final-review（六个 `final-review-*`）工作流命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。机器结果还可用 `--compact`、`--fields` 和 `--output-file` 限制终端上下文或原子落盘。Agent 可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引、参数 schema 和这些能力标记，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。提交前的 `estimate-cost` 与异常恢复语义见 [Batch 工作流](batch_workflows.md#提交前估算与异常恢复)。
+- **命令参考**：按当前任务记录生成可复制的手动命令（`doctor`、`submit`、`status`、`download`、`check`、`quality-report`、`apply` 等）；翻译任务在满足门禁时还会显示 `apply --export-only <EXPORT_ROOT>` 与 `apply --export-dir <EXPORT_ROOT>` 的 CLI 模板。结果区另有「导出…」按钮：打开真实目录选择、仅导出/写回并导出模式选择、源根/目标根/文件树与门禁冲突预览，并通过同一个 `apply` CLI 执行；预览不授权绕过运行时复核，项目/任务切换或源/结果变化会使旧预览失效。提交 journal 已记录远端 job、但 manifest 尚未落盘时会显示 `recover-submit`。#265 P3 还提供 `export-project-snapshot` 与 `reconcile-project-snapshots` 模板，用于导出 source-only 版本快照和只读版本差异；P4 追加 `build-translation-records`、`build-reuse-candidates`、`import-reuse-decisions` 与 `export-reuse-results` 复用模板；P6 之前这里只提供高级命令，不提供快照浏览或匹配确认界面。GUI 保留人类可读文本模式；Agent、脚本或 CI 可在这些核心命令以及 revision（`build-revisions` / `preview-revisions` / `sync-revisions`）、keyword（`build-keywords` / `export-keywords` / `sync-keywords` / `merge-keywords-to-glossary`）和 final-review（六个 `final-review-*`）工作流命令后追加 `--output json`，让 stdout 只返回版本化结果 envelope，并可再追加 `--strict-exit-codes` 获得稳定的语义退出码。需要禁止 stdin 与 latest-manifest 回退时，Agent 可使用 `--non-interactive`；只禁止 target 回退时使用 `--require-explicit-target`。机器结果还可用 `--compact`、`--fields` 和 `--output-file` 限制终端上下文或原子落盘。Agent 可通过 `capabilities` 和 `schema <command>` 直接读取当前 argparse 生成的机器命令索引、参数 schema 和这些能力标记，GUI 不复制维护另一份命令定义。批量翻译任务记录还会显示 `compare-variants` 试跑命令模板。当最近一次检查为「需处理」时，也会补出补译相关命令（底层为 `build-retry`、`merge-retry` 等）。提交前的 `estimate-cost` 与异常恢复语义见 [Batch 工作流](batch_workflows.md#提交前估算与异常恢复)。
 - **任务记录**：只读 JSON 预览（省略 `chunks` / `files` 大字段）。
 - **实际模型用量**：任务上下文显示当前项目累计调用、completion / reasoning / 正文输出 Token、reasoning 占已知输出比例、空正文/截断告警、未知记录数、最近运行及可用成本摘要；命令参考提供 `usage-import` 和 `usage-report`。Provider 没有明确正文计数时显示 `unknown`，不会用 completion 减 reasoning 猜测，也不会把缺失 usage 显示成 0。完整字段与成本语义见 [实际模型用量账本](model_usage_ledger.md)。
 
@@ -464,6 +464,12 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 | 禁止写回 | `blocked` / 旧 `block` |
 
 「写回翻译」按钮只在最近一次检查满足**写回门禁**时启用（`writeback_gate.decision=allow`；批量翻译 · 结果区主按钮）。质量报警默认不阻止写回，但会单独显示在写回摘要中。
+
+同一门禁下，结果区还提供「导出…」：
+- **仅导出**：选择不存在或为空的目录，调用 `apply --export-only <PATH>`；不修改游戏文件、进度或 latest。若同 package 有未决 P2 journal 或 pending receipt，会结构化拒绝而不执行 P2 回滚/状态补记。
+- **写回并导出**：调用 `apply --export-dir <PATH>`，同一份已验证渲染结果同时写回工作区和导出树，使用一个可恢复 journal；文件全部提交后才推进 progress、RAG、latest（前值条件推进）与 manifest/receipt。complete receipt 重放会重新复核两边输出，删/改/增返回 `APPLY_EXPORT_OUTPUT_CHANGED`；RAG 未成功时摘要显示 `APPLY_EXPORT_STATE_PENDING` 与待补记步骤，下一次 apply 重试。
+- 对话框展示源根（游戏根）、目标根、受管文件树与当前门禁；目标目录非空且没有匹配导出记录时会阻止继续，已有导出记录则提示执行时会复核回执/受管树/源快照。
+- 预览只是预检，不授权绕过执行时复核。项目/任务切换、源文件或结果变化会使旧预览失效；CLI 仍会重新校验 stale check、源快照、结构阻断、plan 绑定、输出复核和目录冲突。latest 已被其它操作推进时，重放会保留新值并在摘要中显示 `retained_newer`。
 
 `writeback_gate=allow` 只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。界面明确区分「可写回」与「可交付」：`quality_gate` 会输出机械质量报警；写回后仍须按报警处理，并对错译、术语、语气与上下文进行人工/LLM 通读。
 

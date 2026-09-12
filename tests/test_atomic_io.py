@@ -1,6 +1,8 @@
+import hashlib
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -432,4 +434,491 @@ class BatchArtifactAtomicTests(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    unittest.main()
+
+
+class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
+    def test_prepared_recovery_blocks_uncommitted_external_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            backup = root / '.script.rpy.demo.txn.bak'
+            staged = root / '.script.rpy.demo.txn.tmp'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('out-of-transaction\n', encoding='utf-8')
+            backup.write_text('preimage\n', encoding='utf-8')
+            staged.write_text('transaction-new\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'transaction_kind': 'apply',
+                        'state': 'prepared',
+                        'entries': [
+                            {
+                                'target': str(target),
+                                'staged_path': str(staged),
+                                'backup_path': str(backup),
+                                'existed': True,
+                                'staged_sha256': atomic_io.sha256_text('transaction-new\n'),
+                                'target_preimage_sha256': atomic_io.sha256_text('preimage\n'),
+                            }
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            with self.assertRaises(atomic_io.AtomicWritePreimageConflict):
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind='apply',
+                    verify_targets=True,
+                )
+            self.assertEqual(target.read_text(encoding='utf-8'), 'out-of-transaction\n')
+            self.assertTrue(journal.exists())
+            self.assertTrue(staged.exists())
+
+    def test_committed_recovery_never_rolls_back_external_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            backup = root / '.script.rpy.demo.txn.bak'
+            journal = root / 'writeback-transaction.json'
+            target.write_text('external change after commit\n', encoding='utf-8')
+            backup.write_text('preimage\n', encoding='utf-8')
+            journal.write_text(
+                json.dumps(
+                    {
+                        'version': 1,
+                        'transaction_kind': 'apply',
+                        'state': 'committed',
+                        'entries': [
+                            {
+                                'target': str(target),
+                                'staged_path': str(root / 'consumed.tmp'),
+                                'backup_path': str(backup),
+                                'existed': True,
+                                'staged_sha256': atomic_io.sha256_text('committed\n'),
+                                'target_preimage_sha256': atomic_io.sha256_text('preimage\n'),
+                            }
+                        ],
+                    }
+                ),
+                encoding='utf-8',
+            )
+
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind='apply',
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(
+                target.read_text(encoding='utf-8'),
+                'external change after commit\n',
+            )
+            self.assertFalse(journal.exists())
+            self.assertFalse(backup.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class AtomicWriteRollbackPhaseTests(unittest.TestCase):
+    def _strict_journal(self, root: Path, targets):
+        entries = []
+        for target, preimage in targets:
+            backup = root / f".{target.name}.txn.bak"
+            backup.write_bytes(preimage)
+            entries.append(
+                {
+                    "target": str(target),
+                    "staged_path": str(root / f".{target.name}.txn.tmp"),
+                    "backup_path": str(backup),
+                    "existed": True,
+                    "staged_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                    "target_preimage_sha256": hashlib.sha256(preimage).hexdigest(),
+                }
+            )
+        journal = root / "writeback-transaction.json"
+        journal.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "transaction_kind": "apply",
+                    "state": "prepared",
+                    "entries": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return journal
+
+    def test_strict_rollback_resumes_after_partial_restore_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.rpy"
+            second = root / "second.rpy"
+            first.write_bytes(b"first new\n")
+            second.write_bytes(b"second new\n")
+            journal = self._strict_journal(
+                root,
+                ((first, b"first old\n"), (second, b"second old\n")),
+            )
+            real_restore = atomic_io._restore_backup_copy
+            calls = {"count": 0}
+
+            def fail_second_restore(backup, target):
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise OSError("injected rollback interruption")
+                return real_restore(backup, target)
+
+            with mock.patch.object(
+                atomic_io,
+                "_restore_backup_copy",
+                side_effect=fail_second_restore,
+            ):
+                with self.assertRaisesRegex(OSError, "rollback interruption"):
+                    atomic_io.recover_atomic_write_transaction(
+                        journal,
+                        expected_transaction_kind="apply",
+                        verify_targets=True,
+                    )
+
+            payload = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(payload["state"], "rolling_back")
+            # Recovery walks entries in reverse; the second target was restored
+            # before the injected failure interrupted the first target.
+            self.assertEqual(first.read_bytes(), b"first new\n")
+            self.assertEqual(second.read_bytes(), b"second old\n")
+            self.assertTrue(
+                any(
+                    entry.get("rollback_state") == "rolled_back"
+                    for entry in payload["entries"]
+                )
+            )
+
+            # The already-restored target must be recognized as a legal
+            # rollback phase; retry converges without treating it as external.
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(first.read_bytes(), b"first old\n")
+            self.assertEqual(second.read_bytes(), b"second old\n")
+            self.assertFalse(journal.exists())
+
+    def test_strict_rollback_phase_still_fails_closed_on_external_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.rpy"
+            second = root / "second.rpy"
+            first.write_bytes(b"first new\n")
+            second.write_bytes(b"second new\n")
+            journal = self._strict_journal(
+                root,
+                ((first, b"first old\n"), (second, b"second old\n")),
+            )
+            real_restore = atomic_io._restore_backup_copy
+            calls = {"count": 0}
+
+            def fail_second_restore(backup, target):
+                calls["count"] += 1
+                if calls["count"] == 2:
+                    raise OSError("injected rollback interruption")
+                return real_restore(backup, target)
+
+            with mock.patch.object(
+                atomic_io,
+                "_restore_backup_copy",
+                side_effect=fail_second_restore,
+            ):
+                with self.assertRaises(OSError):
+                    atomic_io.recover_atomic_write_transaction(
+                        journal,
+                        expected_transaction_kind="apply",
+                        verify_targets=True,
+                    )
+
+            first.write_bytes(b"external change\n")
+            with self.assertRaises(atomic_io.AtomicWritePreimageConflict):
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            self.assertEqual(first.read_bytes(), b"external change\n")
+            self.assertTrue(journal.exists())
+
+    def test_committed_cleanup_failure_is_recoverable_without_rollback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            journal = root / "writeback-transaction.json"
+            real_remove = atomic_io._remove_if_present
+
+            def fail_journal_removal(path):
+                if os.path.abspath(os.fspath(path)) == os.path.abspath(journal):
+                    raise OSError("journal cleanup failed")
+                return real_remove(path)
+
+            with (
+                mock.patch.object(
+                    atomic_io,
+                    "_cleanup_transaction_entries",
+                    side_effect=OSError("cleanup failed"),
+                ),
+                mock.patch.object(
+                    atomic_io,
+                    "_remove_if_present",
+                    side_effect=fail_journal_removal,
+                ),
+            ):
+                atomic_io.atomic_write_many_bytes(
+                    [(target, b"new\n")],
+                    journal_path=journal,
+                    transaction_kind="apply",
+                )
+            # The commit is durable even when cleanup fails; the leftover
+            # committed journal is cleaned on the next recovery pass without
+            # touching the committed target.
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertTrue(journal.exists())
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertFalse(journal.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
+    def test_legacy_prepared_journal_keeps_historical_rollback_boundary(self):
+        """Legacy journals without content digests keep the old rollback behavior.
+
+        Strict fail-closed recovery only applies to new journals carrying
+        staged/preimage digests.  This test pins the documented compatibility
+        boundary; it does not claim legacy journals are safe against external
+        modifications.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            backup = root / ".script.rpy.demo.txn.bak"
+            journal = root / "writeback-transaction.json"
+            target.write_bytes(b"external change\n")
+            backup.write_bytes(b"preimage\n")
+            journal.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "transaction_kind": "apply",
+                        "state": "prepared",
+                        "entries": [
+                            {
+                                "target": str(target),
+                                "staged_path": str(root / "missing.txn.tmp"),
+                                "backup_path": str(backup),
+                                "existed": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(target.read_bytes(), b"preimage\n")
+            self.assertFalse(journal.exists())
+
+    def test_committed_cleanup_failure_with_journal_removed_leaves_no_journal(self):
+        """FE-08a: entry cleanup fails but journal deletion succeeds."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            journal = root / "writeback-transaction.json"
+            with mock.patch.object(
+                atomic_io,
+                "_cleanup_transaction_entries",
+                side_effect=OSError("entry cleanup failed"),
+            ):
+                atomic_io.atomic_write_many_bytes(
+                    [(target, b"new\n")],
+                    journal_path=journal,
+                    transaction_kind="apply",
+                )
+
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertFalse(journal.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class AtomicFileLockPreemptionTests(unittest.TestCase):
+    def test_live_owner_lock_is_not_stolen_by_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                old = time.time() - 30.0
+                os.utime(lock, (old, old))
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(
+                        lock,
+                        timeout=0.25,
+                        stale_after=0.01,
+                    ):
+                        pass
+            self.assertFalse(lock.exists())
+
+    def test_dead_owner_lock_can_be_preempted_after_threshold(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            dead_pid = child.pid
+            lock.write_text(
+                json.dumps(
+                    {
+                        "pid": dead_pid,
+                        "token": "dead-owner",
+                        "created_at": time.time() - 30.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 30.0
+            os.utime(lock, (old, old))
+            with atomic_io.exclusive_file_lock(
+                lock,
+                timeout=2.0,
+                stale_after=0.05,
+            ) as owner:
+                self.assertEqual(owner["pid"], os.getpid())
+            self.assertFalse(lock.exists())
+
+    def test_cross_process_live_writer_blocks_stale_waiter(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "writer.lock"
+            marker = root / "held"
+            script = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "import atomic_io\n"
+                "lock, marker = sys.argv[1:3]\n"
+                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                "    Path(marker).write_text('held')\n"
+                "    time.sleep(1.2)\n"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(lock), str(marker)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+            )
+            try:
+                deadline = time.time() + 5.0
+                while time.time() < deadline and not marker.exists():
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists())
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(
+                        lock,
+                        timeout=0.4,
+                        stale_after=0.05,
+                    ):
+                        pass
+            finally:
+                process.wait(timeout=10.0)
+
+    def test_cross_process_dead_writer_lock_is_recoverable(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "writer.lock"
+            marker = root / "held"
+            script = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "import atomic_io\n"
+                "lock, marker = sys.argv[1:3]\n"
+                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                "    Path(marker).write_text('held')\n"
+                "    time.sleep(30.0)\n"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(lock), str(marker)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+            )
+            try:
+                deadline = time.time() + 5.0
+                while time.time() < deadline and not marker.exists():
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists())
+                process.kill()
+                process.wait(timeout=10.0)
+                with atomic_io.exclusive_file_lock(
+                    lock,
+                    timeout=3.0,
+                    stale_after=0.2,
+                ) as owner:
+                    self.assertEqual(owner["pid"], os.getpid())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10.0)
+
+    def test_owner_token_still_prevents_deleting_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                lock.write_text(
+                    json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "token": "replacement-token",
+                            "created_at": time.time(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            self.assertTrue(lock.exists())
+            lock.unlink()
+
+
+if __name__ == "__main__":
     unittest.main()

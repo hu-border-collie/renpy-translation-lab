@@ -34,6 +34,77 @@ class AtomicFileLockTimeoutError(TimeoutError):
     """Raised when a same-directory exclusive file lock cannot be acquired."""
 
 
+LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
+LATEST_MANIFEST_LOCK_STALE_AFTER = 300.0
+
+
+def _read_lock_owner(lock_path: str) -> dict[str, Any] | None:
+    """Read the lock owner JSON; malformed/partially written files are unknown."""
+
+    try:
+        with open(lock_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _windows_lock_owner_alive(pid: int) -> bool | None:
+    try:
+        import ctypes
+    except ImportError:
+        return None
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    process_query_limited_information = 0x1000
+    synchronize = 0x00100000
+    handle = kernel32.OpenProcess(
+        process_query_limited_information | synchronize,
+        False,
+        int(pid),
+    )
+    if not handle:
+        error = kernel32.GetLastError()
+        if error == 5:  # ERROR_ACCESS_DENIED: process exists but cannot be opened
+            return True
+        if error in (87, 1168):  # invalid parameter / not found
+            return False
+        return None
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return None
+        return bool(exit_code.value == 259)  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _lock_owner_process_alive(owner: dict[str, Any] | None) -> bool | None:
+    """Return True/False when liveness is provable, None when uncertain.
+
+    ``None`` must be treated as "do not preempt": the conservative path is to
+    wait for timeout and let the caller surface a structured failure.
+    """
+
+    if not isinstance(owner, dict):
+        return None
+    raw_pid = owner.get("pid")
+    if isinstance(raw_pid, bool) or not isinstance(raw_pid, int) or raw_pid <= 0:
+        return None
+    if raw_pid == os.getpid():
+        return True
+    if os.name == "nt":
+        return _windows_lock_owner_alive(raw_pid)
+    try:
+        os.kill(raw_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 @contextmanager
 def exclusive_file_lock(
     lock_path: str | os.PathLike[str],
@@ -41,12 +112,20 @@ def exclusive_file_lock(
     timeout: float = 30.0,
     poll_interval: float = 0.01,
     stale_after: float = 300.0,
+    preempt_dead_owner: bool = True,
 ):
     """Serialize cooperating writers with an exclusive same-directory lock file.
 
     The lock uses atomic ``O_EXCL`` creation so it works on Windows and POSIX.
-    A token prevents one owner from deleting a replacement lock, and abandoned
-    regular lock files are recovered after ``stale_after`` seconds.
+    A token prevents one owner from deleting a replacement lock.  When
+    ``preempt_dead_owner`` is true, an aged lock is only removed when the
+    recorded owner PID is provably dead; a live owner, malformed owner record,
+    or unverifiable PID is left alone and the waiter times out instead.
+
+    Owner liveness plus a final owner re-read reduces accidental deletion of a
+    replacement lock, but it cannot eliminate the read-then-unlink race between
+    two preemptors.  Callers that cannot tolerate that race (the latest-manifest
+    service) pass ``preempt_dead_owner=False`` and require manual lock recovery.
     """
     target = os.path.abspath(os.fspath(lock_path))
     directory = os.path.dirname(target) or "."
@@ -72,11 +151,33 @@ def exclusive_file_lock(
                 raise OSError(f"File lock path is not a regular file: {target}")
             age = max(0.0, time.time() - lock_stat.st_mtime)
             if stale_after >= 0 and age >= float(stale_after):
-                try:
-                    os.unlink(target)
-                except FileNotFoundError:
-                    pass
-                continue
+                owner_payload = _read_lock_owner(target)
+                owner_alive = (
+                    _lock_owner_process_alive(owner_payload)
+                    if preempt_dead_owner
+                    else None
+                )
+                if preempt_dead_owner and owner_alive is False:
+                    # Re-check the owner/type before unlinking to reduce the
+                    # chance of deleting a replacement lock.  A second
+                    # preemptor can still race between this read and unlink;
+                    # the latest service avoids preemption entirely.
+                    try:
+                        replacement_stat = os.lstat(target)
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISREG(replacement_stat.st_mode):
+                        raise OSError(
+                            f"File lock path is not a regular file: {target}"
+                        )
+                    if _read_lock_owner(target) != owner_payload:
+                        continue
+                    try:
+                        os.unlink(target)
+                    except FileNotFoundError:
+                        pass
+                    continue
+                # Live or unverifiable owner: do not steal the lock by age.
             if time.monotonic() >= deadline:
                 raise AtomicFileLockTimeoutError(
                     f"Timed out waiting for file lock: {target}"
@@ -110,6 +211,114 @@ def exclusive_file_lock(
                 os.unlink(target)
             except FileNotFoundError:
                 pass
+
+
+def latest_manifest_lock_path(latest_manifest_path: str | os.PathLike[str]) -> str:
+    """Return the lock file shared by every latest-manifest writer."""
+
+    return f"{os.path.abspath(os.fspath(latest_manifest_path))}.lock"
+
+
+def _normalized_latest_cursor(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return os.path.normcase(os.path.realpath(os.path.abspath(text)))
+
+
+def write_latest_manifest_locked(
+    latest_manifest_path: str | os.PathLike[str],
+    manifest_path: str | os.PathLike[str],
+    *,
+    timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
+    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
+) -> None:
+    """Physically write the latest cursor under its shared writer lock."""
+
+    latest = os.path.abspath(os.fspath(latest_manifest_path))
+    # Automatic stale-lock preemption cannot be made race-free with pure file
+    # system checks (a read-then-unlink window remains).  The latest cursor is
+    # a human-recoverable pointer, so the shared service never preempts: an
+    # aged lock only produces AtomicFileLockTimeoutError until an operator
+    # removes <latest>.lock after confirming no writer is active.
+    with exclusive_file_lock(
+        latest_manifest_lock_path(latest),
+        timeout=timeout,
+        stale_after=-1,
+        preempt_dead_owner=False,
+    ):
+        atomic_write_text(latest, str(manifest_path))
+
+
+def compare_and_swap_latest_manifest_locked(
+    latest_manifest_path: str | os.PathLike[str],
+    expected: object,
+    target: object,
+    *,
+    timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
+    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
+) -> dict[str, Any]:
+    """Compare-and-swap the latest cursor under the shared writer lock."""
+
+    latest = os.path.abspath(os.fspath(latest_manifest_path))
+    expected_text = str(expected or "").strip()
+    target_text = str(target or "").strip()
+    # See write_latest_manifest_locked: latest locks are never auto-preempted.
+    with exclusive_file_lock(
+        latest_manifest_lock_path(latest),
+        timeout=timeout,
+        stale_after=-1,
+        preempt_dead_owner=False,
+    ):
+        current = ""
+        try:
+            with open(latest, "r", encoding="utf-8") as handle:
+                current = handle.read().strip()
+        except OSError:
+            current = ""
+        record = {
+            "status": "skipped",
+            "expected": expected_text,
+            "target": target_text,
+            "current": current,
+            "message": "",
+        }
+        if target_text and _normalized_latest_cursor(current) == _normalized_latest_cursor(
+            target_text
+        ):
+            record["status"] = "already_advanced"
+            record["message"] = (
+                "latest manifest cursor already points at the planned target"
+            )
+            return record
+        if _normalized_latest_cursor(current) == _normalized_latest_cursor(
+            expected_text
+        ):
+            atomic_write_text(latest, target_text)
+            written = ""
+            try:
+                with open(latest, "r", encoding="utf-8") as handle:
+                    written = handle.read().strip()
+            except OSError:
+                written = ""
+            if _normalized_latest_cursor(written) != _normalized_latest_cursor(
+                target_text
+            ):
+                raise RuntimeError(
+                    "latest manifest cursor verification failed "
+                    f"({written!r} != {target_text!r})"
+                )
+            record["status"] = "advanced"
+            record["current"] = written
+            record["message"] = "latest manifest cursor advanced to the planned target"
+            return record
+        record["status"] = "retained_newer"
+        record["current"] = current
+        record["message"] = (
+            "latest manifest cursor was advanced by another operation; "
+            "kept the newer value instead of overwriting it"
+        )
+        return record
 
 
 def atomic_write(
@@ -222,6 +431,15 @@ class AtomicWriteTransactionError(RuntimeError):
     """Raised when a multi-file atomic-write transaction cannot be recovered."""
 
 
+class AtomicWritePreimageConflict(AtomicWriteTransactionError):
+    """Raised when a guarded target changed outside the pending transaction."""
+
+
+# Sentinel used by ``expected_preimages``: a mapping value of ``None`` means
+# "the target must not exist"; a SHA-256 string means "the target must match".
+_EXPECTED_NOT_CHECKED = object()
+
+
 def _remove_if_present(path: str) -> None:
     if not path:
         return
@@ -318,6 +536,243 @@ def _cleanup_transaction_entries(entries: Iterable[dict[str, Any]]) -> None:
         _remove_if_present(str(entry.get("backup_path") or ""))
 
 
+def _normalize_preimage_hashes(
+    expected_preimages: dict[str | os.PathLike[str], str | None] | None,
+) -> dict[str, str | None]:
+    """Normalize guarded target paths and validate SHA-256 expectations."""
+
+    normalized: dict[str, str | None] = {}
+    for raw_path, raw_hash in (expected_preimages or {}).items():
+        path = os.path.abspath(os.fspath(raw_path))
+        if raw_hash is None:
+            normalized[path] = None
+            continue
+        value = str(raw_hash).strip().lower()
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError(
+                f"Expected target preimage must be a SHA-256 hex digest or None: {raw_path!r}"
+            )
+        normalized[path] = value
+    return normalized
+
+
+def _preimage_digest(path: str, backup_path: str, existed: bool) -> str | None:
+    if not existed:
+        return None
+    return file_sha256(backup_path) if backup_path else None
+
+
+def _make_transaction_entry(
+    target: str,
+    staged_path: str,
+    backup_path: str,
+    existed: bool,
+    *,
+    staged_sha256: str,
+    target_preimage_sha256: str | None,
+) -> dict[str, Any]:
+    return {
+        "target": target,
+        "staged_path": staged_path,
+        "backup_path": backup_path,
+        "existed": existed,
+        "staged_sha256": staged_sha256,
+        "target_preimage_sha256": target_preimage_sha256,
+    }
+
+
+def _verify_target_before_replace(entry: dict[str, Any]) -> None:
+    """Fail closed if a target changed after staging/backup."""
+
+    target = entry["target"]
+    preimage = entry.get("target_preimage_sha256")
+    if entry["existed"]:
+        try:
+            current = file_sha256(target)
+        except OSError as exc:
+            raise AtomicWritePreimageConflict(
+                f"Target disappeared before transaction replace: {target}"
+            ) from exc
+        if preimage and current != preimage:
+            raise AtomicWritePreimageConflict(
+                f"Target changed outside the transaction before replace: {target}"
+            )
+    elif os.path.lexists(target):
+        raise AtomicWritePreimageConflict(
+            f"Target was created outside the transaction before replace: {target}"
+        )
+
+
+def _classify_prepared_entry(entry: dict[str, Any]) -> str:
+    """Classify one prepared journal entry without mutating any target.
+
+    Returns one of ``legacy`` (no content digest), ``uncommitted``,
+    ``committed`` or ``rolled_back``.  Any state that matches neither the
+    staged nor the preimage bytes is an external modification and raises
+    :class:`AtomicWritePreimageConflict`.
+    """
+
+    staged_sha256 = entry.get("staged_sha256")
+    if not staged_sha256:
+        return "legacy"
+    target = entry["target"]
+    staged_path = entry["staged_path"]
+    preimage = entry.get("target_preimage_sha256")
+    recorded = entry.get("rollback_state")
+    staged_exists = os.path.exists(staged_path)
+    target_exists = os.path.lexists(target)
+    if target_exists and (os.path.islink(target) or not os.path.isfile(target)):
+        raise AtomicWritePreimageConflict(
+            f"Recovery target is not a regular file: {target}"
+        )
+    current = file_sha256(target) if target_exists else None
+    expected_rolled_back = preimage if entry["existed"] else None
+
+    if recorded == "rolled_back":
+        if current == expected_rolled_back:
+            return "rolled_back"
+        raise AtomicWritePreimageConflict(
+            "Previously rolled-back target changed outside the pending "
+            f"transaction; refusing to continue recovery: {target}"
+        )
+
+    if staged_exists:
+        # The staged file still exists, so this target was not replaced.
+        if entry["existed"]:
+            if preimage is None:
+                raise AtomicWriteTransactionError(
+                    f"Prepared entry has no preimage digest: {target}"
+                )
+            if current == preimage:
+                return "uncommitted"
+            raise AtomicWritePreimageConflict(
+                "Uncommitted target changed outside the pending transaction; "
+                f"refusing to roll it back: {target}"
+            )
+        if current is None:
+            return "uncommitted"
+        raise AtomicWritePreimageConflict(
+            "Uncommitted target was created outside the pending transaction; "
+            f"refusing to remove it: {target}"
+        )
+
+    # The staged file is gone: the replace for this target already happened, or
+    # an earlier rollback already restored it.
+    if entry["existed"]:
+        if current == staged_sha256:
+            return "committed"
+        if preimage is not None and current == preimage:
+            return "rolled_back"
+        raise AtomicWritePreimageConflict(
+            "Committed target is missing or changed outside the pending "
+            f"transaction; refusing to overwrite it: {target}"
+        )
+    if current is None:
+        return "rolled_back"
+    if current == staged_sha256:
+        return "committed"
+    raise AtomicWritePreimageConflict(
+        "Target was created outside the pending transaction after a new-file "
+        f"commit; refusing to remove it: {target}"
+    )
+
+
+def _verify_prepared_target_state(entry: dict[str, Any]) -> None:
+    """Preflight one prepared entry without mutating any target."""
+
+    _classify_prepared_entry(entry)
+
+
+def _journal_entries_are_strict(entries: Iterable[dict[str, Any]]) -> bool:
+    """Return True when every entry carries content digests for strict recovery."""
+
+    entry_list = list(entries)
+    return bool(entry_list) and all(entry.get("staged_sha256") for entry in entry_list)
+
+
+def _write_transaction_journal(journal: str, payload: dict[str, Any]) -> None:
+    atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
+
+
+def _cleanup_committed_transaction(
+    entries: Iterable[dict[str, Any]],
+    journal: str,
+) -> None:
+    """Best-effort cleanup after a committed journal was persisted.
+
+    The commit is already durable at this point. Leftover temporary files or a
+    committed journal are harmless: the next recovery pass will remove them
+    without touching committed targets.
+    """
+
+    try:
+        _cleanup_transaction_entries(entries)
+    except Exception:
+        pass
+    try:
+        _remove_if_present(journal)
+    except Exception:
+        pass
+
+
+def _run_many_transaction(
+    entries: list[dict[str, Any]],
+    *,
+    journal: str,
+    transaction_kind: str,
+    metadata: dict[str, Any] | None,
+    post_commit_validator: Callable[[], None] | None,
+) -> None:
+    """Persist one prepared -> committed journal around already-staged entries."""
+
+    payload: dict[str, Any] = {
+        "version": 1,
+        "transaction_kind": transaction_kind,
+        "state": "prepared",
+        "entries": entries,
+    }
+    if metadata:
+        payload["metadata"] = dict(metadata)
+    journal_written = False
+    committed = False
+    try:
+        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
+        journal_written = True
+
+        for entry in entries:
+            _verify_target_before_replace(entry)
+            os.replace(entry["staged_path"], entry["target"])
+        if post_commit_validator is not None:
+            post_commit_validator()
+
+        payload["state"] = "committed"
+        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
+        committed = True
+    except Exception:
+        if committed:
+            _cleanup_committed_transaction(entries, journal)
+            raise
+        if journal_written or os.path.lexists(journal):
+            try:
+                recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind=transaction_kind,
+                    verify_targets=True,
+                )
+            except Exception as recovery_exc:
+                # Leave the journal in place for manual recovery; never claim
+                # that a partial transaction was rolled back.
+                raise AtomicWriteTransactionError(
+                    f"Transaction {transaction_kind!r} failed and could not be "
+                    f"safely recovered: {recovery_exc}"
+                ) from recovery_exc
+        else:
+            _cleanup_transaction_entries(entries)
+        raise
+
+    _cleanup_committed_transaction(entries, journal)
+
+
 def _validate_transaction_journal(
     payload: Any,
     journal: str,
@@ -329,7 +784,7 @@ def _validate_transaction_journal(
 
     state = payload.get("state")
     entries = payload.get("entries")
-    if state not in {"prepared", "committed"} or not isinstance(entries, list):
+    if state not in {"prepared", "committed", "rolling_back", "rolled_back"} or not isinstance(entries, list):
         raise AtomicWriteTransactionError(
             f"Invalid writeback transaction journal: {journal}"
         )
@@ -370,6 +825,41 @@ def _validate_transaction_journal(
             raise AtomicWriteTransactionError(
                 f"Invalid entry {index} in writeback transaction journal: {journal}"
             )
+        staged_sha256 = entry.get("staged_sha256")
+        if staged_sha256 is not None and (
+            not isinstance(staged_sha256, str)
+            or len(staged_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in staged_sha256)
+        ):
+            raise AtomicWriteTransactionError(
+                f"Invalid staged digest in entry {index} of writeback journal: {journal}"
+            )
+        preimage_sha256 = entry.get("target_preimage_sha256")
+        if preimage_sha256 is not None and (
+            not isinstance(preimage_sha256, str)
+            or len(preimage_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in preimage_sha256)
+        ):
+            raise AtomicWriteTransactionError(
+                f"Invalid preimage digest in entry {index} of writeback journal: {journal}"
+            )
+        rollback_state = entry.get("rollback_state")
+        if rollback_state is not None and rollback_state not in {"pending", "rolled_back"}:
+            raise AtomicWriteTransactionError(
+                f"Invalid rollback state in entry {index} of writeback journal: {journal}"
+            )
+
+    metadata = payload.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise AtomicWriteTransactionError(
+            f"Invalid metadata in writeback transaction journal: {journal}"
+        )
+
+    recovery = payload.get("recovery")
+    if recovery is not None and not isinstance(recovery, dict):
+        raise AtomicWriteTransactionError(
+            f"Invalid recovery phase in writeback transaction journal: {journal}"
+        )
 
     return state, transaction_kind, entries
 
@@ -392,19 +882,20 @@ def _restore_backup_copy(backup_path: str, target: str) -> None:
         raise
 
 
-def recover_atomic_write_transaction(
+def read_atomic_write_transaction_journal(
     journal_path: str | os.PathLike[str],
     *,
     expected_transaction_kind: str | None = None,
-) -> bool:
-    """Recover an interrupted multi-file write transaction.
+) -> dict[str, Any] | None:
+    """Read and validate a writeback journal without mutating its targets."""
 
-    Prepared transactions are rolled back. Committed transactions only need
-    leftover temporary files removed. Returns True when a journal was found.
-    """
     journal = os.path.abspath(os.fspath(journal_path))
-    if not os.path.isfile(journal):
-        return False
+    if not os.path.lexists(journal):
+        return None
+    if os.path.islink(journal) or not os.path.isfile(journal):
+        raise AtomicWriteTransactionError(
+            f"Writeback transaction journal is not a regular file: {journal}"
+        )
     try:
         with open(journal, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -413,7 +904,7 @@ def recover_atomic_write_transaction(
             f"Could not read writeback transaction journal {journal}: {exc}"
         ) from exc
 
-    state, transaction_kind, entries = _validate_transaction_journal(payload, journal)
+    _state, transaction_kind, _entries = _validate_transaction_journal(payload, journal)
     if (
         expected_transaction_kind is not None
         and transaction_kind != expected_transaction_kind
@@ -423,8 +914,135 @@ def recover_atomic_write_transaction(
             f"recovery kind: expected {expected_transaction_kind!r}, "
             f"got {transaction_kind!r} ({journal})."
         )
+    return payload
 
-    if state == "prepared":
+
+def recover_atomic_write_transaction(
+    journal_path: str | os.PathLike[str],
+    *,
+    expected_transaction_kind: str | None = None,
+    verify_targets: bool = False,
+) -> bool:
+    """Recover an interrupted multi-file write transaction.
+
+    Prepared transactions are rolled back. Committed or already-rolled-back
+    transactions only need leftover temporary files removed. Returns True when
+    a journal was found.
+
+    Strict recovery (new journals with content digests) persists the rollback
+    phase in the journal before mutating targets and records each entry as
+    ``rolled_back`` as it is restored.  A recovery pass interrupted by injected
+    failures or a process stop is therefore replayable: already-restored
+    entries are recognized as a legal state instead of being mistaken for
+    external modifications.  A target that matches neither the staged bytes
+    nor the preimage bytes still fails closed and is never overwritten.
+
+    Legacy journals without content digests fall back to the historical
+    rollback behavior.
+    """
+
+    journal = os.path.abspath(os.fspath(journal_path))
+    payload = read_atomic_write_transaction_journal(
+        journal,
+        expected_transaction_kind=expected_transaction_kind,
+    )
+    if payload is None:
+        return False
+    state = str(payload["state"])
+    entries = list(payload["entries"])
+
+    strict_entries = _journal_entries_are_strict(entries)
+    use_rollback_phase = state == "rolling_back" or (
+        state == "prepared" and verify_targets and strict_entries
+    )
+    if use_rollback_phase:
+        if state == "prepared":
+            # Preflight all targets and persist the rollback phase before any
+            # mutation, so a crash during rollback is replayable.
+            classifications = [
+                _classify_prepared_entry(entry) for entry in entries
+            ]
+            for entry, classification in zip(entries, classifications):
+                entry["rollback_state"] = (
+                    "rolled_back"
+                    if classification in {"uncommitted", "rolled_back"}
+                    else "pending"
+                )
+            payload["state"] = "rolling_back"
+            recovery = payload.get("recovery")
+            if not isinstance(recovery, dict):
+                recovery = {}
+            recovery["started_at"] = time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+            )
+            payload["recovery"] = recovery
+            _write_transaction_journal(journal, payload)
+        else:
+            # Resume: repair any marker whose target was restored before the
+            # process stopped while that entry's journal update was pending.
+            repaired = False
+            for entry in entries:
+                classification = _classify_prepared_entry(entry)
+                if classification in {"uncommitted", "rolled_back"} and (
+                    entry.get("rollback_state") != "rolled_back"
+                ):
+                    entry["rollback_state"] = "rolled_back"
+                    repaired = True
+            if repaired:
+                _write_transaction_journal(journal, payload)
+
+        for entry in reversed(entries):
+            if entry.get("rollback_state") == "rolled_back":
+                continue
+            classification = _classify_prepared_entry(entry)
+            if classification in {"uncommitted", "rolled_back"}:
+                entry["rollback_state"] = "rolled_back"
+                continue
+            if classification != "committed":
+                raise AtomicWriteTransactionError(
+                    "Recovery cannot classify transaction target: "
+                    f"{entry.get('target', '')}"
+                )
+            target = entry["target"]
+            backup_path = entry["backup_path"]
+            if entry["existed"]:
+                if not backup_path or not os.path.isfile(backup_path):
+                    raise AtomicWriteTransactionError(
+                        f"Missing rollback backup for {target}: {backup_path or '(none)'}"
+                    )
+                _restore_backup_copy(backup_path, target)
+                expected_preimage = entry.get("target_preimage_sha256")
+                if expected_preimage and file_sha256(target) != expected_preimage:
+                    raise AtomicWritePreimageConflict(
+                        "Rollback restored bytes that do not match the recorded "
+                        f"preimage: {target}"
+                    )
+            else:
+                _remove_if_present(target)
+                if os.path.lexists(target):
+                    raise AtomicWritePreimageConflict(
+                        f"Rollback could not remove newly committed target: {target}"
+                    )
+            entry["rollback_state"] = "rolled_back"
+            _write_transaction_journal(journal, payload)
+
+        # Mark the whole journal as rolled back before removing temporary files
+        # and the journal itself. A later pass recognizes this terminal phase.
+        payload["state"] = "rolled_back"
+        recovery = payload.get("recovery")
+        if not isinstance(recovery, dict):
+            recovery = {}
+        recovery["completed_at"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+        )
+        payload["recovery"] = recovery
+        _write_transaction_journal(journal, payload)
+    elif state == "prepared":
+        # Legacy rollback path (no content digests): preserve historical
+        # behavior for journals written before strict target guards existed.
+        if verify_targets:
+            for entry in entries:
+                _verify_prepared_target_state(entry)
         for entry in reversed(entries):
             target = entry["target"]
             staged_path = entry["staged_path"]
@@ -448,6 +1066,37 @@ def recover_atomic_write_transaction(
     return True
 
 
+def _guarded_transaction_entry(
+    *,
+    target: str,
+    staged_path: str,
+    backup_path: str,
+    existed: bool,
+    expected_preimages: dict[str, str | None],
+) -> dict[str, Any]:
+    """Record actual content digests and enforce expected preimages."""
+
+    actual_preimage = _preimage_digest(target, backup_path, existed)
+    expected = expected_preimages.get(target, _EXPECTED_NOT_CHECKED)
+    if expected is not _EXPECTED_NOT_CHECKED and actual_preimage != expected:
+        _remove_if_present(staged_path)
+        _remove_if_present(backup_path)
+        expected_text = "(absent)" if expected is None else str(expected)
+        actual_text = "(absent)" if actual_preimage is None else str(actual_preimage)
+        raise AtomicWritePreimageConflict(
+            f"Target changed outside the pending transaction before staging: {target} "
+            f"(expected {expected_text}, found {actual_text})"
+        )
+    return _make_transaction_entry(
+        target,
+        staged_path,
+        backup_path,
+        existed,
+        staged_sha256=file_sha256(staged_path),
+        target_preimage_sha256=actual_preimage,
+    )
+
+
 def atomic_write_many_lines(
     writes: Iterable[tuple[str | os.PathLike[str], Iterable[str]]],
     *,
@@ -455,17 +1104,26 @@ def atomic_write_many_lines(
     encoding: str = "utf-8",
     newline: str | None = "\n",
     transaction_kind: str = "apply",
+    expected_preimages: dict[str | os.PathLike[str], str | None] | None = None,
+    metadata: dict[str, Any] | None = None,
+    post_commit_validator: Callable[[], None] | None = None,
 ) -> None:
     """Replace multiple text files as one recoverable writeback transaction.
 
     All target contents are staged and backed up before the first replacement.
     A replacement failure rolls back every already-replaced target. A surviving
     ``prepared`` journal is likewise rolled back on the next invocation.
+
+    ``expected_preimages`` optionally binds each target to its expected
+    pre-transaction SHA-256 (or ``None`` for "must be absent"). Mismatches fail
+    before any target is replaced.
     """
+
     journal = os.path.abspath(os.fspath(journal_path))
     recover_atomic_write_transaction(
         journal,
         expected_transaction_kind=transaction_kind,
+        verify_targets=True,
     )
     normalized_writes = [
         (os.path.abspath(os.fspath(path)), lines)
@@ -473,9 +1131,9 @@ def atomic_write_many_lines(
     ]
     if not normalized_writes:
         return
+    expected_hashes = _normalize_preimage_hashes(expected_preimages)
 
     entries: list[dict[str, Any]] = []
-    journal_written = False
     try:
         for target, lines in normalized_writes:
             existed = os.path.exists(target)
@@ -485,46 +1143,33 @@ def atomic_write_many_lines(
                 encoding=encoding,
                 newline=newline,
             )
+            backup_path = ""
             try:
                 backup_path = _backup_file(target)
+                entries.append(
+                    _guarded_transaction_entry(
+                        target=target,
+                        staged_path=staged_path,
+                        backup_path=backup_path,
+                        existed=existed,
+                        expected_preimages=expected_hashes,
+                    )
+                )
             except Exception:
                 _remove_if_present(staged_path)
+                _remove_if_present(backup_path)
                 raise
-            entries.append(
-                {
-                    "target": target,
-                    "staged_path": staged_path,
-                    "backup_path": backup_path,
-                    "existed": existed,
-                }
-            )
-
-        payload = {
-            "version": 1,
-            "transaction_kind": transaction_kind,
-            "state": "prepared",
-            "entries": entries,
-        }
-        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
-        journal_written = True
-
-        for entry in entries:
-            os.replace(entry["staged_path"], entry["target"])
-
-        payload["state"] = "committed"
-        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
     except Exception:
-        if journal_written:
-            recover_atomic_write_transaction(
-                journal,
-                expected_transaction_kind=transaction_kind,
-            )
-        else:
-            _cleanup_transaction_entries(entries)
+        _cleanup_transaction_entries(entries)
         raise
 
-    _cleanup_transaction_entries(entries)
-    _remove_if_present(journal)
+    _run_many_transaction(
+        entries,
+        journal=journal,
+        transaction_kind=transaction_kind,
+        metadata=metadata,
+        post_commit_validator=post_commit_validator,
+    )
 
 
 def atomic_write_many_bytes(
@@ -532,6 +1177,9 @@ def atomic_write_many_bytes(
     *,
     journal_path: str | os.PathLike[str],
     transaction_kind: str = "apply",
+    expected_preimages: dict[str | os.PathLike[str], str | None] | None = None,
+    metadata: dict[str, Any] | None = None,
+    post_commit_validator: Callable[[], None] | None = None,
 ) -> None:
     """Replace multiple byte files in one recoverable transaction.
 
@@ -539,10 +1187,12 @@ def atomic_write_many_bytes(
     UTF-8 BOM and the source newline/encoding contract cannot be lost while
     staging a complete file tree.
     """
+
     journal = os.path.abspath(os.fspath(journal_path))
     recover_atomic_write_transaction(
         journal,
         expected_transaction_kind=transaction_kind,
+        verify_targets=True,
     )
     normalized_writes = [
         (os.path.abspath(os.fspath(path)), bytes(content))
@@ -550,53 +1200,40 @@ def atomic_write_many_bytes(
     ]
     if not normalized_writes:
         return
+    expected_hashes = _normalize_preimage_hashes(expected_preimages)
 
     entries: list[dict[str, Any]] = []
-    journal_written = False
     try:
         for target, content in normalized_writes:
             existed = os.path.exists(target)
             staged_path = _stage_bytes(target, content)
+            backup_path = ""
             try:
                 backup_path = _backup_file(target)
+                entries.append(
+                    _guarded_transaction_entry(
+                        target=target,
+                        staged_path=staged_path,
+                        backup_path=backup_path,
+                        existed=existed,
+                        expected_preimages=expected_hashes,
+                    )
+                )
             except Exception:
                 _remove_if_present(staged_path)
+                _remove_if_present(backup_path)
                 raise
-            entries.append(
-                {
-                    "target": target,
-                    "staged_path": staged_path,
-                    "backup_path": backup_path,
-                    "existed": existed,
-                }
-            )
-
-        payload = {
-            "version": 1,
-            "transaction_kind": transaction_kind,
-            "state": "prepared",
-            "entries": entries,
-        }
-        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
-        journal_written = True
-
-        for entry in entries:
-            os.replace(entry["staged_path"], entry["target"])
-
-        payload["state"] = "committed"
-        atomic_write_json(journal, payload, ensure_ascii=False, indent=2)
     except Exception:
-        if journal_written:
-            recover_atomic_write_transaction(
-                journal,
-                expected_transaction_kind=transaction_kind,
-            )
-        else:
-            _cleanup_transaction_entries(entries)
+        _cleanup_transaction_entries(entries)
         raise
 
-    _cleanup_transaction_entries(entries)
-    _remove_if_present(journal)
+    _run_many_transaction(
+        entries,
+        journal=journal,
+        transaction_kind=transaction_kind,
+        metadata=metadata,
+        post_commit_validator=post_commit_validator,
+    )
 
 
 def is_complete_jsonl(path: str | os.PathLike[str], *, encoding: str = "utf-8") -> bool:

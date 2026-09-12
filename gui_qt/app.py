@@ -142,6 +142,12 @@ from .diagnostics_context import (
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
+from .export_writeback_dialog import (
+    APPLY_EXPORT_MODE,
+    EXPORT_ONLY_MODE,
+    ExportPreviewFacts,
+    ExportWritebackDialog,
+)
 from .probe_report import (
     build_probe_cli_args,
     probe_summary_to_diagnostics_context,
@@ -372,7 +378,7 @@ from .settings.registry import (
     build_default_registry,
 )
 
-from .translation_workflow import WorkflowUpdate
+from .translation_workflow import WorkflowUpdate, build_export_writeback_cli_args
 from .widget_helpers import (
     message_box_information,
     message_box_question,
@@ -660,6 +666,7 @@ class MainWindow(QMainWindow):
         self._build_retry_output_lines: list[str] = []
         self._retry_followup_confirmed: set[str] = set()
         self._writeback_manifest_path = ""
+        self._active_apply_export_mode = ""
         self._config_ui_saved_snapshot: dict[str, object] = {}
         self._advanced_setting_widgets: dict[str, QWidget] = {}
         self._advanced_setting_error_labels: dict[str, QLabel] = {}
@@ -2430,6 +2437,14 @@ class MainWindow(QMainWindow):
         self.apply_btn.clicked.connect(self._on_apply_writeback)
         self.apply_btn.setEnabled(False)
         self.writeback_primary_bar.add_widget(self.apply_btn, min_width=96)
+        self.export_writeback_btn = QPushButton("导出…")
+        self.export_writeback_btn.setObjectName("export_writeback_btn")
+        self.export_writeback_btn.setToolTip(
+            "选择导出目录：仅导出本次变更文件，或写回工作区并导出同一份渲染结果。"
+        )
+        self.export_writeback_btn.clicked.connect(self._on_open_export_writeback)
+        self.export_writeback_btn.setEnabled(False)
+        self.writeback_primary_bar.add_widget(self.export_writeback_btn, min_width=80)
         self.apply_revision_btn = QPushButton("写回订正")
         self.apply_revision_btn.setObjectName("apply_revision_btn")
         self.apply_revision_btn.clicked.connect(self._on_apply_revision)
@@ -6107,6 +6122,7 @@ class MainWindow(QMainWindow):
         )
         action_buttons = (
             "apply_btn",
+            "export_writeback_btn",
             "apply_revision_btn",
             "recheck_btn",
             "check_issues_btn",
@@ -6138,6 +6154,7 @@ class MainWindow(QMainWindow):
         if keyword_only:
             translation_buttons = (
                 "apply_btn",
+                "export_writeback_btn",
                 "apply_revision_btn",
                 "recheck_btn",
                 "check_issues_btn",
@@ -6305,6 +6322,14 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "apply_btn"):
             self.apply_btn.setVisible(spec.supports_translation_writeback)
+        if hasattr(self, "export_writeback_btn"):
+            export_ready = (
+                spec.supports_translation_writeback
+                and not uses_revision_writeback
+                and bool(summary.can_apply)
+            )
+            self.export_writeback_btn.setVisible(spec.supports_translation_writeback)
+            self.export_writeback_btn.setEnabled(not running and export_ready)
         if hasattr(self, "apply_revision_btn"):
             self.apply_revision_btn.setVisible(
                 uses_revision_writeback
@@ -12158,6 +12183,7 @@ class MainWindow(QMainWindow):
 
         self._mark_revision_corpus_doctor_report_stale()
         manifest_path = self._writeback_manifest_path
+        self._active_apply_export_mode = "apply"
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_output_lines = []
@@ -12170,6 +12196,136 @@ class MainWindow(QMainWindow):
             "apply",
             self.state.get_batch_script_path(),
             ["apply", manifest_path, "--output", "json", "--non-interactive"],
+        )
+
+    def _export_preview_facts(self, summary) -> ExportPreviewFacts | None:
+        manifest_path = self._writeback_manifest_path
+        if not manifest_path:
+            return None
+        try:
+            manifest = self.state.load_manifest_file(manifest_path, lite=False)
+        except ValueError:
+            return None
+        game_root = str(manifest.get("base_dir") or self.state.get_game_root() or "")
+        tl_dir = str(manifest.get("tl_dir") or "")
+        package_dir = str(Path(manifest_path).parent)
+        check_summary = (
+            manifest.get("last_check_summary")
+            if isinstance(manifest.get("last_check_summary"), dict)
+            else {}
+        )
+        files = tuple(
+            sorted(
+                (
+                    str(relative_path),
+                    int(info.get("task_count") or 0)
+                    if isinstance(info, dict)
+                    else 0,
+                )
+                for relative_path, info in (
+                    manifest.get("files")
+                    if isinstance(manifest.get("files"), dict)
+                    else {}
+                ).items()
+            )
+        )
+        return ExportPreviewFacts(
+            game_root=game_root,
+            tl_dir=tl_dir,
+            package_dir=package_dir,
+            pending_files=int(check_summary.get("pending_files") or 0),
+            pending_lines=int(check_summary.get("pending_lines") or 0),
+            gate_label=summary.heading or summary.status or "未知",
+            files=files,
+        )
+
+    def _on_open_export_writeback(self):
+        if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
+            message_box_information(
+                self,
+                "当前模式不支持",
+                "导出或写回并导出仅适用于批量翻译。",
+            )
+            return
+        if not self._writeback_manifest_path:
+            message_box_information(self, "无法导出", "没有可导出的任务；请先完成结果检查。")
+            return
+        summary = self._current_writeback_summary()
+        if not summary.can_apply:
+            message_box_information(
+                self,
+                "当前不能导出",
+                summary.message or "只有检查结果为可写回时才允许写回并导出；仅导出也使用同一门禁。",
+            )
+            return
+        facts = self._export_preview_facts(summary)
+        if facts is None:
+            message_box_information(self, "无法读取任务", "manifest 读取失败，请重新检查任务。")
+            return
+        manifest_snapshot = self._writeback_manifest_path
+        dialog = ExportWritebackDialog(self, facts=facts, start_dir=Path(facts.game_root or facts.package_dir))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        choice = dialog.choice()
+        if choice is None:
+            return
+        if manifest_snapshot != self._writeback_manifest_path:
+            message_box_information(
+                self,
+                "任务已切换",
+                "导出预览已失效，请基于当前任务重新打开导出窗口。",
+            )
+            return
+        if choice.mode == EXPORT_ONLY_MODE:
+            title = "确认仅导出"
+            body = (
+                "即将导出本次实际发生字节变化的完整文件，不修改游戏脚本或翻译进度。\n\n"
+                f"导出目录：{choice.export_root}"
+            )
+        else:
+            title = "确认写回并导出"
+            body = (
+                "即将把翻译写回游戏脚本，并导出同一份渲染结果。\n"
+                "写回前请确认已在副本或备份上验证。\n\n"
+                f"导出目录：{choice.export_root}"
+            )
+        reply = message_box_question(
+            self,
+            title,
+            body,
+            yes_text="继续",
+            no_text="取消",
+            default="no",
+        )
+        if reply != "yes":
+            return
+        try:
+            args = build_export_writeback_cli_args(
+                manifest_snapshot,
+                mode=choice.mode,
+                export_root=choice.export_root,
+            )
+        except ValueError as exc:
+            message_box_information(self, "导出参数无效", str(exc))
+            return
+        self._mark_revision_corpus_doctor_report_stale()
+        self._active_apply_export_mode = choice.mode
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._apply_output_lines = []
+        self._focus_workbench_status_tab(2)
+        self._set_writeback_summary(
+            running_writeback_summary(manifest_path=manifest_snapshot)
+        )
+        self._append_log(
+            "=== 正在导出/写回：gemini_translate_batch.py "
+            + " ".join(args)
+            + " ===\n"
+        )
+        self._start_cli_command(
+            "apply",
+            self.state.get_batch_script_path(),
+            args,
         )
 
     def _on_derive_durable_sync(self) -> None:
@@ -13135,17 +13291,25 @@ class MainWindow(QMainWindow):
                     exit_code,
                     manifest_path=self._writeback_manifest_path,
                 )
+            apply_export_mode = getattr(self, "_active_apply_export_mode", "apply")
             self._set_writeback_summary(summary)
             self._refresh_diagnostics_context()
             if exit_code == 0:
                 self._refresh_workflow_from_latest_manifest()
-                self._handle_post_apply_registry_sync()
+                if apply_export_mode != EXPORT_ONLY_MODE:
+                    self._handle_post_apply_registry_sync()
             self._active_command = ""
+            self._active_apply_export_mode = ""
             self._set_task_running(False)
             if exit_code == 0:
-                self.statusBar().showMessage("翻译写回完成。", 6000)
+                if apply_export_mode == EXPORT_ONLY_MODE:
+                    self.statusBar().showMessage("翻译文件导出完成。", 6000)
+                elif apply_export_mode == APPLY_EXPORT_MODE:
+                    self.statusBar().showMessage("写回并导出完成。", 6000)
+                else:
+                    self.statusBar().showMessage("翻译写回完成。", 6000)
             else:
-                self.statusBar().showMessage("翻译写回失败，请查看诊断日志。", 8000)
+                self.statusBar().showMessage("操作失败，请查看诊断日志。", 8000)
             return
 
         if self._active_command == "recheck":

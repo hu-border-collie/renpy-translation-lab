@@ -21,6 +21,7 @@ from .manifest_lite import (
     read_manifest_index_fields,
     read_manifest_lite,
 )
+from atomic_io import write_latest_manifest_locked
 from project_asset_paths import (
     normalize_relative_project_assets_in_config,
     sync_project_asset_paths_in_config,
@@ -84,8 +85,8 @@ class ProjectState:
         latest_file = self.get_logs_dir() / "latest_manifest.txt"
         try:
             latest_file.parent.mkdir(parents=True, exist_ok=True)
-            latest_file.write_text(str(manifest_path), encoding="utf-8")
-        except OSError as exc:
+            write_latest_manifest_locked(latest_file, str(manifest_path))
+        except (OSError, TimeoutError) as exc:
             raise ValueError(f"Failed to update latest manifest pointer: {latest_file}") from exc
 
     def get_latest_manifest_path_for_mode(

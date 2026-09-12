@@ -402,15 +402,36 @@ class MigrationTransactionTests(unittest.TestCase):
                 config_store.write_json_object(self.path, {})
         self.assertEqual(self.path.read_bytes(), self.original)
 
-    def test_abandoned_lock_recovers_for_gui_and_migration(self):
+    def test_dead_owner_lock_recovers_for_gui_and_migration(self):
+        lock = self.path.with_name(self.path.name + ".write-lock")
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait(timeout=5.0)
+        owner = json.dumps(
+            {
+                "pid": child.pid,
+                "token": "dead-owner",
+                "created_at": time.time() - 301,
+            }
+        )
+        for write in (lambda: config_store.write_json_object(self.path, fixture()), self.migrate):
+            self.path.write_bytes(self.original)
+            lock.write_text(owner, encoding="utf-8")
+            old = time.time() - 301
+            os.utime(lock, (old, old))
+            write()
+            self.assertFalse(lock.exists())
+
+    def test_corrupt_or_legacy_lock_is_not_preempted(self):
         lock = self.path.with_name(self.path.name + ".write-lock")
         for write in (lambda: config_store.write_json_object(self.path, fixture()), self.migrate):
             self.path.write_bytes(self.original)
             lock.write_text("12345", encoding="ascii")  # Pre-token lock format.
             old = time.time() - 301
             os.utime(lock, (old, old))
-            write()
-            self.assertFalse(lock.exists())
+            with self.assertRaises(config_store.ConfigWriteLockError):
+                write()
+            self.assertEqual(lock.read_text(encoding="ascii"), "12345")
+            self.assertEqual(self.path.read_bytes(), self.original)
 
     def test_lock_cleanup_keeps_replacement_owner_and_tolerates_missing_lock(self):
         lock = self.path.with_name(self.path.name + ".write-lock")

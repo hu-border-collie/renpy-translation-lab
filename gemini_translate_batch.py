@@ -21,16 +21,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import atomic_io
 from atomic_io import (
     atomic_write,
     atomic_write_json,
     atomic_write_jsonl,
     atomic_write_many_lines,
     atomic_write_text,
+    compare_and_swap_latest_manifest_locked,
     file_sha256,
     result_artifact_is_complete,
     recover_atomic_write_transaction,
     sha256_text,
+    write_latest_manifest_locked,
 )
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import advanced_context
@@ -2277,9 +2280,53 @@ def manifest_path_for_target(target):
     return manifests[0]
 
 
+_LATEST_MANIFEST_LOCK_TIMEOUT = atomic_io.LATEST_MANIFEST_LOCK_TIMEOUT
+_LATEST_MANIFEST_LOCK_STALE_AFTER = atomic_io.LATEST_MANIFEST_LOCK_STALE_AFTER
+
+
+def _latest_manifest_lock_path():
+    """Return the lock file shared by every latest-manifest writer."""
+
+    return atomic_io.latest_manifest_lock_path(LATEST_MANIFEST_FILE)
+
+
+def _read_latest_manifest_cursor_unlocked():
+    """Read the latest cursor without writing it."""
+
+    try:
+        return Path(LATEST_MANIFEST_FILE).read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
 def remember_latest_manifest(manifest_path):
+    """Atomically point the latest-manifest cursor at *manifest_path*.
+
+    CLI and GUI latest writers share the same physical lock through
+    :func:`atomic_io.write_latest_manifest_locked`.
+    """
+
     ensure_batch_dirs()
-    atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
+    write_latest_manifest_locked(
+        LATEST_MANIFEST_FILE,
+        manifest_path,
+        timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
+        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
+    )
+
+
+def remember_latest_manifest_if_unchanged(expected, target):
+    """Compare-and-swap the latest cursor under the shared writer lock."""
+
+    ensure_batch_dirs()
+    return compare_and_swap_latest_manifest_locked(
+        LATEST_MANIFEST_FILE,
+        expected,
+        target,
+        timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
+        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
+    )
+
 
 
 def translation_plan_compatibility_diagnostic(manifest):
@@ -12981,6 +13028,79 @@ def _rendered_bytes_with_source_contract(source_document, rendered_lines):
     ).encode('utf-8')
 
 
+def _rendered_export_payloads_by_file(
+    *,
+    adapter_snapshot,
+    revalidated_replacements_by_file,
+    revalidated_file_paths,
+    rendered_by_file,
+    error_code_name,
+    mode_label,
+):
+    """Build filtered export payloads and per-file rendered lines.
+
+    Returns ``(export_payloads, source_documents_by_key, rendered_lines_by_key)``.
+    Both P1 ``--export-only`` and P2 ``--export-dir`` consume this projection so
+    the two output sides can never render different bytes.
+    """
+
+    source_documents_by_key = {
+        _adapter_render_key(document.file_rel_path): document
+        for document in (
+            adapter_snapshot.project.source_documents
+            if adapter_snapshot is not None
+            else ()
+        )
+    }
+    export_payloads = []
+    rendered_lines_by_key = {}
+    for file_key in sorted(revalidated_replacements_by_file):
+        normalized_key = _adapter_render_key(file_key)
+        source_document = source_documents_by_key.get(normalized_key)
+        if source_document is None:
+            raise cli_contract.MachineContractError(
+                f'{mode_label} source document is missing for {file_key}.',
+                code_name=error_code_name,
+                suggested_action='run_check_again',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                details={
+                    'mode': mode_label,
+                    'reason_code': 'source_document_missing',
+                    'file_rel_path': file_key,
+                },
+            )
+        rendered_lines = rendered_by_file.get(normalized_key)
+        if rendered_lines is None:
+            raise cli_contract.MachineContractError(
+                f'{mode_label} rendered target is missing for {file_key}.',
+                code_name=error_code_name,
+                suggested_action='run_check_again',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                details={
+                    'mode': mode_label,
+                    'reason_code': 'rendered_target_missing',
+                    'file_rel_path': file_key,
+                },
+            )
+        contract_lines = _rendered_lines_with_source_contract(
+            source_document,
+            rendered_lines,
+        )
+        rendered_lines_by_key[normalized_key] = contract_lines
+        output_bytes = ''.join(contract_lines).encode('utf-8')
+        if output_bytes == source_document.content:
+            continue
+        export_payloads.append(
+            {
+                'source_path': revalidated_file_paths[file_key],
+                'source_bytes': source_document.content,
+                'content': output_bytes,
+                'source_sha256': source_document.sha256,
+            }
+        )
+    return export_payloads, source_documents_by_key, rendered_lines_by_key
+
+
 def _export_only_request_payload(manifest, identity, summary, plan, source_documents):
     result_path = resolve_manifest_result_path(manifest)
     source_entries = [
@@ -13036,19 +13156,1026 @@ def _export_only_request_payload(manifest, identity, summary, plan, source_docum
         },
     }
 
+def _apply_export_error(exc):
+    """Map a batch_export.ApplyExportError to the shared machine contract."""
 
-def apply_results(target=None, force=False, export_only=None):
-    export_requested = export_only is not None
+    reason_code = str(getattr(exc, 'reason_code', '') or 'apply_export.failed')
+    normalized = re.sub(r'[^A-Za-z0-9]+', '_', reason_code).strip('_').upper()
+    if not normalized.startswith('APPLY_EXPORT'):
+        normalized = 'APPLY_EXPORT_' + normalized
+    details = dict(getattr(exc, 'details', {}) or {})
+    details.update({'mode': 'apply-export', 'reason_code': reason_code})
+    if reason_code == 'apply_export.path_required':
+        suggested_action = 'provide_export_directory'
+        semantic_exit_code = cli_contract.EXIT_USAGE
+    elif reason_code.endswith(('conflict', 'sides_mismatch')):
+        suggested_action = 'use_a_new_export_directory'
+        semantic_exit_code = cli_contract.EXIT_BLOCKED
+    elif 'recovery' in reason_code:
+        suggested_action = 'retry_apply_to_recover_export'
+        semantic_exit_code = cli_contract.EXIT_BLOCKED
+    elif 'state' in reason_code:
+        suggested_action = 'inspect_apply_export_state'
+        semantic_exit_code = cli_contract.EXIT_BLOCKED
+    else:
+        suggested_action = 'inspect_apply_export_diagnostics'
+        semantic_exit_code = cli_contract.EXIT_INVALID_STATE
+    raise cli_contract.MachineContractError(
+        str(exc),
+        code_name=normalized,
+        suggested_action=suggested_action,
+        semantic_exit_code=semantic_exit_code,
+        details=details,
+    )
+
+
+def _reject_export_option_unsupported(manifest=None, *, option, durable_target=False):
+    export_only_option = option == '--export-only'
+    target_code = (
+        'EXPORT_ONLY_UNSUPPORTED_TARGET'
+        if export_only_option
+        else 'EXPORT_OPTION_UNSUPPORTED_TARGET'
+    )
+    mode_code = (
+        'EXPORT_ONLY_UNSUPPORTED_MODE'
+        if export_only_option
+        else 'EXPORT_OPTION_UNSUPPORTED_MODE'
+    )
+    mode_label = 'export-only' if export_only_option else 'apply-export'
+    if durable_target or (
+        isinstance(manifest, dict)
+        and (
+            manifest.get('durable_sync')
+            or isinstance(manifest.get('durable_sync_source'), dict)
+        )
+    ):
+        raise cli_contract.MachineContractError(
+            f'Durable Sync does not support Batch {option}; use its bound preview workflow.',
+            code_name=target_code,
+            suggested_action='use_supported_batch_translation_manifest',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={'mode': mode_label, 'target_kind': 'durable_sync', 'option': option},
+        )
+    if isinstance(manifest, dict) and manifest_mode(manifest) != MANIFEST_MODE_TRANSLATION:
+        raise cli_contract.MachineContractError(
+            f"Batch {option} only supports Ren'Py translation manifests; "
+            f'this manifest is {manifest_mode(manifest)}.',
+            code_name=mode_code,
+            suggested_action='use_supported_batch_translation_manifest',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={
+                'mode': mode_label,
+                'manifest_mode': manifest_mode(manifest),
+                'option': option,
+            },
+        )
+
+
+def _apply_export_identity(manifest):
+    """Return the stable manifest/check/plan/result identity for P2 recovery."""
+
+    identity = manifest_project_identity(manifest)
+    result_path = resolve_manifest_result_path(manifest)
+    try:
+        result_sha256 = file_sha256(result_path)
+    except OSError as exc:
+        raise cli_contract.MachineContractError(
+            f'Apply-export result file is unreadable: {result_path} ({exc}).',
+            code_name='APPLY_EXPORT_RESULT_UNREADABLE',
+            suggested_action='restore_results_or_rebuild_batch_package',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            details={
+                'mode': 'apply-export',
+                'result_path': result_path,
+                'manifest_path': str(manifest.get('_manifest_path') or ''),
+            },
+        ) from exc
+    check_summary = (
+        manifest.get('last_check_summary')
+        if isinstance(manifest.get('last_check_summary'), dict)
+        else {}
+    )
+    plan = (
+        manifest.get('translation_plan')
+        if isinstance(manifest.get('translation_plan'), dict)
+        else {}
+    )
+    writeback_gate = check_summary.get('writeback_gate')
+    payload = {
+        'schema_version': 1,
+        'mode': manifest_mode(manifest),
+        'manifest_path': os.path.abspath(str(manifest.get('_manifest_path') or '')),
+        'manifest_version': manifest.get('manifest_version', manifest.get('version', 1)),
+        'core_schema_version': manifest.get('core_schema_version', 1),
+        'project': {
+            'base_dir': identity.get('base_dir', ''),
+            'tl_dir': identity.get('tl_dir', ''),
+        },
+        'check_contract_version': check_summary.get('check_contract_version', ''),
+        'check_fingerprint_id': check_fingerprint_id(check_summary.get('check_fingerprint')),
+        'writeback_gate_decision': (
+            writeback_gate.get('decision', '') if isinstance(writeback_gate, dict) else ''
+        ),
+        'plan_fingerprint': plan.get('plan_fingerprint', ''),
+        'result_sha256': result_sha256,
+    }
+    return stable_json_sha256(payload)
+
+
+def _apply_export_record_path(manifest):
+    return os.path.join(
+        str(manifest.get('_package_dir') or ''),
+        batch_export.APPLY_EXPORT_RECORD_FILE,
+    )
+
+
+def _load_apply_export_receipt(manifest):
+    """Load the P2 receipt when present; return (record_path, record, entries)."""
+
+    record_path = _apply_export_record_path(manifest)
+    if not os.path.lexists(record_path):
+        return None
+    try:
+        record = batch_export.read_apply_export_record(record_path)
+        entries = batch_export.iter_apply_export_entries(record)
+    except batch_export.ApplyExportError as exc:
+        details = dict(exc.details)
+        details.update(
+            {
+                'mode': 'apply-export',
+                'reason_code': exc.reason_code,
+                'record_path': record_path,
+            }
+        )
+        raise cli_contract.MachineContractError(
+            f'Apply-export receipt is invalid: {exc}',
+            code_name='APPLY_EXPORT_RECORD_INVALID',
+            suggested_action='inspect_apply_export_record',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details=details,
+        ) from exc
+    return record_path, record, entries
+
+
+def _latest_manifest_cursor_value() -> str:
+    """Read the current latest-manifest cursor as text (missing -> empty)."""
+
+    return _read_latest_manifest_cursor_unlocked()
+
+
+def _same_latest_cursor_path(left: object, right: object) -> bool:
+    left_text = str(left or '').strip()
+    right_text = str(right or '').strip()
+    if not left_text or not right_text:
+        return left_text == right_text
+    return _normalized_abs_path(left_text) == _normalized_abs_path(right_text)
+
+
+def _advance_apply_export_latest_cursor(plan):
+    """Conditionally advance the latest cursor and return its phase record.
+
+    The receipt stores the cursor value observed before the file transaction.
+    The compare-and-swap runs under the shared latest-manifest writer lock, so
+    another writer cannot interleave between the comparison and the write.
+    """
+
+    should_update = bool(plan.get('should_update_latest'))
+    target = str(plan.get('latest_target') or '').strip()
+    previous = str(plan.get('latest_previous_value') or '').strip()
+    if not should_update:
+        return {
+            'status': 'skipped',
+            'should_update': False,
+            'previous': previous,
+            'target': target,
+            'current': _latest_manifest_cursor_value(),
+            'message': 'sync execution does not update the latest manifest cursor',
+        }
+    if not target:
+        return {
+            'status': 'skipped',
+            'should_update': True,
+            'previous': previous,
+            'target': target,
+            'current': _latest_manifest_cursor_value(),
+            'message': 'no latest manifest target was planned',
+        }
+    record = remember_latest_manifest_if_unchanged(previous, target)
+    record['should_update'] = True
+    record['previous'] = previous
+    record['target'] = target
+    return record
+
+
+def _verify_apply_export_outputs(manifest, entry, record_path, identity):
+    """Validate receipt-bound export tree and workspace bytes before success."""
+
+    try:
+        export_root = batch_export.validate_apply_export_root(
+            str(entry.get('export_root') or ''),
+            game_root=identity.get('base_dir') or '',
+            package_dir=manifest.get('_package_dir') or '',
+        )
+        batch_export.verify_apply_export_entry(
+            export_root,
+            entry,
+            game_root=identity.get('base_dir') or '',
+            workspace_root=identity.get('tl_dir') or '',
+        )
+    except batch_export.ApplyExportError as exc:
+        details = dict(exc.details)
+        details.update(
+            {
+                'mode': 'apply-export',
+                'reason_code': exc.reason_code,
+                'record_path': record_path,
+                'export_root': str(entry.get('export_root') or ''),
+                'recovery_state': 'state_conflict',
+                'changed': exc.reason_code,
+            }
+        )
+        raise cli_contract.MachineContractError(
+            f'Committed apply-export outputs no longer match the receipt: {exc}',
+            code_name='APPLY_EXPORT_OUTPUT_CHANGED',
+            suggested_action='inspect_apply_export_state',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details=details,
+        ) from exc
+
+
+def _reject_pending_apply_export_for_export_only(manifest):
+    """Fail closed when P1 export-only would have to resolve P2 state.
+
+    ``--export-only`` must never roll back a P2 file transaction or replay its
+    state advancement.  Any unresolved P2 journal or pending receipt is a
+    structured refusal; the caller must recover through the matching apply.
+    """
+
+    package_dir = str(manifest.get('_package_dir') or '')
+    journal_path = os.path.join(package_dir, '.apply_export_transaction.json')
+    if os.path.lexists(journal_path):
+        raise cli_contract.MachineContractError(
+            'An unresolved apply-export transaction exists; recover it before --export-only.',
+            code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+            suggested_action='retry_apply_to_recover_export',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'apply-export',
+                'reason_code': 'apply_export.recovery_required',
+                'transaction_kind': 'apply_export',
+                'transaction_path': journal_path,
+                'record_path': _apply_export_record_path(manifest),
+                'recovery_state': 'recovery_required',
+            },
+        )
+    manifest_pending_steps = _manifest_apply_export_pending_steps(manifest)
+    if manifest_pending_steps:
+        _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
+    receipt = _load_apply_export_receipt(manifest)
+    if receipt is None:
+        return
+    record_path, _record, entries = receipt
+    pending = [
+        entry
+        for entry in entries
+        if (entry.get('state_advancement') or {}).get('status') != 'complete'
+    ]
+    if not pending:
+        return
+    first = pending[0]
+    raise cli_contract.MachineContractError(
+        'A committed apply-export operation is awaiting state recovery; '
+        'run apply (writeback) to finish it before --export-only.',
+        code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+        suggested_action='retry_apply_to_recover_export',
+        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+        details={
+            'mode': 'apply-export',
+            'reason_code': 'apply_export.state_pending',
+            'record_path': record_path,
+            'record_apply_identity': first.get('apply_identity', ''),
+            'record_export_root': first.get('export_root', ''),
+            'recovery_state': 'state_pending',
+        },
+    )
+
+
+def _apply_export_state_complete(manifest, entry, record_path):
+    # A recorded pending step is authoritative even if either status field
+    # says complete; contradictory persisted states must resume, not shortcut.
+    if _apply_export_pending_steps(manifest, entry):
+        return False
+    state = entry.get('state_advancement') or {}
+    if state.get('status') != 'complete':
+        return False
+    advancement = manifest.get('apply_state_advancement')
+    if not isinstance(advancement, dict) or advancement.get('status') != 'complete':
+        return False
+    if advancement.get('operation_identity') != entry.get('operation_identity'):
+        return False
+    if str(manifest.get('applied_at') or '') != str(state.get('applied_at') or ''):
+        return False
+    if _normalized_abs_path(str(manifest.get('export_record_path') or '')) != _normalized_abs_path(
+        record_path
+    ):
+        return False
+    export_summary = manifest.get('export_summary')
+    if not isinstance(export_summary, dict):
+        return False
+    if export_summary.get('state_advancement_status') != 'complete':
+        return False
+    return export_summary.get('apply_identity') == entry.get('apply_identity')
+
+
+def _apply_export_pending_steps(manifest, entry):
+    """Return the union of persisted pending steps, regardless of status.
+
+    Every recorded source is authoritative: a complete marker must never erase
+    a pending step recorded on the other side or inside summary mirrors.  The
+    union must also never be erased by current RAG configuration.
+    """
+
+    steps: set[str] = set()
+
+    def add_steps(value: object) -> None:
+        if isinstance(value, list):
+            steps.update(
+                str(step) for step in value if str(step).strip()
+            )
+
+    if isinstance(entry, dict):
+        receipt_state = entry.get('state_advancement') or {}
+        if isinstance(receipt_state, dict):
+            add_steps(receipt_state.get('pending_steps'))
+    if isinstance(manifest, dict):
+        manifest_state = manifest.get('apply_state_advancement')
+        if isinstance(manifest_state, dict):
+            add_steps(manifest_state.get('pending_steps'))
+        for summary_key in ('apply_summary', 'export_summary'):
+            summary = manifest.get(summary_key)
+            if isinstance(summary, dict):
+                add_steps(summary.get('pending_steps'))
+    return sorted(steps)
+
+
+def _manifest_apply_export_pending_steps(manifest):
+    """Return manifest-recorded P2 pending steps without a receipt entry."""
+
+    return _apply_export_pending_steps(manifest, {'state_advancement': {}})
+
+
+def _raise_manifest_apply_export_pending(manifest, pending_steps):
+    """Fail closed when only the manifest records unresolved P2 pending steps."""
+
+    advancement = manifest.get('apply_state_advancement')
+    if not isinstance(advancement, dict):
+        advancement = {}
+    details = {
+        'mode': 'apply-export',
+        'reason_code': 'apply_export.state_pending',
+        'record_path': str(manifest.get('export_record_path') or ''),
+        'export_root': str((manifest.get('export_summary') or {}).get('export_root') or ''),
+        'recovery_state': 'state_pending',
+        'files_committed': bool(advancement.get('files_committed')),
+        'outputs_committed': bool(advancement.get('outputs_committed')),
+        'pending_steps': list(pending_steps),
+    }
+    reason = str(advancement.get('pending_reason') or '').strip()
+    last_error = str(advancement.get('last_error') or '').strip()
+    if reason:
+        details['pending_reason'] = reason
+    if last_error:
+        details['last_error'] = last_error
+    raise cli_contract.MachineContractError(
+        'Manifest records unresolved apply-export pending steps but the matching '
+        'receipt is unavailable; manual recovery is required.',
+        code_name='APPLY_EXPORT_STATE_PENDING',
+        suggested_action='inspect_apply_export_state',
+        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+        retryable=True,
+        details=details,
+    )
+
+
+def _persist_apply_export_pending_state(
+    record_path,
+    entry,
+    *,
+    pending_steps,
+    reason,
+    last_error='',
+):
+    """Best-effort persist pending steps/last_error into the P2 receipt.
+
+    The receipt status is never changed to complete here; a later successful
+    replay owns that transition.
+    """
+
+    target_identity = str(entry.get('operation_identity') or '')
+    if not target_identity:
+        return False
+    try:
+        record = batch_export.read_apply_export_record(record_path)
+    except batch_export.ApplyExportError:
+        return False
+    exports = record.get('exports')
+    if not isinstance(exports, list):
+        return False
+    updated_exports = []
+    replaced = False
+    for raw_entry in exports:
+        if (
+            isinstance(raw_entry, dict)
+            and str(raw_entry.get('operation_identity') or '') == target_identity
+        ):
+            updated = dict(raw_entry)
+            state = dict(updated.get('state_advancement') or {})
+            state['status'] = 'pending'
+            state['pending_steps'] = sorted(
+                {str(step) for step in pending_steps if str(step).strip()}
+            )
+            state['pending_reason'] = str(reason or '')
+            if last_error:
+                state['last_error'] = str(last_error)
+            else:
+                state.pop('last_error', None)
+            state.pop('completed_at', None)
+            updated['state_advancement'] = state
+            updated_exports.append(updated)
+            replaced = True
+        else:
+            updated_exports.append(raw_entry)
+    if not replaced:
+        return False
+    record['exports'] = updated_exports
+    try:
+        atomic_write_json(record_path, record, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _mark_apply_export_state_complete(record_path, entry, *, latest_cursor=None):
+    """Atomically mark one P2 receipt's state advancement as complete."""
+
+    record = batch_export.read_apply_export_record(record_path)
+    exports = record.get('exports')
+    if not isinstance(exports, list):
+        raise cli_contract.MachineContractError(
+            'Apply-export receipt has no export entries; state cannot be marked complete.',
+            code_name='APPLY_EXPORT_RECORD_INVALID',
+            suggested_action='inspect_apply_export_record',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={'mode': 'apply-export', 'record_path': record_path},
+        )
+    completed_at = datetime.now().isoformat(timespec='seconds')
+    replaced = False
+    updated_exports = []
+    for raw_entry in exports:
+        if (
+            isinstance(raw_entry, dict)
+            and str(raw_entry.get('operation_identity') or '')
+            == str(entry.get('operation_identity') or '')
+        ):
+            updated = dict(raw_entry)
+            state = dict(updated.get('state_advancement') or {})
+            if state.get('status') != 'complete':
+                state['status'] = 'complete'
+                state['completed_at'] = completed_at
+            state['pending_steps'] = []
+            state['rag_status'] = 'complete'
+            state.pop('pending_reason', None)
+            state.pop('last_error', None)
+            if isinstance(latest_cursor, dict):
+                state['latest_cursor'] = dict(latest_cursor)
+            updated['state_advancement'] = state
+            updated_exports.append(updated)
+            replaced = True
+        else:
+            updated_exports.append(raw_entry)
+    if not replaced:
+        raise cli_contract.MachineContractError(
+            'Apply-export receipt no longer contains the operation being completed.',
+            code_name='APPLY_EXPORT_RECORD_CONFLICT',
+            suggested_action='inspect_apply_export_record',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'apply-export',
+                'record_path': record_path,
+                'operation_identity': str(entry.get('operation_identity') or ''),
+            },
+        )
+    record['exports'] = updated_exports
+    atomic_write_json(record_path, record, ensure_ascii=False, indent=2)
+
+
+def _apply_export_pending_error(
+    record_path,
+    normalized_entry,
+    *,
+    message,
+    pending_steps,
+    last_error='',
+    manifest_updated=False,
+    latest_cursor=None,
+    rag_status='',
+    pending_reason='',
+    receipt_updated=None,
+):
+    details = {
+        'mode': 'apply-export',
+        'record_path': record_path,
+        'export_root': normalized_entry.get('export_root', ''),
+        'recovery_state': 'state_pending',
+        'files_committed': True,
+        'outputs_committed': True,
+        'pending_steps': list(pending_steps),
+        'manifest_updated': manifest_updated,
+    }
+    if rag_status:
+        details['rag_status'] = str(rag_status)
+    if pending_reason:
+        details['pending_reason'] = str(pending_reason)
+    if receipt_updated is not None:
+        details['receipt_updated'] = bool(receipt_updated)
+    if last_error:
+        details['last_error'] = str(last_error)
+    if isinstance(latest_cursor, dict):
+        details['latest_cursor'] = dict(latest_cursor)
+    return cli_contract.MachineContractError(
+        message,
+        code_name='APPLY_EXPORT_STATE_PENDING',
+        suggested_action='retry_apply_to_finish_state',
+        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+        retryable=True,
+        details=details,
+    )
+
+
+def _print_apply_export_state_summary(manifest):
+    """Print a concise user-visible summary for a recovered P2 state replay."""
+
+    export_summary = (
+        manifest.get('export_summary')
+        if isinstance(manifest.get('export_summary'), dict)
+        else {}
+    )
+    apply_summary = (
+        manifest.get('apply_summary')
+        if isinstance(manifest.get('apply_summary'), dict)
+        else {}
+    )
+    print(f"Apply+export status: {export_summary.get('status') or 'applied_and_exported'}")
+    print(f"Export root: {export_summary.get('export_root') or ''}")
+    print(f"Exported files: {export_summary.get('exported_files') or 0}")
+    applied_files = apply_summary.get(
+        'actual_applied_files',
+        export_summary.get('actual_applied_files', 0),
+    )
+    print(f"Applied files: {applied_files}")
+    print(f"Applied lines: {apply_summary.get('applied_lines', 0)}")
+    print(f"Export record: {manifest.get('export_record_path') or ''}")
+    print(f"Recovery state: {export_summary.get('recovery_state') or 'state_recovered'}")
+    pending_steps = export_summary.get('pending_steps') or apply_summary.get('pending_steps')
+    if isinstance(pending_steps, list) and pending_steps:
+        print('Pending steps: ' + ', '.join(str(step) for step in pending_steps))
+    latest_cursor = apply_summary.get('latest_cursor')
+    if (
+        isinstance(latest_cursor, dict)
+        and latest_cursor.get('status') == 'retained_newer'
+    ):
+        print('Latest manifest cursor: retained a newer value (replay did not overwrite it)')
+
+
+def _finish_apply_export_state(manifest, *, record_path, entry, identity):
+    """Idempotently replay progress/RAG/latest/manifest state from a P2 receipt.
+
+    File bytes are already committed.  Progress and RAG steps are replayed
+    idempotently; RAG failures keep the receipt and manifest in a pending
+    state so the next apply retries the step instead of reporting complete.
+    The latest cursor advances only when its current value still matches the
+    value recorded before the file transaction (see D5).
+    """
+
+    try:
+        normalized_entry = batch_export.normalize_apply_export_entry(entry)
+    except batch_export.ApplyExportError as exc:
+        _apply_export_error(exc)
+    plan = normalized_entry['state_advancement']
+    current_manifest_path = os.path.abspath(str(manifest.get('_manifest_path') or ''))
+    plan_manifest_path = str(plan.get('manifest_path') or '')
+    if _normalized_abs_path(plan_manifest_path) != _normalized_abs_path(
+        current_manifest_path
+    ):
+        raise cli_contract.MachineContractError(
+            'Apply-export receipt belongs to a different manifest; manual recovery is required.',
+            code_name='APPLY_EXPORT_RECOVERY_STALE',
+            suggested_action='inspect_apply_export_record',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'apply-export',
+                'record_path': record_path,
+                'record_manifest_path': plan_manifest_path,
+                'manifest_path': current_manifest_path,
+                'recovery_state': 'state_pending',
+            },
+        )
+
+    # Every success/replay exit shares this receipt + two-tree byte recheck.
+    _verify_apply_export_outputs(manifest, normalized_entry, record_path, identity)
+
+    manifest_files = manifest.get('files') if isinstance(manifest.get('files'), dict) else {}
+    latest_cursor = {
+        'status': 'skipped',
+        'previous': str(plan.get('latest_previous_value') or ''),
+        'target': str(plan.get('latest_target') or ''),
+        'current': _latest_manifest_cursor_value(),
+        'message': 'RAG state has not completed yet',
+    }
+    try:
+        for progress_item in plan.get('progress') or []:
+            file_key = str(progress_item.get('file_key') or '')
+            if file_key not in manifest_files:
+                raise cli_contract.MachineContractError(
+                    f'Apply-export progress references an unknown file: {file_key}',
+                    code_name='APPLY_EXPORT_STATE_CONFLICT',
+                    suggested_action='inspect_apply_export_state',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={'mode': 'apply-export', 'file_key': file_key},
+                )
+            update_progress(file_key, list(progress_item.get('line_numbers') or []))
+
+        rag_jobs = []
+        for rag_item in plan.get('rag_jobs') or []:
+            file_key = str(rag_item.get('file_rel_path') or '')
+            file_info = manifest_files.get(file_key)
+            if not isinstance(file_info, dict):
+                raise cli_contract.MachineContractError(
+                    f'Apply-export RAG job references an unknown file: {file_key}',
+                    code_name='APPLY_EXPORT_STATE_CONFLICT',
+                    suggested_action='inspect_apply_export_state',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={'mode': 'apply-export', 'file_key': file_key},
+                )
+            rag_jobs.append(
+                {
+                    'file_rel_path': file_key,
+                    'file_path': resolve_manifest_file_path(manifest, file_key, file_info),
+                }
+            )
+        persisted_pending = _apply_export_pending_steps(manifest, normalized_entry)
+        pending_after = set(persisted_pending)
+        rag_apply_summary = {}
+        rag_error = ''
+        rag_status = 'complete' if RAG_ENABLED else 'disabled'
+        rag_pending = 'rag' in pending_after
+        run_rag = False
+        if rag_pending:
+            if not RAG_ENABLED:
+                rag_error = 'RAG pending step is blocked because RAG is disabled'
+                rag_status = 'blocked_disabled'
+            elif not rag_jobs:
+                rag_error = 'RAG pending step is blocked because no RAG jobs are recorded'
+                rag_status = 'blocked_no_jobs'
+            else:
+                run_rag = True
+        elif RAG_ENABLED and rag_jobs:
+            run_rag = True
+        if run_rag:
+            try:
+                rag_apply_summary = sync_rag_store_for_jobs(
+                    rag_jobs,
+                    quality_state=str(plan.get('quality_state') or 'batch_applied'),
+                )
+            except Exception as exc:
+                rag_error = str(exc) or exc.__class__.__name__
+                rag_apply_summary = {'enabled': True, 'error': rag_error}
+            if not isinstance(rag_apply_summary, dict):
+                rag_error = 'invalid_rag_summary'
+                rag_apply_summary = {'enabled': True, 'error': rag_error}
+            else:
+                rag_error = str(rag_apply_summary.get('error') or '').strip()
+            if rag_error:
+                pending_after.add('rag')
+                rag_status = 'error'
+            else:
+                pending_after.discard('rag')
+                rag_status = 'complete'
+        elif not rag_pending and not RAG_ENABLED:
+            rag_apply_summary = {'enabled': False, 'status': 'disabled'}
+
+        remaining_pending = sorted(pending_after - {'rag'})
+        if remaining_pending and not rag_error:
+            rag_error = (
+                'unsupported pending apply-export steps: '
+                + ', '.join(remaining_pending)
+            )
+            rag_status = 'unsupported_pending_steps'
+
+        apply_summary = dict(plan.get('apply_summary') or {})
+        apply_summary['rag'] = rag_apply_summary
+        apply_summary['mode'] = batch_export.APPLY_EXPORT_MODE
+        apply_summary['actual_applied_files'] = len(
+            normalized_entry.get('workspace_files') or []
+        )
+        export_summary = dict(plan.get('export_summary') or {})
+        export_summary['apply_identity'] = normalized_entry['apply_identity']
+        export_summary['actual_applied_files'] = apply_summary['actual_applied_files']
+        export_summary['applied_lines'] = apply_summary.get('applied_lines', 0)
+        manifest['export_summary'] = export_summary
+        manifest['export_record_path'] = record_path
+        manifest['exported_at'] = str(
+            export_summary.get('exported_at') or manifest.get('exported_at') or ''
+        )
+
+        if rag_error:
+            pending_steps_for_state = sorted(pending_after)
+            rag_apply_summary = {
+                **dict(rag_apply_summary or {}),
+                'enabled': bool(RAG_ENABLED),
+                'status': rag_status,
+                'error': rag_error,
+            }
+            receipt_updated = _persist_apply_export_pending_state(
+                record_path,
+                normalized_entry,
+                pending_steps=pending_steps_for_state,
+                reason=rag_status,
+                last_error=rag_error,
+            )
+            apply_summary['rag'] = rag_apply_summary
+            apply_summary['rag_status'] = rag_status
+            apply_summary['pending_steps'] = pending_steps_for_state
+            apply_summary['latest_cursor'] = latest_cursor
+            export_summary['state_advancement_status'] = 'pending'
+            export_summary['pending_steps'] = pending_steps_for_state
+            export_summary['pending_reason'] = rag_status
+            export_summary['rag_status'] = rag_status
+            export_summary['latest_cursor'] = latest_cursor
+            manifest['apply_summary'] = apply_summary
+            manifest.pop('applied_at', None)
+            manifest.pop('next_split_manifest_path', None)
+            manifest.pop('next_split_ready_at', None)
+            manifest.pop('last_apply_failure_report_path', None)
+            manifest['apply_state_advancement'] = {
+                'status': 'pending',
+                'mode': batch_export.APPLY_EXPORT_MODE,
+                'record_path': record_path,
+                'operation_identity': normalized_entry.get('operation_identity', ''),
+                'files_committed': True,
+                'outputs_committed': True,
+                'pending_steps': pending_steps_for_state,
+                'pending_reason': rag_status,
+                'rag_status': rag_status,
+                'last_error': rag_error,
+                'latest_cursor': latest_cursor,
+                'updated_at': datetime.now().isoformat(timespec='seconds'),
+            }
+            try:
+                save_manifest(manifest, update_latest=False)
+            except Exception as save_exc:
+                raise _apply_export_pending_error(
+                    record_path,
+                    normalized_entry,
+                    message=(
+                        'Apply-export files are committed, but the pending step '
+                        f'and manifest state save both failed: {save_exc}'
+                    ),
+                    pending_steps=sorted(set(pending_steps_for_state) | {'manifest'}),
+                    last_error=f'{rag_error}; manifest save: {save_exc}',
+                    manifest_updated=False,
+                    latest_cursor=latest_cursor,
+                    rag_status=rag_status,
+                    pending_reason=rag_status,
+                    receipt_updated=receipt_updated,
+                ) from save_exc
+            raise _apply_export_pending_error(
+                record_path,
+                normalized_entry,
+                message=(
+                    'Apply-export files and export tree are committed, but a '
+                    'persisted pending step could not complete; apply state '
+                    'remains pending and will retry.'
+                ),
+                pending_steps=pending_steps_for_state,
+                last_error=rag_error,
+                manifest_updated=True,
+                latest_cursor=latest_cursor,
+                rag_status=rag_status,
+                pending_reason=rag_status,
+                receipt_updated=receipt_updated,
+            )
+
+        latest_cursor = _advance_apply_export_latest_cursor(plan)
+        apply_summary['pending_steps'] = []
+        apply_summary['latest_cursor'] = latest_cursor
+        apply_summary['rag_status'] = rag_status
+        export_summary['state_advancement_status'] = 'complete'
+        export_summary['pending_steps'] = []
+        export_summary['latest_cursor'] = latest_cursor
+        export_summary['rag_status'] = rag_status
+        manifest['apply_summary'] = apply_summary
+        manifest['export_summary'] = export_summary
+        manifest['applied_at'] = str(plan.get('applied_at') or '')
+        manifest.pop('last_apply_failure_report_path', None)
+        next_split = str(plan.get('next_split_manifest_path') or '')
+        if next_split:
+            manifest['next_split_manifest_path'] = next_split
+            manifest['next_split_ready_at'] = str(
+                plan.get('updated_at') or manifest.get('applied_at') or ''
+            )
+        else:
+            manifest.pop('next_split_manifest_path', None)
+            manifest.pop('next_split_ready_at', None)
+        manifest['apply_state_advancement'] = {
+            'status': 'complete',
+            'mode': batch_export.APPLY_EXPORT_MODE,
+            'record_path': record_path,
+            'operation_identity': normalized_entry.get('operation_identity', ''),
+            'rag_status': rag_status,
+            'latest_cursor': latest_cursor,
+            'completed_at': datetime.now().isoformat(timespec='seconds'),
+        }
+        try:
+            save_manifest(manifest, update_latest=False)
+        except Exception as exc:
+            raise _apply_export_pending_error(
+                record_path,
+                normalized_entry,
+                message=(
+                    'Apply-export files are committed, but the manifest state save '
+                    f'failed: {exc}'
+                ),
+                pending_steps=['manifest'],
+                last_error=str(exc),
+                manifest_updated=False,
+                latest_cursor=latest_cursor,
+            ) from exc
+    except cli_contract.MachineContractError:
+        raise
+    except Exception as exc:
+        raise _apply_export_pending_error(
+            record_path,
+            normalized_entry,
+            message=f'Apply-export files are committed but state recovery failed: {exc}',
+            pending_steps=['state'],
+            last_error=str(exc),
+            manifest_updated=False,
+            latest_cursor=latest_cursor,
+        ) from exc
+
+    try:
+        _mark_apply_export_state_complete(
+            record_path,
+            normalized_entry,
+            latest_cursor=latest_cursor,
+        )
+    except cli_contract.MachineContractError:
+        raise
+    except Exception as exc:
+        raise _apply_export_pending_error(
+            record_path,
+            normalized_entry,
+            message=f'Apply-export state advanced but receipt completion failed: {exc}',
+            pending_steps=['receipt'],
+            last_error=str(exc),
+            manifest_updated=True,
+            latest_cursor=latest_cursor,
+        ) from exc
+    return manifest
+
+
+def _recover_pending_apply_export_journal(manifest):
+    """Recover a prepared/committed P2 journal before any apply state decision."""
+
+    package_dir = str(manifest.get('_package_dir') or '')
+    journal_path = os.path.join(package_dir, '.apply_export_transaction.json')
+    if not os.path.lexists(journal_path):
+        return 'none'
+    try:
+        metadata = batch_export.load_apply_export_transaction_metadata(journal_path)
+    except batch_export.ApplyExportError as exc:
+        _apply_export_error(exc)
+    required = ('export_root', 'workspace_root', 'game_root', 'package_dir')
+    missing = [field for field in required if not metadata.get(field)]
+    if missing:
+        raise cli_contract.MachineContractError(
+            'Apply-export transaction journal is missing its recovery scope.',
+            code_name='APPLY_EXPORT_RECOVERY_INVALID',
+            suggested_action='inspect_apply_export_transaction',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'apply-export',
+                'journal_path': journal_path,
+                'missing_fields': missing,
+                'recovery_state': 'recovery_required',
+            },
+        )
+    if _normalized_abs_path(str(metadata['package_dir'])) != _normalized_abs_path(package_dir):
+        raise cli_contract.MachineContractError(
+            'Apply-export transaction journal belongs to a different task package.',
+            code_name='APPLY_EXPORT_RECOVERY_INVALID',
+            suggested_action='inspect_apply_export_transaction',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details={
+                'mode': 'apply-export',
+                'journal_path': journal_path,
+                'recovery_state': 'recovery_required',
+            },
+        )
+    try:
+        export_root = batch_export.validate_apply_export_root(
+            str(metadata['export_root']),
+            game_root=str(metadata['game_root']),
+            package_dir=str(metadata['package_dir']),
+        )
+    except batch_export.ApplyExportError as exc:
+        _apply_export_error(exc)
+    try:
+        recovered = batch_export.recover_apply_export_transaction(
+            export_root,
+            journal_path,
+            workspace_root=str(metadata['workspace_root']),
+            game_root=str(metadata['game_root']),
+            package_dir=str(metadata['package_dir']),
+        )
+    except batch_export.ApplyExportError as exc:
+        details = dict(exc.details)
+        details.update(
+            {
+                'mode': 'apply-export',
+                'reason_code': exc.reason_code,
+                'journal_path': journal_path,
+                'recovery_state': 'recovery_required',
+            }
+        )
+        raise cli_contract.MachineContractError(
+            f'Apply-export transaction requires recovery before retry: {exc}',
+            code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+            suggested_action='retry_apply_to_recover_export',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            details=details,
+        ) from exc
+    if not recovered:
+        return 'none'
+    try:
+        batch_export.prune_recovered_export_root(export_root)
+    except Exception:
+        pass
+    return 'recovered'
+
+
+def _prepare_apply_export_transaction(manifest):
+    """Validate that no other writeback transaction blocks a P2 apply."""
+
+    package_dir = str(manifest.get('_package_dir') or '')
+    for filename, transaction_kind in (
+        ('.apply_writeback_transaction.json', 'apply'),
+        ('.revision_writeback_transaction.json', 'revision'),
+        ('.export_only_transaction.json', 'export_only'),
+    ):
+        path = os.path.join(package_dir, filename)
+        if os.path.lexists(path):
+            raise cli_contract.MachineContractError(
+                f'An unresolved {transaction_kind} transaction exists; recover it before apply-export.',
+                code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                suggested_action='recover_pending_writeback_transaction',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                details={
+                    'mode': 'apply-export',
+                    'transaction_kind': transaction_kind,
+                    'transaction_path': path,
+                    'recovery_state': 'recovery_required',
+                },
+            )
+    return os.path.join(package_dir, '.apply_export_transaction.json')
+
+
+
+
+def apply_results(target=None, force=False, export_only=None, export_dir=None):
+    if export_only is not None and export_dir is not None:
+        raise cli_contract.MachineContractError(
+            'Apply options --export-only and --export-dir are mutually exclusive.',
+            code_name='EXPORT_OPTIONS_CONFLICT',
+            suggested_action='choose_one_export_option',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={'mode': 'apply-export'},
+        )
+    export_only_requested = export_only is not None
+    dual_requested = export_dir is not None
+    export_requested = export_only_requested or dual_requested
+    option_label = '--export-only' if export_only_requested else '--export-dir'
     durable_store = _resolve_durable_sync_store(target)
     if durable_store is not None:
         if export_requested:
-            _reject_export_only_unsupported(durable_target=True)
+            _reject_export_option_unsupported(durable_target=True, option=option_label)
         # Durable Sync always applies through its bound preview.  ``force``
         # intentionally cannot bypass check/source/artifact predicates.
         return apply_durable_sync_results(durable_store)
     manifest = load_manifest(target)
     if export_requested:
-        _reject_export_only_unsupported(manifest)
+        _reject_export_option_unsupported(manifest, option=option_label)
     durable_source = manifest.get('durable_sync_source')
     if manifest.get('durable_sync') or isinstance(durable_source, dict):
         raise cli_contract.MachineContractError(
@@ -13067,23 +14194,205 @@ def apply_results(target=None, force=False, export_only=None):
             },
         )
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'apply')
+
+    # A committed P2 file transaction always wins over the applied_at guard:
+    # its files and receipt already exist and only state bookkeeping may be
+    # pending.  A prepared journal is strictly recovered first -- but only for
+    # apply/writeback commands.  P1 --export-only must never recover a P2
+    # transaction or replay P2 state advancement; it refuses structurally
+    # until the matching apply has resolved that state.
+    if export_only_requested:
+        _reject_pending_apply_export_for_export_only(manifest)
+        p2_journal_recovery_state = 'none'
+        receipt = _load_apply_export_receipt(manifest)
+    else:
+        p2_journal_recovery_state = _recover_pending_apply_export_journal(manifest)
+        receipt = _load_apply_export_receipt(manifest)
+    manifest_pending_steps = _manifest_apply_export_pending_steps(manifest)
+    if receipt is None and manifest_pending_steps:
+        _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
+    if receipt is not None:
+        record_path, _record, receipt_entries = receipt
+        current_apply_identity = _apply_export_identity(manifest)
+        matching_entry = next(
+            (
+                entry
+                for entry in receipt_entries
+                if entry.get('apply_identity') == current_apply_identity
+            ),
+            None,
+        )
+        pending_entries = [
+            entry
+            for entry in receipt_entries
+            if (entry.get('state_advancement') or {}).get('status') != 'complete'
+        ]
+        if matching_entry is None and manifest_pending_steps:
+            _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
+        if matching_entry is None and pending_entries:
+            pending = pending_entries[0]
+            raise cli_contract.MachineContractError(
+                'A committed apply-export operation from another manifest or result '
+                'is awaiting state recovery.',
+                code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                suggested_action='inspect_apply_export_record',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                details={
+                    'mode': 'apply-export',
+                    'record_path': record_path,
+                    'record_apply_identity': pending.get('apply_identity', ''),
+                    'record_export_root': pending.get('export_root', ''),
+                    'recovery_state': 'state_pending',
+                },
+            )
+        if matching_entry is not None and pending_entries:
+            other_pending = [
+                entry
+                for entry in pending_entries
+                if entry.get('operation_identity')
+                != matching_entry.get('operation_identity')
+            ]
+            if other_pending:
+                pending = other_pending[0]
+                raise cli_contract.MachineContractError(
+                    'Another committed apply-export operation in this package is '
+                    'awaiting state recovery.',
+                    code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                    suggested_action='inspect_apply_export_record',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={
+                        'mode': 'apply-export',
+                        'record_path': record_path,
+                        'record_apply_identity': pending.get('apply_identity', ''),
+                        'record_export_root': pending.get('export_root', ''),
+                        'recovery_state': 'state_pending',
+                    },
+                )
+        if matching_entry is not None:
+            identity = require_manifest_project_match(manifest, 'apply')
+            if export_only_requested:
+                # P1 never replays or verifies-as-success a P2 receipt.
+                if (
+                    matching_entry.get('state_advancement') or {}
+                ).get('status') == 'complete':
+                    raise cli_contract.MachineContractError(
+                        'Manifest was already applied with --export-dir; export-only '
+                        'from an applied result is not supported. Use a new task record.',
+                        code_name='APPLY_EXPORT_ALREADY_APPLIED',
+                        suggested_action='use_new_manifest_or_export_directory',
+                        semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                        details={
+                            'mode': 'apply-export',
+                            'record_path': record_path,
+                            'export_root': matching_entry.get('export_root', ''),
+                        },
+                    )
+                raise cli_contract.MachineContractError(
+                    'A committed apply-export operation is awaiting state recovery; '
+                    'run apply (writeback) to finish it before --export-only.',
+                    code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                    suggested_action='retry_apply_to_recover_export',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={
+                        'mode': 'apply-export',
+                        'record_path': record_path,
+                        'record_export_root': matching_entry.get('export_root', ''),
+                        'recovery_state': 'state_pending',
+                    },
+                )
+            if dual_requested:
+                try:
+                    requested_dual_root = batch_export.validate_apply_export_root(
+                        export_dir,
+                        game_root=identity.get('base_dir') or '',
+                        package_dir=manifest.get('_package_dir') or '',
+                    )
+                except batch_export.ApplyExportError as exc:
+                    _apply_export_error(exc)
+                root_matches = _normalized_abs_path(
+                    requested_dual_root.canonical_path
+                ) == _normalized_abs_path(matching_entry.get('export_root') or '')
+                if not root_matches:
+                    already_complete = _apply_export_state_complete(
+                        manifest,
+                        matching_entry,
+                        record_path,
+                    )
+                    if not already_complete:
+                        raise cli_contract.MachineContractError(
+                            'A committed apply-export operation is waiting for state '
+                            'recovery at its recorded export directory.',
+                            code_name='APPLY_EXPORT_RECOVERY_REQUIRED',
+                            suggested_action='retry_apply_to_recover_export',
+                            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                            details={
+                                'mode': 'apply-export',
+                                'record_path': record_path,
+                                'record_export_root': matching_entry.get('export_root', ''),
+                                'requested_export_root': requested_dual_root.canonical_path,
+                                'recovery_state': 'state_pending',
+                            },
+                        )
+                    raise cli_contract.MachineContractError(
+                        'Manifest was already applied and exported to a different directory.',
+                        code_name='APPLY_EXPORT_ALREADY_APPLIED_OTHER_ROOT',
+                        suggested_action='use_recorded_export_directory_or_new_manifest',
+                        semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                        details={
+                            'mode': 'apply-export',
+                            'record_path': record_path,
+                            'record_export_root': matching_entry.get('export_root', ''),
+                            'requested_export_root': requested_dual_root.canonical_path,
+                        },
+                    )
+            # Every pending-replay and idempotent-success exit below shares
+            # the same receipt + path + two-tree byte recheck.  A tampered
+            # output must not reuse the old success summary.
+            _verify_apply_export_outputs(
+                manifest,
+                matching_entry,
+                record_path,
+                identity,
+            )
+            if not _apply_export_state_complete(manifest, matching_entry, record_path):
+                finished = _finish_apply_export_state(
+                    manifest,
+                    record_path=record_path,
+                    entry=matching_entry,
+                    identity=identity,
+                )
+                _print_apply_export_state_summary(finished)
+                return finished
+            if dual_requested or (force and not export_only_requested):
+                # Files, receipt, and state are complete; this is an idempotent
+                # replay and must not touch either output tree again.
+                return manifest
+
     if manifest.get('applied_at') and not force:
         message = (
             'Manifest was already applied. Re-run apply with --force to bypass this guard; '
             'source validation still applies.'
         )
-        if export_requested:
+        if export_only_requested:
             message = (
                 'Manifest was already applied. Re-run export-only with --force to bypass '
                 'this guard; source validation still applies.'
+            )
+        elif dual_requested:
+            message = (
+                'Manifest was already applied. Re-run apply --export-dir with --force to '
+                'bypass this guard; source validation still applies.'
             )
         raise SystemExit(message)
     identity = require_manifest_project_match(manifest, 'apply')
 
     export_root = None
+    dual_export_root = None
     export_transaction_path = ''
     export_recovery_state = 'none'
-    if export_requested:
+    dual_transaction_path = ''
+    dual_recovery_state = p2_journal_recovery_state
+    if export_only_requested:
         try:
             export_root = batch_export.validate_export_root(
                 export_only,
@@ -13092,19 +14401,29 @@ def apply_results(target=None, force=False, export_only=None):
             )
         except batch_export.ExportOnlyError as exc:
             _export_only_error(exc)
+    if dual_requested:
+        try:
+            dual_export_root = batch_export.validate_apply_export_root(
+                export_dir,
+                game_root=identity.get('base_dir') or '',
+                package_dir=manifest.get('_package_dir') or '',
+            )
+        except batch_export.ApplyExportError as exc:
+            _apply_export_error(exc)
 
     transaction_path = os.path.join(
         manifest['_package_dir'],
         '.apply_writeback_transaction.json',
     )
-    if export_root is None:
+    if dual_requested or export_root is None:
         recover_atomic_write_transaction(
             transaction_path,
             expected_transaction_kind='apply',
+            verify_targets=True,
         )
     require_safe_check_for_apply(
         manifest,
-        update_latest=export_root is None,
+        update_latest=not export_requested,
     )
     if export_root is not None:
         export_transaction_path, export_recovery_state = _prepare_export_only_transaction(
@@ -13113,6 +14432,8 @@ def apply_results(target=None, force=False, export_only=None):
         )
         if export_recovery_state == 'recovered':
             batch_export.prune_recovered_export_root(export_root)
+    if dual_export_root is not None:
+        dual_transaction_path = _prepare_apply_export_transaction(manifest)
 
     replacements_by_file, translated_lines_by_file, failure_entries, summary = collect_result_actions(
         manifest,
@@ -13132,7 +14453,7 @@ def apply_results(target=None, force=False, export_only=None):
         )
         save_manifest(
             manifest,
-            update_latest=(export_root is None)
+            update_latest=(not export_requested)
             and manifest.get('execution') != 'sync',
         )
         raise SystemExit(f'Apply refused because current results are not safe. Report: {report_path}')
@@ -13200,7 +14521,7 @@ def apply_results(target=None, force=False, export_only=None):
         )
         save_manifest(
             manifest,
-            update_latest=(export_root is None)
+            update_latest=(not export_requested)
             and manifest.get('execution') != 'sync',
         )
         raise SystemExit(f'Apply refused because source revalidation is not safe. Report: {report_path}')
@@ -13239,57 +14560,18 @@ def apply_results(target=None, force=False, export_only=None):
             )
 
     if export_root is not None:
-        source_documents_by_key = {
-            _adapter_render_key(document.file_rel_path): document
-            for document in (
-                adapter_snapshot.project.source_documents
-                if adapter_snapshot is not None
-                else ()
-            )
-        }
-        export_payloads = []
-        for file_key in sorted(revalidated_replacements_by_file):
-            normalized_key = _adapter_render_key(file_key)
-            source_document = source_documents_by_key.get(normalized_key)
-            if source_document is None:
-                raise cli_contract.MachineContractError(
-                    f'Export-only source document is missing for {file_key}.',
-                    code_name='EXPORT_ONLY_PLAN_INVALID',
-                    suggested_action='run_check_again',
-                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-                    details={
-                        'mode': 'export-only',
-                        'reason_code': 'source_document_missing',
-                        'file_rel_path': file_key,
-                    },
-                )
-            rendered_lines = rendered_by_file.get(normalized_key)
-            if rendered_lines is None:
-                raise cli_contract.MachineContractError(
-                    f'Export-only rendered target is missing for {file_key}.',
-                    code_name='EXPORT_ONLY_PLAN_INVALID',
-                    suggested_action='run_check_again',
-                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-                    details={
-                        'mode': 'export-only',
-                        'reason_code': 'rendered_target_missing',
-                        'file_rel_path': file_key,
-                    },
-                )
-            output_bytes = _rendered_bytes_with_source_contract(
-                source_document,
-                rendered_lines,
-            )
-            if output_bytes == source_document.content:
-                continue
-            export_payloads.append(
-                {
-                    'source_path': revalidated_file_paths[file_key],
-                    'source_bytes': source_document.content,
-                    'content': output_bytes,
-                    'source_sha256': source_document.sha256,
-                }
-            )
+        (
+            export_payloads,
+            source_documents_by_key,
+            _rendered_lines_by_key,
+        ) = _rendered_export_payloads_by_file(
+            adapter_snapshot=adapter_snapshot,
+            revalidated_replacements_by_file=revalidated_replacements_by_file,
+            revalidated_file_paths=revalidated_file_paths,
+            rendered_by_file=rendered_by_file,
+            error_code_name='EXPORT_ONLY_PLAN_INVALID',
+            mode_label='export-only',
+        )
         try:
             export_summary = batch_export.export_only(
                 export_root,
@@ -13322,6 +14604,183 @@ def apply_results(target=None, force=False, export_only=None):
         print('Applied files: 0')
         print(f"Export record: {export_summary['record_path']}")
         print(f"Recovery state: {export_summary['recovery_state']}")
+        if failure_entries:
+            print(f"Failures logged: {len(failure_entries)}")
+        return manifest
+
+    if dual_export_root is not None:
+        (
+            export_payloads,
+            source_documents_by_key,
+            rendered_lines_by_key,
+        ) = _rendered_export_payloads_by_file(
+            adapter_snapshot=adapter_snapshot,
+            revalidated_replacements_by_file=revalidated_replacements_by_file,
+            revalidated_file_paths=revalidated_file_paths,
+            rendered_by_file=rendered_by_file,
+            error_code_name='APPLY_EXPORT_PLAN_INVALID',
+            mode_label='apply-export',
+        )
+        workspace_payloads = []
+        for file_key in sorted(revalidated_replacements_by_file):
+            if not revalidated_replacements_by_file[file_key]:
+                continue
+            normalized_key = _adapter_render_key(file_key)
+            contract_lines = rendered_lines_by_key.get(normalized_key)
+            source_document = revalidated_source_documents[file_key]
+            target_path = revalidated_file_paths[file_key]
+            if contract_lines is None:
+                raise cli_contract.MachineContractError(
+                    f'Apply-export rendered target is missing for {file_key}.',
+                    code_name='APPLY_EXPORT_PLAN_INVALID',
+                    suggested_action='run_check_again',
+                    semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+                    details={
+                        'mode': 'apply-export',
+                        'reason_code': 'rendered_target_missing',
+                        'file_rel_path': file_key,
+                    },
+                )
+            workspace_payloads.append(
+                {
+                    'target_path': target_path,
+                    'source_path': target_path,
+                    'source_bytes': source_document.content,
+                    'content': ''.join(contract_lines).encode('utf-8'),
+                    'file_key': file_key,
+                }
+            )
+
+        summary_applied_files = len(revalidated_line_numbers_by_file)
+        summary_applied_lines = sum(
+            len(line_numbers)
+            for line_numbers in revalidated_line_numbers_by_file.values()
+        )
+        summary['pending_files'] = summary_applied_files
+        summary['pending_lines'] = summary_applied_lines
+        next_split_manifest = next_split_manifest_path(manifest)
+        should_update_latest = manifest.get('execution') != 'sync'
+        latest_target = ''
+        if should_update_latest:
+            latest_target = next_split_manifest or str(
+                manifest.get('_manifest_path') or ''
+            )
+        applied_at = datetime.now().isoformat(timespec='seconds')
+        latest_previous_value = _latest_manifest_cursor_value()
+        apply_identity_value = _apply_export_identity(manifest)
+        state_advancement = {
+            'manifest_path': os.path.abspath(str(manifest.get('_manifest_path') or '')),
+            'apply_summary': {
+                'applied_files': summary_applied_files,
+                'applied_lines': summary_applied_lines,
+                'candidate_items': summary.get(
+                    'candidate_valid_items',
+                    summary['valid_items'],
+                ),
+                'recoverable_items': summary['valid_items'],
+                'skipped_items': summary.get('skipped_items', 0),
+                'source_mismatch_items': summary.get('source_mismatch_items', 0),
+                'failure_count': len(failure_entries),
+            },
+            'progress': [
+                {
+                    'file_key': file_key,
+                    'line_numbers': sorted(line_numbers),
+                }
+                for file_key, line_numbers in sorted(
+                    revalidated_line_numbers_by_file.items()
+                )
+            ],
+            'rag_jobs': [
+                {'file_rel_path': file_key}
+                for file_key, line_numbers in sorted(
+                    revalidated_line_numbers_by_file.items()
+                )
+                if line_numbers
+            ],
+            'quality_state': 'batch_applied',
+            'latest_target': latest_target,
+            'latest_previous_value': latest_previous_value,
+            'should_update_latest': should_update_latest,
+            'next_split_manifest_path': next_split_manifest,
+            'applied_at': applied_at,
+            'updated_at': applied_at,
+        }
+        try:
+            dual_summary = batch_export.apply_and_export(
+                dual_export_root,
+                game_root=identity.get('base_dir') or '',
+                workspace_root=identity.get('tl_dir') or '',
+                package_dir=manifest.get('_package_dir') or '',
+                workspace_payloads=workspace_payloads,
+                export_payloads=export_payloads,
+                request_payload=_export_only_request_payload(
+                    manifest,
+                    identity,
+                    summary,
+                    adapter_plan,
+                    tuple(source_documents_by_key.values()),
+                ),
+                apply_identity=apply_identity_value,
+                state_advancement=state_advancement,
+                journal_path=dual_transaction_path,
+                recovery_state=dual_recovery_state,
+            )
+        except batch_export.ApplyExportError as exc:
+            _apply_export_error(exc)
+        record_entry = dual_summary.pop('record_entry', None)
+        record_path_for_state = str(
+            dual_summary.get('record_path') or dual_export_root.record_path
+        )
+        if record_entry is None:
+            receipt_now = _load_apply_export_receipt(manifest)
+            if receipt_now is None:
+                raise cli_contract.MachineContractError(
+                    'Apply-export transaction completed without a usable receipt.',
+                    code_name='APPLY_EXPORT_RECORD_INVALID',
+                    suggested_action='inspect_apply_export_record',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={
+                        'mode': 'apply-export',
+                        'export_root': dual_export_root.canonical_path,
+                    },
+                )
+            _record_path_now, _record_now, entries_now = receipt_now
+            record_entry = next(
+                (
+                    entry
+                    for entry in entries_now
+                    if entry.get('apply_identity') == apply_identity_value
+                ),
+                None,
+            )
+            if record_entry is None:
+                raise cli_contract.MachineContractError(
+                    'Apply-export receipt does not contain the committed operation.',
+                    code_name='APPLY_EXPORT_RECORD_INVALID',
+                    suggested_action='inspect_apply_export_record',
+                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                    details={
+                        'mode': 'apply-export',
+                        'export_root': dual_export_root.canonical_path,
+                    },
+                )
+        dual_summary['applied_lines'] = summary_applied_lines
+        dual_summary['state_advancement_status'] = 'pending'
+        _finish_apply_export_state(
+            manifest,
+            record_path=record_path_for_state,
+            entry=record_entry,
+            identity=identity,
+        )
+        print_check_summary(summary)
+        print(f"Apply+export status: {dual_summary.get('status')}")
+        print(f"Export root: {dual_summary.get('export_root')}")
+        print(f"Exported files: {dual_summary.get('exported_files')}")
+        print(f"Applied files: {summary_applied_files}")
+        print(f"Applied lines: {summary_applied_lines}")
+        print(f"Export record: {record_path_for_state}")
+        print(f"Recovery state: {dual_summary.get('recovery_state')}")
         if failure_entries:
             print(f"Failures logged: {len(failure_entries)}")
         return manifest
@@ -13409,6 +14868,7 @@ def apply_revisions(target=None, force=False):
     recover_atomic_write_transaction(
         transaction_path,
         expected_transaction_kind='revision',
+        verify_targets=True,
     )
 
     replacements_by_file, _revised_lines_by_file, failure_entries, summary, preview_entries = collect_revision_actions(
@@ -18888,7 +20348,8 @@ def build_arg_parser():
 
     apply_parser = subparsers.add_parser(
         'apply',
-        help='Apply downloaded results back into tl files, or export changed files only.',
+        help='Apply downloaded results back into tl files, export changed files only, '
+             'or write back and export the same rendered result.',
     )
     add_machine_output_argument(apply_parser)
     apply_parser.add_argument(
@@ -18905,7 +20366,8 @@ def build_arg_parser():
             'structure gates, and export-directory conflicts still apply.'
         ),
     )
-    apply_parser.add_argument(
+    export_group = apply_parser.add_mutually_exclusive_group()
+    export_group.add_argument(
         '--export-only',
         default=None,
         metavar='PATH',
@@ -18913,6 +20375,16 @@ def build_arg_parser():
             'Export this apply result as complete changed files under PATH without '
             'writing the game tree or advancing apply state. PATH must be missing or empty '
             'on first use; repeated use requires the matching export receipt and tree.'
+        ),
+    )
+    export_group.add_argument(
+        '--export-dir',
+        default=None,
+        metavar='PATH',
+        help=(
+            'Write the validated render result back into the game tree and export the '
+            'same complete changed files under PATH in one recoverable transaction. '
+            'PATH must be missing or empty on first use.'
         ),
     )
 
@@ -20578,6 +22050,7 @@ def dispatch_command(parser, args):
             args.target or None,
             force=args.force,
             export_only=args.export_only,
+            export_dir=args.export_dir,
         )
 
     if command == 'export-keywords':
@@ -21019,17 +22492,26 @@ def build_machine_success_envelope(command, value, args):
         export_summary = manifest.get('export_summary')
         if isinstance(export_summary, dict):
             result['apply'] = dict(export_summary)
-            result['apply']['next_split_manifest'] = ''
             artifacts.update(
                 _nonempty_artifacts(
                     export_root=export_summary.get('export_root'),
                     export_record=export_summary.get('record_path'),
                 )
             )
-            status = str(
-                export_summary.get('status')
-                or ('no-op' if not export_summary.get('exported_files') else 'exported')
-            )
+            if export_summary.get('mode') == 'apply-export':
+                result['apply']['next_split_manifest'] = manifest.get(
+                    'next_split_manifest_path',
+                    '',
+                )
+                status = str(
+                    export_summary.get('status') or 'applied_and_exported'
+                )
+            else:
+                result['apply']['next_split_manifest'] = ''
+                status = str(
+                    export_summary.get('status')
+                    or ('no-op' if not export_summary.get('exported_files') else 'exported')
+                )
         else:
             result['apply'] = dict(manifest.get('apply_summary') or {})
             result['apply']['next_split_manifest'] = manifest.get('next_split_manifest_path', '')

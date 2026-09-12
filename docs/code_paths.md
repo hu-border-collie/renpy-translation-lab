@@ -65,6 +65,13 @@
 - `translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
 - Batch 与 durable Sync 的 check/preview/apply 测试是写回安全事实；新增入口必须复用，
   不得仅凭模型任务完成状态授权写回。
+- `batch_export.py`：P1 `export_only` 与 P2 `apply_and_export` 的导出路径/回执/事务核心；
+  P2 把 workspace payload、export payload 与 `apply_export_record.json` 放进同一个
+  `atomic_io.atomic_write_many_bytes` journal，receipt 的 pending 状态计划由
+  `gemini_translate_batch.py` 幂等补记 progress/RAG/latest/manifest。
+- `atomic_io.py`：多文件 prepared/committed journal、strict target guard（事务外修改
+  fail closed）、expected preimage 与 post-commit validator；P1/P2 之外的 apply/revision
+  也继续复用同一恢复内核。
 
 ## GUI 工作台与 Settings
 
