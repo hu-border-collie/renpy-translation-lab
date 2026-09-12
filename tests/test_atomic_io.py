@@ -438,9 +438,6 @@ class BatchArtifactAtomicTests(unittest.TestCase):
             client_mock.assert_not_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
     def test_prepared_recovery_blocks_uncommitted_external_change(self):
@@ -527,9 +524,6 @@ class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
             self.assertFalse(journal.exists())
             self.assertFalse(backup.exists())
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class AtomicWriteRollbackPhaseTests(unittest.TestCase):
@@ -707,9 +701,6 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
             self.assertFalse(journal.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
     def test_legacy_prepared_journal_keeps_historical_rollback_boundary(self):
@@ -778,9 +769,6 @@ class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"new\n")
             self.assertFalse(journal.exists())
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class AtomicProcessFileLockTests(unittest.TestCase):
@@ -866,6 +854,34 @@ class AtomicProcessFileLockTests(unittest.TestCase):
                 self.assertEqual(owner["pid"], os.getpid())
                 self.assertEqual(owner["lock_protocol"], "os_lock_v1")
             self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_symlink_lock_path_is_rejected_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            victim = root / "precious.txt"
+            victim.write_text("do not touch\n", encoding="utf-8")
+            lock = root / "writer.lock"
+            try:
+                lock.symlink_to(victim)
+            except OSError:
+                self.skipTest("symlink creation unavailable")
+            with self.assertRaisesRegex(OSError, "not a regular file"):
+                with atomic_io.exclusive_file_lock(lock, timeout=0.5):
+                    pass
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do not touch\n")
+            self.assertTrue(lock.is_symlink())
+
+    def test_foreign_regular_file_is_used_but_never_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            original = "user data that must survive\n"
+            lock.write_text(original, encoding="utf-8")
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                self.assertEqual(lock.read_text(encoding="utf-8"), original)
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.2):
+                        pass
+            self.assertEqual(lock.read_text(encoding="utf-8"), original)
 
     def test_two_writers_never_enter_critical_section_concurrently(self):
         with tempfile.TemporaryDirectory() as tmp:

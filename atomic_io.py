@@ -121,6 +121,39 @@ def _write_all(fd: int, payload: bytes) -> None:
         view = view[written:]
 
 
+def _lock_file_accepts_owner_record(fd: int) -> bool:
+    """Return whether the existing lock file may be rewritten.
+
+    The owner record is diagnostic only, so a pre-existing file that does not
+    look like one of our lock files must never be overwritten or truncated.
+    Empty files and legacy/current owner records (``pid`` plus ``token``) are
+    accepted; anything else keeps its bytes and is only used for the kernel
+    lock.
+    """
+
+    size = os.fstat(fd).st_size
+    if size == 0:
+        return True
+    if size > _OS_LOCK_OWNER_MAX_BYTES:
+        return False
+    os.lseek(fd, 0, os.SEEK_SET)
+    raw = os.read(fd, size)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    pid = payload.get("pid")
+    token = payload.get("token")
+    return (
+        isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and isinstance(token, str)
+        and bool(token)
+    )
+
+
 @contextmanager
 def exclusive_file_lock(
     lock_path: str | os.PathLike[str],
@@ -140,6 +173,10 @@ def exclusive_file_lock(
     unlinks it, because another waiter may already hold a handle to the same
     inode.  Never delete a lock file while writers may be active; a leftover
     file is harmless because only the kernel lock grants mutual exclusion.
+
+    Symlinks and other non-regular files at the lock path are rejected, and a
+    pre-existing file that does not look like one of our lock records is used
+    for the kernel lock without being rewritten or truncated.
     """
 
     target = os.path.abspath(os.fspath(lock_path))
@@ -147,8 +184,20 @@ def exclusive_file_lock(
     os.makedirs(directory, exist_ok=True)
     deadline = time.monotonic() + max(0.0, float(timeout))
     delay = max(0.001, float(poll_interval))
+
     try:
-        fd = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+        link_stat = os.lstat(target)
+    except FileNotFoundError:
+        link_stat = None
+    if link_stat is not None and not stat.S_ISREG(link_stat.st_mode):
+        raise OSError(f"File lock path is not a regular file: {target}")
+
+    try:
+        fd = os.open(
+            target,
+            os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
     except PermissionError as exc:
         # A lock file created by another user (or a read-only directory) is
         # reported as lock contention rather than a bare permission error so
@@ -157,6 +206,12 @@ def exclusive_file_lock(
             raise AtomicFileLockTimeoutError(
                 f"Timed out waiting for file lock: {target}"
             ) from exc
+        raise
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"File lock path is not a regular file: {target}")
+    except Exception:
+        os.close(fd)
         raise
     try:
         while True:
@@ -179,24 +234,22 @@ def exclusive_file_lock(
             "created_at": time.time(),
             "lock_protocol": _OS_LOCK_PROTOCOL,
         }
-        try:
-            payload = json.dumps(owner, ensure_ascii=False).encode("utf-8")
-            existing_size = os.fstat(fd).st_size
-            if existing_size > _OS_LOCK_OWNER_MAX_BYTES:
-                os.ftruncate(fd, 0)
-                existing_size = 0
-            target_size = max(_OS_LOCK_OWNER_BYTES, existing_size)
-            if len(payload) > target_size:
-                raise OSError("file lock owner record exceeds reserved size")
-            os.lseek(fd, 0, os.SEEK_SET)
-            _write_all(fd, payload + b" " * (target_size - len(payload)))
-            os.fsync(fd)
-        except Exception:
+        if _lock_file_accepts_owner_record(fd):
             try:
-                _release_kernel_lock(fd)
-            except OSError:
-                pass
-            raise
+                payload = json.dumps(owner, ensure_ascii=False).encode("utf-8")
+                existing_size = os.fstat(fd).st_size
+                target_size = max(_OS_LOCK_OWNER_BYTES, existing_size)
+                if len(payload) > target_size:
+                    raise OSError("file lock owner record exceeds reserved size")
+                os.lseek(fd, 0, os.SEEK_SET)
+                _write_all(fd, payload + b" " * (target_size - len(payload)))
+                os.fsync(fd)
+            except Exception:
+                try:
+                    _release_kernel_lock(fd)
+                except OSError:
+                    pass
+                raise
 
         try:
             yield owner

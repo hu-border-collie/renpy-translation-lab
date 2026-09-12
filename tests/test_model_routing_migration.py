@@ -446,10 +446,11 @@ class MigrationTransactionTests(unittest.TestCase):
             old = time.time() - 301
             os.utime(lock, (old, old))
             write()
-            self.assertTrue(lock.exists())
-            record = json.loads(lock.read_text(encoding="utf-8"))
-            self.assertEqual(record["pid"], os.getpid())
-            self.assertEqual(record["lock_protocol"], "os_lock_v1")
+            # Foreign bytes are never rewritten or truncated; the kernel lock
+            # alone grants mutual exclusion (#474).
+            self.assertEqual(lock.read_text(encoding="ascii"), "12345")
+            with config_store.config_write_lock(self.path):
+                pass
 
     def test_lock_file_persists_and_tolerates_missing_file(self):
         lock = self.path.with_name(self.path.name + ".write-lock")
