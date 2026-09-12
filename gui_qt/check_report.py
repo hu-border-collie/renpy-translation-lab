@@ -420,6 +420,13 @@ def summarize_apply_envelope(
                 "待补记步骤："
                 + "、".join(str(step) for step in pending_steps)
             )
+        rag_status = apply_summary.get("rag_status")
+        if isinstance(rag_status, str) and rag_status not in {
+            "",
+            "complete",
+            "disabled",
+        }:
+            facts.append(f"RAG 状态：{rag_status}")
         latest_cursor = apply_summary.get("latest_cursor")
         if (
             isinstance(latest_cursor, Mapping)

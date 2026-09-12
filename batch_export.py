@@ -904,9 +904,30 @@ def _normalize_apply_export_state_advancement(
             "export_only.record_invalid",
             "Apply-export state plan has an invalid last_error.",
         )
+    pending_steps = payload.get("pending_steps", [])
+    if not isinstance(pending_steps, list) or any(
+        not isinstance(step, str) or not step.strip() for step in pending_steps
+    ):
+        raise ExportOnlyError(
+            "export_only.record_invalid",
+            "Apply-export state plan has invalid pending steps.",
+        )
+    pending_reason = payload.get("pending_reason", "")
+    if not isinstance(pending_reason, str):
+        raise ExportOnlyError(
+            "export_only.record_invalid",
+            "Apply-export state plan has an invalid pending reason.",
+        )
+    rag_status = payload.get("rag_status", "")
+    if not isinstance(rag_status, str):
+        raise ExportOnlyError(
+            "export_only.record_invalid",
+            "Apply-export state plan has an invalid RAG status.",
+        )
     normalized = dict(payload)
     normalized["progress"] = normalized_progress
     normalized["rag_jobs"] = normalized_rag_jobs
+    normalized["pending_steps"] = sorted(set(pending_steps))
     return normalized
 
 
@@ -1506,6 +1527,22 @@ def _verify_committed_receipt_entry(
             )
         for workspace_file in normalized["workspace_files"]:
             target = workspace_file["target_path"]
+            try:
+                _assert_no_link_components(
+                    target,
+                    "committed workspace target",
+                    allow_final_file=True,
+                )
+            except ExportOnlyError as exc:
+                raise ApplyExportError(
+                    workspace_conflict_code,
+                    "Committed workspace target path contains a symbolic link or "
+                    f"junction: {target}.",
+                    details={
+                        "target_path": target,
+                        "reason_code": "apply_export.workspace_path_link",
+                    },
+                ) from exc
             target_norm = _normalized_path(target)
             if not (
                 _is_within(game_root_norm, target_norm)
@@ -1548,7 +1585,7 @@ def verify_apply_export_entry(
         game_root=game_root,
         workspace_root=workspace_root,
         tree_conflict_code="apply_export.state_conflict",
-        workspace_conflict_code="apply_export.state_conflict",
+        workspace_conflict_code="apply_export.workspace_conflict",
     )
 
 

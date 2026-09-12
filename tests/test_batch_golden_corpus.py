@@ -1219,6 +1219,365 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             finally:
                 self._restore_batch_environment(old_values)
 
+    def test_golden_apply_export_rag_pending_authoritative_when_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-rag-authority'
+            )
+            try:
+                export_root = root / 'exports'
+                rag_calls = []
+
+                def fake_rag(jobs, quality_state='batch_applied'):
+                    rag_calls.append(list(jobs))
+                    if len(rag_calls) == 1:
+                        return {'enabled': True, 'error': 'store unavailable'}
+                    return {'enabled': True, 'upserted': 0, 'pending': 0}
+
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_before = (
+                    latest_path.read_text(encoding='utf-8') if latest_path.exists() else None
+                )
+
+                with (
+                    mock.patch.object(batch_mod, 'RAG_ENABLED', True),
+                    mock.patch.object(
+                        batch_mod,
+                        'sync_rag_store_for_jobs',
+                        side_effect=fake_rag,
+                    ),
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as first_failure:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    first_failure.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                self.assertEqual(len(rag_calls), 1)
+                record_path = (
+                    Path(manifest_path).parent
+                    / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                )
+                record = json.loads(record_path.read_text(encoding='utf-8'))
+                pending_state = record['exports'][0]['state_advancement']
+                self.assertEqual(pending_state['pending_steps'], ['rag'])
+                self.assertTrue(pending_state.get('pending_reason'))
+                self.assertTrue(pending_state.get('last_error'))
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertNotIn('applied_at', raw_manifest)
+                self.assertEqual(
+                    raw_manifest['apply_state_advancement']['status'],
+                    'pending',
+                )
+                self.assertEqual(
+                    raw_manifest['apply_state_advancement']['pending_steps'],
+                    ['rag'],
+                )
+                self.assertTrue(
+                    raw_manifest['apply_state_advancement'].get('last_error')
+                )
+                self.assertEqual(
+                    raw_manifest['apply_state_advancement'].get('rag_status'),
+                    'error',
+                )
+
+                # RAG disabled must not erase a persisted pending RAG step.
+                with mock.patch.object(batch_mod, 'RAG_ENABLED', False):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as blocked:
+                        batch_mod.apply_results(str(manifest_path))
+                self.assertEqual(
+                    blocked.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                self.assertEqual(
+                    blocked.exception.details.get('rag_status'),
+                    'blocked_disabled',
+                )
+                self.assertEqual(
+                    blocked.exception.details.get('pending_steps'),
+                    ['rag'],
+                )
+                self.assertEqual(len(rag_calls), 1)
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                self.assertNotIn('applied_at', raw_manifest)
+                self.assertEqual(
+                    raw_manifest['apply_state_advancement']['pending_steps'],
+                    ['rag'],
+                )
+                self.assertEqual(
+                    raw_manifest['apply_state_advancement']['rag_status'],
+                    'blocked_disabled',
+                )
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8')
+                    if latest_path.exists()
+                    else None,
+                    latest_before,
+                )
+                record = json.loads(record_path.read_text(encoding='utf-8'))
+                pending_state = record['exports'][0]['state_advancement']
+                self.assertEqual(pending_state['status'], 'pending')
+                self.assertEqual(pending_state['pending_steps'], ['rag'])
+                self.assertNotEqual(pending_state.get('rag_status'), 'complete')
+                self.assertNotEqual(pending_state.get('rag_status'), 'waived')
+                self.assertNotEqual(
+                    raw_manifest['apply_state_advancement']['status'],
+                    'complete',
+                )
+
+                # Re-enabling RAG retries the persisted step before complete.
+                with (
+                    mock.patch.object(batch_mod, 'RAG_ENABLED', True),
+                    mock.patch.object(
+                        batch_mod,
+                        'sync_rag_store_for_jobs',
+                        side_effect=fake_rag,
+                    ),
+                ):
+                    resumed = batch_mod.apply_results(str(manifest_path))
+                self.assertEqual(len(rag_calls), 2)
+                self.assertIn('applied_at', resumed)
+                self.assertEqual(
+                    resumed['apply_state_advancement']['status'],
+                    'complete',
+                )
+                self.assertEqual(
+                    resumed['apply_state_advancement']['rag_status'],
+                    'complete',
+                )
+                record = json.loads(record_path.read_text(encoding='utf-8'))
+                completed_state = record['exports'][0]['state_advancement']
+                self.assertEqual(completed_state['status'], 'complete')
+                self.assertEqual(completed_state['pending_steps'], [])
+                self.assertEqual(completed_state['rag_status'], 'complete')
+                self.assertTrue(latest_path.exists())
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_rejects_workspace_parent_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-workspace-link'
+            )
+            link_created = False
+            moved_parent = None
+            parent = None
+            try:
+                export_root = root / 'exports'
+                batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                parent = tl_dir / 'chapter01'
+                moved_parent = tl_dir / 'moved_chapter01'
+                os.rename(parent, moved_parent)
+                try:
+                    os.symlink(moved_parent, parent, target_is_directory=True)
+                    link_created = True
+                except (OSError, NotImplementedError):
+                    if os.name == 'nt':
+                        completed = subprocess.run(
+                            [
+                                'cmd',
+                                '/c',
+                                'mklink',
+                                '/J',
+                                str(parent),
+                                str(moved_parent),
+                            ],
+                            capture_output=True,
+                            text=True,
+                        )
+                        link_created = completed.returncode == 0 and os.path.isdir(parent)
+                if not link_created:
+                    os.rename(moved_parent, parent)
+                    moved_parent = None
+                    self.skipTest('directory symlink/junction creation unavailable')
+
+                workspace = parent / 'dialogue.rpy'
+                self.assertEqual(
+                    workspace.read_bytes(),
+                    (
+                        GOLDEN_BATCH_FIXTURE_DIR
+                        / 'expected'
+                        / 'applied'
+                        / 'chapter01'
+                        / 'dialogue.rpy'
+                    ).read_bytes(),
+                )
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as raised:
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_dir=str(export_root),
+                    )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+                self.assertEqual(
+                    raised.exception.details.get('changed'),
+                    'apply_export.workspace_conflict',
+                )
+
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as forced:
+                    batch_mod.apply_results(str(manifest_path), force=True)
+                self.assertEqual(
+                    forced.exception.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+            finally:
+                if link_created and parent is not None:
+                    try:
+                        if os.path.isdir(parent) and not os.path.islink(parent):
+                            os.rmdir(parent)
+                        else:
+                            os.unlink(parent)
+                    except OSError:
+                        pass
+                if moved_parent is not None and moved_parent.exists() and parent is not None:
+                    try:
+                        os.rename(moved_parent, parent)
+                    except OSError:
+                        pass
+                self._restore_batch_environment(old_values)
+
+    def test_remember_latest_manifest_if_unchanged_retains_other_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = self._copy_fixture_tl(Path(tmp) / 'project')
+            old_values = self._patch_batch_environment(Path(tmp) / 'project', tl_dir)
+            try:
+                batch_mod.ensure_batch_dirs()
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_path.write_text('writer-B', encoding='utf-8')
+                retained = batch_mod.remember_latest_manifest_if_unchanged(
+                    'writer-A',
+                    'writer-C',
+                )
+                self.assertEqual(retained['status'], 'retained_newer')
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8'),
+                    'writer-B',
+                )
+
+                advanced = batch_mod.remember_latest_manifest_if_unchanged(
+                    'writer-B',
+                    'writer-C',
+                )
+                self.assertEqual(advanced['status'], 'advanced')
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8'),
+                    'writer-C',
+                )
+
+                already = batch_mod.remember_latest_manifest_if_unchanged(
+                    'writer-A',
+                    'writer-C',
+                )
+                self.assertEqual(already['status'], 'already_advanced')
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8'),
+                    'writer-C',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    def test_latest_manifest_writers_share_exclusive_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = self._copy_fixture_tl(root / 'project')
+            old_values = self._patch_batch_environment(root / 'project', tl_dir)
+            try:
+                lock_path = batch_mod._latest_manifest_lock_path()
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+
+                def start_locked_writer(marker_name, value, hold):
+                    marker = root / marker_name
+                    script = (
+                        "import sys, time\n"
+                        "from pathlib import Path\n"
+                        "import atomic_io\n"
+                        "lock, latest, marker, value = sys.argv[1:5]\n"
+                        "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                        "    Path(marker).write_text('held')\n"
+                        "    time.sleep(float(sys.argv[5]))\n"
+                        "    atomic_io.atomic_write_text(latest, value)\n"
+                    )
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            '-c',
+                            script,
+                            str(lock_path),
+                            str(latest_path),
+                            str(marker),
+                            value,
+                            str(hold),
+                        ],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    deadline = time.time() + 5.0
+                    while time.time() < deadline:
+                        if marker.exists():
+                            return process, marker
+                        if process.poll() is not None:
+                            break
+                        time.sleep(0.02)
+                    process.kill()
+                    _stdout, stderr = process.communicate()
+                    self.fail(f'locked writer did not start: {stderr}')
+
+                # Conditional helper must wait for the writer lock and then
+                # preserve the newer value instead of overwriting it.
+                process, _marker = start_locked_writer(
+                    'marker-cas',
+                    'writer-B',
+                    0.6,
+                )
+                retained = batch_mod.remember_latest_manifest_if_unchanged(
+                    'writer-A',
+                    'writer-C',
+                )
+                process.communicate(timeout=5.0)
+                self.assertEqual(retained['status'], 'retained_newer')
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8'),
+                    'writer-B',
+                )
+
+                # Unconditional writer must also use the same lock: it waits
+                # for the holder and therefore wins the final value.
+                process, _marker = start_locked_writer(
+                    'marker-unconditional',
+                    'writer-B2',
+                    0.6,
+                )
+                batch_mod.remember_latest_manifest('writer-D')
+                process.communicate(timeout=5.0)
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8'),
+                    'writer-D',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
     def test_golden_batch_apply_rejects_changed_source_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

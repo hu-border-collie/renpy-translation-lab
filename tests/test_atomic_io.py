@@ -703,3 +703,75 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
+    def test_legacy_prepared_journal_keeps_historical_rollback_boundary(self):
+        """Legacy journals without content digests keep the old rollback behavior.
+
+        Strict fail-closed recovery only applies to new journals carrying
+        staged/preimage digests.  This test pins the documented compatibility
+        boundary; it does not claim legacy journals are safe against external
+        modifications.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            backup = root / ".script.rpy.demo.txn.bak"
+            journal = root / "writeback-transaction.json"
+            target.write_bytes(b"external change\n")
+            backup.write_bytes(b"preimage\n")
+            journal.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "transaction_kind": "apply",
+                        "state": "prepared",
+                        "entries": [
+                            {
+                                "target": str(target),
+                                "staged_path": str(root / "missing.txn.tmp"),
+                                "backup_path": str(backup),
+                                "existed": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                atomic_io.recover_atomic_write_transaction(
+                    journal,
+                    expected_transaction_kind="apply",
+                    verify_targets=True,
+                )
+            )
+            self.assertEqual(target.read_bytes(), b"preimage\n")
+            self.assertFalse(journal.exists())
+
+    def test_committed_cleanup_failure_with_journal_removed_leaves_no_journal(self):
+        """FE-08a: entry cleanup fails but journal deletion succeeds."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "script.rpy"
+            journal = root / "writeback-transaction.json"
+            with mock.patch.object(
+                atomic_io,
+                "_cleanup_transaction_entries",
+                side_effect=OSError("entry cleanup failed"),
+            ):
+                atomic_io.atomic_write_many_bytes(
+                    [(target, b"new\n")],
+                    journal_path=journal,
+                    transaction_kind="apply",
+                )
+
+            self.assertEqual(target.read_bytes(), b"new\n")
+            self.assertFalse(journal.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

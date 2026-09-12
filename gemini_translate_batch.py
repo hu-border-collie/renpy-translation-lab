@@ -27,6 +27,7 @@ from atomic_io import (
     atomic_write_jsonl,
     atomic_write_many_lines,
     atomic_write_text,
+    exclusive_file_lock,
     file_sha256,
     result_artifact_is_complete,
     recover_atomic_write_transaction,
@@ -2277,9 +2278,88 @@ def manifest_path_for_target(target):
     return manifests[0]
 
 
+_LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
+_LATEST_MANIFEST_LOCK_STALE_AFTER = 300.0
+
+
+def _latest_manifest_lock_path():
+    """Return the lock file shared by every latest-manifest writer."""
+
+    return f'{LATEST_MANIFEST_FILE}.lock'
+
+
+def _read_latest_manifest_cursor_unlocked():
+    """Read the latest cursor while the caller holds the latest-manifest lock."""
+
+    try:
+        return Path(LATEST_MANIFEST_FILE).read_text(encoding='utf-8').strip()
+    except OSError:
+        return ''
+
+
 def remember_latest_manifest(manifest_path):
+    """Atomically point the latest-manifest cursor at *manifest_path*.
+
+    All latest-manifest writers share the same exclusive lock so a conditional
+    update and an unconditional update cannot interleave.
+    """
+
     ensure_batch_dirs()
-    atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
+    with exclusive_file_lock(
+        _latest_manifest_lock_path(),
+        timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
+        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
+    ):
+        atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
+
+
+def remember_latest_manifest_if_unchanged(expected, target):
+    """Compare-and-swap the latest cursor under the shared writer lock.
+
+    Returns a phase record.  The helper never calls
+    :func:`remember_latest_manifest` while holding the lock, because the
+    exclusive lock is not re-entrant.
+    """
+
+    expected_text = str(expected or '').strip()
+    target_text = str(target or '').strip()
+    ensure_batch_dirs()
+    with exclusive_file_lock(
+        _latest_manifest_lock_path(),
+        timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
+        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
+    ):
+        current = _read_latest_manifest_cursor_unlocked()
+        record = {
+            'status': 'skipped',
+            'expected': expected_text,
+            'target': target_text,
+            'current': current,
+            'message': '',
+        }
+        if target_text and _same_latest_cursor_path(current, target_text):
+            record['status'] = 'already_advanced'
+            record['message'] = 'latest manifest cursor already points at the planned target'
+            return record
+        if _same_latest_cursor_path(current, expected_text):
+            atomic_write_text(LATEST_MANIFEST_FILE, target_text)
+            written = _read_latest_manifest_cursor_unlocked()
+            if not _same_latest_cursor_path(written, target_text):
+                raise RuntimeError(
+                    'latest manifest cursor verification failed '
+                    f'({written!r} != {target_text!r})'
+                )
+            record['status'] = 'advanced'
+            record['current'] = written
+            record['message'] = 'latest manifest cursor advanced to the planned target'
+            return record
+        record['status'] = 'retained_newer'
+        record['current'] = current
+        record['message'] = (
+            'latest manifest cursor was advanced by another operation; '
+            'kept the newer value instead of overwriting it'
+        )
+        return record
 
 
 def translation_plan_compatibility_diagnostic(manifest):
@@ -13273,10 +13353,7 @@ def _load_apply_export_receipt(manifest):
 def _latest_manifest_cursor_value() -> str:
     """Read the current latest-manifest cursor as text (missing -> empty)."""
 
-    try:
-        return Path(LATEST_MANIFEST_FILE).read_text(encoding='utf-8').strip()
-    except OSError:
-        return ''
+    return _read_latest_manifest_cursor_unlocked()
 
 
 def _same_latest_cursor_path(left: object, right: object) -> bool:
@@ -13291,51 +13368,35 @@ def _advance_apply_export_latest_cursor(plan):
     """Conditionally advance the latest cursor and return its phase record.
 
     The receipt stores the cursor value observed before the file transaction.
-    A replay may only advance when the current value still equals that
-    recorded value, or when it already equals the planned target.  Any other
-    value belongs to a newer operation and is preserved (never overwritten).
+    The compare-and-swap runs under the shared latest-manifest writer lock, so
+    another writer cannot interleave between the comparison and the write.
     """
 
     should_update = bool(plan.get('should_update_latest'))
     target = str(plan.get('latest_target') or '').strip()
     previous = str(plan.get('latest_previous_value') or '').strip()
-    current = _latest_manifest_cursor_value()
-    record = {
-        'status': 'skipped',
-        'should_update': should_update,
-        'previous': previous,
-        'target': target,
-        'current': current,
-        'message': '',
-    }
     if not should_update:
-        record['message'] = 'sync execution does not update the latest manifest cursor'
-        return record
+        return {
+            'status': 'skipped',
+            'should_update': False,
+            'previous': previous,
+            'target': target,
+            'current': _latest_manifest_cursor_value(),
+            'message': 'sync execution does not update the latest manifest cursor',
+        }
     if not target:
-        record['message'] = 'no latest manifest target was planned'
-        return record
-    if _same_latest_cursor_path(current, target):
-        record['status'] = 'already_advanced'
-        record['current'] = current
-        record['message'] = 'latest manifest cursor already points at the planned target'
-        return record
-    if _same_latest_cursor_path(current, previous):
-        remember_latest_manifest(target)
-        written = _latest_manifest_cursor_value()
-        if not _same_latest_cursor_path(written, target):
-            raise RuntimeError(
-                f'latest manifest cursor verification failed ({written!r} != {target!r})'
-            )
-        record['status'] = 'advanced'
-        record['current'] = written
-        record['message'] = 'latest manifest cursor advanced to the planned target'
-        return record
-    record['status'] = 'retained_newer'
-    record['current'] = current
-    record['message'] = (
-        'latest manifest cursor was advanced by another operation; '
-        'kept the newer value instead of overwriting it'
-    )
+        return {
+            'status': 'skipped',
+            'should_update': True,
+            'previous': previous,
+            'target': target,
+            'current': _latest_manifest_cursor_value(),
+            'message': 'no latest manifest target was planned',
+        }
+    record = remember_latest_manifest_if_unchanged(previous, target)
+    record['should_update'] = True
+    record['previous'] = previous
+    record['target'] = target
     return record
 
 
@@ -13452,6 +13513,85 @@ def _apply_export_state_complete(manifest, entry, record_path):
     return export_summary.get('apply_identity') == entry.get('apply_identity')
 
 
+def _apply_export_pending_steps(manifest, entry):
+    """Return persisted pending steps from receipt and/or manifest.
+
+    The receipt is authoritative for a materialized P2 transaction; the
+    manifest mirror covers a crash between a pending-step update and the
+    receipt rewrite.  The union must never be erased by current RAG config.
+    """
+
+    steps: set[str] = set()
+    receipt_state = entry.get('state_advancement') or {}
+    receipt_pending = receipt_state.get('pending_steps')
+    if isinstance(receipt_pending, list):
+        steps.update(str(step) for step in receipt_pending if str(step).strip())
+    manifest_state = manifest.get('apply_state_advancement')
+    if isinstance(manifest_state, dict) and manifest_state.get('status') == 'pending':
+        manifest_pending = manifest_state.get('pending_steps')
+        if isinstance(manifest_pending, list):
+            steps.update(str(step) for step in manifest_pending if str(step).strip())
+    return sorted(steps)
+
+
+def _persist_apply_export_pending_state(
+    record_path,
+    entry,
+    *,
+    pending_steps,
+    reason,
+    last_error='',
+):
+    """Best-effort persist pending steps/last_error into the P2 receipt.
+
+    The receipt status is never changed to complete here; a later successful
+    replay owns that transition.
+    """
+
+    target_identity = str(entry.get('operation_identity') or '')
+    if not target_identity:
+        return False
+    try:
+        record = batch_export.read_apply_export_record(record_path)
+    except batch_export.ApplyExportError:
+        return False
+    exports = record.get('exports')
+    if not isinstance(exports, list):
+        return False
+    updated_exports = []
+    replaced = False
+    for raw_entry in exports:
+        if (
+            isinstance(raw_entry, dict)
+            and str(raw_entry.get('operation_identity') or '') == target_identity
+        ):
+            updated = dict(raw_entry)
+            state = dict(updated.get('state_advancement') or {})
+            state['status'] = 'pending'
+            state['pending_steps'] = sorted(
+                {str(step) for step in pending_steps if str(step).strip()}
+            )
+            state['pending_reason'] = str(reason or '')
+            if last_error:
+                state['last_error'] = str(last_error)
+            else:
+                state.pop('last_error', None)
+            state.pop('completed_at', None)
+            updated['state_advancement'] = state
+            updated_exports.append(updated)
+            replaced = True
+        else:
+            updated_exports.append(raw_entry)
+    if not replaced:
+        return False
+    record['exports'] = updated_exports
+    try:
+        atomic_write_json(record_path, record, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
 def _mark_apply_export_state_complete(record_path, entry, *, latest_cursor=None):
     """Atomically mark one P2 receipt's state advancement as complete."""
 
@@ -13481,6 +13621,8 @@ def _mark_apply_export_state_complete(record_path, entry, *, latest_cursor=None)
                 state['completed_at'] = completed_at
             state['pending_steps'] = []
             state['rag_status'] = 'complete'
+            state.pop('pending_reason', None)
+            state.pop('last_error', None)
             if isinstance(latest_cursor, dict):
                 state['latest_cursor'] = dict(latest_cursor)
             updated['state_advancement'] = state
@@ -13513,6 +13655,8 @@ def _apply_export_pending_error(
     last_error='',
     manifest_updated=False,
     latest_cursor=None,
+    rag_status='',
+    pending_reason='',
 ):
     details = {
         'mode': 'apply-export',
@@ -13524,6 +13668,10 @@ def _apply_export_pending_error(
         'pending_steps': list(pending_steps),
         'manifest_updated': manifest_updated,
     }
+    if rag_status:
+        details['rag_status'] = str(rag_status)
+    if pending_reason:
+        details['pending_reason'] = str(pending_reason)
     if last_error:
         details['last_error'] = str(last_error)
     if isinstance(latest_cursor, dict):
@@ -13649,9 +13797,25 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                     'file_path': resolve_manifest_file_path(manifest, file_key, file_info),
                 }
             )
+        persisted_pending = _apply_export_pending_steps(manifest, normalized_entry)
+        pending_after = set(persisted_pending)
         rag_apply_summary = {}
         rag_error = ''
-        if RAG_ENABLED and rag_jobs:
+        rag_status = 'complete' if RAG_ENABLED else 'disabled'
+        rag_pending = 'rag' in pending_after
+        run_rag = False
+        if rag_pending:
+            if not RAG_ENABLED:
+                rag_error = 'RAG pending step is blocked because RAG is disabled'
+                rag_status = 'blocked_disabled'
+            elif not rag_jobs:
+                rag_error = 'RAG pending step is blocked because no RAG jobs are recorded'
+                rag_status = 'blocked_no_jobs'
+            else:
+                run_rag = True
+        elif RAG_ENABLED and rag_jobs:
+            run_rag = True
+        if run_rag:
             try:
                 rag_apply_summary = sync_rag_store_for_jobs(
                     rag_jobs,
@@ -13665,6 +13829,22 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                 rag_apply_summary = {'enabled': True, 'error': rag_error}
             else:
                 rag_error = str(rag_apply_summary.get('error') or '').strip()
+            if rag_error:
+                pending_after.add('rag')
+                rag_status = 'error'
+            else:
+                pending_after.discard('rag')
+                rag_status = 'complete'
+        elif not rag_pending and not RAG_ENABLED:
+            rag_apply_summary = {'enabled': False, 'status': 'disabled'}
+
+        remaining_pending = sorted(pending_after - {'rag'})
+        if remaining_pending and not rag_error:
+            rag_error = (
+                'unsupported pending apply-export steps: '
+                + ', '.join(remaining_pending)
+            )
+            rag_status = 'unsupported_pending_steps'
 
         apply_summary = dict(plan.get('apply_summary') or {})
         apply_summary['rag'] = rag_apply_summary
@@ -13683,10 +13863,28 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
         )
 
         if rag_error:
-            apply_summary['pending_steps'] = ['rag']
+            pending_steps_for_state = sorted(pending_after)
+            rag_apply_summary = {
+                **dict(rag_apply_summary or {}),
+                'enabled': bool(RAG_ENABLED),
+                'status': rag_status,
+                'error': rag_error,
+            }
+            _persist_apply_export_pending_state(
+                record_path,
+                normalized_entry,
+                pending_steps=pending_steps_for_state,
+                reason=rag_status,
+                last_error=rag_error,
+            )
+            apply_summary['rag'] = rag_apply_summary
+            apply_summary['rag_status'] = rag_status
+            apply_summary['pending_steps'] = pending_steps_for_state
             apply_summary['latest_cursor'] = latest_cursor
             export_summary['state_advancement_status'] = 'pending'
-            export_summary['pending_steps'] = ['rag']
+            export_summary['pending_steps'] = pending_steps_for_state
+            export_summary['pending_reason'] = rag_status
+            export_summary['rag_status'] = rag_status
             export_summary['latest_cursor'] = latest_cursor
             manifest['apply_summary'] = apply_summary
             manifest.pop('applied_at', None)
@@ -13700,7 +13898,9 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                 'operation_identity': normalized_entry.get('operation_identity', ''),
                 'files_committed': True,
                 'outputs_committed': True,
-                'pending_steps': ['rag'],
+                'pending_steps': pending_steps_for_state,
+                'pending_reason': rag_status,
+                'rag_status': rag_status,
                 'last_error': rag_error,
                 'latest_cursor': latest_cursor,
                 'updated_at': datetime.now().isoformat(timespec='seconds'),
@@ -13712,33 +13912,40 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                     record_path,
                     normalized_entry,
                     message=(
-                        'Apply-export files are committed, but the RAG step and '
-                        f'manifest state save both failed: {save_exc}'
+                        'Apply-export files are committed, but the pending step '
+                        f'and manifest state save both failed: {save_exc}'
                     ),
-                    pending_steps=['rag', 'manifest'],
+                    pending_steps=sorted(set(pending_steps_for_state) | {'manifest'}),
                     last_error=f'{rag_error}; manifest save: {save_exc}',
                     manifest_updated=False,
                     latest_cursor=latest_cursor,
+                    rag_status=rag_status,
+                    pending_reason=rag_status,
                 ) from save_exc
             raise _apply_export_pending_error(
                 record_path,
                 normalized_entry,
                 message=(
-                    'Apply-export files and export tree are committed, but the RAG '
-                    'state update failed; apply state remains pending and will retry.'
+                    'Apply-export files and export tree are committed, but a '
+                    'persisted pending step could not complete; apply state '
+                    'remains pending and will retry.'
                 ),
-                pending_steps=['rag'],
+                pending_steps=pending_steps_for_state,
                 last_error=rag_error,
                 manifest_updated=True,
                 latest_cursor=latest_cursor,
+                rag_status=rag_status,
+                pending_reason=rag_status,
             )
 
         latest_cursor = _advance_apply_export_latest_cursor(plan)
         apply_summary['pending_steps'] = []
         apply_summary['latest_cursor'] = latest_cursor
+        apply_summary['rag_status'] = rag_status
         export_summary['state_advancement_status'] = 'complete'
         export_summary['pending_steps'] = []
         export_summary['latest_cursor'] = latest_cursor
+        export_summary['rag_status'] = rag_status
         manifest['apply_summary'] = apply_summary
         manifest['export_summary'] = export_summary
         manifest['applied_at'] = str(plan.get('applied_at') or '')
@@ -13757,7 +13964,7 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
             'mode': batch_export.APPLY_EXPORT_MODE,
             'record_path': record_path,
             'operation_identity': normalized_entry.get('operation_identity', ''),
-            'rag_status': 'complete',
+            'rag_status': rag_status,
             'latest_cursor': latest_cursor,
             'completed_at': datetime.now().isoformat(timespec='seconds'),
         }
