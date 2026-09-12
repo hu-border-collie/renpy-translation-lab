@@ -55,9 +55,12 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
       - 返回 error 摘要或抛异常：保持 pending，记录 `last_error` / `pending_reason`，
         文件不回滚；
       - 本版本不提供静默豁免/waive 路径；关闭配置不会把 pending 改为 complete。
-   4. 条件推进 latest 游标：读、比较、写在同一临界区（`exclusive_file_lock`，所有
-      latest 写入口共享同一锁）。当前值等于 receipt 记录的前值时推进；等于目标时
-      `already_advanced`；属于其它更新操作时保留新值并记录 `retained_newer`，禁止覆盖；
+   4. 条件推进 latest 游标：读写都汇到共享模块 `atomic_io` 的 latest 写服务，
+      统一使用 `<LATEST_MANIFEST_FILE>.lock`；GUI 与 CLI 物理路径一致（GUI
+      `logs/batch_jobs/latest_manifest.txt`）。读、比较、写在同一临界区内完成。
+      当前值等于 receipt 记录的前值时推进；等于目标时 `already_advanced`；
+      属于其它更新操作时保留新值并记录 `retained_newer`，禁止覆盖；锁不可用/
+      超时不得静默放行。安全 stale 抢占见 §6.1；
    5. 写 manifest：`applied_at`、`apply_summary`、`export_summary`、`export_record_path`、
       `apply_state_advancement=complete`、必要的 next split、latest 阶段记录；清理 stale 字段；
       任一 pending 步骤未完成时写 `apply_state_advancement.status=pending` + `pending_steps`
@@ -83,9 +86,25 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 5. 全部完成后写 `state="rolled_back"`，再清理 staged/backup/journal。
 6. 回滚中途进程停止或注入失败后重启：已回滚项被识别为合法状态；尚未回滚项继续回滚。
    已回滚 target 若被事务外再次修改，则仍按外部修改 fail closed，不覆盖。
-7. **legacy 边界**：严格 fail-closed 只适用于带 `staged_sha256` / `target_preimage_sha256`
-   的新 journal。旧 prepared journal（无摘要）保留历史回滚行为，可能覆盖外部修改；
-   本版本不升级旧格式，只由兼容性测试钉住该边界。
+7. **legacy 边界（兼容性边界钉住）**：严格 fail-closed 只适用于带
+   `staged_sha256` / `target_preimage_sha256` 的新 journal。旧 prepared journal
+   （无摘要）保留历史恢复语义，成功恢复后 journal 会被清理，恢复过程可能覆盖
+   外部修改。本版本不升级旧格式；FE-25 与清理测试只钉住该行为边界，不是
+   “旧格式回归必红”的证据。
+
+## 2.2 共享 latest 写服务（F1）
+
+- 物理写 latest 的唯一入口是 `atomic_io.write_latest_manifest_locked` 与
+  `atomic_io.compare_and_swap_latest_manifest_locked`；两者共享
+  `latest_manifest_lock_path(<latest>) = <latest>.lock`。
+- CLI `remember_latest_manifest` / `remember_latest_manifest_if_unchanged` 与
+  `save_manifest(update_latest=True)` 都是这些服务的薄包装；
+  GUI `ProjectState.remember_latest_manifest_path` 直接调用同一服务。
+- GUI 与 CLI 解析到同一物理 latest 文件（`tool_root/logs/batch_jobs/latest_manifest.txt`），
+  因此 GUI writer 与 CLI CAS 不会交错成“CLI 按旧前值覆盖 GUI 新值并报 advanced”。
+- 回归测试：真实 GUI writer 等待持锁 holder、GUI writer 先写后 CLI CAS 返回
+  `retained_newer`、跨进程互斥，以及仓库源码扫描禁止 shared service 之外的
+  `latest` 直接 `write_text` / `atomic_write_text`。
 
 ## 3. 状态表
 
@@ -118,14 +137,32 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   receipt、规范化路径、workspace target 父路径组件（link / junction / reparse）、
   export 受管树（缺失/修改/额外目录）与 workspace 字节摘要。
   失败返回稳定错误码 `APPLY_EXPORT_OUTPUT_CHANGED`，不得复用旧成功摘要。
+- **F4 路径身份读取**：POSIX 且支持 `dir_fd` 时，workspace verifier 从 TL 根打开
+  目录句柄，逐级 `O_NOFOLLOW` + `dir_fd` 打开组件，读文件句柄并比对 path stat；
+  检查后、读取前替换父目录为 link/junction 会在句柄/路径身份不一致时被拒绝。
+  Windows 等无 `dir_fd` 平台退化为 pre/post link-reparse 检查 + realpath 比较；
+  在“校验与读取之间”精确插入父目录替换的窄窗口仍存在残余 TOCTOU 风险，严重度
+  限于“可能把已提交字节的复核授权给错误路径身份”，不会覆盖文件；按已知限制记录，
+  不宣称跨平台完全解决。
 - 已存在 export 树只有在 receipt 的 `apply_identity`、request fingerprint、受管文件摘要、
   目录集合全部匹配时才允许幂等返回；额外/缺失/修改文件、不同 request、不同 root 均拒绝。
 - receipt 存在但 manifest 尚未记录 `applied_at` 时，只能按 receipt 计划补记状态；
   若当前 manifest 的 check/plan/result 身份与 receipt 的 `apply_identity` 不一致，
   按 stale recovery 拒绝，不能拿旧收据推进新结果。
-- **pending_steps 权威**：receipt 与 manifest 中任一记录的 pending 步骤都是待办；
-  当前 `RAG_ENABLED` / store 可用性只能决定“能否执行”，不能把 `"rag"` 抹成 complete。
-  本版本没有 waive 语义；要放弃待办只能修数据或明确重新生成任务，且不得以此伪造成功。
+- **pending_steps 权威（F3）**：在判断 complete 之前先计算 receipt
+  `state_advancement.pending_steps`、manifest `apply_state_advancement.pending_steps`
+  以及 `apply_summary` / `export_summary` 镜像 pending 步骤的并集；**无论任一侧 status
+  是否为 complete**，并集非空即不得视为 complete。当前 `RAG_ENABLED` / store 可用性
+  只能决定“能否执行”，不能把 `"rag"` 抹成 complete；无法识别的待办步骤结构化拒绝为
+  `unsupported_pending_steps`。本版本没有 waive 语义；要放弃待办只能修数据或明确
+  重新生成任务，且不得以此伪造成功。
+- **矛盾持久化状态证据边界**：receipt/manifest 一侧 complete、另一侧/自身仍带
+  pending_steps 属于异常状态下的 fail-closed 加固；本轮未证明它会由正常提交或单次
+  崩溃自然产生，不描述为“普通重试必现的 RAG 丢失”。
+- **last_error best-effort**：RAG pending 状态会尽力把 `pending_steps` /
+  `pending_reason` / `last_error` 写入 receipt、manifest 与 CLI error details；但
+  receipt 重写是 best-effort。若 receipt 写入失败，CLI 仍在 details 中报告
+  `receipt_updated=false`、manifest 保持 pending，不宣称三处一致落盘。
 - P1 `--export-only` 发现同 package 的未决 P2 journal 或 pending receipt 时，
   必须结构化拒绝（`APPLY_EXPORT_RECOVERY_REQUIRED`，`recovery_state` 为
   `recovery_required` / `state_pending`），不得恢复 P2 文件事务、写进度、latest、
@@ -149,14 +186,33 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 | 是否阻塞后续 apply | 是：该 package/manifest 上的新 apply/导出先解析 pending receipt；其它 package 不受影响。 |
 | 完成条件 | `pending_steps` 清空且 RAG 步骤成功返回非 error 摘要后，才写 latest（条件推进）、manifest complete、receipt complete。 |
 
-## 6. latest 游标条件推进语义与并发（D5）
+## 6. latest 游标条件推进语义与并发（D5 / F1 / F2）
 
 - receipt 的 `state_advancement` 在文件事务提交前记录 `latest_previous_value`（事务前游标值）
   与 `latest_target`（本次计划值）；不记录或记录为空按“事务前不存在游标”处理。
-- 所有 latest 写入口（`remember_latest_manifest`、`save_manifest(update_latest=True)`、
-  conditional replay）共享同一把 `atomic_io.exclusive_file_lock`，锁路径与
-  `LATEST_MANIFEST_FILE` 同目录（`<latest>.lock`）；锁不可用/超时按现有失败分类抛出，
-  不允许静默放行。
+- 所有 latest 写入口（CLI `remember_latest_manifest`、`save_manifest(update_latest=True)`、
+  conditional replay，GUI `ProjectState.remember_latest_manifest_path`）共享同一把
+  `atomic_io.exclusive_file_lock`，锁路径 `<latest>.lock`；GUI 与 CLI 指向同一物理
+  文件。锁不可用/超时按现有失败分类抛出，不允许静默放行。
+- F1 回归：GUI 与 CLI 写入口都调用 shared service；源码扫描禁止绕过 service 直接写
+  latest；真实 GUI writer 与 CLI CAS 的确定性交错要么保留更晚 writer 的值，要么让
+  CAS 返回 `retained_newer`，绝不出现“覆盖 + advanced”。
+
+### 6.1 stale 抢占安全语义（F2）
+
+- `exclusive_file_lock` 默认启用 `preempt_dead_owner=True`：owner JSON 含 `pid` / `token` /
+  `created_at`。超过 `stale_after` 后必须先做 owner 存活检查：
+  - POSIX：`os.kill(pid, 0)`；`ProcessLookupError` 才证明已死；`PermissionError` 视为存活；
+    其它 `OSError` 视为无法判断。
+  - Windows：`OpenProcess` + `GetExitCodeProcess`，只在明确无效 PID / 非活动进程时
+    视为已死；`ERROR_ACCESS_DENIED` 视为存活；其它不可判断。
+  - owner 记录损坏、PID 非正整数、或存活/死亡无法判断：一律不抢占，等到 `timeout`
+    后抛 `AtomicFileLockTimeoutError`；latest apply 侧统一转成
+    `APPLY_EXPORT_STATE_PENDING` / `recovery_state=state_pending`。
+- 抢占前会重新读取 owner/token 与文件类型，避免删除替换后的新锁；token 防误删仍然有效。
+- 遗弃锁的人工清理路径：只有在确认 owner PID 不存在、且没有其它 writer 正在使用
+  `<latest>.lock` 时，操作者才可删除该锁文件；不得在存活 owner 持锁期间删除。
+
 - 条件更新 helper（`remember_latest_manifest_if_unchanged`）在锁内完成读 → 比较 → 写：
   - 当前值 == 目标值：`already_advanced`，不再写入；
   - 当前值 == 记录的前值：写入目标并复核，阶段结果为 `advanced`；
@@ -201,7 +257,11 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 | FE-22 | RAG pending 后关闭 RAG 再重试（D4） | receipt/manifest 保持 pending，`blocked_disabled` | 无 `applied_at`、latest 不推进 | 重新开启并成功后才 complete；无 waive 静默路径 |
 | FE-23 | workspace 父目录被换成 symlink/junction，字节不变（D3） | receipt 不变 | target 路径身份改变 | `APPLY_EXPORT_OUTPUT_CHANGED` / workspace conflict |
 | FE-24 | 两个 writer 并发 latest（D5） | 共享锁；CAS 记录阶段 | 保留更晚 writer 的值 | 锁内读-比较-写；不静默放行锁失败 |
-| FE-25 | legacy prepared journal（无摘要） | 无摘要 journal 保留 | 历史回滚可能覆盖外部修改 | 兼容性测试钉住边界；不升级旧格式 |
+| FE-25 | legacy prepared journal（无摘要） | 恢复后 journal 清理 | 历史恢复可能覆盖外部修改 | 兼容性边界钉住；不升级旧格式，不作为旧格式必红证据 |
+| FE-26 | GUI latest writer + CLI CAS 交错（F1） | 同一 `<latest>.lock` | 保留更晚 writer 的值或 CAS `retained_newer` | 禁止“覆盖 + advanced”；所有物理写入口走 shared service |
+| FE-27 | 存活 owner 超过 stale_after（F2） | 锁不被抢占 | 等待者 timeout → 结构化 pending | 只有可证明 owner 已死才允许抢占；未知不抢占 |
+| FE-28 | complete/pending 矛盾 + pending_steps（F3） | pending 并集权威 | 不返回 applied、不写 applied_at、不推进 latest | 可执行步骤续跑；未知步骤结构化拒绝；配置关闭仍 pending |
+| FE-29 | 检查后、读取前替换 workspace 父目录（F4） | verifier 句柄/路径身份校验 | POSIX 拒绝；Windows 窄窗口残余风险记录 | `APPLY_EXPORT_OUTPUT_CHANGED`；不宣称跨平台完全解决 |
 
 ## 8. CLI / 机器输出
 
@@ -212,7 +272,7 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   `record_path`、`export_root`。
 - 稳定错误码：`APPLY_EXPORT_OUTPUT_CHANGED`（幂等重放输出/路径身份复核失败）、
   `APPLY_EXPORT_STATE_PENDING`（RAG/manifest/receipt 补记未完成；`pending_steps`、
-  `pending_reason`、`rag_status`、`last_error` 可诊断）、
+  `pending_reason`、`rag_status`、`last_error`、`receipt_updated` 可诊断）、
   `APPLY_EXPORT_RECOVERY_REQUIRED`（journal/receipt 未决）。
 - `result.apply` 至少包含：`mode`、`export_root`、`record_path`、`exported_files`、
   `applied_files`、`actual_applied_files`、`applied_lines`、`recovery_state`、
