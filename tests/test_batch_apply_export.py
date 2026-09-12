@@ -1,9 +1,11 @@
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import atomic_io
@@ -940,3 +942,47 @@ class BatchApplyExportRollbackPhaseTests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b"old\n")
             self.assertFalse(exported.exists())
             self.assertFalse(journal.exists())
+
+
+class BatchApplyExportReparseFormTests(unittest.TestCase):
+    def test_reparse_attribute_without_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            parent = root / "game" / "tl" / "schinese"
+            parent.mkdir(parents=True)
+            target = parent / "chapter.rpy"
+            target.write_bytes(b"bytes\n")
+            fake_dir_stat = SimpleNamespace(
+                st_mode=stat.S_IFDIR | 0o755,
+                st_file_attributes=0x0400,
+            )
+            real_stat = os.stat
+
+            def fake_stat(path, *args, **kwargs):
+                if os.path.abspath(str(path)) == os.path.abspath(str(parent)):
+                    return fake_dir_stat
+                return real_stat(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    batch_export.os,
+                    "stat",
+                    side_effect=fake_stat,
+                ),
+                mock.patch.object(
+                    batch_export.os.path,
+                    "islink",
+                    return_value=False,
+                ),
+            ):
+                self.assertTrue(batch_export._is_link_or_reparse(str(parent)))
+                with self.assertRaises(batch_export.ExportOnlyError):
+                    batch_export._assert_no_link_components(
+                        str(target),
+                        "reparse parent",
+                        allow_final_file=True,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()

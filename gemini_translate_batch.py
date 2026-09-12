@@ -21,17 +21,19 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import atomic_io
 from atomic_io import (
     atomic_write,
     atomic_write_json,
     atomic_write_jsonl,
     atomic_write_many_lines,
     atomic_write_text,
-    exclusive_file_lock,
+    compare_and_swap_latest_manifest_locked,
     file_sha256,
     result_artifact_is_complete,
     recover_atomic_write_transaction,
     sha256_text,
+    write_latest_manifest_locked,
 )
 from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 import advanced_context
@@ -2278,18 +2280,18 @@ def manifest_path_for_target(target):
     return manifests[0]
 
 
-_LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
-_LATEST_MANIFEST_LOCK_STALE_AFTER = 300.0
+_LATEST_MANIFEST_LOCK_TIMEOUT = atomic_io.LATEST_MANIFEST_LOCK_TIMEOUT
+_LATEST_MANIFEST_LOCK_STALE_AFTER = atomic_io.LATEST_MANIFEST_LOCK_STALE_AFTER
 
 
 def _latest_manifest_lock_path():
     """Return the lock file shared by every latest-manifest writer."""
 
-    return f'{LATEST_MANIFEST_FILE}.lock'
+    return atomic_io.latest_manifest_lock_path(LATEST_MANIFEST_FILE)
 
 
 def _read_latest_manifest_cursor_unlocked():
-    """Read the latest cursor while the caller holds the latest-manifest lock."""
+    """Read the latest cursor without writing it."""
 
     try:
         return Path(LATEST_MANIFEST_FILE).read_text(encoding='utf-8').strip()
@@ -2300,66 +2302,31 @@ def _read_latest_manifest_cursor_unlocked():
 def remember_latest_manifest(manifest_path):
     """Atomically point the latest-manifest cursor at *manifest_path*.
 
-    All latest-manifest writers share the same exclusive lock so a conditional
-    update and an unconditional update cannot interleave.
+    CLI and GUI latest writers share the same physical lock through
+    :func:`atomic_io.write_latest_manifest_locked`.
     """
 
     ensure_batch_dirs()
-    with exclusive_file_lock(
-        _latest_manifest_lock_path(),
+    write_latest_manifest_locked(
+        LATEST_MANIFEST_FILE,
+        manifest_path,
         timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
         stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
-    ):
-        atomic_write_text(LATEST_MANIFEST_FILE, str(manifest_path))
+    )
 
 
 def remember_latest_manifest_if_unchanged(expected, target):
-    """Compare-and-swap the latest cursor under the shared writer lock.
+    """Compare-and-swap the latest cursor under the shared writer lock."""
 
-    Returns a phase record.  The helper never calls
-    :func:`remember_latest_manifest` while holding the lock, because the
-    exclusive lock is not re-entrant.
-    """
-
-    expected_text = str(expected or '').strip()
-    target_text = str(target or '').strip()
     ensure_batch_dirs()
-    with exclusive_file_lock(
-        _latest_manifest_lock_path(),
+    return compare_and_swap_latest_manifest_locked(
+        LATEST_MANIFEST_FILE,
+        expected,
+        target,
         timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
         stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
-    ):
-        current = _read_latest_manifest_cursor_unlocked()
-        record = {
-            'status': 'skipped',
-            'expected': expected_text,
-            'target': target_text,
-            'current': current,
-            'message': '',
-        }
-        if target_text and _same_latest_cursor_path(current, target_text):
-            record['status'] = 'already_advanced'
-            record['message'] = 'latest manifest cursor already points at the planned target'
-            return record
-        if _same_latest_cursor_path(current, expected_text):
-            atomic_write_text(LATEST_MANIFEST_FILE, target_text)
-            written = _read_latest_manifest_cursor_unlocked()
-            if not _same_latest_cursor_path(written, target_text):
-                raise RuntimeError(
-                    'latest manifest cursor verification failed '
-                    f'({written!r} != {target_text!r})'
-                )
-            record['status'] = 'advanced'
-            record['current'] = written
-            record['message'] = 'latest manifest cursor advanced to the planned target'
-            return record
-        record['status'] = 'retained_newer'
-        record['current'] = current
-        record['message'] = (
-            'latest manifest cursor was advanced by another operation; '
-            'kept the newer value instead of overwriting it'
-        )
-        return record
+    )
+
 
 
 def translation_plan_compatibility_diagnostic(manifest):
@@ -13461,6 +13428,9 @@ def _reject_pending_apply_export_for_export_only(manifest):
                 'recovery_state': 'recovery_required',
             },
         )
+    manifest_pending_steps = _manifest_apply_export_pending_steps(manifest)
+    if manifest_pending_steps:
+        _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
     receipt = _load_apply_export_receipt(manifest)
     if receipt is None:
         return
@@ -13491,6 +13461,10 @@ def _reject_pending_apply_export_for_export_only(manifest):
 
 
 def _apply_export_state_complete(manifest, entry, record_path):
+    # A recorded pending step is authoritative even if either status field
+    # says complete; contradictory persisted states must resume, not shortcut.
+    if _apply_export_pending_steps(manifest, entry):
+        return False
     state = entry.get('state_advancement') or {}
     if state.get('status') != 'complete':
         return False
@@ -13514,24 +13488,73 @@ def _apply_export_state_complete(manifest, entry, record_path):
 
 
 def _apply_export_pending_steps(manifest, entry):
-    """Return persisted pending steps from receipt and/or manifest.
+    """Return the union of persisted pending steps, regardless of status.
 
-    The receipt is authoritative for a materialized P2 transaction; the
-    manifest mirror covers a crash between a pending-step update and the
-    receipt rewrite.  The union must never be erased by current RAG config.
+    Every recorded source is authoritative: a complete marker must never erase
+    a pending step recorded on the other side or inside summary mirrors.  The
+    union must also never be erased by current RAG configuration.
     """
 
     steps: set[str] = set()
-    receipt_state = entry.get('state_advancement') or {}
-    receipt_pending = receipt_state.get('pending_steps')
-    if isinstance(receipt_pending, list):
-        steps.update(str(step) for step in receipt_pending if str(step).strip())
-    manifest_state = manifest.get('apply_state_advancement')
-    if isinstance(manifest_state, dict) and manifest_state.get('status') == 'pending':
-        manifest_pending = manifest_state.get('pending_steps')
-        if isinstance(manifest_pending, list):
-            steps.update(str(step) for step in manifest_pending if str(step).strip())
+
+    def add_steps(value: object) -> None:
+        if isinstance(value, list):
+            steps.update(
+                str(step) for step in value if str(step).strip()
+            )
+
+    if isinstance(entry, dict):
+        receipt_state = entry.get('state_advancement') or {}
+        if isinstance(receipt_state, dict):
+            add_steps(receipt_state.get('pending_steps'))
+    if isinstance(manifest, dict):
+        manifest_state = manifest.get('apply_state_advancement')
+        if isinstance(manifest_state, dict):
+            add_steps(manifest_state.get('pending_steps'))
+        for summary_key in ('apply_summary', 'export_summary'):
+            summary = manifest.get(summary_key)
+            if isinstance(summary, dict):
+                add_steps(summary.get('pending_steps'))
     return sorted(steps)
+
+
+def _manifest_apply_export_pending_steps(manifest):
+    """Return manifest-recorded P2 pending steps without a receipt entry."""
+
+    return _apply_export_pending_steps(manifest, {'state_advancement': {}})
+
+
+def _raise_manifest_apply_export_pending(manifest, pending_steps):
+    """Fail closed when only the manifest records unresolved P2 pending steps."""
+
+    advancement = manifest.get('apply_state_advancement')
+    if not isinstance(advancement, dict):
+        advancement = {}
+    details = {
+        'mode': 'apply-export',
+        'reason_code': 'apply_export.state_pending',
+        'record_path': str(manifest.get('export_record_path') or ''),
+        'export_root': str((manifest.get('export_summary') or {}).get('export_root') or ''),
+        'recovery_state': 'state_pending',
+        'files_committed': bool(advancement.get('files_committed')),
+        'outputs_committed': bool(advancement.get('outputs_committed')),
+        'pending_steps': list(pending_steps),
+    }
+    reason = str(advancement.get('pending_reason') or '').strip()
+    last_error = str(advancement.get('last_error') or '').strip()
+    if reason:
+        details['pending_reason'] = reason
+    if last_error:
+        details['last_error'] = last_error
+    raise cli_contract.MachineContractError(
+        'Manifest records unresolved apply-export pending steps but the matching '
+        'receipt is unavailable; manual recovery is required.',
+        code_name='APPLY_EXPORT_STATE_PENDING',
+        suggested_action='inspect_apply_export_state',
+        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+        retryable=True,
+        details=details,
+    )
 
 
 def _persist_apply_export_pending_state(
@@ -13657,6 +13680,7 @@ def _apply_export_pending_error(
     latest_cursor=None,
     rag_status='',
     pending_reason='',
+    receipt_updated=None,
 ):
     details = {
         'mode': 'apply-export',
@@ -13672,6 +13696,8 @@ def _apply_export_pending_error(
         details['rag_status'] = str(rag_status)
     if pending_reason:
         details['pending_reason'] = str(pending_reason)
+    if receipt_updated is not None:
+        details['receipt_updated'] = bool(receipt_updated)
     if last_error:
         details['last_error'] = str(last_error)
     if isinstance(latest_cursor, dict):
@@ -13870,7 +13896,7 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                 'status': rag_status,
                 'error': rag_error,
             }
-            _persist_apply_export_pending_state(
+            receipt_updated = _persist_apply_export_pending_state(
                 record_path,
                 normalized_entry,
                 pending_steps=pending_steps_for_state,
@@ -13921,6 +13947,7 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                     latest_cursor=latest_cursor,
                     rag_status=rag_status,
                     pending_reason=rag_status,
+                    receipt_updated=receipt_updated,
                 ) from save_exc
             raise _apply_export_pending_error(
                 record_path,
@@ -13936,6 +13963,7 @@ def _finish_apply_export_state(manifest, *, record_path, entry, identity):
                 latest_cursor=latest_cursor,
                 rag_status=rag_status,
                 pending_reason=rag_status,
+                receipt_updated=receipt_updated,
             )
 
         latest_cursor = _advance_apply_export_latest_cursor(plan)
@@ -14180,6 +14208,9 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
     else:
         p2_journal_recovery_state = _recover_pending_apply_export_journal(manifest)
         receipt = _load_apply_export_receipt(manifest)
+    manifest_pending_steps = _manifest_apply_export_pending_steps(manifest)
+    if receipt is None and manifest_pending_steps:
+        _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
     if receipt is not None:
         record_path, _record, receipt_entries = receipt
         current_apply_identity = _apply_export_identity(manifest)
@@ -14196,6 +14227,8 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
             for entry in receipt_entries
             if (entry.get('state_advancement') or {}).get('status') != 'complete'
         ]
+        if matching_entry is None and manifest_pending_steps:
+            _raise_manifest_apply_export_pending(manifest, manifest_pending_steps)
         if matching_entry is None and pending_entries:
             pending = pending_entries[0]
             raise cli_contract.MachineContractError(

@@ -1495,6 +1495,154 @@ def load_apply_export_transaction_metadata(
     return dict(metadata)
 
 
+def _workspace_target_sha256_verified(target: str, workspace_root: str) -> str:
+    """Read a committed workspace target with path-identity protections.
+
+    POSIX platforms with ``dir_fd`` support open every component with
+    ``O_NOFOLLOW`` relative to the opened TL root directory; the file handle is
+    then compared with the current path stat so a parent directory that was
+    swapped for a link/junction between check and read is refused.  Other
+    platforms fall back to pre/post link/reparse checks plus realpath identity
+    comparison; the residual TOCTOU window is documented in the contract.
+    """
+
+    target_abs = _absolute_path(target)
+    workspace_abs = _canonical_path(workspace_root)
+    try:
+        _assert_no_link_components(
+            target_abs,
+            "committed workspace target",
+            allow_final_file=True,
+        )
+    except ExportOnlyError as exc:
+        raise ApplyExportError(
+            "apply_export.workspace_conflict",
+            f"Committed workspace target path contains a symbolic link or junction: {target_abs}.",
+            details={"target_path": target_abs},
+        ) from exc
+    relative = os.path.relpath(target_abs, workspace_abs)
+    parts = relative.replace("\\", "/").split("/")
+    if (
+        not relative
+        or relative == "."
+        or relative == ".."
+        or relative.startswith("../")
+        or any(not part or part in {".", ".."} for part in parts)
+    ):
+        raise ApplyExportError(
+            "apply_export.workspace_conflict",
+            f"Committed workspace target escapes the TL root: {target_abs}.",
+            details={"target_path": target_abs},
+        )
+
+    data: bytes | None = None
+    if (
+        os.name == "posix"
+        and hasattr(os, "O_NOFOLLOW")
+        and os.open in getattr(os, "supports_dir_fd", set())
+    ):
+        directory_fd = -1
+        file_fd = -1
+        try:
+            directory_fd = os.open(
+                workspace_abs,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            for part in parts[:-1]:
+                next_fd = os.open(
+                    part,
+                    os.O_RDONLY
+                    | os.O_NOFOLLOW
+                    | getattr(os, "O_DIRECTORY", 0),
+                    dir_fd=directory_fd,
+                )
+                os.close(directory_fd)
+                directory_fd = next_fd
+            file_fd = os.open(
+                parts[-1],
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            stat_from_handle = os.fstat(file_fd)
+            with os.fdopen(os.dup(file_fd), "rb") as handle:
+                data = handle.read()
+            stat_from_path = os.stat(target_abs, follow_symlinks=False)
+            if (
+                stat_from_handle.st_dev,
+                stat_from_handle.st_ino,
+            ) != (
+                stat_from_path.st_dev,
+                stat_from_path.st_ino,
+            ):
+                raise ApplyExportError(
+                    "apply_export.workspace_conflict",
+                    "Committed workspace target identity changed while reading: "
+                    f"{target_abs}.",
+                    details={"target_path": target_abs},
+                )
+        except ApplyExportError:
+            raise
+        except OSError as exc:
+            raise ApplyExportError(
+                "apply_export.workspace_conflict",
+                f"Committed workspace target could not be verified safely: "
+                f"{target_abs} ({exc}).",
+                details={"target_path": target_abs},
+            ) from exc
+        finally:
+            if file_fd >= 0:
+                try:
+                    os.close(file_fd)
+                except OSError:
+                    pass
+            if directory_fd >= 0:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    pass
+    else:
+        before_real = os.path.normcase(os.path.realpath(target_abs))
+        try:
+            with open(target_abs, "rb") as handle:
+                data = handle.read()
+        except OSError as exc:
+            raise ApplyExportError(
+                "apply_export.workspace_conflict",
+                f"Committed workspace file cannot be read: {target_abs} ({exc}).",
+                details={"target_path": target_abs},
+            ) from exc
+        after_real = os.path.normcase(os.path.realpath(target_abs))
+        if before_real != after_real:
+            raise ApplyExportError(
+                "apply_export.workspace_conflict",
+                "Committed workspace target path identity changed while reading: "
+                f"{target_abs}.",
+                details={"target_path": target_abs},
+            )
+
+    # Final component recheck: catches a swap that happened while reading (or
+    # immediately after) and keeps normal directories unaffected.
+    try:
+        _assert_no_link_components(
+            target_abs,
+            "committed workspace target",
+            allow_final_file=True,
+        )
+    except ExportOnlyError as exc:
+        raise ApplyExportError(
+            "apply_export.workspace_conflict",
+            f"Committed workspace target path contains a symbolic link or junction: {target_abs}.",
+            details={"target_path": target_abs},
+        ) from exc
+    if data is None:
+        raise ApplyExportError(
+            "apply_export.workspace_conflict",
+            f"Committed workspace target could not be read: {target_abs}.",
+            details={"target_path": target_abs},
+        )
+    return _sha256(data)
+
+
 def _verify_committed_receipt_entry(
     root: ExportRoot,
     entry: Mapping[str, Any],
@@ -1553,14 +1701,10 @@ def _verify_committed_receipt_entry(
                     f"Committed workspace target is outside the managed scope: {target}.",
                     details={"target_path": target},
                 )
-            try:
-                current_sha256 = file_sha256(target)
-            except OSError as exc:
-                raise ApplyExportError(
-                    workspace_conflict_code,
-                    f"Committed workspace file cannot be read: {target} ({exc}).",
-                    details={"target_path": target},
-                ) from exc
+            current_sha256 = _workspace_target_sha256_verified(
+                target,
+                workspace_root=workspace_root,
+            )
             if current_sha256 != workspace_file["output_sha256"]:
                 raise ApplyExportError(
                     workspace_conflict_code,

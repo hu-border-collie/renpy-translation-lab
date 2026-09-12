@@ -16,6 +16,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import batch_export
 import gemini_translate_batch as batch_mod
 import prompt_context
 import rag_memory
@@ -1576,6 +1577,306 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     'writer-D',
                 )
             finally:
+                self._restore_batch_environment(old_values)
+
+    def test_golden_pending_steps_contradictory_states_never_complete(self):
+        for scenario in (
+            'receipt_complete_with_pending_step',
+            'manifest_complete_with_pending_step',
+        ):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                root, manifest_path, tl_dir, old_values = (
+                    self._prepare_apply_export_case(tmp, f'golden-pending-{scenario}')
+                )
+                try:
+                    export_root = root / 'exports'
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_dir=str(export_root),
+                    )
+                    record_path = (
+                        Path(manifest_path).parent
+                        / batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+                    )
+                    record = json.loads(record_path.read_text(encoding='utf-8'))
+                    entry = record['exports'][0]
+                    state = entry['state_advancement']
+                    if scenario == 'receipt_complete_with_pending_step':
+                        state['status'] = 'complete'
+                        state['pending_steps'] = ['rag']
+                        state['rag_status'] = 'complete'
+                    else:
+                        state['status'] = 'pending'
+                        state['pending_steps'] = []
+                        state.pop('last_error', None)
+                        raw_manifest = json.loads(
+                            Path(manifest_path).read_text(encoding='utf-8')
+                        )
+                        advancement = raw_manifest['apply_state_advancement']
+                        advancement['status'] = 'complete'
+                        advancement['pending_steps'] = ['rag']
+                        advancement['rag_status'] = 'complete'
+                        apply_summary = raw_manifest.get('apply_summary') or {}
+                        apply_summary['pending_steps'] = ['rag']
+                        raw_manifest['apply_summary'] = apply_summary
+                        Path(manifest_path).write_text(
+                            json.dumps(raw_manifest, ensure_ascii=False, indent=2),
+                            encoding='utf-8',
+                        )
+                    record_path.write_text(
+                        json.dumps(record, ensure_ascii=False, indent=2),
+                        encoding='utf-8',
+                    )
+
+                    latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                    latest_before = (
+                        latest_path.read_text(encoding='utf-8')
+                        if latest_path.exists()
+                        else None
+                    )
+                    with (
+                        mock.patch.object(batch_mod, 'RAG_ENABLED', False),
+                        mock.patch.object(
+                            batch_mod,
+                            'sync_rag_store_for_jobs',
+                        ) as rag_call,
+                    ):
+                        with self.assertRaises(
+                            batch_mod.cli_contract.MachineContractError
+                        ) as raised:
+                            batch_mod.apply_results(
+                                str(manifest_path),
+                                force=True,
+                            )
+                    self.assertEqual(
+                        raised.exception.code_name,
+                        'APPLY_EXPORT_STATE_PENDING',
+                    )
+                    self.assertIn(
+                        'rag',
+                        raised.exception.details.get('pending_steps') or [],
+                    )
+                    rag_call.assert_not_called()
+                    self.assertEqual(
+                        latest_path.read_text(encoding='utf-8')
+                        if latest_path.exists()
+                        else None,
+                        latest_before,
+                    )
+                    raw_manifest = json.loads(
+                        Path(manifest_path).read_text(encoding='utf-8')
+                    )
+                    self.assertNotIn('applied_at', raw_manifest)
+                    advancement = raw_manifest.get('apply_state_advancement') or {}
+                    self.assertEqual(advancement.get('status'), 'pending')
+                    self.assertIn('rag', advancement.get('pending_steps') or [])
+                    record = json.loads(record_path.read_text(encoding='utf-8'))
+                    state = record['exports'][0]['state_advancement']
+                    self.assertEqual(state['status'], 'pending')
+                    self.assertIn('rag', state.get('pending_steps') or [])
+                finally:
+                    self._restore_batch_environment(old_values)
+
+    def test_golden_rag_receipt_write_failure_is_best_effort_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-rag-receipt-failure'
+            )
+            try:
+                export_root = root / 'exports'
+                rag_calls = []
+
+                def fake_rag(jobs, quality_state='batch_applied'):
+                    rag_calls.append(list(jobs))
+                    return {'enabled': True, 'error': 'store unavailable'}
+
+                real_write_json = batch_mod.atomic_write_json
+                record_filename = batch_mod.batch_export.APPLY_EXPORT_RECORD_FILE
+
+                def fail_receipt_write(path, payload, **kwargs):
+                    if str(path).endswith(record_filename):
+                        raise OSError('receipt rewrite failed')
+                    return real_write_json(path, payload, **kwargs)
+
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_before = (
+                    latest_path.read_text(encoding='utf-8')
+                    if latest_path.exists()
+                    else None
+                )
+                with (
+                    mock.patch.object(batch_mod, 'RAG_ENABLED', True),
+                    mock.patch.object(
+                        batch_mod,
+                        'sync_rag_store_for_jobs',
+                        side_effect=fake_rag,
+                    ),
+                    mock.patch.object(
+                        batch_mod,
+                        'atomic_write_json',
+                        side_effect=fail_receipt_write,
+                    ),
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                self.assertFalse(raised.exception.details.get('receipt_updated', True))
+                self.assertEqual(len(rag_calls), 1)
+                raw_manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+                advancement = raw_manifest.get('apply_state_advancement') or {}
+                self.assertEqual(advancement.get('status'), 'pending')
+                self.assertIn('rag', advancement.get('pending_steps') or [])
+                self.assertNotIn('applied_at', raw_manifest)
+                self.assertEqual(
+                    latest_path.read_text(encoding='utf-8')
+                    if latest_path.exists()
+                    else None,
+                    latest_before,
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows junction form is Windows-only')
+    def test_golden_apply_export_rejects_workspace_parent_junction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-workspace-junction'
+            )
+            parent = None
+            moved_parent = None
+            junction_created = False
+            try:
+                export_root = root / 'exports'
+                batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                parent = tl_dir / 'chapter01'
+                moved_parent = tl_dir / 'moved_chapter01'
+                os.rename(parent, moved_parent)
+                completed = subprocess.run(
+                    [
+                        'cmd',
+                        '/c',
+                        'mklink',
+                        '/J',
+                        str(parent),
+                        str(moved_parent),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                junction_created = completed.returncode == 0 and os.path.isdir(parent)
+                if not junction_created:
+                    os.rename(moved_parent, parent)
+                    moved_parent = None
+                    self.skipTest('junction creation unavailable')
+                with self.assertRaises(
+                    batch_mod.cli_contract.MachineContractError
+                ) as raised:
+                    batch_mod.apply_results(
+                        str(manifest_path),
+                        export_dir=str(export_root),
+                    )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+            finally:
+                if junction_created and parent is not None:
+                    try:
+                        os.rmdir(parent)
+                    except OSError:
+                        pass
+                if moved_parent is not None and moved_parent.exists() and parent is not None:
+                    try:
+                        os.rename(moved_parent, parent)
+                    except OSError:
+                        pass
+                self._restore_batch_environment(old_values)
+
+    def test_golden_apply_export_rejects_parent_swap_between_check_and_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-workspace-toctou'
+            )
+            link_created = False
+            moved_parent = None
+            parent = None
+            try:
+                export_root = root / 'exports'
+                batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                workspace = tl_dir / 'chapter01' / 'dialogue.rpy'
+                parent = tl_dir / 'chapter01'
+                moved_parent = tl_dir / 'moved_chapter01'
+                real_check = batch_export._assert_no_link_components
+                swapped = {'done': False, 'supported': False}
+
+                def racing_check(path, field_name, **kwargs):
+                    real_check(path, field_name, **kwargs)
+                    if (
+                        not swapped['done']
+                        and os.path.normcase(os.path.abspath(str(path)))
+                        == os.path.normcase(os.path.abspath(str(workspace)))
+                    ):
+                        swapped['done'] = True
+                        os.rename(parent, moved_parent)
+                        try:
+                            os.symlink(
+                                moved_parent,
+                                parent,
+                                target_is_directory=True,
+                            )
+                            swapped['supported'] = True
+                        except (OSError, NotImplementedError):
+                            os.rename(moved_parent, parent)
+
+                raised = None
+                with mock.patch.object(
+                    batch_export,
+                    '_assert_no_link_components',
+                    side_effect=racing_check,
+                ):
+                    try:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                    except batch_mod.cli_contract.MachineContractError as exc:
+                        raised = exc
+                if not swapped['supported']:
+                    self.skipTest('directory symlink creation unavailable')
+                self.assertIsNotNone(raised)
+                assert raised is not None
+                self.assertEqual(
+                    raised.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+                link_created = os.path.islink(parent)
+            finally:
+                if link_created and parent is not None:
+                    try:
+                        os.unlink(parent)
+                    except OSError:
+                        pass
+                if moved_parent is not None and moved_parent.exists() and parent is not None:
+                    try:
+                        os.rename(moved_parent, parent)
+                    except OSError:
+                        pass
                 self._restore_batch_environment(old_values)
 
     def test_golden_batch_apply_rejects_changed_source_snapshot(self):

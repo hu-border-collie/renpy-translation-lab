@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -771,6 +772,152 @@ class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
 
             self.assertEqual(target.read_bytes(), b"new\n")
             self.assertFalse(journal.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class AtomicFileLockPreemptionTests(unittest.TestCase):
+    def test_live_owner_lock_is_not_stolen_by_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                old = time.time() - 30.0
+                os.utime(lock, (old, old))
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(
+                        lock,
+                        timeout=0.25,
+                        stale_after=0.01,
+                    ):
+                        pass
+            self.assertFalse(lock.exists())
+
+    def test_dead_owner_lock_can_be_preempted_after_threshold(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            dead_pid = child.pid
+            lock.write_text(
+                json.dumps(
+                    {
+                        "pid": dead_pid,
+                        "token": "dead-owner",
+                        "created_at": time.time() - 30.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 30.0
+            os.utime(lock, (old, old))
+            with atomic_io.exclusive_file_lock(
+                lock,
+                timeout=2.0,
+                stale_after=0.05,
+            ) as owner:
+                self.assertEqual(owner["pid"], os.getpid())
+            self.assertFalse(lock.exists())
+
+    def test_cross_process_live_writer_blocks_stale_waiter(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "writer.lock"
+            marker = root / "held"
+            script = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "import atomic_io\n"
+                "lock, marker = sys.argv[1:3]\n"
+                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                "    Path(marker).write_text('held')\n"
+                "    time.sleep(1.2)\n"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(lock), str(marker)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+            )
+            try:
+                deadline = time.time() + 5.0
+                while time.time() < deadline and not marker.exists():
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists())
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(
+                        lock,
+                        timeout=0.4,
+                        stale_after=0.05,
+                    ):
+                        pass
+            finally:
+                process.wait(timeout=10.0)
+
+    def test_cross_process_dead_writer_lock_is_recoverable(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "writer.lock"
+            marker = root / "held"
+            script = (
+                "import sys, time\n"
+                "from pathlib import Path\n"
+                "import atomic_io\n"
+                "lock, marker = sys.argv[1:3]\n"
+                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                "    Path(marker).write_text('held')\n"
+                "    time.sleep(30.0)\n"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-c", script, str(lock), str(marker)],
+                cwd=str(Path(__file__).resolve().parents[1]),
+            )
+            try:
+                deadline = time.time() + 5.0
+                while time.time() < deadline and not marker.exists():
+                    if process.poll() is not None:
+                        break
+                    time.sleep(0.02)
+                self.assertTrue(marker.exists())
+                process.kill()
+                process.wait(timeout=10.0)
+                with atomic_io.exclusive_file_lock(
+                    lock,
+                    timeout=3.0,
+                    stale_after=0.2,
+                ) as owner:
+                    self.assertEqual(owner["pid"], os.getpid())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10.0)
+
+    def test_owner_token_still_prevents_deleting_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                lock.write_text(
+                    json.dumps(
+                        {
+                            "pid": os.getpid(),
+                            "token": "replacement-token",
+                            "created_at": time.time(),
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            self.assertTrue(lock.exists())
+            lock.unlink()
 
 
 if __name__ == "__main__":

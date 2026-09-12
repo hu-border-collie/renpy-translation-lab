@@ -34,6 +34,77 @@ class AtomicFileLockTimeoutError(TimeoutError):
     """Raised when a same-directory exclusive file lock cannot be acquired."""
 
 
+LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
+LATEST_MANIFEST_LOCK_STALE_AFTER = 300.0
+
+
+def _read_lock_owner(lock_path: str) -> dict[str, Any] | None:
+    """Read the lock owner JSON; malformed/partially written files are unknown."""
+
+    try:
+        with open(lock_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _windows_lock_owner_alive(pid: int) -> bool | None:
+    try:
+        import ctypes
+    except ImportError:
+        return None
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    process_query_limited_information = 0x1000
+    synchronize = 0x00100000
+    handle = kernel32.OpenProcess(
+        process_query_limited_information | synchronize,
+        False,
+        int(pid),
+    )
+    if not handle:
+        error = kernel32.GetLastError()
+        if error == 5:  # ERROR_ACCESS_DENIED: process exists but cannot be opened
+            return True
+        if error in (87, 1168):  # invalid parameter / not found
+            return False
+        return None
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return None
+        return bool(exit_code.value == 259)  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _lock_owner_process_alive(owner: dict[str, Any] | None) -> bool | None:
+    """Return True/False when liveness is provable, None when uncertain.
+
+    ``None`` must be treated as "do not preempt": the conservative path is to
+    wait for timeout and let the caller surface a structured failure.
+    """
+
+    if not isinstance(owner, dict):
+        return None
+    raw_pid = owner.get("pid")
+    if isinstance(raw_pid, bool) or not isinstance(raw_pid, int) or raw_pid <= 0:
+        return None
+    if raw_pid == os.getpid():
+        return True
+    if os.name == "nt":
+        return _windows_lock_owner_alive(raw_pid)
+    try:
+        os.kill(raw_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
 @contextmanager
 def exclusive_file_lock(
     lock_path: str | os.PathLike[str],
@@ -41,12 +112,16 @@ def exclusive_file_lock(
     timeout: float = 30.0,
     poll_interval: float = 0.01,
     stale_after: float = 300.0,
+    preempt_dead_owner: bool = True,
 ):
     """Serialize cooperating writers with an exclusive same-directory lock file.
 
     The lock uses atomic ``O_EXCL`` creation so it works on Windows and POSIX.
-    A token prevents one owner from deleting a replacement lock, and abandoned
-    regular lock files are recovered after ``stale_after`` seconds.
+    A token prevents one owner from deleting a replacement lock.  When
+    ``preempt_dead_owner`` is true (default), an aged lock is only removed when
+    the recorded owner PID is provably dead; a live owner, a malformed owner
+    record, or an unverifiable PID is left alone and the waiter times out
+    instead.  This prevents an old-but-alive writer from losing its lock.
     """
     target = os.path.abspath(os.fspath(lock_path))
     directory = os.path.dirname(target) or "."
@@ -72,11 +147,31 @@ def exclusive_file_lock(
                 raise OSError(f"File lock path is not a regular file: {target}")
             age = max(0.0, time.time() - lock_stat.st_mtime)
             if stale_after >= 0 and age >= float(stale_after):
-                try:
-                    os.unlink(target)
-                except FileNotFoundError:
-                    pass
-                continue
+                owner_payload = _read_lock_owner(target)
+                owner_alive = (
+                    _lock_owner_process_alive(owner_payload)
+                    if preempt_dead_owner
+                    else None
+                )
+                if preempt_dead_owner and owner_alive is False:
+                    # Re-check the owner before unlinking so a replacement lock
+                    # created between read and unlink is never deleted.
+                    try:
+                        replacement_stat = os.lstat(target)
+                    except FileNotFoundError:
+                        continue
+                    if not stat.S_ISREG(replacement_stat.st_mode):
+                        raise OSError(
+                            f"File lock path is not a regular file: {target}"
+                        )
+                    if _read_lock_owner(target) != owner_payload:
+                        continue
+                    try:
+                        os.unlink(target)
+                    except FileNotFoundError:
+                        pass
+                    continue
+                # Live or unverifiable owner: do not steal the lock by age.
             if time.monotonic() >= deadline:
                 raise AtomicFileLockTimeoutError(
                     f"Timed out waiting for file lock: {target}"
@@ -110,6 +205,106 @@ def exclusive_file_lock(
                 os.unlink(target)
             except FileNotFoundError:
                 pass
+
+
+def latest_manifest_lock_path(latest_manifest_path: str | os.PathLike[str]) -> str:
+    """Return the lock file shared by every latest-manifest writer."""
+
+    return f"{os.path.abspath(os.fspath(latest_manifest_path))}.lock"
+
+
+def _normalized_latest_cursor(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return os.path.normcase(os.path.realpath(os.path.abspath(text)))
+
+
+def write_latest_manifest_locked(
+    latest_manifest_path: str | os.PathLike[str],
+    manifest_path: str | os.PathLike[str],
+    *,
+    timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
+    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
+) -> None:
+    """Physically write the latest cursor under its shared writer lock."""
+
+    latest = os.path.abspath(os.fspath(latest_manifest_path))
+    with exclusive_file_lock(
+        latest_manifest_lock_path(latest),
+        timeout=timeout,
+        stale_after=stale_after,
+    ):
+        atomic_write_text(latest, str(manifest_path))
+
+
+def compare_and_swap_latest_manifest_locked(
+    latest_manifest_path: str | os.PathLike[str],
+    expected: object,
+    target: object,
+    *,
+    timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
+    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
+) -> dict[str, Any]:
+    """Compare-and-swap the latest cursor under the shared writer lock."""
+
+    latest = os.path.abspath(os.fspath(latest_manifest_path))
+    expected_text = str(expected or "").strip()
+    target_text = str(target or "").strip()
+    with exclusive_file_lock(
+        latest_manifest_lock_path(latest),
+        timeout=timeout,
+        stale_after=stale_after,
+    ):
+        current = ""
+        try:
+            with open(latest, "r", encoding="utf-8") as handle:
+                current = handle.read().strip()
+        except OSError:
+            current = ""
+        record = {
+            "status": "skipped",
+            "expected": expected_text,
+            "target": target_text,
+            "current": current,
+            "message": "",
+        }
+        if target_text and _normalized_latest_cursor(current) == _normalized_latest_cursor(
+            target_text
+        ):
+            record["status"] = "already_advanced"
+            record["message"] = (
+                "latest manifest cursor already points at the planned target"
+            )
+            return record
+        if _normalized_latest_cursor(current) == _normalized_latest_cursor(
+            expected_text
+        ):
+            atomic_write_text(latest, target_text)
+            written = ""
+            try:
+                with open(latest, "r", encoding="utf-8") as handle:
+                    written = handle.read().strip()
+            except OSError:
+                written = ""
+            if _normalized_latest_cursor(written) != _normalized_latest_cursor(
+                target_text
+            ):
+                raise RuntimeError(
+                    "latest manifest cursor verification failed "
+                    f"({written!r} != {target_text!r})"
+                )
+            record["status"] = "advanced"
+            record["current"] = written
+            record["message"] = "latest manifest cursor advanced to the planned target"
+            return record
+        record["status"] = "retained_newer"
+        record["current"] = current
+        record["message"] = (
+            "latest manifest cursor was advanced by another operation; "
+            "kept the newer value instead of overwriting it"
+        )
+        return record
 
 
 def atomic_write(

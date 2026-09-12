@@ -78,7 +78,9 @@ def config_write_lock(path: Path):
     """Share the repository lock protocol across GUI save and migration.
 
     Wait briefly for competing writers, recover abandoned locks after five
-    minutes, and use token-checked cleanup so replacement locks survive.
+    minutes only when the recorded owner PID is provably dead, and use
+    token-checked cleanup so replacement locks survive.  Corrupt or legacy
+    owner records are treated as unknown and are not preempted.
     External editors still require the migration's final source-byte check.
     """
     lock = path.with_name(path.name + ".write-lock")
