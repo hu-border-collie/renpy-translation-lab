@@ -17,6 +17,7 @@
 | [#341：Embedding adapters 与 store identity](issue-341-embedding-adapters-store-identity.md) | Provider adapter、store identity 与兼容检查落地记录（PR #388 / PR #401 已合入） |
 | [TyranoScript V600+ P5 parser 调研与 fixture 基线](tyranoscript_v600_parser_research.md) | 官方 runtime parser/catalog 调研与离线 fixture 规范（P5 已合入主干） |
 | [开放 Issues 审计（2026-08-08）](open_issues_audit_2026-08-08.md) | 基于 `main@78ab050` 的 21 个开放 issues 快照与收口顺序审计 |
+| [开放 Issues 审计（2026-09-12）](open_issues_audit_2026-09-12.md) | 基于 `main@d164c2b` 的 11 个开放 issues 快照、难度与收口顺序审计；含 #474 竞态复现 |
 | [Final Review 失败分类探针（#309）](final_review_result_failure_spike.md) | 模型审校结果失败分类 fixture probe 与 targeted resume 设计 |
 
 维护约定：历史文稿只加状态横幅或修正断链，不整篇改写成新手册，避免与现行文档双重维护。
