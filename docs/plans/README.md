@@ -54,4 +54,5 @@
 - [#341：Embedding adapters 与 store identity](../archive/issue-341-embedding-adapters-store-identity.md)：Adapter 与 store identity 持久化校验（PR #388 / PR #401 已交付）。
 - [TyranoScript V600+ P5 parser 调研与 fixture 基线](../archive/tyranoscript_v600_parser_research.md)：P5 验证 adapter 调研与基线（P5 已合入）。
 - [开放 Issues 审计（2026-08-08）](../archive/open_issues_audit_2026-08-08.md)：21 个开放 issues 快照与收口顺序审计。
+- [开放 Issues 审计（2026-09-12）](../archive/open_issues_audit_2026-09-12.md)：11 个开放 issues 快照、难度与收口顺序审计（含 #474 竞态复现与 Epic 记录失真清单）。
 - [Final Review 结果失败分类与 targeted resume spike（#309）](../archive/final_review_result_failure_spike.md)：模型审校结果失败分类 probe 与 targeted resume 设计。

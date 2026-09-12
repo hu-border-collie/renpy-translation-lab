@@ -89,7 +89,7 @@
 - [#347 设计 P0：耐久同步执行器](archive/issue-347-durable-sync-executor-plan.md)：Run/Request/Attempt 状态机与耐久同步执行器核心设计（CLI 已交付，交接见 [plans/issue-347-to-348-handoff.md](plans/issue-347-to-348-handoff.md)）。
 - [#341：Provider-neutral Embedding 纯核心](archive/issue-341-provider-neutral-embedding-core.md) · [Embedding adapters 与 store identity](archive/issue-341-embedding-adapters-store-identity.md)：跨 Provider 向量合同、store 校验与生产接线。
 - [TyranoScript V600+ P5 parser 调研与 fixture 基线](archive/tyranoscript_v600_parser_research.md)：P5 验证 adapter 调研与基线（P5 已合入）。
-- [开放 Issues 审计（2026-08-08）](archive/open_issues_audit_2026-08-08.md) · [Final Review 失败分类探针](archive/final_review_result_failure_spike.md)：历史 issues 快照与审校结果失败分类 spike。
+- [开放 Issues 审计（2026-08-08）](archive/open_issues_audit_2026-08-08.md) · [开放 Issues 审计（2026-09-12）](archive/open_issues_audit_2026-09-12.md) · [Final Review 失败分类探针](archive/final_review_result_failure_spike.md)：历史 issues 快照与审校结果失败分类 spike。
 
 ## 配置分层（速查）
 
