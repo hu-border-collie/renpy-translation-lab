@@ -54,7 +54,10 @@ def _direct_latest_write_offenders(relative_path: str, source: str) -> list[str]
         window = "\n".join(lines[max(0, index - 3) : index + 1])
         if "latest" not in window.lower() and "LATEST_MANIFEST_FILE" not in window:
             continue
-        if any(marker in window for marker in _SHARED_WRITER_MARKERS):
+        # Only the mutating statement itself may claim to be the shared
+        # service; a nearby shared-service call must not hide a separate
+        # direct write on the next line.
+        if any(marker in line for marker in _SHARED_WRITER_MARKERS):
             continue
         offenders.append(f"{relative_path}:{index + 1}: {line.strip()}")
     return offenders
@@ -383,6 +386,14 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                     len(_direct_latest_write_offenders("demo.py", snippet)),
                     1,
                 )
+        adjacent_bypass = (
+            "written = atomic_io.write_latest_manifest_locked(latest, target)\n"
+            "open(latest, 'w', encoding='utf-8').write('x')"
+        )
+        self.assertEqual(
+            len(_direct_latest_write_offenders("demo.py", adjacent_bypass)),
+            1,
+        )
         safe_snippets = (
             "current = latest.read_text(encoding='utf-8')",
             "with open(latest, 'r', encoding='utf-8') as handle:\n    handle.read()",
