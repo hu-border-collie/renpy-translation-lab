@@ -1975,7 +1975,9 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 real_verify = batch_export._workspace_target_sha256_verified
                 real_open = os.open
                 real_fstat = os.fstat
-                root_norm = os.path.normcase(os.path.abspath(str(tl_dir)))
+                root_norm = os.path.normcase(
+                    os.path.realpath(os.path.abspath(str(tl_dir)))
+                )
 
                 def armed_verify(target, workspace_root):
                     state['armed'] = True
@@ -1987,7 +1989,9 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     elif (
                         state['armed']
                         and not state['swapped']
-                        and os.path.normcase(os.path.abspath(str(path))) == root_norm
+                        and os.path.normcase(
+                            os.path.realpath(os.path.abspath(str(path)))
+                        ) == root_norm
                     ):
                         state['swapped'] = True
                         state['root_open_flags'] = args[0] if args else kwargs.get('flags')
@@ -2102,7 +2106,9 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 )
                 real_verify = batch_export._workspace_target_sha256_verified
                 real_open = os.open
-                root_norm = os.path.normcase(os.path.abspath(str(tl_dir)))
+                root_norm = os.path.normcase(
+                    os.path.realpath(os.path.abspath(str(tl_dir)))
+                )
 
                 def armed_verify(target, workspace_root):
                     state['armed'] = True
@@ -2114,7 +2120,9 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     elif (
                         state['armed']
                         and not state['swapped']
-                        and os.path.normcase(os.path.abspath(str(path))) == root_norm
+                        and os.path.normcase(
+                            os.path.realpath(os.path.abspath(str(path)))
+                        ) == root_norm
                     ):
                         state['swapped'] = True
                         state['root_open_flags'] = args[0] if args else kwargs.get('flags')
