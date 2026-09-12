@@ -23,6 +23,10 @@ mcps/
 /macro_setting*.md
 !/macro_setting.example.md
 
+# Runtime kernel lock files (#474); persistent by design, harmless to ignore
+*.write-lock
+.start.lock
+
 # Generated outputs
 logs/
 tmp/

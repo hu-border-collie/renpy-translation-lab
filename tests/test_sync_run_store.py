@@ -13,8 +13,11 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import atomic_io
 import sync_run_contracts as contracts
+import sync_run_store
 from sync_run_contracts import (
     AttemptStatus,
     ErrorCategory,
@@ -283,6 +286,36 @@ class BootstrapStoreTests(unittest.TestCase):
                 client_token='project-token',
             )
         self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_CLIENT_TOKEN_CONFLICT)
+
+    def test_start_lock_held_by_live_writer_maps_to_retryable_busy(self):
+        run_id = build_run_id()
+        lock = self.root / '.start.lock'
+        with (
+            mock.patch.object(
+                sync_run_store,
+                'DEFAULT_START_LOCK_TIMEOUT_SECONDS',
+                0.2,
+            ),
+            atomic_io.exclusive_file_lock(lock, timeout=1.0),
+        ):
+            with self.assertRaises(SyncRunError) as ctx:
+                bootstrap_run(self.root, run_id)
+        self.assertEqual(ctx.exception.code, ErrorCode.SYNC_RUN_BUSY)
+        self.assertTrue(ctx.exception.retryable)
+        self.assertFalse((self.root / run_id).exists())
+
+    def test_abandoned_start_lock_file_does_not_block_bootstrap(self):
+        run_id = build_run_id()
+        lock = self.root / '.start.lock'
+        lock.write_text(
+            '{"pid": 999999, "token": "abandoned-owner"}',
+            encoding='utf-8',
+        )
+        store, created = bootstrap_run(self.root, run_id)
+        self.assertTrue(created)
+        # Kernel lock files persist; the leftover record is diagnostic only.
+        self.assertTrue(lock.exists())
+        self.assertTrue((self.root / run_id / 'state.sqlite3').is_file())
 
     def test_malformed_root_request_is_rejected(self):
         request = make_request()

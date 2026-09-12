@@ -1,7 +1,9 @@
+import errno
 import hashlib
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -21,7 +23,7 @@ class AtomicIoHelperTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding='utf-8'), 'new\n')
             self.assertEqual(list(Path(tmp).glob('*.tmp')), [])
 
-    def test_exclusive_file_lock_serializes_and_releases(self):
+    def test_exclusive_file_lock_serializes_and_keeps_lock_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock_path = Path(tmp) / 'demo.lock'
             with atomic_io.exclusive_file_lock(lock_path, timeout=1.0):
@@ -29,7 +31,11 @@ class AtomicIoHelperTests(unittest.TestCase):
                 with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
                     with atomic_io.exclusive_file_lock(lock_path, timeout=0.05):
                         pass
-            self.assertFalse(lock_path.exists())
+            # Kernel lock files persist by design (#474): deleting one on
+            # release could strand waiters that already opened the same inode.
+            self.assertTrue(lock_path.is_file())
+            with atomic_io.exclusive_file_lock(lock_path, timeout=1.0):
+                pass
 
     def test_atomic_write_preserves_original_when_replace_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -433,9 +439,6 @@ class BatchArtifactAtomicTests(unittest.TestCase):
             client_mock.assert_not_called()
 
 
-if __name__ == '__main__':
-    unittest.main()
-
 
 class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
     def test_prepared_recovery_blocks_uncommitted_external_change(self):
@@ -522,9 +525,6 @@ class AtomicWriteStrictRecoveryGuardTests(unittest.TestCase):
             self.assertFalse(journal.exists())
             self.assertFalse(backup.exists())
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class AtomicWriteRollbackPhaseTests(unittest.TestCase):
@@ -702,9 +702,6 @@ class AtomicWriteRollbackPhaseTests(unittest.TestCase):
             self.assertFalse(journal.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
     def test_legacy_prepared_journal_keeps_historical_rollback_boundary(self):
@@ -774,94 +771,23 @@ class AtomicWriteLegacyJournalCompatibilityTests(unittest.TestCase):
             self.assertFalse(journal.exists())
 
 
-if __name__ == "__main__":
-    unittest.main()
 
+class AtomicProcessFileLockTests(unittest.TestCase):
+    """Kernel-backed lock behavior for non-latest writers (#474)."""
 
-class AtomicFileLockPreemptionTests(unittest.TestCase):
-    def test_live_owner_lock_is_not_stolen_by_age(self):
+    def test_held_lock_cannot_be_stolen_by_age(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "writer.lock"
             with atomic_io.exclusive_file_lock(lock, timeout=1.0):
-                old = time.time() - 30.0
+                old = time.time() - 86400.0
                 os.utime(lock, (old, old))
                 with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
-                    with atomic_io.exclusive_file_lock(
-                        lock,
-                        timeout=0.25,
-                        stale_after=0.01,
-                    ):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.25):
                         pass
-            self.assertFalse(lock.exists())
+            # Kernel lock files persist by design.
+            self.assertTrue(lock.exists())
 
-    def test_dead_owner_lock_can_be_preempted_after_threshold(self):
-        import subprocess
-        import sys
-
-        with tempfile.TemporaryDirectory() as tmp:
-            lock = Path(tmp) / "writer.lock"
-            child = subprocess.Popen([sys.executable, "-c", "pass"])
-            child.wait(timeout=5.0)
-            dead_pid = child.pid
-            lock.write_text(
-                json.dumps(
-                    {
-                        "pid": dead_pid,
-                        "token": "dead-owner",
-                        "created_at": time.time() - 30.0,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            old = time.time() - 30.0
-            os.utime(lock, (old, old))
-            with atomic_io.exclusive_file_lock(
-                lock,
-                timeout=2.0,
-                stale_after=0.05,
-            ) as owner:
-                self.assertEqual(owner["pid"], os.getpid())
-            self.assertFalse(lock.exists())
-
-    def test_cross_process_live_writer_blocks_stale_waiter(self):
-        import subprocess
-        import sys
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            lock = root / "writer.lock"
-            marker = root / "held"
-            script = (
-                "import sys, time\n"
-                "from pathlib import Path\n"
-                "import atomic_io\n"
-                "lock, marker = sys.argv[1:3]\n"
-                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
-                "    Path(marker).write_text('held')\n"
-                "    time.sleep(1.2)\n"
-            )
-            process = subprocess.Popen(
-                [sys.executable, "-c", script, str(lock), str(marker)],
-                cwd=str(Path(__file__).resolve().parents[1]),
-            )
-            try:
-                deadline = time.time() + 5.0
-                while time.time() < deadline and not marker.exists():
-                    if process.poll() is not None:
-                        break
-                    time.sleep(0.02)
-                self.assertTrue(marker.exists())
-                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
-                    with atomic_io.exclusive_file_lock(
-                        lock,
-                        timeout=0.4,
-                        stale_after=0.05,
-                    ):
-                        pass
-            finally:
-                process.wait(timeout=10.0)
-
-    def test_cross_process_dead_writer_lock_is_recoverable(self):
+    def test_crashed_holder_is_released_by_the_kernel(self):
         import subprocess
         import sys
 
@@ -889,35 +815,214 @@ class AtomicFileLockPreemptionTests(unittest.TestCase):
                         break
                     time.sleep(0.02)
                 self.assertTrue(marker.exists())
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.3):
+                        pass
                 process.kill()
                 process.wait(timeout=10.0)
-                with atomic_io.exclusive_file_lock(
-                    lock,
-                    timeout=3.0,
-                    stale_after=0.2,
-                ) as owner:
+                started = time.monotonic()
+                with atomic_io.exclusive_file_lock(lock, timeout=2.0) as owner:
                     self.assertEqual(owner["pid"], os.getpid())
+                    self.assertEqual(owner["lock_protocol"], "os_lock_v1")
+                self.assertLess(time.monotonic() - started, 1.0)
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=10.0)
 
-    def test_owner_token_still_prevents_deleting_replacement(self):
+    def test_leftover_dead_owner_record_does_not_block_writers(self):
+        import subprocess
+        import sys
+
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "writer.lock"
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            lock.write_text(
+                json.dumps(
+                    {
+                        "pid": child.pid,
+                        "token": "dead-owner",
+                        "created_at": time.time() - 86400.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 86400.0
+            os.utime(lock, (old, old))
+            started = time.monotonic()
+            with atomic_io.exclusive_file_lock(lock, timeout=1.0) as owner:
+                self.assertEqual(owner["pid"], os.getpid())
+                self.assertEqual(owner["lock_protocol"], "os_lock_v1")
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_symlink_lock_path_is_rejected_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            victim = root / "precious.txt"
+            victim.write_text("do not touch\n", encoding="utf-8")
+            lock = root / "writer.lock"
+            try:
+                lock.symlink_to(victim)
+            except OSError:
+                self.skipTest("symlink creation unavailable")
+            with self.assertRaisesRegex(OSError, "not a regular file"):
+                with atomic_io.exclusive_file_lock(lock, timeout=0.5):
+                    pass
+            self.assertEqual(victim.read_text(encoding="utf-8"), "do not touch\n")
+            self.assertTrue(lock.is_symlink())
+
+    def test_foreign_regular_file_is_used_but_never_rewritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            original = "user data that must survive\n"
+            lock.write_text(original, encoding="utf-8")
             with atomic_io.exclusive_file_lock(lock, timeout=1.0):
-                lock.write_text(
-                    json.dumps(
-                        {
-                            "pid": os.getpid(),
-                            "token": "replacement-token",
-                            "created_at": time.time(),
-                        }
-                    ),
-                    encoding="utf-8",
-                )
+                self.assertEqual(lock.read_text(encoding="utf-8"), original)
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.2):
+                        pass
+            self.assertEqual(lock.read_text(encoding="utf-8"), original)
+
+    def test_two_writers_never_enter_critical_section_concurrently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            state = {"inside": 0, "overlap": False, "entries": 0}
+            state_guard = threading.Lock()
+            first_entered = threading.Event()
+            errors: list[Exception] = []
+
+            def critical_section(label):
+                with state_guard:
+                    state["inside"] += 1
+                    state["entries"] += 1
+                    if state["inside"] > 1:
+                        state["overlap"] = True
+                if label == "a":
+                    first_entered.set()
+                    time.sleep(0.4)
+                else:
+                    first_entered.wait(timeout=2.0)
+                    time.sleep(0.1)
+                with state_guard:
+                    state["inside"] -= 1
+
+            def worker(label):
+                try:
+                    with atomic_io.exclusive_file_lock(lock, timeout=3.0):
+                        critical_section(label)
+                except Exception as exc:
+                    errors.append(exc)
+
+            first = threading.Thread(
+                target=worker, args=("a",), name="writer-a", daemon=True
+            )
+            second = threading.Thread(
+                target=worker, args=("b",), name="writer-b", daemon=True
+            )
+            first.start()
+            self.assertTrue(first_entered.wait(timeout=2.0))
+            second.start()
+            first.join(timeout=10.0)
+            second.join(timeout=10.0)
+
+            self.assertFalse(first.is_alive(), "first writer did not finish")
+            self.assertFalse(second.is_alive(), "second writer did not finish")
+            self.assertEqual([repr(exc) for exc in errors], [])
+            self.assertEqual(state["entries"], 2)
+            self.assertFalse(
+                state["overlap"],
+                "two writers entered the critical section concurrently",
+            )
             self.assertTrue(lock.exists())
+
+    def test_unsupported_filesystem_lock_is_classified_as_lock_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with mock.patch.object(
+                atomic_io,
+                "_acquire_kernel_lock",
+                side_effect=OSError(errno.ENOTSUP, "locking not supported"),
+            ):
+                with self.assertRaises(atomic_io.AtomicFileLockUnavailableError):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.2):
+                        pass
+        # Callers that map AtomicFileLockTimeoutError keep their retryable
+        # "busy" classification instead of leaking a bare OSError.
+        self.assertTrue(
+            issubclass(
+                atomic_io.AtomicFileLockUnavailableError,
+                atomic_io.AtomicFileLockTimeoutError,
+            )
+        )
+
+    def test_kernel_lock_primitive_is_acquired_and_released(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with (
+                mock.patch.object(
+                    atomic_io,
+                    "_acquire_kernel_lock",
+                    wraps=atomic_io._acquire_kernel_lock,
+                ) as acquire,
+                mock.patch.object(
+                    atomic_io,
+                    "_release_kernel_lock",
+                    wraps=atomic_io._release_kernel_lock,
+                ) as release,
+            ):
+                with atomic_io.exclusive_file_lock(lock, timeout=1.0):
+                    pass
+            self.assertEqual(acquire.call_count, 1)
+            self.assertEqual(release.call_count, 1)
+
+
+class LatestManifestFileLockTests(unittest.TestCase):
+    """The latest cursor keeps its non-preempting manual-recovery lock (#422)."""
+
+    def test_held_lock_is_not_stolen_by_age(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "latest.lock"
+            with atomic_io._latest_manifest_file_lock(lock, timeout=1.0):
+                old = time.time() - 86400.0
+                os.utime(lock, (old, old))
+                with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                    with atomic_io._latest_manifest_file_lock(lock, timeout=0.25):
+                        pass
+            self.assertFalse(lock.exists())
+
+    def test_dead_owner_record_is_not_preempted(self):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "latest.lock"
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            payload = {
+                "pid": child.pid,
+                "token": "dead-owner",
+                "created_at": time.time() - 86400.0,
+            }
+            lock.write_text(json.dumps(payload), encoding="utf-8")
+            old = time.time() - 86400.0
+            os.utime(lock, (old, old))
+            with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                with atomic_io._latest_manifest_file_lock(lock, timeout=0.3):
+                    pass
+            self.assertEqual(json.loads(lock.read_text(encoding="utf-8")), payload)
+
+    def test_release_keeps_replacement_owner_and_tolerates_missing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "latest.lock"
+            replacement = '{"pid": 12345, "token": "different-owner"}'
+            with atomic_io._latest_manifest_file_lock(lock, timeout=1.0):
+                lock.write_text(replacement, encoding="utf-8")
+            self.assertEqual(lock.read_text(encoding="utf-8"), replacement)
             lock.unlink()
+            with atomic_io._latest_manifest_file_lock(lock, timeout=1.0):
+                lock.unlink()
+            self.assertFalse(lock.exists())
 
 
 if __name__ == "__main__":

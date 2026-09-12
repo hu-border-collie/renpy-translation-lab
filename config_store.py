@@ -77,18 +77,16 @@ class ConfigWriteLockError(ValueError):
 def config_write_lock(path: Path):
     """Share the repository lock protocol across GUI save and migration.
 
-    Wait briefly for competing writers, recover abandoned locks after five
-    minutes only when the recorded owner PID is provably dead, and use
-    token-checked cleanup so replacement locks survive.  Corrupt or legacy
-    owner records are treated as unknown and are not preempted.  The generic
-    preemption path cannot eliminate a read-then-unlink race between two
-    preemptors; that residual race is outside the #422 latest-lock contract,
-    whose shared service never auto-preempts.  External editors still require
-    the migration's final source-byte check.
+    Wait briefly for competing writers.  The lock is kernel-backed (``flock``
+    / ``LockFile``), so a writer that dies or crashes releases it
+    automatically and no age-based preemption is performed.  A leftover lock
+    file or corrupt owner record is harmless: the kernel lock, not the file's
+    contents, grants mutual exclusion.  External editors still require the
+    migration's final source-byte check.
     """
     lock = path.with_name(path.name + ".write-lock")
     try:
-        with exclusive_file_lock(lock, timeout=1.0, stale_after=300.0):
+        with exclusive_file_lock(lock, timeout=1.0):
             yield
     except AtomicFileLockTimeoutError as exc:
         raise ConfigWriteLockError(

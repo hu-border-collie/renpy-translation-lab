@@ -199,7 +199,7 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   与 `latest_target`（本次计划值）；不记录或记录为空按“事务前不存在游标”处理。
 - 所有 latest 写入口（CLI `remember_latest_manifest`、`save_manifest(update_latest=True)`、
   conditional replay，GUI `ProjectState.remember_latest_manifest_path`）共享同一把
-  `atomic_io.exclusive_file_lock`，锁路径 `<latest>.lock`；GUI 与 CLI 指向同一物理
+  `atomic_io._latest_manifest_file_lock`，锁路径 `<latest>.lock`；GUI 与 CLI 指向同一物理
   文件。锁不可用/超时按现有失败分类抛出，不允许静默放行。
 - F1 回归：GUI 与 CLI 写入口都调用 shared service；源码扫描禁止绕过 service 直接写
   latest；真实 GUI writer 与 CLI CAS 的确定性交错要么保留更晚 writer 的值，要么让
@@ -207,9 +207,10 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 
 ### 6.1 stale 抢占安全语义（F2）
 
-- **latest 写服务关闭自动抢占**：`atomic_io.write_latest_manifest_locked` 与
-  `compare_and_swap_latest_manifest_locked` 调用 `exclusive_file_lock` 时显式传
-  `stale_after=-1`、`preempt_dead_owner=False`。因此 owner 已死、owner 记录损坏、
+- **latest 写服务使用独立的非抢占文件锁**：`atomic_io.write_latest_manifest_locked` 与
+  `compare_and_swap_latest_manifest_locked` 调用私有
+  `atomic_io._latest_manifest_file_lock`。该实现只用 `O_EXCL` 创建判定占用，从不检查
+  锁文件年龄或 owner 存活，也从不删除他人的锁文件。因此 owner 已死、owner 记录损坏、
   PID 无法判断或锁文件年龄超过任何阈值，都不会触发自动删除；等待者到达 `timeout`
   后抛 `AtomicFileLockTimeoutError`，latest apply 侧统一转成
   `APPLY_EXPORT_STATE_PENDING` / `recovery_state=state_pending`。这是刻意的
@@ -219,26 +220,24 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   且能确认锁文件确为遗弃锁时，操作者才可显式删除该锁文件。不得在存活 owner 持锁
   期间删除。本版本不提供静默强制恢复；若后续增加 maintenance 命令，必须显式
   `--force` 并输出风险提示，不得作为普通写路径的自动行为。
-- 通用 `exclusive_file_lock` / `config_store` / `sync_run_store` 仍保留
-  `preempt_dead_owner=True` 的默认行为：owner JSON 含 `pid` / `token` / `created_at`，
-  超过 `stale_after` 后先做 owner 存活检查：
-  - POSIX：`os.kill(pid, 0)`；`ProcessLookupError` 才证明已死；`PermissionError` 视为存活；
-    其它 `OSError` 视为无法判断。
-  - Windows：`OpenProcess` + `GetExitCodeProcess`，只在明确无效 PID / 非活动进程时
-    视为已死；`ERROR_ACCESS_DENIED` 视为存活；其它不可判断。
-  - owner 记录损坏、PID 非正整数、或存活/死亡无法判断：一律不抢占，等到 `timeout`
-    后抛 `AtomicFileLockTimeoutError`。
-  - 抢占前会防御性重读 owner/token 与文件类型；token 校验仍能避免释放阶段删除替换
-    锁，但**不能消除两个抢占者之间的 read-then-unlink 竞态**。该默认抢占路径不属于
-    #422 的 latest 合同，作为范围外已知限制记录，后续独立 issue 收敛；latest 服务
-    通过“从不自动抢占”完全绕开该竞态。
+- 其它 writer（`config_store` / `sync_run_store` / `model_usage_ledger`）使用
+  kernel-backed 的 `atomic_io.exclusive_file_lock`：POSIX `flock`、Windows
+  `msvcrt.locking`。进程退出或崩溃时由操作系统自动释放，因此不再需要按年龄抢占；
+  “读 owner → 判断已死 → unlink”的 read-then-unlink 竞态已由 #474 移除。锁文件在
+  释放后保留，owner JSON（含 `lock_protocol`）仅作诊断；不得删除正在使用的锁文件。
+  锁路径为符号链接或非 regular 文件时拒绝；既有文件如果不是空文件或本协议/旧版
+  owner 记录，只参与 kernel 锁，不会被改写或截断。不支持 kernel 锁的文件系统
+  （`ENOLCK` / `ENOTSUP`）以锁失败分类返回，调用方沿用「锁定/可重试」失败路径。
+  释放后的锁文件可安全忽略（仓库 `.gitignore` 已覆盖 `*.write-lock` / `.start.lock`）。
+- 新旧版本混跑：旧版 writer 仍用 `O_EXCL` + 年龄抢占，无法与 kernel 锁互斥。升级时
+  必须先停止所有旧版 writer，混跑不在支持范围内。
 - 条件更新 helper（`remember_latest_manifest_if_unchanged`）在锁内完成读 → 比较 → 写：
   - 当前值 == 目标值：`already_advanced`，不再写入；
   - 当前值 == 记录的前值：写入目标并复核，阶段结果为 `advanced`；
   - 当前值既不是前值也不是目标值：判定为其它合法操作已推进，**保留新值**，阶段结果为
     `retained_newer`，在 manifest `apply_state_advancement.latest_cursor`、
     `apply_summary.latest_cursor` 与 receipt 完成记录中给出用户可见诊断，不覆盖。
-- helper 内部不复用会再次上锁的 `remember_latest_manifest`（`exclusive_file_lock` 非重入）。
+- helper 内部不复用会再次上锁的 `remember_latest_manifest`（latest 文件锁非重入）。
 - `sync execution` 不更新 latest（`skipped`）；next split 存在时目标仍是 next split manifest。
 - 正常重放只推进一次；并发/交错 writer 下不覆盖更晚的游标。
 
@@ -317,9 +316,10 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 
 - Windows 等无 `dir_fd` 平台仍存在“校验与读取之间”精确替换父目录的窄 TOCTOU 窗口；
   目前以 pre/post link/reparse + realpath 检查兜底，不宣称跨平台完全解决。
-- `config_store` / `sync_run_store` 的 generic lock 默认抢占路径仍有概率极低但存在的
-  两个抢占者 read-then-unlink 竞态；本 PR 未全局改变默认语义，作为范围外已知限制记录，
-  后续独立 issue 收敛。latest 服务不受影响，因为它完全不自动抢占。
+- 旧版与新版 writer 混跑不在支持范围：旧版 `O_EXCL` + 年龄抢占与新版 kernel 锁
+  （`flock` / `msvcrt.locking`）无法互相排斥。升级前必须先停止所有旧版 writer；
+  kernel 锁文件释放后保留是设计行为，不得手动删除正在使用的锁文件（见 §6.1）。
+  #474 已移除 generic lock 的 read-then-unlink 抢占竞态。
 - latest 源码扫描是 limited-pattern 扫描，只覆盖代表性直接写模式，不能数学证明仓库
   中不存在任意其它物理 writer。
 - reparse-only / junction unit test、FE-25 legacy prepared journal、清理阶段边界测试

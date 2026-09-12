@@ -2281,7 +2281,6 @@ def manifest_path_for_target(target):
 
 
 _LATEST_MANIFEST_LOCK_TIMEOUT = atomic_io.LATEST_MANIFEST_LOCK_TIMEOUT
-_LATEST_MANIFEST_LOCK_STALE_AFTER = atomic_io.LATEST_MANIFEST_LOCK_STALE_AFTER
 
 
 def _latest_manifest_lock_path():
@@ -2311,7 +2310,6 @@ def remember_latest_manifest(manifest_path):
         LATEST_MANIFEST_FILE,
         manifest_path,
         timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
-        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
     )
 
 
@@ -2324,7 +2322,6 @@ def remember_latest_manifest_if_unchanged(expected, target):
         expected,
         target,
         timeout=_LATEST_MANIFEST_LOCK_TIMEOUT,
-        stale_after=_LATEST_MANIFEST_LOCK_STALE_AFTER,
     )
 
 

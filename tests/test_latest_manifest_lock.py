@@ -91,7 +91,7 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                 seen.append(str(lock_path))
                 yield {}
 
-            with mock.patch.object(atomic_io, "exclusive_file_lock", fake_lock):
+            with mock.patch.object(atomic_io, "_latest_manifest_file_lock", fake_lock):
                 atomic_io.write_latest_manifest_locked(latest, "target")
             self.assertEqual(seen, [f"{latest}.lock"])
             self.assertEqual(latest.read_text(encoding="utf-8"), "target")
@@ -112,7 +112,6 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                 latest,
                 "demo/manifest.json",
                 timeout=batch_mod._LATEST_MANIFEST_LOCK_TIMEOUT,
-                stale_after=batch_mod._LATEST_MANIFEST_LOCK_STALE_AFTER,
             )
 
     def test_gui_wrapper_delegates_to_shared_service(self):
@@ -148,7 +147,7 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "import atomic_io\n"
                 "lock, latest, marker = sys.argv[1:4]\n"
-                "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                "with atomic_io._latest_manifest_file_lock(lock, timeout=5.0):\n"
                 "    Path(marker).write_text('held')\n"
                 "    time.sleep(0.6)\n"
                 "    atomic_io.atomic_write_text(latest, 'holder-B')\n"
@@ -237,14 +236,14 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
             finally:
                 process.wait(timeout=10.0)
 
-    def test_latest_service_disables_automatic_preemption_for_both_paths(self):
+    def test_latest_service_uses_manual_recovery_lock_for_both_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             latest = Path(tmp) / "latest_manifest.txt"
             latest.write_text("writer-A", encoding="utf-8")
             with mock.patch.object(
                 atomic_io,
-                "exclusive_file_lock",
-                wraps=atomic_io.exclusive_file_lock,
+                "_latest_manifest_file_lock",
+                wraps=atomic_io._latest_manifest_file_lock,
             ) as lock:
                 atomic_io.write_latest_manifest_locked(
                     latest,
@@ -259,8 +258,11 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                 )
             self.assertEqual(lock.call_count, 2)
             for call in lock.call_args_list:
-                self.assertEqual(call.kwargs["stale_after"], -1)
-                self.assertIs(call.kwargs["preempt_dead_owner"], False)
+                self.assertEqual(
+                    call.args[0],
+                    atomic_io.latest_manifest_lock_path(latest),
+                )
+                self.assertEqual(call.kwargs["timeout"], 0.1)
 
     def test_dead_aged_latest_lock_is_never_preempted(self):
         with tempfile.TemporaryDirectory() as tmp:
