@@ -6,6 +6,7 @@ flush + fsync, then ``os.replace`` so readers never observe a truncated file.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -35,7 +36,27 @@ class AtomicFileLockTimeoutError(TimeoutError):
 
 
 LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
-LATEST_MANIFEST_LOCK_STALE_AFTER = 300.0
+
+_OS_LOCK_PROTOCOL = "os_lock_v1"
+# Windows ``msvcrt.locking`` locks a byte range from the current position and
+# may lock past EOF.  Locking a byte far beyond the small owner record keeps
+# the file readable by diagnostics while the lock is held.
+_OS_LOCK_BYTE_OFFSET = 1 << 20
+# Owner records are rewritten in place with space padding instead of
+# truncating the file: JSON parsers accept trailing whitespace, and avoiding
+# SetEndOfFile under an active byte-range lock keeps the Windows path boring.
+_OS_LOCK_OWNER_BYTES = 512
+_OS_LOCK_OWNER_MAX_BYTES = 1 << 20
+_LOCK_CONTENTION_ERRNOS = frozenset(
+    value
+    for value in (
+        errno.EACCES,
+        errno.EAGAIN,
+        errno.EDEADLK,
+        getattr(errno, "EDEADLOCK", None),
+    )
+    if value is not None
+)
 
 
 def _read_lock_owner(lock_path: str) -> dict[str, Any] | None:
@@ -49,60 +70,55 @@ def _read_lock_owner(lock_path: str) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def _windows_lock_owner_alive(pid: int) -> bool | None:
-    try:
-        import ctypes
-    except ImportError:
-        return None
-    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
-    process_query_limited_information = 0x1000
-    synchronize = 0x00100000
-    handle = kernel32.OpenProcess(
-        process_query_limited_information | synchronize,
-        False,
-        int(pid),
-    )
-    if not handle:
-        error = kernel32.GetLastError()
-        if error == 5:  # ERROR_ACCESS_DENIED: process exists but cannot be opened
-            return True
-        if error in (87, 1168):  # invalid parameter / not found
-            return False
-        return None
-    try:
-        exit_code = ctypes.c_ulong()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            return None
-        return bool(exit_code.value == 259)  # STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
+def _acquire_kernel_lock(fd: int) -> None:
+    """Take the process-level exclusive lock or raise on contention."""
+
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, _OS_LOCK_BYTE_OFFSET, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
-def _lock_owner_process_alive(owner: dict[str, Any] | None) -> bool | None:
-    """Return True/False when liveness is provable, None when uncertain.
+def _release_kernel_lock(fd: int) -> None:
+    """Release the process-level exclusive lock.
 
-    ``None`` must be treated as "do not preempt": the conservative path is to
-    wait for timeout and let the caller surface a structured failure.
+    Closing the descriptor releases the lock as well, so callers treat a
+    failure here as best effort.
     """
 
-    if not isinstance(owner, dict):
-        return None
-    raw_pid = owner.get("pid")
-    if isinstance(raw_pid, bool) or not isinstance(raw_pid, int) or raw_pid <= 0:
-        return None
-    if raw_pid == os.getpid():
-        return True
     if os.name == "nt":
-        return _windows_lock_owner_alive(raw_pid)
-    try:
-        os.kill(raw_pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
+        import msvcrt
+
+        os.lseek(fd, _OS_LOCK_BYTE_OFFSET, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def _is_lock_contention(exc: OSError) -> bool:
+    """Return whether ``exc`` means another process currently holds the lock."""
+
+    if exc.errno in _LOCK_CONTENTION_ERRNOS:
         return True
-    except OSError:
-        return None
-    return True
+    # Windows ``msvcrt.locking`` can surface the underlying sharing/lock
+    # violation codes instead of a mapped errno.
+    return getattr(exc, "winerror", None) in (32, 33)
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("short write while recording file lock owner")
+        view = view[written:]
 
 
 @contextmanager
@@ -111,22 +127,106 @@ def exclusive_file_lock(
     *,
     timeout: float = 30.0,
     poll_interval: float = 0.01,
-    stale_after: float = 300.0,
-    preempt_dead_owner: bool = True,
 ):
-    """Serialize cooperating writers with an exclusive same-directory lock file.
+    """Serialize cooperating writers with a kernel-backed exclusive lock file.
 
-    The lock uses atomic ``O_EXCL`` creation so it works on Windows and POSIX.
-    A token prevents one owner from deleting a replacement lock.  When
-    ``preempt_dead_owner`` is true, an aged lock is only removed when the
-    recorded owner PID is provably dead; a live owner, malformed owner record,
-    or unverifiable PID is left alone and the waiter times out instead.
+    The lock is held by the operating system (``flock`` on POSIX and
+    ``msvcrt.locking`` on Windows), so it is released automatically when the
+    owner process exits or crashes.  Age-based stale-lock preemption is no
+    longer needed and is no longer performed, which removes the
+    read-then-unlink race between two preemptors (#474).
 
-    Owner liveness plus a final owner re-read reduces accidental deletion of a
-    replacement lock, but it cannot eliminate the read-then-unlink race between
-    two preemptors.  Callers that cannot tolerate that race (the latest-manifest
-    service) pass ``preempt_dead_owner=False`` and require manual lock recovery.
+    The lock file is intentionally persistent: releasing the lock never
+    unlinks it, because another waiter may already hold a handle to the same
+    inode.  Never delete a lock file while writers may be active; a leftover
+    file is harmless because only the kernel lock grants mutual exclusion.
     """
+
+    target = os.path.abspath(os.fspath(lock_path))
+    directory = os.path.dirname(target) or "."
+    os.makedirs(directory, exist_ok=True)
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    delay = max(0.001, float(poll_interval))
+    try:
+        fd = os.open(target, os.O_CREAT | os.O_RDWR, 0o600)
+    except PermissionError as exc:
+        # A lock file created by another user (or a read-only directory) is
+        # reported as lock contention rather than a bare permission error so
+        # callers keep their documented timeout semantics.
+        if os.path.exists(target):
+            raise AtomicFileLockTimeoutError(
+                f"Timed out waiting for file lock: {target}"
+            ) from exc
+        raise
+    try:
+        while True:
+            try:
+                _acquire_kernel_lock(fd)
+            except OSError as exc:
+                if not _is_lock_contention(exc):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise AtomicFileLockTimeoutError(
+                        f"Timed out waiting for file lock: {target}"
+                    ) from exc
+                time.sleep(delay)
+                continue
+            break
+
+        owner = {
+            "pid": os.getpid(),
+            "token": uuid.uuid4().hex,
+            "created_at": time.time(),
+            "lock_protocol": _OS_LOCK_PROTOCOL,
+        }
+        try:
+            payload = json.dumps(owner, ensure_ascii=False).encode("utf-8")
+            existing_size = os.fstat(fd).st_size
+            if existing_size > _OS_LOCK_OWNER_MAX_BYTES:
+                os.ftruncate(fd, 0)
+                existing_size = 0
+            target_size = max(_OS_LOCK_OWNER_BYTES, existing_size)
+            if len(payload) > target_size:
+                raise OSError("file lock owner record exceeds reserved size")
+            os.lseek(fd, 0, os.SEEK_SET)
+            _write_all(fd, payload + b" " * (target_size - len(payload)))
+            os.fsync(fd)
+        except Exception:
+            try:
+                _release_kernel_lock(fd)
+            except OSError:
+                pass
+            raise
+
+        try:
+            yield owner
+        finally:
+            try:
+                _release_kernel_lock(fd)
+            except OSError:
+                pass
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _latest_manifest_file_lock(
+    lock_path: str | os.PathLike[str],
+    *,
+    timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
+    poll_interval: float = 0.01,
+):
+    """Non-preempting file-existence lock for the latest-manifest service.
+
+    This preserves the #422 contract for the latest cursor: a leftover lock
+    file (dead owner, corrupt record, or unknown age) never triggers automatic
+    deletion, and waiters surface ``AtomicFileLockTimeoutError`` until an
+    operator removes ``<latest>.lock`` after confirming that no writer is
+    active.  Every other writer uses the kernel-backed
+    :func:`exclusive_file_lock`, so the read-then-unlink race no longer exists
+    anywhere in the codebase.
+    """
+
     target = os.path.abspath(os.fspath(lock_path))
     directory = os.path.dirname(target) or "."
     os.makedirs(directory, exist_ok=True)
@@ -143,45 +243,10 @@ def exclusive_file_lock(
         try:
             fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
-            try:
-                lock_stat = os.lstat(target)
-            except FileNotFoundError:
-                continue
-            if not stat.S_ISREG(lock_stat.st_mode):
-                raise OSError(f"File lock path is not a regular file: {target}")
-            age = max(0.0, time.time() - lock_stat.st_mtime)
-            if stale_after >= 0 and age >= float(stale_after):
-                owner_payload = _read_lock_owner(target)
-                owner_alive = (
-                    _lock_owner_process_alive(owner_payload)
-                    if preempt_dead_owner
-                    else None
-                )
-                if preempt_dead_owner and owner_alive is False:
-                    # Re-check the owner/type before unlinking to reduce the
-                    # chance of deleting a replacement lock.  A second
-                    # preemptor can still race between this read and unlink;
-                    # the latest service avoids preemption entirely.
-                    try:
-                        replacement_stat = os.lstat(target)
-                    except FileNotFoundError:
-                        continue
-                    if not stat.S_ISREG(replacement_stat.st_mode):
-                        raise OSError(
-                            f"File lock path is not a regular file: {target}"
-                        )
-                    if _read_lock_owner(target) != owner_payload:
-                        continue
-                    try:
-                        os.unlink(target)
-                    except FileNotFoundError:
-                        pass
-                    continue
-                # Live or unverifiable owner: do not steal the lock by age.
             if time.monotonic() >= deadline:
                 raise AtomicFileLockTimeoutError(
                     f"Timed out waiting for file lock: {target}"
-                )
+                ) from None
             time.sleep(delay)
             continue
 
@@ -231,21 +296,17 @@ def write_latest_manifest_locked(
     manifest_path: str | os.PathLike[str],
     *,
     timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
-    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
 ) -> None:
     """Physically write the latest cursor under its shared writer lock."""
 
     latest = os.path.abspath(os.fspath(latest_manifest_path))
-    # Automatic stale-lock preemption cannot be made race-free with pure file
-    # system checks (a read-then-unlink window remains).  The latest cursor is
-    # a human-recoverable pointer, so the shared service never preempts: an
-    # aged lock only produces AtomicFileLockTimeoutError until an operator
-    # removes <latest>.lock after confirming no writer is active.
-    with exclusive_file_lock(
+    # The latest cursor keeps the #422 manual-recovery contract: the
+    # file-existence lock never preempts, so an abandoned <latest>.lock only
+    # produces AtomicFileLockTimeoutError until an operator removes it after
+    # confirming that no writer is active.
+    with _latest_manifest_file_lock(
         latest_manifest_lock_path(latest),
         timeout=timeout,
-        stale_after=-1,
-        preempt_dead_owner=False,
     ):
         atomic_write_text(latest, str(manifest_path))
 
@@ -256,7 +317,6 @@ def compare_and_swap_latest_manifest_locked(
     target: object,
     *,
     timeout: float = LATEST_MANIFEST_LOCK_TIMEOUT,
-    stale_after: float = LATEST_MANIFEST_LOCK_STALE_AFTER,
 ) -> dict[str, Any]:
     """Compare-and-swap the latest cursor under the shared writer lock."""
 
@@ -264,11 +324,9 @@ def compare_and_swap_latest_manifest_locked(
     expected_text = str(expected or "").strip()
     target_text = str(target or "").strip()
     # See write_latest_manifest_locked: latest locks are never auto-preempted.
-    with exclusive_file_lock(
+    with _latest_manifest_file_lock(
         latest_manifest_lock_path(latest),
         timeout=timeout,
-        stale_after=-1,
-        preempt_dead_owner=False,
     ):
         current = ""
         try:

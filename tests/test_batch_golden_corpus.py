@@ -1513,7 +1513,7 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                         "from pathlib import Path\n"
                         "import atomic_io\n"
                         "lock, latest, marker, value = sys.argv[1:5]\n"
-                        "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
+                        "with atomic_io._latest_manifest_file_lock(lock, timeout=5.0):\n"
                         "    Path(marker).write_text('held')\n"
                         "    time.sleep(float(sys.argv[5]))\n"
                         "    atomic_io.atomic_write_text(latest, value)\n"

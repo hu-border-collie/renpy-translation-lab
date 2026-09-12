@@ -9,6 +9,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
+import atomic_io
 import gemini_translate_batch as batch
 import model_usage_ledger as usage
 from gui_qt.diagnostics_context import build_diagnostics_context
@@ -488,7 +489,11 @@ class ModelUsageLedgerTests(unittest.TestCase):
             self.assertEqual(sum(row["inserted_records"] for row in results), 2)
             self.assertEqual(report["totals"]["records"], 2)
             self.assertEqual(report["totals"]["total_tokens"], 3)
-            self.assertFalse(os.path.exists(ledger.lock_path))
+            # Kernel lock files persist by design (#474); the lock must be
+            # released and immediately reusable instead of deleted.
+            self.assertTrue(os.path.exists(ledger.lock_path))
+            with atomic_io.exclusive_file_lock(ledger.lock_path, timeout=1.0):
+                pass
 
     def test_project_identity_prevents_cross_root_mixing(self):
         with tempfile.TemporaryDirectory() as first_root, tempfile.TemporaryDirectory() as second_root:

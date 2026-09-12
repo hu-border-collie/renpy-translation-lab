@@ -258,6 +258,15 @@ class MigrationTransactionTests(unittest.TestCase):
     def migrate(self):
         return migrate_config_file(self.path, expected_fingerprint=fingerprint(self.original))
 
+    def visible_siblings(self):
+        """Root entries excluding the persistent kernel lock file (#474)."""
+
+        return sorted(
+            path.name
+            for path in self.root.iterdir()
+            if not path.name.endswith(".write-lock")
+        )
+
     def test_preview_has_no_side_effects(self):
         report = preview_config_file(self.path)
         self.assertEqual(report["status"], "ready")
@@ -296,7 +305,7 @@ class MigrationTransactionTests(unittest.TestCase):
         self.path.write_bytes(self.original + b" ")
         with self.assertRaisesRegex(ValueError, "changed"):
             self.migrate()
-        self.assertEqual(list(self.root.iterdir()), [self.path])
+        self.assertEqual(self.visible_siblings(), [self.path.name])
 
     def test_rollback_refuses_changed_config_and_corrupt_backup(self):
         report = self.migrate()
@@ -318,7 +327,10 @@ class MigrationTransactionTests(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob("*.bak"))), 1)
         self.assertEqual(len(list(self.root.glob("*.migration-*.json"))), 1)
         self.assertFalse(list(self.root.glob("*.tmp")))
-        self.assertFalse(list(self.root.glob("*.write-lock")))
+        # The kernel lock file is persistent by design; verify it is released
+        # rather than deleted.
+        with config_store.config_write_lock(self.path):
+            pass
 
     def test_interruption_after_commit_leaves_usable_rollback_report(self):
         replace = config_store.os.replace
@@ -337,7 +349,7 @@ class MigrationTransactionTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original)
-        self.assertEqual(list(self.root.iterdir()), [self.path])
+        self.assertEqual(self.visible_siblings(), [self.path.name])
 
     @unittest.skipUnless(os.name == "nt", "Windows DACL preservation")
     def test_windows_dacl_is_preserved_for_backup_report_and_replacement(self):
@@ -418,31 +430,38 @@ class MigrationTransactionTests(unittest.TestCase):
             lock.write_text(owner, encoding="utf-8")
             old = time.time() - 301
             os.utime(lock, (old, old))
+            started = time.monotonic()
             write()
-            self.assertFalse(lock.exists())
+            # A dead owner's kernel lock does not survive the process, so the
+            # leftover file is acquired immediately without age-based recovery.
+            self.assertLess(time.monotonic() - started, 2.0)
+            self.assertTrue(lock.exists())
+            self.assertEqual(json.loads(lock.read_text(encoding="utf-8"))["pid"], os.getpid())
 
-    def test_corrupt_or_legacy_lock_is_not_preempted(self):
+    def test_corrupt_legacy_lock_file_does_not_block_writers(self):
         lock = self.path.with_name(self.path.name + ".write-lock")
         for write in (lambda: config_store.write_json_object(self.path, fixture()), self.migrate):
             self.path.write_bytes(self.original)
             lock.write_text("12345", encoding="ascii")  # Pre-token lock format.
             old = time.time() - 301
             os.utime(lock, (old, old))
-            with self.assertRaises(config_store.ConfigWriteLockError):
-                write()
-            self.assertEqual(lock.read_text(encoding="ascii"), "12345")
-            self.assertEqual(self.path.read_bytes(), self.original)
+            write()
+            self.assertTrue(lock.exists())
+            record = json.loads(lock.read_text(encoding="utf-8"))
+            self.assertEqual(record["pid"], os.getpid())
+            self.assertEqual(record["lock_protocol"], "os_lock_v1")
 
-    def test_lock_cleanup_keeps_replacement_owner_and_tolerates_missing_lock(self):
+    def test_lock_file_persists_and_tolerates_missing_file(self):
         lock = self.path.with_name(self.path.name + ".write-lock")
-        replacement = '{"pid": 12345, "token": "different-owner"}'
         with config_store.config_write_lock(self.path):
-            lock.write_text(replacement, encoding="utf-8")
-        self.assertEqual(lock.read_text(encoding="utf-8"), replacement)
+            self.assertTrue(lock.exists())
+        # Releasing a kernel lock never deletes the lock file; a waiter may
+        # already hold a handle to the same inode.
+        self.assertTrue(lock.exists())
         lock.unlink()
         with config_store.config_write_lock(self.path):
-            lock.unlink()
-        self.assertFalse(lock.exists())
+            pass
+        self.assertTrue(lock.exists())
 
     def test_cli_lock_timeout_is_classified_without_exposing_path(self):
         with config_store.config_write_lock(self.path), redirect_stdout(output := io.StringIO()):
@@ -459,7 +478,7 @@ class MigrationTransactionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 migrate_config_file(self.path, expected_fingerprint=fingerprint(raw))
             self.assertEqual(self.path.read_bytes(), raw)
-            self.assertEqual(list(self.root.iterdir()), [self.path])
+            self.assertEqual(self.visible_siblings(), [self.path.name])
 
     def test_symlink_is_refused(self):
         link = self.root / "link.json"
@@ -482,7 +501,7 @@ class MigrationTransactionTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original)
-        self.assertEqual(list(self.root.iterdir()), [self.path])
+        self.assertEqual(self.visible_siblings(), [self.path.name])
 
     def test_report_cannot_escape_backup_directory(self):
         report = self.migrate()
