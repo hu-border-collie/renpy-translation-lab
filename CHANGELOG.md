@@ -36,7 +36,7 @@
 
 ### 修复
 
-- 修复 #474：`exclusive_file_lock` 改为 kernel 级进程锁（POSIX `flock` / Windows `msvcrt.locking`），进程退出或崩溃时由操作系统自动释放，移除了 stale 抢占路径上“重读 owner → `unlink`”的 read-then-unlink 竞态。`config_store`、`sync_run_store` 与 usage ledger 等所有调用方一并受益；锁文件释放后保留（不再删除，避免等待者持有旧 inode），owner JSON 增加 `lock_protocol=os_lock_v1` 仅作诊断，旧的 `stale_after` / `preempt_dead_owner` 参数移除。锁路径为符号链接或非 regular 文件时拒绝；既有文件若不是空文件或本协议/旧版 owner 记录，只参与 kernel 锁而不会被改写或截断。latest 游标服务继续使用独立的非抢占文件锁，保留 #422 的人工清理合同；旧版与新版 writer 的锁协议互不兼容，升级前必须停止所有旧版 writer。
+- 修复 #474：`exclusive_file_lock` 改为 kernel 级进程锁（POSIX `flock` / Windows `msvcrt.locking`），进程退出或崩溃时由操作系统自动释放，移除了 stale 抢占路径上“重读 owner → `unlink`”的 read-then-unlink 竞态。`config_store`、`sync_run_store` 与 usage ledger 等所有调用方一并受益；锁文件释放后保留（不再删除，避免等待者持有旧 inode），owner JSON 增加 `lock_protocol=os_lock_v1` 仅作诊断，旧的 `stale_after` / `preempt_dead_owner` 参数移除。锁路径为符号链接或非 regular 文件时拒绝；既有文件若不是空文件或本协议/旧版 owner 记录，只参与 kernel 锁而不会被改写或截断；不支持 kernel 锁的文件系统（`ENOLCK` / `ENOTSUP`）按锁失败分类，不泄漏裸 `OSError`。latest 游标服务继续使用独立的非抢占文件锁，保留 #422 的人工清理合同；旧版与新版 writer 的锁协议互不兼容，升级前必须停止所有旧版 writer。
 - Ren'Py adapter inventory 支持合法多行字符串：多行三引号与反斜杠续行现在按逻辑语句生成可定位 candidate，locator 记录 `end_line_hint` / `multiline`，TL 中 paired source marker 的译文按现有启发式分类；非法未闭合字符串仍保持 `parse_error`。adapter version 升至 `1.1.3`（#460）。
 - Ren'Py TL source marker pairing 不再依赖 candidate 分类：unsupported / unknown 字符串上方合法标记不再级联为 `renpy.source_marker_unpaired`；`old` marker 只配 `new` 行，voice 行不消费 comment marker，没有后继字符串的 quoted comment 仍 fail closed；adapter version 升至 `1.1.4`（#461）。
 - canonicalize Ren'Py parse-error evidence：异常文本中的进程内存地址会被规范化，相同输入/规则/adapter 下的 `inventory_digest` 与 `coverage_digest` 跨进程稳定，归因脚本重新输出这两个 digest；adapter version 升至 `1.1.5`（#463）。

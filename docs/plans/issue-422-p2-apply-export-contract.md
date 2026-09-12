@@ -226,7 +226,9 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   “读 owner → 判断已死 → unlink”的 read-then-unlink 竞态已由 #474 移除。锁文件在
   释放后保留，owner JSON（含 `lock_protocol`）仅作诊断；不得删除正在使用的锁文件。
   锁路径为符号链接或非 regular 文件时拒绝；既有文件如果不是空文件或本协议/旧版
-  owner 记录，只参与 kernel 锁，不会被改写或截断。
+  owner 记录，只参与 kernel 锁，不会被改写或截断。不支持 kernel 锁的文件系统
+  （`ENOLCK` / `ENOTSUP`）以锁失败分类返回，调用方沿用「锁定/可重试」失败路径。
+  释放后的锁文件可安全忽略（仓库 `.gitignore` 已覆盖 `*.write-lock` / `.start.lock`）。
 - 新旧版本混跑：旧版 writer 仍用 `O_EXCL` + 年龄抢占，无法与 kernel 锁互斥。升级时
   必须先停止所有旧版 writer，混跑不在支持范围内。
 - 条件更新 helper（`remember_latest_manifest_if_unchanged`）在锁内完成读 → 比较 → 写：

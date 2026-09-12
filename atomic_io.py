@@ -35,6 +35,15 @@ class AtomicFileLockTimeoutError(TimeoutError):
     """Raised when a same-directory exclusive file lock cannot be acquired."""
 
 
+class AtomicFileLockUnavailableError(AtomicFileLockTimeoutError):
+    """Raised when the filesystem cannot provide kernel-backed locks.
+
+    Subclasses :class:`AtomicFileLockTimeoutError` so callers that already map
+    a lock failure to their retryable "busy" result keep working on
+    filesystems where ``flock`` / ``LockFile`` is not supported.
+    """
+
+
 LATEST_MANIFEST_LOCK_TIMEOUT = 30.0
 
 _OS_LOCK_PROTOCOL = "os_lock_v1"
@@ -54,6 +63,16 @@ _LOCK_CONTENTION_ERRNOS = frozenset(
         errno.EAGAIN,
         errno.EDEADLK,
         getattr(errno, "EDEADLOCK", None),
+    )
+    if value is not None
+)
+# Filesystems without kernel lock support (some NFS/FUSE/network mounts).
+_LOCK_UNSUPPORTED_ERRNOS = frozenset(
+    value
+    for value in (
+        getattr(errno, "ENOLCK", None),
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
     )
     if value is not None
 )
@@ -218,6 +237,10 @@ def exclusive_file_lock(
             try:
                 _acquire_kernel_lock(fd)
             except OSError as exc:
+                if exc.errno in _LOCK_UNSUPPORTED_ERRNOS:
+                    raise AtomicFileLockUnavailableError(
+                        f"File lock is not supported by this filesystem: {target}"
+                    ) from exc
                 if not _is_lock_contention(exc):
                     raise
                 if time.monotonic() >= deadline:

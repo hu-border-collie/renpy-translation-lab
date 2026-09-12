@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import os
@@ -934,6 +935,26 @@ class AtomicProcessFileLockTests(unittest.TestCase):
                 "two writers entered the critical section concurrently",
             )
             self.assertTrue(lock.exists())
+
+    def test_unsupported_filesystem_lock_is_classified_as_lock_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "writer.lock"
+            with mock.patch.object(
+                atomic_io,
+                "_acquire_kernel_lock",
+                side_effect=OSError(errno.ENOTSUP, "locking not supported"),
+            ):
+                with self.assertRaises(atomic_io.AtomicFileLockUnavailableError):
+                    with atomic_io.exclusive_file_lock(lock, timeout=0.2):
+                        pass
+        # Callers that map AtomicFileLockTimeoutError keep their retryable
+        # "busy" classification instead of leaking a bare OSError.
+        self.assertTrue(
+            issubclass(
+                atomic_io.AtomicFileLockUnavailableError,
+                atomic_io.AtomicFileLockTimeoutError,
+            )
+        )
 
     def test_kernel_lock_primitive_is_acquired_and_released(self):
         with tempfile.TemporaryDirectory() as tmp:
