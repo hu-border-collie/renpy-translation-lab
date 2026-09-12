@@ -19,6 +19,64 @@ import gemini_translate_batch as batch_mod
 from gui_qt.project_state import ProjectState
 
 
+_SHARED_WRITER_MARKERS = (
+    "write_latest_manifest_locked",
+    "compare_and_swap_latest_manifest_locked",
+)
+_DIRECT_LATEST_MUTATION_PATTERNS = (
+    re.compile(r"\.write_text\s*\("),
+    re.compile(r"\.write_bytes\s*\("),
+    re.compile(r"\batomic_write_text\s*\("),
+    re.compile(r"\batomic_write\s*\("),
+    re.compile(r"\bopen\s*\([^)]*[\"'][wax]"),
+    re.compile(r"\.open\s*\([^)]*[\"'][wax]"),
+    re.compile(r"\bos\.(?:replace|rename)\s*\("),
+    re.compile(r"\bshutil\.(?:copy|copyfile|move)\s*\("),
+    re.compile(r"\.replace\s*\("),
+    re.compile(r"\.rename\s*\("),
+    re.compile(r"\.unlink\s*\("),
+)
+
+
+def _direct_latest_write_offenders(relative_path: str, source: str) -> list[str]:
+    """Return limited-pattern offenders for a source file.
+
+    The scan intentionally covers representative direct-write idioms rather
+    than proving that no arbitrary writer can exist; see the contract's known
+    limitations.
+    """
+
+    lines = source.splitlines()
+    offenders: list[str] = []
+    for index, line in enumerate(lines):
+        if not any(mutation.search(line) for mutation in _DIRECT_LATEST_MUTATION_PATTERNS):
+            continue
+        window = "\n".join(lines[max(0, index - 3) : index + 1])
+        if "latest" not in window.lower() and "LATEST_MANIFEST_FILE" not in window:
+            continue
+        if any(marker in window for marker in _SHARED_WRITER_MARKERS):
+            continue
+        offenders.append(f"{relative_path}:{index + 1}: {line.strip()}")
+    return offenders
+
+
+def _collect_direct_latest_write_offenders(repo_root: Path) -> list[str]:
+    allowed = {"atomic_io.py"}
+    offenders: list[str] = []
+    for path in repo_root.rglob("*.py"):
+        relative = path.relative_to(repo_root).as_posix()
+        if relative.startswith(("tests/", "logs/", "__pycache__/")):
+            continue
+        if relative in allowed:
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        offenders.extend(_direct_latest_write_offenders(relative, source))
+    return offenders
+
+
 class LatestManifestSharedWriterTests(unittest.TestCase):
     def test_physical_writer_uses_latest_lock_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,35 +234,170 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
             finally:
                 process.wait(timeout=10.0)
 
+    def test_latest_service_disables_automatic_preemption_for_both_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "latest_manifest.txt"
+            latest.write_text("writer-A", encoding="utf-8")
+            with mock.patch.object(
+                atomic_io,
+                "exclusive_file_lock",
+                wraps=atomic_io.exclusive_file_lock,
+            ) as lock:
+                atomic_io.write_latest_manifest_locked(
+                    latest,
+                    "writer-B",
+                    timeout=0.1,
+                )
+                atomic_io.compare_and_swap_latest_manifest_locked(
+                    latest,
+                    "writer-B",
+                    "writer-C",
+                    timeout=0.1,
+                )
+            self.assertEqual(lock.call_count, 2)
+            for call in lock.call_args_list:
+                self.assertEqual(call.kwargs["stale_after"], -1)
+                self.assertIs(call.kwargs["preempt_dead_owner"], False)
+
+    def test_dead_aged_latest_lock_is_never_preempted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            latest = Path(tmp) / "latest_manifest.txt"
+            latest.write_text("writer-A", encoding="utf-8")
+            lock = Path(atomic_io.latest_manifest_lock_path(latest))
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            lock.write_text(
+                json.dumps(
+                    {
+                        "pid": child.pid,
+                        "token": "dead-owner-token",
+                        "created_at": time.time() - 30.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 30.0
+            os.utime(lock, (old, old))
+            for label, operation in (
+                (
+                    "write",
+                    lambda: atomic_io.write_latest_manifest_locked(
+                        latest,
+                        "writer-B",
+                        timeout=0.35,
+                    ),
+                ),
+                (
+                    "cas",
+                    lambda: atomic_io.compare_and_swap_latest_manifest_locked(
+                        latest,
+                        "writer-A",
+                        "writer-B",
+                        timeout=0.35,
+                    ),
+                ),
+            ):
+                with self.subTest(operation=label):
+                    with self.assertRaises(atomic_io.AtomicFileLockTimeoutError):
+                        operation()
+                    self.assertEqual(
+                        latest.read_text(encoding="utf-8"),
+                        "writer-A",
+                    )
+                    self.assertEqual(
+                        json.loads(lock.read_text(encoding="utf-8"))["token"],
+                        "dead-owner-token",
+                    )
+
+    def test_competing_latest_reapers_never_delete_or_double_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            latest = root / "latest_manifest.txt"
+            latest.write_text("writer-A", encoding="utf-8")
+            lock = Path(atomic_io.latest_manifest_lock_path(latest))
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            child.wait(timeout=5.0)
+            lock.write_text(
+                json.dumps(
+                    {
+                        "pid": child.pid,
+                        "token": "dead-reaper-victim",
+                        "created_at": time.time() - 30.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old = time.time() - 30.0
+            os.utime(lock, (old, old))
+            start = root / "start"
+            scripts = []
+            for index in range(2):
+                marker = root / f"marker-{index}"
+                script = (
+                    "import sys, time\n"
+                    "from pathlib import Path\n"
+                    "import atomic_io\n"
+                    "latest, marker, start = sys.argv[1:4]\n"
+                    "while not Path(start).exists():\n"
+                    "    time.sleep(0.01)\n"
+                    "try:\n"
+                    "    atomic_io.write_latest_manifest_locked(\n"
+                    "        latest, 'reaper-%s', timeout=0.6)\n"
+                    "except atomic_io.AtomicFileLockTimeoutError:\n"
+                    "    Path(marker).write_text('timeout')\n"
+                    "else:\n"
+                    "    Path(marker).write_text('stole')\n"
+                ) % index
+                scripts.append(
+                    subprocess.Popen(
+                        [sys.executable, "-c", script, str(latest), str(marker), str(start)],
+                        cwd=str(Path(__file__).resolve().parents[1]),
+                    )
+                )
+            start.write_text("go", encoding="utf-8")
+            for process in scripts:
+                self.assertEqual(process.wait(timeout=10.0), 0)
+            self.assertEqual(
+                [ (root / f"marker-{i}").read_text(encoding="utf-8") for i in range(2) ],
+                ["timeout", "timeout"],
+            )
+            self.assertEqual(latest.read_text(encoding="utf-8"), "writer-A")
+            self.assertEqual(
+                json.loads(lock.read_text(encoding="utf-8"))["token"],
+                "dead-reaper-victim",
+            )
+
+    def test_limited_pattern_scan_catches_representative_bypasses(self):
+        bypasses = (
+            'open(latest, "w", encoding="utf-8").write("x")',
+            "Path(latest).write_text('x', encoding='utf-8')",
+            "os.replace(temp_path, latest)",
+            "os.rename(temp_path, LATEST_MANIFEST_FILE)",
+            "temp_path.replace(latest)",
+            "shutil.copyfile(temp_path, latest)",
+            "atomic_write_text(latest, 'x')",
+        )
+        for snippet in bypasses:
+            with self.subTest(snippet=snippet):
+                self.assertEqual(
+                    len(_direct_latest_write_offenders("demo.py", snippet)),
+                    1,
+                )
+        safe_snippets = (
+            "current = latest.read_text(encoding='utf-8')",
+            "with open(latest, 'r', encoding='utf-8') as handle:\n    handle.read()",
+            "written = atomic_io.write_latest_manifest_locked(latest, target)",
+        )
+        for snippet in safe_snippets:
+            with self.subTest(snippet=snippet):
+                self.assertEqual(
+                    _direct_latest_write_offenders("demo.py", snippet),
+                    [],
+                )
+
     def test_no_direct_latest_manifest_writes_outside_shared_service(self):
         repo_root = Path(__file__).resolve().parents[1]
-        allowed = {"atomic_io.py"}
-        offenders: list[str] = []
-        write_pattern = re.compile(r"\.write_text\s*\(|atomic_write_text\s*\(")
-        shared_markers = (
-            "write_latest_manifest_locked",
-            "compare_and_swap_latest_manifest_locked",
-        )
-        for path in repo_root.rglob("*.py"):
-            relative = path.relative_to(repo_root).as_posix()
-            if relative.startswith(("tests/", "logs/", "__pycache__/")):
-                continue
-            if relative in allowed:
-                continue
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeError):
-                continue
-            for index, line in enumerate(lines):
-                if not write_pattern.search(line):
-                    continue
-                window = "\n".join(lines[max(0, index - 3) : index + 1])
-                if "latest" not in window.lower() and "LATEST_MANIFEST_FILE" not in window:
-                    continue
-                if any(marker in window for marker in shared_markers):
-                    continue
-                offenders.append(f"{relative}:{index + 1}: {line.strip()}")
-        self.assertEqual(offenders, [])
+        self.assertEqual(_collect_direct_latest_write_offenders(repo_root), [])
 
 
 if __name__ == "__main__":

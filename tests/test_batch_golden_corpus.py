@@ -1579,6 +1579,71 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             finally:
                 self._restore_batch_environment(old_values)
 
+    def test_golden_dead_aged_latest_lock_yields_state_pending_without_stealing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-latest-lock-timeout'
+            )
+            try:
+                export_root = root / 'exports'
+                lock = Path(batch_mod._latest_manifest_lock_path())
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                latest_path = Path(batch_mod.LATEST_MANIFEST_FILE)
+                latest_before = (
+                    latest_path.read_bytes() if latest_path.exists() else None
+                )
+                child = subprocess.Popen([sys.executable, '-c', 'pass'])
+                child.wait(timeout=5.0)
+                lock.write_text(
+                    json.dumps(
+                        {
+                            'pid': child.pid,
+                            'token': 'aged-dead-latest-owner',
+                            'created_at': time.time() - 30.0,
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                old = time.time() - 30.0
+                os.utime(lock, (old, old))
+                with mock.patch.object(
+                    batch_mod,
+                    '_LATEST_MANIFEST_LOCK_TIMEOUT',
+                    0.35,
+                ):
+                    with self.assertRaises(
+                        batch_mod.cli_contract.MachineContractError
+                    ) as raised:
+                        batch_mod.apply_results(
+                            str(manifest_path),
+                            export_dir=str(export_root),
+                        )
+                self.assertEqual(
+                    raised.exception.code_name,
+                    'APPLY_EXPORT_STATE_PENDING',
+                )
+                self.assertEqual(
+                    raised.exception.details.get('recovery_state'),
+                    'state_pending',
+                )
+                self.assertTrue(raised.exception.details.get('files_committed'))
+                self.assertTrue(raised.exception.details.get('outputs_committed'))
+                self.assertIn(
+                    'state',
+                    raised.exception.details.get('pending_steps') or [],
+                )
+                self.assertIn('Timed out waiting for file lock', str(raised.exception))
+                self.assertEqual(
+                    latest_path.read_bytes() if latest_path.exists() else None,
+                    latest_before,
+                )
+                self.assertEqual(
+                    json.loads(lock.read_text(encoding='utf-8'))['token'],
+                    'aged-dead-latest-owner',
+                )
+            finally:
+                self._restore_batch_environment(old_values)
+
     def test_golden_pending_steps_contradictory_states_never_complete(self):
         for scenario in (
             'receipt_complete_with_pending_step',
@@ -1875,6 +1940,247 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                 if moved_parent is not None and moved_parent.exists() and parent is not None:
                     try:
                         os.rename(moved_parent, parent)
+                    except OSError:
+                        pass
+                self._restore_batch_environment(old_values)
+
+    @unittest.skipUnless(
+        os.name == 'posix'
+        and hasattr(os, 'O_NOFOLLOW')
+        and os.open in getattr(os, 'supports_dir_fd', set()),
+        'POSIX dir_fd + O_NOFOLLOW required',
+    )
+    def test_golden_apply_export_posix_handle_identity_branch_after_precheck(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-workspace-dir-fd-branch'
+            )
+            parent = tl_dir / 'chapter01'
+            moved_parent = tl_dir / 'moved_chapter01'
+            state = {
+                'armed': False,
+                'swapped': False,
+                'link_created': False,
+                'unsupported': False,
+                'dir_fd_calls': [],
+                'fstat_calls': 0,
+                'root_open_flags': None,
+            }
+            try:
+                export_root = root / 'exports'
+                batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                real_verify = batch_export._workspace_target_sha256_verified
+                real_open = os.open
+                real_fstat = os.fstat
+                root_norm = os.path.normcase(os.path.abspath(str(tl_dir)))
+
+                def armed_verify(target, workspace_root):
+                    state['armed'] = True
+                    return real_verify(target, workspace_root)
+
+                def racing_open(path, *args, **kwargs):
+                    if kwargs.get('dir_fd') is not None:
+                        state['dir_fd_calls'].append(str(path))
+                    elif (
+                        state['armed']
+                        and not state['swapped']
+                        and os.path.normcase(os.path.abspath(str(path))) == root_norm
+                    ):
+                        state['swapped'] = True
+                        state['root_open_flags'] = args[0] if args else kwargs.get('flags')
+                        os.rename(parent, moved_parent)
+                        try:
+                            os.symlink(
+                                moved_parent,
+                                parent,
+                                target_is_directory=True,
+                            )
+                            state['link_created'] = True
+                        except (OSError, NotImplementedError):
+                            if moved_parent.exists() and not os.path.lexists(parent):
+                                os.rename(moved_parent, parent)
+                            state['unsupported'] = True
+                    return real_open(path, *args, **kwargs)
+
+                def spy_fstat(fd, *args, **kwargs):
+                    state['fstat_calls'] += 1
+                    return real_fstat(fd, *args, **kwargs)
+
+                raised = None
+                with mock.patch.object(
+                    batch_export.os,
+                    'open',
+                    side_effect=racing_open,
+                ) as patched_open:
+                    with mock.patch.object(
+                        batch_export.os,
+                        'supports_dir_fd',
+                        set(batch_export.os.supports_dir_fd) | {patched_open},
+                    ):
+                        with (
+                            mock.patch.object(
+                                batch_export,
+                                '_workspace_target_sha256_verified',
+                                side_effect=armed_verify,
+                            ),
+                            mock.patch.object(
+                                batch_export.os,
+                                'fstat',
+                                side_effect=spy_fstat,
+                            ),
+                        ):
+                            try:
+                                batch_mod.apply_results(
+                                    str(manifest_path),
+                                    export_dir=str(export_root),
+                                )
+                            except batch_mod.cli_contract.MachineContractError as exc:
+                                raised = exc
+                if state['unsupported']:
+                    self.skipTest('directory symlink creation unavailable')
+                self.assertTrue(state['swapped'])
+                self.assertTrue(state['dir_fd_calls'])
+                self.assertGreaterEqual(state['fstat_calls'], 1)
+                self.assertIsNotNone(state['root_open_flags'])
+                assert state['root_open_flags'] is not None
+                self.assertTrue(int(state['root_open_flags']) & int(os.O_NOFOLLOW))
+                self.assertIsNotNone(raised)
+                assert raised is not None
+                self.assertEqual(
+                    raised.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+                self.assertEqual(
+                    raised.details.get('changed'),
+                    'apply_export.workspace_conflict',
+                )
+                self.assertIn('could not be verified safely', str(raised))
+            finally:
+                if state['link_created'] and os.path.islink(parent):
+                    try:
+                        os.unlink(parent)
+                    except OSError:
+                        pass
+                if (
+                    moved_parent.exists()
+                    and not os.path.lexists(parent)
+                ):
+                    try:
+                        os.rename(moved_parent, parent)
+                    except OSError:
+                        pass
+                self._restore_batch_environment(old_values)
+
+    @unittest.skipUnless(
+        os.name == 'posix'
+        and hasattr(os, 'O_NOFOLLOW')
+        and os.open in getattr(os, 'supports_dir_fd', set()),
+        'POSIX dir_fd + O_NOFOLLOW required',
+    )
+    def test_golden_apply_export_rejects_tl_root_replaced_before_root_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, manifest_path, tl_dir, old_values = self._prepare_apply_export_case(
+                tmp, 'golden-workspace-tl-root-replaced'
+            )
+            moved_tl = root / 'moved_schinese'
+            state = {
+                'armed': False,
+                'swapped': False,
+                'link_created': False,
+                'unsupported': False,
+                'root_open_flags': None,
+                'dir_fd_calls': 0,
+            }
+            try:
+                export_root = root / 'exports'
+                batch_mod.apply_results(
+                    str(manifest_path),
+                    export_dir=str(export_root),
+                )
+                real_verify = batch_export._workspace_target_sha256_verified
+                real_open = os.open
+                root_norm = os.path.normcase(os.path.abspath(str(tl_dir)))
+
+                def armed_verify(target, workspace_root):
+                    state['armed'] = True
+                    return real_verify(target, workspace_root)
+
+                def racing_open(path, *args, **kwargs):
+                    if kwargs.get('dir_fd') is not None:
+                        state['dir_fd_calls'] += 1
+                    elif (
+                        state['armed']
+                        and not state['swapped']
+                        and os.path.normcase(os.path.abspath(str(path))) == root_norm
+                    ):
+                        state['swapped'] = True
+                        state['root_open_flags'] = args[0] if args else kwargs.get('flags')
+                        os.rename(tl_dir, moved_tl)
+                        try:
+                            os.symlink(
+                                moved_tl,
+                                tl_dir,
+                                target_is_directory=True,
+                            )
+                            state['link_created'] = True
+                        except (OSError, NotImplementedError):
+                            if moved_tl.exists() and not os.path.lexists(tl_dir):
+                                os.rename(moved_tl, tl_dir)
+                            state['unsupported'] = True
+                    return real_open(path, *args, **kwargs)
+
+                raised = None
+                with mock.patch.object(
+                    batch_export.os,
+                    'open',
+                    side_effect=racing_open,
+                ) as patched_open:
+                    with mock.patch.object(
+                        batch_export.os,
+                        'supports_dir_fd',
+                        set(batch_export.os.supports_dir_fd) | {patched_open},
+                    ):
+                        with mock.patch.object(
+                            batch_export,
+                            '_workspace_target_sha256_verified',
+                            side_effect=armed_verify,
+                        ):
+                            try:
+                                batch_mod.apply_results(
+                                    str(manifest_path),
+                                    export_dir=str(export_root),
+                                )
+                            except batch_mod.cli_contract.MachineContractError as exc:
+                                raised = exc
+                if state['unsupported']:
+                    self.skipTest('directory symlink creation unavailable')
+                self.assertTrue(state['swapped'])
+                self.assertIsNotNone(state['root_open_flags'])
+                assert state['root_open_flags'] is not None
+                self.assertTrue(int(state['root_open_flags']) & int(os.O_NOFOLLOW))
+                self.assertIsNotNone(raised)
+                assert raised is not None
+                self.assertEqual(
+                    raised.code_name,
+                    'APPLY_EXPORT_OUTPUT_CHANGED',
+                )
+                self.assertEqual(
+                    raised.details.get('changed'),
+                    'apply_export.workspace_conflict',
+                )
+                self.assertIn('could not be verified safely', str(raised))
+            finally:
+                if state['link_created'] and os.path.islink(tl_dir):
+                    try:
+                        os.unlink(tl_dir)
+                    except OSError:
+                        pass
+                if moved_tl.exists() and not os.path.lexists(tl_dir):
+                    try:
+                        os.rename(moved_tl, tl_dir)
                     except OSError:
                         pass
                 self._restore_batch_environment(old_values)

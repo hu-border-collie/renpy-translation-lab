@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -1544,10 +1545,32 @@ def _workspace_target_sha256_verified(target: str, workspace_root: str) -> str:
         directory_fd = -1
         file_fd = -1
         try:
+            # O_NOFOLLOW on the root catches a workspace root replaced by a
+            # symlink between the path checks above and this open.  The
+            # fstat/lstat identity comparison catches a swap after the open;
+            # component opens below stay anchored on this handle with
+            # O_NOFOLLOW.
             directory_fd = os.open(
                 workspace_abs,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | os.O_NOFOLLOW,
             )
+            root_handle_stat = os.fstat(directory_fd)
+            root_path_stat = os.lstat(workspace_abs)
+            if stat.S_ISLNK(root_path_stat.st_mode) or (
+                root_handle_stat.st_dev,
+                root_handle_stat.st_ino,
+            ) != (
+                root_path_stat.st_dev,
+                root_path_stat.st_ino,
+            ):
+                raise ApplyExportError(
+                    "apply_export.workspace_conflict",
+                    "Committed workspace root identity changed while opening: "
+                    f"{workspace_abs}.",
+                    details={"target_path": target_abs},
+                )
             for part in parts[:-1]:
                 next_fd = os.open(
                     part,

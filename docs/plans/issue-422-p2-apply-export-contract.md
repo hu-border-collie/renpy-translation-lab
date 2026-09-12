@@ -60,7 +60,7 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
       `logs/batch_jobs/latest_manifest.txt`）。读、比较、写在同一临界区内完成。
       当前值等于 receipt 记录的前值时推进；等于目标时 `already_advanced`；
       属于其它更新操作时保留新值并记录 `retained_newer`，禁止覆盖；锁不可用/
-      超时不得静默放行。安全 stale 抢占见 §6.1；
+      超时不得静默放行。latest 锁不自动抢占、遗弃锁仅人工清理，见 §6.1；
    5. 写 manifest：`applied_at`、`apply_summary`、`export_summary`、`export_record_path`、
       `apply_state_advancement=complete`、必要的 next split、latest 阶段记录；清理 stale 字段；
       任一 pending 步骤未完成时写 `apply_state_advancement.status=pending` + `pending_steps`
@@ -103,8 +103,11 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 - GUI 与 CLI 解析到同一物理 latest 文件（`tool_root/logs/batch_jobs/latest_manifest.txt`），
   因此 GUI writer 与 CLI CAS 不会交错成“CLI 按旧前值覆盖 GUI 新值并报 advanced”。
 - 回归测试：真实 GUI writer 等待持锁 holder、GUI writer 先写后 CLI CAS 返回
-  `retained_newer`、跨进程互斥，以及仓库源码扫描禁止 shared service 之外的
-  `latest` 直接 `write_text` / `atomic_write_text`。
+  `retained_newer`、跨进程互斥，以及仓库源码扫描禁止 shared service 之外的代表性
+  直接写模式（`write_text`/`write_bytes`/`atomic_write_text`、写模式 `open`、
+  `os.replace`/`os.rename`、`shutil.copy*`、`.replace`/`.rename`）。该扫描是
+  limited-pattern 检查，**不能证明不存在任意其它 writer**；这是验收辅助，不是
+  完备性证明。
 
 ## 3. 状态表
 
@@ -137,13 +140,17 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
   receipt、规范化路径、workspace target 父路径组件（link / junction / reparse）、
   export 受管树（缺失/修改/额外目录）与 workspace 字节摘要。
   失败返回稳定错误码 `APPLY_EXPORT_OUTPUT_CHANGED`，不得复用旧成功摘要。
-- **F4 路径身份读取**：POSIX 且支持 `dir_fd` 时，workspace verifier 从 TL 根打开
-  目录句柄，逐级 `O_NOFOLLOW` + `dir_fd` 打开组件，读文件句柄并比对 path stat；
-  检查后、读取前替换父目录为 link/junction 会在句柄/路径身份不一致时被拒绝。
-  Windows 等无 `dir_fd` 平台退化为 pre/post link-reparse 检查 + realpath 比较；
-  在“校验与读取之间”精确插入父目录替换的窄窗口仍存在残余 TOCTOU 风险，严重度
-  限于“可能把已提交字节的复核授权给错误路径身份”，不会覆盖文件；按已知限制记录，
-  不宣称跨平台完全解决。
+- **F4 路径身份读取**：POSIX 且支持 `dir_fd` 时，workspace verifier 先用
+  `O_NOFOLLOW` 打开 TL 根，并对根句柄做 `fstat` 与路径 `lstat` 的 dev/ino 身份比对；
+  随后逐级 `O_NOFOLLOW` + `dir_fd` 打开组件，读文件句柄并比对 path stat。TL 根或
+  父目录在检查后、打开前被替换为 link/junction 会在根/组件打开或身份比对时失败，
+  统一映射为 `APPLY_EXPORT_OUTPUT_CHANGED` / `apply_export.workspace_conflict`。
+  测试在两个位置注入：根 open 前替换 TL 根（证明根 `O_NOFOLLOW` 生效），以及在
+  helper 最后一次预检后、组件 open 前替换父目录（证明 `dir_fd`/`fstat` 分支实际
+  执行且读路径被拒绝）。Windows 等无 `dir_fd` 平台退化为 pre/post link-reparse
+  检查 + realpath 比较；在“校验与读取之间”精确插入父目录替换的窄窗口仍存在残余
+  TOCTOU 风险，严重度限于“可能把已提交字节的复核授权给错误路径身份”，不会覆盖
+  文件；按已知限制记录，不宣称跨平台完全解决。
 - 已存在 export 树只有在 receipt 的 `apply_identity`、request fingerprint、受管文件摘要、
   目录集合全部匹配时才允许幂等返回；额外/缺失/修改文件、不同 request、不同 root 均拒绝。
 - receipt 存在但 manifest 尚未记录 `applied_at` 时，只能按 receipt 计划补记状态；
@@ -200,19 +207,31 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 
 ### 6.1 stale 抢占安全语义（F2）
 
-- `exclusive_file_lock` 默认启用 `preempt_dead_owner=True`：owner JSON 含 `pid` / `token` /
-  `created_at`。超过 `stale_after` 后必须先做 owner 存活检查：
+- **latest 写服务关闭自动抢占**：`atomic_io.write_latest_manifest_locked` 与
+  `compare_and_swap_latest_manifest_locked` 调用 `exclusive_file_lock` 时显式传
+  `stale_after=-1`、`preempt_dead_owner=False`。因此 owner 已死、owner 记录损坏、
+  PID 无法判断或锁文件年龄超过任何阈值，都不会触发自动删除；等待者到达 `timeout`
+  后抛 `AtomicFileLockTimeoutError`，latest apply 侧统一转成
+  `APPLY_EXPORT_STATE_PENDING` / `recovery_state=state_pending`。这是刻意的
+  “绝不自动抢占”，因为“读 owner → 判断已死 → unlink”与替换锁之间无法只靠文件
+  系统检查消除竞态。
+- 人工清理路径（唯一恢复方式）：只有在确认没有 writer 正在使用 `<latest>.lock`、
+  且能确认锁文件确为遗弃锁时，操作者才可显式删除该锁文件。不得在存活 owner 持锁
+  期间删除。本版本不提供静默强制恢复；若后续增加 maintenance 命令，必须显式
+  `--force` 并输出风险提示，不得作为普通写路径的自动行为。
+- 通用 `exclusive_file_lock` / `config_store` / `sync_run_store` 仍保留
+  `preempt_dead_owner=True` 的默认行为：owner JSON 含 `pid` / `token` / `created_at`，
+  超过 `stale_after` 后先做 owner 存活检查：
   - POSIX：`os.kill(pid, 0)`；`ProcessLookupError` 才证明已死；`PermissionError` 视为存活；
     其它 `OSError` 视为无法判断。
   - Windows：`OpenProcess` + `GetExitCodeProcess`，只在明确无效 PID / 非活动进程时
     视为已死；`ERROR_ACCESS_DENIED` 视为存活；其它不可判断。
   - owner 记录损坏、PID 非正整数、或存活/死亡无法判断：一律不抢占，等到 `timeout`
-    后抛 `AtomicFileLockTimeoutError`；latest apply 侧统一转成
-    `APPLY_EXPORT_STATE_PENDING` / `recovery_state=state_pending`。
-- 抢占前会重新读取 owner/token 与文件类型，避免删除替换后的新锁；token 防误删仍然有效。
-- 遗弃锁的人工清理路径：只有在确认 owner PID 不存在、且没有其它 writer 正在使用
-  `<latest>.lock` 时，操作者才可删除该锁文件；不得在存活 owner 持锁期间删除。
-
+    后抛 `AtomicFileLockTimeoutError`。
+  - 抢占前会防御性重读 owner/token 与文件类型；token 校验仍能避免释放阶段删除替换
+    锁，但**不能消除两个抢占者之间的 read-then-unlink 竞态**。该默认抢占路径不属于
+    #422 的 latest 合同，作为范围外已知限制记录，后续独立 issue 收敛；latest 服务
+    通过“从不自动抢占”完全绕开该竞态。
 - 条件更新 helper（`remember_latest_manifest_if_unchanged`）在锁内完成读 → 比较 → 写：
   - 当前值 == 目标值：`already_advanced`，不再写入；
   - 当前值 == 记录的前值：写入目标并复核，阶段结果为 `advanced`；
@@ -259,7 +278,9 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 | FE-24 | 两个 writer 并发 latest（D5） | 共享锁；CAS 记录阶段 | 保留更晚 writer 的值 | 锁内读-比较-写；不静默放行锁失败 |
 | FE-25 | legacy prepared journal（无摘要） | 恢复后 journal 清理 | 历史恢复可能覆盖外部修改 | 兼容性边界钉住；不升级旧格式，不作为旧格式必红证据 |
 | FE-26 | GUI latest writer + CLI CAS 交错（F1） | 同一 `<latest>.lock` | 保留更晚 writer 的值或 CAS `retained_newer` | 禁止“覆盖 + advanced”；所有物理写入口走 shared service |
-| FE-27 | 存活 owner 超过 stale_after（F2） | 锁不被抢占 | 等待者 timeout → 结构化 pending | 只有可证明 owner 已死才允许抢占；未知不抢占 |
+| FE-27 | 存活 owner 超过 stale_after（F2） | 锁不被抢占 | 等待者 timeout → 结构化 pending | latest 服务从不自动抢占；generic lock 仅在可证明 owner 已死时抢占，未知不抢占 |
+| FE-30 | 已死 owner 的 aged latest 锁（F2） | `<latest>.lock` 保留原 owner/token | latest 值不变，等待者 timeout → 结构化 pending | 必须人工确认无 writer 后删除锁；两个 reaper 并发也不能删除/双写 |
+| FE-31 | 同级/后续 writer 替换锁后旧 owner 释放（F2） | 旧 owner 不删除替换锁 | 替换锁及其 writer 不受影响 | token 校验防误删；latest 路径因从不抢占不涉及抢占竞态 |
 | FE-28 | complete/pending 矛盾 + pending_steps（F3） | pending 并集权威 | 不返回 applied、不写 applied_at、不推进 latest | 可执行步骤续跑；未知步骤结构化拒绝；配置关闭仍 pending |
 | FE-29 | 检查后、读取前替换 workspace 父目录（F4） | verifier 句柄/路径身份校验 | POSIX 拒绝；Windows 窄窗口残余风险记录 | `APPLY_EXPORT_OUTPUT_CHANGED`；不宣称跨平台完全解决 |
 
@@ -286,7 +307,23 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 - P2 写回字节与导出字节一致：preflight `sides_mismatch` + post-commit validator。
 - 严格回滚可重放且不覆盖事务外修改：D1 回滚阶段 + FE-17/13/14；legacy 边界 FE-25。
 - P1 不执行 P2 恢复/状态补记：D2 + FE-18。
-- 所有幂等成功出口复核输出与路径身份，不伪报成功：D3 + FE-19/23。
+- 所有幂等成功出口复核输出与路径身份，不伪报成功：D3 + FE-19/23/29。
+- POSIX 根/父目录路径身份由句柄分支拒绝，并映射稳定错误码：F4 + FE-29。
 - RAG 失败/配置变化可追踪、可重试、不 complete：D4 + FE-10/20/22。
-- latest 条件推进、共享锁、不覆盖后续操作：D5 + FE-21/24。
+- latest 条件推进、共享锁、不覆盖后续操作，且 latest 锁从不自动抢占：D5/F2 + FE-21/24/27/30/31。
 - 普通 apply / 不支持模式无回归：P1 测试 + durable/revision 拒绝导出选项 + `--export-only` 既有测试。
+
+## 10. 已知限制与范围外
+
+- Windows 等无 `dir_fd` 平台仍存在“校验与读取之间”精确替换父目录的窄 TOCTOU 窗口；
+  目前以 pre/post link/reparse + realpath 检查兜底，不宣称跨平台完全解决。
+- `config_store` / `sync_run_store` 的 generic lock 默认抢占路径仍有概率极低但存在的
+  两个抢占者 read-then-unlink 竞态；本 PR 未全局改变默认语义，作为范围外已知限制记录，
+  后续独立 issue 收敛。latest 服务不受影响，因为它完全不自动抢占。
+- latest 源码扫描是 limited-pattern 扫描，只覆盖代表性直接写模式，不能数学证明仓库
+  中不存在任意其它物理 writer。
+- reparse-only / junction unit test、FE-25 legacy prepared journal、清理阶段边界测试
+  是兼容性或边界钉住，不声称在旧审计版本上必然失败；回归证据以明确的 fault-injection
+  与并发交错测试为准。
+- 真实进程终止/断电持久性、RAG upsert 在 kill 中途的注入未在本轮故障矩阵中模拟；
+  文件事务边界按 `atomic_io` 已有语义与崩溃阶段矩阵验收。

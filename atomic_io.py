@@ -118,10 +118,14 @@ def exclusive_file_lock(
 
     The lock uses atomic ``O_EXCL`` creation so it works on Windows and POSIX.
     A token prevents one owner from deleting a replacement lock.  When
-    ``preempt_dead_owner`` is true (default), an aged lock is only removed when
-    the recorded owner PID is provably dead; a live owner, a malformed owner
-    record, or an unverifiable PID is left alone and the waiter times out
-    instead.  This prevents an old-but-alive writer from losing its lock.
+    ``preempt_dead_owner`` is true, an aged lock is only removed when the
+    recorded owner PID is provably dead; a live owner, malformed owner record,
+    or unverifiable PID is left alone and the waiter times out instead.
+
+    Owner liveness plus a final owner re-read reduces accidental deletion of a
+    replacement lock, but it cannot eliminate the read-then-unlink race between
+    two preemptors.  Callers that cannot tolerate that race (the latest-manifest
+    service) pass ``preempt_dead_owner=False`` and require manual lock recovery.
     """
     target = os.path.abspath(os.fspath(lock_path))
     directory = os.path.dirname(target) or "."
@@ -230,10 +234,16 @@ def write_latest_manifest_locked(
     """Physically write the latest cursor under its shared writer lock."""
 
     latest = os.path.abspath(os.fspath(latest_manifest_path))
+    # Automatic stale-lock preemption cannot be made race-free with pure file
+    # system checks (a read-then-unlink window remains).  The latest cursor is
+    # a human-recoverable pointer, so the shared service never preempts: an
+    # aged lock only produces AtomicFileLockTimeoutError until an operator
+    # removes <latest>.lock after confirming no writer is active.
     with exclusive_file_lock(
         latest_manifest_lock_path(latest),
         timeout=timeout,
-        stale_after=stale_after,
+        stale_after=-1,
+        preempt_dead_owner=False,
     ):
         atomic_write_text(latest, str(manifest_path))
 
@@ -251,10 +261,12 @@ def compare_and_swap_latest_manifest_locked(
     latest = os.path.abspath(os.fspath(latest_manifest_path))
     expected_text = str(expected or "").strip()
     target_text = str(target or "").strip()
+    # See write_latest_manifest_locked: latest locks are never auto-preempted.
     with exclusive_file_lock(
         latest_manifest_lock_path(latest),
         timeout=timeout,
-        stale_after=stale_after,
+        stale_after=-1,
+        preempt_dead_owner=False,
     ):
         current = ""
         try:
