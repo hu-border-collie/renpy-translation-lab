@@ -603,6 +603,11 @@ class CliPhase2Tests(unittest.TestCase):
                 "coverage / review gate is not confirmed",
                 str(ctx.exception),
             )
+            self.assertEqual(ctx.exception.code_name, "COVERAGE_UNCONFIRMED")
+            self.assertIn(
+                "coverage.review_missing",
+                ctx.exception.details["reasons"],
+            )
 
 
 if __name__ == "__main__":

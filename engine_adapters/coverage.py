@@ -1054,8 +1054,6 @@ def evaluate_coverage_gate(
         status = "review_invalid"
     elif review_record is None:
         status = "review_missing"
-    elif review_status == "invalid":
-        status = "review_invalid"
     elif review_status == "stale":
         status = "review_stale"
     elif review_status == "pending":
@@ -1069,7 +1067,7 @@ def evaluate_coverage_gate(
 
     return CoverageGateDecision(
         status=status,
-        confirmed=not reasons,
+        confirmed=status == "confirmed",
         coverage_status=completion.coverage_status,
         coverage_digest=completion.coverage_digest,
         review_status=review_status,

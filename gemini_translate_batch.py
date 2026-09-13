@@ -21873,6 +21873,26 @@ def dispatch_command(parser, args):
                         retryable=False,
                         details={'reasons': ['coverage.evidence_missing']},
                     ) from exc
+                if not bool(coverage_gate.get('confirmed')):
+                    raise cli_contract.MachineContractError(
+                        'cannot publish: coverage / review gate is not confirmed',
+                        code_name='COVERAGE_UNCONFIRMED',
+                        suggested_action=(
+                            '先修复 coverage block，并在 <game_root>/translation_context/'
+                            'coverage_review.json 提供满足当前 policy 的独立 review，再发布。'
+                        ),
+                        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                        retryable=False,
+                        details={
+                            'status': coverage_gate.get('status'),
+                            'reasons': list(coverage_gate.get('reasons') or []),
+                            'review_status': coverage_gate.get('review_status'),
+                            'review_policy': coverage_gate.get('review_policy'),
+                            'unresolved_findings': coverage_gate.get(
+                                'unresolved_findings'
+                            ),
+                        },
+                    )
                 return publish_project_brief(
                     store_dir,
                     base_dir=legacy.BASE_DIR or None,
