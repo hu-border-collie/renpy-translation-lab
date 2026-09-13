@@ -2,8 +2,8 @@
 
 > **状态**：#272 研究与路线决策基准文档。
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
-> **前置依赖**：本路线决策必须在 #265 P5（TyranoScript V600+ 验证 Adapter）与 P6（产品化收尾）交付并关闭后，方可为推荐候选创建独立实现 Issue。
-> **核对日期**：2026-08-18。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
+> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；本路线决策仍须在 #265 P6（#424 产品化收尾）关闭后，方可为推荐候选创建独立实现 Issue。
+> **核对日期**：2026-09-12。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
 
 ---
 
@@ -55,7 +55,7 @@
 | :--- | :--- |
 | `[官方]` | 对照现行官方文档、发行说明或引擎 UI 可直接核对。 |
 | `[推断]` | 由官方机制推导，或来自社区实践，尚未用本仓库夹具验证。 |
-| `[待夹具验证]` | 涉及本工具 Adapter / coverage / writeback 的集成假设；#265 P5/P6 完成并有 fixture 前不得当成立项依据。 |
+| `[待夹具验证]` | 涉及本工具 Adapter / coverage / writeback 的集成假设；#265 P5 已交付，P6（#424）完成并有 fixture 前不得当成立项依据。 |
 
 第 5 节对 Naninovel 与现有 `coverage.py` / `versioning.py` / `writeback.py` 的对照全部属于 `[待夹具验证]`。
 
@@ -139,7 +139,7 @@ Naninovel 文本 ID 适合作为 opaque locator 载荷和 lineage **候选证据
 
 #### 4.1.4 Adapter 接入、范围与写回
 - **推荐模式**：`native_catalog` / `hybrid`；
-- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 可消费 `target_root=localization_catalog` 的 `text_span_replace`；该操作仅支持单行内非空源片段替换，多行译文与空译文插入仍须设计并验证，不能假设任意本地化文档都可直接形成合法 plan `[待夹具验证]`。
+- **写回路径**：本地化文档与 Managed Text 均为 UTF-8 文本，**无需 Unity Editor 运行时**。公共 `writeback.py` 可消费 `target_root=localization_catalog` 的 `text_span_replace` 与 `multiline_text_span_replace`；单行与跨行非空源片段替换已支持（#471），空源片段插入仍不支持，不能假设任意本地化文档都可直接形成合法 plan `[待夹具验证]`。
 
 **支持版本**：Naninovel **1.21** + Unity **6.0 LTS 或 6.3 LTS**（须最新 patch；非 LTS 不支持）`[官方]`。
 **明确不支持**：1.18、1.19、1.20 及 Unity 2021.3 / 2022.3 作为推荐窗口；若将来单开遗留车道须另写立项说明。
@@ -325,7 +325,7 @@ monogatari.translation ('Español', {
 
 ## 5. 对照已验证的 Adapter 契约
 
-对照 #265 已验证的 Ren'Py Adapter 以及 P5 规划的 TyranoScript Adapter。下图只表示**评估顺序**，不把 Godot 写成已承诺的第四引擎：
+对照 #265 已验证的 Ren'Py Adapter 以及 P5 已交付的 TyranoScript Adapter。下图只表示**评估顺序**，不把 Godot 写成已承诺的第四引擎：
 
 ```mermaid
 flowchart TD
@@ -353,7 +353,7 @@ flowchart TD
     GDO --> CoreContracts
 ```
 
-> **设计假设 / 待 #265 P5/P6 后复核。** 5.1–5.4 描述的是候选引擎若实现 Adapter 时应如何对接现有合同，不是已经存在的集成。
+> **设计假设 / 待 #265 P6（#424）后复核（P5 已交付）。** 5.1–5.4 描述的是候选引擎若实现 Adapter 时应如何对接现有合同，不是已经存在的集成。
 
 ### 5.1 候选清单与覆盖审计
 `[待夹具验证]` Naninovel Adapter 应能输出 `coverage_candidates.jsonl`：
@@ -364,7 +364,7 @@ flowchart TD
 `[待夹具验证]` Naninovel 文本 ID 可作为 locator / `confirmed_lineage` 的**候选证据**。源脚本增删时，`reconcile-project-snapshots` 应报告 `locator_exact`、`moved_exact`、`source_modified` 等 match kind；`build-reuse-candidates` 再映射为 `exact_reuse` / `moved_reuse` / `source_modified_reference`。不要把复用类名写成 reconcile CLI 的输出。
 
 ### 5.3 安全写回
-`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。该消费者是公共能力，但当前 span 操作不能跨行或插入空源片段。多行译文、空译文与组合 ID 的处理必须先明确公共合同及测试，不能另写私有文件写入器绕过门禁。
+`[待夹具验证]` 本地化文档是行式文本（Spreadsheet 路径才是 CSV）。公共 `engine_adapters/writeback.py` 在 `target_root=localization_catalog` 时消费 `text_span_replace` 与 source snapshot 校验。该消费者是公共能力；`text_span_replace` 与 `multiline_text_span_replace` 已覆盖单行与跨行非空源片段替换（#471），空源片段插入仍不支持。空译文与组合 ID 的处理必须先明确公共合同及测试，不能另写私有文件写入器绕过门禁。
 
 ### 5.4 RPG Maker MV/MZ 纯叙事模式 Adapter 设计假设
 `[待夹具验证]` 以下为针对纯 ADV 工程的设计假设；本地人工样本不能替代可再分发的合成回归夹具：
