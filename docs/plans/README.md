@@ -25,7 +25,7 @@
   最终命令别名验收边界。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
   #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1–P4 门禁实测已完成；当前实现说明见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。
-- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)：
+- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)（2026-09-12 刷新）：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。
 - [GitHub 视觉小说本地化工具源码研究](github_localization_projects_research.md)：
