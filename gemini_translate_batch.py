@@ -48,6 +48,9 @@ import cli_discovery
 import doctor_recommendations as doctor_rec
 import generation_target
 from engine_adapters.contracts import (
+    CANDIDATE_SCHEMA_VERSION,
+    COVERAGE_SCHEMA_VERSION,
+    ENGINE_ADAPTER_PROTOCOL_VERSION,
     InventoryPolicy,
     Occurrence,
     OpaqueLocator,
@@ -3548,6 +3551,13 @@ def summarize_coverage_for_doctor(coverage_snapshot, *, review_path=''):
             review_path=review_path,
             review_error=review_error,
         ).to_dict()
+    unresolved = []
+    if inventory is not None:
+        unresolved = [
+            _coverage_candidate_summary(candidate)
+            for candidate in inventory.candidates
+            if candidate.classification in UNRESOLVED_COVERAGE_CLASSIFICATIONS
+        ]
     return {
         'status': assessment.coverage_status,
         'completion': assessment.completion,
@@ -3567,8 +3577,31 @@ def summarize_coverage_for_doctor(coverage_snapshot, *, review_path=''):
         'unresolved_findings': int(
             (gate_payload or {}).get('unresolved_findings') or 0
         ),
+        'unresolved_candidate_count': len(unresolved),
+        'unresolved_candidates': unresolved[:20],
         'review_path': review_path,
     }
+
+
+def _collect_doctor_translation_progress():
+    """Return ``(progress, adapter_snapshot)`` for doctor callers.
+
+    The adapter snapshot is reused by the engine-status doctor checks so a
+    single read-only scan feeds both the progress counts and the locator /
+    catalog / schema diagnostics.
+    """
+    file_jobs = collect_pending_file_jobs(
+        include_complete_files=True,
+        include_occurrences=False,
+        include_task_payloads=False,
+    )
+    progress = summarize_translation_progress(file_jobs)
+    adapter_snapshot = getattr(file_jobs, 'coverage_snapshot', None)
+    progress['coverage'] = summarize_coverage_for_doctor(
+        adapter_snapshot,
+        review_path=resolve_coverage_review_path(),
+    )
+    return progress, adapter_snapshot
 
 
 def collect_doctor_translation_progress():
@@ -3578,16 +3611,7 @@ def collect_doctor_translation_progress():
     :func:`collect_pending_file_jobs`, but skips occurrence extraction and does
     not materialize per-task payloads.
     """
-    file_jobs = collect_pending_file_jobs(
-        include_complete_files=True,
-        include_occurrences=False,
-        include_task_payloads=False,
-    )
-    progress = summarize_translation_progress(file_jobs)
-    progress['coverage'] = summarize_coverage_for_doctor(
-        getattr(file_jobs, 'coverage_snapshot', None),
-        review_path=resolve_coverage_review_path(),
-    )
+    progress, _adapter_snapshot = _collect_doctor_translation_progress()
     return progress
 
 
@@ -19047,6 +19071,919 @@ def collect_doctor_model_routing_status():
     }
 
 
+_ENGINE_REQUIRED_WRITEBACK_OPERATIONS = ('text_span_replace',)
+
+
+def _engine_status_issue(code, severity, message, *, suggested_action='', details=None):
+    """Build one stable, machine-readable engine-status finding."""
+
+    issue = {
+        'code': str(code),
+        'severity': str(severity),
+        'message': str(message),
+    }
+    if suggested_action:
+        issue['suggested_action'] = str(suggested_action)
+    if details:
+        issue['details'] = dict(details)
+    return issue
+
+
+def _engine_status_from_issues(issues):
+    severities = {str(issue.get('severity') or '') for issue in (issues or ())}
+    if 'error' in severities:
+        return 'blocked'
+    if 'warning' in severities:
+        return 'attention'
+    return 'ok'
+
+
+def _engine_status_int(value, default=0):
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _collect_doctor_adapter_capabilities(adapter, has_tl_files=None):
+    """Return ``(payload, issues)`` for adapter capability/behavior checks."""
+
+    issues = []
+    capabilities = adapter.capabilities()
+    capabilities_dict = capabilities.to_dict()
+    payload = {
+        'capabilities': capabilities_dict,
+        'behavior_digest': '',
+        'required_writeback_operations': list(_ENGINE_REQUIRED_WRITEBACK_OPERATIONS),
+    }
+    if int(capabilities.engine_adapter_protocol_version or 0) != ENGINE_ADAPTER_PROTOCOL_VERSION:
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.protocol_mismatch',
+                'error',
+                'Adapter protocol version does not match the shared contract.',
+                suggested_action='update_tool',
+                details={
+                    'expected': ENGINE_ADAPTER_PROTOCOL_VERSION,
+                    'actual': int(capabilities.engine_adapter_protocol_version or 0),
+                },
+            )
+        )
+    supported_modes = {
+        str(getattr(mode, 'value', mode)) for mode in capabilities.supported_localization_modes
+    }
+    selected_mode = str(
+        getattr(
+            capabilities.selected_localization_mode,
+            'value',
+            capabilities.selected_localization_mode,
+        )
+    )
+    payload['selected_localization_mode'] = selected_mode
+    payload['supported_localization_modes'] = sorted(supported_modes)
+    if selected_mode not in supported_modes:
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.localization_mode_unsupported',
+                'error',
+                'Adapter selected localization mode is not in its supported mode list.',
+                suggested_action='update_tool',
+                details={'selected': selected_mode, 'supported': sorted(supported_modes)},
+            )
+        )
+    declared_writeback = {str(operation) for operation in capabilities.declarative_writeback or ()}
+    missing_writeback = [
+        operation
+        for operation in _ENGINE_REQUIRED_WRITEBACK_OPERATIONS
+        if operation not in declared_writeback
+    ]
+    payload['declared_writeback_operations'] = sorted(declared_writeback)
+    if missing_writeback:
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.writeback_capability_missing',
+                'error',
+                'Adapter cannot express a writeback operation required by the current apply path.',
+                suggested_action='update_tool',
+                details={'missing_operations': missing_writeback},
+            )
+        )
+    if not capabilities.source_inventory:
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.source_inventory_missing',
+                'warning',
+                'Adapter reports no source inventory; coverage and relocation cannot be validated.',
+                suggested_action='update_tool',
+            )
+        )
+    if has_tl_files is False and capabilities.native_catalog_required_for_writeback:
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.catalog_missing',
+                'warning',
+                'Adapter requires a native catalog for writeback, but no TL catalog files exist.',
+                suggested_action='generate_template',
+            )
+        )
+    try:
+        payload['behavior_digest'] = str(adapter.behavior_digest() or '')
+    except Exception as exc:  # pragma: no cover - defensive; adapter bugs surface as a code
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.behavior_digest_unavailable',
+                'error',
+                f'Could not compute adapter behavior digest: {exc}',
+                suggested_action='update_tool',
+            )
+        )
+    if not payload['behavior_digest'] and not any(
+        issue['code'] == 'engine.adapter.behavior_digest_unavailable' for issue in issues
+    ):
+        issues.append(
+            _engine_status_issue(
+                'engine.adapter.behavior_digest_missing',
+                'warning',
+                'Adapter behavior digest is empty; coverage identity cannot be '
+                'compared across runs.',
+                suggested_action='update_tool',
+            )
+        )
+    return payload, issues
+
+
+def _collect_doctor_live_engine_checks(adapter, capabilities_payload, adapter_snapshot):
+    """Inspect one live adapter scan for schema, locator, and catalog health."""
+
+    issues = []
+    if adapter_snapshot is None:
+        return {'checked': False, 'reason': 'live_scan_unavailable'}, issues
+
+    project = adapter_snapshot.project
+    inventory = adapter_snapshot.inventory
+    report = adapter_snapshot.report
+    capabilities = dict(capabilities_payload.get('capabilities') or {})
+    expected_engine = str(capabilities.get('engine') or adapter.engine)
+    expected_adapter_version = str(
+        capabilities.get('adapter_version') or adapter.adapter_version
+    )
+    selected_mode = str(capabilities.get('selected_localization_mode') or '')
+
+    locator_schema_versions = {}
+    locator_engines = set()
+    candidate_schema_versions = {}
+    for candidate in inventory.candidates:
+        locator = candidate.locator
+        schema = int(locator.locator_schema_version or 0)
+        locator_schema_versions[schema] = locator_schema_versions.get(schema, 0) + 1
+        locator_engines.add(str(locator.engine or ''))
+        candidate_schema = int(candidate.candidate_schema_version or 0)
+        candidate_schema_versions[candidate_schema] = (
+            candidate_schema_versions.get(candidate_schema, 0) + 1
+        )
+
+    provenance = dict(report.catalog_provenance or {})
+    payload = {
+        'checked': True,
+        'engine': str(project.engine or ''),
+        'adapter_version': str(project.adapter_version or ''),
+        'localization_mode': str(
+            getattr(project.localization_mode, 'value', project.localization_mode) or ''
+        ),
+        'target_language': str(project.target_language or ''),
+        'project_snapshot_fingerprint': str(project.project_snapshot_fingerprint or ''),
+        'source_fingerprint': str(project.source_fingerprint or ''),
+        'source_file_count': len(project.source_documents or ()),
+        'candidate_count': len(inventory.candidates or ()),
+        'locator_schema_versions': {
+            str(key): value for key, value in sorted(locator_schema_versions.items())
+        },
+        'locator_engines': sorted(locator_engines),
+        'candidate_schema_versions': {
+            str(key): value for key, value in sorted(candidate_schema_versions.items())
+        },
+        'catalog_freshness': str(report.catalog_freshness or ''),
+        'catalog_provenance_status': str(provenance.get('provenance_status') or ''),
+        'catalog_recorded_source_fingerprint': str(
+            provenance.get('recorded_source_fingerprint') or ''
+        ),
+        'catalog_live_source_fingerprint': str(
+            provenance.get('live_source_fingerprint') or report.source_fingerprint or ''
+        ),
+        'source_changed_during_scan': bool(report.source_changed_during_scan),
+        'invariant_error_count': len(report.invariant_errors or ()),
+    }
+
+    if str(project.engine or '') != expected_engine:
+        issues.append(
+            _engine_status_issue(
+                'engine.live.engine_mismatch',
+                'error',
+                'Live scan engine differs from the adapter engine.',
+                suggested_action='rescan_project',
+                details={'expected': expected_engine, 'actual': str(project.engine or '')},
+            )
+        )
+    if str(project.adapter_version or '') != expected_adapter_version:
+        issues.append(
+            _engine_status_issue(
+                'engine.live.adapter_mismatch',
+                'warning',
+                'Live scan adapter version differs from the running adapter.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': expected_adapter_version,
+                    'actual': str(project.adapter_version or ''),
+                },
+            )
+        )
+    live_mode = str(
+        getattr(project.localization_mode, 'value', project.localization_mode) or ''
+    )
+    if selected_mode and live_mode != selected_mode:
+        issues.append(
+            _engine_status_issue(
+                'engine.live.localization_mode_mismatch',
+                'warning',
+                'Live scan localization mode differs from the adapter capability declaration.',
+                suggested_action='rescan_project',
+                details={'expected': selected_mode, 'actual': live_mode},
+            )
+        )
+    if str(inventory.adapter_version or '') != expected_adapter_version:
+        issues.append(
+            _engine_status_issue(
+                'engine.inventory.adapter_mismatch',
+                'warning',
+                'Candidate inventory adapter version differs from the running adapter.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': expected_adapter_version,
+                    'actual': str(inventory.adapter_version or ''),
+                },
+            )
+        )
+    if str(report.adapter_version or '') != expected_adapter_version:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.adapter_mismatch',
+                'warning',
+                'Coverage report adapter version differs from the running adapter.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': expected_adapter_version,
+                    'actual': str(report.adapter_version or ''),
+                },
+            )
+        )
+    expected_behavior_digest = str(capabilities_payload.get('behavior_digest') or '')
+    actual_behavior_digest = str(report.adapter_behavior_digest or '')
+    if expected_behavior_digest and actual_behavior_digest != expected_behavior_digest:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.behavior_digest_mismatch',
+                'warning',
+                'Coverage report behavior digest differs from the running adapter.',
+                suggested_action='rescan_project',
+            )
+        )
+    if int(report.engine_adapter_protocol_version or 0) != ENGINE_ADAPTER_PROTOCOL_VERSION:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.protocol_mismatch',
+                'error',
+                'Coverage report was produced with an unsupported adapter protocol version.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': ENGINE_ADAPTER_PROTOCOL_VERSION,
+                    'actual': int(report.engine_adapter_protocol_version or 0),
+                },
+            )
+        )
+    if int(report.candidate_schema_version or 0) != CANDIDATE_SCHEMA_VERSION:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.candidate_schema_mismatch',
+                'error',
+                'Coverage report candidate schema version is unsupported.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': CANDIDATE_SCHEMA_VERSION,
+                    'actual': int(report.candidate_schema_version or 0),
+                },
+            )
+        )
+    if int(report.coverage_schema_version or 0) != COVERAGE_SCHEMA_VERSION:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.schema_mismatch',
+                'error',
+                'Coverage report schema version is unsupported.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': COVERAGE_SCHEMA_VERSION,
+                    'actual': int(report.coverage_schema_version or 0),
+                },
+            )
+        )
+    if str(inventory.source_fingerprint or '') != str(project.source_fingerprint or ''):
+        issues.append(
+            _engine_status_issue(
+                'engine.inventory.source_fingerprint_mismatch',
+                'error',
+                'Candidate inventory source fingerprint does not match the project scan.',
+                suggested_action='rescan_project',
+            )
+        )
+    if str(inventory.project_snapshot_fingerprint or '') != str(
+        project.project_snapshot_fingerprint or ''
+    ):
+        issues.append(
+            _engine_status_issue(
+                'engine.inventory.snapshot_fingerprint_mismatch',
+                'error',
+                'Candidate inventory project snapshot fingerprint does not match the project scan.',
+                suggested_action='rescan_project',
+            )
+        )
+    if str(report.source_fingerprint or '') != str(project.source_fingerprint or ''):
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.source_fingerprint_mismatch',
+                'error',
+                'Coverage report source fingerprint does not match the project scan.',
+                suggested_action='rescan_project',
+            )
+        )
+    if str(report.project_snapshot_fingerprint or '') != str(
+        project.project_snapshot_fingerprint or ''
+    ):
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.snapshot_fingerprint_mismatch',
+                'error',
+                'Coverage report project snapshot fingerprint does not match the project scan.',
+                suggested_action='rescan_project',
+            )
+        )
+    if report.invariant_errors:
+        issues.append(
+            _engine_status_issue(
+                'engine.coverage.invariant_errors',
+                'error',
+                'Coverage report failed its internal invariants.',
+                suggested_action='rescan_project',
+                details={'errors': [str(item) for item in report.invariant_errors][:10]},
+            )
+        )
+    mismatched_locator_engines = sorted(
+        engine for engine in locator_engines if engine != adapter.engine
+    )
+    if mismatched_locator_engines:
+        issues.append(
+            _engine_status_issue(
+                'engine.locator.engine_mismatch',
+                'error',
+                'Live candidate locators were produced by a different engine adapter.',
+                suggested_action='rescan_project',
+                details={'expected': adapter.engine, 'actual': mismatched_locator_engines},
+            )
+        )
+    mismatched_locator_schemas = sorted(
+        str(version)
+        for version in locator_schema_versions
+        if version != int(adapter.locator_schema_version or 0)
+    )
+    if mismatched_locator_schemas:
+        issues.append(
+            _engine_status_issue(
+                'engine.locator.schema_mismatch',
+                'error',
+                'Live candidate locators use an unsupported locator schema version.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': int(adapter.locator_schema_version or 0),
+                    'actual': mismatched_locator_schemas,
+                },
+            )
+        )
+    mismatched_candidate_schemas = sorted(
+        str(version)
+        for version in candidate_schema_versions
+        if version != CANDIDATE_SCHEMA_VERSION
+    )
+    if mismatched_candidate_schemas:
+        issues.append(
+            _engine_status_issue(
+                'engine.candidate.schema_mismatch',
+                'error',
+                'Live candidates use an unsupported candidate schema version.',
+                suggested_action='rescan_project',
+                details={
+                    'expected': CANDIDATE_SCHEMA_VERSION,
+                    'actual': mismatched_candidate_schemas,
+                },
+            )
+        )
+    if report.source_changed_during_scan:
+        issues.append(
+            _engine_status_issue(
+                'engine.catalog.source_changed_during_scan',
+                'warning',
+                'Source or catalog files changed while coverage was scanned.',
+                suggested_action='rescan_project',
+            )
+        )
+    catalog_freshness = str(report.catalog_freshness or '')
+    if catalog_freshness in {'stale', 'missing'}:
+        issues.append(
+            _engine_status_issue(
+                'engine.catalog.freshness_stale',
+                'warning',
+                'Catalog provenance reports a stale or missing catalog.',
+                suggested_action='regenerate_template',
+                details={'catalog_freshness': catalog_freshness},
+            )
+        )
+    elif catalog_freshness != 'fresh':
+        issues.append(
+            _engine_status_issue(
+                'engine.catalog.freshness_unknown',
+                'info',
+                'Adapter cannot prove catalog freshness; scan-time source '
+                'identity is the authority.',
+                details={'catalog_freshness': catalog_freshness or 'unknown'},
+            )
+        )
+    recorded_fingerprint = str(provenance.get('recorded_source_fingerprint') or '')
+    live_fingerprint = str(
+        provenance.get('live_source_fingerprint') or report.source_fingerprint or ''
+    )
+    if recorded_fingerprint and recorded_fingerprint != live_fingerprint:
+        issues.append(
+            _engine_status_issue(
+                'engine.catalog.recorded_source_stale',
+                'warning',
+                'Catalog recorded source fingerprint differs from the live scan.',
+                suggested_action='regenerate_template',
+            )
+        )
+    elif str(provenance.get('provenance_status') or '') == 'inferred':
+        issues.append(
+            _engine_status_issue(
+                'engine.catalog.provenance_inferred',
+                'info',
+                'Catalog provenance was inferred from the current scan, not '
+                'recorded by a generator.',
+            )
+        )
+    return payload, issues
+
+
+def _latest_exported_project_snapshot_manifest(root_dir=None):
+    """Return the newest ``project_snapshot.json`` under ``logs/project_snapshots``."""
+
+    root = str(root_dir if root_dir is not None else PROJECT_SNAPSHOTS_DIR)
+    if not os.path.isdir(root):
+        return ''
+    candidates = []
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return ''
+    for name in names:
+        snapshot_path = os.path.join(
+            root,
+            name,
+            engine_versioning.DEFAULT_SNAPSHOT_FILENAME,
+        )
+        if not os.path.isfile(snapshot_path):
+            continue
+        try:
+            candidates.append((os.path.getmtime(snapshot_path), snapshot_path))
+        except OSError:
+            continue
+    if not candidates:
+        return ''
+    candidates.sort()
+    return candidates[-1][1]
+
+
+def _collect_doctor_snapshot_compatibility(adapter):
+    """Check the newest exported project snapshot against current schemas."""
+
+    issues = []
+    snapshot_path = _latest_exported_project_snapshot_manifest()
+    payload = {
+        'checked': False,
+        'latest_path': snapshot_path,
+        'latest': None,
+        'supported_project_snapshot_schema_version': (
+            engine_versioning.PROJECT_SNAPSHOT_SCHEMA_VERSION
+        ),
+        'supported_project_snapshot_digest_schema_version': (
+            engine_versioning.PROJECT_SNAPSHOT_DIGEST_SCHEMA_VERSION
+        ),
+        'supported_coverage_schema_version': COVERAGE_SCHEMA_VERSION,
+    }
+    if not snapshot_path:
+        payload['reason'] = 'no_exported_project_snapshot'
+        return payload, issues
+
+    payload['checked'] = True
+    try:
+        with open(snapshot_path, 'r', encoding='utf-8-sig') as handle:
+            manifest = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.invalid',
+                'warning',
+                f'Latest exported project snapshot cannot be read: {exc}',
+                suggested_action='reexport_project_snapshot',
+                details={'path': snapshot_path},
+            )
+        )
+        return payload, issues
+    if not isinstance(manifest, dict):
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.invalid',
+                'warning',
+                'Latest exported project snapshot is not a JSON object.',
+                suggested_action='reexport_project_snapshot',
+                details={'path': snapshot_path},
+            )
+        )
+        return payload, issues
+
+    coverage = manifest.get('coverage') if isinstance(manifest.get('coverage'), dict) else {}
+    game_version = (
+        manifest.get('game_version') if isinstance(manifest.get('game_version'), dict) else {}
+    )
+    latest = {
+        'path': snapshot_path,
+        'kind': str(manifest.get('kind') or ''),
+        'project_snapshot_schema_version': _engine_status_int(
+            manifest.get('project_snapshot_schema_version')
+        ),
+        'project_snapshot_digest_schema_version': _engine_status_int(
+            manifest.get('project_snapshot_digest_schema_version')
+        ),
+        'engine': str(manifest.get('engine') or ''),
+        'adapter_version': str(manifest.get('adapter_version') or ''),
+        'localization_mode': str(manifest.get('localization_mode') or ''),
+        'target_language': str(manifest.get('target_language') or ''),
+        'source_fingerprint': str(manifest.get('source_fingerprint') or ''),
+        'generated_at': str(manifest.get('generated_at') or ''),
+        'version_id': str(game_version.get('version_id') or ''),
+        'coverage_schema_version': _engine_status_int(
+            coverage.get('coverage_schema_version')
+        ),
+        'coverage_status': str(coverage.get('coverage_status') or ''),
+        'review_status': str(coverage.get('review_status') or ''),
+        'review_policy': str(coverage.get('review_policy') or ''),
+        'review_policy_satisfied': bool(coverage.get('review_policy_satisfied')),
+        'unresolved_findings': _engine_status_int(
+            coverage.get('unresolved_findings')
+        ),
+    }
+    payload['latest'] = latest
+
+    if latest['kind'] != engine_versioning.PROJECT_SNAPSHOT_KIND:
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.kind_mismatch',
+                'warning',
+                'Newest snapshot artifact is not a project snapshot kind.',
+                suggested_action='reexport_project_snapshot',
+                details={'kind': latest['kind']},
+            )
+        )
+    if (
+        latest['project_snapshot_schema_version']
+        != engine_versioning.PROJECT_SNAPSHOT_SCHEMA_VERSION
+    ):
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.schema_unsupported',
+                'warning',
+                'Newest project snapshot schema version is unsupported by this build.',
+                suggested_action='reexport_project_snapshot',
+                details={
+                    'expected': engine_versioning.PROJECT_SNAPSHOT_SCHEMA_VERSION,
+                    'actual': latest['project_snapshot_schema_version'],
+                },
+            )
+        )
+    if (
+        latest['project_snapshot_digest_schema_version']
+        != engine_versioning.PROJECT_SNAPSHOT_DIGEST_SCHEMA_VERSION
+    ):
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.digest_schema_unsupported',
+                'warning',
+                'Newest project snapshot digest schema version is unsupported by this build.',
+                suggested_action='reexport_project_snapshot',
+                details={
+                    'expected': engine_versioning.PROJECT_SNAPSHOT_DIGEST_SCHEMA_VERSION,
+                    'actual': latest['project_snapshot_digest_schema_version'],
+                },
+            )
+        )
+    if latest['engine'] != adapter.engine:
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.engine_mismatch',
+                'warning',
+                'Newest project snapshot was produced by a different engine adapter.',
+                suggested_action='reexport_project_snapshot',
+                details={'expected': adapter.engine, 'actual': latest['engine']},
+            )
+        )
+    if latest['adapter_version'] and latest['adapter_version'] != adapter.adapter_version:
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.adapter_outdated',
+                'info',
+                'Newest project snapshot was produced by a different adapter version.',
+                details={
+                    'current': adapter.adapter_version,
+                    'snapshot': latest['adapter_version'],
+                },
+            )
+        )
+    if latest['coverage_schema_version'] != COVERAGE_SCHEMA_VERSION:
+        issues.append(
+            _engine_status_issue(
+                'engine.snapshot.coverage_schema_unsupported',
+                'warning',
+                'Newest project snapshot embeds an unsupported coverage schema version.',
+                suggested_action='reexport_project_snapshot',
+                details={
+                    'expected': COVERAGE_SCHEMA_VERSION,
+                    'actual': latest['coverage_schema_version'],
+                },
+            )
+        )
+    return payload, issues
+
+
+def _collect_doctor_writeback_preconditions(adapter_snapshot):
+    """Check the active batch package for writeback identity/freshness blocks."""
+
+    issues = []
+    payload = {
+        'checked': False,
+        'manifest_path': '',
+        'status': 'not_applicable',
+        'reason': 'no_batch_manifest',
+        'source_identity_checked': False,
+    }
+    try:
+        manifest_path = manifest_path_for_target(None)
+    except cli_contract.MachineContractError:
+        return payload, issues
+    except Exception as exc:  # pragma: no cover - defensive
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.manifest_lookup_failed',
+                'warning',
+                f'Could not resolve the active batch manifest: {exc}',
+                suggested_action='rebuild_batch_package',
+            )
+        )
+        payload['status'] = 'attention'
+        return payload, issues
+
+    payload['checked'] = True
+    payload['manifest_path'] = manifest_path
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as handle:
+            manifest = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.manifest_invalid',
+                'warning',
+                f'Active batch manifest cannot be read: {exc}',
+                suggested_action='rebuild_batch_package',
+                details={'path': manifest_path},
+            )
+        )
+        payload['status'] = 'attention'
+        return payload, issues
+    if not isinstance(manifest, dict):
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.manifest_invalid',
+                'warning',
+                'Active batch manifest is not a JSON object.',
+                suggested_action='rebuild_batch_package',
+                details={'path': manifest_path},
+            )
+        )
+        payload['status'] = 'attention'
+        return payload, issues
+
+    manifest_version = _engine_status_int(
+        manifest.get('manifest_version', manifest.get('version', 1)),
+        default=0,
+    )
+    if manifest_version <= 0:
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.manifest_invalid',
+                'warning',
+                'Active batch manifest has no valid manifest_version.',
+                suggested_action='rebuild_batch_package',
+                details={'path': manifest_path},
+            )
+        )
+        payload['status'] = 'attention'
+        return payload, issues
+    payload['manifest_version'] = manifest_version
+    payload['manifest_state'] = str(manifest.get('state') or '')
+    payload['last_apply_result'] = str(manifest.get('last_apply_result') or '')
+    if isinstance(manifest.get('durable_sync_source'), dict):
+        payload['status'] = 'delegated'
+        payload['reason'] = 'durable_sync_run_store'
+        return payload, issues
+
+    plan = manifest.get('translation_plan')
+    if not isinstance(plan, dict) or not plan:
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.legacy_manifest',
+                'warning',
+                'Active batch package has no TranslationPlan; writeback runs '
+                'in legacy compatibility mode.',
+                suggested_action='rebuild_batch_package',
+            )
+        )
+        payload['status'] = 'attention'
+        return payload, issues
+
+    payload['execution_strategy'] = str(plan.get('execution_strategy') or '')
+    if plan.get('execution_strategy') != translation_plan.STRATEGY_GEMINI_BATCH:
+        payload['status'] = 'delegated'
+        payload['reason'] = 'translation_plan_strategy'
+        return payload, issues
+
+    try:
+        translation_plan.validate_plan_fingerprint(plan)
+        payload['plan_fingerprint_valid'] = True
+    except ValueError as exc:
+        payload['plan_fingerprint_valid'] = False
+        issues.append(
+            _engine_status_issue(
+                'engine.writeback.plan_fingerprint_mismatch',
+                'error',
+                f'Active batch plan fingerprint is invalid or stale: {exc}',
+                suggested_action='rebuild_batch_package',
+            )
+        )
+
+    if adapter_snapshot is not None:
+        try:
+            current_identity = _batch_plan_source_identity(
+                TranslationFileJobs([], adapter_snapshot=adapter_snapshot)
+            ).to_dict()
+            reasons = translation_plan.source_identity_differences(
+                plan.get('source_identity') or {},
+                current_identity,
+            )
+            payload['source_identity_checked'] = True
+            payload['source_identity_differences'] = list(reasons)
+            if reasons:
+                issues.append(
+                    _engine_status_issue(
+                        'engine.writeback.source_stale',
+                        'warning',
+                        'Source or adapter identity changed after this batch package was built.',
+                        suggested_action='rebuild_batch_package',
+                        details={'reasons': list(reasons)},
+                    )
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            issues.append(
+                _engine_status_issue(
+                    'engine.writeback.source_identity_check_failed',
+                    'error',
+                    f'Could not compare the active plan source identity: {exc}',
+                    suggested_action='rescan_project',
+                )
+            )
+    payload['status'] = _engine_status_from_issues(issues)
+    return payload, issues
+
+
+def collect_doctor_engine_status(adapter_snapshot=None, *, has_tl_files=None):
+    """Read-only adapter/schema/snapshot/writeback diagnostics (#424 P6 Slice 3b).
+
+    Findings carry stable reason codes and severities so CLI machine output and
+    the GUI can render them without parsing free-text warnings. A ``blocked``
+    status means the current adapter or batch package cannot satisfy a hard
+    precondition; ``attention`` means a finding is actionable but not fatal.
+
+    ``has_tl_files`` distinguishes "no catalog generated yet" from "scan
+    unavailable"; ``None`` skips checks that depend on that fact.
+    """
+
+    adapter = RenPyAdapter(legacy_module=legacy)
+    issues = []
+
+    try:
+        capabilities_payload, capability_issues = _collect_doctor_adapter_capabilities(
+            adapter,
+            has_tl_files=has_tl_files,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        capabilities_payload = {
+            'capabilities': {},
+            'behavior_digest': '',
+            'required_writeback_operations': list(_ENGINE_REQUIRED_WRITEBACK_OPERATIONS),
+        }
+        capability_issues = [
+            _engine_status_issue(
+                'engine.adapter.capabilities_unavailable',
+                'error',
+                f'Could not read adapter capabilities: {exc}',
+                suggested_action='update_tool',
+            )
+        ]
+    issues.extend(capability_issues)
+
+    try:
+        live_payload, live_issues = _collect_doctor_live_engine_checks(
+            adapter,
+            capabilities_payload,
+            adapter_snapshot,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        live_payload = {'checked': False, 'reason': 'check_failed', 'error': str(exc)}
+        live_issues = [
+            _engine_status_issue(
+                'engine.live.check_failed',
+                'error',
+                f'Live adapter schema check failed: {exc}',
+                suggested_action='rescan_project',
+            )
+        ]
+    issues.extend(live_issues)
+
+    try:
+        snapshot_payload, snapshot_issues = _collect_doctor_snapshot_compatibility(adapter)
+    except Exception as exc:  # pragma: no cover - defensive
+        snapshot_payload = {'checked': False, 'reason': 'check_failed'}
+        snapshot_issues = [
+            _engine_status_issue(
+                'engine.snapshot.check_failed',
+                'warning',
+                f'Project snapshot compatibility check failed: {exc}',
+                suggested_action='reexport_project_snapshot',
+            )
+        ]
+    issues.extend(snapshot_issues)
+
+    try:
+        writeback_payload, writeback_issues = _collect_doctor_writeback_preconditions(
+            adapter_snapshot
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        writeback_payload = {'checked': False, 'status': 'attention', 'error': str(exc)}
+        writeback_issues = [
+            _engine_status_issue(
+                'engine.writeback.check_failed',
+                'warning',
+                f'Writeback precondition check failed: {exc}',
+                suggested_action='rebuild_batch_package',
+            )
+        ]
+    issues.extend(writeback_issues)
+
+    issue_counts = {'error': 0, 'warning': 0, 'info': 0}
+    for issue in issues:
+        severity = str(issue.get('severity') or '')
+        if severity in issue_counts:
+            issue_counts[severity] += 1
+    return {
+        'status': _engine_status_from_issues(issues),
+        'engine': adapter.engine,
+        'adapter_version': adapter.adapter_version,
+        'locator_schema_version': int(adapter.locator_schema_version or 0),
+        'capabilities': capabilities_payload,
+        'live': live_payload,
+        'snapshot': snapshot_payload,
+        'writeback': writeback_payload,
+        'issues': issues,
+        'issue_counts': issue_counts,
+    }
+
+
 def collect_doctor_report():
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
@@ -19188,12 +20125,13 @@ def collect_doctor_report():
     total_task_count = 0
     coverage_summary = None
     coverage_evidence_available = False
+    adapter_snapshot = None
     # Avoid walking a TL tree that may sit outside the project root.
     # Progress counts use the same inventory filter as batch build, without the
     # occurrence-extraction work that build/writeback needs.
     if has_tl_files and not tl_path_invalid:
         try:
-            progress = collect_doctor_translation_progress()
+            progress, adapter_snapshot = _collect_doctor_translation_progress()
             pending_file_count = progress['pending_file_count']
             pending_task_count = progress['pending_task_count']
             translated_task_count = progress['translated_task_count']
@@ -19235,6 +20173,11 @@ def collect_doctor_report():
         if catalog_hint:
             warnings.append(generation_target.catalog_not_generation_warning(catalog_hint))
 
+    engine_status = collect_doctor_engine_status(
+        adapter_snapshot,
+        has_tl_files=bool(has_tl_files) and not tl_path_invalid,
+    )
+
     report = {
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
@@ -19273,6 +20216,7 @@ def collect_doctor_report():
         'context_status': context_status,
         'project_assets': project_assets,
         'model_routing': model_routing_status,
+        'engine_status': engine_status,
         'warnings': warnings,
     }
     layout_context = collect_doctor_layout_context(report)
@@ -19293,6 +20237,11 @@ def finalize_doctor_actionable_signals(report):
     if workflow_state and doctor_rec.recommendations_block_workflow_state(
         report['recommendations']
     ):
+        workflow_state = ''
+    engine_status = str(((report.get('engine_status') or {}).get('status') or '')).strip()
+    if engine_status == 'blocked':
+        # A blocked adapter/package precondition must not also advertise a
+        # startable workflow state; CLI/GUI show the engine issue codes.
         workflow_state = ''
     report['workflow_state'] = workflow_state
     return report
@@ -19323,6 +20272,23 @@ def print_doctor_report(report):
             "  - "
             f"[{issue.get('code')}] {issue.get('execution_strategy')}/"
             f"{issue.get('stage') or 'profile'}: {issue.get('message')}"
+        )
+    engine_status = report.get('engine_status') or {}
+    engine_issues = list(engine_status.get('issues') or [])
+    print(
+        f"- Engine: {engine_status.get('engine') or 'unknown'} "
+        f"{engine_status.get('adapter_version') or ''} "
+        f"(status: {engine_status.get('status') or 'unknown'}, "
+        f"{len(engine_issues)} issue(s))"
+    )
+    if engine_status.get('locator_schema_version'):
+        print(
+            f"- Engine locator schema: {engine_status.get('locator_schema_version')}"
+        )
+    for issue in engine_issues:
+        print(
+            "  - "
+            f"[{issue.get('severity')}] {issue.get('code')}: {issue.get('message')}"
         )
     print(
         f"- Prepare: enabled={report['prepare_enabled']}, "
@@ -22821,11 +23787,13 @@ def build_machine_success_envelope(command, value, args):
         report = dict(value or {})
         recommendations = list(report.get('recommendations') or [])
         blocked = doctor_rec.recommendations_block_workflow_state(recommendations)
-        status = (
-            'blocked'
-            if blocked
-            else report.get('workflow_state') or report.get('mode') or 'ready'
-        )
+        engine_status = str(
+            ((report.get('engine_status') or {}).get('status') or '')
+        ).strip()
+        if blocked or engine_status == 'blocked':
+            status = 'blocked'
+        else:
+            status = report.get('workflow_state') or report.get('mode') or 'ready'
         return cli_contract.success_envelope(
             command,
             status=status,

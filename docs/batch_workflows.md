@@ -108,7 +108,7 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 
 - `gemini_translate_batch.py` 需要显式子命令；不带子命令会打印帮助并退出。
 - Batch 产物默认写到 `logs/batch_jobs/<package>/`。
-- `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，不调用 Gemini，也不会写回 `.rpy`。
+- `doctor` 只检查当前 `game_root` / `tl_subdir`、SDK/launcher、TL 模板和 `old/new` / 剧情块形态，外加只读的 `engine_status`（adapter capabilities/locator schema/最新 project snapshot 兼容性/catalog provenance/latest manifest 写回前置），不调用 Gemini，也不会写回 `.rpy`。
 - `probe` 会用同步请求做最小 smoke test；每个被抽样的 request row 必须能对应当前 manifest 中的非空 chunk，否则会在调用 Provider 前拒绝并提示重建 package，避免把过期或损坏的请求误判为成功。
 - `check` 是干跑校验，不会修改 `.rpy`；它会把当前 manifest、results、目标 item 形状、TranslationPlan/request 绑定、质量规则配置和 check contract version 写入 `last_check_summary.check_fingerprint`，输出 `writeback_gate` / `quality_gate` / `check_status`（文本模式仍保留 `Safety status` 兼容行），并在包目录写入 `check_failures.jsonl` 与 `quality_findings.jsonl`。
 - `quality-ack` / `quality-unack` 只更新 manifest 里的 `quality_acknowledged_finding_ids` 并重算 `quality_gate.acknowledged_count` / `decision`；确认不写入 `quality_findings.jsonl`，不进入 `check_fingerprint`，也不能解除 blocker。`quality-ack <manifest>` 不带选择参数时列出未确认报警摘要；`--finding <id>` 可重复，或 `--all` 确认全部 warning。重新 `check` 后，匹配不到新 finding 的旧确认自动失效。

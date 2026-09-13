@@ -396,6 +396,7 @@ from .user_copy import (
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
+    COVERAGE_REVIEW_COPY,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
@@ -407,6 +408,7 @@ from .revision_workflow import (
     RevisionProposalConfirmWorkflow,
     RevisionProposalImportWorkflow,
 )
+from .coverage_worker import CoverageReviewImportWorker
 from .context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
@@ -2250,6 +2252,31 @@ class MainWindow(QMainWindow):
         self.doctor_details_label.setVisible(False)
         doctor_content_layout.addWidget(self.doctor_details_label)
         self._sync_doctor_details_toggle_chrome()
+
+        # Coverage / independent review actions (#424 P6). The display itself
+        # comes from the doctor report; these controls only trigger the same
+        # read-only rescan and review-import contract as the CLI.
+        doctor_action_row = QWidget()
+        doctor_action_row.setObjectName("doctor_coverage_action_row")
+        doctor_action_layout = QHBoxLayout(doctor_action_row)
+        doctor_action_layout.setContentsMargins(0, 0, 0, 0)
+        doctor_action_layout.setSpacing(8)
+        self.coverage_rescan_btn = QPushButton(COVERAGE_REVIEW_COPY["rescan"])
+        self.coverage_rescan_btn.setObjectName("doctor_coverage_rescan_btn")
+        self.coverage_rescan_btn.setToolTip(COVERAGE_REVIEW_COPY["rescan_tip"])
+        self.coverage_rescan_btn.clicked.connect(self._on_doctor_coverage_rescan)
+        doctor_action_layout.addWidget(self.coverage_rescan_btn)
+        self.coverage_import_btn = QPushButton(COVERAGE_REVIEW_COPY["import_review"])
+        self.coverage_import_btn.setObjectName("doctor_coverage_import_btn")
+        self.coverage_import_btn.setToolTip(COVERAGE_REVIEW_COPY["import_review_tip"])
+        self.coverage_import_btn.clicked.connect(self._on_import_coverage_review)
+        doctor_action_layout.addWidget(self.coverage_import_btn)
+        doctor_action_layout.addStretch(1)
+        doctor_content_layout.addWidget(doctor_action_row)
+        self._coverage_import_worker: CoverageReviewImportWorker | None = None
+        self._coverage_import_game_root = ""
+        self._sync_doctor_coverage_buttons()
+
         doctor_content_layout.addStretch()
         self.doctor_summary_scroll.setWidget(doctor_content)
         doctor_summary_layout.addWidget(self.doctor_summary_scroll, 1)
@@ -10829,6 +10856,133 @@ class MainWindow(QMainWindow):
 
         self._set_doctor_summary(summary)
 
+    def _sync_doctor_coverage_buttons(self, running=None) -> None:
+        """Enable coverage actions only for a selected, idle project."""
+        rescan_btn = getattr(self, "coverage_rescan_btn", None)
+        import_btn = getattr(self, "coverage_import_btn", None)
+        if rescan_btn is None or import_btn is None:
+            return
+        if running is None:
+            try:
+                running = bool(self.kill_btn.isEnabled())
+            except Exception:
+                running = False
+        game_root = ""
+        try:
+            game_root = str(self.state.get_game_root() or "")
+        except Exception:
+            game_root = ""
+        import_running = getattr(self, "_coverage_import_worker", None) is not None
+        enabled = bool(game_root) and not bool(running) and not import_running
+        rescan_btn.setEnabled(enabled)
+        import_btn.setEnabled(enabled)
+
+    def _on_doctor_coverage_rescan(self) -> None:
+        if getattr(self, "_coverage_import_worker", None) is not None:
+            return
+        self._on_run_doctor()
+
+    def _on_import_coverage_review(self) -> None:
+        """Install one completed review JSON through the shared CLI contract."""
+        if getattr(self, "_coverage_import_worker", None) is not None:
+            return
+        if bool(getattr(self, "_task_running", False)) or self._cli_runner_is_active():
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+        game_root = str(self.state.get_game_root() or "")
+        if not game_root:
+            message_box_information(
+                self,
+                "请先选择项目",
+                "请先选择游戏的 work 目录。",
+            )
+            return
+        try:
+            import gemini_translate_batch as batch_mod
+
+            target_path = batch_mod.resolve_coverage_review_path(game_root)
+        except Exception:
+            target_path = ""
+        selected, _filter = QFileDialog.getOpenFileName(
+            self,
+            COVERAGE_REVIEW_COPY["import_dialog_title"],
+            str(Path(game_root)),
+            "JSON (*.json);;All Files (*)",
+        )
+        selected = str(selected or "").strip()
+        if not selected:
+            return
+        target_text = target_path or "(game_root/translation_context/coverage_review.json)"
+        if (
+            message_box_question(
+                self,
+                COVERAGE_REVIEW_COPY["import_confirm_title"],
+                COVERAGE_REVIEW_COPY["import_confirm_body"].format(target=target_text),
+                yes_text="导入",
+                no_text="取消",
+                default="yes",
+            )
+            != "yes"
+        ):
+            return
+        self._coverage_import_game_root = game_root
+        self._append_log(f"=== 正在导入覆盖核对：{selected} ===\n")
+        self.statusBar().showMessage(COVERAGE_REVIEW_COPY["import_running"], 0)
+        self._sync_doctor_coverage_buttons(running=True)
+        worker = CoverageReviewImportWorker(selected, parent=self)
+        worker.completed.connect(self._on_coverage_review_import_completed)
+        self._coverage_import_worker = worker
+        worker.start()
+
+    def _on_coverage_review_import_completed(self, result: object) -> None:
+        worker = self.sender()
+        if worker is not self._coverage_import_worker:
+            return
+        self._coverage_import_worker = None
+        delete_later = getattr(worker, "deleteLater", None)
+        if callable(delete_later):
+            delete_later()
+        self.statusBar().clearMessage()
+        self._sync_doctor_coverage_buttons()
+        if getattr(self, "_shutdown_requested", False):
+            return
+        current_root = str(self.state.get_game_root() or "")
+        if current_root != str(getattr(self, "_coverage_import_game_root", "") or ""):
+            message_box_warning(
+                self,
+                COVERAGE_REVIEW_COPY["import_failed_title"],
+                COVERAGE_REVIEW_COPY["project_changed"],
+            )
+            return
+        if not bool(getattr(result, "ok", False)):
+            user_message = getattr(result, "user_message", None)
+            detail = user_message() if callable(user_message) else str(result)
+            self._append_log(f"{detail}\n")
+            message_box_warning(
+                self,
+                COVERAGE_REVIEW_COPY["import_failed_title"],
+                detail,
+            )
+            return
+        payload = dict(getattr(result, "payload", None) or {})
+        self._append_log(
+            "覆盖核对已导入："
+            f"{payload.get('review_path') or ''} "
+            f"({payload.get('review_status') or ''})\n"
+        )
+        message_box_information(
+            self,
+            COVERAGE_REVIEW_COPY["import_done_title"],
+            COVERAGE_REVIEW_COPY["import_done_body"].format(
+                path=payload.get("review_path") or "",
+                review_status=payload.get("review_status") or "",
+                review_policy=payload.get("review_policy") or "",
+                unresolved_findings=int(payload.get("unresolved_findings") or 0),
+            ),
+        )
+        self._on_run_doctor()
+
     def _on_bootstrap_work(self):
         if not self._confirm_unsaved_config_before_workflow():
             return
@@ -12863,6 +13017,7 @@ class MainWindow(QMainWindow):
             self.workbench_nav.setEnabled(not self._context_switching_locked())
         self._set_shell_nav_task_lock(running)
         self._sync_doctor_prep_button_chrome()
+        self._sync_doctor_coverage_buttons(running=running)
         self._sync_bootstrap_prep_button_chrome()
         api_btn = self._settings_widget("api_btn")
         if api_btn is not None:
@@ -13222,6 +13377,7 @@ class MainWindow(QMainWindow):
         self.doctor_message_label.setText(summary.message)
         self.doctor_facts_label.setText("\n".join(summary.facts))
         self._set_doctor_detail_facts(summary.detail_facts)
+        self._sync_doctor_coverage_buttons()
         self._update_translate_button_label()
         spec = work_mode_spec(self._current_work_mode())
         running = self.kill_btn.isEnabled()
