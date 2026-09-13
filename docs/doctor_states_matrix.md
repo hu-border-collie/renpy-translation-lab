@@ -108,7 +108,28 @@ doctor 会检查完整计划以便提前暴露配置问题；真正启动任务�
 
 ---
 
-## 7. 决策流（基于优先级的漏斗抑制逻辑）
+## 7. 维度七：引擎、schema 与写回前置状态 (`engine_status`)
+
+`doctor.engine_status` 是只读的 adapter / schema / snapshot / 写回前置快照。每次 doctor
+最多复用一次 live adapter 扫描（`_collect_doctor_translation_progress` 返回的 snapshot），
+不再二次扫描 TL；它不调用模型、不写回文件。`status` 取 `ok` / `attention` / `blocked`，
+`blocked` 会同时抑制 workflow state，并让 doctor machine envelope 返回 `status=blocked`。
+
+| 检查块 | 读取的事实 | 稳定 reason code（`issues[].code`） |
+| :--- | :--- | :--- |
+| **capabilities** | `RenPyAdapter.capabilities()`、`behavior_digest()`、共享 protocol / schema 常量；`has_tl_files` 事实。 | `engine.adapter.protocol_mismatch`、`engine.adapter.localization_mode_unsupported`、`engine.adapter.writeback_capability_missing`、`engine.adapter.source_inventory_missing`、`engine.writeback.catalog_missing`、`engine.adapter.behavior_digest_missing` / `_unavailable`。 |
+| **live** | 本次扫描的 `ProjectDiscovery` / `CandidateInventory` / `CoverageReport`：engine、adapter version、localization mode、source/snapshot fingerprint、locator engine 与 `locator_schema_version`、candidate schema、report invariant。 | `engine.live.*_mismatch`、`engine.inventory.*_mismatch`、`engine.coverage.*_mismatch`、`engine.locator.engine_mismatch` / `schema_mismatch`、`engine.candidate.schema_mismatch`、`engine.coverage.invariant_errors`。 |
+| **snapshot** | `logs/project_snapshots/` 下最新的 `project_snapshot.json`（只读 manifest，不加载 occurrence JSONL）。 | `engine.snapshot.invalid`、`kind_mismatch`、`schema_unsupported`、`digest_schema_unsupported`、`engine_mismatch`、`adapter_outdated`、`coverage_schema_unsupported`。 |
+| **catalog** | `CoverageReport.catalog_freshness` / `catalog_provenance` / `source_changed_during_scan`。Ren'Py 只能推断 provenance，因此通常给出 info 级 `engine.catalog.freshness_unknown` 与 `engine.catalog.provenance_inferred`；recorded fingerprint 与 live 不一致时给 `engine.catalog.recorded_source_stale` warning。 | 同上。 |
+| **writeback** | `latest_manifest` 的 manifest version、`translation_plan` fingerprint / `source_identity`、`durable_sync_source` 委派标记。 | `engine.writeback.manifest_invalid`、`legacy_manifest`、`plan_fingerprint_mismatch`、`source_stale`、`source_identity_check_failed`；Durable Sync / 非 Batch strategy 标记为 `delegated`，由各自 run-store / plan 合同处理。 |
+
+`engine.snapshot.schema_unsupported` 等 snapshot 兼容问题只影响 `snapshot` 检查块，不会
+让 doctor 变成 blocked；`plan_fingerprint_mismatch` 等当前包无法安全 apply 的错误才是
+`blocked`。`source_stale` 为 warning：apply 仍会拒绝，但项目可以先重建包再写回。
+
+---
+
+## 8. 决策流（基于优先级的漏斗抑制逻辑）
 
 决策分两段：布局 / 模板阻断仍通过漏斗提前返回；布局就绪后，上下文建议改为累计收集，并按“必需在前、可选在后”输出：
 
