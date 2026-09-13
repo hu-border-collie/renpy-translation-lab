@@ -125,6 +125,15 @@ class BatchBuildCoverageGuardTests(unittest.TestCase):
             )
         )
 
+    def test_missing_coverage_evidence_is_a_structured_refusal(self):
+        with self.assertRaises(cli_contract.MachineContractError) as ctx:
+            self._run_create(None)
+        self.assertEqual(ctx.exception.code_name, "COVERAGE_UNCONFIRMED")
+        self.assertEqual(
+            ctx.exception.details["reasons"],
+            ["coverage.evidence_missing"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

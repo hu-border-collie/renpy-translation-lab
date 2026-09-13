@@ -4333,21 +4333,30 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     if not file_jobs:
         coverage_snapshot = getattr(file_jobs, 'coverage_snapshot', None)
         coverage_report = getattr(coverage_snapshot, 'report', None)
-        if coverage_report is not None:
-            assessment = evaluate_coverage_completion(coverage_report)
-            if assessment.completion == 'unconfirmed':
-                # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
-                raise cli_contract.MachineContractError(
-                    '没有待译条目，但文本覆盖未确认，不能报告为翻译完成。',
-                    code_name='COVERAGE_UNCONFIRMED',
-                    suggested_action=(
-                        '先运行 doctor 查看 coverage 分类、reason 与排除理由；'
-                        '修复 unknown / parse_error 或完成 coverage review 后重试。'
-                    ),
-                    semantic_exit_code=cli_contract.EXIT_BLOCKED,
-                    retryable=False,
-                    details=assessment.to_dict(),
-                )
+        if coverage_report is None:
+            # A missing coverage measurement is not evidence of completion.
+            assessment_payload = {
+                'completion': 'unconfirmed',
+                'coverage_status': 'unknown',
+                'coverage_digest': '',
+                'classification_counts': {},
+                'reasons': ['coverage.evidence_missing'],
+            }
+        else:
+            assessment_payload = evaluate_coverage_completion(coverage_report).to_dict()
+        if assessment_payload['completion'] == 'unconfirmed':
+            # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
+            raise cli_contract.MachineContractError(
+                '没有待译条目，但文本覆盖未确认，不能报告为翻译完成。',
+                code_name='COVERAGE_UNCONFIRMED',
+                suggested_action=(
+                    '先运行 doctor 查看 coverage 分类、reason 与排除理由；'
+                    '修复 unknown / parse_error 或完成 coverage review 后重试。'
+                ),
+                semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                retryable=False,
+                details=assessment_payload,
+            )
         print('No pending lines to translate.')
         return None
 
@@ -18068,6 +18077,10 @@ def collect_doctor_workflow_state(report):
         coverage = report.get('coverage') or {}
         if coverage.get('completion') == 'unconfirmed':
             return doctor_rec.COVERAGE_UNCONFIRMED
+        if report.get('coverage_evidence_available') is False:
+            # The progress scan failed and pending defaulted to zero; a missing
+            # measurement must not be reported as "no pending lines".
+            return ''
         return doctor_rec.NO_PENDING_LINES
 
     has_existing_translations = _doctor_has_existing_translations(report)
@@ -18846,6 +18859,7 @@ def collect_doctor_report():
     translated_task_count = 0
     total_task_count = 0
     coverage_summary = None
+    coverage_evidence_available = False
     # Avoid walking a TL tree that may sit outside the project root.
     # Progress counts use the same inventory filter as batch build, without the
     # occurrence-extraction work that build/writeback needs.
@@ -18857,6 +18871,7 @@ def collect_doctor_report():
             translated_task_count = progress['translated_task_count']
             total_task_count = progress['total_task_count']
             coverage_summary = progress.get('coverage')
+            coverage_evidence_available = coverage_summary is not None
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
@@ -18926,6 +18941,7 @@ def collect_doctor_report():
         'translated_task_count': translated_task_count,
         'total_task_count': total_task_count,
         'coverage': coverage_summary,
+        'coverage_evidence_available': coverage_evidence_available,
         'context_status': context_status,
         'project_assets': project_assets,
         'model_routing': model_routing_status,
@@ -21362,6 +21378,13 @@ def _run_translate_preflight(args):
                 '当前范围没有待翻译条目，但文本覆盖未确认（'
                 + ', '.join(assessment.reasons)
                 + '）；不能报告为翻译完成。请先运行 doctor 查看 coverage 分类与 reason。',
+            ))
+        elif assessment is None:
+            # A missing coverage measurement cannot confirm a zero-pending claim.
+            risks.append(_preflight_risk(
+                'COVERAGE_EVIDENCE_MISSING',
+                'warning',
+                '无法取得 coverage 证据，不能确认“零待译”是否完整；请先运行 doctor 并重试。',
             ))
         else:
             risks.append(_preflight_risk(

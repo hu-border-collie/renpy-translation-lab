@@ -468,6 +468,18 @@ class DoctorRecommendationMatrixTests(unittest.TestCase):
             doctor_rec.NO_PENDING_LINES,
         )
 
+    def test_zero_pending_without_coverage_evidence_has_no_workflow_state(self):
+        report = _layout_report(
+            base_dir="C:/Games/Example/work",
+            rpy_files=20,
+            layout_status="ready",
+        )
+        report["pending_task_count"] = 0
+        report["coverage"] = None
+        report["coverage_evidence_available"] = False
+
+        self.assertEqual(batch_mod.collect_doctor_workflow_state(report), "")
+
     def test_ready_new_translation_has_pending_workflow_state(self):
         report = _layout_report(
             base_dir="C:/Games/Example/work",

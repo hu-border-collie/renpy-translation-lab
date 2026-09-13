@@ -191,6 +191,14 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(risks["NO_PENDING_WORK"]["severity"], "info")
         self.assertNotIn("COVERAGE_UNCONFIRMED", risks)
 
+    def test_zero_pending_without_coverage_evidence_warns(self) -> None:
+        context = fake_context(self.section, requests=[])
+        payload = self._run_preflight(context)
+        risks = {risk["code"]: risk for risk in payload["risks"]}
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(risks["COVERAGE_EVIDENCE_MISSING"]["severity"], "warning")
+        self.assertNotIn("NO_PENDING_WORK", risks)
+
     def test_retrieval_risk_uses_the_selected_strategy_flags(self) -> None:
         context = fake_context(self.section)
         args = self.parser.parse_args(
