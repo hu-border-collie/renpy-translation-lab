@@ -2626,6 +2626,14 @@ class MainWindow(QMainWindow):
         is_running = getattr(runner, "is_running", None) if runner is not None else None
         if callable(is_running) and bool(is_running()):
             return
+        if name in {"engine_snapshot", "reuse_candidates"}:
+            if not self.state.get_game_root():
+                message_box_information(self, "请先选择项目", "请先选择游戏的 work 目录。")
+                return
+            self._open_engine_snapshot_dialog(
+                start_tab=0 if name == "engine_snapshot" else 2
+            )
+            return
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
@@ -2656,6 +2664,17 @@ class MainWindow(QMainWindow):
             return
         if name == "project_analysis_generate":
             self._start_project_analysis_workflow(build=False, generate=True, offer_keywords=False)
+
+    def _open_engine_snapshot_dialog(self, *, start_tab: int = 0) -> None:
+        """Open the read-only engine/snapshot/reuse dialog for the active project."""
+        from .engine_snapshot_dialog import EngineSnapshotDialog
+
+        dialog = EngineSnapshotDialog(
+            self,
+            game_root=str(self.state.get_game_root() or ""),
+            start_tab=int(start_tab),
+        )
+        dialog.exec()
 
     def _project_analysis_max_brief_chars(self) -> int:
         values = read_advanced_settings(self.state.load_translator_config())
