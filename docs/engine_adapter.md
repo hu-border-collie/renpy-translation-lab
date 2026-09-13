@@ -215,9 +215,11 @@ occurrence 扫描，输出：
 `validate_reconciliation_freshness()` 对照当前两个 snapshot digest 与 coverage/review
 dependency digest；任一依赖改变时状态为 `stale`。
 
-P3 是按 #265 分阶段交付的高级 CLI 能力；GUI 当前只在「诊断与运行日志 → 命令参考」
-提供命令模板。快照浏览、版本 diff、歧义处理和复用候选交互属于 P6。P3 报告本身
-没有任何写回入口；跨版本复用必须经过下面的 P4 流程。
+P3 的导出与对账 CLI 不新增写回入口；P6（#424）在「上下文库 → 引擎与快照…」
+增加只读 GUI：展示 adapter 能力、`logs/project_snapshots/` 快照列表与两版
+snapshot 的 reconciliation 摘要、disposition、匹配依据、置信度和 base/target
+locator。创建快照、导出报告与后续 P4 流程仍由 CLI 执行；GUI 不重新实现匹配。
+跨版本复用必须经过下面的 P4 流程。
 
 ## P4 译文复用候选与人工确认
 
@@ -268,7 +270,9 @@ digest）变化时，`validate_reuse_freshness()` 会把候选标记为 `stale`�
 决策导入与结果导出都会拒绝继续。高置信匹配同样以 pending 候选开始，没有免审
 通道；reference-only 候选即使接受也只保留旧译文供参考，不会计入可写回的复用。
 
-P4 不新增 GUI 界面；GUI 只在诊断命令参考提供模板（完整交互属 P6）。
+P4 的决策与结果导出仍只在 CLI 执行；P6（#424）GUI「上下文库 → 复用候选…」
+只读加载已有 `reuse_report.json`，展示候选类别、状态、歧义目标、译文来源、
+证据与 `reuse_review.md`，不代替人工决策，也不写回。
 
 ## 真实项目门禁实测
 

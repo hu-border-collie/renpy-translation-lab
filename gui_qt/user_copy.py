@@ -314,6 +314,132 @@ def project_analysis_record_status_label(status: str) -> str:
     return PROJECT_ANALYSIS_RECORD_STATUS_LABELS.get(str(status or ""), "未知")
 
 
+# Read-only engine / project-snapshot / reuse-candidate copy (#424 P6).
+# The GUI calls the existing P3/P4 APIs; it must not re-derive matching.
+ENGINE_SNAPSHOT_COPY = {
+    "section_title": "引擎与快照",
+    "open_dialog": "引擎与快照…",
+    "open_dialog_tip": (
+        "只读查看当前 engine / adapter 能力、已导出的项目快照、"
+        "版本差异与跨版本复用候选；不会修改游戏文件。"
+    ),
+    "reuse_entry": "复用候选…",
+    "reuse_entry_tip": "只读查看已有 reuse_report.json 的候选、歧义与证据；不执行决策或写回。",
+    "dialog_title": "引擎与快照（只读）",
+    "dialog_intro": (
+        "展示当前 adapter 能力边界、logs/project_snapshots 下的项目快照，"
+        "并调用现有 reconciliation / reuse API 展示版本差异与复用候选。"
+    ),
+    "tab_overview": "引擎与能力",
+    "tab_diff": "版本对比",
+    "tab_reuse": "复用候选",
+    "refresh": "刷新概览",
+    "snapshot_root": "快照目录",
+    "snapshot_count": "快照数量",
+    "coverage_review_path": "coverage review",
+    "behavior_digest": "adapter behavior digest",
+    "no_snapshots": "尚未导出任何项目快照；可先运行 export-project-snapshot。",
+    "snapshot_columns": (
+        "版本",
+        "生成时间",
+        "engine / adapter",
+        "覆盖状态",
+        "独立核对",
+        "snapshot digest",
+        "路径",
+    ),
+    "diff_base": "旧版本 base",
+    "diff_target": "新版本 target",
+    "diff_choose": "选择快照目录…",
+    "diff_run": "开始对比",
+    "diff_running": "正在读取两个快照并生成只读对账报告…",
+    "diff_empty": "请先选择 base 与 target 快照。",
+    "diff_summary": "对账摘要",
+    "diff_items": "逐项匹配证据（最多显示 500 条）",
+    "diff_columns": (
+        "结果",
+        "匹配依据",
+        "置信度",
+        "base 定位",
+        "target 定位",
+        "候选 / 证据",
+    ),
+    "reuse_path": "复用候选包",
+    "reuse_choose": "选择目录…",
+    "reuse_load": "加载复用候选",
+    "reuse_running": "正在读取复用候选包…",
+    "reuse_summary": "候选摘要",
+    "reuse_columns": (
+        "候选",
+        "类别",
+        "状态",
+        "置信度",
+        "译文来源",
+        "目标 occurrence",
+        "证据",
+    ),
+    "reuse_open_review": "打开审核表",
+    "reuse_review_missing": "未找到 reuse_review.md。",
+    "close": "关闭",
+    "loading": "正在读取…",
+    "error_title": "引擎与快照读取失败",
+    "disposition_labels": {
+        "matched": "已匹配",
+        "ambiguous": "base 歧义",
+        "ambiguous_target": "target 歧义",
+        "deleted": "已删除",
+        "added": "新增",
+    },
+    "match_kind_labels": {
+        "confirmed_lineage": "已确认 lineage",
+        "locator_exact": "locator 完全一致",
+        "content_exact": "内容指纹一致",
+        "moved_exact": "移动但原文一致",
+        "context_high_confidence": "上下文高置信",
+        "source_modified": "原文小改",
+        "ambiguous": "歧义，无唯一候选",
+    },
+    "reuse_class_labels": {
+        "exact_reuse": "精确复用",
+        "moved_reuse": "移动复用",
+        "context_match": "上下文匹配",
+        "source_modified_reference": "原文已改（仅参考）",
+        "ambiguous": "歧义，需人工指定目标",
+    },
+    "reuse_status_labels": {
+        "pending": "待决策",
+        "accepted": "已接受",
+        "rejected": "已拒绝",
+    },
+    "snapshot_status_labels": {
+        "ready": "ready",
+        "attention": "attention",
+        "block": "block",
+        "stale": "stale",
+    },
+    "evidence_labels": {
+        "source_equal": "原文相同",
+        "speaker_equal": "speaker 相同",
+        "context_before_equal": "前文相同",
+        "context_after_equal": "后文相同",
+        "file_moved": "文件移动",
+        "line_changed": "行号变化",
+        "source_similarity": "原文相似度",
+        "score": "匹配分",
+        "reference_only": "仅参考",
+        "has_translation_record": "有译文记录",
+    },
+}
+
+
+def engine_snapshot_label(mapping_name: str, value: str) -> str:
+    """Return a user-facing label from one ENGINE_SNAPSHOT_COPY table."""
+    table = ENGINE_SNAPSHOT_COPY.get(mapping_name)
+    if not isinstance(table, dict):
+        return str(value or "")
+    return str(table.get(str(value or ""), str(value or "")))
+
+
 # Coverage / independent review copy shared by the doctor summary and the
 # coverage review import action (#424 P6). Reason codes mirror
 # engine_adapters.coverage; keep this table in lockstep with the CLI contract.

@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
 from ..empty_state import EmptyStateWidget
 from ..user_copy import (
     CONTEXT_LIBRARY_COPY,
+    ENGINE_SNAPSHOT_COPY,
     PROJECT_ANALYSIS_COPY,
     TASK_PROJECT_GATE_COPY,
 )
@@ -203,6 +205,31 @@ class ContextLibraryPage(QFrame):
         self.page_stack.addWidget(self.status_page)
         self.page_stack.setCurrentWidget(self.empty_state)
 
+        # Read-only P3/P4 presentation (#424 P6): capabilities, snapshots,
+        # version diff and existing reuse candidates. The row stays visible for
+        # any selected project (even when all context features are disabled);
+        # export/build/decision actions stay in the CLI for this slice.
+        self.engine_actions_bar = QWidget()
+        self.engine_actions_bar.setObjectName("context_engine_actions_bar")
+        engine_layout = QHBoxLayout(self.engine_actions_bar)
+        engine_layout.setContentsMargins(0, 0, 0, 0)
+        engine_layout.setSpacing(8)
+        self.engine_snapshot_btn = QPushButton(ENGINE_SNAPSHOT_COPY["open_dialog"])
+        self.engine_snapshot_btn.setObjectName("context_engine_snapshot_btn")
+        self.engine_snapshot_btn.setToolTip(ENGINE_SNAPSHOT_COPY["open_dialog_tip"])
+        self.engine_snapshot_btn.clicked.connect(
+            lambda: self._trigger_action("engine_snapshot")
+        )
+        engine_layout.addWidget(self.engine_snapshot_btn)
+        self.reuse_candidates_btn = QPushButton(ENGINE_SNAPSHOT_COPY["reuse_entry"])
+        self.reuse_candidates_btn.setObjectName("context_reuse_candidates_btn")
+        self.reuse_candidates_btn.setToolTip(ENGINE_SNAPSHOT_COPY["reuse_entry_tip"])
+        self.reuse_candidates_btn.clicked.connect(
+            lambda: self._trigger_action("reuse_candidates")
+        )
+        engine_layout.addWidget(self.reuse_candidates_btn)
+        engine_layout.addStretch(1)
+        outer.addWidget(self.engine_actions_bar)
 
         self._refresh_action_states()
     def set_action_callbacks(self, actions: WorkbenchPageActions) -> None:
@@ -472,6 +499,8 @@ class ContextLibraryPage(QFrame):
         self.project_analysis_build_btn.setEnabled(can_manage and has_structure)
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
+        self.engine_snapshot_btn.setEnabled(not self._running and self._has_project)
+        self.reuse_candidates_btn.setEnabled(not self._running and self._has_project)
         self.context_actions.reflow()
 
     def _trigger_project_analysis_primary(self) -> None:
