@@ -130,7 +130,9 @@ python gemini_translate_batch.py coverage-review-import --file review.json --dry
 - `coverage-status` 现场扫描项目，输出 coverage 状态、分类与 reason 计数、gate
   状态/reason、review 状态，以及未解决候选（`unknown` / `parse_error` /
   `unsupported`）的 locator 摘要。`--output json` 走版本化 envelope；
-  `--strict-exit-codes` 下 confirmed=0、需要处理=2、block=3。
+  `--strict-exit-codes` 与 doctor 保持一致：confirmed=0、需要处理（含
+  `coverage_unconfirmed` / `review_missing` / `review_stale` / policy 不满足）=2、
+  `review_invalid`=3。
 - `coverage-review-import` 校验 review schema、freshness、policy 与 findings，并把
   记录原子写入 `<game_root>/translation_context/coverage_review.json`；pending 与
   stale review 分别以 `COVERAGE_REVIEW_PENDING` / `COVERAGE_REVIEW_STALE` 结构化

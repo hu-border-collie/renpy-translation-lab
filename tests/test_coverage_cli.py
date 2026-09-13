@@ -271,7 +271,7 @@ class CoverageCliContractTests(unittest.TestCase):
         )
         self.assertEqual(
             cli_contract.strict_exit_code(envelope("coverage_unconfirmed")),
-            cli_contract.EXIT_BLOCKED,
+            cli_contract.EXIT_NEEDS_ACTION,
         )
         self.assertEqual(
             cli_contract.strict_exit_code(envelope("review_invalid")),
