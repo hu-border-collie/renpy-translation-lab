@@ -171,6 +171,23 @@ class CoverageStatusTests(unittest.TestCase):
         self.assertIn("chapter1.rpy:7", output.getvalue())
         self.assertIn("coverage.status.block", payload["gate"]["reasons"])
 
+    def test_doctor_coverage_summary_includes_unresolved_locator(self):
+        candidate = make_candidate("unknown")
+        inventory = make_inventory(candidate)
+        report = make_report(inventory, status="block", counts={"unknown": 1})
+        payload = batch.summarize_coverage_for_doctor(
+            SimpleNamespace(report=report, inventory=inventory),
+            review_path="",
+        )
+        self.assertEqual(payload["unresolved_candidate_count"], 1)
+        summary = payload["unresolved_candidates"][0]
+        self.assertEqual(summary["classification"], "unknown")
+        self.assertEqual(
+            summary["locator"]["locator"]["file_rel_path"],
+            "chapter1.rpy",
+        )
+        self.assertEqual(payload["completion"], "unconfirmed")
+
 
 class CoverageReviewImportTests(unittest.TestCase):
     def _run_import(self, *, record, tmp, dry_run=False, source_fingerprint=None):

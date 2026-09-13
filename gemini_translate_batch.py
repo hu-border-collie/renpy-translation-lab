@@ -3551,6 +3551,13 @@ def summarize_coverage_for_doctor(coverage_snapshot, *, review_path=''):
             review_path=review_path,
             review_error=review_error,
         ).to_dict()
+    unresolved = []
+    if inventory is not None:
+        unresolved = [
+            _coverage_candidate_summary(candidate)
+            for candidate in inventory.candidates
+            if candidate.classification in UNRESOLVED_COVERAGE_CLASSIFICATIONS
+        ]
     return {
         'status': assessment.coverage_status,
         'completion': assessment.completion,
@@ -3570,6 +3577,8 @@ def summarize_coverage_for_doctor(coverage_snapshot, *, review_path=''):
         'unresolved_findings': int(
             (gate_payload or {}).get('unresolved_findings') or 0
         ),
+        'unresolved_candidate_count': len(unresolved),
+        'unresolved_candidates': unresolved[:20],
         'review_path': review_path,
     }
 

@@ -251,6 +251,8 @@ plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor �
 
 `coverage` 块同时包含独立 review 门禁（#424 P6 Slice 2）：`review_status`、`review_policy`、`review_policy_satisfied`、`unresolved_findings`、`review_path` 与 `gate`（confirmed/status/reasons）。review 约定路径为 `<game_root>/translation_context/coverage_review.json`；缺失、stale、pending、policy 不满足或存在 unresolved findings 时，Project Analysis 发布与 Final Review readiness 都会拒绝，即使 `pending=0`。
 
+GUI 环境检查摘要会按同一 `coverage` 块显示文本覆盖状态、分类计数、review/gate 与未解决候选 locator，并提供「重新扫描文本覆盖」和「导入核对结果」；导入走 `<game_root>/translation_context/coverage_review.json` 的同一 `run_coverage_review_import` 合同，拒绝原因以稳定 code（`COVERAGE_REVIEW_*`）显示，不解析自由文本（#424 P6 Slice 3c）。
+
 当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag` / `rebuild_rag_store` / `rebuild_source_index_store`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
 
 ## 文案要求

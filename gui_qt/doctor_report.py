@@ -8,6 +8,7 @@ from typing import Any
 
 import doctor_recommendations as doctor_rec
 
+from .coverage_actions import format_coverage_detail_facts, format_coverage_facts
 from .summary_helpers import append_unique_fact
 from .user_copy import (
     doctor_mode_label,
@@ -577,6 +578,10 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
     if isinstance(project_assets, dict):
         parsed["project_assets"] = project_assets
 
+    coverage = report.get("coverage")
+    if isinstance(coverage, dict):
+        parsed["coverage"] = coverage
+
     return parsed
 
 
@@ -677,6 +682,10 @@ def _summarize_doctor_parsed(
     ):
         append_unique_fact(all_facts, fact)
 
+    coverage = parsed.get("coverage") if isinstance(parsed.get("coverage"), dict) else None
+    for fact in format_coverage_facts(coverage):
+        append_unique_fact(all_facts, fact)
+
     findings = list(warnings)
     if api_key_count is not None:
         if api_key_count > 0:
@@ -705,6 +714,8 @@ def _summarize_doctor_parsed(
         all_facts,
         layout_status=layout_status,
     )
+    for detail in format_coverage_detail_facts(coverage):
+        detail_facts.append(detail)
 
     if exit_code != 0:
         return DoctorSummary(
