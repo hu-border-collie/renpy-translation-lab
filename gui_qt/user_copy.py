@@ -527,6 +527,10 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
     ),
     doctor_rec.START_INCREMENTAL_BATCH: "补译环境已就绪，可以开始批量翻译。",
     doctor_rec.NO_PENDING_LINES: _NO_PENDING_STATUS_MESSAGE,
+    doctor_rec.COVERAGE_UNCONFIRMED: (
+        "当前没有待译条目，但文本覆盖未确认（存在未识别或解析失败的结构），不能视为翻译完成；"
+        "请先查看环境检查中的 coverage 分类与排除理由，修复后再重试。"
+    ),
     doctor_rec.START_PENDING_BATCH: "翻译环境已就绪，可以开始批量翻译。",
     doctor_rec.UNKNOWN: DOCTOR_RECOMMENDATION_UNKNOWN_SUMMARY,
 }
@@ -536,6 +540,7 @@ _SHARED_WORKFLOW_STATE_CODES = (
     doctor_rec.SUBSTANTIALLY_COMPLETE,
     doctor_rec.START_INCREMENTAL_BATCH,
     doctor_rec.NO_PENDING_LINES,
+    doctor_rec.COVERAGE_UNCONFIRMED,
     doctor_rec.START_PENDING_BATCH,
 )
 DOCTOR_WORKFLOW_STATE_MESSAGES: dict[str, str] = {

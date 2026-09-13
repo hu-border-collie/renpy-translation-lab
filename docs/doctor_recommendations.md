@@ -210,7 +210,9 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor 将其记录为
 `model_routing.status=attention` 并继续形成报告，而任务启动路径以稳定机器合同拒绝。
 
-`start_pending_batch`、`start_incremental_batch`、`substantially_complete` 和 `no_pending_lines` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
+`start_pending_batch`、`start_incremental_batch`、`substantially_complete`、`no_pending_lines` 和 `coverage_unconfirmed` 现在作为 `workflow_state` 输出，不进入建议列表；对旧版 CLI 建议行仍保留解析兼容。
+
+`coverage_unconfirmed`（#424 P6）表示“零待译但覆盖未确认”：存在 `unknown` / `parse_error` / inventory invariant / source-change，或 coverage 状态不是 `ready` / `attention`。此时 doctor 报告 `coverage` 块给出状态、分类计数、digest 与稳定 reason；GUI 文案不得把它显示成“项目已译完”，Batch `build` / `submit` 也会以结构化错误拒绝。
 
 当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag` / `rebuild_rag_store` / `rebuild_source_index_store`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
 

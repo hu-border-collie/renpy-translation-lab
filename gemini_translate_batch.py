@@ -54,7 +54,11 @@ from engine_adapters.contracts import (
     SourceDocument,
     ValidatedTranslation,
 )
-from engine_adapters.coverage import export_coverage_package, load_review_record
+from engine_adapters.coverage import (
+    evaluate_coverage_completion,
+    export_coverage_package,
+    load_review_record,
+)
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 import engine_adapters.reuse as engine_reuse
 import engine_adapters.versioning as engine_versioning
@@ -3456,6 +3460,27 @@ def summarize_translation_progress(file_jobs):
     }
 
 
+def summarize_coverage_for_doctor(coverage_snapshot):
+    """Return the read-only coverage summary consumed by doctor (#424 P6)."""
+
+    report = getattr(coverage_snapshot, 'report', None)
+    if report is None:
+        return None
+    assessment = evaluate_coverage_completion(report)
+    counts = dict(assessment.classification_counts)
+    return {
+        'status': assessment.coverage_status,
+        'completion': assessment.completion,
+        'coverage_digest': assessment.coverage_digest,
+        'candidate_count': int(getattr(report, 'candidate_count', 0) or 0),
+        'classification_counts': counts,
+        'unknown_count': int(counts.get('unknown') or 0),
+        'parse_error_count': int(counts.get('parse_error') or 0),
+        'unsupported_count': int(counts.get('unsupported') or 0),
+        'reasons': list(assessment.reasons),
+    }
+
+
 def collect_doctor_translation_progress():
     """Doctor-only progress summary: same counts as full pending jobs, cheaper path.
 
@@ -3468,7 +3493,11 @@ def collect_doctor_translation_progress():
         include_occurrences=False,
         include_task_payloads=False,
     )
-    return summarize_translation_progress(file_jobs)
+    progress = summarize_translation_progress(file_jobs)
+    progress['coverage'] = summarize_coverage_for_doctor(
+        getattr(file_jobs, 'coverage_snapshot', None)
+    )
+    return progress
 
 
 def format_context_block(lines, empty_label):
@@ -4302,6 +4331,32 @@ def create_batch_package(display_name_override='', skip_prepare=False):
 
     file_jobs = collect_pending_file_jobs()
     if not file_jobs:
+        coverage_snapshot = getattr(file_jobs, 'coverage_snapshot', None)
+        coverage_report = getattr(coverage_snapshot, 'report', None)
+        if coverage_report is None:
+            # A missing coverage measurement is not evidence of completion.
+            assessment_payload = {
+                'completion': 'unconfirmed',
+                'coverage_status': 'unknown',
+                'coverage_digest': '',
+                'classification_counts': {},
+                'reasons': ['coverage.evidence_missing'],
+            }
+        else:
+            assessment_payload = evaluate_coverage_completion(coverage_report).to_dict()
+        if assessment_payload['completion'] == 'unconfirmed':
+            # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
+            raise cli_contract.MachineContractError(
+                '没有待译条目，但文本覆盖未确认，不能报告为翻译完成。',
+                code_name='COVERAGE_UNCONFIRMED',
+                suggested_action=(
+                    '先运行 doctor 查看 coverage 分类、reason 与排除理由；'
+                    '修复 unknown / parse_error 或完成 coverage review 后重试。'
+                ),
+                semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                retryable=False,
+                details=assessment_payload,
+            )
         print('No pending lines to translate.')
         return None
 
@@ -18019,6 +18074,13 @@ def collect_doctor_workflow_state(report):
 
     pending = _doctor_pending_task_count(report)
     if pending <= 0:
+        coverage = report.get('coverage') or {}
+        if coverage.get('completion') == 'unconfirmed':
+            return doctor_rec.COVERAGE_UNCONFIRMED
+        if report.get('coverage_evidence_available') is False:
+            # The progress scan failed and pending defaulted to zero; a missing
+            # measurement must not be reported as "no pending lines".
+            return ''
         return doctor_rec.NO_PENDING_LINES
 
     has_existing_translations = _doctor_has_existing_translations(report)
@@ -18796,6 +18858,8 @@ def collect_doctor_report():
     pending_file_count = 0
     translated_task_count = 0
     total_task_count = 0
+    coverage_summary = None
+    coverage_evidence_available = False
     # Avoid walking a TL tree that may sit outside the project root.
     # Progress counts use the same inventory filter as batch build, without the
     # occurrence-extraction work that build/writeback needs.
@@ -18806,6 +18870,8 @@ def collect_doctor_report():
             pending_task_count = progress['pending_task_count']
             translated_task_count = progress['translated_task_count']
             total_task_count = progress['total_task_count']
+            coverage_summary = progress.get('coverage')
+            coverage_evidence_available = coverage_summary is not None
         except Exception as exc:
             print(f'Warning: Could not compute pending translation counts: {exc}')
 
@@ -18874,6 +18940,8 @@ def collect_doctor_report():
         'pending_file_count': pending_file_count,
         'translated_task_count': translated_task_count,
         'total_task_count': total_task_count,
+        'coverage': coverage_summary,
+        'coverage_evidence_available': coverage_evidence_available,
         'context_status': context_status,
         'project_assets': project_assets,
         'model_routing': model_routing_status,
@@ -21294,11 +21362,36 @@ def _run_translate_preflight(args):
             '实际运行可能在 prepare 后变化。',
         ))
     if not requests:
-        risks.append(_preflight_risk(
-            'NO_PENDING_WORK',
-            'info',
-            '当前范围没有待翻译条目。',
-        ))
+        coverage_report = getattr(
+            getattr(context, 'adapter_snapshot', None), 'report', None
+        )
+        assessment = (
+            evaluate_coverage_completion(coverage_report)
+            if coverage_report is not None
+            else None
+        )
+        if assessment is not None and assessment.completion == 'unconfirmed':
+            # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
+            risks.append(_preflight_risk(
+                'COVERAGE_UNCONFIRMED',
+                'error',
+                '当前范围没有待翻译条目，但文本覆盖未确认（'
+                + ', '.join(assessment.reasons)
+                + '）；不能报告为翻译完成。请先运行 doctor 查看 coverage 分类与 reason。',
+            ))
+        elif assessment is None:
+            # A missing coverage measurement cannot confirm a zero-pending claim.
+            risks.append(_preflight_risk(
+                'COVERAGE_EVIDENCE_MISSING',
+                'warning',
+                '无法取得 coverage 证据，不能确认“零待译”是否完整；请先运行 doctor 并重试。',
+            ))
+        else:
+            risks.append(_preflight_risk(
+                'NO_PENDING_WORK',
+                'info',
+                '当前范围没有待翻译条目。',
+            ))
 
     status = 'blocked' if any(risk['severity'] == 'error' for risk in risks) else 'ready'
     payload = {

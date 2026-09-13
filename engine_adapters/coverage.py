@@ -491,6 +491,63 @@ def build_coverage_report(
     )
 
 
+COMPLETION_CLAIMABLE_COVERAGE_STATUSES = frozenset({"ready", "attention"})
+
+
+@dataclass(frozen=True)
+class CoverageCompletionAssessment:
+    """Whether a zero-pending claim may be reported as a confirmed text range.
+
+    #265 下游门禁：只有 ``coverage_status`` ∈ {ready, attention}，且没有
+    unknown / parse_error / inventory invariant / source-change 证据时，才能声明
+    “文本范围已确认”。独立 coverage review 是否满足 policy 由 review 门禁
+    另行叠加（见 :func:`validate_review_record`）。
+    """
+
+    completion: str
+    coverage_status: str
+    coverage_digest: str
+    classification_counts: Mapping[str, int]
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "completion": self.completion,
+            "coverage_status": self.coverage_status,
+            "coverage_digest": self.coverage_digest,
+            "classification_counts": dict(self.classification_counts),
+            "reasons": list(self.reasons),
+        }
+
+
+def evaluate_coverage_completion(report: CoverageReport) -> CoverageCompletionAssessment:
+    """Return whether a "no pending text" claim is coverage-confirmed."""
+
+    status = str(report.coverage_status or "")
+    reasons: list[str] = []
+    if status not in COMPLETION_CLAIMABLE_COVERAGE_STATUSES:
+        reasons.append(f"coverage.status.{status or 'unknown'}")
+    counts = {
+        str(key): int(value or 0)
+        for key, value in (report.classification_counts or {}).items()
+    }
+    if counts.get("unknown"):
+        reasons.append("coverage.unknown_candidates")
+    if counts.get("parse_error"):
+        reasons.append("coverage.parse_error_candidates")
+    if report.invariant_errors:
+        reasons.append("coverage.invariant_errors")
+    if report.source_changed_during_scan:
+        reasons.append("coverage.source_changed_during_scan")
+    return CoverageCompletionAssessment(
+        completion="unconfirmed" if reasons else "confirmed",
+        coverage_status=status,
+        coverage_digest=str(report.coverage_digest or ""),
+        classification_counts=counts,
+        reasons=tuple(reasons),
+    )
+
+
 @dataclass(frozen=True)
 class CoverageFreshness:
     effective_status: str
