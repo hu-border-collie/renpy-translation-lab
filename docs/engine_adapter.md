@@ -138,6 +138,17 @@ python gemini_translate_batch.py coverage-review-import --file review.json --dry
   stale review 分别以 `COVERAGE_REVIEW_PENDING` / `COVERAGE_REVIEW_STALE` 结构化
   拒绝，`--dry-run` 只校验不写盘。
 
+doctor 的 `engine_status` 块（#424 P6 Slice 3b）把 adapter capabilities / protocol、
+live scan 的 locator 与 candidate schema、最新 `logs/project_snapshots/*/project_snapshot.json`
+的 schema/engine/adapter 兼容性、coverage catalog provenance，以及 `latest_manifest`
+的 plan fingerprint / source identity 统一为稳定 `issues[].code`（`engine.*`）。该块不
+调用模型、不写盘，并复用 doctor 已有的 live adapter scan。任一 `error` 会让该块
+`blocked` 并让 doctor envelope 返回 `status=blocked`；`source_stale` 等写回问题为
+warning，实际 `check` / `apply` 仍按 `validate_batch_translation_plan_before_dispatch`
+拒绝。字段与 reason code 清单见
+[doctor 状态矩阵](doctor_states_matrix.md) 与
+[doctor 建议机制](doctor_recommendations.md)。
+
 ## Review provenance
 
 `coverage_review_template.json` 必须由核对者另存或填写：
