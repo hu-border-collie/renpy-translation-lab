@@ -238,6 +238,12 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         return EXIT_BLOCKED
     if command == "doctor" and status == "coverage_unconfirmed":
         return EXIT_NEEDS_ACTION
+    if command == "coverage-status":
+        if status == "confirmed":
+            return EXIT_OK
+        if status in {"coverage_unconfirmed", "review_invalid"}:
+            return EXIT_BLOCKED
+        return EXIT_NEEDS_ACTION
     if command in {"preview-revisions", "final-review-create-revisions"}:
         if status in {"safe", "ready"}:
             return EXIT_OK

@@ -432,6 +432,18 @@ python gemini_translate_batch.py export-reuse-results \
   C:/reuse/decided/reuse_report.json C:/batch/target/manifest.json
 ```
 
+### Coverage 状态与 review 导入（#424 P6）
+
+```bash
+python gemini_translate_batch.py coverage-status --output json
+python gemini_translate_batch.py coverage-review-import --file review.json --dry-run
+```
+
+`coverage-status` 只读展示 coverage 分类、gate 与未解决候选 locator；
+`coverage-review-import` 校验后把 review 安装到
+`<game_root>/translation_context/coverage_review.json`，供 Project Analysis 发布、
+Final Review readiness 与 doctor 使用。
+
 - `export-project-snapshot` 复用当前 Ren'Py adapter 的 discovery / inventory /
   coverage / occurrence 结果，输出 `project_snapshot.json` 与
   `unit_occurrences.jsonl`；默认目录为 `logs/project_snapshots/`。

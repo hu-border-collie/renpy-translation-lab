@@ -120,6 +120,22 @@ confirmed（`--force` 不绕过）；Final Review readiness 在 gate 未确认�
 `pending=0`。doctor 的 `coverage` 块会显示 review status / policy / unresolved
 findings / gate 状态与稳定 reason。
 
+P6 提供两个只读 / 本地命令（不调用模型、不要求 API Key）：
+
+```bash
+python gemini_translate_batch.py coverage-status --limit 20 --output json
+python gemini_translate_batch.py coverage-review-import --file review.json --dry-run --output json
+```
+
+- `coverage-status` 现场扫描项目，输出 coverage 状态、分类与 reason 计数、gate
+  状态/reason、review 状态，以及未解决候选（`unknown` / `parse_error` /
+  `unsupported`）的 locator 摘要。`--output json` 走版本化 envelope；
+  `--strict-exit-codes` 下 confirmed=0、需要处理=2、block=3。
+- `coverage-review-import` 校验 review schema、freshness、policy 与 findings，并把
+  记录原子写入 `<game_root>/translation_context/coverage_review.json`；pending 与
+  stale review 分别以 `COVERAGE_REVIEW_PENDING` / `COVERAGE_REVIEW_STALE` 结构化
+  拒绝，`--dry-run` 只校验不写盘。
+
 ## Review provenance
 
 `coverage_review_template.json` 必须由核对者另存或填写：
