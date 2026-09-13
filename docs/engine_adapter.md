@@ -349,6 +349,34 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
 
+## P6 离线端到端回归与边界
+
+P6 收口不依赖真实游戏运行时，回归分为三层，全部在 CI 的 CLI / GUI 套件中执行：
+
+- **Ren'Py 产品路径**：`tests/test_batch_golden_corpus.py` 用最小 fixture 走
+  `build -> check -> apply`、`apply --export-only/--export-dir` 与幂等重放；
+  `tests/test_engine_adapter_p1.py` / `p3` / `p4` 覆盖 adapter、coverage、
+  snapshot、reconciliation 与 reuse 合同；`tests/test_engine_offline_corpus.py`
+  冻结 Ren'Py fixture 的 candidate / occurrence / 分类计数，并断言同一 checkout
+  内 `inventory_digest` / `coverage_digest` 稳定（不跨 OS 固定 digest：Git 可能
+  在 Windows 以 CRLF 检出文本 fixture，合法地改变源字节哈希），同时验证
+  coverage package 与 review template。
+- **TyranoScript 离线 corpus**：`tests/test_engine_adapter_p5_tyrano.py` +
+  `tests/fixtures/tyranoscript_v600`（含 `expected/inventory.json`）覆盖
+  hybrid inventory、原生 catalog 双向对账、`lang_set` 完整性、语义重定位和
+  声明式 `json_catalog_set` 渲染；`tests/test_engine_offline_corpus.py` 同时
+  冻结 Tyrano fixture 的 candidate / occurrence / 分类计数与同一 checkout 内的
+  snapshot / coverage digest 稳定性。Tyrano 的 CLI/GUI 入口与
+  端到端写回按 2026-09-12 决策不在本单范围。
+- **gates**：CLI 全量 `python3 -B tests/run_cli_tests.py -q` 与 GUI 全量
+  `python3 -B tests/run_gui_tests.py -q`（PySide6）都必须通过；结构阻断、stale
+  source、stale check、coverage / review 门禁与 `--force` 语义由上述用例共同覆盖。
+
+已知边界：仓库提供的 `scripts/run_renpy_integration.py` 需要外部 Ren'Py SDK，
+CI 不下载 SDK，因此 **真实引擎运行时的语言切换、locale fallback 与最终显示**
+未在本单验证；真实项目上的 coverage `block` 频率与运行时修复见
+[coverage block 归因报告](plans/renpy_coverage_block_attribution.md)。这些边界
+不阻止 Ren'Py 离线产品路径，但不能表述为“真实 Ren'Py 运行时已全部验证”。
 
 ## 结构保护
 

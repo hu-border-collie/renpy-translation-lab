@@ -33,7 +33,10 @@
     "refresh_existing_template": true,
     "language": "schinese",
     "renpy_sdk_dir": "",
+    "launcher_py": "",
     "python_exe": "",
+    "unpack_command": "",
+    "template_command": "",
     "allow_shell_commands": false
   },
   "sync": {
@@ -101,10 +104,14 @@
     "context_before": 30,
     "context_after": 10,
     "max_output_tokens": 32768,
+    "retry_chunk_size": 8,
+    "retry_max_source_chars": 4000,
     "temperature": 0.4,
     "display_name_prefix": "renpy-translate",
     "macro_setting_file": "macro_setting.md",
+    "macro_setting": "",
     "thinking_level": "minimal",
+    "safety_settings": [],
     "rag": {
       "enabled": true,
       "embedding_backend": "gemini",
@@ -159,6 +166,15 @@
       "model": "",
       "display_name_prefix": "renpy-final-review",
       "store_under_batch_jobs": true
+    },
+    "keyword_extraction": {
+      "chunk_size": 40,
+      "max_candidates_per_chunk": 12,
+      "display_name_prefix": "renpy-keywords"
+    },
+    "revision": {
+      "chunk_size": 6,
+      "display_name_prefix": "renpy-revise"
     },
     "submit_max_cost": 0,
     "non_chinese_validation": {
