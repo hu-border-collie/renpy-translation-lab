@@ -2,7 +2,7 @@
 
 > **状态**：#272 研究与路线决策基准文档。
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
-> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，待最终清单收口关闭 Epic；关闭后即可为推荐候选创建独立实现 Issue。真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
+> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，#265 已于 2026-09-13 关闭。后续推荐候选可创建独立实现 Issue；真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
 > **核对日期**：2026-09-13。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
 
 ---
@@ -55,7 +55,7 @@
 | :--- | :--- |
 | `[官方]` | 对照现行官方文档、发行说明或引擎 UI 可直接核对。 |
 | `[推断]` | 由官方机制推导，或来自社区实践，尚未用本仓库夹具验证。 |
-| `[待夹具验证]` | 涉及本工具 Adapter / coverage / writeback 的集成假设；#265 P5 已交付，P6（#424）完成并有 fixture 前不得当成立项依据。 |
+| `[待夹具验证]` | 涉及本工具 Adapter / coverage / writeback 的集成假设；Ren'Py 与 TyranoScript 已有离线 fixture，其它候选引擎仍须独立 fixture 与立项后才能升级为已验证事实。 |
 
 第 5 节对 Naninovel 与现有 `coverage.py` / `versioning.py` / `writeback.py` 的对照全部属于 `[待夹具验证]`。
 
