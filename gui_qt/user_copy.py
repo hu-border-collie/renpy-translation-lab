@@ -314,6 +314,117 @@ def project_analysis_record_status_label(status: str) -> str:
     return PROJECT_ANALYSIS_RECORD_STATUS_LABELS.get(str(status or ""), "未知")
 
 
+# Coverage / independent review copy shared by the doctor summary and the
+# coverage review import action (#424 P6). Reason codes mirror
+# engine_adapters.coverage; keep this table in lockstep with the CLI contract.
+COVERAGE_REVIEW_COPY = {
+    "rescan": "重新扫描文本覆盖",
+    "rescan_tip": "重新运行环境检查，刷新 coverage 分类、未解决候选与核对门禁状态。",
+    "import_review": "导入核对结果",
+    "import_review_tip": (
+        "选择已完成的 coverage_review.json；按与 CLI `coverage-review-import` "
+        "相同的 schema / freshness / policy 合同校验后写入 game_root。"
+    ),
+    "import_dialog_title": "选择已完成的覆盖核对 JSON",
+    "import_confirm_title": "导入覆盖核对结果",
+    "import_confirm_body": (
+        "将校验该 JSON 是否与当前 source / coverage digest 一致，并安装为：\n"
+        "{target}\n\n"
+        "pending、stale 或未满足 policy 的核对会被拒绝；不会修改 .rpy 脚本。"
+    ),
+    "import_running": "正在导入覆盖核对结果…",
+    "import_failed_title": "导入覆盖核对结果失败",
+    "import_done_title": "覆盖核对结果已导入",
+    "import_done_body": (
+        "已安装到：{path}\n"
+        "核对状态：{review_status}；策略：{review_policy}；"
+        "未解决 findings：{unresolved_findings}"
+    ),
+    "project_changed": "导入期间项目已切换或关闭；结果未刷新，请对当前项目重新运行环境检查。",
+    "status_labels": {
+        "ready": "已识别，可继续",
+        "attention": "已识别，但有注意项",
+        "block": "存在阻断项",
+        "stale": "已过期",
+        "unknown": "未知",
+    },
+    "completion_labels": {
+        "confirmed": "覆盖已确认",
+        "unconfirmed": "覆盖未确认",
+    },
+    "gate_status_labels": {
+        "confirmed": "核对门禁已确认",
+        "coverage_unconfirmed": "文本覆盖未确认",
+        "review_missing": "缺少独立核对",
+        "review_invalid": "核对记录无效",
+        "review_stale": "核对记录已过期",
+        "review_pending": "核对尚未完成",
+        "review_unresolved_findings": "仍有未解决 finding",
+        "review_policy_unsatisfied": "核对策略未满足",
+    },
+    "review_status_labels": {
+        "missing": "缺失",
+        "pending": "待核对",
+        "agent_reviewed": "Agent 已核对",
+        "human_reviewed": "人工已核对",
+        "changes_requested": "要求修改",
+        "stale": "已过期",
+        "invalid": "无效",
+        "unknown": "未知",
+    },
+    "review_policy_labels": {
+        "agent_or_human": "Agent 或人工",
+        "human_required": "必须人工",
+    },
+    "reason_labels": {
+        "coverage.status.unknown": "coverage 状态未知",
+        "coverage.status.block": "coverage 存在阻断项",
+        "coverage.status.stale": "coverage 已过期",
+        "coverage.unknown_candidates": "存在未识别候选",
+        "coverage.parse_error_candidates": "存在解析失败候选",
+        "coverage.invariant_errors": "coverage invariant 失败",
+        "coverage.source_changed_during_scan": "扫描期间源码发生变化",
+        "coverage.review_missing": "缺少独立核对",
+        "coverage.review_invalid": "核对记录无效",
+        "coverage.review_stale": "核对记录已过期",
+        "coverage.review_pending": "核对尚未完成",
+        "coverage.review_unresolved_findings": "仍有未解决 finding",
+        "coverage.review_policy_unsatisfied": "核对策略未满足",
+    },
+    "classification_labels": {
+        "translatable": "可译",
+        "already_translated": "已译",
+        "explicitly_excluded": "显式排除",
+        "unknown": "未知",
+        "parse_error": "解析失败",
+        "unsupported": "不支持",
+    },
+}
+
+
+def coverage_status_label(status: str) -> str:
+    """Return a user-facing live coverage status label."""
+    return COVERAGE_REVIEW_COPY["status_labels"].get(str(status or ""), "未知")
+
+
+def coverage_gate_status_label(status: str) -> str:
+    """Return a user-facing coverage + review gate status label."""
+    return COVERAGE_REVIEW_COPY["gate_status_labels"].get(str(status or ""), "未知")
+
+
+def coverage_review_status_label(status: str) -> str:
+    """Return a user-facing independent-review status label."""
+    return COVERAGE_REVIEW_COPY["review_status_labels"].get(str(status or ""), "未知")
+
+
+def coverage_review_policy_label(policy: str) -> str:
+    """Return a user-facing review policy label."""
+    return COVERAGE_REVIEW_COPY["review_policy_labels"].get(
+        str(policy or ""),
+        str(policy or "未指定"),
+    )
+
+
 SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
     "项目列表操作即时保存，不受设置保存按钮影响。"
 )
