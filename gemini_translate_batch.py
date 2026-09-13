@@ -61,6 +61,7 @@ from engine_adapters.coverage import (
     evaluate_coverage_gate,
     export_coverage_package,
     load_review_record,
+    validate_review_record,
 )
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 import engine_adapters.reuse as engine_reuse
@@ -140,6 +141,12 @@ PROFILE_COMMANDS = frozenset(
         'profiles-probe',
     }
 )
+COVERAGE_COMMANDS = frozenset(
+    {
+        'coverage-status',
+        'coverage-review-import',
+    }
+)
 def _profile_stage_choices():
     """Derive stage choices from the shared editor core (no duplicated enum)."""
 
@@ -191,6 +198,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'final-review-create-revisions',
         *DURABLE_SYNC_COMMANDS,
         *PROFILE_COMMANDS,
+        *COVERAGE_COMMANDS,
         TRANSLATE_PREFLIGHT_COMMAND,
     }
 )
@@ -219,6 +227,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'check',
         'apply',
         *PROFILE_COMMANDS,
+        *COVERAGE_COMMANDS,
         TRANSLATE_PREFLIGHT_COMMAND,
         'estimate-cost',
         'preview-revisions',
@@ -3580,6 +3589,231 @@ def collect_doctor_translation_progress():
         review_path=resolve_coverage_review_path(),
     )
     return progress
+
+
+UNRESOLVED_COVERAGE_CLASSIFICATIONS = frozenset({'unknown', 'parse_error', 'unsupported'})
+
+
+def _build_live_coverage_snapshot():
+    """Run the read-only adapter scan used by the coverage CLI commands."""
+
+    try:
+        return build_translation_snapshot(
+            RenPyAdapter(legacy_module=legacy),
+            ProjectDiscoveryRequest(
+                project_root=legacy.BASE_DIR,
+                localization_root=legacy.TL_DIR,
+                target_language=legacy.PREP_LANGUAGE,
+                include_files=tuple(sorted(legacy.INCLUDE_FILES)),
+                include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
+            ),
+            InventoryPolicy(),
+            include_occurrences=False,
+            include_task_payloads=False,
+        )
+    except cli_contract.MachineContractError:
+        raise
+    except Exception as exc:
+        raise cli_contract.MachineContractError(
+            f'could not build the live coverage snapshot: {exc}',
+            code_name='COVERAGE_EVIDENCE_UNAVAILABLE',
+            suggested_action='先运行 doctor 检查项目配置、game_root 与 TL 目录后重试。',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+        ) from exc
+
+
+def _coverage_candidate_summary(candidate):
+    locator = {}
+    raw_locator = getattr(candidate, 'locator', None)
+    if raw_locator is not None:
+        to_dict = getattr(raw_locator, 'to_dict', None)
+        locator = to_dict() if callable(to_dict) else dict(raw_locator)
+    return {
+        'candidate_id': str(candidate.candidate_id),
+        'classification': str(candidate.classification),
+        'structure_kind': str(candidate.structure_kind),
+        'reason_codes': list(candidate.reason_codes or ()),
+        'locator': locator,
+        'excerpt': str(candidate.raw_excerpt or '')[:200],
+    }
+
+
+def _coverage_locator_text(locator):
+    payload = locator.get('locator') if isinstance(locator, dict) else None
+    if not isinstance(payload, dict):
+        payload = locator if isinstance(locator, dict) else {}
+    file_rel_path = str(payload.get('file_rel_path') or payload.get('path') or '')
+    line = payload.get('line')
+    if line is None:
+        line = payload.get('ordinal')
+    return file_rel_path, ('' if line is None else str(line))
+
+
+def collect_coverage_status(*, unresolved_limit=20):
+    """Read-only coverage + review gate status for the active project (#424 P6)."""
+
+    adapter_snapshot = _build_live_coverage_snapshot()
+    review_record, review_path, review_error = load_coverage_review_for_project()
+    gate = evaluate_coverage_gate(
+        adapter_snapshot.report,
+        adapter_snapshot.inventory,
+        review_record=review_record,
+        review_path=review_path,
+        review_error=review_error,
+    )
+    unresolved = [
+        _coverage_candidate_summary(candidate)
+        for candidate in adapter_snapshot.inventory.candidates
+        if candidate.classification in UNRESOLVED_COVERAGE_CLASSIFICATIONS
+    ]
+    limit = max(0, int(unresolved_limit or 0))
+    report = adapter_snapshot.report
+    return {
+        'status': gate.status,
+        'confirmed': gate.confirmed,
+        'engine': report.engine,
+        'adapter_version': report.adapter_version,
+        'coverage_status': report.coverage_status,
+        'coverage_digest': report.coverage_digest,
+        'candidate_count': report.candidate_count,
+        'classification_counts': dict(report.classification_counts),
+        'reason_counts': dict(report.reason_counts),
+        'unresolved_candidate_count': len(unresolved),
+        'unresolved_candidates': unresolved[:limit],
+        'review_path': review_path,
+        'gate': gate.to_dict(),
+    }
+
+
+def print_coverage_status(payload):
+    print(f"Coverage status: {payload.get('coverage_status') or 'unknown'}")
+    print(f"- engine: {payload.get('engine')} / {payload.get('adapter_version')}")
+    print(f"- candidates: {int(payload.get('candidate_count') or 0)}")
+    counts = dict(payload.get('classification_counts') or {})
+    classified = ', '.join(
+        f'{key}={int(value or 0)}' for key, value in sorted(counts.items()) if value
+    )
+    if classified:
+        print(f"- classification: {classified}")
+    print(f"- coverage digest: {payload.get('coverage_digest') or ''}")
+    gate = dict(payload.get('gate') or {})
+    print(f"- gate: {gate.get('status')} (confirmed={bool(gate.get('confirmed'))})")
+    if gate.get('reasons'):
+        print('- gate reasons: ' + ', '.join(str(r) for r in gate['reasons']))
+    print(f"- review: {gate.get('review_status')} at {payload.get('review_path') or '(unset)'}")
+    if gate.get('unresolved_findings'):
+        print(f"- unresolved review findings: {int(gate['unresolved_findings'])}")
+    unresolved = list(payload.get('unresolved_candidates') or ())
+    if unresolved:
+        print(
+            f"- unresolved candidates ({int(payload.get('unresolved_candidate_count') or 0)}, "
+            f"showing {len(unresolved)}):"
+        )
+        for item in unresolved:
+            file_rel_path, line = _coverage_locator_text(item.get('locator') or {})
+            location = file_rel_path or '?'
+            if line:
+                location = f'{location}:{line}'
+            reasons = ','.join(item.get('reason_codes') or [])
+            print(
+                f"  - [{item.get('classification')}] {location}"
+                + (f" {reasons}" if reasons else '')
+            )
+
+
+def run_coverage_review_import(args):
+    """Validate and install a completed coverage review (#424 P6)."""
+
+    source = str(getattr(args, 'file', '') or '').strip()
+    if not source:
+        raise cli_contract.MachineContractError(
+            'coverage-review-import requires --file',
+            code_name='COVERAGE_REVIEW_FILE_REQUIRED',
+            suggested_action='传入已完成的 coverage review JSON 文件。',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    try:
+        record = load_review_record(source)
+    except ValueError as exc:
+        raise cli_contract.MachineContractError(
+            f'coverage review is not valid JSON: {exc}',
+            code_name='COVERAGE_REVIEW_INVALID',
+            suggested_action='按 coverage package 中的 review 模板修正 JSON 后重试。',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+            details={'error': str(exc)},
+        ) from exc
+
+    adapter_snapshot = _build_live_coverage_snapshot()
+    try:
+        validation = validate_review_record(
+            record,
+            adapter_snapshot.report,
+            adapter_snapshot.inventory,
+        )
+    except ValueError as exc:
+        raise cli_contract.MachineContractError(
+            f'coverage review does not match the live coverage: {exc}',
+            code_name='COVERAGE_REVIEW_INVALID',
+            suggested_action=(
+                '重新导出当前 source 的 coverage package，按模板完成 review 后再导入。'
+            ),
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+            details={'error': str(exc)},
+        ) from exc
+    if validation.effective_status == 'stale':
+        raise cli_contract.MachineContractError(
+            'coverage review is stale for the current source / coverage',
+            code_name='COVERAGE_REVIEW_STALE',
+            suggested_action=(
+                '重新导出 coverage package，按当前 source 完成新的 review 后再导入。'
+            ),
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+            details={'stale_reasons': list(validation.stale_reasons)},
+        )
+    if validation.effective_status == 'pending':
+        raise cli_contract.MachineContractError(
+            'coverage review is still pending; complete it before importing',
+            code_name='COVERAGE_REVIEW_PENDING',
+            suggested_action=(
+                '填写 reviewer 与 confirmed_at，并把 status 改为 agent_reviewed 或 human_reviewed。'
+            ),
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+        )
+
+    target = resolve_coverage_review_path()
+    if not target:
+        raise cli_contract.MachineContractError(
+            'game_root is not configured; cannot resolve the review path',
+            code_name='COVERAGE_REVIEW_PATH_UNSET',
+            suggested_action='先在 translator_config.json 配置有效的 game_root。',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+        )
+    gate = evaluate_coverage_gate(
+        adapter_snapshot.report,
+        adapter_snapshot.inventory,
+        review_record=record,
+        review_path=target,
+    )
+    dry_run = bool(getattr(args, 'dry_run', False))
+    if not dry_run:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        atomic_write_json(target, record, ensure_ascii=False, indent=2)
+    return {
+        'status': 'dry_run' if dry_run else 'imported',
+        'review_path': target,
+        'review_status': validation.effective_status,
+        'review_policy': validation.review_policy,
+        'review_policy_satisfied': validation.policy_satisfied,
+        'unresolved_findings': validation.unresolved_findings,
+        'coverage_review_digest': validation.coverage_review_digest,
+        'gate': gate.to_dict(),
+    }
 
 
 def format_context_block(lines, empty_label):
@@ -19451,6 +19685,37 @@ def build_arg_parser():
     doctor_parser = subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
     add_machine_output_argument(doctor_parser)
 
+    coverage_status_parser = subparsers.add_parser(
+        'coverage-status',
+        help='Read-only live coverage classification and coverage/review gate status.',
+    )
+    coverage_status_parser.add_argument(
+        '--limit',
+        type=int,
+        default=20,
+        help='Maximum unresolved candidates to list (default: 20).',
+    )
+    add_machine_output_argument(coverage_status_parser)
+
+    coverage_review_import_parser = subparsers.add_parser(
+        'coverage-review-import',
+        help=(
+            'Validate a completed coverage review and install it at '
+            '<game_root>/translation_context/coverage_review.json.'
+        ),
+    )
+    coverage_review_import_parser.add_argument(
+        '--file',
+        required=True,
+        help='Completed coverage review JSON to validate and install.',
+    )
+    coverage_review_import_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Validate the review and report the gate without writing it.',
+    )
+    add_machine_output_argument(coverage_review_import_parser)
+
     bootstrap_work_parser = subparsers.add_parser(
         'bootstrap-work',
         help='Create work/ from original/game when work is missing or empty (no TL generation).',
@@ -22137,6 +22402,26 @@ def dispatch_command(parser, args):
         if command == 'translate-preflight':
             return run_translate_preflight(args)
 
+        if command == 'coverage-status':
+            payload = collect_coverage_status(
+                unresolved_limit=getattr(args, 'limit', 20)
+            )
+            print_coverage_status(payload)
+            return payload
+
+        if command == 'coverage-review-import':
+            payload = run_coverage_review_import(args)
+            print(
+                f"Coverage review {payload.get('status')}: "
+                f"{payload.get('review_path')}"
+            )
+            gate = dict(payload.get('gate') or {})
+            print(
+                f"- gate: {gate.get('status')} "
+                f"(confirmed={bool(gate.get('confirmed'))})"
+            )
+            return payload
+
         if command == 'build':
             return create_batch_package(
                 display_name_override=args.display_name,
@@ -22455,7 +22740,11 @@ def _load_machine_manifest(command, value, args):
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
 
-    if command in PROFILE_COMMANDS or command == TRANSLATE_PREFLIGHT_COMMAND:
+    if (
+        command in PROFILE_COMMANDS
+        or command in COVERAGE_COMMANDS
+        or command == TRANSLATE_PREFLIGHT_COMMAND
+    ):
         payload = dict(value or {})
         status = str(payload.pop('status', 'completed'))
         return cli_contract.success_envelope(

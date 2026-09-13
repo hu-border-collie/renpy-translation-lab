@@ -46,6 +46,10 @@ class BatchCliContractTests(unittest.TestCase):
             return [command, "staged_selection.json", "--selection-file", "selection.json"]
         if command == "translate-preflight":
             return [command, "--strategy", "sync"]
+        if command == "coverage-status":
+            return [command]
+        if command == "coverage-review-import":
+            return [command, "--file", "review.json"]
         if command == "profiles-probe":
             return [
                 command,
@@ -2695,6 +2699,22 @@ class BatchCliContractTests(unittest.TestCase):
                         handler_patches.append(
                             mock.patch.object(batch, "apply_revisions", return_value={"ok": True})
                         )
+                    elif command == "coverage-status":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "collect_coverage_status",
+                                return_value={"status": "confirmed", "confirmed": True},
+                            )
+                        )
+                    elif command == "coverage-review-import":
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_coverage_review_import",
+                                return_value={"status": "imported"},
+                            )
+                        )
                     elif command == "split":
                         handler_patches.append(
                             mock.patch.object(batch, "split_manifest", return_value=None)
@@ -2940,6 +2960,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 "gemini-main",
                                 "--strategy",
                                 "sync",
+                            ]
+                        elif command == "coverage-status":
+                            argv = ["coverage-status"]
+                        elif command == "coverage-review-import":
+                            argv = [
+                                "coverage-review-import",
+                                "--file",
+                                "review.json",
                             ]
                         else:
                             argv = [command, "manifest.json"]

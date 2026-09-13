@@ -455,6 +455,18 @@ python gemini_translate_batch.py export-reuse-results \
   [真实项目门禁实测](engine_adapter.md#真实项目门禁实测)。不把历史
   Batch 包套到已经漂移的源树上冻结译文记录。
 
+### Coverage 状态与 review 导入（#424 P6）
+
+```bash
+python gemini_translate_batch.py coverage-status --output json
+python gemini_translate_batch.py coverage-review-import --file review.json --dry-run
+```
+
+`coverage-status` 只读展示 coverage 分类、gate 与未解决候选 locator；
+`coverage-review-import` 校验后把 review 安装到
+`<game_root>/translation_context/coverage_review.json`，供 Project Analysis 发布、
+Final Review readiness 与 doctor 使用。
+
 ## 关键词提取流程
 
 关键词提取模式只生成候选报告，不写回 `.rpy` / `glossary.json` / `story_graph.json`：
