@@ -527,6 +527,38 @@ class CliStatusTests(unittest.TestCase):
         self.assertIn("当前不会用于翻译", disabled_label)
 
 
+class PublishCoverageGateTests(unittest.TestCase):
+    def test_publish_refuses_unconfirmed_coverage_gate(self):
+        with self.assertRaisesRegex(
+            pa.ProjectAnalysisError,
+            "coverage / review gate is not confirmed",
+        ):
+            pa.publish_project_brief(
+                store_dir=None,
+                coverage_gate={
+                    "status": "review_missing",
+                    "confirmed": False,
+                    "reasons": ["coverage.review_missing"],
+                },
+            )
+
+    def test_publish_gate_is_not_bypassed_by_force(self):
+        with self.assertRaisesRegex(
+            pa.ProjectAnalysisError,
+            "coverage / review gate is not confirmed",
+        ):
+            pa.publish_project_brief(
+                store_dir=None,
+                force=True,
+                current_source_fingerprint="fingerprint",
+                coverage_gate={
+                    "status": "coverage_unconfirmed",
+                    "confirmed": False,
+                    "reasons": ["coverage.unknown_candidates"],
+                },
+            )
+
+
 class DoctorIntegrationTests(unittest.TestCase):
     def test_doctor_context_includes_project_analysis(self):
         import gemini_translate_batch as batch_mod

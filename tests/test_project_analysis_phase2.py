@@ -22,6 +22,17 @@ SCRIPT = FIXTURE_DIR / "script.rpy"
 KEYWORDS = FIXTURE_DIR / "keyword_chunk_summaries.jsonl"
 
 
+class _ConfirmedCoverageGate:
+    """Stub gate for CLI tests that focus on publish/unpublish plumbing."""
+
+    def to_dict(self):
+        return {
+            "status": "confirmed",
+            "confirmed": True,
+            "reasons": [],
+        }
+
+
 class RouteParseTests(unittest.TestCase):
     def test_fixture_has_two_routes_shared_label_and_unresolved(self):
         graph = routes.build_route_graph(
@@ -541,7 +552,14 @@ class CliPhase2Tests(unittest.TestCase):
                 if args:
                     printed.append(str(args[0]))
 
-            with mock.patch("builtins.print", side_effect=capture):
+            with (
+                mock.patch("builtins.print", side_effect=capture),
+                mock.patch.object(
+                    batch_mod,
+                    "evaluate_project_coverage_gate",
+                    return_value=_ConfirmedCoverageGate(),
+                ),
+            ):
                 batch_mod.main(
                     ["project-analysis-publish", "--store-dir", store_dir]
                 )
@@ -550,6 +568,41 @@ class CliPhase2Tests(unittest.TestCase):
 
             allowed = pa.load_injectable_project_brief(store_dir=store_dir, enabled=True)
             self.assertTrue(allowed["injectable"])
+
+    def test_cli_publish_refuses_unconfirmed_coverage(self):
+        import gemini_translate_batch as batch_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            with mock.patch("builtins.print"):
+                batch_mod.main(
+                    [
+                        "project-analysis-ingest-keywords",
+                        "--summary-jsonl",
+                        str(KEYWORDS),
+                        "--store-dir",
+                        store_dir,
+                    ]
+                )
+                batch_mod.main(
+                    [
+                        "project-analysis-build-structure",
+                        "--store-dir",
+                        store_dir,
+                        "--script-root",
+                        str(FIXTURE_DIR),
+                        "--entry-label",
+                        "start",
+                    ]
+                )
+            with self.assertRaises(SystemExit) as ctx:
+                batch_mod.main(
+                    ["project-analysis-publish", "--store-dir", store_dir]
+                )
+            self.assertIn(
+                "coverage / review gate is not confirmed",
+                str(ctx.exception),
+            )
 
 
 if __name__ == "__main__":

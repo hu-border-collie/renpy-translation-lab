@@ -2,6 +2,7 @@
 """Coverage completion gate tests (#424 P6 slice 1)."""
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -133,6 +134,38 @@ class BatchBuildCoverageGuardTests(unittest.TestCase):
             ctx.exception.details["reasons"],
             ["coverage.evidence_missing"],
         )
+
+
+class CoverageGateTests(unittest.TestCase):
+    def test_review_missing_is_not_confirmed(self):
+        report = make_coverage_report(status="attention", counts={"unsupported": 1})
+        decision = engine_coverage.evaluate_coverage_gate(
+            report, object(), review_record=None
+        )
+        self.assertFalse(decision.confirmed)
+        self.assertEqual(decision.status, "review_missing")
+        self.assertIn("coverage.review_missing", decision.reasons)
+
+    def test_coverage_unconfirmed_wins_over_review_missing(self):
+        report = make_coverage_report(status="block", counts={"unknown": 1})
+        decision = engine_coverage.evaluate_coverage_gate(
+            report, object(), review_record=None
+        )
+        self.assertFalse(decision.confirmed)
+        self.assertEqual(decision.status, "coverage_unconfirmed")
+        self.assertIn("coverage.unknown_candidates", decision.reasons)
+
+    def test_default_review_path_is_project_scoped(self):
+        path = engine_coverage.default_coverage_review_path("/game/work")
+        self.assertEqual(
+            path,
+            os.path.join(
+                os.path.abspath("/game/work"),
+                "translation_context",
+                "coverage_review.json",
+            ),
+        )
+        self.assertEqual(engine_coverage.default_coverage_review_path(""), "")
 
 
 if __name__ == "__main__":

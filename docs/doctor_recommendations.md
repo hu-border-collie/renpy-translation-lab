@@ -214,6 +214,8 @@ plan 构建前的配置错误也会转换为 `MODEL_PROFILE_INVALID`：doctor �
 
 `coverage_unconfirmed`（#424 P6）表示“零待译但覆盖未确认”：存在 `unknown` / `parse_error` / inventory invariant / source-change，或 coverage 状态不是 `ready` / `attention`。此时 doctor 报告 `coverage` 块给出状态、分类计数、digest 与稳定 reason；GUI 文案不得把它显示成“项目已译完”，Batch `build` / `submit` 也会以结构化错误拒绝。
 
+`coverage` 块同时包含独立 review 门禁（#424 P6 Slice 2）：`review_status`、`review_policy`、`review_policy_satisfied`、`unresolved_findings`、`review_path` 与 `gate`（confirmed/status/reasons）。review 约定路径为 `<game_root>/translation_context/coverage_review.json`；缺失、stale、pending、policy 不满足或存在 unresolved findings 时，Project Analysis 发布与 Final Review readiness 都会拒绝，即使 `pending=0`。
+
 当存在**必须执行的准备**建议（例如 `bootstrap_source_index` / `bootstrap_rag` / `rebuild_rag_store` / `rebuild_source_index_store`）时，`workflow_state` 应留空，避免 CLI 同时出现「可开始翻译」与「必须先准备」。可选优化（`bootstrap_rag_or_warm_on_build`、`enable_rag_for_consistency`、`enable_source_index_for_new_project`，以及 `build_project_analysis` / `refresh_project_analysis` / 项目分析模型与 API 配置建议）不抑制 `workflow_state`。
 
 ## 文案要求

@@ -143,6 +143,8 @@ python gemini_translate_batch.py project-analysis-publish
 python gemini_translate_batch.py project-analysis-unpublish
 ```
 
+> **#424 P6 起**：`project-analysis-publish` 在写入 published 前会评估 live coverage 与独立 review（约定路径 `<game_root>/translation_context/coverage_review.json`）。coverage `block`、review 缺失/stale/pending、policy 不满足或存在 unresolved findings 时拒绝发布，`--force` 不绕过该门禁；doctor 的 `coverage` 块会显示 gate 状态。
+
 配置（默认关闭；模型、预算、路径等工具级默认值位于 `translator_config.example.json` → `batch.project_analysis`）：
 
 ```json

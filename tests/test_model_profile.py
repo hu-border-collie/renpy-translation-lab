@@ -1607,11 +1607,22 @@ class SyncEntryWiringTests(unittest.TestCase):
                 )
 
                 batch_mod.legacy.TL_DIR = str(tl_dir)
-                review_path = batch_mod.create_final_review_package(
-                    skip_prepare=True,
-                    chunk_size=1,
-                    allow_pending=True,
-                )
+                gate_stub = mock.Mock()
+                gate_stub.to_dict.return_value = {
+                    "status": "confirmed",
+                    "confirmed": True,
+                    "reasons": [],
+                }
+                with mock.patch.object(
+                    batch_mod,
+                    "evaluate_project_coverage_gate",
+                    return_value=gate_stub,
+                ):
+                    review_path = batch_mod.create_final_review_package(
+                        skip_prepare=True,
+                        chunk_size=1,
+                        allow_pending=True,
+                    )
                 written.append(json.loads(Path(review_path).read_text(encoding="utf-8")))
         finally:
             batch_mod.legacy.TL_DIR = old["tl_dir"]
