@@ -2,8 +2,8 @@
 
 > **状态**：#272 研究与路线决策基准文档。
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
-> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；本路线决策仍须在 #265 P6（#424 产品化收尾）关闭后，方可为推荐候选创建独立实现 Issue。
-> **核对日期**：2026-09-12。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
+> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，待最终清单收口关闭 Epic；关闭后即可为推荐候选创建独立实现 Issue。真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
+> **核对日期**：2026-09-13。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
 
 ---
 
