@@ -35,8 +35,6 @@ RENPY_CORPUS = {
         "unknown": 0,
         "unsupported": 0,
     },
-    "inventory_digest": "d073cfc18f89bf9b1f185d3a67abe255cd4625eae50981ed177ae2ddf6e82cc9",
-    "coverage_digest": "171697ae3d2b92f24ea28ce3cbc4034976d519390edad278333b62b96f81d2ef",
 }
 
 TYRANO_CORPUS = {
@@ -51,8 +49,6 @@ TYRANO_CORPUS = {
         "unknown": 1,
         "unsupported": 2,
     },
-    "inventory_digest": "b7e9e354f92e2351cd090fc1a5160c104d956c35f9d02d3843cc688140255767",
-    "coverage_digest": "da15fcac16dd5d8cdc7d370815ca141981b208085818004e134e726c5a06284a",
 }
 
 
@@ -68,9 +64,23 @@ class EngineOfflineCorpusTests(unittest.TestCase):
             dict(report.classification_counts),
             expected["classification_counts"],
         )
-        self.assertEqual(report.inventory_digest, expected["inventory_digest"])
-        self.assertEqual(report.coverage_digest, expected["coverage_digest"])
         self.assertEqual(report.invariant_errors, ())
+        self.assertRegex(report.inventory_digest, r"^[0-9a-f]{64}$")
+        self.assertRegex(report.coverage_digest, r"^[0-9a-f]{64}$")
+
+    def _assert_deterministic(self, first, second) -> None:
+        # Digests intentionally are not frozen across operating systems:
+        # Git may check text fixtures out with CRLF on Windows, which changes
+        # source bytes and hashes. Corpus regression freezes counts/classes and
+        # requires stable digests within one checkout.
+        self.assertEqual(
+            first.report.inventory_digest,
+            second.report.inventory_digest,
+        )
+        self.assertEqual(
+            first.report.coverage_digest,
+            second.report.coverage_digest,
+        )
 
     def test_renpy_corpus_snapshot_and_coverage_package(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,7 +110,7 @@ class EngineOfflineCorpusTests(unittest.TestCase):
             )
             self.assertTrue(Path(paths.report_path).is_file())
 
-        self.assertEqual(first.report.coverage_digest, second.report.coverage_digest)
+        self._assert_deterministic(first, second)
         self._assert_corpus(first, RENPY_CORPUS)
         self.assertEqual(template["review_policy"], "agent_or_human")
 
@@ -114,7 +124,7 @@ class EngineOfflineCorpusTests(unittest.TestCase):
         first = build_tyrano_snapshot(adapter, request)
         second = build_tyrano_snapshot(adapter, request)
 
-        self.assertEqual(first.report.coverage_digest, second.report.coverage_digest)
+        self._assert_deterministic(first, second)
         self._assert_corpus(first, TYRANO_CORPUS)
 
         with tempfile.TemporaryDirectory() as tmp:
