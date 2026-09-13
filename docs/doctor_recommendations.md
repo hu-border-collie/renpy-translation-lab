@@ -48,6 +48,7 @@ GUI 文案入口名称（须与界面一致）：
 - 上下文系统：RAG、原文索引是否启用，store 是否存在，记录或片段是否完整，embedding backend/model 与 store identity 是否兼容。
 - 项目分析：按当前项目解析是否启用，再检查产物是否缺失/过期、生成模型与 API Key 是否可用。
 - 项目资产：术语表和风格设定是否存在、路径是否匹配当前项目。
+- 引擎与写回：adapter capabilities / protocol、live scan 的 locator 与 candidate schema、最新 `project_snapshot.json` 兼容性、coverage catalog provenance，以及 `latest_manifest` 的 plan fingerprint / source identity。
 - 运行条件：API 密钥是否配置。
 - 语言合同：目录语言（`prepare.language` / `tl_subdir` 末段）与生成目标（`generation.target_language`，当前仅 `schinese`）。目录语言为日语等已知 Ren'Py 语言时给出提示，不阻断；显式配置不支持的生成目标记为需要处理的警告，并在调用模型前失败。
 
@@ -140,6 +141,39 @@ rag_needs_bootstrap
 
 用户文案由展示层根据 `code` 和参数生成。CLI 不应把英文句子当协议，GUI 也不应通过搜索文案关键词判断严重程度。
 
+## 引擎与写回检查块
+
+adapter / schema / snapshot / 写回前置检查不复用「建议」结构，而是输出
+`doctor.engine_status`（#424 P6 Slice 3b）：
+
+```json
+{
+  "status": "ok | attention | blocked",
+  "engine": "renpy",
+  "adapter_version": "1.1.8",
+  "locator_schema_version": 1,
+  "capabilities": {},
+  "live": {},
+  "snapshot": {"checked": true, "latest": {}},
+  "writeback": {"status": "ok | attention | blocked | delegated | not_applicable"},
+  "issues": [
+    {"code": "engine.writeback.source_stale", "severity": "warning",
+     "suggested_action": "rebuild_batch_package", "details": {"reasons": []}}
+  ],
+  "issue_counts": {"error": 0, "warning": 1, "info": 0}
+}
+```
+
+- `code` 是稳定协议；`message` 只是回退文案，GUI 不得匹配其关键词。
+- `severity` 取 `error` / `warning` / `info`；任一 `error` 使该块 `blocked`，
+  任一 `warning` 使该块 `attention`。`blocked` 时 doctor envelope 返回
+  `status=blocked`，且不再给出 workflow state。
+- 写回前置检查只覆盖 `latest_manifest` 的 plan fingerprint 与 source identity；
+  `check` / `apply` 仍会在写盘前执行同一 `validate_batch_translation_plan_before_dispatch`
+  硬门禁，doctor 的检查不是绕过路径。
+- Durable Sync 与非 Gemini Batch strategy 标记为 `delegated`，由 run-store /
+  各自 plan 合同负责新鲜度。
+
 ## 匹配示例
 
 假设检查结果为：
@@ -195,6 +229,7 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 
 - `gemini_translate_batch.py::collect_doctor_recommendations()`：根据 doctor report 选择建议代码。
 - `gemini_translate_batch.py::collect_doctor_workflow_state()`：生成不进入建议列表的正常流程状态。
+- `gemini_translate_batch.py::collect_doctor_engine_status()`：生成只读 `engine_status` 块（capabilities / live schema / snapshot / catalog / writeback 前置），失败用 `engine.*` 稳定 code 表达。
 - `doctor_recommendations.py`：稳定建议代码、参数和 CLI 序列化兼容。
 - `gui_qt/doctor_report.py`：把 report 转换成 GUI 摘要、事实和状态。
 - `gui_qt/user_copy.py`：根据稳定代码生成中文文案和严重程度表现。
