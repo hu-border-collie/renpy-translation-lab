@@ -48,6 +48,7 @@ import cli_discovery
 import doctor_recommendations as doctor_rec
 import generation_target
 from engine_adapters.contracts import (
+    InventoryPolicy,
     Occurrence,
     OpaqueLocator,
     ProjectDiscoveryRequest,
@@ -55,7 +56,9 @@ from engine_adapters.contracts import (
     ValidatedTranslation,
 )
 from engine_adapters.coverage import (
+    default_coverage_review_path,
     evaluate_coverage_completion,
+    evaluate_coverage_gate,
     export_coverage_package,
     load_review_record,
 )
@@ -3460,14 +3463,82 @@ def summarize_translation_progress(file_jobs):
     }
 
 
-def summarize_coverage_for_doctor(coverage_snapshot):
+def resolve_coverage_review_path(base_dir=None):
+    """Return the project-level coverage review path (#424 P6)."""
+
+    root = str(base_dir if base_dir is not None else (legacy.BASE_DIR or ''))
+    return default_coverage_review_path(root)
+
+
+def load_coverage_review_for_project(base_dir=None):
+    """Return ``(record, path, error)`` for the project-level review file."""
+
+    path = resolve_coverage_review_path(base_dir)
+    if not path or not os.path.isfile(path):
+        return None, path, ''
+    try:
+        return load_review_record(path), path, ''
+    except ValueError as exc:
+        return None, path, str(exc)
+
+
+def evaluate_project_coverage_gate(
+    *,
+    adapter_snapshot=None,
+    base_dir=None,
+    review_policy=None,
+):
+    """Evaluate the full coverage + independent-review gate for the project."""
+
+    if adapter_snapshot is None:
+        adapter_snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=legacy),
+            ProjectDiscoveryRequest(
+                project_root=legacy.BASE_DIR,
+                localization_root=legacy.TL_DIR,
+                target_language=legacy.PREP_LANGUAGE,
+                include_files=tuple(sorted(legacy.INCLUDE_FILES)),
+                include_prefixes=tuple(sorted(legacy.INCLUDE_PREFIXES)),
+            ),
+            InventoryPolicy(review_policy=review_policy or 'agent_or_human'),
+            include_occurrences=False,
+            include_task_payloads=False,
+        )
+    review_record, review_path, review_error = load_coverage_review_for_project(base_dir)
+    return evaluate_coverage_gate(
+        adapter_snapshot.report,
+        adapter_snapshot.inventory,
+        review_record=review_record,
+        review_path=review_path,
+        review_error=review_error,
+    )
+
+
+def summarize_coverage_for_doctor(coverage_snapshot, *, review_path=''):
     """Return the read-only coverage summary consumed by doctor (#424 P6)."""
 
     report = getattr(coverage_snapshot, 'report', None)
     if report is None:
         return None
+    inventory = getattr(coverage_snapshot, 'inventory', None)
     assessment = evaluate_coverage_completion(report)
     counts = dict(assessment.classification_counts)
+    review_record = None
+    review_error = ''
+    if review_path and os.path.isfile(review_path):
+        try:
+            review_record = load_review_record(review_path)
+        except ValueError as exc:
+            review_error = str(exc)
+    gate_payload = None
+    if inventory is not None:
+        gate_payload = evaluate_coverage_gate(
+            report,
+            inventory,
+            review_record=review_record,
+            review_path=review_path,
+            review_error=review_error,
+        ).to_dict()
     return {
         'status': assessment.coverage_status,
         'completion': assessment.completion,
@@ -3478,6 +3549,16 @@ def summarize_coverage_for_doctor(coverage_snapshot):
         'parse_error_count': int(counts.get('parse_error') or 0),
         'unsupported_count': int(counts.get('unsupported') or 0),
         'reasons': list(assessment.reasons),
+        'gate': gate_payload,
+        'review_status': (gate_payload or {}).get('review_status', 'unknown'),
+        'review_policy': (gate_payload or {}).get('review_policy', ''),
+        'review_policy_satisfied': bool(
+            (gate_payload or {}).get('review_policy_satisfied')
+        ),
+        'unresolved_findings': int(
+            (gate_payload or {}).get('unresolved_findings') or 0
+        ),
+        'review_path': review_path,
     }
 
 
@@ -3495,7 +3576,8 @@ def collect_doctor_translation_progress():
     )
     progress = summarize_translation_progress(file_jobs)
     progress['coverage'] = summarize_coverage_for_doctor(
-        getattr(file_jobs, 'coverage_snapshot', None)
+        getattr(file_jobs, 'coverage_snapshot', None),
+        review_path=resolve_coverage_review_path(),
     )
     return progress
 
@@ -6689,12 +6771,24 @@ def create_final_review_package(
         if require_zero_pending is None
         else bool(require_zero_pending)
     )
+    coverage_snapshot = getattr(pending_jobs, 'coverage_snapshot', None)
+    if coverage_snapshot is not None:
+        coverage_gate = evaluate_project_coverage_gate(
+            adapter_snapshot=coverage_snapshot,
+        ).to_dict()
+    else:
+        coverage_gate = {
+            'status': 'coverage_unconfirmed',
+            'confirmed': False,
+            'reasons': ['coverage.evidence_missing'],
+        }
     readiness = fr.evaluate_readiness(
         pending_task_count=pending_count,
         pending_files=_pending_file_rows_for_final_review(pending_jobs),
         review_item_count=len(translation_items),
         require_zero_pending=enforce_zero,
         allow_pending=bool(allow_pending),
+        coverage_gate=coverage_gate,
     )
     try:
         fr.require_readiness(readiness)
@@ -21766,12 +21860,46 @@ def dispatch_command(parser, args):
             if command == 'project-analysis-diff':
                 return format_brief_diff(store_dir, base_dir=legacy.BASE_DIR or None)
             if command == 'project-analysis-publish':
+                try:
+                    coverage_gate = evaluate_project_coverage_gate().to_dict()
+                except Exception as exc:
+                    raise cli_contract.MachineContractError(
+                        f'cannot publish: coverage evidence unavailable ({exc})',
+                        code_name='COVERAGE_UNCONFIRMED',
+                        suggested_action=(
+                            '先修复项目/coverage 扫描并运行 doctor，再发布项目分析。'
+                        ),
+                        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                        retryable=False,
+                        details={'reasons': ['coverage.evidence_missing']},
+                    ) from exc
+                if not bool(coverage_gate.get('confirmed')):
+                    raise cli_contract.MachineContractError(
+                        'cannot publish: coverage / review gate is not confirmed',
+                        code_name='COVERAGE_UNCONFIRMED',
+                        suggested_action=(
+                            '先修复 coverage block，并在 <game_root>/translation_context/'
+                            'coverage_review.json 提供满足当前 policy 的独立 review，再发布。'
+                        ),
+                        semantic_exit_code=cli_contract.EXIT_BLOCKED,
+                        retryable=False,
+                        details={
+                            'status': coverage_gate.get('status'),
+                            'reasons': list(coverage_gate.get('reasons') or []),
+                            'review_status': coverage_gate.get('review_status'),
+                            'review_policy': coverage_gate.get('review_policy'),
+                            'unresolved_findings': coverage_gate.get(
+                                'unresolved_findings'
+                            ),
+                        },
+                    )
                 return publish_project_brief(
                     store_dir,
                     base_dir=legacy.BASE_DIR or None,
                     force=bool(getattr(args, 'force', False)),
                     current_source_fingerprint=getattr(args, 'source_fingerprint', '')
                     or '',
+                    coverage_gate=coverage_gate,
                 )
             if command == 'project-analysis-unpublish':
                 return unpublish_project_brief(

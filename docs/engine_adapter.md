@@ -112,8 +112,13 @@ P6（#424）开始接入**完成声明门禁**：零待译时，只有 coverage 
 - Batch `build` / `submit` 以结构化错误 `COVERAGE_UNCONFIRMED` 拒绝，不再返回
   `no_work` 成功。
 
-coverage review 是否满足 policy 的硬门禁（Project Analysis 发布、Final Review
-completion）属于后续切片，届时与 review 记录的运行时位置一并定义。
+coverage review 的硬门禁（#424 P6 Slice 2）已接入：review 记录约定为
+`<game_root>/translation_context/coverage_review.json`，由
+`evaluate_coverage_gate` 同时校验 coverage 与 review（freshness、policy、
+unresolved findings）。`project-analysis-publish` 在写入 published 前要求 gate
+confirmed（`--force` 不绕过）；Final Review readiness 在 gate 未确认时拒绝，即使
+`pending=0`。doctor 的 `coverage` 块会显示 review status / policy / unresolved
+findings / gate 状态与稳定 reason。
 
 ## Review provenance
 

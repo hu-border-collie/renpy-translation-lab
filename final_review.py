@@ -216,6 +216,7 @@ class ReadinessReport:
     pending_files: list[dict[str, Any]] = field(default_factory=list)
     require_zero_pending: bool = True
     allow_pending: bool = False
+    coverage_gate: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -227,6 +228,7 @@ class ReadinessReport:
             "pending_files": list(self.pending_files),
             "require_zero_pending": bool(self.require_zero_pending),
             "allow_pending": bool(self.allow_pending),
+            "coverage_gate": dict(self.coverage_gate) if self.coverage_gate else None,
         }
 
 
@@ -237,6 +239,7 @@ def evaluate_readiness(
     review_item_count: int = 0,
     require_zero_pending: bool = True,
     allow_pending: bool = False,
+    coverage_gate: Mapping[str, Any] | None = None,
 ) -> ReadinessReport:
     """Decide whether a final-review campaign may be built for the scope.
 
@@ -307,6 +310,18 @@ def evaluate_readiness(
             "审校结果可能不完整。"
         )
 
+    gate = dict(coverage_gate or {})
+    if gate and not bool(gate.get("confirmed")):
+        gate_reasons = ", ".join(str(reason) for reason in (gate.get("reasons") or []))
+        reasons.append(
+            "coverage / review 未确认"
+            + (f"（{gate_reasons}）" if gate_reasons else "")
+            + "；不能仅凭已识别 pending=0 通过完成合同。"
+            "请先修复 coverage block，并在 <game_root>/translation_context/"
+            "coverage_review.json 提供满足当前 policy 的独立 review。"
+        )
+        ready = False
+
     return ReadinessReport(
         ready=ready,
         reasons=reasons,
@@ -316,6 +331,7 @@ def evaluate_readiness(
         pending_files=file_rows,
         require_zero_pending=bool(require_zero_pending),
         allow_pending=bool(allow_pending),
+        coverage_gate=gate or None,
     )
 
 
@@ -332,6 +348,11 @@ def require_readiness(report: ReadinessReport | Mapping[str, Any]) -> ReadinessR
             pending_files=list(report.get("pending_files") or []),
             require_zero_pending=bool(report.get("require_zero_pending", True)),
             allow_pending=bool(report.get("allow_pending", False)),
+            coverage_gate=(
+                dict(report.get("coverage_gate"))
+                if isinstance(report.get("coverage_gate"), Mapping)
+                else None
+            ),
         )
     if not payload.ready:
         raise FinalReviewReadinessError(payload.reasons, details=payload.to_dict())

@@ -1542,6 +1542,7 @@ def publish_project_brief(
     force: bool = False,
     current_source_fingerprint: str = "",
     project_identity: Mapping[str, Any] | None = None,
+    coverage_gate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Promote draft brief to published after gate checks.
 
@@ -1552,7 +1553,20 @@ def publish_project_brief(
     unless ``force=True`` **and** ``current_source_fingerprint`` is provided
     (structure rebuild fingerprint). Brief body hashes never substitute for
     source fingerprints.
+
+    ``coverage_gate`` (from :mod:`engine_adapters.coverage`) is enforced before
+    any write and is deliberately **not** bypassed by ``force``: publishing a
+    brief as a complete project analysis requires fresh coverage and a
+    satisfied independent review (#265 / #424 P6).
     """
+    if coverage_gate is not None and not bool(coverage_gate.get("confirmed")):
+        gate_reasons = ", ".join(
+            str(reason) for reason in (coverage_gate.get("reasons") or [])
+        )
+        raise ProjectAnalysisError(
+            "cannot publish: coverage / review gate is not confirmed"
+            + (f" ({gate_reasons})" if gate_reasons else "")
+        )
     store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
     draft = store.load_brief_text(published=False).strip()
     if not draft:
@@ -1575,6 +1589,7 @@ def publish_project_brief(
                 "store_dir": store.store_dir,
                 "changed": False,
                 "message": "brief already published (identical draft)",
+                "coverage_gate": dict(coverage_gate) if coverage_gate else None,
             }
         raise ProjectAnalysisError(
             "cannot publish: brief already published; pass force=True to replace"
@@ -1658,6 +1673,7 @@ def publish_project_brief(
         "changed": True,
         "message": "brief published",
         "source_fingerprint": lineage.get("source_fingerprint") or "",
+        "coverage_gate": dict(coverage_gate) if coverage_gate else None,
     }
 
 

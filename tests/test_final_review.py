@@ -76,6 +76,37 @@ class ReadinessTests(unittest.TestCase):
         self.assertTrue(report.ready)
         self.assertEqual(report.reasons, [])
 
+    def test_unconfirmed_coverage_gate_blocks_even_with_zero_pending(self):
+        report = fr.evaluate_readiness(
+            pending_task_count=0,
+            review_item_count=4,
+            require_zero_pending=True,
+            coverage_gate={
+                "status": "review_missing",
+                "confirmed": False,
+                "reasons": ["coverage.review_missing"],
+            },
+        )
+        self.assertFalse(report.ready)
+        self.assertTrue(any("coverage / review 未确认" in r for r in report.reasons))
+        self.assertEqual(report.to_dict()["coverage_gate"]["status"], "review_missing")
+        with self.assertRaises(fr.FinalReviewReadinessError):
+            fr.require_readiness(report)
+
+    def test_confirmed_coverage_gate_keeps_readiness(self):
+        report = fr.evaluate_readiness(
+            pending_task_count=0,
+            review_item_count=4,
+            require_zero_pending=True,
+            coverage_gate={
+                "status": "confirmed",
+                "confirmed": True,
+                "reasons": [],
+            },
+        )
+        self.assertTrue(report.ready)
+        self.assertEqual(report.to_dict()["coverage_gate"]["status"], "confirmed")
+
 
 class SnapshotAndDigestTests(unittest.TestCase):
     def test_translation_digest_stable_under_reorder(self):

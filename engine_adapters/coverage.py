@@ -941,3 +941,141 @@ def validate_review_record(
         stale_reasons=tuple(stale_reasons),
         coverage_review_digest=coverage_review_digest,
     )
+
+
+COVERAGE_REVIEW_DIR_NAME = "translation_context"
+COVERAGE_REVIEW_FILENAME = "coverage_review.json"
+
+
+def default_coverage_review_path(project_root: str | os.PathLike[str] | None) -> str:
+    """Return the project-level coverage review path used by runtime gates.
+
+    The review is a project artifact bound to the source snapshot, so it lives
+    next to the other project context files and travels with the project:
+    ``<game_root>/translation_context/coverage_review.json``.
+    """
+
+    root = str(project_root or "").strip()
+    if not root:
+        return ""
+    return os.path.join(
+        os.path.abspath(root),
+        COVERAGE_REVIEW_DIR_NAME,
+        COVERAGE_REVIEW_FILENAME,
+    )
+
+
+@dataclass(frozen=True)
+class CoverageGateDecision:
+    """Combined live-coverage and independent-review decision for gates."""
+
+    status: str
+    confirmed: bool
+    coverage_status: str
+    coverage_digest: str
+    review_status: str
+    review_policy: str
+    review_policy_satisfied: bool
+    unresolved_findings: int
+    coverage_review_digest: str
+    review_path: str
+    reasons: tuple[str, ...]
+    review_error: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "confirmed": self.confirmed,
+            "coverage_status": self.coverage_status,
+            "coverage_digest": self.coverage_digest,
+            "review_status": self.review_status,
+            "review_policy": self.review_policy,
+            "review_policy_satisfied": self.review_policy_satisfied,
+            "unresolved_findings": self.unresolved_findings,
+            "coverage_review_digest": self.coverage_review_digest,
+            "review_path": self.review_path,
+            "reasons": list(self.reasons),
+            "review_error": self.review_error,
+        }
+
+
+def evaluate_coverage_gate(
+    report: CoverageReport,
+    inventory: CandidateInventory,
+    *,
+    review_record: Mapping[str, Any] | None = None,
+    review_path: str = "",
+    review_error: str = "",
+) -> CoverageGateDecision:
+    """Combine coverage completion with the independent review gate.
+
+    #265：只有 coverage 与 review 均 fresh、满足当前 review policy 且没有
+    unresolved findings 时，下游任务才能声称“文本范围已确认”。
+    """
+
+    completion = evaluate_coverage_completion(report)
+    reasons: list[str] = list(completion.reasons)
+    review_status = "missing"
+    review_policy = ""
+    policy_satisfied = False
+    unresolved = 0
+    review_digest = ""
+
+    if review_error:
+        review_status = "invalid"
+        reasons.append("coverage.review_invalid")
+    elif review_record is None:
+        reasons.append("coverage.review_missing")
+    else:
+        try:
+            validation = validate_review_record(review_record, report, inventory)
+        except ValueError as exc:
+            review_status = "invalid"
+            review_error = str(exc)
+            reasons.append("coverage.review_invalid")
+        else:
+            review_status = validation.effective_status
+            review_policy = validation.review_policy
+            policy_satisfied = validation.policy_satisfied
+            unresolved = validation.unresolved_findings
+            review_digest = validation.coverage_review_digest
+            if validation.stale_reasons:
+                reasons.append("coverage.review_stale")
+            elif validation.effective_status == "pending":
+                reasons.append("coverage.review_pending")
+            elif unresolved:
+                reasons.append("coverage.review_unresolved_findings")
+            elif not validation.policy_satisfied:
+                reasons.append("coverage.review_policy_unsatisfied")
+
+    if completion.completion != "confirmed":
+        status = "coverage_unconfirmed"
+    elif review_status == "invalid":
+        status = "review_invalid"
+    elif review_record is None:
+        status = "review_missing"
+    elif review_status == "stale":
+        status = "review_stale"
+    elif review_status == "pending":
+        status = "review_pending"
+    elif unresolved:
+        status = "review_unresolved_findings"
+    elif not policy_satisfied:
+        status = "review_policy_unsatisfied"
+    else:
+        status = "confirmed"
+
+    return CoverageGateDecision(
+        status=status,
+        confirmed=status == "confirmed",
+        coverage_status=completion.coverage_status,
+        coverage_digest=completion.coverage_digest,
+        review_status=review_status,
+        review_policy=review_policy,
+        review_policy_satisfied=policy_satisfied,
+        unresolved_findings=unresolved,
+        coverage_review_digest=review_digest,
+        review_path=str(review_path or ""),
+        reasons=tuple(reasons),
+        review_error=review_error,
+    )
