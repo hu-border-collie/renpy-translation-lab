@@ -26,6 +26,7 @@ ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT = "enable_source_index_for_new_project"
 START_INCREMENTAL_BATCH = "start_incremental_batch"
 START_PENDING_BATCH = "start_pending_batch"
 NO_PENDING_LINES = "no_pending_lines"
+COVERAGE_UNCONFIRMED = "coverage_unconfirmed"
 UNKNOWN = "unknown"
 
 ALL_CODES = frozenset(
@@ -51,6 +52,7 @@ ALL_CODES = frozenset(
         START_INCREMENTAL_BATCH,
         START_PENDING_BATCH,
         NO_PENDING_LINES,
+        COVERAGE_UNCONFIRMED,
     }
 )
 WORKFLOW_STATE_CODES = frozenset(
@@ -59,6 +61,7 @@ WORKFLOW_STATE_CODES = frozenset(
         START_INCREMENTAL_BATCH,
         START_PENDING_BATCH,
         NO_PENDING_LINES,
+        COVERAGE_UNCONFIRMED,
     }
 )
 

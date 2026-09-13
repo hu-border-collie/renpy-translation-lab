@@ -101,7 +101,19 @@ logs/batch_jobs/<package>/coverage/
   不再一致。
 
 Ren'Py P1 只能从现有 TL 脚本推断 catalog provenance，因此自动报告通常为
-`attention`；P1 不把该状态接入新的 translation build/apply gate，以保持行为兼容。
+`attention`。P1/P2 不把该状态接入 `check -> apply` 写回门禁，以保持行为兼容；
+P6（#424）开始接入**完成声明门禁**：零待译时，只有 coverage 为 `ready` /
+`attention` 且没有 `unknown` / `parse_error` / inventory invariant / source-change
+证据，才允许声明“没有待翻译内容”。否则：
+
+- `doctor` 输出 `workflow_state=coverage_unconfirmed`，并在报告中给出 coverage
+  状态、分类计数、digest 与稳定 reason；
+- `translate-preflight` 以 `COVERAGE_UNCONFIRMED` error risk 阻断启动；
+- Batch `build` / `submit` 以结构化错误 `COVERAGE_UNCONFIRMED` 拒绝，不再返回
+  `no_work` 成功。
+
+coverage review 是否满足 policy 的硬门禁（Project Analysis 发布、Final Review
+completion）属于后续切片，届时与 review 记录的运行时位置一并定义。
 
 ## Review provenance
 

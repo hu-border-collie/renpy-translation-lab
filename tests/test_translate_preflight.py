@@ -41,13 +41,38 @@ def routing_section(strategy: str = "sync") -> dict:
     )
 
 
-def fake_context(section: dict, *, plan=None):
+def coverage_report(
+    *,
+    status: str = "ready",
+    counts: dict | None = None,
+    invariant_errors=(),
+    source_changed: bool = False,
+):
+    """Minimal coverage report shape consumed by the preflight gate."""
+
+    return SimpleNamespace(
+        coverage_status=status,
+        classification_counts=dict(counts or {}),
+        invariant_errors=tuple(invariant_errors),
+        source_changed_during_scan=source_changed,
+        coverage_digest="coverage-digest",
+    )
+
+
+def fake_context(
+    section: dict,
+    *,
+    plan=None,
+    requests=None,
+    coverage_report_value=None,
+):
     plan = plan or reader.read_routing_plan({"model_routing": section})
     chunks = [SimpleNamespace(chunk_id="chunk-1"), SimpleNamespace(chunk_id="chunk-2")]
-    requests = [
-        SimpleNamespace(expected_ids=["a", "b"]),
-        SimpleNamespace(expected_ids=["c"]),
-    ]
+    if requests is None:
+        requests = [
+            SimpleNamespace(expected_ids=["a", "b"]),
+            SimpleNamespace(expected_ids=["c"]),
+        ]
     identity = SimpleNamespace(
         to_dict=lambda: {
             "engine": "renpy",
@@ -61,11 +86,12 @@ def fake_context(section: dict, *, plan=None):
     return SimpleNamespace(
         plan_build=SimpleNamespace(
             plan=SimpleNamespace(chunks=chunks, source_identity=identity),
-            requests=requests,
+            requests=list(requests),
         ),
         routing_plan=plan,
         adapter_snapshot=SimpleNamespace(
-            project=SimpleNamespace(source_documents=documents)
+            project=SimpleNamespace(source_documents=documents),
+            report=coverage_report_value,
         ),
         pending_jobs=[{"file_rel_path": "a.rpy", "tasks": [{}]}],
     )
@@ -119,6 +145,51 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(payload["chunk_policy"], {"max_items": 60, "max_chars": 18000})
         self.assertEqual(payload["source_snapshot"]["file_count"], 1)
         self.assertEqual(payload["credential_available"], True)
+
+    def _run_preflight(self, context):
+        args = self.parser.parse_args(["translate-preflight", "--strategy", "sync"])
+        with (
+            mock.patch.object(
+                runtime,
+                "prepare_sync_translation_execution_context",
+                return_value=context,
+            ),
+            mock.patch(
+                "model_capability_probe.default_credential_loader",
+                return_value="key",
+            ),
+        ):
+            return batch.run_translate_preflight(args)
+
+    def test_zero_pending_with_unconfirmed_coverage_blocks(self) -> None:
+        context = fake_context(
+            self.section,
+            requests=[],
+            coverage_report_value=coverage_report(
+                status="block",
+                counts={"unknown": 1, "parse_error": 1},
+            ),
+        )
+        payload = self._run_preflight(context)
+        risks = {risk["code"]: risk for risk in payload["risks"]}
+        self.assertEqual(payload["status"], "blocked")
+        self.assertEqual(risks["COVERAGE_UNCONFIRMED"]["severity"], "error")
+        self.assertNotIn("NO_PENDING_WORK", risks)
+
+    def test_zero_pending_with_confirmed_coverage_stays_info(self) -> None:
+        context = fake_context(
+            self.section,
+            requests=[],
+            coverage_report_value=coverage_report(
+                status="attention",
+                counts={"unsupported": 1},
+            ),
+        )
+        payload = self._run_preflight(context)
+        risks = {risk["code"]: risk for risk in payload["risks"]}
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(risks["NO_PENDING_WORK"]["severity"], "info")
+        self.assertNotIn("COVERAGE_UNCONFIRMED", risks)
 
     def test_retrieval_risk_uses_the_selected_strategy_flags(self) -> None:
         context = fake_context(self.section)

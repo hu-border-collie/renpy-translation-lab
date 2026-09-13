@@ -160,6 +160,9 @@ class CliContractTests(unittest.TestCase):
         proposal_confirmed = cli_contract.success_envelope(
             "confirm-revision-proposals", status="previewed"
         )
+        coverage_unconfirmed = cli_contract.success_envelope(
+            "doctor", status="coverage_unconfirmed"
+        )
 
         self.assertEqual(
             cli_contract.strict_exit_code(warn),
@@ -168,6 +171,10 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(
             cli_contract.strict_exit_code(blocked),
             cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(coverage_unconfirmed),
+            cli_contract.EXIT_NEEDS_ACTION,
         )
         self.assertEqual(cli_contract.strict_exit_code(pending), 0)
         self.assertEqual(

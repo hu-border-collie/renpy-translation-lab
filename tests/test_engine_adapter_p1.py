@@ -802,7 +802,23 @@ translate schinese start:
                 include_task_payloads=False,
             )
 
-        self.assertEqual(doctor, full)
+        count_keys = (
+            "pending_task_count",
+            "translated_task_count",
+            "total_task_count",
+            "pending_file_count",
+        )
+        self.assertEqual(
+            {key: doctor[key] for key in count_keys},
+            {key: full[key] for key in count_keys},
+        )
+        coverage = doctor.get("coverage") or {}
+        self.assertEqual(
+            coverage.get("status"),
+            full_jobs.coverage_snapshot.report.coverage_status,
+        )
+        # attention coverage without unknown/parse_error still confirms the range.
+        self.assertEqual(coverage.get("completion"), "confirmed")
         self.assertEqual(batch.summarize_translation_progress(light_jobs), full)
         self.assertEqual(light_jobs.coverage_snapshot.occurrences, ())
         self.assertEqual(light_jobs.coverage_snapshot.pending_tasks_by_file, {})

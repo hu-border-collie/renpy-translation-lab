@@ -146,6 +146,13 @@ class GuiUserCopyTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(message, DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES[code])
 
+    def test_coverage_unconfirmed_workflow_copy_is_not_a_completion_claim(self):
+        from gui_qt.user_copy import DOCTOR_WORKFLOW_STATE_MESSAGES
+
+        message = DOCTOR_WORKFLOW_STATE_MESSAGES[doctor_rec.COVERAGE_UNCONFIRMED]
+        self.assertIn("覆盖未确认", message)
+        self.assertIn("不能视为翻译完成", message)
+
     def test_model_routing_runtime_hint_states_frozen_route_exception(self):
         hint = MODEL_ROUTING_RUNTIME_COPY["settings_hint"]
         self.assertIn("新任务", hint)

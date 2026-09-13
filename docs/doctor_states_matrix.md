@@ -157,5 +157,10 @@ doctor 会检查完整计划以便提前暴露配置问题；真正启动任务�
 ----------------------------------------------------------------------------------------
  [条件] 没有任何待处理项 
         ──> 建议列表返回空 []，GUI 显示环境就绪状态。
+ [条件] pending_task_count == 0 且 report.coverage.completion == 'unconfirmed'
+         ──> workflow_state = coverage_unconfirmed（#424 P6）；GUI 不得显示“项目已译完”，
+              Batch build / translate-preflight 以 COVERAGE_UNCONFIRMED 拒绝完成声明。
+ [条件] pending_task_count == 0 且 coverage 已确认或缺失 coverage 证据
+         ──> workflow_state = no_pending_lines（保持既有行为）。
 ========================================================================================
 ```
