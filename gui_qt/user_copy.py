@@ -1382,11 +1382,17 @@ MODEL_PROFILES_PAGE_COPY = {
         "凭据只保存引用，不写入配置文件。保存前会用 schema-v1 合同校验。"
     ),
     "legacy_hint": (
-        "当前项目仍是旧模型配置。可点击「创建 Model Routing 配置」从空白开始，"
-        "或先按迁移文档把旧 sync.* / batch.model 迁移为 model_routing；"
-        "迁移前运行行为不会改变。"
+        "检测到旧模型配置（{fields}）：当前不能从空白创建 Model Routing，"
+        "否则会丢失旧 Sync / Batch 模型、Provider 与阶段路由。"
+        "请先在「诊断与运行日志」的任务命令参考运行 "
+        "model_config_migration.py preview / migrate / rollback；"
+        "迁移前运行行为不会改变，迁移会保留原有模型与执行策略。"
     ),
-    "invalid_hint": "model_routing 配置无效，已禁用编辑：{reason}。请修正或回滚后再编辑。",
+    "invalid_hint": (
+        "model_routing 配置无效（{reason}），已禁用编辑与创建。"
+        "请修正配置文件，或点击「移除 Model Routing 配置」并在保存后回退旧配置；"
+        "移除不会修复或迁移旧配置本身。"
+    ),
     "profiles_group": "Model Profiles",
     "providers_group": "Provider 连接",
     "defaults_group": "默认主模型与执行方式",
@@ -1398,9 +1404,26 @@ MODEL_PROFILES_PAGE_COPY = {
     ),
     "diagnostics_group": "诊断",
     "create_button": "创建 Model Routing 配置",
+    "create_tooltip": (
+        "创建一个最小的 Model Routing 配置"
+        "（Gemini Provider + Gemini Main，暂定执行方式为 Gemini Batch）。"
+    ),
+    "create_blocked_tooltip": (
+        "检测到旧模型配置：请先按页面说明完成迁移；"
+        "空白创建会丢失旧模型、Provider 与阶段路由。"
+    ),
+    "create_invalid_tooltip": (
+        "model_routing 当前无效：请先修正或移除，不能从空白创建覆盖。"
+    ),
     "remove_button": "移除 Model Routing 配置",
-    "remove_tooltip": "保存后删除 model_routing，运行时回退到旧配置；可用「重新加载」撤销。",
-    "remove_pending": "已标记移除 model_routing；保存设置后生效，重新加载可撤销。",
+    "remove_tooltip": (
+        "保存后删除 model_routing，运行时回退到旧配置；可用「重新加载」撤销；"
+        "不会修复或迁移旧配置本身。"
+    ),
+    "remove_pending": (
+        "已标记移除 model_routing；保存设置后生效，重新加载可撤销；"
+        "移除不会修复旧配置本身。"
+    ),
     "add_profile": "新增",
     "copy_profile": "复制",
     "delete_profile": "删除",

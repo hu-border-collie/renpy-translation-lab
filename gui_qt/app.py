@@ -87,6 +87,7 @@ from PySide6.QtWidgets import (
 from project_version import __version__
 import cli_contract
 import model_profile
+import model_routing_config
 import model_usage_ledger
 import revision_selection
 
@@ -14492,9 +14493,19 @@ class MainWindow(QMainWindow):
             if profiles_page is not None and (
                 want is None or "profiles" in want
             ):
-                profiles_page.load(
-                    {"model_routing": config.get("model_routing")}
+                raw_model_routing = config.get("model_routing")
+                legacy_fields = (
+                    ()
+                    if isinstance(raw_model_routing, Mapping)
+                    else tuple(
+                        ".".join(str(part) for part in path)
+                        for path in model_routing_config.legacy_fields_present(
+                            config
+                        )
+                    )
                 )
+                profiles_page.set_creation_context(legacy_fields=legacy_fields)
+                profiles_page.load({"model_routing": raw_model_routing})
 
             sync_config = self._config_section(config, "sync")
             batch_config = self._config_section(config, "batch")

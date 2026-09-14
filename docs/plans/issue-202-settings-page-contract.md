@@ -165,6 +165,9 @@ class SettingsPageActions:
 - `set_task_running(running)`：响应全局任务锁，禁用会改变配置或触发长任务的控件；不管理锁本身。
   Coordinator 记录当前 `running`，并在 `ensure_page` 新建页面后立即补发，避免任务运行中
   首次打开的设置页控件仍可编辑。
+- 额外只读上下文（如 `ProfilesSettingsPage.set_creation_context`）：由 host 在 `load` 前后注入、
+  描述当前磁盘配置的非配置摘要（例如检测到的旧字段路径）；不进入 `collect()`、不写盘，
+  页面只用于禁用或解释 UI 状态。
 - 有局部 worker 的页面必须复用 #297 设施：operation identity、retired ownership 到真实
   `finished`、`ShutdownParticipant` 注册、禁止 GUI 线程固定等待、丢弃 stale result。Phase B
   先用 adapter 兼容未迁移页面；Phase C 首个 worker 页面必须落地生命周期接入，不允许另建框架。

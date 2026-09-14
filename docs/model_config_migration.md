@@ -41,6 +41,19 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 `MODEL_CONFIG_MIGRATION_REFUSED`、分类 `reason` 和可操作的 `next_action`，不会回显原配置
 或 Provider 异常正文。
 
+## 创建与迁移的边界（#457）
+
+「设置 → 模型与 Provider」的「创建 Model Routing 配置」不是迁移的替代入口：
+
+- 仅当配置**没有**旧 `sync.*` / `batch.*` 字段时，页面才允许空白创建；生成最小
+  Gemini Provider + `Gemini Main` profile，暂定执行方式为 `gemini_batch`（与迁移默认、
+  示例配置一致）。新用户 / 新项目的最终默认仍待 Gemini 支持地区 smoke 与 A/B 数据。
+- 检测到旧字段时，页面禁用创建并指向本页命令（先在「诊断与运行日志」运行
+  `preview` / `migrate` / `rollback`）。迁移会保留旧模型、Provider、凭据引用与阶段路由，
+  并生成可回滚的字节级备份；空白创建不会继承这些配置。
+- 无效的 `model_routing`（非对象类型）不会被当作空白：页面禁用编辑与创建、阻止保存，
+  可显式「移除 Model Routing 配置」并在保存后回退旧配置；移除不会修复或迁移旧字段本身。
+
 ## 保持的行为
 
 - 产品默认 profile 为 `legacy-batch`，策略为 `gemini_batch`。

@@ -4,6 +4,10 @@ Owns the versioned ``model_routing`` section and renders the unified provider /
 profile / strategy / stage-route surface. All mutations go through the Qt-free
 ``model_profiles_editor`` core; the page never resolves or stores credentials,
 and the host keeps the single save transaction and file write.
+
+Blank creation is only offered while the config has no legacy ``sync.*`` /
+``batch.*`` fields; legacy configs are guided to the explicit offline migration
+so their models, providers and stage routes are not silently dropped (#457).
 """
 from __future__ import annotations
 
@@ -59,6 +63,21 @@ _CONTEXT_LABELS = MODEL_PROFILES_PAGE_COPY["context_labels"]
 _STRATEGY_LABELS = MODEL_PROFILES_PAGE_COPY["strategy_labels"]
 
 
+def _invalid_raw_reason(raw: object) -> str:
+    """Describe why a non-object ``model_routing`` value cannot be edited."""
+    if isinstance(raw, bool):
+        kind = "布尔值"
+    elif isinstance(raw, str):
+        kind = "字符串"
+    elif isinstance(raw, (int, float)):
+        kind = "数字"
+    elif isinstance(raw, (list, tuple)):
+        kind = "数组"
+    else:
+        kind = type(raw).__name__
+    return f"model_routing 必须是对象（当前为{kind}）"
+
+
 class ProfilesSettingsPage(QObject):
     """Settings page for Model Profiles, providers and stage routes."""
 
@@ -78,7 +97,10 @@ class ProfilesSettingsPage(QObject):
         self._loading = False
         self._task_running = False
         self._section: dict[str, Any] | None = None
+        self._invalid_raw: Any | None = None
         self._baseline: dict[str, Any] | None = None
+        self._baseline_invalid_raw: Any | None = None
+        self._legacy_fields: tuple[str, ...] = ()
         self._remove_requested = False
         self._selected_profile_id = ""
         self._selected_provider_id = ""
@@ -112,10 +134,34 @@ class ProfilesSettingsPage(QObject):
 
     def load(self, snapshot: Mapping[str, object], *, restore: bool = False) -> None:
         raw = snapshot.get("model_routing") if isinstance(snapshot, Mapping) else None
-        self._section = copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else None
+        if raw is None:
+            # Missing key and explicit ``null`` both mean "no section"; this is
+            # the legitimate legacy/empty state, not an invalid one.
+            section: dict[str, Any] | None = None
+            invalid_raw: object | None = None
+        elif isinstance(raw, Mapping):
+            section = dict(raw)
+            invalid_raw = None
+        else:
+            # Any other type is invalid: never treat it as an empty state or
+            # the create button would silently replace it.
+            section = None
+            invalid_raw = copy.deepcopy(raw)
+        self._section = copy.deepcopy(section)
+        self._invalid_raw = invalid_raw
         self._remove_requested = False
         if not restore:
             self._baseline = copy.deepcopy(self._section)
+            self._baseline_invalid_raw = copy.deepcopy(self._invalid_raw)
+        self._refresh_all()
+
+    def set_creation_context(self, *, legacy_fields: Sequence[str] = ()) -> None:
+        """Inject read-only legacy detection for the creation guard (#457).
+
+        ``legacy_fields`` carries dotted config paths only (no values or
+        credentials) and is deliberately never emitted by ``collect()``.
+        """
+        self._legacy_fields = tuple(str(path) for path in legacy_fields)
         self._refresh_all()
 
     def collect(self) -> dict[str, object]:
@@ -123,11 +169,27 @@ class ProfilesSettingsPage(QObject):
             # Explicit removal: save_apply drops the key so the user can fall
             # back to legacy config or re-create a valid section.
             return {"model_routing": None}
+        if self._invalid_raw is not None:
+            # Preserve an invalid raw value instead of silently dropping it;
+            # ``validate`` blocks the save until the user fixes or removes it.
+            return {"model_routing": copy.deepcopy(self._invalid_raw)}
         if self._section is None:
             return {}
         return {"model_routing": copy.deepcopy(self._section)}
 
     def validate(self) -> Sequence[SettingsIssue]:
+        if self._remove_requested:
+            return []
+        if self._invalid_raw is not None:
+            return [
+                SettingsIssue(
+                    page_key=self.page_key,
+                    field_key="model_routing",
+                    message=MODEL_PROFILES_PAGE_COPY["invalid_hint"].format(
+                        reason=_invalid_raw_reason(self._invalid_raw)
+                    ),
+                )
+            ]
         if self._section is None:
             return []
         issues = editor.section_issues(self._section)
@@ -148,6 +210,7 @@ class ProfilesSettingsPage(QObject):
     def reset(self) -> None:
         self._remove_requested = False
         self._section = copy.deepcopy(self._baseline)
+        self._invalid_raw = copy.deepcopy(self._baseline_invalid_raw)
         self._refresh_all()
 
     def focus_issue(self, issue: SettingsIssue) -> bool:
@@ -426,8 +489,20 @@ class ProfilesSettingsPage(QObject):
         self._refresh_defaults()
         self._refresh_routes()
         self._refresh_enabled()
-        if self._section is None:
-            self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["legacy_hint"])
+        if self._invalid_raw is not None:
+            self.hint_label.setText(
+                MODEL_PROFILES_PAGE_COPY["invalid_hint"].format(
+                    reason=_invalid_raw_reason(self._invalid_raw)
+                )
+            )
+        elif self._section is None and self._legacy_fields:
+            self.hint_label.setText(
+                MODEL_PROFILES_PAGE_COPY["legacy_hint"].format(
+                    fields="、".join(self._legacy_fields)
+                )
+            )
+        elif self._section is None:
+            self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["hint"])
         else:
             issues = editor.section_issues(self._section)
             if issues:
@@ -459,8 +534,28 @@ class ProfilesSettingsPage(QObject):
             self.routes_group,
         ):
             widget.setEnabled(editable)
-        self.create_btn.setEnabled(not self._task_running and self._section is None)
-        self.remove_btn.setEnabled(not self._task_running and self._section is not None)
+        blank_creation_available = (
+            self._section is None
+            and self._invalid_raw is None
+            and not self._legacy_fields
+        )
+        self.create_btn.setEnabled(
+            not self._task_running and blank_creation_available
+        )
+        if self._invalid_raw is not None:
+            self.create_btn.setToolTip(
+                MODEL_PROFILES_PAGE_COPY["create_invalid_tooltip"]
+            )
+        elif self._legacy_fields:
+            self.create_btn.setToolTip(
+                MODEL_PROFILES_PAGE_COPY["create_blocked_tooltip"]
+            )
+        else:
+            self.create_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["create_tooltip"])
+        self.remove_btn.setEnabled(
+            not self._task_running
+            and (self._section is not None or self._invalid_raw is not None)
+        )
         self.profiles_diagnose_btn.setEnabled(self._section is not None)
         self.profiles_probe_btn.setEnabled(
             editable and bool(self._selected_profile_id)
@@ -725,44 +820,38 @@ class ProfilesSettingsPage(QObject):
     # -- user actions ----------------------------------------------------
 
     def _on_create_section(self) -> None:
+        if (
+            self._section is not None
+            or self._invalid_raw is not None
+            or self._legacy_fields
+        ):
+            # Defensive guard: the button is disabled in these states, and
+            # blank creation must never overwrite or shadow existing config.
+            return
         from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
 
-        section = editor.empty_section()
-        section = editor.add_provider(
-            section,
-            label=MODEL_PROFILES_PAGE_COPY["create_provider_label"],
-            adapter="gemini",
-            provider="gemini",
-            credential_kind="api_keys_json",
-            credential_name="api_keys",
-            credential_env_name="GEMINI_API_KEY",
-        )
-        provider_id = editor.provider_ids(section)[0]
-        section = editor.add_profile(
-            section,
-            label=MODEL_PROFILES_PAGE_COPY["create_profile_label"],
-            provider_id=provider_id,
-            model=DEFAULT_GEMINI_TRANSLATION_MODEL,
-        )
-        profile_id = editor.profile_ids(section)[0]
-        # Store the default explicitly so the created section is valid and the
-        # visible selector matches what will be saved.
-        section = editor.set_defaults(
-            section,
-            primary_profile_id=profile_id,
-            execution_strategy="sync",
-        )
+        try:
+            section = editor.initial_section(
+                provider_label=MODEL_PROFILES_PAGE_COPY["create_provider_label"],
+                profile_label=MODEL_PROFILES_PAGE_COPY["create_profile_label"],
+                model=DEFAULT_GEMINI_TRANSLATION_MODEL,
+            )
+        except editor.ModelProfilesEditorError as exc:
+            self._show_error(exc)
+            return
         self._remove_requested = False
         self._section = section
-        self._selected_profile_id = profile_id
-        self._selected_provider_id = provider_id
+        self._invalid_raw = None
+        self._selected_profile_id = editor.profile_ids(section)[0]
+        self._selected_provider_id = editor.provider_ids(section)[0]
         self._refresh_all()
 
     def _on_remove_section(self) -> None:
-        if self._section is None:
+        if self._section is None and self._invalid_raw is None:
             return
         self._remove_requested = True
         self._section = None
+        self._invalid_raw = None
         self._selected_profile_id = ""
         self._selected_provider_id = ""
         self._refresh_all()

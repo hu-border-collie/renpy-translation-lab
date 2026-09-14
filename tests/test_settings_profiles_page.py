@@ -71,7 +71,7 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertGreater(self.page.providers_list.count(), 0)
         self.assertTrue(self.page.profiles_add_btn.isEnabled())
 
-    def test_create_section_stores_a_valid_default(self) -> None:
+    def test_create_section_stores_a_valid_gemini_batch_default(self) -> None:
         from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
 
         self.page.load({})
@@ -85,7 +85,80 @@ class ProfilesPageTests(unittest.TestCase):
         )
         self.assertEqual(
             collected["defaults"],
-            {"primary_profile_id": "gemini-main", "execution_strategy": "sync"},
+            {
+                "primary_profile_id": "gemini-main",
+                "execution_strategy": "gemini_batch",
+            },
+        )
+        self.assertIn("Gemini Batch", self.page.create_btn.toolTip())
+
+    def test_null_model_routing_is_an_empty_state(self) -> None:
+        self.page.load({"model_routing": None})
+
+        self.assertTrue(self.page.create_btn.isEnabled())
+        self.assertEqual(self.page.collect(), {})
+        self.assertEqual(self.page.validate(), [])
+
+    def test_legacy_fields_disable_blank_creation_and_explain_migration(self) -> None:
+        self.page.set_creation_context(legacy_fields=("sync.model", "batch.model"))
+        self.page.load({})
+
+        self.assertFalse(self.page.create_btn.isEnabled())
+        hint = self.page.hint_label.text()
+        self.assertIn("sync.model", hint)
+        self.assertIn("batch.model", hint)
+        self.assertIn("诊断与运行日志", hint)
+        self.assertIn("model_config_migration.py", hint)
+        self.assertEqual(self.page.collect(), {})
+
+        # The read-only detection result is never part of the saved config.
+        self.page.load({"model_routing": migrated_section()})
+        self.assertEqual(set(self.page.collect()), {"model_routing"})
+
+    def test_invalid_raw_model_routing_is_not_treated_as_empty(self) -> None:
+        for raw in ("broken", ["broken"], 7, False):
+            with self.subTest(raw=raw):
+                self.page.load({"model_routing": raw})
+
+                self.assertFalse(self.page.create_btn.isEnabled())
+                self.assertTrue(self.page.remove_btn.isEnabled())
+                self.assertEqual(self.page.collect(), {"model_routing": raw})
+                issues = self.page.validate()
+                self.assertEqual(len(issues), 1)
+                self.assertIn("model_routing", issues[0].message)
+
+    def test_remove_invalid_raw_is_explicit_and_reversible(self) -> None:
+        raw = ["broken"]
+        self.page.load({"model_routing": raw})
+        self.assertEqual(len(self.page.validate()), 1)
+
+        self.page.remove_btn.click()
+
+        self.assertEqual(self.page.collect(), {"model_routing": None})
+        self.assertEqual(self.page.validate(), [])
+        self.assertIn("不会修复", self.messages[-1])
+
+        self.page.reset()
+        self.assertEqual(self.page.collect(), {"model_routing": raw})
+        self.assertEqual(len(self.page.validate()), 1)
+
+    def test_created_section_is_discarded_by_reset(self) -> None:
+        self.page.load({})
+        self.page.create_btn.click()
+        self.assertIn("model_routing", self.page.collect())
+
+        self.page.reset()
+
+        self.assertEqual(self.page.collect(), {})
+
+    def test_existing_section_blocks_create_even_with_legacy_context(self) -> None:
+        self.page.set_creation_context(legacy_fields=("sync.model",))
+        self.page.load({"model_routing": migrated_section()})
+
+        self.assertFalse(self.page.create_btn.isEnabled())
+        self.assertEqual(
+            self.page.collect()["model_routing"]["schema_version"],
+            1,
         )
 
     def test_invalid_integer_keeps_other_capability_overrides(self) -> None:
@@ -597,6 +670,23 @@ class ProfilesAppIntegrationTests(unittest.TestCase):
             snapshot["model_routing"]["defaults"],
             self.config["model_routing"]["defaults"],
         )
+
+    def test_legacy_config_load_blocks_blank_creation(self) -> None:
+        legacy_config = json.loads(
+            (FIXTURES / "gemini_batch.json").read_text(encoding="utf-8")
+        )
+        self.assertNotIn("model_routing", legacy_config)
+
+        self.window.state.load_translator_config = lambda: legacy_config  # type: ignore[method-assign]
+        page = self.window._settings_coordinator.ensure_page("profiles")
+        self.window._load_config_to_ui(
+            refresh_task_gates=False,
+            pages={"profiles"},
+        )
+
+        self.assertFalse(page.create_btn.isEnabled())
+        self.assertIn("sync.model", page.hint_label.text())
+        self.assertEqual(page.collect(), {})
 
     def test_probe_action_runs_cli_and_renders_report(self) -> None:
         class _Runner:
