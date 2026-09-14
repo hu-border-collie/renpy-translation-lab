@@ -873,6 +873,82 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('Existing glossary entries', system_text)
         self.assertIn('chunk_summary', system_text)
 
+    def test_create_keyword_package_uses_frozen_route_model(self):
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / 'fixtures'
+            / 'model_routing_legacy'
+            / 'gemini_batch.json'
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding='utf-8'))
+        ).config['model_routing']
+        section['routes']['keyword'] = {
+            'profile_id': 'legacy-sync',
+            'strategy': 'gemini_batch',
+        }
+        routed_model = 'gemini-3.1-flash-lite'
+        batch_default = 'gemini-3.5-flash'
+
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                (tl_dir / 'script.rpy').write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n'
+                    'label demo:\n'
+                    '    e "Aether Compass"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(
+                    jobs_dir / 'latest_manifest.txt'
+                )
+
+                with (
+                    mock.patch.object(runtime, 'MODEL_ROUTING_CONFIG', section),
+                    mock.patch.object(batch_mod, 'BATCH_MODEL', batch_default),
+                    mock.patch.object(
+                        batch_mod.legacy, 'run_prepare_steps'
+                    ) as prepare_mock,
+                ):
+                    manifest_path = batch_mod.create_keyword_package(
+                        chunk_size=1,
+                        max_candidates_per_chunk=3,
+                    )
+                manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        prepare_mock.assert_not_called()
+        self.assertEqual(manifest['batch_model'], routed_model)
+        self.assertEqual(
+            manifest['model_routing']['routes']['keyword']['profile_id'],
+            'legacy-sync',
+        )
+
     def test_export_keyword_candidates_dedupes_jsonl_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             package_dir = Path(tmp)
@@ -1188,6 +1264,79 @@ class BatchRepairRegressionTests(unittest.TestCase):
             schema['properties']['revisions']['items']['required'],
         )
         self.assertIn('current_translation', target_text)
+
+    def test_create_revision_package_uses_frozen_route_model(self):
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / 'fixtures'
+            / 'model_routing_legacy'
+            / 'gemini_batch.json'
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding='utf-8'))
+        ).config['model_routing']
+        section['routes']['revision'] = {
+            'profile_id': 'legacy-sync',
+            'strategy': 'gemini_batch',
+        }
+        routed_model = 'gemini-3.1-flash-lite'
+        batch_default = 'gemini-3.5-flash'
+
+        old_values = {
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'log_dir': batch_mod.LOG_DIR,
+            'jobs_dir': batch_mod.BATCH_JOBS_DIR,
+            'repair_dir': batch_mod.REPAIR_RUNS_DIR,
+            'sync_dir': batch_mod.SYNC_RUNS_DIR,
+            'latest': batch_mod.LATEST_MANIFEST_FILE,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'tl'
+                jobs_dir = root / 'batch_jobs'
+                tl_dir.mkdir()
+                (tl_dir / 'script.rpy').write_text(
+                    'translate schinese start:\n'
+                    '    old "Void Gate"\n'
+                    '    new "虚空门"\n',
+                    encoding='utf-8',
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / 'logs')
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / 'repair_runs')
+                batch_mod.SYNC_RUNS_DIR = str(root / 'sync_runs')
+                batch_mod.LATEST_MANIFEST_FILE = str(
+                    jobs_dir / 'latest_manifest.txt'
+                )
+
+                with (
+                    mock.patch.object(runtime, 'MODEL_ROUTING_CONFIG', section),
+                    mock.patch.object(batch_mod, 'BATCH_MODEL', batch_default),
+                ):
+                    manifest_path = batch_mod.create_revision_package(
+                        skip_prepare=True,
+                        chunk_size=1,
+                    )
+                manifest = json.loads(
+                    Path(manifest_path).read_text(encoding='utf-8')
+                )
+        finally:
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.LOG_DIR = old_values['log_dir']
+            batch_mod.BATCH_JOBS_DIR = old_values['jobs_dir']
+            batch_mod.REPAIR_RUNS_DIR = old_values['repair_dir']
+            batch_mod.SYNC_RUNS_DIR = old_values['sync_dir']
+            batch_mod.LATEST_MANIFEST_FILE = old_values['latest']
+
+        self.assertEqual(manifest['batch_model'], routed_model)
+        self.assertEqual(
+            manifest['model_routing']['routes']['revision']['profile_id'],
+            'legacy-sync',
+        )
 
     def test_sync_keyword_candidates_runs_requests_and_exports_reports(self):
         old_values = {
