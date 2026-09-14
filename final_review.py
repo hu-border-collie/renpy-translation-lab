@@ -47,6 +47,9 @@ STATUS_DONE = "done"
 STATUS_FAILED = "failed"
 STATUS_STALE = "stale"
 
+# Classification used when a unit stores free-text or unknown errors (#486).
+UNIT_ERROR_FALLBACK = "review_unit_failed"
+
 VALID_CAMPAIGN_STATUSES = frozenset(
     {
         STATUS_PENDING,
@@ -1224,6 +1227,22 @@ def assert_failure_not_done(unit: Mapping[str, Any]) -> None:
         )
 
 
+def classify_unit_error(error: Any) -> str:
+    """Return the stable classification prefix for a review-unit error.
+
+    Unit errors stay human-readable ``"<code>: detail"`` strings. Status and
+    ingest summaries aggregate the prefix without echoing provider payloads;
+    free-text or empty errors collapse to ``review_unit_failed``.
+    """
+    text = str(error or "").strip()
+    if not text:
+        return UNIT_ERROR_FALLBACK
+    code = text.split(":", 1)[0].strip()
+    if not code or any(ch.isspace() for ch in code):
+        return UNIT_ERROR_FALLBACK
+    return code[:64]
+
+
 def write_campaign_package(
     package_dir: str | os.PathLike[str],
     *,
@@ -1434,6 +1453,13 @@ def collect_campaign_status(
         selection_state_counts[selection] = selection_state_counts.get(selection, 0) + 1
         revision_state_counts[revision] = revision_state_counts.get(revision, 0) + 1
 
+    failure_reason_counts: dict[str, int] = {}
+    for unit in units:
+        if _as_optional_str(unit.get("status")) != STATUS_FAILED:
+            continue
+        code = classify_unit_error(unit.get("error"))
+        failure_reason_counts[code] = failure_reason_counts.get(code, 0) + 1
+
     return {
         "mode": MANIFEST_MODE_FINAL_REVIEW,
         "report_only": True,
@@ -1457,6 +1483,7 @@ def collect_campaign_status(
         "item_count": sum(int(u.get("item_count") or 0) for u in units),
         "finding_count": len(findings),
         "status_counts": status_counts,
+        "failure_reason_counts": dict(sorted(failure_reason_counts.items())),
         "finding_type_counts": dict(sorted(finding_type_counts.items())),
         "selection_state_counts": dict(sorted(selection_state_counts.items())),
         "revision_state_counts": dict(sorted(revision_state_counts.items())),
@@ -1482,6 +1509,9 @@ def format_status_text(status: Mapping[str, Any]) -> str:
     ]
     if status.get("finding_type_counts"):
         lines.append(f"  finding_types: {status.get('finding_type_counts')}")
+    failure_reasons = status.get("failure_reason_counts") or {}
+    if failure_reasons:
+        lines.append(f"  failure_reasons: {failure_reasons}")
     readiness = status.get("readiness") or {}
     if readiness:
         lines.append(

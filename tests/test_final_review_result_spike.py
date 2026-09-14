@@ -68,7 +68,7 @@ def _load_fixture() -> dict:
 
 
 class ResultFixtureSpikeTests(unittest.TestCase):
-    def test_fixed_fixtures_characterize_current_ingest_decisions(self):
+    def test_fixed_fixtures_match_strict_ingest_decisions(self):
         fixture = _load_fixture()
         self.assertEqual(fixture["schema_version"], 1)
         self.assertEqual(fixture["unit_item_count"], len(_fixture_unit()["items"]))
@@ -110,17 +110,16 @@ class ResultFixtureSpikeTests(unittest.TestCase):
         fixture = _load_fixture()
         mapped_codes = {case["candidate_code"] for case in fixture["cases"]}
         self.assertEqual(mapped_codes, set(fixture["candidate_codes"]))
+        current_contract_cases = [
+            case for case in fixture["cases"] if case["evidence_scope"] == "current_contract"
+        ]
         self.assertEqual(
             {
                 case["id"]
-                for case in fixture["cases"]
-                if case["evidence_scope"] == "current_contract"
-                if case["decision_assessment"] == "false_accept"
+                for case in current_contract_cases
+                if case["decision_assessment"] in {"false_accept", "false_reject"}
             },
-            {
-                "schema_missing_reason",
-                "duplicate_item",
-            },
+            set(),
         )
         self.assertEqual(
             {
@@ -130,11 +129,11 @@ class ResultFixtureSpikeTests(unittest.TestCase):
             },
             {"reviewed_count_mismatch"},
         )
-        self.assertFalse(
-            any(
-                case["decision_assessment"] == "false_reject"
-                and case["evidence_scope"] == "current_contract"
-                for case in fixture["cases"]
+        self.assertTrue(
+            all(
+                case["decision_assessment"]
+                in {"correct_accept", "correct_reject"}
+                for case in current_contract_cases
             )
         )
 

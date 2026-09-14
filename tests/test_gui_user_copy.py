@@ -12,6 +12,7 @@ from gui_qt.user_copy import (
     check_status_label,
     doctor_mode_label,
     format_bootstrap_fact,
+    format_final_review_failure_reasons,
     format_manifest_path_fact,
     format_quality_gate_fact,
     job_state_label,
@@ -172,6 +173,15 @@ class GuiUserCopyTests(unittest.TestCase):
         )
         self.assertIn("denied", failed_log)
         self.assertIn("缓存失败", failed_log)
+
+    def test_final_review_failure_reason_copy_maps_stable_codes(self):
+        text = format_final_review_failure_reasons(
+            {"schema": 2, "duplicate_item": 1, "unknown_code": 1, "ignored": 0}
+        )
+        self.assertEqual(text, "同一词条重复 finding×1、结果 schema 不符×2、unknown_code×1")
+        self.assertEqual(format_final_review_failure_reasons(None), "")
+        self.assertEqual(format_final_review_failure_reasons({"schema": 0}), "")
+
 
 if __name__ == "__main__":
     unittest.main()

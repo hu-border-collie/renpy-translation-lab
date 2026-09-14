@@ -117,7 +117,9 @@ python gemini_translate_batch.py profiles-set-route --stage final_review --clear
 - `sync-keywords` 的 envelope 与 `export-keywords` 相同（四份候选/概要报告），但
   `manifest_path` 来自本次返回值，不会读取 latest manifest。
 - `final-review-status` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`）；
-  严格模式下 `failed` 退出 `4`、`stale` 退出 `3`。`final-review-status --json` 仍输出未版本化的
+  严格模式下 `failed` 退出 `4`、`stale` 退出 `3`。`result.failure_reason_counts` 按稳定分类
+  （`failed_to_parse_model_json` / `missing_findings` / `schema` / `duplicate_item` 等）汇总失败 unit，
+  与 GUI 状态行同源；`final-review-status --json` 仍输出未版本化的
   裸 JSON，仅为兼容保留，新代码请使用 `--output json`。
 - `merge-keywords-to-glossary` 在 `--output json` 模式下必须搭配 `--yes` 或 `--dry-run`，
   否则返回 `error.code=INTERACTIVE_REVIEW_UNSUPPORTED`（严格模式退出 `5`）。

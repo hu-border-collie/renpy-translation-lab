@@ -50,6 +50,20 @@ JOB_STATE_LABELS = {
     "JOB_STATE_RUNNING": "处理中",
 }
 
+# Stable final-review unit error classifications (#486). Unknown codes stay as
+# the raw identifier so machine detail is not hidden.
+FINAL_REVIEW_FAILURE_REASON_LABELS = {
+    "failed_to_parse_model_json": "模型 JSON 解析失败",
+    "missing_findings": "结果缺少 findings 数组",
+    "schema": "结果 schema 不符",
+    "duplicate_item": "同一词条重复 finding",
+    "missing_response_text": "响应缺少文本",
+    "missing_result_row": "缺少结果行",
+    "row_error": "结果行返回错误",
+    "input_digest_mismatch": "审校输入已变化",
+    "review_unit_failed": "未分类失败",
+}
+
 APP_SHUTDOWN_COPY = {
     "active_title": "任务仍在运行",
     "active_heading": "关闭前需要停止本机正在运行的任务。",
@@ -869,6 +883,24 @@ def format_job_fact(job_name: str) -> str:
 
 def format_job_state_fact(state: str) -> str:
     return f"任务状态：{job_state_label(state)}"
+
+
+def format_final_review_failure_reasons(counts: Any) -> str:
+    """Render stable final-review failure counts as Chinese status copy."""
+    if not isinstance(counts, dict):
+        return ""
+    parts: list[str] = []
+    for code, count in sorted(counts.items()):
+        try:
+            value = int(count)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0:
+            continue
+        key = str(code or "").strip() or "review_unit_failed"
+        label = FINAL_REVIEW_FAILURE_REASON_LABELS.get(key, key)
+        parts.append(f"{label}×{value}")
+    return "、".join(parts)
 
 
 def format_safety_fact(level: str, *, prefix: str = "检查结果") -> str:

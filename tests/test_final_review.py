@@ -596,6 +596,65 @@ class ConfigMergeTests(unittest.TestCase):
         self.assertEqual(cfg["prompt_schema_version"], fr.PROMPT_SCHEMA_VERSION)
 
 
+class UnitErrorClassificationTests(unittest.TestCase):
+    def test_classify_unit_error_uses_stable_prefix(self):
+        self.assertEqual(
+            fr.classify_unit_error("schema: finding[0] missing required field 'reason'"),
+            "schema",
+        )
+        self.assertEqual(
+            fr.classify_unit_error("duplicate_item: finding[1] repeats finding[0]"),
+            "duplicate_item",
+        )
+        self.assertEqual(
+            fr.classify_unit_error("missing_response_text"), "missing_response_text"
+        )
+        self.assertEqual(fr.classify_unit_error("free text failure"), fr.UNIT_ERROR_FALLBACK)
+        self.assertEqual(fr.classify_unit_error(""), fr.UNIT_ERROR_FALLBACK)
+        self.assertEqual(fr.classify_unit_error(None), fr.UNIT_ERROR_FALLBACK)
+
+    def test_collect_campaign_status_reports_failure_reason_counts(self):
+        items = _items(("script.rpy", "Hello", "你好"))
+        snap = fr.build_context_snapshot(translation_items=items, glossary_enabled=False)
+        units = fr.build_review_units(
+            items,
+            chunk_size=1,
+            context_digest=snap["context_digest"],
+            snapshot_digest=snap["snapshot_digest"],
+            model="m",
+        )
+        failed = fr.mark_unit_failed(
+            units[0], "schema: finding[0] missing required field 'reason'"
+        )
+        manifest = fr.build_campaign_manifest(
+            package_dir="pkg",
+            display_name="status",
+            snapshot=snap,
+            units=[failed],
+            readiness=fr.evaluate_readiness(review_item_count=1, pending_task_count=0),
+        )
+        status = fr.collect_campaign_status(
+            package={
+                "manifest": manifest,
+                "units": [failed],
+                "findings": [],
+                "snapshot": snap,
+            }
+        )
+        self.assertEqual(status["status"], fr.STATUS_FAILED)
+        self.assertEqual(status["failure_reason_counts"], {"schema": 1})
+        text = fr.format_status_text(status)
+        self.assertIn("failure_reasons", text)
+        self.assertIn("schema", text)
+
+        import cli_contract
+
+        envelope = cli_contract.success_envelope(
+            "final-review-status", status="failed", result=status
+        )
+        self.assertEqual(envelope["result"]["failure_reason_counts"], {"schema": 1})
+
+
 class CliStatusExportTests(unittest.TestCase):
     def test_final_review_status_and_export_cli(self):
         import gemini_translate_batch as batch_mod
