@@ -47,10 +47,10 @@
       "candidate_code": "schema",
       "evidence_scope": "current_contract",
       "expected_decision": "reject",
-      "current_status": "done",
-      "current_finding_count": 1,
-      "current_error_contains": "",
-      "decision_assessment": "false_accept"
+      "current_status": "failed",
+      "current_finding_count": 0,
+      "current_error_contains": "schema",
+      "decision_assessment": "correct_reject"
     },
     {
       "id": "duplicate_item",
@@ -61,10 +61,10 @@
       "candidate_code": "duplicate_item",
       "evidence_scope": "current_contract",
       "expected_decision": "reject",
-      "current_status": "done",
-      "current_finding_count": 2,
-      "current_error_contains": "",
-      "decision_assessment": "false_accept"
+      "current_status": "failed",
+      "current_finding_count": 0,
+      "current_error_contains": "duplicate_item",
+      "decision_assessment": "correct_reject"
     },
     {
       "id": "refusal",

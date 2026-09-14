@@ -36,6 +36,7 @@ from final_review import (
     FinalReviewError,
     FinalReviewSchemaError,
     assert_failure_not_done,
+    classify_unit_error,
     collect_campaign_status,
     derive_campaign_status,
     format_campaign_report_markdown,
@@ -66,6 +67,13 @@ FINDING_TYPE_ENUM = [
 ]
 
 SEVERITY_ENUM = ["high", "medium", "low", "info"]
+
+# Stable unit error classifications (#486). ``error`` remains the human-readable
+# detail; status summaries and GUI copy aggregate by these prefixes.
+ERROR_JSON_PARSE = "failed_to_parse_model_json"
+ERROR_MISSING_FINDINGS = "missing_findings"
+ERROR_SCHEMA = "schema"
+ERROR_DUPLICATE_ITEM = "duplicate_item"
 
 
 def build_system_instruction() -> str:
@@ -459,6 +467,54 @@ def extract_text_from_response_payload(response_payload: Any) -> str:
     return ""
 
 
+def _effective_field(
+    record: Mapping[str, Any],
+    keys: Sequence[str],
+) -> tuple[bool, Any]:
+    """Resolve canonical field plus legacy aliases with old ``or`` precedence.
+
+    Returns ``(present, value)`` where the first truthy candidate wins. Falsy
+    candidates keep alias compatibility (for example ``{"reason": null,
+    "detail": "x"}`` still resolves to ``"x"``), but a truthy non-string value
+    is returned for strict type validation instead of being silently coerced.
+    """
+    present = False
+    value: Any = None
+    for key in keys:
+        if key not in record:
+            continue
+        candidate = record.get(key)
+        if candidate:
+            return True, candidate
+        present = True
+        value = candidate
+    return present, value
+
+
+def _safe_error_value(value: Any, *, limit: int = 80) -> str:
+    """Render a bounded, printable detail value without provider payload text."""
+    text = "".join(ch if ch.isprintable() else " " for ch in str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _finding_duplicate_key(finding: Mapping[str, Any]) -> tuple[str, ...]:
+    """Identity of a normalized finding for exact-duplicate rejection (#486).
+
+    Different problems on the same item stay valid; only a repeated tuple of
+    item + normalized finding content counts as an exact duplicate.
+    """
+    return (
+        str(finding.get("identity_v2") or ""),
+        str(finding.get("finding_type") or ""),
+        str(finding.get("severity") or ""),
+        str(finding.get("reason") or ""),
+        str(finding.get("evidence") or ""),
+        str(finding.get("suggested_revision") or ""),
+    )
+
+
 def parse_unit_findings(
     response_text: str,
     unit: Mapping[str, Any],
@@ -466,71 +522,146 @@ def parse_unit_findings(
     provider: str = "",
     model: str = "",
 ) -> tuple[list[dict[str, Any]], str]:
-    """Parse model JSON into normalized findings.
+    """Parse model JSON into normalized findings with strict schema checks.
 
     Returns ``(findings, error)``. On success *error* is empty (findings may be []).
-    On failure *findings* is empty and *error* explains why — caller must mark failed.
+    On failure *findings* is empty and *error* carries a stable classification:
+
+    - ``failed_to_parse_model_json`` — JSON syntax / root container failure;
+    - ``missing_findings`` — no canonical ``findings`` (or ``issues`` alias) array;
+    - ``schema`` — shape, required field, type, enum or unknown item reference;
+    - ``duplicate_item`` — the same normalized finding repeats for one item.
+
+    Legacy soft aliases remain accepted when the canonical field is absent or
+    falsy: ``issues``, ``id`` / ``identity_v2``, ``type``, ``detail`` and
+    ``suggestion``. A truthy canonical field wins over aliases. Unknown extra
+    response fields are ignored for forward compatibility (no completion
+    receipt contract is introduced here).
     """
     unit_id = str(unit.get("unit_id") or "")
     unit_digest = str(unit.get("input_digest") or "")
     item_by_id: dict[str, Mapping[str, Any]] = {}
     for item in unit.get("items") or []:
-        if isinstance(item, Mapping):
-            iid = str(item.get("id") or item.get("identity_v2") or "").strip()
+        if not isinstance(item, Mapping):
+            continue
+        for key in ("id", "identity_v2"):
+            iid = str(item.get(key) or "").strip()
             if iid:
-                item_by_id[iid] = item
+                item_by_id.setdefault(iid, item)
 
     try:
         payload = parse_json_payload(response_text)
     except Exception as exc:  # noqa: BLE001 — surface as unit failure
-        return [], f"failed_to_parse_model_json: {exc}"
+        return [], f"{ERROR_JSON_PARSE}: {exc}"
 
     if not isinstance(payload, Mapping):
-        return [], "failed_to_parse_model_json: root is not an object"
+        return [], f"{ERROR_JSON_PARSE}: root is not an object"
 
     raw_findings = payload.get("findings")
     if raw_findings is None:
         # Allow alternate key "issues" as soft alias, else fail (not silent zero).
         raw_findings = payload.get("issues")
     if raw_findings is None:
-        return [], "failed_to_parse_model_json: missing findings array"
+        return [], f"{ERROR_MISSING_FINDINGS}: missing findings array"
     if not isinstance(raw_findings, list):
-        return [], "failed_to_parse_model_json: findings is not an array"
+        return [], f"{ERROR_SCHEMA}: findings is not an array"
 
     findings: list[dict[str, Any]] = []
-    for raw in raw_findings:
+    seen_duplicates: dict[tuple[str, ...], int] = {}
+    for index, raw in enumerate(raw_findings):
         if not isinstance(raw, Mapping):
-            return [], "failed_to_parse_model_json: finding entry is not an object"
-        item_id = str(raw.get("item_id") or raw.get("id") or raw.get("identity_v2") or "").strip()
-        item = item_by_id.get(item_id) if item_id else None
+            return [], f"{ERROR_SCHEMA}: finding[{index}] is not an object"
+
+        has_ref, item_ref = _effective_field(raw, ("item_id", "id", "identity_v2"))
+        if not has_ref:
+            return [], f"{ERROR_SCHEMA}: finding[{index}] missing required field 'item_id'"
+        if not isinstance(item_ref, str) or not item_ref.strip():
+            return [], (
+                f"{ERROR_SCHEMA}: finding[{index}] field 'item_id' must be a non-empty string"
+            )
+        item_id = item_ref.strip()
+        item = item_by_id.get(item_id)
+        if item is None:
+            return [], (
+                f"{ERROR_SCHEMA}: finding[{index}] references unknown item_id "
+                f"'{_safe_error_value(item_id)}'"
+            )
+
+        has_type, raw_type = _effective_field(raw, ("finding_type", "type"))
+        if not has_type:
+            return [], f"{ERROR_SCHEMA}: finding[{index}] missing required field 'finding_type'"
+        if not isinstance(raw_type, str):
+            return [], f"{ERROR_SCHEMA}: finding[{index}] field 'finding_type' must be a string"
+        finding_type = raw_type.strip().lower()
+        if finding_type not in FINDING_TYPE_ENUM:
+            return [], (
+                f"{ERROR_SCHEMA}: finding[{index}] field 'finding_type' has unsupported value"
+            )
+
+        if "severity" not in raw:
+            return [], f"{ERROR_SCHEMA}: finding[{index}] missing required field 'severity'"
+        raw_severity = raw.get("severity")
+        if not isinstance(raw_severity, str):
+            return [], f"{ERROR_SCHEMA}: finding[{index}] field 'severity' must be a string"
+        severity = raw_severity.strip().lower()
+        if severity not in SEVERITY_ENUM:
+            return [], (
+                f"{ERROR_SCHEMA}: finding[{index}] field 'severity' has unsupported value"
+            )
+
+        has_reason, raw_reason = _effective_field(raw, ("reason", "detail"))
+        if not has_reason:
+            return [], f"{ERROR_SCHEMA}: finding[{index}] missing required field 'reason'"
+        if not isinstance(raw_reason, str):
+            return [], f"{ERROR_SCHEMA}: finding[{index}] field 'reason' must be a string"
+
+        optional_text: dict[str, str] = {}
+        for canonical, aliases in (
+            ("evidence", ()),
+            ("suggested_revision", ("suggestion",)),
+        ):
+            has_value, raw_value = _effective_field(raw, (canonical, *aliases))
+            if not has_value or raw_value is None:
+                optional_text[canonical] = ""
+                continue
+            if not isinstance(raw_value, str):
+                return [], (
+                    f"{ERROR_SCHEMA}: finding[{index}] field '{canonical}' must be a string"
+                )
+            optional_text[canonical] = raw_value
+
         record = {
-            "identity_v2": item_id
-            or (str(item.get("identity_v2") or item.get("id") or "") if item else ""),
-            "file_rel_path": (item or {}).get("file_rel_path") or unit.get("file_rel_path") or "",
-            "source": (item or {}).get("source") or raw.get("source") or "",
-            "current_translation": (item or {}).get("current_translation")
-            or raw.get("current_translation")
-            or "",
-            "finding_type": raw.get("finding_type") or raw.get("type") or "",
-            "severity": raw.get("severity") or "medium",
-            "evidence": raw.get("evidence") or "",
-            "reason": raw.get("reason") or raw.get("detail") or "",
-            "suggested_revision": raw.get("suggested_revision") or raw.get("suggestion") or "",
+            "identity_v2": item_id,
+            "file_rel_path": item.get("file_rel_path") or unit.get("file_rel_path") or "",
+            "source": item.get("source") or "",
+            "current_translation": item.get("current_translation") or "",
+            "finding_type": finding_type,
+            "severity": severity,
+            "evidence": optional_text["evidence"],
+            "reason": raw_reason,
+            "suggested_revision": optional_text["suggested_revision"],
             # Strip model-claimed applied/fixed in normalize_finding.
             "revision_state": raw.get("revision_state") or "none",
         }
-        findings.append(
-            normalize_finding(
-                record,
-                review_unit_id=unit_id,
-                review_unit_digest=unit_digest,
-                provider=provider,
-                model=model or str(unit.get("model") or ""),
-                prompt_schema_version=str(
-                    unit.get("prompt_schema_version") or PROMPT_SCHEMA_VERSION
-                ),
-            )
+        normalized = normalize_finding(
+            record,
+            review_unit_id=unit_id,
+            review_unit_digest=unit_digest,
+            provider=provider,
+            model=model or str(unit.get("model") or ""),
+            prompt_schema_version=str(
+                unit.get("prompt_schema_version") or PROMPT_SCHEMA_VERSION
+            ),
         )
+        duplicate_key = _finding_duplicate_key(normalized)
+        if duplicate_key in seen_duplicates:
+            first_index = seen_duplicates[duplicate_key]
+            return [], (
+                f"{ERROR_DUPLICATE_ITEM}: finding[{index}] repeats finding[{first_index}] "
+                f"for item '{_safe_error_value(item_id)}'"
+            )
+        seen_duplicates[duplicate_key] = index
+        findings.append(normalized)
     return findings, ""
 
 
@@ -642,7 +773,7 @@ def ingest_result_rows(
             summary["finding_count"] += len(findings)
         elif updated.get("status") == STATUS_FAILED:
             summary["failed_units"] += 1
-            bump(str(updated.get("error") or "failed")[:80])
+            bump(classify_unit_error(updated.get("error")))
 
     # Units that were running but missing from results → failed (not silent done).
     for unit_id, unit in list(unit_map.items()):

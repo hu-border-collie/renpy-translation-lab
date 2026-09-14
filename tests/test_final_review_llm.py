@@ -164,6 +164,195 @@ class ParseFindingsTests(unittest.TestCase):
         self.assertIn("missing findings", error)
         self.assertEqual(findings, [])
 
+    def test_schema_missing_required_fields_marks_unit_failed(self):
+        unit = _unit()
+        cases = [
+            (
+                {"findings": [{"item_id": "id-a", "finding_type": "omission", "severity": "high"}]},
+                "reason",
+            ),
+            (
+                {"findings": [{"item_id": "id-a", "severity": "high", "reason": "x"}]},
+                "finding_type",
+            ),
+            (
+                {"findings": [{"item_id": "id-a", "finding_type": "omission", "reason": "x"}]},
+                "severity",
+            ),
+        ]
+        for payload, field in cases:
+            with self.subTest(field=field):
+                text = json.dumps(payload, ensure_ascii=False)
+                findings, error = frl.parse_unit_findings(text, unit)
+                self.assertEqual(findings, [])
+                self.assertTrue(error.startswith("schema:"))
+                self.assertIn(field, error)
+                updated, updated_findings = frl.apply_unit_result(unit, response_text=text)
+                self.assertEqual(updated["status"], fr.STATUS_FAILED)
+                self.assertEqual(updated_findings, [])
+                fr.assert_failure_not_done(updated)
+
+    def test_schema_rejects_wrong_types_enums_and_unknown_items(self):
+        unit = _unit()
+        cases = [
+            (
+                {"item_id": 7, "finding_type": "omission", "severity": "high", "reason": "x"},
+                "must be a non-empty string",
+            ),
+            (
+                {"item_id": "id-a", "finding_type": ["omission"], "severity": "high", "reason": "x"},
+                "must be a string",
+            ),
+            (
+                {"item_id": "id-a", "finding_type": "typo", "severity": "high", "reason": "x"},
+                "unsupported value",
+            ),
+            (
+                {"item_id": "id-a", "finding_type": "omission", "severity": "urgent", "reason": "x"},
+                "unsupported value",
+            ),
+            (
+                {"item_id": "id-a", "finding_type": "omission", "severity": "high", "reason": 3},
+                "must be a string",
+            ),
+            (
+                {"item_id": "id-missing", "finding_type": "omission", "severity": "high", "reason": "x"},
+                "unknown item_id",
+            ),
+        ]
+        for finding, expected in cases:
+            with self.subTest(expected=expected, finding=finding):
+                text = json.dumps({"findings": [finding]}, ensure_ascii=False)
+                findings, error = frl.parse_unit_findings(text, unit)
+                self.assertEqual(findings, [])
+                self.assertTrue(error.startswith("schema:"))
+                self.assertIn(expected, error)
+
+    def test_duplicate_exact_finding_rejected_but_same_item_variants_allowed(self):
+        unit = _unit()
+        base = {
+            "item_id": "id-a",
+            "finding_type": "terminology",
+            "severity": "medium",
+            "reason": "term mismatch",
+        }
+        findings, error = frl.parse_unit_findings(
+            json.dumps({"findings": [base, dict(base)]}, ensure_ascii=False), unit
+        )
+        self.assertEqual(findings, [])
+        self.assertTrue(error.startswith("duplicate_item:"))
+
+        distinct = [
+            base,
+            {**base, "finding_type": "mistranslation"},
+            {**base, "reason": "different reason"},
+            {**base, "evidence": "different evidence"},
+            {**base, "suggested_revision": "建议译名"},
+        ]
+        findings, error = frl.parse_unit_findings(
+            json.dumps({"findings": distinct}, ensure_ascii=False), unit
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(len(findings), 5)
+
+    def test_soft_aliases_remain_accepted_with_canonical_precedence(self):
+        unit = _unit()
+        payload = {
+            "issues": [
+                {
+                    "id": "id-b",
+                    "type": "Terminology",
+                    "severity": "Medium",
+                    "detail": "术语不一致",
+                    "suggestion": "改用统一译名",
+                }
+            ]
+        }
+        findings, error = frl.parse_unit_findings(
+            json.dumps(payload, ensure_ascii=False), unit
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["identity_v2"], "id-b")
+        self.assertEqual(findings[0]["finding_type"], "terminology")
+        self.assertEqual(findings[0]["severity"], "medium")
+        self.assertEqual(findings[0]["reason"], "术语不一致")
+        self.assertEqual(findings[0]["suggested_revision"], "改用统一译名")
+        self.assertEqual(findings[0]["evidence"], "")
+
+        # Canonical key wins even when empty (legacy behavior), and empty
+        # canonical fields fall back to aliases the same way as before.
+        canonical_empty = {
+            "findings": [],
+            "issues": [{"id": "id-a", "type": "omission", "severity": "high", "detail": "x"}],
+        }
+        findings, error = frl.parse_unit_findings(
+            json.dumps(canonical_empty, ensure_ascii=False), unit
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(findings, [])
+
+        alias_fallback = {
+            "findings": [
+                {
+                    "item_id": "id-a",
+                    "finding_type": "",
+                    "type": "omission",
+                    "severity": "high",
+                    "reason": "x",
+                }
+            ]
+        }
+        findings, error = frl.parse_unit_findings(
+            json.dumps(alias_fallback, ensure_ascii=False), unit
+        )
+        self.assertEqual(error, "")
+        self.assertEqual(findings[0]["finding_type"], "omission")
+
+    def test_ingest_failure_keeps_other_done_units_and_stable_reason_counts(self):
+        units = [_unit("u1"), _unit("u2")]
+        valid_text = json.dumps(
+            {
+                "findings": [
+                    {
+                        "item_id": "id-a",
+                        "finding_type": "omission",
+                        "severity": "high",
+                        "reason": "missing",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        invalid_text = json.dumps(
+            {
+                "findings": [
+                    {
+                        "item_id": "id-a",
+                        "finding_type": "omission",
+                        "severity": "high",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        result = frl.ingest_result_rows(
+            units,
+            [
+                {"key": "u1", "response_text": valid_text},
+                {"key": "u2", "response_text": invalid_text},
+            ],
+        )
+        by_id = {unit["unit_id"]: unit for unit in result["units"]}
+        self.assertEqual(by_id["u1"]["status"], fr.STATUS_DONE)
+        self.assertEqual(by_id["u1"]["finding_count"], 1)
+        self.assertEqual(by_id["u2"]["status"], fr.STATUS_FAILED)
+        self.assertTrue(str(by_id["u2"]["error"]).startswith("schema:"))
+        self.assertEqual(result["summary"]["done_units"], 1)
+        self.assertEqual(result["summary"]["failed_units"], 1)
+        self.assertEqual(result["summary"]["reason_counts"], {"schema": 1})
+        self.assertEqual(len(result["findings"]), 1)
+
     def test_apply_unit_result_failed_not_done(self):
         unit = _unit()
         updated, findings = frl.apply_unit_result(unit, response_text="{{{")

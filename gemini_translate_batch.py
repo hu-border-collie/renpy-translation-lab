@@ -7277,6 +7277,9 @@ def run_final_review_ingest_results(target=None, result_path='', allow_stale_res
     print(f"Result rows: {summary.get('result_rows', 0)}")
     print(f"Done units: {summary.get('done_units', 0)}")
     print(f"Failed units: {summary.get('failed_units', 0)}")
+    reason_counts = summary.get('reason_counts') or {}
+    if summary.get('failed_units'):
+        print(f"Failure reasons: {reason_counts}")
     print(f"Findings: {summary.get('finding_count', 0)}")
     print(f"Campaign status: {(result.get('status') or {}).get('status')}")
     print('Report-only: no .rpy writes. Select findings before creating revision candidates.')

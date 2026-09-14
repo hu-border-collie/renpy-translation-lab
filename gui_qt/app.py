@@ -397,6 +397,7 @@ from .user_copy import (
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
     COVERAGE_REVIEW_COPY,
+    format_final_review_failure_reasons,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
@@ -8612,12 +8613,16 @@ class MainWindow(QMainWindow):
                 scope = review_status.get("scope") or {}
                 counts = review_status.get("status_counts") or {}
                 snapshot = str(review_status.get("snapshot_digest") or "")
+                failure_note = format_final_review_failure_reasons(
+                    review_status.get("failure_reason_counts")
+                )
+                failure_suffix = f"；失败原因：{failure_note}" if failure_note else ""
                 review_status_message = (
                     f"最终审校：{review_status.get('status')}；"
                     f"范围 {scope.get('file_count', 0)} 个文件 / {scope.get('item_count', 0)} 条译文；"
                     f"unit 完成 {counts.get('done', 0)}、失败 {counts.get('failed', 0)}、"
                     f"过期 {counts.get('stale', 0)}；findings {review_status.get('finding_count', 0)}；"
-                    f"快照 {snapshot[:12] or '—'}。"
+                    f"快照 {snapshot[:12] or '—'}{failure_suffix}。"
                 )
 
                 findings_enabled = (
