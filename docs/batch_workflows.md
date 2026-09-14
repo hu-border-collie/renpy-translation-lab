@@ -558,7 +558,7 @@ python gemini_translate_batch.py compare-variants logs/batch_jobs/<package>/mani
 
 ## Manifest 与 identity v2
 
-Batch `build` 会生成：
+Batch `build` 会生成下列 package。普通翻译 `build` 的 `batch_model` 取冻结的 translation 阶段路由模型（`--profile` 与 `model_routing.routes.translation` 覆盖生效），估算、请求生成配置与 `submit` 创建作业使用同一模型；`build-retry` 沿用父 manifest 的冻结路由 / 记录模型，不再读取实时 `BATCH_MODEL`。
 
 ```text
 logs/batch_jobs/<package>/manifest.json

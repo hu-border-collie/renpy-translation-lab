@@ -91,9 +91,13 @@ class BatchBuildCoverageGuardTests(unittest.TestCase):
     def _run_create(self, report):
         snapshot = SimpleNamespace(report=report)
         jobs = batch.TranslationFileJobs(coverage_snapshot=snapshot)
+        plan = SimpleNamespace(
+            routes={"translation": SimpleNamespace(stage="translation")}
+        )
         with (
             mock.patch.object(batch.legacy, "require_supported_generation_target"),
-            mock.patch.object(batch, "freeze_runtime_routing_plan", return_value={}),
+            mock.patch.object(batch, "freeze_runtime_routing_plan", return_value=plan),
+            mock.patch.object(batch, "route_model", return_value="gemini-test"),
             mock.patch.object(batch.legacy, "run_prepare_steps"),
             mock.patch.object(batch.os.path, "isdir", return_value=True),
             mock.patch.object(batch, "collect_pending_file_jobs", return_value=jobs),

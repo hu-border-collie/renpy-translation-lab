@@ -284,6 +284,47 @@ class BatchGoldenCorpusTests(unittest.TestCase):
             encoding='utf-8',
         )
 
+    def test_golden_batch_build_uses_frozen_translation_route_model(self):
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / 'fixtures'
+            / 'model_routing_legacy'
+            / 'gemini_batch.json'
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding='utf-8'))
+        ).config['model_routing']
+        section['routes']['translation'] = {
+            'profile_id': 'legacy-sync',
+            'strategy': 'gemini_batch',
+        }
+        routed_model = 'gemini-3.1-flash-lite'
+        batch_default = 'gemini-3.5-flash'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = self._copy_fixture_tl(root)
+            old_values = self._patch_batch_environment(root, tl_dir)
+            try:
+                with (
+                    mock.patch.object(runtime, 'MODEL_ROUTING_CONFIG', section),
+                    mock.patch.object(batch_mod, 'BATCH_MODEL', batch_default),
+                ):
+                    manifest_path = batch_mod.create_batch_package(
+                        skip_prepare=True
+                    )
+                manifest = self._load_manifest(manifest_path)
+            finally:
+                self._restore_batch_environment(old_values)
+
+        self.assertEqual(manifest['batch_model'], routed_model)
+        self.assertEqual(
+            manifest['model_routing']['routes']['translation']['profile_id'],
+            'legacy-sync',
+        )
+
     def test_golden_batch_build_check_apply_end_to_end(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

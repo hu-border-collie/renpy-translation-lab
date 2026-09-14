@@ -4664,6 +4664,8 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_TRANSLATION},
     )
+    translation_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    effective_model = route_model(routing_plan, translation_route)
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -4735,7 +4737,13 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
     with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
         for chunk in chunks:
-            handle.write(json.dumps(build_batch_request(chunk), ensure_ascii=False) + '\n')
+            handle.write(
+                json.dumps(
+                    build_batch_request(chunk, model=effective_model),
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
 
     build_warnings = get_batch_risk_warnings()
     build_warnings.extend(coverage_export_warnings)
@@ -4747,7 +4755,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         'mode': MANIFEST_MODE_TRANSLATION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': BATCH_MODEL,
+        'batch_model': effective_model,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
@@ -8044,6 +8052,12 @@ def collect_retry_chunk_keys(manifest):
 def build_retry_package(target=None, display_name_override=''):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'build-retry')
+    retry_plan = resolve_manifest_routing_plan(
+        manifest,
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+    )
+    retry_route = route_for_manifest(retry_plan, manifest)
+    effective_model = route_model(retry_plan, retry_route)
     retry_keys, failure_entries, summary, reason_counts = collect_retry_chunk_keys(manifest)
     if not retry_keys:
         print('No retry chunks needed.')
@@ -8067,7 +8081,10 @@ def build_retry_package(target=None, display_name_override=''):
     retry_dir = create_unique_child_dir(retry_root, f'{timestamp}_retry')
 
     input_jsonl_path = os.path.join(retry_dir, 'requests.jsonl')
-    request_rows = [build_batch_request(chunk) for chunk in retry_chunks]
+    request_rows = [
+        build_batch_request(chunk, model=effective_model)
+        for chunk in retry_chunks
+    ]
     write_jsonl_file(input_jsonl_path, request_rows)
 
     source_display_name = manifest.get('display_name') or os.path.basename(manifest['_package_dir'])
@@ -8080,7 +8097,7 @@ def build_retry_package(target=None, display_name_override=''):
         'mode': MANIFEST_MODE_TRANSLATION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': BATCH_MODEL,
+        'batch_model': effective_model,
         'base_dir': manifest.get('base_dir', legacy.BASE_DIR),
         'tl_dir': manifest.get('tl_dir', legacy.TL_DIR),
         **_manifest_target_language_fields(manifest),

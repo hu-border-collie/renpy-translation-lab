@@ -455,6 +455,22 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     ],
                 )
 
+                from model_routing_migration import preview_migration
+
+                routing_fixture = (
+                    Path(__file__).parent
+                    / 'fixtures'
+                    / 'model_routing_legacy'
+                    / 'gemini_batch.json'
+                )
+                routing_section = preview_migration(
+                    json.loads(routing_fixture.read_text(encoding='utf-8'))
+                ).config['model_routing']
+                routing_section['routes']['translation'] = {
+                    'profile_id': 'legacy-sync',
+                    'strategy': 'gemini_batch',
+                }
+
                 manifest_path = package_dir / 'manifest.json'
                 manifest_path.write_text(
                     json.dumps(
@@ -464,6 +480,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                             'mode': batch_mod.MANIFEST_MODE_TRANSLATION,
                             'display_name': 'demo',
                             'batch_model': 'gemini-test',
+                            'model_routing': routing_section,
                             'input_jsonl_path': str(package_dir / 'requests.jsonl'),
                             'result_jsonl_path': 'results.jsonl',
                             'settings': {'target_size': 2},
@@ -499,6 +516,16 @@ class BatchRepairRegressionTests(unittest.TestCase):
                         ['script.rpy:2:4:11:again'],
                     )
                     self.assertTrue(retry_manifest['source_index_enabled'])
+                    self.assertEqual(
+                        retry_manifest['batch_model'],
+                        'gemini-3.1-flash-lite',
+                    )
+                    self.assertEqual(
+                        retry_manifest['model_routing']['routes']['translation'][
+                            'profile_id'
+                        ],
+                        'legacy-sync',
+                    )
                     self.assertEqual(latest_path.read_text(encoding='utf-8'), retry_manifest_path)
                     retry_request = json.loads(Path(retry_manifest['input_jsonl_path']).read_text(encoding='utf-8').splitlines()[0])
                     self.assertEqual(retry_request['key'], 'chunk-bad-retry-001')
