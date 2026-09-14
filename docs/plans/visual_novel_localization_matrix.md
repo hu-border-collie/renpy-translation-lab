@@ -2,8 +2,8 @@
 
 > **状态**：#272 研究与路线决策基准文档。
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
-> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，#265 已于 2026-09-13 关闭。后续推荐候选可创建独立实现 Issue；真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
-> **核对日期**：2026-09-13。官方版本与语法以各引擎现行文档为准；刷新本表时同步更新日期。
+> **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，#265 已于 2026-09-13 关闭。后续推荐候选**可以**创建独立实现 Issue，但已于 2026-09-14 决定暂缓立项（见 §6.1 状态注）；真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
+> **核对日期**：2026-09-13（官方版本与语法）。P6 收口与立项暂缓状态更新于 2026-09-14（#272）；官方版本与语法以各引擎现行文档为准，刷新本表时同步更新日期。
 
 ---
 
@@ -353,7 +353,7 @@ flowchart TD
     GDO --> CoreContracts
 ```
 
-> **设计假设 / 待 #265 P6（#424）后复核（P5 已交付）。** 5.1–5.4 描述的是候选引擎若实现 Adapter 时应如何对接现有合同，不是已经存在的集成。
+> **设计假设 / 待第三 Adapter 正式立项时复核。** #265 P5/P6 已交付且 Epic 已于 2026-09-13 关闭，但 5.1–5.4 仍是对候选引擎若实现 Adapter 时应如何对接现有合同的设计假设，不是已经存在的集成；其实质对照复核与 P2 选型一并暂缓（#272，2026-09-14）。
 
 ### 5.1 候选清单与覆盖审计
 `[待夹具验证]` Naninovel Adapter 应能输出 `coverage_candidates.jsonl`：
@@ -379,10 +379,12 @@ flowchart TD
 ## 6. 第三 Adapter 推荐决策与后续路线
 
 ### 6.1 最终决策结论
-在 #265（Ren'Py + TyranoScript V600+）全部交付并验证完成后：
+在 #265（Ren'Py + TyranoScript V600+）交付并关闭（2026-09-13）后，研究结论为：
 
 > 1. **主线标准候选**：推荐将 **Naninovel (Unity)** 作为本工具官方支持的第三个 Engine Adapter（代表 Unity 体系现代纯文本与 CSV 离线目录规范）。
 > 2. **实战原型先行线**：将 **RPG Maker MV/MZ 纯叙事模式（Narrative Mode）** 列为 B+ 研究候选。先建立 §7.4 的合成回归夹具，再验证 JSON 事件树映射、字体回退与安全写回；本地游戏仅作为补充人工验证样本。
+
+> **2026-09-14 状态**：以上为研究 / 路线推荐，不是已排期的实现承诺。第三 Adapter 的实现立项（P2）**暂缓**，触发条件见 [#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)：当前离线队列（#344 代码收口、#431 首期、#488）完成且无更高优 issue，或出现真实第三引擎需求 / 可再分发 fixture。届时须重新核对官方资料与 fixture 许可。
 
 本文件不为第四引擎立项。Godot + Dialogic 仅在 Dialogic 离开 Alpha、导出合同稳定后重新评估。
 
@@ -397,7 +399,7 @@ flowchart TD
 
 ## 7. 立项前置条件与规范预设
 
-当 #265 关闭且正式立项时，必须满足以下规范：
+当第三 Adapter 正式立项时（#265 已于 2026-09-13 关闭，立项按 §6.1 状态注暂缓），必须满足以下规范：
 
 ### 7.1 Naninovel 支持版本与输入产物
 - **受支持引擎/插件版本**：Naninovel **1.21**，运行于 Unity **6.0 LTS** 或 **6.3 LTS**（最新 patch；非 LTS 不支持）`[官方]`。
