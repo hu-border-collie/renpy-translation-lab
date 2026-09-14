@@ -5828,6 +5828,8 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_REVISION},
     )
+    revision_route = routing_plan.routes[model_profile.STAGE_REVISION]
+    effective_model = route_model(routing_plan, revision_route)
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -5856,7 +5858,13 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
     input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
     with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
         for chunk in chunks:
-            handle.write(json.dumps(build_revision_request(chunk), ensure_ascii=False) + '\n')
+            handle.write(
+                json.dumps(
+                    build_revision_request(chunk, model=effective_model),
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
 
     build_warnings = get_batch_risk_warnings()
     manifest = {
@@ -5866,7 +5874,7 @@ def create_revision_package(display_name_override='', skip_prepare=False, chunk_
         'mode': MANIFEST_MODE_REVISION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': BATCH_MODEL,
+        'batch_model': effective_model,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),
@@ -7454,6 +7462,8 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         required_stages={model_profile.STAGE_KEYWORD},
     )
+    keyword_route = routing_plan.routes[model_profile.STAGE_KEYWORD]
+    effective_model = route_model(routing_plan, keyword_route)
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -7482,7 +7492,17 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
     input_jsonl_path = os.path.join(package_dir, 'requests.jsonl')
     with open(input_jsonl_path, 'w', encoding='utf-8') as handle:
         for chunk in chunks:
-            handle.write(json.dumps(build_keyword_request(chunk, max_candidates), ensure_ascii=False) + '\n')
+            handle.write(
+                json.dumps(
+                    build_keyword_request(
+                        chunk,
+                        max_candidates,
+                        model=effective_model,
+                    ),
+                    ensure_ascii=False,
+                )
+                + '\n'
+            )
 
     manifest = {
         'version': 2,
@@ -7491,7 +7511,7 @@ def create_keyword_package(display_name_override='', skip_prepare=True, chunk_si
         'mode': MANIFEST_MODE_KEYWORD_EXTRACTION,
         'created_at': datetime.now().isoformat(timespec='seconds'),
         'display_name': display_name,
-        'batch_model': BATCH_MODEL,
+        'batch_model': effective_model,
         'base_dir': legacy.BASE_DIR,
         'tl_dir': legacy.TL_DIR,
         **_manifest_target_language_fields(),

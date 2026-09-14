@@ -189,7 +189,7 @@ python gemini_translate_batch.py sync-revisions --limit 3
 python gemini_translate_batch.py sync-revisions --apply
 ```
 
-`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并对将被写回的修订结果运行共享机械质量规则，生成包目录下的 `quality_findings.jsonl`；合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、质量 finding 路径与哈希、质量策略/规则版本、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回，写回前还会在最终候选上重新运行质量规则；质量 warning 不阻止订正写回，配置为 blocker 的规则按 revision 自己的写回门禁拒绝写回。`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化、源文件快照变化、质量规则/策略变化或 blocker。
+`build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。构建时作业模型取冻结的 revision 阶段路由（未配置 `model_routing` 时继承旧 Batch 入口），`--profile` 与阶段路由覆盖会写入 manifest 与请求生成配置。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并对将被写回的修订结果运行共享机械质量规则，生成包目录下的 `quality_findings.jsonl`；合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、质量 finding 路径与哈希、质量策略/规则版本、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回，写回前还会在最终候选上重新运行质量规则；质量 warning 不阻止订正写回，配置为 blocker 的规则按 revision 自己的写回门禁拒绝写回。`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化、源文件快照变化、质量规则/策略变化或 blocker。
 
 `apply-revisions` 的终态写在 manifest 的 `revision_apply_state`，固定区分：
 
@@ -485,7 +485,7 @@ python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manif
 python gemini_translate_batch.py sync-keywords --limit 3
 ```
 
-`build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`。候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`。
+`build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`。构建时作业模型取冻结的 keyword 阶段路由（未配置 `model_routing` 时继承旧 Batch 入口），`--profile` 与阶段路由覆盖会写入 manifest 与请求生成配置。候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`。
 
 `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源，并从现有 revision corpus 扫描投影中附上术语的首次历史 occurrence、文件/行号、现译和冲突原因。该历史证据只做人工作提示；大小写/复数变体、Ren'Py 插值、多个不同现译、保留不译（原文=译文）、无证据和无法对齐的项目不会被自动锁入 glossary。中文译法只有与整句历史现译完全相等时才作为安全对齐，中文子串命中仍需人工确认。
 
