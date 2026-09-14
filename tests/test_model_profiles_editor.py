@@ -327,6 +327,53 @@ class StrategyGatingTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "UNKNOWN_CAPABILITY_OVERRIDE")
 
 
+class InitialSectionTests(unittest.TestCase):
+    def test_initial_section_is_valid_and_defaults_to_gemini_batch(self) -> None:
+        section = editor.initial_section(
+            provider_label="Google Gemini",
+            profile_label="Gemini Main",
+            model="gemini-test-model",
+        )
+
+        self.assertFalse(editor.section_issues(section))
+        self.assertEqual(editor.provider_ids(section), ("google-gemini",))
+        self.assertEqual(editor.profile_ids(section), ("gemini-main",))
+        self.assertEqual(
+            section["defaults"],
+            {
+                "primary_profile_id": "gemini-main",
+                "execution_strategy": "gemini_batch",
+            },
+        )
+        profile = section["profiles"]["gemini-main"]
+        self.assertEqual(profile["model"], "gemini-test-model")
+        provider = section["providers"]["google-gemini"]
+        self.assertEqual(provider["adapter"], "gemini")
+        self.assertEqual(provider["credential_ref"]["name"], "api_keys")
+
+    def test_initial_section_can_explicitly_select_sync(self) -> None:
+        section = editor.initial_section(
+            provider_label="Google Gemini",
+            profile_label="Gemini Main",
+            model="gemini-test-model",
+            execution_strategy="sync",
+        )
+
+        self.assertEqual(section["defaults"]["execution_strategy"], "sync")
+
+    def test_initial_section_only_builds_the_v1_section(self) -> None:
+        # Preserving legacy sync.* / batch.* fields is the offline migration's
+        # job; blank creation must not claim to inherit them (#457).
+        section = editor.initial_section(
+            provider_label="Google Gemini",
+            profile_label="Gemini Main",
+            model="gemini-test-model",
+        )
+
+        self.assertNotIn("sync", section)
+        self.assertNotIn("batch", section)
+
+
 class EditorViewTests(unittest.TestCase):
     def test_view_is_credential_free_and_resolves_capabilities(self) -> None:
         view = editor.editor_view(gemini_section())

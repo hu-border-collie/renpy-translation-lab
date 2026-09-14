@@ -143,7 +143,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
   - **Provider 连接**：适配器（Gemini 直连 / LiteLLM）、上游 Provider、API Base / 模型目录 URL 与**凭据引用**（本机 `api_keys.json` 槽位、系统安全存储、环境变量引用或无需鉴权）；从不写入或回显密钥值。
   - **Model Profiles**：新增 / 复制 / 删除 / 诊断；编辑标签、Provider、主模型、轮换模型、embedding profile 绑定与能力覆盖（高级，带风险提示）。
   - **默认与阶段路由**：设置默认主模型与执行方式，并可为初译、术语、订正、项目分析、最终审校分别覆盖 profile / strategy；未覆盖的阶段跟随默认并显示来源。
-  - 保存前用 schema-v1 合同校验，未通过会阻止保存；删除仍被默认值、阶段路由或 embedding 引用的 profile/provider 会被拒绝。旧配置可直接「创建 Model Routing 配置」从空白开始，或按迁移文档先迁移；迁移前运行行为不变。
+  - 保存前用 schema-v1 合同校验，未通过会阻止保存；删除仍被默认值、阶段路由或 embedding 引用的 profile/provider 会被拒绝。无旧配置字段时可直接「创建 Model Routing 配置」从空白开始（Gemini Provider + Gemini Main，暂定执行方式为 `gemini_batch`，候选默认待真实 smoke 与 A/B 后决定）；检测到旧 `sync.*` / `batch.*` 字段时创建按钮被禁用，页面会指向「诊断与运行日志」的迁移命令，避免静默丢失旧模型、Provider 与阶段路由。无效的 `model_routing` 不会被当作空白：页面显示错误并阻止保存，可显式移除并在保存后回退旧配置；移除不会修复旧配置本身。
 - **高级 · 翻译吞吐**：`同步单请求超时` 统一控制同步翻译、项目分析、关键词、订正、修补和 A/B 对比的每次模型请求等待上限；默认 120 秒，可设 5–600 秒，不是整次任务总时限。`同步前文条目数`（默认 30）与 `同步后文条目数`（默认 10）控制同步初译的局部上下文预算，0 表示关闭对应方向。
 - **高级 · 术语与风格**：`同步风格设定文件` 指定注入同步提示词的 `macro_setting.md` 路径（相对当前 work；留空使用当前 work 下的同名文件）。
 - **上下文**：

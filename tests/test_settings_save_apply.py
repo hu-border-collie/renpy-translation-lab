@@ -274,6 +274,28 @@ class ModelRoutingSaveApplyTests(unittest.TestCase):
         self.assertNotIn("model_routing", config)
         self.assertEqual(config["sync"]["model"], "gemini-3.1-flash-lite")
 
+    def test_non_object_model_routing_blocks_until_explicitly_removed(self) -> None:
+        config = {"model_routing": "broken"}
+
+        blocked = apply_collected_settings(
+            config,
+            {"model_routing": "broken"},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertFalse(blocked.ok)
+        self.assertEqual(blocked.block_page, "profiles")
+        self.assertEqual(config["model_routing"], "broken")
+
+        removed = apply_collected_settings(
+            config,
+            {"model_routing": None},
+            original_config=copy.deepcopy(config),
+        )
+
+        self.assertTrue(removed.ok, removed)
+        self.assertNotIn("model_routing", config)
+
     def test_legacy_invalid_section_still_blocks_models_page(self) -> None:
         config = {"model_routing": {"schema_version": 1}}
 

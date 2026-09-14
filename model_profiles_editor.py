@@ -674,6 +674,46 @@ def set_defaults(
     return data
 
 
+def initial_section(
+    *,
+    provider_label: str,
+    profile_label: str,
+    model: str,
+    execution_strategy: str = routing.ExecutionStrategy.GEMINI_BATCH.value,
+) -> dict[str, Any]:
+    """Return a minimal valid v1 section for a user-created configuration.
+
+    The default execution strategy is the shipped provisional default
+    (``gemini_batch``), matching the migration default and example config
+    until the real-provider smoke / A/B decision in #457. Callers that must
+    preserve legacy ``sync.*`` / ``batch.*`` fields should run the offline
+    migration instead of blank creation.
+    """
+    section = empty_section()
+    section = add_provider(
+        section,
+        label=str(provider_label),
+        adapter=routing.ADAPTER_GEMINI,
+        provider="gemini",
+        credential_kind=routing.CREDENTIAL_KIND_API_KEYS_JSON,
+        credential_name="api_keys",
+        credential_env_name="GEMINI_API_KEY",
+    )
+    provider_id = provider_ids(section)[0]
+    section = add_profile(
+        section,
+        label=str(profile_label),
+        provider_id=provider_id,
+        model=str(model),
+    )
+    profile_id = profile_ids(section)[0]
+    return set_defaults(
+        section,
+        primary_profile_id=profile_id,
+        execution_strategy=execution_strategy,
+    )
+
+
 def set_route(
     section: Mapping[str, Any] | None,
     stage: str,
