@@ -95,7 +95,7 @@
   "manifest_path": "…",
   "report_path": "…",
   "finding_count": 0,
-  "severity_counts": {"error": 0, "warning": 0, "info": 0},
+  "severity_counts": {"info": 0, "low": 0, "medium": 0, "high": 0},
   "reason_counts": {"…": 0},
   "generated_at": "…",
   "matched_by": ["project", "plan_fingerprint"]

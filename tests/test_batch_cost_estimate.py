@@ -86,6 +86,72 @@ class BatchCostEstimateTests(unittest.TestCase):
             )
         )
 
+    def test_estimate_requests_cost_is_known_with_pricing(self):
+        pricing = {
+            'currency': 'USD',
+            'chars_per_input_token': 4,
+            'version': 3,
+            'models': {
+                'gemini-test': {
+                    'input_per_million': 1.0,
+                    'output_per_million': 2.0,
+                }
+            },
+        }
+
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'gemini-test',
+            request_texts=['abcd' * 25],
+            max_output_tokens_per_request=1000,
+            pricing_config=pricing,
+            translator_config={'batch': {'pricing': {'models': {}}}},
+        )
+
+        self.assertEqual(estimate['status'], 'known')
+        self.assertEqual(estimate['input_tokens'], 25)
+        self.assertEqual(estimate['output_tokens_max'], 1000)
+        self.assertAlmostEqual(
+            estimate['estimated_cost_min'], 25 * 1.0 / 1_000_000, places=8
+        )
+        self.assertAlmostEqual(
+            estimate['estimated_cost_max'],
+            (25 * 1.0 + 1000 * 2.0) / 1_000_000,
+            places=8,
+        )
+        self.assertEqual(estimate['pricing_source'], 'translator_config')
+        self.assertEqual(estimate['scope'], 'current_plan')
+
+    def test_estimate_requests_cost_unknown_when_unpriced(self):
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'unpriced-model',
+            request_texts=['hello'],
+            max_output_tokens_per_request=100,
+            pricing_config={'models': {}},
+        )
+
+        self.assertEqual(estimate['status'], 'unknown')
+        self.assertEqual(estimate['reason'], 'pricing_unavailable')
+        self.assertIsNone(estimate['estimated_cost_min'])
+        self.assertEqual(estimate['pricing_source'], 'defaults')
+
+    def test_estimate_requests_cost_unknown_without_input_text(self):
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'gemini-test',
+            request_texts=[''],
+            max_output_tokens_per_request=100,
+            pricing_config={
+                'models': {
+                    'gemini-test': {
+                        'input_per_million': 1.0,
+                        'output_per_million': 2.0,
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(estimate['status'], 'unknown')
+        self.assertEqual(estimate['reason'], 'input_unreadable')
+
     def test_estimate_final_review_uses_unit_or_request_count(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             jsonl_path = os.path.join(tmp_dir, 'requests.jsonl')
