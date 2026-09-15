@@ -35,7 +35,7 @@
 | 通过图形界面完成第一次翻译 | [GUI 快速开始](docs/quickstart_gui.md) |
 | 让 Agent 或脚本通过 CLI 操作 | [Agent / CLI 快速开始](docs/quickstart_agent.md) |
 | 查完整 Batch 命令与恢复流程 | [Batch 工作流与安全检查](docs/batch_workflows.md) |
-| 小批量使用同步执行并审查后写回 | [同步翻译工作流](docs/sync_workflow.md) |
+| 使用同步执行并审查后写回（支持完整项目耐久执行） | [同步翻译工作流](docs/sync_workflow.md) |
 | 选择模型与执行方式、跑四类 smoke | [Provider / 执行策略 Smoke Matrix](docs/provider_smoke_matrix.md) |
 | 修改本仓库代码或文档 | [AGENTS.md](AGENTS.md) → [CONTRIBUTING.md](CONTRIBUTING.md) |
 

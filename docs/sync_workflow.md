@@ -2,9 +2,9 @@
 
 文档地图：[docs/README.md](README.md)
 
-同步 CLI 适合小范围即时翻译、补译和局部验证。它与 Gemini Batch 主路径使用不同的运行合同：默认命令会调用所选同步供应商，但**只生成可审查预览**；只有显式传入该次预览的 manifest 才会写回项目。
+同步执行与 Gemini Batch 都是一等翻译入口，通过 ModelProfile / ExecutionStrategy 选择（见 [模型配置迁移](model_config_migration.md) 与 [Provider / 执行策略 Smoke Matrix](provider_smoke_matrix.md)）。同步路径支持完整项目翻译的耐久执行（逐 chunk 持久化、恢复、取消与派生），也适合小范围即时翻译、补译和局部验证；它与 Batch 共用 TranslationPlan、上下文装配与检查 / 写回合同。
 
-大型任务、远程排队、成本折扣和可恢复下载仍优先使用 [Batch 工作流](batch_workflows.md)。GUI 用户可直接阅读 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
+同步命令默认只生成可审查预览，只有显式传入该次预览的 manifest / run 才会写回项目。需要远程排队、成本折扣和可恢复下载时使用 [Batch 工作流](batch_workflows.md)；GUI 用户可直接阅读 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
 
 ## 前置条件
 

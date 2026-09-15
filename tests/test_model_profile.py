@@ -1647,6 +1647,159 @@ class SyncEntryWiringTests(unittest.TestCase):
             self.assertIn("profiles", snapshot)
             self.assertIn("routes", snapshot)
 
+    def test_final_review_effective_model_prefers_frozen_route(self) -> None:
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "model_routing_legacy"
+            / "gemini_batch.json"
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding="utf-8"))
+        ).config["model_routing"]
+        section["routes"]["final_review"] = {
+            "profile_id": "legacy-sync",
+            "strategy": "gemini_batch",
+        }
+        manifest = {
+            "mode": "final_review",
+            "model_routing": section,
+            "model": "gemini-recorded-legacy",
+            "batch_model": "gemini-recorded-legacy",
+        }
+
+        self.assertEqual(
+            batch_mod._final_review_effective_model(manifest),
+            "gemini-3.1-flash-lite",
+        )
+
+    def test_final_review_effective_model_keeps_recorded_legacy_model(self) -> None:
+        manifest = {
+            "mode": "final_review",
+            "model": "gemini-recorded-legacy",
+            "batch_model": "gemini-recorded-legacy",
+        }
+
+        self.assertEqual(
+            batch_mod._final_review_effective_model(manifest),
+            "gemini-recorded-legacy",
+        )
+
+    def test_final_review_package_uses_frozen_route_model(self) -> None:
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "model_routing_legacy"
+            / "gemini_batch.json"
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding="utf-8"))
+        ).config["model_routing"]
+        section["routes"]["final_review"] = {
+            "profile_id": "legacy-sync",
+            "strategy": "gemini_batch",
+        }
+        routed_model = "gemini-3.1-flash-lite"
+        old = {
+            "tl_dir": batch_mod.legacy.TL_DIR,
+            "log_dir": batch_mod.LOG_DIR,
+            "jobs_dir": batch_mod.BATCH_JOBS_DIR,
+            "repair_dir": batch_mod.REPAIR_RUNS_DIR,
+            "sync_dir": batch_mod.SYNC_RUNS_DIR,
+            "latest": batch_mod.LATEST_MANIFEST_FILE,
+            "final_enabled": batch_mod.FINAL_REVIEW_ENABLED,
+            "require_zero": batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING,
+            "include_files": set(batch_mod.legacy.INCLUDE_FILES),
+            "include_prefixes": set(batch_mod.legacy.INCLUDE_PREFIXES),
+            "base_dir": batch_mod.legacy.BASE_DIR,
+            "model_routing": batch_mod.legacy.MODEL_ROUTING_CONFIG,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / "tl"
+                jobs_dir = root / "batch_jobs"
+                tl_dir.mkdir()
+                jobs_dir.mkdir()
+                (tl_dir / "script.rpy").write_text(
+                    "translate schinese start:\n"
+                    '    old "Hello"\n'
+                    '    new "你好"\n',
+                    encoding="utf-8",
+                )
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.LOG_DIR = str(root / "logs")
+                batch_mod.BATCH_JOBS_DIR = str(jobs_dir)
+                batch_mod.REPAIR_RUNS_DIR = str(root / "repair_runs")
+                batch_mod.SYNC_RUNS_DIR = str(root / "sync_runs")
+                batch_mod.LATEST_MANIFEST_FILE = str(
+                    jobs_dir / "latest_manifest.txt"
+                )
+                batch_mod.FINAL_REVIEW_ENABLED = True
+                batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING = False
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+                batch_mod.legacy.BASE_DIR = str(root)
+
+                gate_stub = mock.Mock()
+                gate_stub.to_dict.return_value = {
+                    "status": "confirmed",
+                    "confirmed": True,
+                    "reasons": [],
+                }
+                with (
+                    mock.patch.object(
+                        batch_mod.legacy, "MODEL_ROUTING_CONFIG", section
+                    ),
+                    mock.patch.object(
+                        batch_mod, "BATCH_MODEL", "gemini-batch-default"
+                    ),
+                    mock.patch.object(
+                        batch_mod, "FINAL_REVIEW_MODEL", "gemini-final-default"
+                    ),
+                    mock.patch.object(
+                        batch_mod,
+                        "evaluate_project_coverage_gate",
+                        return_value=gate_stub,
+                    ),
+                ):
+                    review_path = batch_mod.create_final_review_package(
+                        skip_prepare=True,
+                        chunk_size=1,
+                        allow_pending=True,
+                    )
+                manifest = json.loads(
+                    Path(review_path).read_text(encoding="utf-8")
+                )
+        finally:
+            batch_mod.legacy.TL_DIR = old["tl_dir"]
+            batch_mod.LOG_DIR = old["log_dir"]
+            batch_mod.BATCH_JOBS_DIR = old["jobs_dir"]
+            batch_mod.REPAIR_RUNS_DIR = old["repair_dir"]
+            batch_mod.SYNC_RUNS_DIR = old["sync_dir"]
+            batch_mod.LATEST_MANIFEST_FILE = old["latest"]
+            batch_mod.FINAL_REVIEW_ENABLED = old["final_enabled"]
+            batch_mod.FINAL_REVIEW_REQUIRE_ZERO_PENDING = old["require_zero"]
+            batch_mod.legacy.INCLUDE_FILES = old["include_files"]
+            batch_mod.legacy.INCLUDE_PREFIXES = old["include_prefixes"]
+            batch_mod.legacy.BASE_DIR = old["base_dir"]
+            batch_mod.legacy.MODEL_ROUTING_CONFIG = old["model_routing"]
+
+        self.assertEqual(manifest["model"], routed_model)
+        self.assertEqual(manifest["batch_model"], routed_model)
+        self.assertEqual(
+            manifest["model_routing"]["routes"]["final_review"]["profile_id"],
+            "legacy-sync",
+        )
+        self.assertEqual(
+            batch_mod._final_review_effective_model(manifest),
+            routed_model,
+        )
+
     def test_old_manifest_without_model_routing_keeps_recorded_model(self) -> None:
         recorded = "gemini-old-recorded"
         live = "gemini-live-new"
