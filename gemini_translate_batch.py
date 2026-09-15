@@ -7073,7 +7073,8 @@ def create_final_review_package(
         raise SystemExit(1) from exc
 
     chunk_size = max(1, int(chunk_size or FINAL_REVIEW_CHUNK_SIZE or fr.DEFAULT_CHUNK_SIZE))
-    model = FINAL_REVIEW_MODEL or BATCH_MODEL or ''
+    final_review_route = routing_plan.routes[model_profile.STAGE_FINAL_REVIEW]
+    model = route_model(routing_plan, final_review_route)
     prompt_schema = FINAL_REVIEW_PROMPT_SCHEMA_VERSION or fr.PROMPT_SCHEMA_VERSION
 
     snapshot = _collect_final_review_context_snapshot(translation_items)
@@ -7122,7 +7123,7 @@ def create_final_review_package(
         model=model,
         prompt_schema_version=prompt_schema,
         chunk_size=chunk_size,
-        batch_model=BATCH_MODEL,
+        batch_model=model,
         settings={
             'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
             'temperature': BATCH_TEMPERATURE,
@@ -7202,6 +7203,23 @@ def run_final_review_export(target=None, output_jsonl='', output_markdown=''):
     return result
 
 
+def _final_review_effective_model(manifest):
+    """Return the campaign's frozen final-review model (#344 ④).
+
+    Modern packages carry a ``model_routing`` snapshot, so the model frozen at
+    build time wins. Older packages fall back to their recorded ``model`` /
+    ``batch_model`` through :func:`resolve_manifest_routing_plan`; the live
+    ``FINAL_REVIEW_MODEL`` / ``BATCH_MODEL`` globals are only consulted when the
+    manifest has no recorded model either.
+    """
+    plan = resolve_manifest_routing_plan(
+        manifest,
+        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+    )
+    route = route_for_manifest(plan, manifest)
+    return route_model(plan, route)
+
+
 def run_final_review_resume(target=None, force=False):
     """Rebuild requests for pending/stale/failed units; skip unchanged done units.
 
@@ -7215,6 +7233,7 @@ def run_final_review_resume(target=None, force=False):
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
     package_dir = package['paths']['package_dir']
+    model = _final_review_effective_model(package['manifest'])
     frozen_snapshot = dict(package.get('snapshot') or {})
     frozen_context = str(
         frozen_snapshot.get('context_digest') or package['manifest'].get('context_digest') or ''
@@ -7243,7 +7262,7 @@ def run_final_review_resume(target=None, force=False):
             temperature=BATCH_TEMPERATURE,
             max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
             thinking_level=BATCH_THINKING_LEVEL,
-            model=FINAL_REVIEW_MODEL or BATCH_MODEL or '',
+            model=model,
             safety_settings=BATCH_SAFETY_SETTINGS or None,
         )
     except fr.FinalReviewError as exc:
@@ -7275,12 +7294,13 @@ def run_final_review_ingest_results(target=None, result_path='', allow_stale_res
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
     package_dir = package['paths']['package_dir']
+    model = _final_review_effective_model(package['manifest'])
     try:
         result = fr_llm.ingest_results_into_package(
             package_dir,
             result_path=result_path or '',
             provider=str(SYNC_BACKEND or 'gemini'),
-            model=FINAL_REVIEW_MODEL or BATCH_MODEL or '',
+            model=model,
             extract_text=extract_text_from_response_payload,
             allow_stale_results=bool(allow_stale_results),
         )

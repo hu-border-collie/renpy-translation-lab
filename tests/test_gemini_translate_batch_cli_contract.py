@@ -170,6 +170,79 @@ class BatchCliContractTests(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def test_final_review_resume_and_ingest_use_frozen_route_model(self):
+        from model_routing_migration import preview_migration
+
+        fixture = (
+            Path(__file__).parent
+            / 'fixtures'
+            / 'model_routing_legacy'
+            / 'gemini_batch.json'
+        )
+        section = preview_migration(
+            json.loads(fixture.read_text(encoding='utf-8'))
+        ).config['model_routing']
+        section['routes']['final_review'] = {
+            'profile_id': 'legacy-sync',
+            'strategy': 'gemini_batch',
+        }
+        manifest = {
+            'mode': 'final_review',
+            'model_routing': section,
+            'model': 'gemini-recorded-legacy',
+            'batch_model': 'gemini-recorded-legacy',
+        }
+        package = {
+            'paths': {'package_dir': '/tmp/final-review'},
+            'snapshot': {},
+            'units': [],
+            'manifest': manifest,
+        }
+        captured: dict[str, str] = {}
+
+        def fake_resume(package_dir, **kwargs):
+            captured['resume_model'] = kwargs['model']
+            return {
+                'paths': {'manifest': '/tmp/final-review/manifest.json'},
+                'run_count': 0,
+                'skip_count': 0,
+            }
+
+        def fake_ingest(package_dir, **kwargs):
+            captured['ingest_model'] = kwargs['model']
+            return {
+                'paths': {'manifest': '/tmp/final-review/manifest.json'},
+                'summary': {},
+                'status': {},
+            }
+
+        with (
+            mock.patch.object(
+                batch,
+                'manifest_path_for_target',
+                return_value='/tmp/final-review/manifest.json',
+            ),
+            mock.patch.object(batch, 'remember_latest_manifest'),
+            mock.patch(
+                'final_review.load_campaign_package',
+                return_value=package,
+            ),
+            mock.patch(
+                'final_review_llm.prepare_resume_requests',
+                side_effect=fake_resume,
+            ),
+            mock.patch(
+                'final_review_llm.ingest_results_into_package',
+                side_effect=fake_ingest,
+            ),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            batch.run_final_review_resume('/tmp/final-review')
+            batch.run_final_review_ingest_results('/tmp/final-review')
+
+        self.assertEqual(captured['resume_model'], 'gemini-3.1-flash-lite')
+        self.assertEqual(captured['ingest_model'], 'gemini-3.1-flash-lite')
+
     def test_sync_start_emits_run_identity_marker_before_execution(self):
         observed: list[str] = []
 

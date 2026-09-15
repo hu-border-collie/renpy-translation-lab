@@ -214,6 +214,8 @@ python gemini_translate_batch.py sync-revisions --apply
 
 最终审校先以**独立 campaign** 批量发现问题，默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。只有用户明确选择的 findings 才会转成普通 revision manifest，并强制走 `preview-revisions → apply-revisions`；模型不能声称问题已经修复或写回。
 
+最终审校的模型取冻结的 `final_review` 阶段路由：campaign manifest 的 `model` / `batch_model`、resume 重建请求与结果解析使用同一模型；无 `model_routing` 的旧 campaign 回退到 manifest 记录的模型。legacy 入口仍要求 final_review 策略为 `gemini_batch`。
+
 ```bash
 # 构建 campaign：完成度闸门 + 冻结上下文 digest + review units + requests.jsonl
 python gemini_translate_batch.py final-review-build
