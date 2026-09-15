@@ -22220,6 +22220,18 @@ def _print_durable_sync_snapshot(snapshot):
     requests = dict(progress.get('requests') or {})
     print(f"Durable Sync run: {snapshot.get('run_id') or '(unknown)'}")
     print(f"Status: {snapshot.get('run_status') or 'unknown'}")
+    frozen = dict((snapshot or {}).get('frozen_profile') or {})
+    provider = str(frozen.get('provider') or '').strip() or 'unknown'
+    model = str(frozen.get('model') or '').strip() or 'unknown'
+    frozen_details = []
+    profile_id = str(frozen.get('profile_id') or '').strip()
+    strategy = str(frozen.get('execution_strategy') or '').strip()
+    if profile_id:
+        frozen_details.append(f'profile={profile_id}')
+    if strategy:
+        frozen_details.append(f'strategy={strategy}')
+    frozen_suffix = f" ({', '.join(frozen_details)})" if frozen_details else ''
+    print(f'Frozen model: {provider}/{model}{frozen_suffix}')
     print(
         'Items: '
         f"accepted={int(items.get('accepted') or 0)}, "

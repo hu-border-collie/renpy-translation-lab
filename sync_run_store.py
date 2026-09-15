@@ -2866,6 +2866,60 @@ class SyncRunStore:
             'next_eligible_at': request.get('next_eligible_at'),
         }
 
+    @staticmethod
+    def _frozen_profile_snapshot(plan_row, attempts) -> dict[str, Any]:
+        """Expose the frozen ModelProfile for read-only status display (#344).
+
+        Prefers the run's stored plan snapshot so a failure always shows the
+        provider/model that was frozen at run start. Older runs without a
+        snapshot fall back to the provider/model recorded on their attempts.
+        Credentials, params and headers are never included.
+        """
+        profile = {
+            'profile_id': '',
+            'label': '',
+            'adapter': '',
+            'provider': '',
+            'model': '',
+            'embedding_profile_id': '',
+        }
+        strategy = ''
+        source = 'unknown'
+        if plan_row is not None:
+            try:
+                plan_payload = json.loads(plan_row['canonical_json'] or '{}')
+            except (TypeError, ValueError):
+                plan_payload = {}
+            if isinstance(plan_payload, dict):
+                raw_profile = plan_payload.get('model_profile_snapshot')
+                if isinstance(raw_profile, dict) and raw_profile:
+                    profile = {
+                        'profile_id': str(raw_profile.get('id') or ''),
+                        'label': str(raw_profile.get('label') or ''),
+                        'adapter': str(raw_profile.get('adapter') or ''),
+                        'provider': str(raw_profile.get('provider') or ''),
+                        'model': str(raw_profile.get('model') or ''),
+                        'embedding_profile_id': str(
+                            raw_profile.get('embedding_profile_id') or ''
+                        ),
+                    }
+                    strategy = str(plan_payload.get('execution_strategy') or '')
+                    source = 'plan_snapshot'
+        if source == 'unknown':
+            for attempt in reversed(attempts):
+                provider = str(attempt['provider'] or '').strip()
+                model = str(attempt['model'] or '').strip()
+                if provider or model:
+                    profile['provider'] = provider
+                    profile['model'] = model
+                    source = 'attempt'
+                    break
+        return {
+            **profile,
+            'execution_strategy': strategy,
+            'source': source,
+        }
+
     def build_snapshot(self) -> dict:
         """Return the store-backed run snapshot defined in #347 section 11.2."""
         with self._conn() as conn:
@@ -2876,6 +2930,10 @@ class SyncRunStore:
             attempts = conn.execute(
                 'SELECT * FROM attempts WHERE run_id = ?', (self.run_id,)
             ).fetchall()
+            plan_row = conn.execute(
+                'SELECT canonical_json FROM plans WHERE run_id = ?',
+                (self.run_id,),
+            ).fetchone()
             item_count = conn.execute(
                 'SELECT COUNT(*) AS n FROM item_results WHERE run_id = ?', (self.run_id,)
             ).fetchone()['n']
@@ -2980,6 +3038,9 @@ class SyncRunStore:
                     'plan_id': run['plan_id'],
                     'plan_fingerprint': run['plan_fingerprint'],
                 },
+                'frozen_profile': self._frozen_profile_snapshot(
+                    plan_row, attempts
+                ),
                 'cancellation': {'requested': int(run['cancel_epoch']) > 0},
                 'progress': {
                     'requests': {

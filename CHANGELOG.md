@@ -36,6 +36,7 @@
 
 ### 修复
 
+- durable Sync 的 `sync-status` 快照新增只读 `frozen_profile`（profile / adapter / provider / model / embedding profile / execution strategy / source）：优先取 run 启动时冻结的 plan 快照，旧 run 回退到 attempt 记录的 provider/model，缺失时诚实标 `unknown`；CLI 文本与 GUI 运行事实同步显示，失败或降级时能看到真实 Provider/模型（#344 ⑦）。
 - `build-revisions` / `build-keywords` 的 Batch 作业模型改为取冻结的 revision / keyword 阶段路由，`manifest.batch_model` 与请求 generation config 使用同一模型；显式 `model_routing` 阶段路由（含 `--profile`）现在真正作用于 Gemini Batch 作业。未配置 `model_routing` 的旧配置仍解析为原 `batch_model`，行为不变（#344）。
 - 翻译 `build` 与 `build-retry` 同样接入冻结路由：`build` 的 `batch_model` 取 translation 阶段路由模型（`--profile` / 阶段路由覆盖生效），`build-retry` 沿用父 manifest 的冻结路由或记录模型；估算、请求生成配置与提交使用同一模型，无 `model_routing` 的旧包保持原记录模型与运行时回退（#344）。
 - 零待译不再默认等于完成（#424 P6）：新增共享 `evaluate_coverage_completion`。`doctor` 在 `pending=0` 但 coverage 未确认（存在 `unknown` / `parse_error` / inventory invariant / source-change，或状态不是 `ready` / `attention`）时输出 `workflow_state=coverage_unconfirmed`，报告给出 coverage 状态、分类计数、digest 与稳定 reason；`translate-preflight` 以 `COVERAGE_UNCONFIRMED` error risk 阻断启动；Batch `build` / `submit` 以结构化错误 `COVERAGE_UNCONFIRMED` 拒绝，不再返回 `no_work` 成功。取不到 coverage 证据时同样不声明完成：doctor 不给 workflow state，preflight 报 `COVERAGE_EVIDENCE_MISSING` warning，build 以 `coverage.evidence_missing` 拒绝。coverage review 的 policy 硬门禁与 Project Analysis / Final Review 接线属后续切片。

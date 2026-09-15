@@ -1257,6 +1257,7 @@ DURABLE_SYNC_RUN_COPY = {
     "check_manifest_label": "检查清单",
     "status_label": "运行状态",
     "status_unknown": "未知",
+    "model_fact": "模型：{provider} / {model}",
     "status_labels": {
         "planned": "已创建，等待执行",
         "running": "执行中",

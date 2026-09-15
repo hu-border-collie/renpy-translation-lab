@@ -133,6 +133,43 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertTrue(derive.ack_duplicate_billing_risk)
         self.assertEqual(derive.output, 'json')
 
+    def test_sync_status_surfaces_frozen_provider_and_model(self):
+        class _Service:
+            def status(self, run_id=None, *, latest=False):
+                return {
+                    'run_id': 'sync-run-v1-demo',
+                    'run_status': 'failed',
+                    'next_action': 'resume',
+                    'progress': {'requests': {}, 'items': {}},
+                    'frozen_profile': {
+                        'profile_id': 'gemini-main',
+                        'adapter': 'gemini',
+                        'provider': 'gemini',
+                        'model': 'gemini-3.5-flash',
+                        'execution_strategy': 'sync',
+                        'source': 'plan_snapshot',
+                    },
+                }
+
+        args = batch.build_arg_parser().parse_args(['sync-status', '--latest'])
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(
+                batch,
+                '_durable_sync_store_only_service',
+                return_value=_Service(),
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            snapshot = batch.run_durable_sync_command(args)
+
+        self.assertEqual(snapshot['frozen_profile']['provider'], 'gemini')
+        self.assertEqual(snapshot['frozen_profile']['model'], 'gemini-3.5-flash')
+        self.assertIn(
+            'Frozen model: gemini/gemini-3.5-flash',
+            stdout.getvalue(),
+        )
+
     def test_sync_start_emits_run_identity_marker_before_execution(self):
         observed: list[str] = []
 

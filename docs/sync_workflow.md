@@ -117,6 +117,8 @@ python gemini_translate_batch.py sync-derive <RUN> --json
 
 `sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
 
+`sync-status` 快照包含只读 `frozen_profile`（`profile_id` / `label` / `adapter` / `provider` / `model` / `embedding_profile_id` / `execution_strategy` / `source`）：优先来自 run 启动时冻结的 plan 快照；旧 run 没有快照时回退到 attempt 记录的 provider/model；两者都没有时 `source=unknown` 且不显示假值。CLI 文本输出与 GUI 运行事实都会显示该 Provider/模型，失败或降级时不再只能看到错误分类。
+
 终态只代表执行器不再调度，并不授权写回。耐久路径固定为：
 
 ```powershell

@@ -754,6 +754,64 @@ class ProjectionAndIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(total, bucket_sum)
 
+    def test_snapshot_exposes_frozen_profile_from_plan(self):
+        plan = make_plan()
+        plan['model_profile_snapshot'] = {
+            'id': 'gemini-main',
+            'label': 'Gemini Main',
+            'adapter': 'gemini',
+            'provider': 'gemini',
+            'model': 'gemini-3.5-flash',
+            'embedding_profile_id': 'gemini-embed',
+        }
+        store, _ = bootstrap_run(self.root / 'frozen-profile', plan=plan)
+
+        snapshot = store.build_snapshot()
+
+        self.assertEqual(
+            snapshot['frozen_profile'],
+            {
+                'profile_id': 'gemini-main',
+                'label': 'Gemini Main',
+                'adapter': 'gemini',
+                'provider': 'gemini',
+                'model': 'gemini-3.5-flash',
+                'embedding_profile_id': 'gemini-embed',
+                'execution_strategy': 'sync',
+                'source': 'plan_snapshot',
+            },
+        )
+
+    def test_snapshot_falls_back_to_attempt_provider_model(self):
+        plan = make_plan()
+        plan.pop('model_profile_snapshot', None)
+        store, _ = bootstrap_run(self.root / 'attempt-profile', plan=plan)
+        store.acquire_lease(owner_token='owner-1')
+        store.prepare_attempt(
+            request_id='req-1',
+            owner_token='owner-1',
+            provider='openrouter',
+            model='deepseek-v4-flash',
+        )
+
+        frozen = store.build_snapshot()['frozen_profile']
+
+        self.assertEqual(frozen['source'], 'attempt')
+        self.assertEqual(frozen['provider'], 'openrouter')
+        self.assertEqual(frozen['model'], 'deepseek-v4-flash')
+        self.assertEqual(frozen['profile_id'], '')
+
+    def test_snapshot_reports_unknown_frozen_profile_without_evidence(self):
+        plan = make_plan()
+        plan.pop('model_profile_snapshot', None)
+        store, _ = bootstrap_run(self.root / 'unknown-profile', plan=plan)
+
+        frozen = store.build_snapshot()['frozen_profile']
+
+        self.assertEqual(frozen['source'], 'unknown')
+        self.assertEqual(frozen['provider'], '')
+        self.assertEqual(frozen['model'], '')
+
 
 if __name__ == '__main__':
     unittest.main()
