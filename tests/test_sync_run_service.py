@@ -135,6 +135,9 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(status['changed'])
         self.assertEqual(status['next_action'], 'check')
         self.assertEqual(status['freshness']['source'], 'fresh')
+        self.assertEqual(status['frozen_profile']['provider'], 'fake')
+        self.assertEqual(status['frozen_profile']['model'], 'fake-model')
+        self.assertEqual(status['frozen_profile']['source'], 'plan_snapshot')
 
     def test_start_reports_run_identity_before_execution(self):
         observed: list[str] = []

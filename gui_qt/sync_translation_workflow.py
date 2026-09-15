@@ -117,6 +117,17 @@ def durable_sync_facts(
         run_status_of(snapshot) or DURABLE_SYNC_RUN_COPY["status_unknown"],
     )
     facts.append(f"{DURABLE_SYNC_RUN_COPY['status_label']}：{status_label}")
+    frozen_profile = _as_mapping(snapshot.get("frozen_profile"))
+    provider = str(frozen_profile.get("provider") or "").strip()
+    model = str(frozen_profile.get("model") or "").strip()
+    if provider or model:
+        unknown = DURABLE_SYNC_RUN_COPY["status_unknown"]
+        facts.append(
+            DURABLE_SYNC_RUN_COPY["model_fact"].format(
+                provider=provider or unknown,
+                model=model or unknown,
+            )
+        )
     expected = _as_int(items.get("expected"))
     accepted = _as_int(items.get("accepted"))
     unresolved = _as_int(items.get("unresolved"))

@@ -531,6 +531,18 @@ class DurableSyncFactTests(unittest.TestCase):
         self.assertIn("结果未知", joined)
         self.assertIn("900", joined)
 
+    def test_facts_show_frozen_provider_and_model(self) -> None:
+        payload = snapshot()
+        payload["frozen_profile"] = {
+            "provider": "gemini",
+            "model": "gemini-3.5-flash",
+            "source": "plan_snapshot",
+        }
+
+        facts = durable_sync_facts(payload)
+
+        self.assertIn("gemini / gemini-3.5-flash", "\n".join(facts))
+
     def test_envelope_parser_rejects_human_output(self) -> None:
         self.assertIsNone(parse_machine_envelope("Sync preview manifest: C:/run/manifest.json\n"))
         self.assertIsNotNone(
