@@ -112,6 +112,25 @@ def resolve_model_pricing(model_name, pricing_config):
     return best_rates
 
 
+def pricing_source(translator_config=None) -> str:
+    """Return where the effective pricing table came from (#488 S1).
+
+    ``translator_config`` means the config carries a non-empty
+    ``batch.pricing`` section; otherwise the shipped defaults are used (the
+    loader merges configured rates over defaults either way).
+    """
+
+    if isinstance(translator_config, dict):
+        batch = translator_config.get('batch')
+        if (
+            isinstance(batch, dict)
+            and isinstance(batch.get('pricing'), dict)
+            and batch['pricing']
+        ):
+            return 'translator_config'
+    return 'defaults'
+
+
 def _coerce_nonnegative_int(value):
     if value is None or isinstance(value, bool):
         return None
@@ -257,6 +276,68 @@ def estimate_manifest_cost(manifest, pricing_config=None, translator_config=None
         'estimated_cost_min': round(estimated_cost_min, 4),
         'estimated_cost_max': round(estimated_cost_max, 4),
         'estimated_at': datetime.now().isoformat(timespec='seconds'),
+    }
+
+
+def estimate_requests_cost(
+    model_name,
+    *,
+    request_texts,
+    max_output_tokens_per_request,
+    pricing_config,
+    translator_config=None,
+) -> dict:
+    """Estimate one plan's cost without provider calls (#488 S1).
+
+    Returns a contract-shaped mapping where ``status=unknown`` means the
+    estimate cannot be trusted; callers must not render unknown as zero cost.
+    Input tokens use the same chars-per-token rule as manifest estimates.
+    """
+
+    texts = [str(text or '') for text in (request_texts or ())]
+    request_count = len(texts)
+    currency = str((pricing_config or {}).get('currency') or 'USD')
+    base = {
+        'model': str(model_name or '').strip(),
+        'currency': currency,
+        'input_tokens': None,
+        'output_tokens_max': None,
+        'estimated_cost_min': None,
+        'estimated_cost_max': None,
+        'pricing_version': (pricing_config or {}).get('version'),
+        'pricing_source': pricing_source(translator_config),
+        'scope': 'current_plan',
+        'excluded': ['provider 排队与重试', '未计入的实际输出'],
+    }
+    if request_count <= 0:
+        return {**base, 'status': 'unknown', 'reason': 'no_requests'}
+    input_chars = sum(len(text) for text in texts)
+    if input_chars <= 0:
+        return {**base, 'status': 'unknown', 'reason': 'input_unreadable'}
+    rates = resolve_model_pricing(model_name, pricing_config) or {}
+    input_rate = _coerce_positive_float(rates.get('input_per_million'), 0.0)
+    output_rate = _coerce_positive_float(rates.get('output_per_million'), 0.0)
+    if not input_rate and not output_rate:
+        return {**base, 'status': 'unknown', 'reason': 'pricing_unavailable'}
+
+    chars_per_token = _coerce_positive_float(
+        (pricing_config or {}).get('chars_per_input_token'),
+        DEFAULT_PRICING['chars_per_input_token'],
+    )
+    estimated_input_tokens = int((input_chars / chars_per_token) + 0.999999)
+    per_request_output = max(0, int(max_output_tokens_per_request or 0))
+    estimated_output_tokens = per_request_output * request_count
+    estimated_cost_min = (estimated_input_tokens * input_rate) / 1_000_000
+    estimated_cost_max = (
+        estimated_cost_min + (estimated_output_tokens * output_rate) / 1_000_000
+    )
+    return {
+        **base,
+        'status': 'known',
+        'input_tokens': estimated_input_tokens,
+        'output_tokens_max': estimated_output_tokens,
+        'estimated_cost_min': round(estimated_cost_min, 6),
+        'estimated_cost_max': round(estimated_cost_max, 6),
     }
 
 

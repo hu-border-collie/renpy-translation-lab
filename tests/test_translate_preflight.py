@@ -65,13 +65,23 @@ def fake_context(
     plan=None,
     requests=None,
     coverage_report_value=None,
+    coverage_inventory=None,
+    plan_fingerprint="plan-fingerprint-1",
 ):
     plan = plan or reader.read_routing_plan({"model_routing": section})
     chunks = [SimpleNamespace(chunk_id="chunk-1"), SimpleNamespace(chunk_id="chunk-2")]
     if requests is None:
         requests = [
-            SimpleNamespace(expected_ids=["a", "b"]),
-            SimpleNamespace(expected_ids=["c"]),
+            SimpleNamespace(
+                expected_ids=["a", "b"],
+                system_instruction="system prompt",
+                user_prompt="user prompt",
+            ),
+            SimpleNamespace(
+                expected_ids=["c"],
+                system_instruction="system prompt",
+                user_prompt="user prompt",
+            ),
         ]
     identity = SimpleNamespace(
         to_dict=lambda: {
@@ -85,13 +95,18 @@ def fake_context(
     documents = [SimpleNamespace(file_rel_path="a.rpy")]
     return SimpleNamespace(
         plan_build=SimpleNamespace(
-            plan=SimpleNamespace(chunks=chunks, source_identity=identity),
+            plan=SimpleNamespace(
+                chunks=chunks,
+                source_identity=identity,
+                plan_fingerprint=plan_fingerprint,
+            ),
             requests=list(requests),
         ),
         routing_plan=plan,
         adapter_snapshot=SimpleNamespace(
             project=SimpleNamespace(source_documents=documents),
             report=coverage_report_value,
+            inventory=coverage_inventory,
         ),
         pending_jobs=[{"file_rel_path": "a.rpy", "tasks": [{}]}],
     )
@@ -145,6 +160,116 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(payload["chunk_policy"], {"max_items": 60, "max_chars": 18000})
         self.assertEqual(payload["source_snapshot"]["file_count"], 1)
         self.assertEqual(payload["credential_available"], True)
+
+    def test_payload_includes_cost_coverage_and_quality_summaries(self) -> None:
+        context = fake_context(
+            self.section,
+            coverage_report_value=coverage_report(
+                status="ready", counts={"translatable": 3}
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_cursor = str(Path(tmp) / "latest_manifest.txt")
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", missing_cursor):
+                payload = self._run_preflight(context)
+
+        self.assertEqual(payload["cost"]["status"], "known")
+        self.assertEqual(payload["cost"]["scope"], "current_plan")
+        self.assertGreater(payload["cost"]["input_tokens"], 0)
+        self.assertGreaterEqual(
+            payload["cost"]["estimated_cost_max"],
+            payload["cost"]["estimated_cost_min"],
+        )
+        self.assertEqual(payload["coverage"]["scope"], "current_scan")
+        self.assertEqual(payload["coverage"]["completion"], "confirmed")
+        self.assertEqual(
+            payload["coverage"]["classification_counts"]["translatable"], 3
+        )
+        self.assertEqual(payload["quality_summary"]["status"], "not_available")
+        self.assertEqual(payload["quality_summary"]["reason"], "latest_manifest_missing")
+
+    def test_cost_summary_is_unknown_for_unpriced_model(self) -> None:
+        section = routing_section()
+        section["profiles"]["gemini-main"]["model"] = "unpriced-model-xyz"
+        section["profiles"]["gemini-main"]["models"] = ["unpriced-model-xyz"]
+        context = fake_context(section)
+        args = self.parser.parse_args(["translate-preflight", "--strategy", "sync"])
+        with (
+            mock.patch.object(runtime, "MODEL_ROUTING_CONFIG", section),
+            mock.patch.object(
+                runtime,
+                "prepare_sync_translation_execution_context",
+                return_value=context,
+            ),
+            mock.patch(
+                "model_capability_probe.default_credential_loader",
+                return_value="key",
+            ),
+        ):
+            payload = batch.run_translate_preflight(args)
+
+        self.assertEqual(payload["cost"]["status"], "unknown")
+        self.assertEqual(payload["cost"]["reason"], "pricing_unavailable")
+        self.assertIsNone(payload["cost"]["estimated_cost_min"])
+
+    def test_quality_summary_matches_project_and_plan_fingerprint(self) -> None:
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "quality_findings.jsonl"
+            report_path.write_text(
+                json.dumps({"reason_code": "dup", "severity": "medium"}) + "\n"
+                + json.dumps({"reason_code": "missing", "severity": "high"}) + "\n",
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+            manifest_path = root / "manifest.json"
+            manifest = {
+                "mode": batch.MANIFEST_MODE_TRANSLATION,
+                "base_dir": runtime.BASE_DIR,
+                "tl_dir": runtime.TL_DIR,
+                "translation_plan": {"plan_fingerprint": "plan-fingerprint-1"},
+                "last_quality_findings_path": str(report_path),
+                "last_check_at": "2026-09-15T00:00:00",
+                "last_check_summary": {"quality_findings_sha256": digest},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            cursor = root / "latest_manifest.txt"
+            cursor.write_text(str(manifest_path), encoding="utf-8")
+            context = fake_context(self.section)
+
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
+                payload = self._run_preflight(context)
+
+            summary = payload["quality_summary"]
+            self.assertEqual(summary["status"], "available")
+            self.assertEqual(summary["finding_count"], 2)
+            self.assertEqual(summary["severity_counts"]["high"], 1)
+            self.assertEqual(summary["severity_counts"]["medium"], 1)
+            self.assertEqual(summary["matched_by"], ["project", "plan_fingerprint"])
+
+            manifest["translation_plan"]["plan_fingerprint"] = "other-plan"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
+                payload = self._run_preflight(context)
+            self.assertEqual(payload["quality_summary"]["status"], "stale")
+            self.assertEqual(payload["quality_summary"]["reason"], "plan_mismatch")
+
+            manifest["translation_plan"]["plan_fingerprint"] = "plan-fingerprint-1"
+            manifest["last_check_summary"]["quality_findings_sha256"] = "0" * 64
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
+                payload = self._run_preflight(context)
+            self.assertEqual(payload["quality_summary"]["status"], "stale")
+            self.assertEqual(
+                payload["quality_summary"]["reason"], "report_digest_mismatch"
+            )
+
+            cursor.unlink()
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
+                payload = self._run_preflight(context)
+            self.assertEqual(payload["quality_summary"]["status"], "not_available")
 
     def _run_preflight(self, context):
         args = self.parser.parse_args(["translate-preflight", "--strategy", "sync"])
