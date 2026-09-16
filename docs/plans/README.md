@@ -28,7 +28,7 @@
   最终命令别名验收边界。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)：
   #265 / #285 的调用链审计、adapter/coverage schema 与阶段接入边界。P1–P4 门禁实测已完成；当前实现说明见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。
-- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)（2026-09-12 刷新）：
+- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)（2026-09-13 版本/语法核对，09-16 补充外部工具路线）：
   #272 针对 Naninovel、Godot+Dialogic 2、Visual Novel Maker、Monogatari、
   KiriKiri/KAG、RPG Maker MV/MZ 六大引擎的 12 维本地化能力评估矩阵与第三 Adapter 路线决策。
 - [GitHub 视觉小说本地化工具源码研究](github_localization_projects_research.md)：
@@ -38,6 +38,9 @@
 - [多引擎本地化适配与候选引擎开源生态研究](multi_engine_localization_ecosystem_research.md)：
   针对 #265（引擎适配边界与版本化翻译资产）与 #272（第三引擎选型）对标 VNTextPatch、Translator++、
   Weblate/translate-toolkit 架构以及 Naninovel、Godot+Dialogic 2、RPG Maker 原生生态的深度研究。
+- [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)（2026-09-16）：
+  对照当前 issues 与主干代码评估外部 parser、`.trans` 文件交换及 MCP 自动化；记录身份/上下文、
+  公共写回合同缺口、两阶段导出和最小对照实验。尚未实现，不改变 #272 暂缓或 Naninovel 原生首选。
 - [#364 真实项目质量规则校准执行手册](issue-364-calibration-runbook.md)：
   A1 离线语料与 A3 校准报告工具的使用方法，以及已完成的 B 线执行步骤。
 - [真实项目机械质量校准基线](quality_calibration_baseline.md)：
