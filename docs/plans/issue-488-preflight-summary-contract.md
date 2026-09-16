@@ -56,14 +56,17 @@
   所选 strategy 的 `max_output_tokens`（sync 用 `legacy.MAX_OUTPUT_TOKENS`，batch 用 `BATCH_MAX_OUTPUT_TOKENS`）+
   `batch_cost_estimate.resolve_model_pricing(profile.model)` / `load_pricing_config`（`batch_cost_estimate.py:48/95`）。
 - **known**：模型价格与 token 估算均可用；`estimated_cost_min` 只计输入，`estimated_cost_max` 含输入 + 最大输出。
-- **unknown**：模型无价格、请求文本不可读或 token 估算缺失；此时不返回数字，**不得显示 0 或“免费”**。
+- **unknown**：模型无价格（`pricing_unavailable`）、只有单侧费率（`partial_pricing`）、请求文本不可读（`input_unreadable`）
+  或没有请求（`no_requests`）；此时不返回数字，**不得显示 0 或“免费”**。`reason` 为可选增量字段。
+- `pricing_source` 按“该模型是否命中 `batch.pricing.models` 配置项”判定；只配置 currency / chars_per_input_token
+  不影响该字段。
 - 只覆盖当前 plan 的初译请求，不含 final review / repair / embedding；不调用 provider、不执行 prepare。
 
 ### 3.2 `coverage`
 
 ```json
 "coverage": {
-  "status": "ready | attention | blocked | unknown",
+  "status": "ready | attention | block | unknown",
   "completion": "confirmed | unconfirmed | unknown",
   "coverage_digest": "…",
   "candidate_count": 123,
@@ -74,6 +77,7 @@
   "unsupported_count": 0,
   "reasons": ["…"],
   "gate": {"…": "…"},
+  "confirmed": false,
   "review_status": "…",
   "scope": "current_scan"
 }
@@ -82,8 +86,11 @@
 - **来源**：同一次预检扫描的 adapter snapshot（`context.adapter_snapshot`），复用
   `summarize_coverage_for_doctor`（`gemini_translate_batch.py:3529`）与 `evaluate_coverage_completion`；
   不重新扫描、不另造放行语义。
+- `status` 是 **live coverage 状态**（`report.coverage_status`，即 `ready / attention / block / unknown`）；
+  review / gate 状态只放在 `gate.status` / `review_status`，两者不得混用。`confirmed` 为可选增量字段。
 - 零待译分支继续复用同一 gate（`:22761`）：阻断判定与摘要来自同一份证据。
-- **unknown**：扫描证据缺失时 `status=unknown`、`completion=unconfirmed`；不得显示“覆盖完成”。
+- **unknown**：扫描证据缺失时 `status=unknown`、`completion=unknown`（不是 `unconfirmed`，否则会把
+  “证据缺失”误升级为 `COVERAGE_UNCONFIRMED` error）；不得显示“覆盖完成”。
 - `scope` 固定 `current_scan`，表示摘要与本次预检扫描同源；跨项目切换后必须重算，不得缓存复用。
 
 ### 3.3 `quality_summary`
@@ -98,19 +105,24 @@
   "severity_counts": {"info": 0, "low": 0, "medium": 0, "high": 0},
   "reason_counts": {"…": 0},
   "generated_at": "…",
-  "matched_by": ["project", "plan_fingerprint"]
+  "matched_by": ["project", "plan_fingerprint"],
+  "reason": "…"
 }
 ```
 
-- **来源**：已有质量报告的 manifest 引用（`last_quality_findings_path` / `last_check_report_path`）+
+- **来源（S1 范围）**：最新 translated manifest 的质量报告（`last_quality_findings_path`）+
   `quality_report_export.load_quality_findings`（`quality_report_export.py:102`）。
+  **S1 只覆盖 Batch 路径**：`check_results` 对 `execution=sync` 不更新全局 latest manifest，
+  durable Sync 的质量报告在 run store 中；因此 `strategy=sync` 时返回
+  `not_available` / `quality_source_not_supported_for_strategy`，不把 Batch 报告误当 Sync 结果。
+  Sync 来源（如 `find_latest_run` + bound preview manifest）列入后续切片。
 - **available 必须同时满足**：
   1. manifest `mode == translation`；
-  2. manifest `base_dir` / `tl_dir` 与当前项目一致；
+  2. manifest `base_dir` / `tl_dir` 与当前项目一致（使用仓库 canonical path 规则）；
   3. manifest `translation_plan.plan_fingerprint` == 当前 plan fingerprint（无 `translation_plan` 的旧 manifest 不匹配）；
-  4. 报告文件存在；若 manifest 记录了 sha256，则实际内容需匹配。
+  4. 报告文件存在；若 `last_check_summary.quality_findings_sha256` 存在，则实际内容需匹配。
 - **stale**：找到 manifest 但任一匹配条件不满足；**not_available**：没有可用 manifest / 报告；
-  **unknown**：读取失败或报告格式不可解析。
+  **unknown**：读取失败或报告格式不可解析。`reason` 与 `matched_by` 为可选增量字段。
 - 不启动模型审校、不把 warning 当作“质量通过”；初译前无报告时绝不显示“质量通过”。
 - 仅按文件时间或 latest 指针不能认定匹配；项目、任务、源/结果或 profile 切换后不得沿用旧摘要。
 
@@ -120,7 +132,7 @@
 | --- | --- | --- | --- |
 | `cost` | 当前 plan + 当前 pricing config | 每次预检重新计算 | plan / profile / pricing config 变化即重算 |
 | `coverage` | 当前只读扫描 | `scope=current_scan`，与零待译门禁同源 | 项目 / TL / include 范围变化即重算 |
-| `quality_summary` | 已有 manifest 引用的报告 | 项目身份 + plan fingerprint + 报告存在（+ sha256） | 任一匹配条件不满足 → `stale` |
+| `quality_summary` | 已有 manifest 引用的报告（S1 仅 Batch latest） | 项目身份 + plan fingerprint + 报告存在（+ sha256） | 任一匹配条件不满足 → `stale`；strategy=sync → `not_available` |
 
 三条摘要都不跨请求缓存；payload 只描述“本次预检当前看到的状态”。
 
@@ -142,7 +154,9 @@
 ## 7. 实施切片
 
 1. **S1 核心**：新增可复用 summary 函数（cost / coverage / quality）并接入 preflight payload；
-   单测覆盖 known / unknown、available / stale / not_available、项目与 plan 切换。
+   单测覆盖已知 / 未知 / stale / not_available、项目与 plan 切换、mode/report/digest mismatch。
+   S1 的 quality 来源仅 Batch latest manifest；durable Sync 来源（`find_latest_run` + bound preview manifest）
+   列为后续切片 S1.5。
 2. **S2 界面**：CLI 文本 + GUI facts + `user_copy`，同步 argparse 帮助与 GUI 测试。
 3. **S3 文档**：更新本文件的实现状态与现行文档（`docs/quickstart_agent.md` / `docs/gui_workbench.md` 相关段落）。
 

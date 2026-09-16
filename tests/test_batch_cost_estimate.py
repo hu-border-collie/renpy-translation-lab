@@ -104,10 +104,23 @@ class BatchCostEstimateTests(unittest.TestCase):
             request_texts=['abcd' * 25],
             max_output_tokens_per_request=1000,
             pricing_config=pricing,
-            translator_config={'batch': {'pricing': {'models': {}}}},
+            translator_config={
+                'batch': {
+                    'pricing': {
+                        'models': {
+                            'gemini-test': {
+                                'input_per_million': 1.0,
+                                'output_per_million': 2.0,
+                            }
+                        }
+                    }
+                }
+            },
+            strategy='sync',
         )
 
         self.assertEqual(estimate['status'], 'known')
+        self.assertEqual(estimate['strategy'], 'sync')
         self.assertEqual(estimate['input_tokens'], 25)
         self.assertEqual(estimate['output_tokens_max'], 1000)
         self.assertAlmostEqual(
@@ -120,6 +133,56 @@ class BatchCostEstimateTests(unittest.TestCase):
         )
         self.assertEqual(estimate['pricing_source'], 'translator_config')
         self.assertEqual(estimate['scope'], 'current_plan')
+
+    def test_estimate_requests_cost_source_falls_back_to_defaults(self):
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'gemini-test',
+            request_texts=['hello'],
+            max_output_tokens_per_request=100,
+            pricing_config={
+                'models': {
+                    'gemini-test': {
+                        'input_per_million': 1.0,
+                        'output_per_million': 2.0,
+                    }
+                }
+            },
+            translator_config={
+                'batch': {'pricing': {'currency': 'USD', 'chars_per_input_token': 4}}
+            },
+        )
+
+        self.assertEqual(estimate['status'], 'known')
+        self.assertEqual(estimate['pricing_source'], 'defaults')
+
+    def test_estimate_requests_cost_unknown_without_requests(self):
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'gemini-test',
+            request_texts=[],
+            max_output_tokens_per_request=100,
+            pricing_config={'models': {}},
+        )
+
+        self.assertEqual(estimate['status'], 'unknown')
+        self.assertEqual(estimate['reason'], 'no_requests')
+
+    def test_estimate_requests_cost_unknown_with_partial_pricing(self):
+        estimate = batch_cost_estimate.estimate_requests_cost(
+            'gemini-test',
+            request_texts=['hello'],
+            max_output_tokens_per_request=100,
+            pricing_config={
+                'models': {
+                    'gemini-test': {
+                        'output_per_million': 2.0,
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(estimate['status'], 'unknown')
+        self.assertEqual(estimate['reason'], 'partial_pricing')
+        self.assertIsNone(estimate['estimated_cost_min'])
 
     def test_estimate_requests_cost_unknown_when_unpriced(self):
         estimate = batch_cost_estimate.estimate_requests_cost(

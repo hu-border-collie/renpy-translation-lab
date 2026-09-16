@@ -22607,13 +22607,16 @@ def _empty_quality_summary(status, reason='', *, manifest_path=''):
 
 
 def _same_project_path(left, right):
-    """Compare project paths without depending on separator or case."""
+    """Compare project paths with the repository's canonical path rules."""
 
-    def normalize(value):
-        return str(value or '').strip().replace('\\', '/').rstrip('/').lower()
-
-    normalized_left = normalize(left)
-    return bool(normalized_left) and normalized_left == normalize(right)
+    left_text = str(left or '').strip()
+    right_text = str(right or '').strip()
+    if not left_text or not right_text:
+        return False
+    try:
+        return _normalized_abs_path(left_text) == _normalized_abs_path(right_text)
+    except (OSError, ValueError):
+        return False
 
 
 def summarize_preflight_coverage(adapter_snapshot):
@@ -22645,7 +22648,7 @@ def summarize_preflight_coverage(adapter_snapshot):
     assessment = evaluate_coverage_completion(report)
     counts = dict(assessment.classification_counts or {})
     summary = {
-        'status': 'unknown',
+        'status': str(assessment.coverage_status or 'unknown'),
         'confirmed': False,
         'completion': assessment.completion,
         'coverage_digest': assessment.coverage_digest,
@@ -22672,27 +22675,35 @@ def summarize_preflight_coverage(adapter_snapshot):
         review_error=review_error,
     )
     gate_payload = gate.to_dict()
-    summary['status'] = gate.status
     summary['confirmed'] = bool(gate.confirmed)
     summary['gate'] = gate_payload
     summary['review_status'] = str(gate_payload.get('review_status') or 'unknown')
     return summary
 
 
-def summarize_preflight_quality(*, plan_fingerprint, base_dir, tl_dir):
+def summarize_preflight_quality(
+    *, plan_fingerprint, base_dir, tl_dir, strategy='gemini_batch'
+):
     """Summarize an existing, identity-matched quality report (#488 S1).
 
+    S1 only reads the latest translated manifest (Batch path). Durable Sync
+    reports live in the run store and need a separate source; for ``sync`` the
+    summary is honestly ``not_available`` instead of matching a Batch report.
     The report is only ``available`` when it belongs to the same project and
     the same translation plan fingerprint; a latest pointer or file timestamp
     alone is never treated as a match.
     """
 
+    if str(strategy or '') != model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        return _empty_quality_summary(
+            'not_available', 'quality_source_not_supported_for_strategy'
+        )
     cursor = _read_latest_manifest_cursor_unlocked()
     if not cursor or not os.path.isfile(cursor):
         return _empty_quality_summary('not_available', 'latest_manifest_missing')
     try:
         manifest = load_manifest(cursor)
-    except Exception:
+    except (Exception, SystemExit):
         return _empty_quality_summary(
             'unknown', 'manifest_unreadable', manifest_path=cursor
         )
@@ -22857,11 +22868,13 @@ def _run_translate_preflight(args):
         max_output_tokens_per_request=preflight_max_output_tokens,
         pricing_config=batch_cost_estimate.load_pricing_config(config),
         translator_config=config,
+        strategy=strategy,
     )
     quality_summary = summarize_preflight_quality(
         plan_fingerprint=str(getattr(plan, 'plan_fingerprint', '') or ''),
         base_dir=str(getattr(legacy, 'BASE_DIR', '') or ''),
         tl_dir=str(getattr(legacy, 'TL_DIR', '') or ''),
+        strategy=strategy,
     )
     if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
         batch_flags = resolve_batch_context_flags(config, game_root=legacy.BASE_DIR)

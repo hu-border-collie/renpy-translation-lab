@@ -112,23 +112,30 @@ def resolve_model_pricing(model_name, pricing_config):
     return best_rates
 
 
-def pricing_source(translator_config=None) -> str:
-    """Return where the effective pricing table came from (#488 S1).
+def pricing_source(model_name='', translator_config=None) -> str:
+    """Return where one model's effective rates came from (#488 S1).
 
-    ``translator_config`` means the config carries a non-empty
-    ``batch.pricing`` section; otherwise the shipped defaults are used (the
-    loader merges configured rates over defaults either way).
+    ``translator_config`` means the model matched a non-empty
+    ``batch.pricing.models`` entry; otherwise the shipped defaults are used
+    (the loader merges configured rates over defaults for configured models).
     """
 
-    if isinstance(translator_config, dict):
-        batch = translator_config.get('batch')
-        if (
-            isinstance(batch, dict)
-            and isinstance(batch.get('pricing'), dict)
-            and batch['pricing']
-        ):
-            return 'translator_config'
-    return 'defaults'
+    if not isinstance(translator_config, dict):
+        return 'defaults'
+    batch = translator_config.get('batch')
+    if not isinstance(batch, dict):
+        return 'defaults'
+    configured = batch.get('pricing')
+    if not isinstance(configured, dict):
+        return 'defaults'
+    configured_models = configured.get('models')
+    if not isinstance(configured_models, dict) or not configured_models:
+        return 'defaults'
+    return (
+        'translator_config'
+        if resolve_model_pricing(model_name, {'models': configured_models})
+        else 'defaults'
+    )
 
 
 def _coerce_nonnegative_int(value):
@@ -286,6 +293,7 @@ def estimate_requests_cost(
     max_output_tokens_per_request,
     pricing_config,
     translator_config=None,
+    strategy='',
 ) -> dict:
     """Estimate one plan's cost without provider calls (#488 S1).
 
@@ -299,13 +307,14 @@ def estimate_requests_cost(
     currency = str((pricing_config or {}).get('currency') or 'USD')
     base = {
         'model': str(model_name or '').strip(),
+        'strategy': str(strategy or '').strip(),
         'currency': currency,
         'input_tokens': None,
         'output_tokens_max': None,
         'estimated_cost_min': None,
         'estimated_cost_max': None,
         'pricing_version': (pricing_config or {}).get('version'),
-        'pricing_source': pricing_source(translator_config),
+        'pricing_source': pricing_source(model_name, translator_config),
         'scope': 'current_plan',
         'excluded': ['provider 排队与重试', '未计入的实际输出'],
     }
@@ -319,6 +328,9 @@ def estimate_requests_cost(
     output_rate = _coerce_positive_float(rates.get('output_per_million'), 0.0)
     if not input_rate and not output_rate:
         return {**base, 'status': 'unknown', 'reason': 'pricing_unavailable'}
+    if not input_rate or not output_rate:
+        # A missing side must not be rendered as a real zero cost.
+        return {**base, 'status': 'unknown', 'reason': 'partial_pricing'}
 
     chars_per_token = _coerce_positive_float(
         (pricing_config or {}).get('chars_per_input_token'),

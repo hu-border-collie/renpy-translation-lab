@@ -174,6 +174,7 @@ class PreflightCommandTests(unittest.TestCase):
                 payload = self._run_preflight(context)
 
         self.assertEqual(payload["cost"]["status"], "known")
+        self.assertEqual(payload["cost"]["strategy"], "sync")
         self.assertEqual(payload["cost"]["scope"], "current_plan")
         self.assertGreater(payload["cost"]["input_tokens"], 0)
         self.assertGreaterEqual(
@@ -186,7 +187,45 @@ class PreflightCommandTests(unittest.TestCase):
             payload["coverage"]["classification_counts"]["translatable"], 3
         )
         self.assertEqual(payload["quality_summary"]["status"], "not_available")
-        self.assertEqual(payload["quality_summary"]["reason"], "latest_manifest_missing")
+        self.assertEqual(
+            payload["quality_summary"]["reason"],
+            "quality_source_not_supported_for_strategy",
+        )
+
+    def test_coverage_summary_keeps_live_status_and_gate_separate(self) -> None:
+        context = fake_context(
+            self.section,
+            coverage_report_value=coverage_report(
+                status="ready", counts={"translatable": 3}
+            ),
+            coverage_inventory=object(),
+        )
+        gate = SimpleNamespace(
+            status="review_missing",
+            confirmed=False,
+            coverage_status="ready",
+            review_status="missing",
+            to_dict=lambda: {
+                "status": "review_missing",
+                "confirmed": False,
+                "coverage_status": "ready",
+                "review_status": "missing",
+            },
+        )
+        with mock.patch.object(batch, "evaluate_coverage_gate", return_value=gate):
+            payload = self._run_preflight(context)
+
+        self.assertEqual(payload["coverage"]["status"], "ready")
+        self.assertFalse(payload["coverage"]["confirmed"])
+        self.assertEqual(payload["coverage"]["gate"]["status"], "review_missing")
+        self.assertEqual(payload["coverage"]["review_status"], "missing")
+
+        blocked_context = fake_context(
+            self.section,
+            coverage_report_value=coverage_report(status="block", counts={}),
+        )
+        blocked_payload = self._run_preflight(blocked_context)
+        self.assertEqual(blocked_payload["coverage"]["status"], "block")
 
     def test_cost_summary_is_unknown_for_unpriced_model(self) -> None:
         section = routing_section()
@@ -209,11 +248,20 @@ class PreflightCommandTests(unittest.TestCase):
             payload = batch.run_translate_preflight(args)
 
         self.assertEqual(payload["cost"]["status"], "unknown")
+        self.assertEqual(payload["cost"]["strategy"], "sync")
         self.assertEqual(payload["cost"]["reason"], "pricing_unavailable")
         self.assertIsNone(payload["cost"]["estimated_cost_min"])
 
     def test_quality_summary_matches_project_and_plan_fingerprint(self) -> None:
         import hashlib
+
+        def summarize(strategy="gemini_batch"):
+            return batch.summarize_preflight_quality(
+                plan_fingerprint="plan-fingerprint-1",
+                base_dir=runtime.BASE_DIR,
+                tl_dir=runtime.TL_DIR,
+                strategy=strategy,
+            )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -237,39 +285,55 @@ class PreflightCommandTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             cursor = root / "latest_manifest.txt"
             cursor.write_text(str(manifest_path), encoding="utf-8")
-            context = fake_context(self.section)
 
             with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
-                payload = self._run_preflight(context)
+                summary = summarize()
+                self.assertEqual(summary["status"], "available")
+                self.assertEqual(summary["finding_count"], 2)
+                self.assertEqual(summary["severity_counts"]["high"], 1)
+                self.assertEqual(summary["severity_counts"]["medium"], 1)
+                self.assertEqual(
+                    summary["matched_by"], ["project", "plan_fingerprint"]
+                )
 
-            summary = payload["quality_summary"]
-            self.assertEqual(summary["status"], "available")
-            self.assertEqual(summary["finding_count"], 2)
-            self.assertEqual(summary["severity_counts"]["high"], 1)
-            self.assertEqual(summary["severity_counts"]["medium"], 1)
-            self.assertEqual(summary["matched_by"], ["project", "plan_fingerprint"])
+                sync_summary = summarize(strategy="sync")
+                self.assertEqual(sync_summary["status"], "not_available")
+                self.assertEqual(
+                    sync_summary["reason"],
+                    "quality_source_not_supported_for_strategy",
+                )
 
-            manifest["translation_plan"]["plan_fingerprint"] = "other-plan"
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
-                payload = self._run_preflight(context)
-            self.assertEqual(payload["quality_summary"]["status"], "stale")
-            self.assertEqual(payload["quality_summary"]["reason"], "plan_mismatch")
+                manifest["translation_plan"]["plan_fingerprint"] = "other-plan"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assertEqual(summarize()["reason"], "plan_mismatch")
 
-            manifest["translation_plan"]["plan_fingerprint"] = "plan-fingerprint-1"
-            manifest["last_check_summary"]["quality_findings_sha256"] = "0" * 64
-            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
-                payload = self._run_preflight(context)
-            self.assertEqual(payload["quality_summary"]["status"], "stale")
-            self.assertEqual(
-                payload["quality_summary"]["reason"], "report_digest_mismatch"
-            )
+                manifest["translation_plan"]["plan_fingerprint"] = "plan-fingerprint-1"
+                manifest["base_dir"] = "C:/other/project"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assertEqual(summarize()["reason"], "project_mismatch")
 
-            cursor.unlink()
-            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
-                payload = self._run_preflight(context)
-            self.assertEqual(payload["quality_summary"]["status"], "not_available")
+                manifest["base_dir"] = runtime.BASE_DIR
+                manifest["mode"] = "revision"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assertEqual(summarize()["reason"], "mode_mismatch")
+
+                manifest["mode"] = batch.MANIFEST_MODE_TRANSLATION
+                manifest["last_quality_findings_path"] = str(root / "missing.jsonl")
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assertEqual(summarize()["reason"], "report_missing")
+
+                manifest["last_quality_findings_path"] = str(report_path)
+                manifest["last_check_summary"]["quality_findings_sha256"] = "0" * 64
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                self.assertEqual(summarize()["reason"], "report_digest_mismatch")
+
+                manifest_path.write_text("{not json", encoding="utf-8")
+                self.assertEqual(summarize()["status"], "unknown")
+                self.assertEqual(summarize()["reason"], "manifest_unreadable")
+
+                cursor.unlink()
+                self.assertEqual(summarize()["status"], "not_available")
+                self.assertEqual(summarize()["reason"], "latest_manifest_missing")
 
     def _run_preflight(self, context):
         args = self.parser.parse_args(["translate-preflight", "--strategy", "sync"])
