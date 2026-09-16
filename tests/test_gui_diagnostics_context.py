@@ -187,6 +187,25 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("写回翻译（仅可写回）", labels)
         self.assertNotIn("导出翻译文件（CLI，仅导出）", labels)
 
+    def test_command_reference_includes_translate_preflight(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=r"C:\jobs\manifest.json",
+            manifest={"mode": "translation"},
+        )
+        by_label = {command.label: command.command for command in commands}
+        self.assertIn("翻译预检", by_label)
+        self.assertIn("translate-preflight", by_label["翻译预检"])
+        self.assertIn("--strategy", by_label["翻译预检"])
+
+        idle = idle_diagnostics_context(
+            batch_script_path="gemini_translate_batch.py"
+        )
+        idle_labels = {command.label: command.command for command in idle.commands}
+        self.assertIn("翻译预检", idle_labels)
+        self.assertIn("translate-preflight", idle_labels["翻译预检"])
+
     def test_command_reference_includes_durable_sync_lifecycle(self):
         commands = build_cli_commands(
             python_exe='python',

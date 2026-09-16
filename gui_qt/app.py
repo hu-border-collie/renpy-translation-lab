@@ -87,6 +87,7 @@ from PySide6.QtWidgets import (
 from project_version import __version__
 import cli_contract
 import model_profile
+import preflight_display
 import model_routing_config
 import model_usage_ledger
 import revision_selection
@@ -11391,6 +11392,7 @@ class MainWindow(QMainWindow):
                 )
             )
         strategy = str(payload.get("strategy") or "")
+        summary = preflight_display.format_preflight_summary_fields(payload)
         return copy["body"].format(
             model=profile.get("model") or "(unknown)",
             profile=profile.get("id") or "",
@@ -11402,6 +11404,9 @@ class MainWindow(QMainWindow):
             max_items=policy.get("max_items", 0),
             max_chars=policy.get("max_chars", 0),
             contexts="；".join(context_bits),
+            cost=summary["cost"],
+            coverage=summary["coverage"],
+            quality=summary["quality"],
             risks="\n".join(risk_lines) or copy["no_risks"],
         )
 

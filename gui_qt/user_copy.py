@@ -1204,15 +1204,21 @@ TRANSLATION_TARGET_COPY = {
 
 # Pre-start preflight dialog copy (#348 P3 increment A). Counts come from the
 # shared TranslationPlan scan; no provider/embedding call is made.
+# Cost / coverage / quality lines are filled by preflight_display so CLI and
+# GUI share one unknown / stale renderer.
 TRANSLATION_PREFLIGHT_COPY = {
     "title": "开始前确认",
     "blocked_title": "预检未通过",
+    "command_label": "翻译预检",
     "body": (
         "模型：{model}（{profile}）\n"
         "执行方式：{strategy}\n"
         "项目：{root}\n"
         "待处理：{files} 个文件 / {items} 个条目 / {chunks} 个 chunk（{max_items} 条 / {max_chars} 字符）\n"
         "上下文来源：{contexts}\n"
+        "{cost}\n"
+        "{coverage}\n"
+        "{quality}\n"
         "风险与提示：\n{risks}"
     ),
     "no_risks": "无",

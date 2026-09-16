@@ -5,6 +5,7 @@ import doctor_recommendations as doctor_rec
 from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,
     QUALITY_REPORT_EXPORT_LABEL,
+    TRANSLATION_PREFLIGHT_COPY,
     LITELLM_CACHE_COPY,
     MODEL_ROUTING_RUNTIME_COPY,
     REVISION_CORPUS_COPY,
@@ -25,6 +26,13 @@ from gui_qt.user_copy import (
 
 
 class GuiUserCopyTests(unittest.TestCase):
+    def test_preflight_copy_includes_summary_placeholders(self):
+        body = TRANSLATION_PREFLIGHT_COPY["body"]
+        self.assertIn("{cost}", body)
+        self.assertIn("{coverage}", body)
+        self.assertIn("{quality}", body)
+        self.assertEqual(TRANSLATION_PREFLIGHT_COPY["command_label"], "翻译预检")
+
     def test_revision_proposal_copy_covers_staged_selection_actions(self):
         self.assertIn("明确勾选", REVISION_PROPOSAL_COPY["selection_hint"])
         self.assertEqual(REVISION_PROPOSAL_COPY["selection_select_all"], "全选筛选中有效")

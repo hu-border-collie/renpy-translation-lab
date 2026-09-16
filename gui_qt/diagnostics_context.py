@@ -25,6 +25,7 @@ from .user_copy import (
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
+    TRANSLATION_PREFLIGHT_COPY,
     USAGE_LEDGER_COPY,
     VERSION_ASSET_COPY,
     format_notice_fact,
@@ -237,6 +238,21 @@ def model_config_migration_commands(*, python_exe: str, script_path: str) -> lis
     ]
 
 
+def _translate_preflight_command(
+    python_exe: str, batch_script_path: str
+) -> DiagnosticsCommand | None:
+    if not batch_script_path:
+        return None
+    return DiagnosticsCommand(
+        label=TRANSLATION_PREFLIGHT_COPY["command_label"],
+        command=format_cli_command(
+            python_exe,
+            batch_script_path,
+            ["translate-preflight", "--strategy", "<STRATEGY>"],
+        ),
+    )
+
+
 def build_cli_commands(
     *,
     python_exe: str,
@@ -246,7 +262,16 @@ def build_cli_commands(
     submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
     if not manifest_path:
-        return model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path)
+        commands = []
+        preflight = _translate_preflight_command(python_exe, batch_script_path)
+        if preflight is not None:
+            commands.append(preflight)
+        commands.extend(
+            model_config_migration_commands(
+                python_exe=python_exe, script_path=batch_script_path
+            )
+        )
+        return commands
 
     commands: list[DiagnosticsCommand] = [
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
@@ -254,6 +279,12 @@ def build_cli_commands(
             label="项目检查",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
         ),
+    ]
+    preflight = _translate_preflight_command(python_exe, batch_script_path)
+    if preflight is not None:
+        commands.append(preflight)
+    commands.extend(
+        [
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['start'],
             command=format_cli_command(
@@ -458,7 +489,8 @@ def build_cli_commands(
                 ["final-review-ingest-results", manifest_path],
             ),
         ),
-    ]
+        ]
+    )
     # Keep usage commands ahead of mode-specific early returns so revision /
     # keyword / retry packages expose the same import/report actions.
     commands.extend(
@@ -1158,14 +1190,22 @@ def idle_diagnostics_context(
     batch_script_path: str = "",
     python_exe: str = "python",
 ) -> DiagnosticsContext:
+    commands = list(_usage_report_command(batch_script_path, python_exe))
+    preflight = _translate_preflight_command(python_exe, batch_script_path)
+    if preflight is not None:
+        commands.append(preflight)
+    commands.extend(
+        model_config_migration_commands(
+            python_exe=python_exe, script_path=batch_script_path
+        )
+    )
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
         message=MODEL_CONFIG_MIGRATION_COPY["idle_hint"],
         facts=_project_usage_facts(game_root),
         paths=[],
-        commands=[*_usage_report_command(batch_script_path, python_exe),
-                  *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path)],
+        commands=commands,
         manifest_json_preview="",
     )
 
@@ -1183,6 +1223,9 @@ def sync_diagnostics_context(
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
     commands.extend(_usage_report_command(batch_script_path, python_exe))
+    preflight = _translate_preflight_command(python_exe, batch_script_path)
+    if preflight is not None:
+        commands.append(preflight)
     commands.extend(model_config_migration_commands(
         python_exe=python_exe, script_path=batch_script_path or sync_script_path,
     ))

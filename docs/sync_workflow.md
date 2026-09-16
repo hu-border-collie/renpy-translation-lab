@@ -132,7 +132,7 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
-启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源与风险；GUI 的「开始」会先跑该命令并展示确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。
+启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源、成本 / coverage / 已有质量摘要与风险。文本模式在 counts 后打印这三行摘要；`--output json` 仍只输出 envelope。未知价格不显示为 0，stale / 缺失质量报告不显示为通过。当前质量摘要只匹配 Batch latest manifest；durable Sync 的质量来源尚未接入。GUI 的「开始」会先跑该命令并展示同一 payload 的确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。
 
 GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程并自动用只读 `sync-status --latest` 定位该运行。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
 
