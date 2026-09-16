@@ -4,6 +4,7 @@
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
 > **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，#265 已于 2026-09-13 关闭。后续推荐候选**可以**创建独立实现 Issue，但已于 2026-09-14 决定暂缓立项（见 §6.1 状态注）；真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
 > **核对日期**：2026-09-13（官方版本与语法）。P6 收口与立项暂缓状态更新于 2026-09-14（#272）；官方版本与语法以各引擎现行文档为准，刷新本表时同步更新日期。
+> **外部工具补充**：2026-09-16 增加 [Translator++ 接入评估](translatorpp_integration_assessment.md)及 §6.3 / §7.5；未全量刷新六引擎官方资料，不改变原生候选评级或暂缓状态。
 
 ---
 
@@ -25,6 +26,7 @@
 - **拒绝泛化承诺**：绝不承诺“支持所有视觉小说引擎”或“支持任意 Godot / RPG Maker 游戏”；必须明确限定受支持的具体引擎版本、官方本地化插件及清晰的排除项。
 - **双轨推进与优先级调整**：Naninovel 维持作为 Unity 体系现代纯文本本地化的**首选推荐第三引擎**。同时，鉴于本地已有长篇纯 ADV 游戏作为人工验证样本，将 **RPG Maker MV/MZ 纯叙事模式（Narrative/ADV Mode）** 从原评级 C- 提权至 **B+（实战原型先行候选）**。B+ 是待验证的研究评级，不代表仓库 fixture 或 Adapter 已就绪；可再分发的合成夹具仍须建立（见 §7.4）。两者拟形成互补验证：Naninovel 验证离线纯文本 Catalog 机制，RPG Maker 叙事模式验证复杂 JSON 事件树的节点精确替换与字体回退防御。
 - **对齐公共安全层**：任何后续 Adapter 必须无条件复用 `translation_core.TranslationUnit`、`check -> apply` 安全合约、声明式 `WritebackPlan` 与版本化快照/复用审计机制，严禁开辟直接改写源码或绕过门禁的私有旁路。
+- **外部格式与原生能力分开**：Translator++ `.trans` bridge 是待实验的提取/导出协作路线，不是引擎官方 `native_catalog`，也不改变 D1–D12 的原生能力判断；仅完成制品导入不能新增“已支持引擎”。
 
 ---
 
@@ -374,6 +376,8 @@ flowchart TD
 - **原子写回契约（待实现）**：公共合同扩展完成后，才能验证地图 JSON 节点替换、无关字段保留、源快照复核与事务写回；禁止 Adapter 私自重写整张地图绕过公共消费者。
 - **字符集渲染防御**：提供可选的 `gamefont.css` 自动覆写与中文字体挂载，解决目标语言方块乱码。
 
+上述缺口针对本项目**直接写回 RPG Maker 源地图**。如果先走 Translator++ `.trans` bridge，可暂由其 parser 负责最终游戏导出，但 `.trans` 自身也是数组网格，仍须扩展公共制品写回合同；上下文映射、控制码、staging 与输出游戏验收都不能省略。详见[接入评估 §4](translatorpp_integration_assessment.md#4-接入设计先文件交换再自动化)。
+
 ---
 
 ## 6. 第三 Adapter 推荐决策与后续路线
@@ -394,6 +398,14 @@ flowchart TD
    - 本地长篇 ADV 样本可补充人工检查；公开回归必须使用自行构造并注明许可证的最小 fixture，不能复制未授权游戏地图或文本；
    - 须固定引擎版本和插件组合；JSON 布局及控制码仍需回归验证，不能假设永无变更；
    - 控制码需按「官方 / 已登记扩展 / 未知」分层验证；仅在扩展来源已记录时把 `\pop[n]` 纳入保护—还原用例，并验证长篇剧情树与单体大 JSON 的声明式安全写回。
+
+### 6.3 可选外部格式路线：Translator++
+
+2026-09-16 的[专项评估](translatorpp_integration_assessment.md)建议：保留 Naninovel 原生首选，另以**单版本 RPG Maker 叙事 fixture**作为外部 bridge 的首个实验候选。Translator++ 可提供部分引擎提取与导出，本项目继续管理结果身份、快照、完整性、冲突/stale、结构检查及安全写回。
+
+先验证 `.trans` 文件往返，后考虑已由官方公告的 MCP 自动化；当前没有 bridge 实现或真实往返结果。上游 Godot Parser / Unity binary translator 的 0.1 公告不能替代 Dialogic / Naninovel 专项验收；KAG 的方言风险继续后置。外部后端是否值得接入，应比较“Agent + Translator++”与“再加入本项目工具包”的实际收益，而非仅统计其支持引擎数量。
+
+该路线不修改 §6.1 的暂缓条件，不自动创建第三 Adapter 实现单，也不扩大 Agent 工具包提案 PR #499 的首轮 Ren'Py 实验范围。
 
 ---
 
@@ -436,6 +448,16 @@ flowchart TD
   - 增加数组索引越界、节点类型变化、字符串键与整数索引混淆、重复或冲突目标、非法目标根的拒绝用例，并确认未修改字段保留。
   - 在仓库 / CI 中验证提取、定位、无损写回和失败门禁后，才可将 D12 标记为就绪。本地游戏仅用于补充人工烟测，单独记录引擎版本与验证结果，不提交游戏资产。
 
+### 7.5 Translator++ bridge 的额外前置条件
+
+如选择外部格式路线，除 §7.4 的授权与叙事范围外，还须满足[专项评估 §5](translatorpp_integration_assessment.md#5-最小实验与验收)：
+
+- 固定主程序、源引擎、parser/add-on、工程 schema 与导出配置；公共下载和较新 Beta 的能力不能混用。
+- 冻结 `.trans` 与实际导出所需源文件/staging；确认有效译文列、空单元格、同文多 context 及上下文专用译文的往返语义。
+- 原生事件坐标与 `.trans` 行下标均只作快照内 locator；bridge 的映射必须序列化并绑定摘要，漂移不能按旧下标写回。
+- 分别验收“受控生成新 `.trans`”和“外部导出新游戏副本”；失败收据、恢复与重试条件各自明确，不宣称现有事务覆盖两个应用。
+- 独立清单验证游戏覆盖与可玩性；`.trans` 导入条目全数处理不等于全游戏 coverage。未有版本/fixture/往返证据前，不更新 D12 或生产支持状态。
+
 ---
 
 ## 8. 参考资料与官方文档
@@ -455,4 +477,5 @@ flowchart TD
 - **TyranoScript Translation Reference (#265)**: <https://tyranoscript.com/usage/advance/translate>
 - **RPG Maker MZ Official Help**: <https://rpgmakerofficial.com/product/MZ_help-en/index.html>
 - **多引擎本地化适配与候选引擎开源生态研究**: [multi_engine_localization_ecosystem_research.md](multi_engine_localization_ecosystem_research.md)
+- **Translator++ 多引擎接入评估**: [translatorpp_integration_assessment.md](translatorpp_integration_assessment.md)
 - **本仓库 Adapter 合同**: [engine_adapter.md](../engine_adapter.md)

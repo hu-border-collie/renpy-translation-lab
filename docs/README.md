@@ -74,6 +74,7 @@
 - [#347 → #348 耐久 Sync 产品化交接](plans/issue-347-to-348-handoff.md)：冻结服务/snapshot/CLI/制品接缝与验收边界。
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md) · [多引擎生态与工具源码研究](plans/multi_engine_localization_ecosystem_research.md) · [GitHub 本地化项目研究](plans/github_localization_projects_research.md)
+- [Translator++ 多引擎接入评估](plans/translatorpp_integration_assessment.md)：外部 parser / `.trans` / MCP 能力、当前 issue 影响、公共合同缺口与最小实验；尚未实现 bridge，不改变 #272 暂缓状态。
 - [#364 真实项目质量规则校准执行手册](plans/issue-364-calibration-runbook.md) · [校准基线](plans/quality_calibration_baseline.md)
 - [#426 Ren'Py coverage block 归因报告](plans/renpy_coverage_block_attribution.md)：只读脚本与原创 fixture 的 unknown / unsupported / parse_error 归因、漏扫检查和后续拆单草案；#460–#464 五条 follow-up 与跨行 writeback（#471）已全部实现；真实大型项目频率归因见 #470。
 

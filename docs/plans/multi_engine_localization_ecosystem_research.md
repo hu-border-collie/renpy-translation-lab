@@ -1,19 +1,20 @@
 # 多引擎本地化适配与候选引擎开源生态研究
 
 > **状态**：公开仓库源码与工具生态级研究记录，对接 [#265](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) 与 [#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)。
-> **核对日期**：2026-09-06。
+> **核对日期**：2026-09-06（原生态研究）；2026-09-16 专项刷新 Translator++ 接口、接入边界及 #265 / #272 状态，其余工具与引擎未做全量重新审计。
 > **研究对象**：跨引擎本地化抽象框架（VNTextPatch、Translator++、translate-toolkit / Weblate）以及候选目标引擎（Naninovel、Godot+Dialogic 2、RPG Maker MV/MZ、KiriKiri）的原生生态与工具链。
-> **前置约定**：本研究服务于 #265（引擎适配边界与版本化翻译资产）的产品化收口，以及 #272（能力矩阵与后续路线）中第三引擎立项决策；不违背既有的 `check -> apply`、声明式 `WritebackPlan` 与 Fail-Closed 门禁。
+> **前置约定**：#265 已于 2026-09-13 关闭；#272 的第三 Adapter 实质复核与实现立项按 2026-09-14 决定暂缓。本研究提供后续决策依据，不改变排期及既有 `check -> apply`、声明式 `WritebackPlan` 与 Fail-Closed 门禁。
+> **专项评估**：[Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)记录当前 issues、官方证据、公共合同缺口与最小实验；接入尚未实现。
 
 ---
 
 ## 1. 摘要与核心结论
 
-视觉小说与泛游戏本地化工具在开源与民间生态中存在深厚的积累。然而，通过源码级审视这些工具与引擎底层机制后，可以得出以下核心结论：
+本研究按公开源码、官方接口和本仓库实现比较可复用机制；不同工具的证据深度并不相同，不能据此给出全面优劣排名。
 
-1. **“跨引擎提取”常见，但“版本化生命周期管理”极度匮乏**：
-   * 绝大多数知名跨引擎工具（如 VNTextPatch、Translator++）的核心竞争力在于针对 30+ 种引擎文件格式的**逆向解包与静态字节/字符 Span 重定位（Offset Relocation）**；
-   * 但它们普遍缺乏**版本快照（Snapshot）、文本演进对账（Reconciliation）与机器质量门禁（Quality Gate）**。一旦上游游戏更新源码，现有的翻译产物往往面临大面积错位或损坏。
+1. **外部提取与导出能力值得复用，但须逐条验证合同**：
+   * VNTextPatch 的格式接口与重定位机制、Translator++ 的 parser 和统一工程制品可以减少部分引擎的重复开发，不能把所有工具归为同一种 Span 实现；
+   * Translator++ 可作为可选外部格式后端。导入后仍须建立与本项目 snapshot、occurrence、结果和写回门禁的绑定；公开资料未证明双方合同等价，也不足以断言上游必然没有版本或安全保护。
 2. **工业级本地化（如 Weblate / translate-toolkit）长于格式对账，但短于剧情拓扑**：
    * 通用软件本地化标准（PO, XLIFF）具备成熟的三向合并（3-way merge）与 Fuzzy 状态机；
    * 但它们无法原生表达视觉小说的**角色说话人（Speaker）、前后对白滑动窗口（Context Window）与代码/排版控制标签嵌套**。
@@ -22,8 +23,8 @@
    * **Godot + Dialogic 2**：生态中已有成熟的 CSV 翻译插件，但 Dialogic 2.0 目前处于 Alpha 20，API 频繁重构，过早立项必然背负巨大的接口废弃维护债务；
    * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（本地人工样本支持的研究候选，仓库合成夹具仍待建立）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
 4. **对本项目的战略启示**：
-   * 本项目在 `#265` 中建立的 `ProjectSnapshot`、`ReconciliationReport`、`TranslationRecord` 与声明式 `WritebackPlan`，在**数据严密性与防漂移安全性上明显超越了同类开源游戏翻译工具**；
-   * 本项目应积极借鉴 **VNTextPatch 的字符 Span 重定位算法**、**Weblate 的 Fuzzy 微改审核状态**、**Translator++ 的数据网格交互直觉**，以及 **Naninovel 官方离线文本目录的直接消费模式**，完成从“文本翻译脚本”到“工业级多引擎工作台”的跃迁。
+   * 本项目已建立的 `ProjectSnapshot`、`ReconciliationReport`、`TranslationRecord` 与声明式 `WritebackPlan` 可作为接入基础；新增格式仍需要公共合同扩展、产品接线和独立验收；
+   * Translator++ 的价值不只在数据网格交互，还在可复用的提取/导出与自动化接口。应比较“Agent + Translator++”和“再加入本项目工具包”的实际收益，同时保留 Naninovel 官方离线目录路线，避免重复建设已有能力。
 
 ---
 
@@ -45,7 +46,7 @@
 
 ---
 
-## 3. 架构级对标项目源码分析（面向 #265）
+## 3. 架构级对标项目源码与接口分析（面向 #265）
 
 ### 3.1 VNTextPatch / VNTranslationTools：跨引擎脚本重定位的标杆
 
@@ -69,22 +70,21 @@
 
 ### 3.2 Translator++：全流程多引擎工作台的产品化形态
 
-* **关键参考**：[Dreamsavior Translator++](https://dreamsavior.net/) · [TranslatorPlusPlusChineseWiki](https://github.com/zyf722/TranslatorPlusPlusChineseWiki)
-* **技术底座**：Node.js / Electron / NW.js，支持 RPG Maker (全部版本)、Wolf RPG Editor、Ren'Py、TyranoScript、Unity 等。
+* **关键参考**：[官方格式参考](https://dreamsavior.net/docs/translator-developers-guide/trans-format/format-reference/) · [8.9.2 发行说明](https://dreamsavior.net/update-info-translator-ver-8-9-2/) · [8.9.9 发行说明](https://dreamsavior.net/update-info-translator-ver-8-9-9/)
+* **证据范围**：官方接口、公开源码文档与发行说明；未取得并审计匹配最新 Beta 的完整源码包，也未在本仓库完成往返实验。不得概括为“全部版本均已支持”。
 
 #### 核心机制剖析
-1. **统一的中间数据网格（TransData Grid）**：
-   无论导入哪种引擎，全部转化为标准网格模型：
-   * `Tag / Context`：记录对白来源（地图、事件编号、代码行）；
-   * `Speaker`：说话人识别；
-   * `Source / Target`：原文与当前译文；
-   * `Status`：翻译状态（未译、机器生成、人工验证）。
-2. **启发式工程更新（Update Project）**：
-   允许用户在游戏更新版本后，载入新版游戏并与旧翻译工程做 Diff：通过上下文标签与原文相似度，将已翻译文本自动迁移到新工程中。
+
+1. **统一工程制品**：`.trans` 是 JSON；`project.files[*].data` 为原文/多译文列网格，允许空值；`context` 是逐行上下文列表。格式参考页较旧，当前布局与有效译文列需实测。
+2. **上下文与去重**：同一行可能对应多个真实位置，并有按 context 指定译文的机制；context 的定位语义由 parser 决定，不能自动推导统一 speaker、稳定 occurrence 或人工审核状态。[Context](https://dreamsavior.net/docs/translator/getting-started/context/) · [按上下文翻译](https://dreamsavior.net/docs/translator/getting-started/translation-by-context/)
+3. **导出依赖**：`.trans` 不等于完整自包含工程，生成补丁依赖 staging；版本冻结与备份需覆盖实际导出输入。[Staging files](https://dreamsavior.net/docs/translator/staging-files/)
+4. **自动化接口**：8.9.2 Beta 已公告 `/mcp` Streamable HTTP 和工具发现/调用；8.9.9 Beta 列出 RPG Maker MV/MZ Parser 2.21、Unity binary translator 0.1 等更新。接口可用性、具体 parser 覆盖和恢复行为仍须按实际安装版本验证。
 
 #### 对本项目的启发与边界
-* ✅ **汲取**：其网格数据模型的直观性与多引擎插件架构值得 GUI 参考，尤其是面向人工审校的表格化呈现。
-* 🛑 **防范**：其增量更新主要依赖字符串与行号启发式匹配，**缺乏基于源文件哈希与片段 SHA-256 的严格门禁**。在复杂分支剧情中，经常出现“由于上下文微调导致旧译文被错误塞入新对白”的静默灾难；本项目 `#265 P4` 的 `ReuseCandidate` 必须保持严格的人工确认门禁。
+
+* **推荐研究路线**：先验证固定版本 RPG Maker 叙事 fixture 的 `.trans` 文件往返，再接公共外部工作包/结果合同；文件 bridge 成立后才考虑 MCP 自动化。
+* **保留的责任**：本项目继续负责结果身份、完整性、冲突/stale、源引擎结构规则及受控写回。`.trans` 的数组/空值、同文多 context 和 staging 都使接入不止是字段转换；当前公共 JSON writer 还不支持这些数组路径。
+* **证据边界**：不再以未经验证的“缺乏哈希”“经常静默错位”评价上游。是否能满足本项目合同、能节省多少工作，按[专项评估](translatorpp_integration_assessment.md)的对照实验和验收清单判断；上游模型/Batch 能力与本项目也有重合。
 
 ---
 
@@ -129,12 +129,14 @@
    * 官方内置 `Spreadsheet Tool`；须先生成本地化数据，再导出 `.csv`，翻译后通过官方工具导入。编辑 CSV 本身不等于完成资源导入。
 3. **完全无需 Unity 运行时的写回能力**：
    * 经核实，Naninovel 的本地化文件在打包前就是项目 Assets 目录下的普通文本文件（UTF-8）；
-   * Adapter 可离线修改已生成的本地化文档；生成、CSV 导入、构建与运行时验证仍属于官方工具链。公共 `text_span_replace` 当前仅支持单行内替换，多行译文和空译文插入如何形成合法 plan 仍须设计与夹具验证，不能由“纯文本”推定已支持。
+   * Adapter 可离线修改已生成的本地化文档；生成、CSV 导入、构建与运行时验证仍属于官方工具链。公共 `text_span_replace` 与 `multiline_text_span_replace` 已支持单行/跨行非空源片段替换（#471），空源片段插入仍不支持；Naninovel 条目如何形成合法 plan 仍须设计与夹具验证，不能由“纯文本”推定已接入。
 
-#### 对比反思：为什么坚决不用 XUnity.AutoTranslator？
+#### 与 Unity 通用翻译工具的边界
+
 * 社区常有使用 [XUnity.AutoTranslator](https://github.com/bbepis/XUnity.AutoTranslator) 汉化 Unity 游戏的先例；
-* 但 XUnity 依赖 BepInEx/MelonLoader 在游戏运行时动态 Hook 拦截 `TextMeshPro` 渲染，面对包含动态变量插值（Interpolation）的对白极易发生正则击穿或内存泄漏，无法生成供官方或民间直接发布的标准本地化包；
-* **裁定**：本项目支持 Naninovel 时，必须坚定走官方 `Localization` 文本目录与 CSV 的离线静态写回通道。
+* 运行时捕获/替换与消费 Naninovel 官方 locale 制品是不同路径，不能据此推定相同的文本 ID、覆盖范围或导出合同；
+* Translator++ 已公告 Unity binary translator 0.1，不能继续把其 Unity 能力仅描述为 XUnity 路线，但本研究尚无 Naninovel 专项往返证据；
+* **推荐维持**：本项目评估 Naninovel 时优先走官方 `Localization` 文本目录与 CSV 通道，外部 Unity parser 另行验证，不据公告改变候选结论。
 
 ---
 
@@ -179,30 +181,26 @@
 | 对标项目 | 核心定位 | 引擎模式 | 写回与安全保障 | 版本对账与差分能力 | 对本项目的关键借鉴与警示 |
 |---|---|:---:|---|---|---|
 | **VNTextPatch** | 跨 30+ 引擎提取/补丁器 | 源码解析与二进制重写 | 字节/字符 Span 重定位；自动 Word Wrapping | ❌ 无快照，上游更新易错位 | 借鉴抽象接口与 Span 重定位；坚守版本快照。 |
-| **Translator++** | 通用跨引擎本地化工作台 | 统一中间网格 (TransData) | 引擎专用插件导出；缺乏原子哈希校验 | ⚠️ 启发式字符串匹配，缺乏门禁 | 借鉴数据网格交互；防范无门禁的静默合并。 |
+| **Translator++** | 跨引擎工作台 / 可选外部格式后端 | `.trans` 网格 + parser / staging | 专用 parser 导出；与本项目门禁的等价性待验证 | 须验证上下文、版本变化与复用语义，不能据行号认定稳定身份 | 优先评估文件 bridge，保留公共结果/写回责任；详见[专项评估](translatorpp_integration_assessment.md)。 |
 | **translate-toolkit (Weblate)** | 工业级本地化底座 | 通用格式 (PO/JSON/CSV) | 格式无损往返读写 (Roundtrip) | ✅ 成熟的三向合并与 Fuzzy 降级 | 吸收 Fuzzy 降级状态机；弥补游戏剧情上下文。 |
 | **Naninovel Built-in** | Unity 顶级视觉小说插件 | 原生纯文本目录 + CSV | 离线纯文本写回，无需 Unity 运行时 | ✅ 官方文本 ID 增量更新与保留 | **证实为最佳第三引擎候选**；直接消费离线目录。 |
 | **Dialogic 2 (Godot)** | Godot 剧情对白系统 | 原生 CSV 矩阵导出 | 离线改写 CSV 后由 Godot 编辑器重新导入；运行时加载资源 | ⚠️ Alpha 阶段频繁重构 | 技术路线可行；严格等待 Beta/RC 稳定。 |
 | **RPGMLocalizer** | RPG Maker JSON 批翻译器 | 暴力解析 `MapXXX.json` | 危险的原位 Monolithic JSON 覆写 | ❌ 极差，重新生成易破坏事件树 | **印证全量 RPG 高危预警**；严禁粗暴 JSON 覆写。叙事模式 B+ 原型线须另走节点级声明式写回（见矩阵文档）。 |
-| **renpy-translation-lab** | **工业级 VN 本地化工作台** | **抽象 Adapter + 混合双轨** | **声明式 WritebackPlan + 原子 Span SHA-256 门禁** | **ProjectSnapshot + Reconciliation 严格对账** | **坚守架构领先优势，补齐产品化交互。** |
+| **renpy-translation-lab** | VN 本地化工作台 | 抽象 Adapter + 混合双轨 | 声明式 WritebackPlan、源快照校验与写回事务 | ProjectSnapshot + Reconciliation | 复用现有核心；第三引擎与外部制品仍需合同扩展、产品接线和独立验收。 |
 
 ---
 
 ## 6. 对 #265 与 #272 的演进路线建议
 
-### 6.1 对 Issue #265 的产品化收尾（P6）建议
+### 6.1 Issue #265 已交付边界
 
-1. **GUI 接入快照对账与复用审查**：
-   * 参考 Translator++ 的直观网格设计，在 GUI 中将 `ProjectSnapshot` 对账结果与 `ReuseCandidate` 呈现为直观的可视化卡片；
-   * 严格遵循 Weblate 规范：对源文本微改的条目默认标记为 `needs_review`，不经人工确认绝不放行。
-2. **强化 Span 替换与排版防御**：
-   * 吸收 VNTextPatch 经验，在 `engine_adapters/writeback.py` 中增强长文本自动换行与字符集安全检查。
-3. **固化 Fail-Closed 机器退出契约**：
-   * 确保 CLI 在机器调用模式（`--output json --strict-exit-codes`）下，任何门禁阻断都能输出不可篡改的结构化 Envelope。
+#265 P5/P6 已交付，Epic 已于 2026-09-13 关闭，不再把旧研究建议列作 P6 待办。当前 Ren'Py 产品化、coverage、版本对账/复用、CLI/GUI 与 Tyrano 离线 corpus 的边界，以 [Engine Adapter 现行说明](../engine_adapter.md)为准。
+
+后续借用外部编辑界面仍须保持复用决定、质量确认、审校状态与写回许可分离。自动折行、字体或新引擎结构规则须单独定义适用范围，不能作为格式 bridge 的隐式副作用。
 
 ### 6.2 对 Issue #272 的第三引擎（Naninovel）实施预研规范
 
-当 #265 P6 正式交付并关闭后，正式启动 Naninovel Adapter 时必须遵守以下规范：
+Naninovel 仍是推荐原生第三 Adapter；#272 的实质复核与立项暂缓，触发条件见[矩阵 §6.1](visual_novel_localization_matrix.md#61-最终决策结论)。将来正式启动时须重新核对版本、fixture 许可并遵守以下规范：
 
 1. **架构模式归属**：
    * 采用 `native_catalog` / `hybrid` 模式：优先读取并操作 `Resources/Naninovel/Localization/{Locale}/` 下的纯文本脚本；
@@ -213,11 +211,18 @@
    * 按矩阵 §4.1 / §5.2，将 Naninovel 文本 ID 作为 opaque locator 与 lineage 的候选证据；组合 ID 须保留片段关系，不能直接把 `# id` 同时当作 occurrence 与 lineage 身份；
    * 写回计划必须遵循声明式 `WritebackPlan`，在验证目标文件快照哈希与内容校验无误后方可执行写入。
 
+### 6.3 Translator++ 外部格式路线
+
+将“自行实现引擎 parser”与“接入外部格式后端”分开决策。推荐先以单版本 RPG Maker 叙事 fixture 验证 `.trans` 的位置映射、有效译文列、结构保护与 staging 导出，再评估公共工作包/结果入口的实际增益。首版输出新 `.trans`，最终游戏导出独立记录，不能把制品写回成功当作游戏验收通过。
+
+完整 issue 影响、现有代码缺口、文件/MCP 选择和停止条件见 [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)。该路线尚未实现，不解除 #272 暂缓，不把 Agent 工具包提案视为已交付能力。
+
 ---
 
 ## 7. 参考资料
 
 ### 外部项目源码与官方文档
+
 - [VNTextPatch (arcusmaximus)](https://github.com/arcusmaximus/VNTranslationTools)：跨引擎视觉小说文本提取与补丁工具集。
 - [VNTextPatch-net8 (rafael-vasconcellos)](https://github.com/rafael-vasconcellos/VNTextPatch-net8)：现代跨平台 .NET 8 移植版。
 - [Translator++ (Dreamsavior)](https://dreamsavior.net/)：通用跨引擎游戏本地化工作台。
@@ -228,10 +233,12 @@
 - [RPGMLocalizer (Lord0fTurk)](https://github.com/Lord0fTurk/RPGMLocalizer)：RPG Maker MV/MZ 数据文件解析与翻译工具。
 
 ### 本仓库现行核心文档与实现
+
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)（#272 决策文档）
+- [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)（2026-09-16 官方接口、issue 影响与待实验接入合同）
 - [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)（#265 P0 契约文档）
 - [GitHub 视觉小说本地化工具源码研究](github_localization_projects_research.md)（跨项目对比与迁移规范）
-- [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)（P1–P5 现行实现说明）
+- [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)（P1–P6 现行实现与验证边界）
 - [engine_adapters/writeback.py](../../engine_adapters/writeback.py)（声明式原子写回内核）
 - [engine_adapters/versioning.py](../../engine_adapters/versioning.py)（项目版本快照与对账）
 - [engine_adapters/reuse.py](../../engine_adapters/reuse.py)（版本化翻译记录与复用）
