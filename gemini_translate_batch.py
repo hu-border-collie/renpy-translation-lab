@@ -22589,6 +22589,188 @@ def run_translate_preflight(args):
         return _run_translate_preflight(args)
 
 
+def _empty_quality_summary(status, reason='', *, manifest_path=''):
+    """Return the #488 S1 quality-summary shape for a non-available state."""
+
+    return {
+        'status': status,
+        'source': 'latest_manifest' if manifest_path else 'none',
+        'manifest_path': manifest_path,
+        'report_path': '',
+        'finding_count': 0,
+        'severity_counts': {'info': 0, 'low': 0, 'medium': 0, 'high': 0},
+        'reason_counts': {},
+        'generated_at': '',
+        'matched_by': [],
+        'reason': reason,
+    }
+
+
+def _same_project_path(left, right):
+    """Compare project paths with the repository's canonical path rules."""
+
+    left_text = str(left or '').strip()
+    right_text = str(right or '').strip()
+    if not left_text or not right_text:
+        return False
+    try:
+        return _normalized_abs_path(left_text) == _normalized_abs_path(right_text)
+    except (OSError, ValueError):
+        return False
+
+
+def summarize_preflight_coverage(adapter_snapshot):
+    """Return the #488 S1 coverage summary for the current preflight scan.
+
+    Reuses the same read-only adapter snapshot as the zero-pending gate; a
+    missing report or inventory degrades to ``unknown`` instead of inventing a
+    completion claim.
+    """
+
+    report = getattr(adapter_snapshot, 'report', None)
+    if report is None:
+        return {
+            'status': 'unknown',
+            'confirmed': False,
+            'completion': 'unknown',
+            'coverage_digest': '',
+            'candidate_count': 0,
+            'classification_counts': {},
+            'reason_counts': {},
+            'unknown_count': 0,
+            'parse_error_count': 0,
+            'unsupported_count': 0,
+            'reasons': ['coverage.evidence_missing'],
+            'gate': None,
+            'review_status': 'unknown',
+            'scope': 'current_scan',
+        }
+    assessment = evaluate_coverage_completion(report)
+    counts = dict(assessment.classification_counts or {})
+    summary = {
+        'status': str(assessment.coverage_status or 'unknown'),
+        'confirmed': False,
+        'completion': assessment.completion,
+        'coverage_digest': assessment.coverage_digest,
+        'candidate_count': int(getattr(report, 'candidate_count', 0) or 0),
+        'classification_counts': counts,
+        'reason_counts': dict(getattr(report, 'reason_counts', {}) or {}),
+        'unknown_count': int(counts.get('unknown') or 0),
+        'parse_error_count': int(counts.get('parse_error') or 0),
+        'unsupported_count': int(counts.get('unsupported') or 0),
+        'reasons': list(assessment.reasons),
+        'gate': None,
+        'review_status': 'unknown',
+        'scope': 'current_scan',
+    }
+    inventory = getattr(adapter_snapshot, 'inventory', None)
+    if inventory is None:
+        return summary
+    review_record, review_path, review_error = load_coverage_review_for_project()
+    gate = evaluate_coverage_gate(
+        report,
+        inventory,
+        review_record=review_record,
+        review_path=review_path,
+        review_error=review_error,
+    )
+    gate_payload = gate.to_dict()
+    summary['confirmed'] = bool(gate.confirmed)
+    summary['gate'] = gate_payload
+    summary['review_status'] = str(gate_payload.get('review_status') or 'unknown')
+    return summary
+
+
+def summarize_preflight_quality(
+    *, plan_fingerprint, base_dir, tl_dir, strategy='gemini_batch'
+):
+    """Summarize an existing, identity-matched quality report (#488 S1).
+
+    S1 only reads the latest translated manifest (Batch path). Durable Sync
+    reports live in the run store and need a separate source; for ``sync`` the
+    summary is honestly ``not_available`` instead of matching a Batch report.
+    The report is only ``available`` when it belongs to the same project and
+    the same translation plan fingerprint; a latest pointer or file timestamp
+    alone is never treated as a match.
+    """
+
+    if str(strategy or '') != model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        return _empty_quality_summary(
+            'not_available', 'quality_source_not_supported_for_strategy'
+        )
+    cursor = _read_latest_manifest_cursor_unlocked()
+    if not cursor or not os.path.isfile(cursor):
+        return _empty_quality_summary('not_available', 'latest_manifest_missing')
+    try:
+        manifest = load_manifest(cursor)
+    except (Exception, SystemExit):
+        return _empty_quality_summary(
+            'unknown', 'manifest_unreadable', manifest_path=cursor
+        )
+    if str(manifest.get('mode') or '') != MANIFEST_MODE_TRANSLATION:
+        return _empty_quality_summary('stale', 'mode_mismatch', manifest_path=cursor)
+    if not (
+        _same_project_path(manifest.get('base_dir'), base_dir)
+        and _same_project_path(manifest.get('tl_dir'), tl_dir)
+    ):
+        return _empty_quality_summary('stale', 'project_mismatch', manifest_path=cursor)
+    plan = manifest.get('translation_plan')
+    plan = dict(plan) if isinstance(plan, dict) else {}
+    manifest_fingerprint = str(plan.get('plan_fingerprint') or '')
+    expected_fingerprint = str(plan_fingerprint or '')
+    if (
+        not expected_fingerprint
+        or not manifest_fingerprint
+        or manifest_fingerprint != expected_fingerprint
+    ):
+        return _empty_quality_summary('stale', 'plan_mismatch', manifest_path=cursor)
+    report_path = str(manifest.get('last_quality_findings_path') or '')
+    if not report_path or not os.path.isfile(report_path):
+        return _empty_quality_summary('stale', 'report_missing', manifest_path=cursor)
+    check_summary = manifest.get('last_check_summary')
+    expected_digest = ''
+    if isinstance(check_summary, dict):
+        expected_digest = str(check_summary.get('quality_findings_sha256') or '')
+    if expected_digest:
+        try:
+            if _sha256_file(report_path) != expected_digest:
+                return _empty_quality_summary(
+                    'stale', 'report_digest_mismatch', manifest_path=cursor
+                )
+        except OSError:
+            return _empty_quality_summary(
+                'unknown', 'report_unreadable', manifest_path=cursor
+            )
+    try:
+        findings = quality_report_export.load_quality_findings(report_path)
+    except Exception:
+        return _empty_quality_summary(
+            'unknown', 'report_unreadable', manifest_path=cursor
+        )
+    severity_counts = {'info': 0, 'low': 0, 'medium': 0, 'high': 0}
+    reason_counts = {}
+    for finding in findings:
+        severity = str(finding.get('severity') or 'info').strip().lower()
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        reason_code = str(finding.get('reason_code') or '').strip()
+        if reason_code:
+            reason_counts[reason_code] = reason_counts.get(reason_code, 0) + 1
+    return {
+        'status': 'available',
+        'source': 'latest_manifest',
+        'manifest_path': cursor,
+        'report_path': report_path,
+        'finding_count': len(findings),
+        'severity_counts': severity_counts,
+        'reason_counts': reason_counts,
+        'generated_at': str(
+            manifest.get('last_check_at') or manifest.get('created_at') or ''
+        ),
+        'matched_by': ['project', 'plan_fingerprint'],
+        'reason': '',
+    }
+
+
 def _run_translate_preflight(args):
     """Scan the project and describe the shared plan without provider calls."""
 
@@ -22660,6 +22842,40 @@ def _run_translate_preflight(args):
     context_budget = getattr(capabilities, 'context_budget_tokens', None)
 
     config = _read_translator_config_object()
+    coverage_summary = summarize_preflight_coverage(
+        getattr(context, 'adapter_snapshot', None)
+    )
+    request_texts = [
+        str(getattr(request, 'system_instruction', '') or '')
+        + str(getattr(request, 'user_prompt', '') or '')
+        for request in requests
+    ]
+    if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        preflight_max_output_tokens = int(BATCH_MAX_OUTPUT_TOKENS or 0)
+    else:
+        preflight_max_output_tokens = int(
+            getattr(legacy, 'MAX_OUTPUT_TOKENS', 0) or 0
+        )
+    if preflight_max_output_tokens <= 0 and requests:
+        first_generation = getattr(requests[0], 'generation_config', None)
+        if isinstance(first_generation, dict):
+            preflight_max_output_tokens = int(
+                first_generation.get('max_output_tokens') or 0
+            )
+    cost_summary = batch_cost_estimate.estimate_requests_cost(
+        profile.model,
+        request_texts=request_texts,
+        max_output_tokens_per_request=preflight_max_output_tokens,
+        pricing_config=batch_cost_estimate.load_pricing_config(config),
+        translator_config=config,
+        strategy=strategy,
+    )
+    quality_summary = summarize_preflight_quality(
+        plan_fingerprint=str(getattr(plan, 'plan_fingerprint', '') or ''),
+        base_dir=str(getattr(legacy, 'BASE_DIR', '') or ''),
+        tl_dir=str(getattr(legacy, 'TL_DIR', '') or ''),
+        strategy=strategy,
+    )
     if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
         batch_flags = resolve_batch_context_flags(config, game_root=legacy.BASE_DIR)
         context_sources = {
@@ -22759,24 +22975,16 @@ def _run_translate_preflight(args):
             '实际运行可能在 prepare 后变化。',
         ))
     if not requests:
-        coverage_report = getattr(
-            getattr(context, 'adapter_snapshot', None), 'report', None
-        )
-        assessment = (
-            evaluate_coverage_completion(coverage_report)
-            if coverage_report is not None
-            else None
-        )
-        if assessment is not None and assessment.completion == 'unconfirmed':
+        if coverage_summary['completion'] == 'unconfirmed':
             # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
             risks.append(_preflight_risk(
                 'COVERAGE_UNCONFIRMED',
                 'error',
                 '当前范围没有待翻译条目，但文本覆盖未确认（'
-                + ', '.join(assessment.reasons)
+                + ', '.join(coverage_summary['reasons'])
                 + '）；不能报告为翻译完成。请先运行 doctor 查看 coverage 分类与 reason。',
             ))
-        elif assessment is None:
+        elif coverage_summary['completion'] != 'confirmed':
             # A missing coverage measurement cannot confirm a zero-pending claim.
             risks.append(_preflight_risk(
                 'COVERAGE_EVIDENCE_MISSING',
@@ -22832,6 +23040,9 @@ def _run_translate_preflight(args):
             'file_count': len(dict(identity_dict.get('file_digests') or {})),
         },
         'context_sources': context_sources,
+        'cost': cost_summary,
+        'coverage': coverage_summary,
+        'quality_summary': quality_summary,
         'credential_available': bool(api_key) if needs_key else True,
         'risks': risks,
         'environment': {
