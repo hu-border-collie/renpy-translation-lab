@@ -30,7 +30,11 @@ STRATEGY_ORDER: tuple[str, ...] = (
     routing.ExecutionStrategy.GEMINI_BATCH.value,
 )
 
-ADAPTERS: tuple[str, ...] = (routing.ADAPTER_GEMINI, routing.ADAPTER_LITELLM)
+ADAPTERS: tuple[str, ...] = (
+    routing.ADAPTER_GEMINI,
+    routing.ADAPTER_LITELLM,
+    routing.ADAPTER_OPENAI_COMPATIBLE,
+)
 
 CREDENTIAL_KINDS: tuple[str, ...] = (
     routing.CREDENTIAL_KIND_API_KEYS_JSON,
@@ -256,6 +260,7 @@ def model_profile_for(
         ),
         models=tuple(str(item) for item in raw.get("models") or (str(raw.get("model") or ""),)),
         base_url=str(provider.get("base_url") or ""),
+        extra_headers=dict(provider.get("extra_headers") or {}),
         capability_overrides=dict(raw.get("capability_overrides") or {}),
         params=dict(raw.get("params") or {}),
         embedding_profile_id=str(raw.get("embedding_profile_id") or ""),
@@ -384,6 +389,7 @@ def editor_view(section: Mapping[str, Any] | None) -> dict[str, Any]:
                     "name": str(credential.get("name") or ""),
                     "env_name": str(credential.get("env_name") or ""),
                 },
+                "extra_headers": dict(raw.get("extra_headers") or {}),
                 "used_by": tuple(
                     str(profile_id)
                     for profile_id, profile in (data.get("profiles") or {}).items()
@@ -436,6 +442,7 @@ def add_provider(
     credential_kind: str = routing.CREDENTIAL_KIND_NONE,
     credential_name: str = "",
     credential_env_name: str = "",
+    extra_headers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = _mutation_section(section)
     if adapter not in ADAPTERS:
@@ -457,6 +464,10 @@ def add_provider(
             "name": str(credential_name or ""),
             "env_name": str(credential_env_name or ""),
         },
+        "extra_headers": {
+            str(key): str(value)
+            for key, value in dict(extra_headers or {}).items()
+        },
     }
     return data
 
@@ -473,6 +484,7 @@ def update_provider(
     credential_kind: str | None = None,
     credential_name: str | None = None,
     credential_env_name: str | None = None,
+    extra_headers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = _mutation_section(section)
     entry = _provider_entry(data, provider_id)
@@ -480,6 +492,11 @@ def update_provider(
         if adapter not in ADAPTERS:
             raise ModelProfilesEditorError("INVALID_ADAPTER", f"Unsupported adapter: {adapter}")
         entry["adapter"] = adapter
+    if extra_headers is not None:
+        entry["extra_headers"] = {
+            str(key): str(value)
+            for key, value in dict(extra_headers).items()
+        }
     if credential_kind is not None:
         if credential_kind not in CREDENTIAL_KINDS:
             raise ModelProfilesEditorError(

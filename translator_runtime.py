@@ -1188,9 +1188,10 @@ def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
         sync = {}
 
     backend_name = str(sync.get("backend") or "gemini").strip().lower()
-    if backend_name not in {"gemini", "litellm"}:
+    if backend_name not in {"gemini", "litellm", "openai_compatible"}:
         raise model_profile.ModelRoutingConfigError(
-            f"Unsupported sync backend: {backend_name}. Choose 'gemini' or 'litellm'."
+            f"Unsupported sync backend: {backend_name}. Choose 'gemini', 'litellm', "
+            "or configure an openai_compatible ModelProfile."
         )
     SYNC_BACKEND = backend_name
 
@@ -7315,7 +7316,8 @@ def run_translation(*, prepare=False):
     if SYNC_BACKEND == "gemini":
         print(f"Gemini API Keys Loaded: {len(API_KEYS)}")
     else:
-        print("Gemini API Key: not required for LiteLLM")
+        backend_label = "LiteLLM" if SYNC_BACKEND == "litellm" else SYNC_BACKEND
+        print(f"Gemini API Key: not required for {backend_label}")
     print(f"Base dir: {BASE_DIR}")
     print(f"TL subdir: {TL_SUBDIR}")
     print(f"TL dir: {TL_DIR} (exists: {os.path.isdir(TL_DIR)})")

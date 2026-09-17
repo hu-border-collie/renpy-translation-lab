@@ -24,7 +24,37 @@ MODEL_ROUTING_CONFIG_SCHEMA_VERSION = 1
 
 ADAPTER_GEMINI = "gemini"
 ADAPTER_LITELLM = "litellm"
-KNOWN_ADAPTERS = frozenset({ADAPTER_GEMINI, ADAPTER_LITELLM})
+ADAPTER_OPENAI_COMPATIBLE = "openai_compatible"
+KNOWN_ADAPTERS = frozenset({
+    ADAPTER_GEMINI,
+    ADAPTER_LITELLM,
+    ADAPTER_OPENAI_COMPATIBLE,
+})
+
+OPENAI_COMPATIBLE_GENERATION_PARAM_KEYS = frozenset({
+    "temperature",
+    "max_output_tokens",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "stop",
+    "timeout",
+})
+STRUCTURED_OUTPUT_MODES = frozenset({
+    "strict_json_schema",
+    "json_object",
+    "prompt_only_json",
+})
+_SENSITIVE_HEADER_MARKERS = (
+    "authorization",
+    "apikey",
+    "api-key",
+    "token",
+    "secret",
+    "password",
+    "cookie",
+)
 
 STRATEGY_SYNC = "sync"
 STRATEGY_GEMINI_BATCH = "gemini_batch"
@@ -268,6 +298,105 @@ def _validate_url(value: object, path: str) -> list[ConfigContractIssue]:
     return []
 
 
+def _validate_extra_headers(raw: object, path: str) -> list[ConfigContractIssue]:
+    """Validate non-sensitive request headers for a direct provider."""
+
+    if raw in (None, {}):
+        return []
+    if not _is_mapping(raw):
+        return [_issue(path, "invalid_extra_headers", "extra_headers must be an object.")]
+    issues: list[ConfigContractIssue] = []
+    for raw_key, raw_value in raw.items():
+        key = raw_key if isinstance(raw_key, str) else ""
+        value = raw_value if isinstance(raw_value, str) else ""
+        if not key.strip() or not isinstance(raw_value, str):
+            issues.append(_issue(
+                f"{path}.{key or '<invalid>'}",
+                "invalid_extra_header",
+                "extra header names and values must be non-empty strings.",
+            ))
+            continue
+        if any(marker in key or marker in value for marker in ("\r", "\n")):
+            issues.append(_issue(
+                f"{path}.{key}",
+                "invalid_extra_header",
+                "extra header names and values must not contain newlines.",
+            ))
+            continue
+        try:
+            key.encode("ascii")
+            value.encode("latin-1")
+        except UnicodeEncodeError:
+            issues.append(_issue(
+                f"{path}.{key}",
+                "invalid_extra_header",
+                "extra header names must be ASCII and values must be Latin-1 encodable.",
+            ))
+            continue
+        normalized = re.sub(r"[^a-z0-9]", "", key.casefold())
+        if any(
+            re.sub(r"[^a-z0-9]", "", marker) in normalized
+            for marker in _SENSITIVE_HEADER_MARKERS
+        ):
+            issues.append(_issue(
+                f"{path}.{key}",
+                "sensitive_extra_header",
+                "Credential-bearing headers must use credential_ref, not extra_headers.",
+            ))
+    return issues
+
+
+def _validate_openai_compatible_params(
+    raw: object,
+    path: str,
+) -> list[ConfigContractIssue]:
+    """Reject generation params outside the S1 whitelist instead of ignoring them."""
+
+    if not _is_mapping(raw):
+        return []
+    unknown = sorted(
+        str(key)
+        for key in raw
+        if str(key) not in OPENAI_COMPATIBLE_GENERATION_PARAM_KEYS
+    )
+    if not unknown:
+        return []
+    return [_issue(
+        path,
+        "unsupported_generation_param",
+        "Unsupported openai_compatible generation params: " + ", ".join(unknown),
+    )]
+
+
+def _validate_structured_output_override(
+    raw: object,
+    path: str,
+) -> list[ConfigContractIssue]:
+    """Validate the structured-output mode override shape and enum."""
+
+    if not _is_mapping(raw):
+        return []
+    structured = raw.get("structured_output")
+    if structured is None:
+        return []
+    if not _is_mapping(structured):
+        return [_issue(
+            f"{path}.structured_output",
+            "invalid_structured_output_override",
+            "capability_overrides.structured_output must be an object.",
+        )]
+    mode = structured.get("mode")
+    if mode is not None and (
+        not isinstance(mode, str) or mode not in STRUCTURED_OUTPUT_MODES
+    ):
+        return [_issue(
+            f"{path}.structured_output.mode",
+            "unsupported_structured_output_mode",
+            f"structured output mode must be one of {sorted(STRUCTURED_OUTPUT_MODES)}.",
+        )]
+    return []
+
+
 def _validate_providers(raw: object) -> tuple[list[ConfigContractIssue], dict[str, str]]:
     path = f"{MODEL_ROUTING_SECTION}.providers"
     if not _is_mapping(raw) or not raw:
@@ -318,6 +447,36 @@ def _validate_providers(raw: object) -> tuple[list[ConfigContractIssue], dict[st
         ))
         issues.extend(_validate_url(provider.get("base_url", ""), f"{provider_path}.base_url"))
         issues.extend(_validate_url(provider.get("models_url", ""), f"{provider_path}.models_url"))
+        extra_headers = provider.get("extra_headers")
+        if extra_headers not in (None, {}):
+            if adapter != ADAPTER_OPENAI_COMPATIBLE:
+                issues.append(_issue(
+                    f"{provider_path}.extra_headers",
+                    "unsupported_provider_field",
+                    "extra_headers is only supported by the openai_compatible adapter.",
+                ))
+            else:
+                issues.extend(_validate_extra_headers(
+                    extra_headers,
+                    f"{provider_path}.extra_headers",
+                ))
+        if adapter == ADAPTER_OPENAI_COMPATIBLE:
+            if not str(provider.get("base_url") or "").strip():
+                issues.append(_issue(
+                    f"{provider_path}.base_url",
+                    "missing_provider_url",
+                    "openai_compatible requires a base_url.",
+                ))
+            credential = provider.get("credential_ref")
+            if (
+                _is_mapping(credential)
+                and credential.get("kind") == CREDENTIAL_KIND_API_KEYS_JSON
+            ):
+                issues.append(_issue(
+                    f"{provider_path}.credential_ref.kind",
+                    "unsupported_credential_kind_for_adapter",
+                    "openai_compatible credentials must use none, env, or keyring.",
+                ))
     return issues, adapters
 
 
@@ -397,6 +556,21 @@ def _validate_profiles(
                     "invalid_profile_object",
                     f"profile.{object_key} must be an object.",
                 ))
+        provider_id_value = profile.get("provider_id")
+        provider_adapter = (
+            provider_adapters.get(str(provider_id_value or ""))
+            if isinstance(provider_id_value, str)
+            else None
+        )
+        if provider_adapter == ADAPTER_OPENAI_COMPATIBLE:
+            issues.extend(_validate_openai_compatible_params(
+                profile.get("params", {}),
+                f"{profile_path}.params",
+            ))
+            issues.extend(_validate_structured_output_override(
+                profile.get("capability_overrides", {}),
+                f"{profile_path}.capability_overrides",
+            ))
     return issues, profile_providers
 
 

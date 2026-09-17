@@ -292,6 +292,19 @@
           "kind": "api_keys_json",
           "name": "api_keys"
         }
+      },
+      "openai-compatible": {
+        "label": "OpenAI-compatible (direct)",
+        "adapter": "openai_compatible",
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "models_url": "https://api.openai.com/v1/models",
+        "credential_ref": {
+          "kind": "keyring",
+          "name": "openai",
+          "env_name": "OPENAI_API_KEY"
+        },
+        "extra_headers": {}
       }
     },
     "profiles": {
@@ -354,6 +367,24 @@
           "native_query_task_type": "RETRIEVAL_QUERY",
           "native_document_task_type": "RETRIEVAL_DOCUMENT"
         }
+      },
+      "openai-compatible": {
+        "label": "OpenAI-compatible Sync",
+        "provider_id": "openai-compatible",
+        "model": "gpt-4.1-mini",
+        "models": [
+          "gpt-4.1-mini"
+        ],
+        "params": {
+          "temperature": 0.2,
+          "max_output_tokens": 4096
+        },
+        "capability_overrides": {
+          "structured_output": {
+            "mode": "json_object"
+          }
+        },
+        "embedding_profile_id": ""
       }
     },
     "defaults": {

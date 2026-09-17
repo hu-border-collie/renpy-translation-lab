@@ -13,8 +13,10 @@ GUI 原有 workflow 调用相同 CLI，因此同样消费新配置；统一 Mode
 页面仍属于 P3。本阶段 GUI 模型页显示兼容说明，保存时校验并保留新 section 和未知字段。
 
 现有兼容命令使用 `legacy_entrypoints` 角色指针；项目分析保持 Sync、最终审校保持 Gemini
-Batch。跨 Provider 的模型字符串覆盖、Gemini 非 `api_keys_json/api_keys` 凭据槽和非空生成
-profile `params` 尚未接入旧命令，会明确拒绝，不能静默忽略。生成请求参数继续保存在
+Batch。跨 Provider 的模型字符串覆盖、Gemini 非 `api_keys_json/api_keys` 凭据槽仍会明确
+拒绝，不能静默忽略。`openai_compatible` 直连 profile 的白名单生成参数
+（`temperature` / `max_output_tokens` / `top_p` 等）已接入 Sync 生成；Gemini / LiteLLM
+profile 的非空 `params` 仍按原合同拒绝，不能静默忽略。生成请求参数继续保存在
 `sync` / `batch` 执行设置中；embedding profile 的 `params` 已按独立连接读取。
 P3 再提供统一 profile/strategy 选择和完整参数编辑表面。
 

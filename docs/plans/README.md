@@ -16,6 +16,9 @@
   冻结现有 `translate-preflight` payload 基线，以及成本 / coverage / 已有质量摘要三个最小新增字段的来源、
   freshness / unknown 语义与 CLI/GUI 展示合同。S1 payload、S2/S3 展示/文档与 S1.5
   durable Sync quality 来源均已落地。
+- [#431 S1 直连 OpenAI-compatible Sync 生成合同](issue-431-openai-compatible-contract.md)：
+  冻结协议适配器 / Provider 连接 / ModelProfile 职责、首期迁移矩阵、配置与结构化输出合同、
+  错误映射、GUI 最小接线和离线测试范围；真实 smoke、final_review 解绑与 LiteLLM 移除属后续切片。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、
   串行与子代理并行协作，以及首个 Ren'Py 章节实验。待评审、待验证，尚未实现。

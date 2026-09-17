@@ -150,6 +150,7 @@ def _profiles_from_section(
             credential_ref=routing.CredentialRef.from_manifest_dict(provider["credential_ref"]),
             models=tuple(raw.get("models") or [raw["model"]]),
             base_url=provider.get("base_url", ""),
+            extra_headers=provider.get("extra_headers", {}),
             capability_overrides=raw.get("capability_overrides", {}),
             params=raw.get("params", {}), embedding_profile_id=raw.get("embedding_profile_id", ""),
         )
@@ -333,12 +334,23 @@ def resolve_runtime_plan(
             raise routing.ModelRoutingConfigError("Unsupported legacy stage execution strategy")
     generation_ids = {route.profile_id for route in plan.routes.values()}
     for profile in plan.profiles.values():
-        if profile.id in generation_ids and profile.params:
+        if (
+            profile.id in generation_ids
+            and profile.params
+            and profile.adapter != routing.ADAPTER_OPENAI_COMPATIBLE
+        ):
             raise routing.ModelRoutingConfigError("Profile params are not supported by legacy entrypoints; retain execution parameters in sync/batch")
         if profile.credential_ref.kind == "api_keys_json" and profile.credential_ref.name != "api_keys":
             raise routing.ModelRoutingConfigError("Unsupported Gemini credential slot")
         if profile.adapter == "gemini" and profile.credential_ref.kind != "api_keys_json":
             raise routing.ModelRoutingConfigError("Gemini legacy entrypoints require api_keys_json credentials")
+        if (
+            profile.adapter == routing.ADAPTER_OPENAI_COMPATIBLE
+            and profile.credential_ref.kind == "api_keys_json"
+        ):
+            raise routing.ModelRoutingConfigError(
+                "openai_compatible profiles require none/env/keyring credentials"
+            )
     profiles, routes, capabilities = dict(plan.profiles), dict(plan.routes), dict(plan.capabilities)
     for stage, model in (stage_overrides or {}).items():
         if not str(model or "").strip():
