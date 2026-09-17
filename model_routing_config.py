@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 from openai_compatible_contract import (
     GENERATION_PARAM_KEYS,
     STRUCTURED_OUTPUT_MODES,
+    is_sensitive_header,
 )
 
 
@@ -37,26 +38,6 @@ KNOWN_ADAPTERS = frozenset({
 })
 
 OPENAI_COMPATIBLE_GENERATION_PARAM_KEYS = GENERATION_PARAM_KEYS
-_SENSITIVE_HEADER_MARKERS = (
-    "authorization",
-    "apikey",
-    "api-key",
-    "token",
-    "secret",
-    "password",
-    "cookie",
-)
-_SENSITIVE_HEADER_VALUE_MARKERS = (
-    "bearer ",
-    "api_key=",
-    "apikey=",
-    "access_token=",
-    "token=",
-    "secret=",
-    "password=",
-)
-_SK_KEY_PATTERN = re.compile(r"(?:^|[\s,;=:])sk-[a-z0-9_-]{8,}")
-
 STRATEGY_SYNC = "sync"
 STRATEGY_GEMINI_BATCH = "gemini_batch"
 KNOWN_EXECUTION_STRATEGIES = frozenset({
@@ -334,26 +315,11 @@ def _validate_extra_headers(raw: object, path: str) -> list[ConfigContractIssue]
                 "extra header names must be ASCII and values must be Latin-1 encodable.",
             ))
             continue
-        normalized = re.sub(r"[^a-z0-9]", "", key.casefold())
-        if any(
-            re.sub(r"[^a-z0-9]", "", marker) in normalized
-            for marker in _SENSITIVE_HEADER_MARKERS
-        ):
+        if is_sensitive_header(key, value):
             issues.append(_issue(
                 f"{path}.{key}",
                 "sensitive_extra_header",
                 "Credential-bearing headers must use credential_ref, not extra_headers.",
-            ))
-            continue
-        lowered_value = value.casefold()
-        if any(
-            marker in lowered_value
-            for marker in _SENSITIVE_HEADER_VALUE_MARKERS
-        ) or _SK_KEY_PATTERN.search(lowered_value):
-            issues.append(_issue(
-                f"{path}.{key}",
-                "sensitive_extra_header",
-                "extra header values look like credentials; use credential_ref instead.",
             ))
     return issues
 

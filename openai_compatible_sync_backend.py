@@ -21,6 +21,7 @@ from openai_compatible_contract import (
     DEFAULT_STRUCTURED_OUTPUT_MODE,
     REQUEST_BODY_PARAM_KEYS,
     STRUCTURED_OUTPUT_MODES,
+    is_sensitive_header,
 )
 from sync_model_backend import (
     SYNC_EXECUTION_MODE,
@@ -369,6 +370,24 @@ class OpenAICompatibleSyncBackend:
         for key, value in self._extra_headers.items():
             if not key or not value:
                 continue
+            if any(marker in key or marker in value for marker in ("\r", "\n")):
+                raise SyncBackendError(
+                    "unsupported_capability",
+                    request_metadata={
+                        "provider": self.provider,
+                        "reason": "invalid_extra_header",
+                    },
+                )
+            if is_sensitive_header(key, value):
+                # Defense in depth: an unvalidated/tolerated config path must
+                # not be able to override Authorization or smuggle credentials.
+                raise SyncBackendError(
+                    "unsupported_capability",
+                    request_metadata={
+                        "provider": self.provider,
+                        "reason": "sensitive_extra_header",
+                    },
+                )
             try:
                 key.encode("ascii")
                 value.encode("latin-1")

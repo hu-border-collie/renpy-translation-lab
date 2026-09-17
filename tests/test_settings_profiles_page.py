@@ -849,6 +849,14 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         self.assertEqual(provider["extra_headers"], {})
         self.assertTrue(self.messages)
 
+    def test_non_string_extra_header_value_does_not_write(self) -> None:
+        provider_id = self._apply_openai_preset()
+        self.page.provider_extra_headers_edit.setText('{"X-Test": null}')
+        self.page._on_provider_fields_changed()
+        provider = self.page.collect()["model_routing"]["providers"][provider_id]
+        self.assertEqual(provider["extra_headers"], {})
+        self.assertTrue(self.messages)
+
     def test_structured_output_mode_round_trip(self) -> None:
         self.page.profiles_list.setCurrentRow(0)
         profile_id = self.page._selected_profile_id

@@ -392,6 +392,35 @@ class CredentialAndHeaderTests(unittest.TestCase):
             "invalid_extra_header",
         )
 
+    def test_extra_headers_cannot_override_authorization(self) -> None:
+        transport = RecordingTransport(json_response(chat_payload()))
+        backend = make_backend(
+            transport,
+            api_key="real-key",
+            extra_headers={"Authorization": "Bearer attacker"},
+        )
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(captured.exception.category, "unsupported_capability")
+        self.assertEqual(
+            captured.exception.request_metadata["reason"],
+            "sensitive_extra_header",
+        )
+        self.assertEqual(transport.calls, [])
+
+    def test_extra_headers_reject_crlf(self) -> None:
+        backend = make_backend(
+            RecordingTransport(json_response(chat_payload())),
+            extra_headers={"X-Trace": "value\r\nX-Evil: 1"},
+        )
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(captured.exception.category, "unsupported_capability")
+        self.assertEqual(
+            captured.exception.request_metadata["reason"],
+            "invalid_extra_header",
+        )
+
 
 class ResponseAndErrorTests(unittest.TestCase):
     def test_reasoning_is_not_mixed_into_final_text(self) -> None:

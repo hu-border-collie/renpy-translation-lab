@@ -1254,7 +1254,17 @@ class ProfilesSettingsPage(QObject):
                 )
             )
             return None
-        return {str(key): str(item) for key, item in value.items()}
+        parsed: dict[str, str] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip() or not isinstance(item, str):
+                self._show_status(
+                    MODEL_PROFILES_PAGE_COPY["extra_headers_invalid"].format(
+                        reason="键和值都必须是字符串"
+                    )
+                )
+                return None
+            parsed[key] = item
+        return parsed
 
     def _on_provider_preset_selected(self, _index: int) -> None:
         """Fill the selected provider connection from one built-in preset."""
