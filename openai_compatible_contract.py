@@ -25,3 +25,15 @@ GENERATION_PARAM_KEYS = frozenset({
     "stop",
     "timeout",
 })
+
+# Keys that map 1:1 into the Chat Completions JSON body.  ``max_output_tokens``
+# is renamed to ``max_tokens`` and ``timeout`` is transport-only, so neither may
+# be copied into the request body as an unknown provider parameter.
+REQUEST_BODY_PARAM_KEYS = frozenset({
+    "temperature",
+    "top_p",
+    "frequency_penalty",
+    "presence_penalty",
+    "seed",
+    "stop",
+})

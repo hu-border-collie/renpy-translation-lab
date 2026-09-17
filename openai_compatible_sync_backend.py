@@ -19,7 +19,7 @@ from typing import Any, Callable, Mapping
 
 from openai_compatible_contract import (
     DEFAULT_STRUCTURED_OUTPUT_MODE,
-    GENERATION_PARAM_KEYS,
+    REQUEST_BODY_PARAM_KEYS,
     STRUCTURED_OUTPUT_MODES,
 )
 from sync_model_backend import (
@@ -29,8 +29,6 @@ from sync_model_backend import (
     SyncGenerationResult,
     normalize_sync_timeout_seconds,
 )
-
-_GENERATION_PARAM_KEYS = GENERATION_PARAM_KEYS
 
 # Gemini-only / adapter-internal options that must never leak into a Chat
 # Completions body.  ``safety_settings`` fails closed because dropping it would
@@ -451,7 +449,7 @@ class OpenAICompatibleSyncBackend:
             "messages": _build_messages(request.contents, config),
             "stream": False,
         }
-        for key in _GENERATION_PARAM_KEYS:
+        for key in REQUEST_BODY_PARAM_KEYS:
             if key in config and config[key] is not None:
                 payload[key] = config[key]
         max_output_tokens = config.get("max_output_tokens")

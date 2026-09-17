@@ -135,6 +135,8 @@ class RequestShapeTests(unittest.TestCase):
         self.assertEqual(call["body"]["model"], "org/model-x")
         self.assertEqual(call["body"]["temperature"], 0.2)
         self.assertEqual(call["body"]["max_tokens"], 256)
+        self.assertNotIn("timeout", call["body"])
+        self.assertNotIn("max_output_tokens", call["body"])
         self.assertFalse(call["body"]["stream"])
         self.assertNotIn("response_format", call["body"])
         self.assertEqual(result.provider, "openai")
@@ -205,6 +207,8 @@ class RequestShapeTests(unittest.TestCase):
         )
         self.assertEqual(transport.calls[0]["body"]["temperature"], 0.9)
         self.assertEqual(transport.calls[0]["body"]["max_tokens"], 64)
+        self.assertNotIn("max_output_tokens", transport.calls[0]["body"])
+        self.assertNotIn("timeout", transport.calls[0]["body"])
 
 
 class StructuredOutputTests(unittest.TestCase):

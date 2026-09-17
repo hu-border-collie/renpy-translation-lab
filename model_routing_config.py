@@ -48,7 +48,6 @@ _SENSITIVE_HEADER_MARKERS = (
 )
 _SENSITIVE_HEADER_VALUE_MARKERS = (
     "bearer ",
-    "sk-",
     "api_key=",
     "apikey=",
     "access_token=",
@@ -56,6 +55,7 @@ _SENSITIVE_HEADER_VALUE_MARKERS = (
     "secret=",
     "password=",
 )
+_SK_KEY_PATTERN = re.compile(r"(?:^|[\s,;=:])sk-[a-z0-9_-]{8,}")
 
 STRATEGY_SYNC = "sync"
 STRATEGY_GEMINI_BATCH = "gemini_batch"
@@ -346,7 +346,10 @@ def _validate_extra_headers(raw: object, path: str) -> list[ConfigContractIssue]
             ))
             continue
         lowered_value = value.casefold()
-        if any(marker in lowered_value for marker in _SENSITIVE_HEADER_VALUE_MARKERS):
+        if any(
+            marker in lowered_value
+            for marker in _SENSITIVE_HEADER_VALUE_MARKERS
+        ) or _SK_KEY_PATTERN.search(lowered_value):
             issues.append(_issue(
                 f"{path}.{key}",
                 "sensitive_extra_header",

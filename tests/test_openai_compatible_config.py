@@ -222,6 +222,21 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertIn("sensitive_extra_header", issue_codes(section))
 
+    def test_api_key_shaped_extra_header_value_is_rejected(self) -> None:
+        section, _provider_id, _profile_id = direct_section(
+            extra_headers={"X-Auth": "sk-abcdefghijklmnop"}
+        )
+        self.assertIn("sensitive_extra_header", issue_codes(section))
+
+    def test_benign_extra_header_values_are_allowed(self) -> None:
+        section, _provider_id, _profile_id = direct_section(
+            extra_headers={
+                "X-Run-Mode": "task-1",
+                "X-Phase": "risk-free",
+            }
+        )
+        self.assertNotIn("sensitive_extra_header", issue_codes(section))
+
     def test_structured_output_modes_share_one_contract_source(self) -> None:
         import openai_compatible_contract as contract
         from openai_compatible_sync_backend import STRUCTURED_OUTPUT_MODES
