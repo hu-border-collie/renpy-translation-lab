@@ -14,7 +14,8 @@
 
 - [#488 翻译预检最小增量字段合同](issue-488-preflight-summary-contract.md)：
   冻结现有 `translate-preflight` payload 基线，以及成本 / coverage / 已有质量摘要三个最小新增字段的来源、
-  freshness / unknown 语义与 CLI/GUI 展示合同；实现按 S1 核心 → S2 界面 → S3 文档推进。
+  freshness / unknown 语义与 CLI/GUI 展示合同。S1 payload 与 S2/S3 展示/文档已落地；S1.5
+  durable Sync quality 来源仍待做。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、
   串行与子代理并行协作，以及首个 Ren'Py 章节实验。待评审、待验证，尚未实现。

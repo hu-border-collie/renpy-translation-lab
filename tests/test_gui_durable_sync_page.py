@@ -267,6 +267,105 @@ class DurableSyncAppWiringTests(unittest.TestCase):
             self.window._on_finished(0)
             QApplication.processEvents()
 
+    def test_preflight_facts_include_cost_coverage_and_quality(self) -> None:
+        payload = {
+            "strategy": "sync",
+            "profile": {"id": RUN_ID, "model": "gemini-3.5-flash"},
+            "project": {"root": "C:/game/work"},
+            "counts": {
+                "files_with_pending": 1,
+                "pending_items": 4,
+                "chunks": 1,
+            },
+            "chunk_policy": {"max_items": 60, "max_chars": 18000},
+            "context_sources": {"local_context": {"before": 30, "after": 10}},
+            "risks": [],
+            "cost": {
+                "status": "known",
+                "model": "gemini-3.5-flash",
+                "strategy": "sync",
+                "currency": "USD",
+                "estimated_cost_min": 0.0123,
+                "estimated_cost_max": 0.0456,
+                "pricing_source": "defaults",
+                "scope": "current_plan",
+                "excluded": ["provider 排队与重试"],
+            },
+            "coverage": {
+                "status": "ready",
+                "completion": "confirmed",
+                "classification_counts": {"translatable": 4},
+                "unknown_count": 0,
+                "parse_error_count": 0,
+            },
+            "quality_summary": {
+                "status": "available",
+                "finding_count": 2,
+                "severity_counts": {"high": 1, "medium": 1},
+            },
+        }
+        facts = self.window._format_translation_preflight_facts(payload)
+        self.assertIn("成本：", facts)
+        self.assertIn("0.0123", facts)
+        self.assertIn("本次初译计划", facts)
+        self.assertIn("final review / repair / embedding", facts)
+        self.assertIn("文本覆盖：", facts)
+        self.assertIn("translatable=4", facts)
+        self.assertIn("质量摘要：", facts)
+        self.assertIn("finding 2", facts)
+        self.assertNotIn("质量通过", facts)
+
+    def test_preflight_facts_unknown_and_stale_are_explicit(self) -> None:
+        payload = {
+            "strategy": "sync",
+            "profile": {"id": RUN_ID, "model": "gemini-3.5-flash"},
+            "project": {"root": "C:/game/work"},
+            "counts": {
+                "files_with_pending": 1,
+                "pending_items": 4,
+                "chunks": 1,
+            },
+            "chunk_policy": {"max_items": 60, "max_chars": 18000},
+            "context_sources": {},
+            "risks": [],
+            "cost": {"status": "unknown", "reason": "pricing_unavailable"},
+            "coverage": {"status": "unknown", "completion": "unknown"},
+            "quality_summary": {"status": "stale", "reason": "plan_mismatch"},
+        }
+        facts = self.window._format_translation_preflight_facts(payload)
+        self.assertIn("无法估算", facts)
+        self.assertIn("不能报告为覆盖完成", facts)
+        self.assertIn("过期", facts)
+        self.assertNotIn("免费", facts)
+        self.assertNotIn("质量通过", facts)
+        self.assertNotIn("¥0", facts)
+        self.assertNotIn("0.0", facts)
+
+    def test_preflight_facts_missing_summary_keys_do_not_crash(self) -> None:
+        payload = {
+            "strategy": "sync",
+            "profile": {"id": RUN_ID, "model": "gemini-3.5-flash"},
+            "project": {"root": "C:/game/work"},
+            "counts": {
+                "files_with_pending": 1,
+                "pending_items": 4,
+                "chunks": 1,
+            },
+            "chunk_policy": {"max_items": 60, "max_chars": 18000},
+            "context_sources": {},
+            "risks": [],
+        }
+        facts = self.window._format_translation_preflight_facts(payload)
+        self.assertIn("成本：", facts)
+        self.assertIn("文本覆盖：", facts)
+        self.assertIn("质量摘要：", facts)
+        self.assertIn("无法估算", facts)
+        self.assertNotIn("质量通过", facts)
+        self.assertNotIn("免费", facts)
+        empty_facts = self.window._format_translation_preflight_facts({})
+        self.assertIn("成本：", empty_facts)
+        self.assertNotIn("质量通过", empty_facts)
+
     def test_start_sync_translation_runs_durable_sync_start(self) -> None:
         self.window._on_start_translation()
         self._finish_preflight()

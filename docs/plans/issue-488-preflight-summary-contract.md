@@ -1,8 +1,9 @@
 # #488 翻译预检最小增量字段合同
 
-> **状态**：设计合同（待实现）。本文件冻结 #488 的“当前字段 + 最小新增字段 + 数据来源 + freshness / unknown 合同”；
+> **状态**：S1 已实现（payload 含 `cost` / `coverage` / `quality_summary`）；S2/S3（CLI/GUI 展示与现行文档）由本 PR 落地。S1.5（durable Sync quality 来源）尚未实现。
+> 本文件冻结 #488 的“当前字段 + 最小新增字段 + 数据来源 + freshness / unknown 合同”；
 > 实现与界面以代码和现行手册为准。
-> **基线**：`main@1ddd0be`；研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
+> **基线**：`main@1ddd0be`；S1 合入 `main@9ef609b`。研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
 > **关联**：#488、#348、#424、#457、#364。
 
 ## 1. 范围
@@ -138,12 +139,14 @@
 
 ## 5. CLI / GUI 展示合同
 
-- **CLI 文本**：在现有 facts 后增加 cost / coverage / quality 三行；`unknown` / `not_available` / `stale`
-  使用明确文案，不显示 0 成本或“通过”。
-- **CLI JSON**：新增 `cost` / `coverage` / `quality_summary` 三键；`--output json` 仍只输出 envelope。
-- **GUI**：`TRANSLATION_PREFLIGHT_COPY.body` 增加对应行（同一 payload，不另算）；
+- **CLI 文本**（S2）：在现有 counts facts 后、risks 前增加 cost / coverage / quality 三行；
+  `unknown` / `not_available` / `stale` 使用明确文案，不显示 0 成本或“通过”。
+- **CLI JSON**（S1）：payload 含 `cost` / `coverage` / `quality_summary` 三键；`--output json`
+  仍只输出 envelope，不改 envelope 形状。
+- **GUI**（S2）：`TRANSLATION_PREFLIGHT_COPY.body` 增加对应行（同一 payload，不另算）；
   阻塞 / 确认 / 零待译逻辑保持不变；预检结论不是 `check` / `apply` 授权。
-- 字段与文案由可复用核心生成，CLI 与 GUI 消费同一结果。
+- 字段与文案由 `preflight_display.format_preflight_summary_fields()` 生成，CLI 与 GUI 消费同一结果。
+  缺失字段不得渲染为“通过”或“¥0 / 免费”。
 
 ## 6. 非目标
 
@@ -153,12 +156,15 @@
 
 ## 7. 实施切片
 
-1. **S1 核心**：新增可复用 summary 函数（cost / coverage / quality）并接入 preflight payload；
+1. **S1 核心**（已合入）：新增可复用 summary 函数（cost / coverage / quality）并接入 preflight payload；
    单测覆盖已知 / 未知 / stale / not_available、项目与 plan 切换、mode/report/digest mismatch。
    S1 的 quality 来源仅 Batch latest manifest；durable Sync 来源（`find_latest_run` + bound preview manifest）
    列为后续切片 S1.5。
-2. **S2 界面**：CLI 文本 + GUI facts + `user_copy`，同步 argparse 帮助与 GUI 测试。
-3. **S3 文档**：更新本文件的实现状态与现行文档（`docs/quickstart_agent.md` / `docs/gui_workbench.md` 相关段落）。
+2. **S2 界面**（本 PR）：CLI 文本 + GUI facts + `user_copy`，共用 `preflight_display` 渲染器；
+   同步 argparse 帮助、诊断命令参考与 GUI 测试。
+3. **S3 文档**（本 PR）：更新本文件的实现状态与现行文档（`docs/quickstart_agent.md` /
+   `docs/gui_workbench.md` / `docs/sync_workflow.md` 相关段落）。
+4. **S1.5**（未做）：durable Sync quality 来源。
 
 ## 8. 验收映射
 

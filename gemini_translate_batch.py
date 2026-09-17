@@ -42,6 +42,7 @@ from embedding_backend import EmbeddingBackendError, EmbeddingContractError
 import batch_export
 import batch_cost_estimate
 import batch_non_chinese_rules
+import preflight_display
 import batch_submit_recovery
 import cli_contract
 import cli_discovery
@@ -20775,12 +20776,16 @@ def build_arg_parser():
         ),
     )
 
+    preflight_help = (
+        'Scan the project and report the shared TranslationPlan, cost, '
+        'coverage, existing quality summary, context sources and risks '
+        'without any provider or embedding call. Unknown cost is not shown '
+        'as zero; stale or missing quality reports are not shown as a pass.'
+    )
     preflight_parser = subparsers.add_parser(
         'translate-preflight',
-        help=(
-            'Scan the project and report the shared TranslationPlan, context '
-            'sources and risks without any provider or embedding call.'
-        ),
+        help=preflight_help,
+        description=preflight_help,
     )
     add_machine_output_argument(preflight_parser)
     preflight_parser.add_argument(
@@ -23061,6 +23066,8 @@ def _run_translate_preflight(args):
             f"pending_items={payload['counts']['pending_items']} "
             f"chunks={payload['counts']['chunks']}"
         )
+        for line in preflight_display.format_preflight_summary_lines(payload):
+            print(f'  {line}')
         for risk in risks:
             print(f"  [{risk['severity']}] {risk['code']}: {risk['message']}")
     return payload

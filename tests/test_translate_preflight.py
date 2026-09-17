@@ -347,8 +347,33 @@ class PreflightCommandTests(unittest.TestCase):
                 "model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
+            redirect_stdout(io.StringIO()),
         ):
             return batch.run_translate_preflight(args)
+
+    def _capture_preflight_text(self, context, extra_args=None):
+        argv = ["translate-preflight", *(extra_args or ["--strategy", "sync"])]
+        args = self.parser.parse_args(argv)
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(
+                runtime,
+                "prepare_sync_translation_execution_context",
+                return_value=context,
+            ),
+            mock.patch(
+                "model_capability_probe.default_credential_loader",
+                return_value="key",
+            ),
+            mock.patch.object(
+                batch,
+                "_read_translator_config_object",
+                return_value={},
+            ),
+            redirect_stdout(stdout),
+        ):
+            payload = batch.run_translate_preflight(args)
+        return payload, stdout.getvalue()
 
     def test_zero_pending_with_unconfirmed_coverage_blocks(self) -> None:
         context = fake_context(
@@ -806,6 +831,124 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(payload["status"], "blocked")
         codes = {risk["code"] for risk in payload["risks"]}
         self.assertIn("STRATEGY_NOT_SUPPORTED", codes)
+
+    def test_help_mentions_cost_coverage_and_quality_summaries(self) -> None:
+        stdout = io.StringIO()
+        with self.assertRaises(SystemExit), redirect_stdout(stdout):
+            self.parser.parse_args(["translate-preflight", "--help"])
+        help_text = stdout.getvalue().lower()
+        listing = self.parser.format_help().lower()
+        self.assertIn("cost", help_text)
+        self.assertIn("coverage", help_text)
+        self.assertIn("quality", help_text)
+        self.assertIn("unknown", help_text)
+        self.assertIn("translate-preflight", listing)
+        self.assertIn("cost", listing)
+
+    def test_text_output_shows_known_cost_and_coverage(self) -> None:
+        context = fake_context(
+            self.section,
+            coverage_report_value=coverage_report(
+                status="ready", counts={"translatable": 3}
+            ),
+        )
+        payload, text = self._capture_preflight_text(context)
+        self.assertEqual(payload["cost"]["status"], "known")
+        cost_line = next(line for line in text.splitlines() if "成本：" in line)
+        coverage_line = next(line for line in text.splitlines() if "文本覆盖：" in line)
+        quality_line = next(line for line in text.splitlines() if "质量摘要：" in line)
+        self.assertIn("gemini-3.5-flash", cost_line)
+        self.assertIn("–", cost_line)
+        self.assertIn("本次初译计划", cost_line)
+        self.assertIn("final review / repair / embedding", cost_line)
+        self.assertIn("translatable=3", coverage_line)
+        self.assertIn("没有可验证的已有质量报告", quality_line)
+        self.assertNotIn("免费", cost_line)
+        self.assertNotIn("质量通过", quality_line)
+        self.assertNotIn("覆盖完成", coverage_line)
+
+    def test_text_output_unknown_cost_does_not_show_zero(self) -> None:
+        section = routing_section()
+        section["profiles"]["gemini-main"]["model"] = "unpriced-model-xyz"
+        section["profiles"]["gemini-main"]["models"] = ["unpriced-model-xyz"]
+        context = fake_context(section)
+        with mock.patch.object(runtime, "MODEL_ROUTING_CONFIG", section):
+            payload, text = self._capture_preflight_text(context)
+        self.assertEqual(payload["cost"]["status"], "unknown")
+        cost_line = next(line for line in text.splitlines() if "成本：" in line)
+        self.assertIn("无法估算", cost_line)
+        self.assertIn("没有可用价格表", cost_line)
+        self.assertNotIn("免费", cost_line)
+        self.assertNotIn("0.0", cost_line)
+        self.assertNotIn("¥0", cost_line)
+
+    def test_text_output_quality_available_stale_and_not_available(self) -> None:
+        import hashlib
+
+        context = fake_context(
+            self.section,
+            coverage_report_value=coverage_report(
+                status="ready", counts={"translatable": 3}
+            ),
+            plan_fingerprint="plan-fingerprint-1",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_path = root / "quality_findings.jsonl"
+            report_path.write_text(
+                json.dumps({"reason_code": "dup", "severity": "medium"}) + "\n"
+                + json.dumps({"reason_code": "missing", "severity": "high"}) + "\n",
+                encoding="utf-8",
+            )
+            digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+            manifest_path = root / "manifest.json"
+            manifest = {
+                "mode": batch.MANIFEST_MODE_TRANSLATION,
+                "base_dir": runtime.BASE_DIR,
+                "tl_dir": runtime.TL_DIR,
+                "translation_plan": {"plan_fingerprint": "plan-fingerprint-1"},
+                "last_quality_findings_path": str(report_path),
+                "last_check_at": "2026-09-15T00:00:00",
+                "last_check_summary": {"quality_findings_sha256": digest},
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            cursor = root / "latest_manifest.txt"
+            cursor.write_text(str(manifest_path), encoding="utf-8")
+
+            with mock.patch.object(batch, "LATEST_MANIFEST_FILE", str(cursor)):
+                _payload, available_text = self._capture_preflight_text(
+                    context,
+                    extra_args=["--strategy", "gemini_batch"],
+                )
+                available_line = next(
+                    line for line in available_text.splitlines() if "质量摘要：" in line
+                )
+                self.assertIn("finding 2", available_line)
+                self.assertIn("high=1", available_line)
+                self.assertNotIn("质量通过", available_line)
+
+                manifest["translation_plan"]["plan_fingerprint"] = "other-plan"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                _payload, stale_text = self._capture_preflight_text(
+                    context,
+                    extra_args=["--strategy", "gemini_batch"],
+                )
+                stale_line = next(
+                    line for line in stale_text.splitlines() if "质量摘要：" in line
+                )
+                self.assertIn("过期", stale_line)
+                self.assertNotIn("finding", stale_line)
+                self.assertNotIn("质量通过", stale_line)
+
+        _payload, missing_text = self._capture_preflight_text(
+            context,
+            extra_args=["--strategy", "sync"],
+        )
+        missing_line = next(
+            line for line in missing_text.splitlines() if "质量摘要：" in line
+        )
+        self.assertIn("没有可验证的已有质量报告", missing_line)
+        self.assertNotIn("质量通过", missing_line)
 
     def test_json_mode_suppresses_human_preflight_stdout(self) -> None:
         context = fake_context(self.section)

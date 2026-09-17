@@ -43,7 +43,7 @@
 
 1. **主模型（ModelProfile）**：在 GUI 左导航「翻译」页首选择；Provider 连接、模型、能力覆盖与阶段路由在「设置 → 模型与 Provider」维护。
 2. **执行方式（ExecutionStrategy）**：该 profile 支持「同步」或「Gemini Batch」；不支持的组合会禁用并给出缺失能力说明。
-3. **CLI 对等**：`--profile` 选择本次运行的主模型（`sync-start --profile` / `build --profile`）；`profiles-show / profiles-validate / profiles-set-default / profiles-set-route` 用于查看与修改配置；`translate-preflight` 在不调用 Provider 的前提下预览条目、chunk、上下文来源与风险。
+3. **CLI 对等**：`--profile` 选择本次运行的主模型（`sync-start --profile` / `build --profile`）；`profiles-show / profiles-validate / profiles-set-default / profiles-set-route` 用于查看与修改配置；`translate-preflight` 在不调用 Provider 的前提下预览条目、chunk、上下文来源、成本 / coverage / 已有质量摘要与风险。
 4. **旧配置**：仍使用旧 `sync.*` / `batch.model` 的项目行为不变；迁移说明见 [模型配置迁移](docs/model_config_migration.md)。
 
 ### 安装基础环境
