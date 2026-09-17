@@ -1126,7 +1126,7 @@ class DurableSyncPreflightQualityTests(unittest.TestCase):
         summary = self._summarize()
         self.assertEqual(summary["status"], "available")
         self.assertEqual(summary["source"], "durable_sync_preview")
-        self.assertEqual(summary["manifest_path"], str(preview))
+        self.assertEqual(summary["manifest_path"], str(preview.resolve()))
         self.assertTrue(summary["generated_at"])
         self.assertGreater(summary["finding_count"], 0)
         self.assertGreaterEqual(summary["severity_counts"]["medium"], 1)
@@ -1198,6 +1198,32 @@ class DurableSyncPreflightQualityTests(unittest.TestCase):
             sha256_digest=file_sha256(preview),
             schema_version=sync_translation_preview.VERSION,
         )
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "unknown")
+        self.assertEqual(summary["reason"], "preview_manifest_unreadable")
+        self.assertEqual(summary["source"], "durable_sync_preview")
+
+    def test_invalid_preview_artifact_path_is_unknown(self) -> None:
+        import sqlite3
+
+        connection = sqlite3.connect(str(self.store.db_path))
+        try:
+            with connection:
+                connection.execute(
+                    "INSERT INTO artifacts("
+                    " run_id, kind, relative_path, sha256, schema_version, created_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        self.store.run_id,
+                        "preview_manifest",
+                        "../escape/manifest.json",
+                        "a" * 64,
+                        1,
+                        "2026-01-01T00:00:00Z",
+                    ),
+                )
+        finally:
+            connection.close()
         summary = self._summarize()
         self.assertEqual(summary["status"], "unknown")
         self.assertEqual(summary["reason"], "preview_manifest_unreadable")

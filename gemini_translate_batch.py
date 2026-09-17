@@ -22805,7 +22805,9 @@ def _summarize_durable_sync_quality(*, plan_fingerprint, base_dir, tl_dir):
         return _empty_quality_summary(
             'unknown', 'durable_sync_store_unreadable'
         )
-    except (OSError, ValueError):
+    except Exception:
+        # Preflight is a read-only diagnostic: a broken run store must
+        # degrade to unknown instead of aborting the CLI/GUI confirmation.
         return _empty_quality_summary('unknown', 'durable_sync_store_unreadable')
 
     try:
@@ -22821,7 +22823,9 @@ def _summarize_durable_sync_quality(*, plan_fingerprint, base_dir, tl_dir):
         preview_path = store.resolve_artifact_path(
             str(row.get('relative_path') or '')
         )
-    except (OSError, ValueError):
+    except Exception:
+        # ``resolve_artifact_path`` rejects absolute paths, traversal and
+        # symlink escapes; report unknown rather than leaking the failure.
         return _empty_quality_summary(
             'unknown',
             'preview_manifest_unreadable',
