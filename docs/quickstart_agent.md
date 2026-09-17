@@ -326,7 +326,7 @@ python gemini_translate_batch.py translate-preflight --strategy sync --output js
 
 `doctor` 不调用 Gemini，也不写回 `.rpy`。确认输出中的 `game_root`、`tl_subdir`、目录语言、生成目标和待译数量符合预期。生成目标当前只支持简体中文。遇到阻塞项时先修复；可选建议不应被误判为强制失败。
 
-`translate-preflight` 同样离线只读：扫描当前项目并构建共享 TranslationPlan，报告模型/策略、待处理计数、上下文来源、成本、本次扫描的 coverage 摘要、已有质量摘要与风险，不调用 Provider / embedding，也不执行 prepare。文本模式在 counts 后打印成本 / coverage / 质量三行；`--output json` 仍只输出 envelope。未知价格不能当成 0 或免费；`stale` / `not_available` 质量报告不能当成通过。预检 `ready` 不是 `check` / `apply` 授权。当前质量摘要只匹配 Batch latest manifest；durable Sync 质量来源尚未接入。
+`translate-preflight` 同样离线只读：扫描当前项目并构建共享 TranslationPlan，报告模型/策略、待处理计数、上下文来源、成本、本次扫描的 coverage 摘要、已有质量摘要与风险，不调用 Provider / embedding，也不执行 prepare。文本模式在 counts 后打印成本 / coverage / 质量三行；`--output json` 仍只输出 envelope。未知价格不能当成 0 或免费；`stale` / `not_available` 质量报告不能当成通过。预检 `ready` 不是 `check` / `apply` 授权。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配。
 
 ## 4. 执行安全 Batch 流程
 

@@ -15,7 +15,12 @@ import gemini_translate_batch as batch
 import model_profile
 import model_profiles_editor as editor
 import model_routing_reader as reader
+import sync_run_store
+import sync_translation_preview
+import translation_plan
 import translator_runtime as runtime
+from atomic_io import file_sha256, sha256_text
+from sync_run_contracts import build_run_id
 
 
 def routing_section(strategy: str = "sync") -> dict:
@@ -116,11 +121,14 @@ class PreflightCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         self.section = routing_section()
         self.parser = batch.build_arg_parser()
+        self._log_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._log_tmp.cleanup)
         self.legacy_patches = (
             mock.patch.object(runtime, "MODEL_ROUTING_CONFIG", self.section),
             mock.patch.object(runtime, "BASE_DIR", "C:/game/work"),
             mock.patch.object(runtime, "TL_DIR", "C:/game/work/game/tl/schinese"),
             mock.patch.object(runtime, "GENERATION_TARGET_LANGUAGE", "schinese"),
+            mock.patch.object(runtime, "LOG_DIR", self._log_tmp.name),
             mock.patch.object(runtime, "MAX_ITEMS", 60),
             mock.patch.object(runtime, "MAX_CHARS", 18000),
             mock.patch.object(runtime, "SYNC_RAG_ENABLED", False),
@@ -189,7 +197,7 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(payload["quality_summary"]["status"], "not_available")
         self.assertEqual(
             payload["quality_summary"]["reason"],
-            "quality_source_not_supported_for_strategy",
+            "durable_sync_run_missing",
         )
 
     def test_coverage_summary_keeps_live_status_and_gate_separate(self) -> None:
@@ -300,7 +308,7 @@ class PreflightCommandTests(unittest.TestCase):
                 self.assertEqual(sync_summary["status"], "not_available")
                 self.assertEqual(
                     sync_summary["reason"],
-                    "quality_source_not_supported_for_strategy",
+                    "durable_sync_run_missing",
                 )
 
                 manifest["translation_plan"]["plan_fingerprint"] = "other-plan"
@@ -996,6 +1004,211 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(envelope["result"]["counts"]["pending_items"], 1)
         self.assertNotIn("status", envelope["result"])
         cli_contract.parse_result_envelope(json.dumps(envelope))
+
+
+class DurableSyncPreflightQualityTests(unittest.TestCase):
+    """#488 S1.5: durable Sync quality summaries read bound preview artifacts."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.project_root = self.root / "game"
+        self.tl_dir = self.project_root / "tl" / "schinese"
+        self.tl_dir.mkdir(parents=True)
+        self.log_dir = self.root / "logs"
+        self.log_dir.mkdir()
+        self._log_patch = mock.patch.object(runtime, "LOG_DIR", str(self.log_dir))
+        self._log_patch.start()
+        self.addCleanup(self._log_patch.stop)
+        self.source_text = '    "Hello"\n'
+        self.preview_text = '    "你好..."\n'
+        self.plan_payload = self._make_plan_payload()
+        self.plan_fingerprint = str(self.plan_payload["plan_fingerprint"])
+        self.store, _ = sync_run_store.SyncRunStore.bootstrap(
+            self.log_dir / "sync_runs",
+            build_run_id(),
+            plan=self.plan_payload,
+            requests=[
+                {
+                    "request_id": "req-1",
+                    "plan_id": "plan-488-s15",
+                    "expected_ids": ["item-1"],
+                    "prompt_fingerprint": "p" * 16,
+                    "request_fingerprint": "r" * 16,
+                }
+            ],
+        )
+
+    def _make_plan_payload(self) -> dict:
+        payload = {
+            "schema_version": translation_plan.PLAN_SCHEMA_VERSION,
+            "plan_id": "plan-488-s15",
+            "run_id": "",
+            "execution_strategy": translation_plan.STRATEGY_SYNC,
+            "source_identity": {
+                "engine": "renpy",
+                "adapter_version": "v1",
+                "file_digests": {"a.rpy": sha256_text(self.source_text)},
+            },
+            "config_fingerprint": "b" * 16,
+            "model_profile_snapshot": {"provider": "fake"},
+            "chunk_policy": {},
+            "context_policy": {},
+            "chunks": [],
+            "request_summaries": [],
+            "artifacts": {},
+        }
+        fingerprint_payload = dict(payload)
+        fingerprint_payload.pop("run_id", None)
+        fingerprint_payload.pop("plan_fingerprint", None)
+        payload["plan_fingerprint"] = translation_plan.short_fingerprint(
+            translation_plan.canonical_json(fingerprint_payload)
+        )
+        return payload
+
+    def _create_preview(self) -> Path:
+        preview_path, _ = sync_translation_preview.create_sync_preview(
+            log_dir=self.store.run_dir,
+            project_root=self.project_root,
+            tl_dir=self.tl_dir,
+            files=[
+                {
+                    "relative_path": "a.rpy",
+                    "source_text": self.source_text,
+                    "preview_text": self.preview_text,
+                    "progress_entries": ["item-1"],
+                    "translated_items": 1,
+                    "quality_subjects": [
+                        {
+                            "item_id": "item-1",
+                            "file_rel_path": "a.rpy",
+                            "line": 0,
+                            "line_number": 1,
+                            "source": "Hello",
+                            "translation": "你好...",
+                        }
+                    ],
+                }
+            ],
+            translation_plan_payload=dict(self.plan_payload),
+            request_ids=[],
+            durable_check_binding={"writeback_gate": {"decision": "allow"}},
+        )
+        preview = Path(preview_path)
+        self.store.put_artifact(
+            kind="preview_manifest",
+            relative_path=str(
+                preview.resolve().relative_to(self.store.run_dir.resolve())
+            ),
+            sha256_digest=file_sha256(preview),
+            schema_version=sync_translation_preview.VERSION,
+        )
+        return preview
+
+    def _summarize(
+        self,
+        *,
+        strategy: str = "sync",
+        plan_fingerprint: str | None = None,
+        base_dir=None,
+        tl_dir=None,
+    ) -> dict:
+        return batch.summarize_preflight_quality(
+            plan_fingerprint=plan_fingerprint or self.plan_fingerprint,
+            base_dir=str(base_dir or self.project_root),
+            tl_dir=str(tl_dir or self.tl_dir),
+            strategy=strategy,
+        )
+
+    def test_available_summary_reads_bound_durable_sync_preview(self) -> None:
+        preview = self._create_preview()
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "available")
+        self.assertEqual(summary["source"], "durable_sync_preview")
+        self.assertEqual(summary["manifest_path"], str(preview))
+        self.assertTrue(summary["generated_at"])
+        self.assertGreater(summary["finding_count"], 0)
+        self.assertGreaterEqual(summary["severity_counts"]["medium"], 1)
+        self.assertTrue(summary["reason_counts"])
+        self.assertEqual(summary["matched_by"], ["project", "plan_fingerprint"])
+
+    def test_missing_run_is_not_available(self) -> None:
+        empty_log_dir = self.root / "empty-logs"
+        with mock.patch.object(runtime, "LOG_DIR", str(empty_log_dir)):
+            summary = self._summarize()
+        self.assertEqual(summary["status"], "not_available")
+        self.assertEqual(summary["reason"], "durable_sync_run_missing")
+        self.assertEqual(summary["source"], "none")
+
+    def test_run_without_check_is_not_available(self) -> None:
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "not_available")
+        self.assertEqual(summary["reason"], "durable_sync_check_not_run")
+        self.assertEqual(summary["source"], "none")
+
+    def test_project_and_plan_binding_mismatch_is_stale(self) -> None:
+        self._create_preview()
+        plan_mismatch = self._summarize(plan_fingerprint="other-plan")
+        self.assertEqual(plan_mismatch["status"], "stale")
+        self.assertEqual(plan_mismatch["reason"], "plan_mismatch")
+        project_mismatch = self._summarize(base_dir=str(self.root / "other-game"))
+        self.assertEqual(project_mismatch["status"], "stale")
+        self.assertEqual(project_mismatch["reason"], "project_mismatch")
+
+    def test_preview_artifact_digest_mismatch_is_stale(self) -> None:
+        preview = self._create_preview()
+        preview.write_text("{}\n", encoding="utf-8")
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "stale")
+        self.assertEqual(summary["reason"], "preview_manifest_mismatch")
+
+    def test_report_digest_mismatch_is_stale(self) -> None:
+        preview = self._create_preview()
+        manifest = sync_translation_preview.load_sync_preview(str(preview))
+        report = (
+            Path(manifest["_manifest_path"]).parent
+            / manifest["last_quality_findings_path"]
+        )
+        report.write_text("{}\n", encoding="utf-8")
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "stale")
+        self.assertEqual(summary["reason"], "report_digest_mismatch")
+
+    def test_missing_report_is_stale(self) -> None:
+        preview = self._create_preview()
+        manifest = sync_translation_preview.load_sync_preview(str(preview))
+        report = (
+            Path(manifest["_manifest_path"]).parent
+            / manifest["last_quality_findings_path"]
+        )
+        report.unlink()
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "stale")
+        self.assertEqual(summary["reason"], "report_missing")
+
+    def test_corrupt_preview_manifest_is_unknown(self) -> None:
+        preview = self._create_preview()
+        preview.write_text("{not json\n", encoding="utf-8")
+        self.store.put_artifact(
+            kind="preview_manifest",
+            relative_path=str(
+                preview.resolve().relative_to(self.store.run_dir.resolve())
+            ),
+            sha256_digest=file_sha256(preview),
+            schema_version=sync_translation_preview.VERSION,
+        )
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "unknown")
+        self.assertEqual(summary["reason"], "preview_manifest_unreadable")
+        self.assertEqual(summary["source"], "durable_sync_preview")
+
+    def test_non_sync_strategy_keeps_explicit_reason(self) -> None:
+        summary = self._summarize(strategy="other-strategy")
+        self.assertEqual(summary["status"], "not_available")
+        self.assertEqual(
+            summary["reason"], "quality_source_not_supported_for_strategy"
+        )
 
 
 class PreflightNoProviderCallTests(unittest.TestCase):

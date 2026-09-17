@@ -22594,12 +22594,14 @@ def run_translate_preflight(args):
         return _run_translate_preflight(args)
 
 
-def _empty_quality_summary(status, reason='', *, manifest_path=''):
-    """Return the #488 S1 quality-summary shape for a non-available state."""
+def _empty_quality_summary(status, reason='', *, manifest_path='', source=None):
+    """Return the #488 quality-summary shape for a non-available state."""
 
+    if source is None:
+        source = 'latest_manifest' if manifest_path else 'none'
     return {
         'status': status,
-        'source': 'latest_manifest' if manifest_path else 'none',
+        'source': source,
         'manifest_path': manifest_path,
         'report_path': '',
         'finding_count': 0,
@@ -22608,6 +22610,33 @@ def _empty_quality_summary(status, reason='', *, manifest_path=''):
         'generated_at': '',
         'matched_by': [],
         'reason': reason,
+    }
+
+
+def _quality_summary_from_findings(
+    findings, *, source, manifest_path, report_path, generated_at, matched_by
+):
+    """Build the #488 available quality summary from normalized findings."""
+
+    severity_counts = {'info': 0, 'low': 0, 'medium': 0, 'high': 0}
+    reason_counts = {}
+    for finding in findings:
+        severity = str(finding.get('severity') or 'info').strip().lower()
+        severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        reason_code = str(finding.get('reason_code') or '').strip()
+        if reason_code:
+            reason_counts[reason_code] = reason_counts.get(reason_code, 0) + 1
+    return {
+        'status': 'available',
+        'source': source,
+        'manifest_path': str(manifest_path or ''),
+        'report_path': str(report_path or ''),
+        'finding_count': len(findings),
+        'severity_counts': severity_counts,
+        'reason_counts': reason_counts,
+        'generated_at': str(generated_at or ''),
+        'matched_by': list(matched_by),
+        'reason': '',
     }
 
 
@@ -22686,23 +22715,9 @@ def summarize_preflight_coverage(adapter_snapshot):
     return summary
 
 
-def summarize_preflight_quality(
-    *, plan_fingerprint, base_dir, tl_dir, strategy='gemini_batch'
-):
-    """Summarize an existing, identity-matched quality report (#488 S1).
+def _summarize_latest_manifest_quality(*, plan_fingerprint, base_dir, tl_dir):
+    """Summarize the latest translated Batch manifest's quality report."""
 
-    S1 only reads the latest translated manifest (Batch path). Durable Sync
-    reports live in the run store and need a separate source; for ``sync`` the
-    summary is honestly ``not_available`` instead of matching a Batch report.
-    The report is only ``available`` when it belongs to the same project and
-    the same translation plan fingerprint; a latest pointer or file timestamp
-    alone is never treated as a match.
-    """
-
-    if str(strategy or '') != model_profile.ExecutionStrategy.GEMINI_BATCH.value:
-        return _empty_quality_summary(
-            'not_available', 'quality_source_not_supported_for_strategy'
-        )
     cursor = _read_latest_manifest_cursor_unlocked()
     if not cursor or not os.path.isfile(cursor):
         return _empty_quality_summary('not_available', 'latest_manifest_missing')
@@ -22752,28 +22767,209 @@ def summarize_preflight_quality(
         return _empty_quality_summary(
             'unknown', 'report_unreadable', manifest_path=cursor
         )
-    severity_counts = {'info': 0, 'low': 0, 'medium': 0, 'high': 0}
-    reason_counts = {}
-    for finding in findings:
-        severity = str(finding.get('severity') or 'info').strip().lower()
-        severity_counts[severity] = severity_counts.get(severity, 0) + 1
-        reason_code = str(finding.get('reason_code') or '').strip()
-        if reason_code:
-            reason_counts[reason_code] = reason_counts.get(reason_code, 0) + 1
-    return {
-        'status': 'available',
-        'source': 'latest_manifest',
-        'manifest_path': cursor,
-        'report_path': report_path,
-        'finding_count': len(findings),
-        'severity_counts': severity_counts,
-        'reason_counts': reason_counts,
-        'generated_at': str(
+    return _quality_summary_from_findings(
+        findings,
+        source='latest_manifest',
+        manifest_path=cursor,
+        report_path=report_path,
+        generated_at=str(
             manifest.get('last_check_at') or manifest.get('created_at') or ''
         ),
-        'matched_by': ['project', 'plan_fingerprint'],
-        'reason': '',
-    }
+        matched_by=['project', 'plan_fingerprint'],
+    )
+
+
+def _summarize_durable_sync_quality(*, plan_fingerprint, base_dir, tl_dir):
+    """Summarize the checked preview bound to the latest durable Sync run.
+
+    Durable Sync stores quality findings inside the run directory and binds the
+    checked preview manifest as a ``preview_manifest`` run artifact.  The
+    summary is only ``available`` when that artifact, the preview's
+    project/plan binding and the findings digest all match.  A run without a
+    completed check is honestly ``not_available``; a latest pointer or file
+    timestamp alone is never treated as a match.
+    """
+
+    from sync_run_contracts import ErrorCode, SyncRunError
+    from sync_run_service import find_latest_run
+    from sync_run_store import SyncRunStore
+
+    root = _durable_sync_root_dir()
+    try:
+        run_id = find_latest_run(root)
+    except SyncRunError as exc:
+        if exc.code is ErrorCode.SYNC_RUN_NOT_FOUND:
+            return _empty_quality_summary(
+                'not_available', 'durable_sync_run_missing'
+            )
+        return _empty_quality_summary(
+            'unknown', 'durable_sync_store_unreadable'
+        )
+    except (OSError, ValueError):
+        return _empty_quality_summary('unknown', 'durable_sync_store_unreadable')
+
+    try:
+        store = SyncRunStore(root, run_id)
+        row = store.get_artifact(kind='preview_manifest')
+    except (Exception, SystemExit):
+        return _empty_quality_summary('unknown', 'durable_sync_store_unreadable')
+    if row is None:
+        return _empty_quality_summary(
+            'not_available', 'durable_sync_check_not_run'
+        )
+    try:
+        preview_path = store.resolve_artifact_path(
+            str(row.get('relative_path') or '')
+        )
+    except (OSError, ValueError):
+        return _empty_quality_summary(
+            'unknown',
+            'preview_manifest_unreadable',
+            source='durable_sync_preview',
+        )
+    try:
+        preview_matches = (
+            preview_path.is_file()
+            and file_sha256(preview_path) == str(row.get('sha256') or '')
+        )
+    except OSError:
+        return _empty_quality_summary(
+            'unknown',
+            'preview_manifest_unreadable',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    if not preview_matches:
+        return _empty_quality_summary(
+            'stale',
+            'preview_manifest_mismatch',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    try:
+        manifest = sync_translation_preview.load_sync_preview(str(preview_path))
+    except Exception:
+        return _empty_quality_summary(
+            'unknown',
+            'preview_manifest_unreadable',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    if not (
+        _same_project_path(manifest.get('project_root'), base_dir)
+        and _same_project_path(manifest.get('tl_dir'), tl_dir)
+    ):
+        return _empty_quality_summary(
+            'stale',
+            'project_mismatch',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    plan = manifest.get('translation_plan')
+    plan = dict(plan) if isinstance(plan, dict) else {}
+    manifest_fingerprint = str(
+        manifest.get('plan_fingerprint') or plan.get('plan_fingerprint') or ''
+    )
+    expected_fingerprint = str(plan_fingerprint or '')
+    if (
+        not expected_fingerprint
+        or not manifest_fingerprint
+        or manifest_fingerprint != expected_fingerprint
+    ):
+        return _empty_quality_summary(
+            'stale',
+            'plan_mismatch',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    package_dir = Path(str(manifest.get('_manifest_path') or preview_path)).parent
+    raw_report_path = str(manifest.get('last_quality_findings_path') or '')
+    if not raw_report_path:
+        return _empty_quality_summary(
+            'stale',
+            'report_missing',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    try:
+        report_path = sync_translation_preview.resolve_preview_artifact_path(
+            package_dir, raw_report_path
+        )
+    except (OSError, ValueError):
+        return _empty_quality_summary(
+            'unknown',
+            'preview_manifest_unreadable',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    if not report_path.is_file():
+        return _empty_quality_summary(
+            'stale',
+            'report_missing',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    expected_digest = str(manifest.get('quality_findings_sha256') or '')
+    if expected_digest:
+        try:
+            digest_matches = file_sha256(report_path) == expected_digest
+        except OSError:
+            return _empty_quality_summary(
+                'unknown',
+                'report_unreadable',
+                manifest_path=str(preview_path),
+                source='durable_sync_preview',
+            )
+        if not digest_matches:
+            return _empty_quality_summary(
+                'stale',
+                'report_digest_mismatch',
+                manifest_path=str(preview_path),
+                source='durable_sync_preview',
+            )
+    try:
+        findings = quality_report_export.load_quality_findings(str(report_path))
+    except Exception:
+        return _empty_quality_summary(
+            'unknown',
+            'report_unreadable',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    return _quality_summary_from_findings(
+        findings,
+        source='durable_sync_preview',
+        manifest_path=str(preview_path),
+        report_path=str(report_path),
+        generated_at=str(manifest.get('created_at') or ''),
+        matched_by=['project', 'plan_fingerprint'],
+    )
+
+
+def summarize_preflight_quality(
+    *, plan_fingerprint, base_dir, tl_dir, strategy='gemini_batch'
+):
+    """Summarize an existing, identity-matched quality report (#488 S1/S1.5).
+
+    Batch reads the latest translated manifest; durable Sync reads the checked
+    preview artifact bound to the latest run.  Both sources only report
+    ``available`` when the report belongs to the same project and the same
+    translation plan fingerprint; a latest pointer or file timestamp alone is
+    never treated as a match.
+    """
+
+    strategy_value = str(strategy or '')
+    if strategy_value == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        return _summarize_latest_manifest_quality(
+            plan_fingerprint=plan_fingerprint, base_dir=base_dir, tl_dir=tl_dir
+        )
+    if strategy_value == model_profile.ExecutionStrategy.SYNC.value:
+        return _summarize_durable_sync_quality(
+            plan_fingerprint=plan_fingerprint, base_dir=base_dir, tl_dir=tl_dir
+        )
+    return _empty_quality_summary(
+        'not_available', 'quality_source_not_supported_for_strategy'
+    )
 
 
 def _run_translate_preflight(args):
