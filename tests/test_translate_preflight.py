@@ -1175,6 +1175,27 @@ class DurableSyncPreflightQualityTests(unittest.TestCase):
         self.assertEqual(summary["status"], "stale")
         self.assertEqual(summary["reason"], "report_digest_mismatch")
 
+    def test_preview_without_report_digest_is_stale(self) -> None:
+        preview = self._create_preview()
+        manifest = json.loads(preview.read_text(encoding="utf-8"))
+        manifest.pop("quality_findings_sha256", None)
+        manifest["preview_fingerprint"] = sync_translation_preview._fingerprint(
+            manifest
+        )
+        preview.write_text(json.dumps(manifest), encoding="utf-8")
+        self.store.put_artifact(
+            kind="preview_manifest",
+            relative_path=str(
+                preview.resolve().relative_to(self.store.run_dir.resolve())
+            ),
+            sha256_digest=file_sha256(preview),
+            schema_version=sync_translation_preview.VERSION,
+        )
+        summary = self._summarize()
+        self.assertEqual(summary["status"], "stale")
+        self.assertEqual(summary["reason"], "report_digest_missing")
+        self.assertEqual(summary["source"], "durable_sync_preview")
+
     def test_missing_report_is_stale(self) -> None:
         preview = self._create_preview()
         manifest = sync_translation_preview.load_sync_preview(str(preview))

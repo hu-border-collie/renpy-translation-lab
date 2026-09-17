@@ -22914,23 +22914,29 @@ def _summarize_durable_sync_quality(*, plan_fingerprint, base_dir, tl_dir):
             source='durable_sync_preview',
         )
     expected_digest = str(manifest.get('quality_findings_sha256') or '')
-    if expected_digest:
-        try:
-            digest_matches = file_sha256(report_path) == expected_digest
-        except OSError:
-            return _empty_quality_summary(
-                'unknown',
-                'report_unreadable',
-                manifest_path=str(preview_path),
-                source='durable_sync_preview',
-            )
-        if not digest_matches:
-            return _empty_quality_summary(
-                'stale',
-                'report_digest_mismatch',
-                manifest_path=str(preview_path),
-                source='durable_sync_preview',
-            )
+    if not expected_digest:
+        return _empty_quality_summary(
+            'stale',
+            'report_digest_missing',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    try:
+        digest_matches = file_sha256(report_path) == expected_digest
+    except OSError:
+        return _empty_quality_summary(
+            'unknown',
+            'report_unreadable',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
+    if not digest_matches:
+        return _empty_quality_summary(
+            'stale',
+            'report_digest_mismatch',
+            manifest_path=str(preview_path),
+            source='durable_sync_preview',
+        )
     try:
         findings = quality_report_export.load_quality_findings(str(report_path))
     except Exception:

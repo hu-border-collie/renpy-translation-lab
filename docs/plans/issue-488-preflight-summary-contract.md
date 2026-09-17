@@ -129,7 +129,7 @@
     3. preview `plan_fingerprint` == 当前 plan fingerprint；
     4. `quality_findings.jsonl` 位于预览包内，且内容与 `quality_findings_sha256` 一致。
 - **not_available**：Batch 没有 latest manifest；durable Sync 没有运行记录，或最新运行尚未完成 `check`。
-  **stale**：找到 manifest / preview，但项目、计划、artifact 或报告摘要任一条件不满足；
+  **stale**：找到 manifest / preview，但项目、计划、artifact、报告或摘要记录任一条件不满足；
   **unknown**：运行存储、manifest 或报告读取失败、格式不可解析。
 - 不启动模型审校、不把 warning 当作“质量通过”；初译前无报告时绝不显示“质量通过”。
 - 仅按文件时间或 latest 指针不能认定匹配；项目、任务、源/结果或 profile 切换后不得沿用旧摘要。
