@@ -1266,6 +1266,7 @@ class ProfilesSettingsPage(QObject):
             return
         payload = openai_compatible_presets.preset_provider_payload(preset_id)
         credential = payload["credential_ref"]
+        preset_mode = str(payload.get("structured_output_mode") or "")
         try:
             self._section = editor.update_provider(
                 self._section,
@@ -1280,6 +1281,12 @@ class ProfilesSettingsPage(QObject):
                 credential_env_name=credential["env_name"],
                 extra_headers=payload["extra_headers"],
             )
+            if preset_mode:
+                self._section = self._apply_preset_structured_mode(
+                    self._section,
+                    self._selected_provider_id,
+                    preset_mode,
+                )
         except editor.ModelProfilesEditorError as exc:
             self._show_error(exc)
             return
@@ -1288,6 +1295,36 @@ class ProfilesSettingsPage(QObject):
         self._refresh_defaults()
         self._refresh_routes()
         self._populate_provider_editor()
+
+    @staticmethod
+    def _apply_preset_structured_mode(
+        section: dict,
+        provider_id: str,
+        mode: str,
+    ) -> dict:
+        """Apply a preset's structured-output mode to profiles without one.
+
+        Profiles that already declare an explicit mode keep it; the preset is a
+        connection suggestion, not an override of an intentional capability
+        decision.
+        """
+
+        for profile in editor.editor_view(section)["profiles"]:
+            if str(profile.get("provider_id") or "") != provider_id:
+                continue
+            overrides = dict(profile.get("capability_overrides") or {})
+            structured = overrides.get("structured_output")
+            if isinstance(structured, Mapping) and str(
+                structured.get("mode") or ""
+            ).strip():
+                continue
+            overrides["structured_output"] = {"mode": mode}
+            section = editor.update_profile(
+                section,
+                str(profile["id"]),
+                capability_overrides=overrides,
+            )
+        return section
 
     def _on_defaults_changed(self, *_args: object) -> None:
         if self._loading or self._section is None:

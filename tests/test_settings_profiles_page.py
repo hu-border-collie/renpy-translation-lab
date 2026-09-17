@@ -804,6 +804,36 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         )
         self.assertEqual(provider["extra_headers"], {})
 
+    def test_provider_preset_applies_mode_to_unset_profile(self) -> None:
+        provider_id = self._apply_openai_preset()
+        profiles = [
+            profile
+            for profile in editor.editor_view(
+                self.page.collect()["model_routing"]
+            )["profiles"]
+            if profile["provider_id"] == provider_id
+        ]
+        self.assertTrue(profiles)
+        for profile in profiles:
+            self.assertEqual(
+                profile["capability_overrides"]["structured_output"],
+                {"mode": "strict_json_schema"},
+            )
+
+    def test_provider_preset_keeps_explicit_profile_mode(self) -> None:
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+        combo = self.page.profile_structured_output_combo
+        combo.setCurrentIndex(combo.findData("json_object"))
+        self.page._on_profile_capabilities_changed()
+
+        self._apply_openai_preset()
+
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertEqual(overrides["structured_output"], {"mode": "json_object"})
+
     def test_provider_extra_headers_round_trip(self) -> None:
         provider_id = self._apply_openai_preset()
         self.page.provider_extra_headers_edit.setText('{"X-Trace": "abc"}')

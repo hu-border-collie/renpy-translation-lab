@@ -401,6 +401,10 @@ class OpenAICompatibleSyncBackend:
             return value
         if kind == "keyring":
             name = str(ref.get("name") or self.provider or "").strip()
+            # ``litellm_provider_config`` is a credential-reference reader; it
+            # does not import the LiteLLM runtime at module import time.  A
+            # genuine import failure is still reported as missing_dependency
+            # instead of being mislabeled as a bad credential.
             try:
                 from litellm_provider_config import load_provider_api_key
             except Exception as exc:

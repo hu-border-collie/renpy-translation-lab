@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import importlib
+import sys
 import unittest
+from unittest import mock
 
 import model_profile as routing
 import model_profiles_editor as editor
@@ -297,6 +300,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(payload["base_url"], "https://api.openai.com/v1")
         self.assertEqual(payload["credential_ref"]["env_name"], "OPENAI_API_KEY")
         self.assertEqual(payload["extra_headers"], {})
+        self.assertEqual(payload["structured_output_mode"], "strict_json_schema")
 
     def test_ollama_preset_is_keyless(self) -> None:
         preset = presets.get_preset("ollama")
@@ -306,6 +310,16 @@ class PresetTests(unittest.TestCase):
     def test_custom_preset_defaults_to_conservative_mode(self) -> None:
         preset = presets.get_preset("custom")
         self.assertEqual(preset.structured_output_mode, "prompt_only_json")
+
+    def test_credential_reader_imports_without_litellm(self) -> None:
+        saved = sys.modules.pop("litellm_provider_config", None)
+        try:
+            with mock.patch.dict(sys.modules, {"litellm": None}):
+                module = importlib.import_module("litellm_provider_config")
+        finally:
+            if saved is not None:
+                sys.modules["litellm_provider_config"] = saved
+        self.assertTrue(callable(getattr(module, "load_provider_api_key", None)))
 
 
 if __name__ == "__main__":

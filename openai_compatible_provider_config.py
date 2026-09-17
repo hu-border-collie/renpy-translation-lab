@@ -131,4 +131,5 @@ def preset_provider_payload(preset_id: str) -> dict:
             "env_name": preset.credential_env_name,
         },
         "extra_headers": {},
+        "structured_output_mode": preset.structured_output_mode,
     }
