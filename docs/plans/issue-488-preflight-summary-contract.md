@@ -1,9 +1,9 @@
 # #488 翻译预检最小增量字段合同
 
-> **状态**：S1 已实现（payload 含 `cost` / `coverage` / `quality_summary`）；S2/S3（CLI/GUI 展示与现行文档）由本 PR 落地。S1.5（durable Sync quality 来源）尚未实现。
+> **状态**：S1（payload）、S2/S3（CLI/GUI 展示与现行文档）与 S1.5（durable Sync quality 来源）均已实现。
 > 本文件冻结 #488 的“当前字段 + 最小新增字段 + 数据来源 + freshness / unknown 合同”；
 > 实现与界面以代码和现行手册为准。
-> **基线**：`main@1ddd0be`；S1 合入 `main@9ef609b`。研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
+> **基线**：`main@1ddd0be`；S1 合入 `main@9ef609b`，S2/S3 合入 `main@e83ccf1`，S1.5 合入当前开发分支。研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
 > **关联**：#488、#348、#424、#457、#364。
 
 ## 1. 范围
@@ -99,7 +99,7 @@
 ```json
 "quality_summary": {
   "status": "available | stale | not_available | unknown",
-  "source": "latest_manifest | none",
+  "source": "latest_manifest | durable_sync_preview | none",
   "manifest_path": "…",
   "report_path": "…",
   "finding_count": 0,
@@ -111,19 +111,26 @@
 }
 ```
 
-- **来源（S1 范围）**：最新 translated manifest 的质量报告（`last_quality_findings_path`）+
-  `quality_report_export.load_quality_findings`（`quality_report_export.py:102`）。
-  **S1 只覆盖 Batch 路径**：`check_results` 对 `execution=sync` 不更新全局 latest manifest，
-  durable Sync 的质量报告在 run store 中；因此 `strategy=sync` 时返回
-  `not_available` / `quality_source_not_supported_for_strategy`，不把 Batch 报告误当 Sync 结果。
-  Sync 来源（如 `find_latest_run` + bound preview manifest）列入后续切片。
+- **来源（S1 / S1.5 范围）**：
+  - **Batch**（`strategy=gemini_batch`）：最新 translated manifest 的质量报告（`last_quality_findings_path`）+
+    `quality_report_export.load_quality_findings`（`quality_report_export.py:102`）。
+  - **durable Sync**（`strategy=sync`）：最新 durable run 的 `preview_manifest` artifact
+    （`sync_run_service.find_latest_run` + `SyncRunStore.get_artifact`）。该 artifact 只在 run 完成
+    `check` 并生成绑定预览后存在；质量报告位于预览包内的 `quality_findings.jsonl`。
 - **available 必须同时满足**：
-  1. manifest `mode == translation`；
-  2. manifest `base_dir` / `tl_dir` 与当前项目一致（使用仓库 canonical path 规则）；
-  3. manifest `translation_plan.plan_fingerprint` == 当前 plan fingerprint（无 `translation_plan` 的旧 manifest 不匹配）；
-  4. 报告文件存在；若 `last_check_summary.quality_findings_sha256` 存在，则实际内容需匹配。
-- **stale**：找到 manifest 但任一匹配条件不满足；**not_available**：没有可用 manifest / 报告；
-  **unknown**：读取失败或报告格式不可解析。`reason` 与 `matched_by` 为可选增量字段。
+  - Batch：
+    1. manifest `mode == translation`；
+    2. manifest `base_dir` / `tl_dir` 与当前项目一致（使用仓库 canonical path 规则）；
+    3. manifest `translation_plan.plan_fingerprint` == 当前 plan fingerprint（无 `translation_plan` 的旧 manifest 不匹配）；
+    4. 报告文件存在；若 `last_check_summary.quality_findings_sha256` 存在，则实际内容需匹配。
+  - durable Sync：
+    1. run artifact 记录的 sha256 与 `preview_manifest` 文件一致；
+    2. preview manifest 的 `project_root` / `tl_dir` 与当前项目一致；
+    3. preview `plan_fingerprint` == 当前 plan fingerprint；
+    4. `quality_findings.jsonl` 位于预览包内，且内容与 `quality_findings_sha256` 一致。
+- **not_available**：Batch 没有 latest manifest；durable Sync 没有运行记录，或最新运行尚未完成 `check`。
+  **stale**：找到 manifest / preview，但项目、计划、artifact、报告或摘要记录任一条件不满足；
+  **unknown**：运行存储、manifest 或报告读取失败、格式不可解析。
 - 不启动模型审校、不把 warning 当作“质量通过”；初译前无报告时绝不显示“质量通过”。
 - 仅按文件时间或 latest 指针不能认定匹配；项目、任务、源/结果或 profile 切换后不得沿用旧摘要。
 
@@ -133,7 +140,7 @@
 | --- | --- | --- | --- |
 | `cost` | 当前 plan + 当前 pricing config | 每次预检重新计算 | plan / profile / pricing config 变化即重算 |
 | `coverage` | 当前只读扫描 | `scope=current_scan`，与零待译门禁同源 | 项目 / TL / include 范围变化即重算 |
-| `quality_summary` | 已有 manifest 引用的报告（S1 仅 Batch latest） | 项目身份 + plan fingerprint + 报告存在（+ sha256） | 任一匹配条件不满足 → `stale`；strategy=sync → `not_available` |
+| `quality_summary` | Batch：最新 translated manifest 引用的报告；durable Sync：最新 run 的已检查 preview artifact 及其绑定报告 | 项目身份 + plan fingerprint + 报告存在（+ artifact / 报告 sha256） | 任一匹配条件不满足 → `stale`；无运行或未 check → `not_available`；读取失败 → `unknown` |
 
 三条摘要都不跨请求缓存；payload 只描述“本次预检当前看到的状态”。
 
@@ -158,13 +165,15 @@
 
 1. **S1 核心**（已合入）：新增可复用 summary 函数（cost / coverage / quality）并接入 preflight payload；
    单测覆盖已知 / 未知 / stale / not_available、项目与 plan 切换、mode/report/digest mismatch。
-   S1 的 quality 来源仅 Batch latest manifest；durable Sync 来源（`find_latest_run` + bound preview manifest）
-   列为后续切片 S1.5。
-2. **S2 界面**（本 PR）：CLI 文本 + GUI facts + `user_copy`，共用 `preflight_display` 渲染器；
+   S1 的 quality 来源仅 Batch latest manifest；durable Sync 来源由 S1.5 补齐。
+2. **S2 界面**（已合入 `main@e83ccf1`）：CLI 文本 + GUI facts + `user_copy`，共用 `preflight_display` 渲染器；
    同步 argparse 帮助、诊断命令参考与 GUI 测试。
-3. **S3 文档**（本 PR）：更新本文件的实现状态与现行文档（`docs/quickstart_agent.md` /
+3. **S3 文档**（已合入 `main@e83ccf1`）：更新本文件的实现状态与现行文档（`docs/quickstart_agent.md` /
    `docs/gui_workbench.md` / `docs/sync_workflow.md` 相关段落）。
-4. **S1.5**（未做）：durable Sync quality 来源。
+4. **S1.5 durable Sync 来源**（已实现）：`summarize_preflight_quality(strategy=sync)` 读取
+   `find_latest_run` 选出的最新 run 的 `preview_manifest` artifact，校验 artifact sha256、preview
+   项目 / plan 绑定与 `quality_findings_sha256` 后复用同一 findings 聚合；run 未 check、绑定不匹配、
+   报告缺失或损坏分别返回 `not_available` / `stale` / `unknown`，不把 Batch 报告误当 Sync 结果。
 
 ## 8. 验收映射
 
@@ -175,5 +184,5 @@
 | 切换项目 / 任务 / profile 后不沿用旧摘要 | §4 |
 | 离线无 Key 可运行；不调用 provider / embedding / prepare | §1、§3 |
 | 现有预检风险与零待译 coverage 合同保持 | §2、§3.2 |
-| 针对性测试覆盖已知 / 未知 / stale / 缺失 | §7 S1/S2 |
+| 针对性测试覆盖已知 / 未知 / stale / 缺失 | §7 S1/S1.5/S2 |
 | 同步 argparse、GUI copy、现行文档 | §7 S2/S3 |

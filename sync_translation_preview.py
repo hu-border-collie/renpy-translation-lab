@@ -136,6 +136,19 @@ def _artifact_path(package_dir: Path, value: Any) -> Path:
     return candidate
 
 
+def resolve_preview_artifact_path(
+    package_dir: str | os.PathLike[str], value: Any
+) -> Path:
+    """Resolve one bound preview artifact path inside its package directory.
+
+    This is the read-side counterpart of the path rules used while writing a
+    preview.  Absolute paths, ``..`` traversal and symlink escapes raise
+    ``ValueError`` so callers can report ``unknown`` instead of reading an
+    unbound file.
+    """
+    return _artifact_path(Path(package_dir), value)
+
+
 def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "schema": manifest.get("schema"),

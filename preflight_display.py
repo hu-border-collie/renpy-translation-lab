@@ -37,8 +37,18 @@ QUALITY_REASON_LABELS = {
     "project_mismatch": "不属于当前项目",
     "plan_mismatch": "不属于当前翻译计划",
     "report_missing": "质量报告文件不存在",
+    "report_digest_missing": "质量报告缺少摘要记录",
     "report_digest_mismatch": "报告内容与记录不一致",
     "report_unreadable": "质量报告无法读取或解析",
+    "durable_sync_run_missing": "没有 durable Sync 运行记录",
+    "durable_sync_check_not_run": "最新 durable Sync 运行尚未完成 check",
+    "durable_sync_store_unreadable": "durable Sync 运行存储无法读取",
+    "preview_manifest_mismatch": (
+        "durable Sync 预览 manifest 与运行记录不一致"
+    ),
+    "preview_manifest_unreadable": (
+        "durable Sync 预览 manifest 无法读取或解析"
+    ),
 }
 
 COVERAGE_STATUS_LABELS = {

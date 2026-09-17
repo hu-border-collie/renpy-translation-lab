@@ -139,6 +139,25 @@ class PreflightDisplayTests(unittest.TestCase):
         self.assertNotIn("finding", line)
         self.assertNotIn("质量通过", line)
 
+    def test_durable_sync_not_checked_reason_is_explicit(self) -> None:
+        line = preflight_display.format_preflight_quality_line(
+            {
+                "status": "not_available",
+                "reason": "durable_sync_check_not_run",
+            }
+        )
+        self.assertIn("尚未完成 check", line)
+        self.assertNotIn("durable_sync_check_not_run", line)
+        self.assertNotIn("质量通过", line)
+
+    def test_missing_report_digest_reason_is_explicit(self) -> None:
+        line = preflight_display.format_preflight_quality_line(
+            {"status": "stale", "reason": "report_digest_missing"}
+        )
+        self.assertIn("缺少摘要记录", line)
+        self.assertNotIn("report_digest_missing", line)
+        self.assertNotIn("质量通过", line)
+
     def test_unknown_quality_is_explicit(self) -> None:
         line = preflight_display.format_preflight_quality_line(
             {"status": "unknown", "reason": "report_unreadable"}

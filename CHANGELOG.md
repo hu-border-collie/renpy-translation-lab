@@ -72,7 +72,7 @@
 
 ### 变更
 
-- `translate-preflight` 文本输出与 GUI 启动确认框展示成本 / coverage / 已有质量摘要（与 JSON payload 同一来源）：已知成本显示模型、策略、min–max 与计价来源；coverage 显示状态、完成度与分类计数；质量摘要仅在报告匹配当前项目与计划时给出 finding 计数。`unknown` / `stale` / `not_available` 使用明确文案，不显示零成本、免费或「质量通过」。`--output json` 仍只输出原 envelope。durable Sync 的质量来源尚未接入。
+- `translate-preflight` 文本输出与 GUI 启动确认框展示成本 / coverage / 已有质量摘要（与 JSON payload 同一来源）：已知成本显示模型、策略、min–max 与计价来源；coverage 显示状态、完成度与分类计数；质量摘要仅在报告匹配当前项目与计划时给出 finding 计数。`unknown` / `stale` / `not_available` 使用明确文案，不显示零成本、免费或「质量通过」。`--output json` 仍只输出原 envelope。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配，run 未 check、artifact / 报告摘要不匹配或读取失败时分别显示 `not_available` / `stale` / `unknown`，不把 Batch 报告误当 Sync 结果。
 - 「设置 → 模型与 Provider」的「创建 Model Routing 配置」收敛为无旧 `sync.*` / `batch.*` 字段时的空白创建，初始默认与迁移默认对齐为 `gemini_batch`；检测到旧字段时禁用创建并将原因与迁移命令位置显示在页面上，避免静默丢失旧模型、Provider 与阶段路由。无效的 `model_routing`（非对象类型）不再被当作空白：页面阻止保存，可显式移除并在保存后回退旧配置（移除不会修复旧配置本身）。新用户 / 新项目默认值的最终决策仍待真实 Provider smoke 与 A/B（#457）。
 - 新用户 / 新项目的默认主模型与执行策略**保持不变**；是否调整默认值将在四类真实 Provider smoke 与 A/B 数据完成后单独决定，不隐藏在本次迁移或 UI 改动中。
 - `gemini_translate.py` 兼容入口继续可用，但输出非阻塞弃用提示并给出映射：新任务请使用 `gemini_translate_batch.py sync-start --profile <PROFILE_ID>`，写回改为 `check <RUN>` → `apply <RUN>`。迁移期默认模型、默认 Sync/Batch 策略与旧配置行为均保持不变。
