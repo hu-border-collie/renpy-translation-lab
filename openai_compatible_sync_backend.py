@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 from openai_compatible_contract import (
     DEFAULT_STRUCTURED_OUTPUT_MODE,
@@ -342,21 +343,34 @@ class OpenAICompatibleSyncBackend:
         return config
 
     def _chat_completions_url(self) -> str:
-        base = self._base_url.rstrip("/")
+        base = str(self._base_url or "").strip()
         if not base:
             raise SyncBackendError(
                 "unsupported_capability",
                 request_metadata={"reason": "missing_base_url"},
             )
-        lowered = base.casefold()
-        if not lowered.startswith(("http://", "https://")):
+        try:
+            parsed = urlsplit(base)
+        except ValueError as exc:
+            raise SyncBackendError(
+                "unsupported_capability",
+                request_metadata={"reason": "invalid_base_url"},
+            ) from exc
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise SyncBackendError(
                 "unsupported_capability",
                 request_metadata={"reason": "invalid_base_url"},
             )
-        if lowered.endswith("/chat/completions"):
-            return base
-        return f"{base}/chat/completions"
+        path = parsed.path.rstrip("/")
+        if not path.casefold().endswith("/chat/completions"):
+            path = f"{path}/chat/completions"
+        return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+
+    def _redacted_request_url(self) -> str:
+        """Return the request URL without query/fragment for diagnostics."""
+
+        parsed = urlsplit(self._chat_completions_url())
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
     def _build_headers(self) -> dict[str, str]:
         headers = {
@@ -454,7 +468,11 @@ class OpenAICompatibleSyncBackend:
         request: SyncGenerationRequest,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         config = self._effective_config(request)
-        unsupported = sorted(_UNSUPPORTED_OPTION_KEYS & set(config))
+        unsupported = sorted(
+            option
+            for option in _UNSUPPORTED_OPTION_KEYS
+            if config.get(option)
+        )
         if unsupported:
             raise SyncBackendError(
                 "unsupported_capability",
@@ -526,7 +544,7 @@ class OpenAICompatibleSyncBackend:
         metadata: dict[str, Any] = {
             "provider": self.provider,
             "structured_output_mode": mode,
-            "request_url": self._chat_completions_url(),
+            "request_url": self._redacted_request_url(),
         }
         if ignored:
             metadata["ignored_provider_options"] = ignored

@@ -175,6 +175,28 @@ class RequestShapeTests(unittest.TestCase):
             "invalid_base_url",
         )
 
+    def test_base_url_with_query_preserves_query(self) -> None:
+        transport = RecordingTransport(json_response(chat_payload()))
+        backend = OpenAICompatibleSyncBackend(
+            provider="azure",
+            base_url=(
+                "https://x.example/openai/deployments/d"
+                "?api-version=2024-02-01"
+            ),
+            credential_ref={"kind": "none"},
+            transport=transport,
+        )
+        result = backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(
+            transport.calls[0]["url"],
+            "https://x.example/openai/deployments/d/chat/completions"
+            "?api-version=2024-02-01",
+        )
+        self.assertEqual(
+            result.request_metadata["request_url"],
+            "https://x.example/openai/deployments/d/chat/completions",
+        )
+
     def test_message_list_contents_are_preserved(self) -> None:
         transport = RecordingTransport(json_response(chat_payload(content="ok")))
         backend = make_backend(transport)
@@ -291,6 +313,18 @@ class StructuredOutputTests(unittest.TestCase):
             captured.exception.request_metadata["reason"],
             "gemini_only_option",
         )
+
+    def test_empty_safety_settings_is_ignored(self) -> None:
+        transport = RecordingTransport(json_response(chat_payload()))
+        backend = make_backend(transport)
+        backend.generate(
+            SyncGenerationRequest(
+                model="m",
+                contents="x",
+                config={"safety_settings": []},
+            )
+        )
+        self.assertNotIn("safety_settings", transport.calls[0]["body"])
 
 
 class CredentialAndHeaderTests(unittest.TestCase):
