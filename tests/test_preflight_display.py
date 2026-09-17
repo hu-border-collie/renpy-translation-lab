@@ -15,6 +15,7 @@ def known_cost(**overrides):
         "estimated_cost_min": 0.0123,
         "estimated_cost_max": 0.0456,
         "pricing_source": "defaults",
+        "scope": "current_plan",
         "excluded": ["provider 排队与重试", "未计入的实际输出"],
     }
     payload.update(overrides)
@@ -52,6 +53,8 @@ class PreflightDisplayTests(unittest.TestCase):
         self.assertIn("0.0456", line)
         self.assertIn("USD", line)
         self.assertIn("defaults", line)
+        self.assertIn("本次初译计划", line)
+        self.assertIn("final review / repair / embedding", line)
         self.assertIn("未计入的实际输出", line)
         self.assertNotIn("无法估算", line)
         self.assertNotIn("免费", line)
@@ -80,6 +83,13 @@ class PreflightDisplayTests(unittest.TestCase):
         )
         self.assertIn("无法估算", line)
         self.assertNotIn("免费", line)
+
+    def test_known_cost_without_scope_does_not_invent_plan_scope(self) -> None:
+        line = preflight_display.format_preflight_cost_line(
+            known_cost(scope=None)
+        )
+        self.assertIn("成本：unknown", line)
+        self.assertNotIn("成本：本次初译计划", line)
 
     def test_coverage_shows_status_counts_and_unknowns(self) -> None:
         line = preflight_display.format_preflight_coverage_line(ready_coverage())

@@ -288,6 +288,7 @@ class DurableSyncAppWiringTests(unittest.TestCase):
                 "estimated_cost_min": 0.0123,
                 "estimated_cost_max": 0.0456,
                 "pricing_source": "defaults",
+                "scope": "current_plan",
                 "excluded": ["provider 排队与重试"],
             },
             "coverage": {
@@ -306,6 +307,8 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         facts = self.window._format_translation_preflight_facts(payload)
         self.assertIn("成本：", facts)
         self.assertIn("0.0123", facts)
+        self.assertIn("本次初译计划", facts)
+        self.assertIn("final review / repair / embedding", facts)
         self.assertIn("文本覆盖：", facts)
         self.assertIn("translatable=4", facts)
         self.assertIn("质量摘要：", facts)

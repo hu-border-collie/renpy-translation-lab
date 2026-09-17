@@ -859,6 +859,8 @@ class PreflightCommandTests(unittest.TestCase):
         quality_line = next(line for line in text.splitlines() if "质量摘要：" in line)
         self.assertIn("gemini-3.5-flash", cost_line)
         self.assertIn("–", cost_line)
+        self.assertIn("本次初译计划", cost_line)
+        self.assertIn("final review / repair / embedding", cost_line)
         self.assertIn("translatable=3", coverage_line)
         self.assertIn("没有可验证的已有质量报告", quality_line)
         self.assertNotIn("免费", cost_line)

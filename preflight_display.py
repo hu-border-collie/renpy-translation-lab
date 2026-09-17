@@ -23,6 +23,10 @@ PRICING_SOURCE_LABELS = {
     "defaults": "defaults（内置默认）",
 }
 
+COST_SCOPE_LABELS = {
+    "current_plan": "本次初译计划",
+}
+
 QUALITY_REASON_LABELS = {
     "quality_source_not_supported_for_strategy": (
         "当前执行方式没有可验证的质量报告来源"
@@ -105,10 +109,11 @@ def format_preflight_cost_line(cost: object) -> str:
     strategy = _text(data.get("strategy")) or "unknown"
     currency = _text(data.get("currency")) or "USD"
     source = _reason_label(data.get("pricing_source"), PRICING_SOURCE_LABELS) or "unknown"
+    scope = _reason_label(data.get("scope"), COST_SCOPE_LABELS) or "unknown"
     excluded = _join_excluded(data.get("excluded"))
     line = (
-        f"成本：{model} / {strategy}，约 {min_text}–{max_text} {currency}"
-        f"（计价来源：{source}"
+        f"成本：{scope}，{model} / {strategy}，约 {min_text}–{max_text} {currency}"
+        f"（不含 final review / repair / embedding；计价来源：{source}"
     )
     if excluded:
         line += f"；未计入：{excluded}"
