@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Mapping
 
 from model_profile import ADAPTER_OPENAI_COMPATIBLE
+from openai_compatible_contract import DEFAULT_STRUCTURED_OUTPUT_MODE
 
 
 @dataclass(frozen=True)
@@ -27,7 +28,7 @@ class OpenAICompatiblePreset:
     credential_name: str = ""
     credential_env_name: str = ""
     requires_key: bool = True
-    structured_output_mode: str = "prompt_only_json"
+    structured_output_mode: str = DEFAULT_STRUCTURED_OUTPUT_MODE
     default_model: str = ""
     notes: str = ""
 
@@ -89,7 +90,7 @@ _PRESETS: tuple[OpenAICompatiblePreset, ...] = (
         provider="custom",
         base_url="",
         credential_kind="keyring",
-        structured_output_mode="prompt_only_json",
+        structured_output_mode=DEFAULT_STRUCTURED_OUTPUT_MODE,
         notes="手动填写 base URL、模型 ID 与非敏感额外请求头。",
     ),
 )

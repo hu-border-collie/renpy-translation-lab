@@ -18,6 +18,11 @@ import re
 from typing import TypeGuard
 from urllib.parse import urlsplit
 
+from openai_compatible_contract import (
+    GENERATION_PARAM_KEYS,
+    STRUCTURED_OUTPUT_MODES,
+)
+
 
 MODEL_ROUTING_SECTION = "model_routing"
 MODEL_ROUTING_CONFIG_SCHEMA_VERSION = 1
@@ -31,21 +36,7 @@ KNOWN_ADAPTERS = frozenset({
     ADAPTER_OPENAI_COMPATIBLE,
 })
 
-OPENAI_COMPATIBLE_GENERATION_PARAM_KEYS = frozenset({
-    "temperature",
-    "max_output_tokens",
-    "top_p",
-    "frequency_penalty",
-    "presence_penalty",
-    "seed",
-    "stop",
-    "timeout",
-})
-STRUCTURED_OUTPUT_MODES = frozenset({
-    "strict_json_schema",
-    "json_object",
-    "prompt_only_json",
-})
+OPENAI_COMPATIBLE_GENERATION_PARAM_KEYS = GENERATION_PARAM_KEYS
 _SENSITIVE_HEADER_MARKERS = (
     "authorization",
     "apikey",
@@ -54,6 +45,16 @@ _SENSITIVE_HEADER_MARKERS = (
     "secret",
     "password",
     "cookie",
+)
+_SENSITIVE_HEADER_VALUE_MARKERS = (
+    "bearer ",
+    "sk-",
+    "api_key=",
+    "apikey=",
+    "access_token=",
+    "token=",
+    "secret=",
+    "password=",
 )
 
 STRATEGY_SYNC = "sync"
@@ -342,6 +343,14 @@ def _validate_extra_headers(raw: object, path: str) -> list[ConfigContractIssue]
                 f"{path}.{key}",
                 "sensitive_extra_header",
                 "Credential-bearing headers must use credential_ref, not extra_headers.",
+            ))
+            continue
+        lowered_value = value.casefold()
+        if any(marker in lowered_value for marker in _SENSITIVE_HEADER_VALUE_MARKERS):
+            issues.append(_issue(
+                f"{path}.{key}",
+                "sensitive_extra_header",
+                "extra header values look like credentials; use credential_ref instead.",
             ))
     return issues
 

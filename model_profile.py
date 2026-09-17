@@ -41,6 +41,7 @@ from typing import Any, Callable, Mapping
 
 from cli_contract import EXIT_INVALID_STATE, MachineContractError
 from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+from openai_compatible_contract import DEFAULT_STRUCTURED_OUTPUT_MODE
 from litellm_provider_config import (
     CustomLiteLLMProvider,
     StructuredOutputCapability,
@@ -684,7 +685,7 @@ def _openai_compatible_capabilities(
     caps = ModelCapabilities(
         sync_generation=CapabilityFlag(True),
         structured_output=StructuredOutputSpec(
-            mode="prompt_only_json",
+            mode=DEFAULT_STRUCTURED_OUTPUT_MODE,
             source=CAPABILITY_SOURCE_ADAPTER_DEFAULT,
             basis=STRUCTURED_OUTPUT_BASIS_CONSERVATIVE_DEFAULT,
         ),

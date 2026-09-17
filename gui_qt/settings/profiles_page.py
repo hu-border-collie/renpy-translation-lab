@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 import model_profiles_editor as editor
 import openai_compatible_provider_config as openai_compatible_presets
+from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
 from .page_chrome import build_settings_scroll_page, settings_group
@@ -404,7 +405,7 @@ class ProfilesSettingsPage(QObject):
         self.profile_structured_output_combo.addItem(
             MODEL_PROFILES_PAGE_COPY["inherit_value"], None
         )
-        for mode in ("strict_json_schema", "json_object", "prompt_only_json"):
+        for mode in STRUCTURED_OUTPUT_MODE_ORDER:
             self.profile_structured_output_combo.addItem(mode, mode)
         self.profile_structured_output_combo.currentIndexChanged.connect(
             self._on_profile_capabilities_changed

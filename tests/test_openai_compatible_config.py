@@ -216,6 +216,19 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertIn("invalid_extra_header", issue_codes(section))
 
+    def test_sensitive_extra_header_value_is_rejected(self) -> None:
+        section, _provider_id, _profile_id = direct_section(
+            extra_headers={"X-Auth": "Bearer sk-test-secret"}
+        )
+        self.assertIn("sensitive_extra_header", issue_codes(section))
+
+    def test_structured_output_modes_share_one_contract_source(self) -> None:
+        import openai_compatible_contract as contract
+        from openai_compatible_sync_backend import STRUCTURED_OUTPUT_MODES
+
+        self.assertEqual(config.STRUCTURED_OUTPUT_MODES, contract.STRUCTURED_OUTPUT_MODES)
+        self.assertEqual(STRUCTURED_OUTPUT_MODES, contract.STRUCTURED_OUTPUT_MODES)
+
     def test_unknown_generation_param_is_rejected(self) -> None:
         section, _provider_id, _profile_id = direct_section(
             params={"temperature": 0.2, "top_k": 5}

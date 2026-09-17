@@ -17,6 +17,11 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from openai_compatible_contract import (
+    DEFAULT_STRUCTURED_OUTPUT_MODE,
+    GENERATION_PARAM_KEYS,
+    STRUCTURED_OUTPUT_MODES,
+)
 from sync_model_backend import (
     SYNC_EXECUTION_MODE,
     SyncBackendError,
@@ -25,21 +30,7 @@ from sync_model_backend import (
     normalize_sync_timeout_seconds,
 )
 
-DEFAULT_STRUCTURED_OUTPUT_MODE = "prompt_only_json"
-STRUCTURED_OUTPUT_MODES = frozenset({
-    "strict_json_schema",
-    "json_object",
-    "prompt_only_json",
-})
-
-_GENERATION_PARAM_KEYS = frozenset({
-    "temperature",
-    "top_p",
-    "frequency_penalty",
-    "presence_penalty",
-    "seed",
-    "stop",
-})
+_GENERATION_PARAM_KEYS = GENERATION_PARAM_KEYS
 
 # Gemini-only / adapter-internal options that must never leak into a Chat
 # Completions body.  ``safety_settings`` fails closed because dropping it would
@@ -359,13 +350,13 @@ class OpenAICompatibleSyncBackend:
                 request_metadata={"reason": "missing_base_url"},
             )
         lowered = base.casefold()
-        if lowered.endswith("/chat/completions"):
-            return base
         if not lowered.startswith(("http://", "https://")):
             raise SyncBackendError(
                 "unsupported_capability",
                 request_metadata={"reason": "invalid_base_url"},
             )
+        if lowered.endswith("/chat/completions"):
+            return base
         return f"{base}/chat/completions"
 
     def _build_headers(self) -> dict[str, str]:
@@ -414,10 +405,18 @@ class OpenAICompatibleSyncBackend:
             name = str(ref.get("name") or self.provider or "").strip()
             try:
                 from litellm_provider_config import load_provider_api_key
-
+            except Exception as exc:
+                raise SyncBackendError(
+                    "missing_dependency",
+                    request_metadata={"reason": "credential_reader_unavailable"},
+                ) from exc
+            try:
                 value = str(load_provider_api_key(name) or "").strip()
-            except Exception:
-                value = ""
+            except Exception as exc:
+                raise SyncBackendError(
+                    "provider_error",
+                    request_metadata={"reason": "credential_reader_error"},
+                ) from exc
             if not value:
                 raise SyncBackendError(
                     "authentication",

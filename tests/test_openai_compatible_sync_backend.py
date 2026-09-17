@@ -158,6 +158,21 @@ class RequestShapeTests(unittest.TestCase):
             "https://api.example/v1/chat/completions",
         )
 
+    def test_base_url_without_scheme_is_unsupported(self) -> None:
+        backend = OpenAICompatibleSyncBackend(
+            provider="openai",
+            base_url="api.example.com/v1/chat/completions",
+            credential_ref={"kind": "none"},
+            transport=RecordingTransport(json_response(chat_payload())),
+        )
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(captured.exception.category, "unsupported_capability")
+        self.assertEqual(
+            captured.exception.request_metadata["reason"],
+            "invalid_base_url",
+        )
+
     def test_message_list_contents_are_preserved(self) -> None:
         transport = RecordingTransport(json_response(chat_payload(content="ok")))
         backend = make_backend(transport)
@@ -309,6 +324,37 @@ class CredentialAndHeaderTests(unittest.TestCase):
         self.assertEqual(
             captured.exception.request_metadata["reason"],
             "credential_env_missing",
+        )
+
+    def test_keyring_reader_import_failure_is_missing_dependency(self) -> None:
+        backend = make_backend(
+            RecordingTransport(json_response(chat_payload())),
+            credential_ref={"kind": "keyring", "name": "openai"},
+        )
+        with mock.patch.dict("sys.modules", {"litellm_provider_config": None}):
+            with self.assertRaises(SyncBackendError) as captured:
+                backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(captured.exception.category, "missing_dependency")
+        self.assertEqual(
+            captured.exception.request_metadata["reason"],
+            "credential_reader_unavailable",
+        )
+
+    def test_keyring_reader_error_is_provider_error(self) -> None:
+        backend = make_backend(
+            RecordingTransport(json_response(chat_payload())),
+            credential_ref={"kind": "keyring", "name": "openai"},
+        )
+        with mock.patch(
+            "litellm_provider_config.load_provider_api_key",
+            side_effect=RuntimeError("keyring backend exploded"),
+        ):
+            with self.assertRaises(SyncBackendError) as captured:
+                backend.generate(SyncGenerationRequest(model="m", contents="x"))
+        self.assertEqual(captured.exception.category, "provider_error")
+        self.assertEqual(
+            captured.exception.request_metadata["reason"],
+            "credential_reader_error",
         )
 
     def test_keyless_credential_sends_no_authorization(self) -> None:
