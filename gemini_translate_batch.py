@@ -7528,17 +7528,22 @@ def run_final_review_run_sync(
             'Final review sync dry-run: '
             f"{result['run_count']} unit(s) to run, "
             f"{result['skip_count']} skipped, "
-            f"{result['deferred_count']} deferred."
+            f"{result['deferred_count']} deferred.",
+            file=sys.stderr,
         )
     else:
         print(
             'Final review sync: '
             f"run={result['run_count']} skip={result['skip_count']} "
             f"done={result['done_delta']} failed={result['failed_delta']} "
-            f"findings={result['finding_count']}"
+            f"findings={result['finding_count']}",
+            file=sys.stderr,
         )
-        print(f"Campaign status: {(result.get('campaign_status') or {}).get('status')}")
-        print('Report-only: no .rpy writes.')
+        print(
+            f"Campaign status: {(result.get('campaign_status') or {}).get('status')}",
+            file=sys.stderr,
+        )
+        print('Report-only: no .rpy writes.', file=sys.stderr)
     if result.get('status') == 'aborted':
         abort_category = str(result.get('abort_category') or '')
         raise cli_contract.MachineContractError(
