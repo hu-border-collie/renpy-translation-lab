@@ -26,12 +26,14 @@ S2 在 S1 直连生成后端之上补齐四块：
 - 解析：OpenAI 风格 `{"data":[{"id":"..."}]}`；保留 provider 原始 ID 与斜杠语义，
   去重后排序；不按模态过滤，避免误删可调用模型。
 - 输出：`profiles-list-models --profile <ID> --output json` 返回
-  `status / profile_id / provider / base_url / models_url / count / models / source`。
+  `status / profile_id / provider / base_url / models_url / count / models / source`；
+  `base_url` / `models_url` 诊断值统一脱敏（去除 userinfo/query/fragment）。
   失败使用稳定机器码（`CREDENTIAL_UNAVAILABLE`、`MODEL_CATALOG_TIMEOUT`、
   `MODEL_CATALOG_RATE_LIMITED`、`MODEL_CATALOG_UNAVAILABLE`、
   `MODEL_CATALOG_UNSUPPORTED`、`MODEL_CATALOG_INVALID`、`MODEL_CATALOG_FAILED`）。
 - GUI：profile 编辑区提供「拉取模型列表」与只读目录下拉，选择后填入模型字段；
-  模型字段始终可手动编辑。目录错误只提示，不阻止保存或启动。
+  模型字段始终可手动编辑。切换 Profile 时清空上一 Provider 的目录缓存，避免跨供应商误填；
+  目录错误只提示，不阻止保存或启动。
 - 非目标：后台定时刷新、跨 Provider 聚合目录、把目录当白名单、目录失败自动切换模型。
 
 ## 3. 连接诊断

@@ -154,6 +154,12 @@ class FetchModelTests(unittest.TestCase):
             catalog.redacted_endpoint(connection.provider_models_url()),
             "https://api.example/openai/models",
         )
+        self.assertEqual(
+            catalog.redacted_endpoint(
+                "https://user:pass@api.example/v1?key=SECRET#frag"
+            ),
+            "https://api.example/v1",
+        )
 
     def test_http_errors_map_to_shared_categories(self) -> None:
         cases = (

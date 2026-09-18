@@ -642,9 +642,21 @@ class ProfilesSettingsPage(QObject):
             ),
             None,
         )
+        if profile is None:
+            return False
+        # The adapter lives on the provider (S1 contract); keep this predicate
+        # identical to openai_compatible_model_catalog.connection_for_profile.
+        provider = next(
+            (
+                item
+                for item in view["providers"]
+                if item["id"] == profile.get("provider_id")
+            ),
+            None,
+        )
         return bool(
-            profile
-            and str(profile.get("adapter") or "") == "openai_compatible"
+            provider
+            and str(provider.get("adapter") or "") == "openai_compatible"
         )
 
     def _refresh_profiles_list(self) -> None:
@@ -774,6 +786,14 @@ class ProfilesSettingsPage(QObject):
         index = combo.findData(value) if value else -1
         combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
 
+    def _reset_model_catalog_combo(self) -> None:
+        """Drop a previously fetched provider catalog when the profile changes."""
+
+        self.profile_model_catalog_combo.clear()
+        self.profile_model_catalog_combo.addItem(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"], ""
+        )
+
     def _populate_profile_editor(self) -> None:
         if self._section is None:
             self.profile_label_edit.clear()
@@ -794,7 +814,7 @@ class ProfilesSettingsPage(QObject):
                 self.profile_model_edit.clear()
                 self.profile_models_edit.clear()
                 self.profile_structured_output_combo.setCurrentIndex(0)
-                self.profile_model_catalog_combo.setCurrentIndex(0)
+                self._reset_model_catalog_combo()
                 return
             self.profile_label_edit.setText(profile["label"])
             self.profile_provider_combo.clear()
@@ -808,7 +828,7 @@ class ProfilesSettingsPage(QObject):
             self.profile_models_edit.setText(
                 "，".join(profile.get("rotation_extras") or ())
             )
-            self.profile_model_catalog_combo.setCurrentIndex(0)
+            self._reset_model_catalog_combo()
             self.profile_embedding_combo.clear()
             self.profile_embedding_combo.addItem(
                 MODEL_PROFILES_PAGE_COPY["embedding_none_option"],

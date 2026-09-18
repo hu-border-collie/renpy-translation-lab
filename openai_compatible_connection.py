@@ -75,10 +75,18 @@ def openai_compatible_endpoint(
 
 
 def redacted_endpoint(url: object) -> str:
-    """Return an endpoint URL without query/fragment for diagnostics."""
+    """Return an endpoint URL without userinfo, query or fragment.
+
+    Diagnostics must stay useful without echoing URL-embedded credentials; a
+    caller may hold an older/programmatic profile that bypassed config
+    validation, so the redactor never trusts ``netloc`` verbatim.
+    """
 
     parsed = urlsplit(str(url or ""))
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    netloc = parsed.netloc
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[-1]
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
 
 
 class OpenAICompatibleConnection:

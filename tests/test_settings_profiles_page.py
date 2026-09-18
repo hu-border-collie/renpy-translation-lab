@@ -920,6 +920,12 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         self.assertEqual(collected["model"], "gpt-4.1")
         self.assertTrue(self.messages)
 
+        # Re-populating the editor (e.g. switching profiles) must not leak the
+        # previous provider's catalog into the next profile.
+        self.page._populate_profile_editor()
+        self.assertEqual(self.page.profile_model_catalog_combo.count(), 1)
+        self.assertEqual(self.page.profile_model_catalog_combo.currentData(), "")
+
     def test_model_catalog_running_and_error_feedback(self) -> None:
         page = ProfilesSettingsPage(
             actions=SettingsPageActions(show_status=self.messages.append)

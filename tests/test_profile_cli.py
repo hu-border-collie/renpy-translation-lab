@@ -423,10 +423,10 @@ class ProfileCliTests(unittest.TestCase):
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["error"]["code"], "CREDENTIAL_UNAVAILABLE")
 
-    def test_profiles_list_models_redacts_url_queries(self) -> None:
+    def test_profiles_list_models_redacts_url_credentials(self) -> None:
         section = self._direct_section(
-            base_url="https://api.example/v1?key=SECRET",
-            models_url="",
+            base_url="https://user:pass@api.example/v1?key=SECRET",
+            models_url="https://api.example/v1/models",
         )
         self.config["model_routing"] = section
         self._write_config(self.config)
@@ -450,6 +450,7 @@ class ProfileCliTests(unittest.TestCase):
         self.assertTrue(envelope["ok"])
         serialized = json.dumps(envelope)
         self.assertNotIn("SECRET", serialized)
+        self.assertNotIn("user:pass", serialized)
         self.assertEqual(
             envelope["result"]["base_url"],
             "https://api.example/v1",
