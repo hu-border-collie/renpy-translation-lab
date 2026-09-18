@@ -952,6 +952,9 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
             actions=SettingsPageActions(show_status=self.messages.append)
         )
         self.addCleanup(page.widget.deleteLater)
+        section = self._direct_section()
+        page.load({"model_routing": section})
+        page.profiles_list.setCurrentRow(0)
 
         page.set_model_catalog_running(True)
         self.assertEqual(
@@ -964,8 +967,21 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
             MODEL_PROFILES_PAGE_COPY["model_catalog_button"],
         )
 
-        page.set_model_catalog_error("MODEL_CATALOG_TIMEOUT")
+        page.set_model_catalog_error(
+            "MODEL_CATALOG_TIMEOUT",
+            profile_id=page._selected_profile_id,
+        )
         self.assertTrue(
+            any("MODEL_CATALOG_TIMEOUT" in message for message in self.messages)
+        )
+
+        # An error for a different profile must not surface on this page.
+        self.messages.clear()
+        page.set_model_catalog_error(
+            "MODEL_CATALOG_TIMEOUT",
+            profile_id="some-other-profile",
+        )
+        self.assertFalse(
             any("MODEL_CATALOG_TIMEOUT" in message for message in self.messages)
         )
 

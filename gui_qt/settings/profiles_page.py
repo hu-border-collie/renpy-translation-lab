@@ -1126,16 +1126,20 @@ class ProfilesSettingsPage(QObject):
             )
 
     def _catalog_profile_matches(self, profile_id: str) -> bool:
-        """Return whether a catalog result still belongs to the visible profile."""
+        """Return whether a catalog result belongs to the visible profile.
 
-        return not profile_id or profile_id == self._selected_profile_id
+        Callers must pass the profile id that produced the result; a missing or
+        mismatched id never writes into the currently selected profile.
+        """
+
+        return profile_id == self._selected_profile_id
 
     def set_model_catalog(
         self,
         models: object,
         *,
+        profile_id: str,
         source: str = "",
-        profile_id: str = "",
     ) -> None:
         """Populate the read-only catalog combo; manual model entry stays valid.
 
@@ -1173,7 +1177,7 @@ class ProfilesSettingsPage(QObject):
             )
         )
 
-    def set_model_catalog_error(self, code: str, *, profile_id: str = "") -> None:
+    def set_model_catalog_error(self, code: str, *, profile_id: str) -> None:
         """Show a stable catalog failure code without provider response text."""
 
         if not self._catalog_profile_matches(profile_id):

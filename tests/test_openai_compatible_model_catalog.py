@@ -161,6 +161,17 @@ class FetchModelTests(unittest.TestCase):
             "https://api.example/v1",
         )
 
+    def test_models_url_is_sibling_of_full_chat_endpoint_base(self) -> None:
+        connection = OpenAICompatibleConnection(
+            provider="openai",
+            base_url="https://api.example/v1/chat/completions",
+            credential_ref={"kind": "none"},
+        )
+        self.assertEqual(
+            connection.provider_models_url(),
+            "https://api.example/v1/models",
+        )
+
     def test_http_errors_map_to_shared_categories(self) -> None:
         cases = (
             (401, "authentication"),

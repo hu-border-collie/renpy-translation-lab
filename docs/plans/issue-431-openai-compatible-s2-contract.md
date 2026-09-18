@@ -20,7 +20,8 @@ S2 在 S1 直连生成后端之上补齐四块：
 
 ## 2. 模型目录发现
 
-- 端点：`provider.models_url` 优先；否则由 `base_url` 派生 `/models`，保留 query。
+- 端点：`provider.models_url` 优先；否则由 `base_url` 派生 `/models`（若 `base_url`
+  已是完整 `/chat/completions` 端点则派生同级 `/models`），保留 query。
 - 认证与请求头：复用 `openai_compatible_connection`，与生成路径共用
   `credential_ref`、`extra_headers` 校验与脱敏规则。
 - 解析：OpenAI 风格 `{"data":[{"id":"..."}]}`；保留 provider 原始 ID 与斜杠语义，

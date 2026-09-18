@@ -74,6 +74,17 @@ def openai_compatible_endpoint(
     return urlunsplit((scheme, netloc, base_path, query, ""))
 
 
+def _strip_endpoint_suffix(url: object, suffix: str) -> str:
+    """Return *url* with one trailing *suffix* path segment removed."""
+
+    scheme, netloc, path, query = _parsed_http_url(url)
+    suffix = "/" + str(suffix or "").strip("/")
+    base_path = path.rstrip("/")
+    if suffix != "/" and base_path.casefold().endswith(suffix.casefold()):
+        base_path = base_path[: -len(suffix)]
+    return urlunsplit((scheme, netloc, base_path, query, ""))
+
+
 def redacted_endpoint(url: object) -> str:
     """Return an endpoint URL without userinfo, query or fragment.
 
@@ -171,11 +182,17 @@ class OpenAICompatibleConnection:
         return openai_compatible_endpoint(self.base_url, "/chat/completions")
 
     def provider_models_url(self) -> str:
-        return openai_compatible_endpoint(
-            self.base_url,
-            "/models",
-            explicit_url=self.models_url,
-        )
+        if str(self.models_url or "").strip():
+            return openai_compatible_endpoint(
+                self.base_url,
+                "/models",
+                explicit_url=self.models_url,
+            )
+        # A profile may legitimately use the full generation endpoint as
+        # ``base_url`` (S1 contract); derive the sibling models endpoint rather
+        # than appending ``/models`` after ``/chat/completions``.
+        sibling_base = _strip_endpoint_suffix(self.base_url, "/chat/completions")
+        return openai_compatible_endpoint(sibling_base, "/models")
 
     def request_headers(self, *, json_content: bool = True) -> dict[str, str]:
         headers = {
