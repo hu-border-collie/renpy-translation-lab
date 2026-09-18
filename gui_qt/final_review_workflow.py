@@ -158,10 +158,23 @@ class FinalReviewWorkflow:
             parsed = json.loads(str(output or "").strip())
         except ValueError:
             parsed = None
-        if isinstance(parsed, dict):
-            raw_result = parsed.get("result")
-            if isinstance(raw_result, dict):
-                result = raw_result
+        if not isinstance(parsed, dict) or not parsed.get("ok"):
+            return WorkflowUpdate(
+                status="failed",
+                heading="最终审校同步执行中断",
+                message="同步执行没有正常完成，请查看原始输出。",
+                facts=self._facts(),
+            )
+        raw_result = parsed.get("result")
+        if isinstance(raw_result, dict):
+            result = raw_result
+        else:
+            return WorkflowUpdate(
+                status="failed",
+                heading="最终审校同步执行中断",
+                message="同步执行返回了无法识别的结果，请查看原始输出。",
+                facts=self._facts(),
+            )
         failed = int(result.get("failed_delta") or 0)
         findings = int(result.get("finding_count") or 0)
         facts = self._facts(

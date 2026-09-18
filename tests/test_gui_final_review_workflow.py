@@ -181,6 +181,28 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "ready")
         self.assertIn("重试", update.message)
 
+    def test_sync_run_error_envelope_stops_workflow(self):
+        workflow = FinalReviewWorkflow(
+            ["final-review-run-sync"],
+            "C:/tmp/review/manifest.json",
+        )
+        update = workflow.complete_current_step(
+            0,
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "FINAL_REVIEW_SYNC_ABORTED",
+                        "message": "authentication failed",
+                    },
+                }
+            ),
+        )
+
+        self.assertEqual(update.status, "failed")
+        self.assertEqual(update.heading, "最终审校同步执行中断")
+        self.assertIsNone(workflow.current_step())
+
 
 if __name__ == "__main__":
     unittest.main()
