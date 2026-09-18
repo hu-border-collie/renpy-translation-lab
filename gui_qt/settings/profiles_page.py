@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 import model_profiles_editor as editor
 import openai_compatible_provider_config as openai_compatible_presets
+from model_profile import ADAPTER_OPENAI_COMPATIBLE
 from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
@@ -372,6 +373,32 @@ class ProfilesSettingsPage(QObject):
         layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["models_label"]))
         layout.addWidget(self.profile_models_edit)
 
+        self.profile_model_catalog_combo = NoWheelComboBox()
+        self.profile_model_catalog_combo.setObjectName(
+            "profiles_profile_model_catalog_combo"
+        )
+        self.profile_model_catalog_combo.addItem(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"], ""
+        )
+        self.profile_model_catalog_combo.currentIndexChanged.connect(
+            self._on_model_catalog_selected
+        )
+        self.profile_model_catalog_btn = QPushButton(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_button"]
+        )
+        self.profile_model_catalog_btn.setObjectName(
+            "profiles_profile_model_catalog_btn"
+        )
+        self.profile_model_catalog_btn.setToolTip(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_tooltip"]
+        )
+        self.profile_model_catalog_btn.clicked.connect(self._on_fetch_model_catalog)
+        catalog_row = QHBoxLayout()
+        catalog_row.addWidget(self.profile_model_catalog_combo, 1)
+        catalog_row.addWidget(self.profile_model_catalog_btn)
+        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["model_catalog_label"]))
+        layout.addLayout(catalog_row)
+
         self.profile_embedding_combo = NoWheelComboBox()
         self.profile_embedding_combo.setObjectName("profiles_profile_embedding_combo")
         self.profile_embedding_combo.currentIndexChanged.connect(
@@ -598,6 +625,40 @@ class ProfilesSettingsPage(QObject):
         self.profiles_probe_btn.setEnabled(
             editable and bool(self._selected_profile_id)
         )
+        catalog_supported = self._model_catalog_supported()
+        self.profile_model_catalog_btn.setEnabled(editable and catalog_supported)
+        self.profile_model_catalog_combo.setEnabled(editable and catalog_supported)
+
+    def _model_catalog_supported(self) -> bool:
+        """Return whether the selected profile uses the direct adapter."""
+
+        if self._section is None or not self._selected_profile_id:
+            return False
+        view = editor.editor_view(self._section)
+        profile = next(
+            (
+                item
+                for item in view["profiles"]
+                if item["id"] == self._selected_profile_id
+            ),
+            None,
+        )
+        if profile is None:
+            return False
+        # The adapter lives on the provider (S1 contract); keep this predicate
+        # identical to openai_compatible_model_catalog.connection_for_profile.
+        provider = next(
+            (
+                item
+                for item in view["providers"]
+                if item["id"] == profile.get("provider_id")
+            ),
+            None,
+        )
+        return bool(
+            provider
+            and str(provider.get("adapter") or "") == ADAPTER_OPENAI_COMPATIBLE
+        )
 
     def _refresh_profiles_list(self) -> None:
         self._loading = True
@@ -726,6 +787,14 @@ class ProfilesSettingsPage(QObject):
         index = combo.findData(value) if value else -1
         combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
 
+    def _reset_model_catalog_combo(self) -> None:
+        """Drop a previously fetched provider catalog when the profile changes."""
+
+        self.profile_model_catalog_combo.clear()
+        self.profile_model_catalog_combo.addItem(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"], ""
+        )
+
     def _populate_profile_editor(self) -> None:
         if self._section is None:
             self.profile_label_edit.clear()
@@ -746,6 +815,7 @@ class ProfilesSettingsPage(QObject):
                 self.profile_model_edit.clear()
                 self.profile_models_edit.clear()
                 self.profile_structured_output_combo.setCurrentIndex(0)
+                self._reset_model_catalog_combo()
                 return
             self.profile_label_edit.setText(profile["label"])
             self.profile_provider_combo.clear()
@@ -759,6 +829,7 @@ class ProfilesSettingsPage(QObject):
             self.profile_models_edit.setText(
                 "，".join(profile.get("rotation_extras") or ())
             )
+            self._reset_model_catalog_combo()
             self.profile_embedding_combo.clear()
             self.profile_embedding_combo.addItem(
                 MODEL_PROFILES_PAGE_COPY["embedding_none_option"],
@@ -1029,6 +1100,102 @@ class ProfilesSettingsPage(QObject):
             "probe_profile",
             {"profile_id": self._selected_profile_id},
         )
+
+    def _on_fetch_model_catalog(self) -> None:
+        if self._section is None or not self._selected_profile_id:
+            self._show_status(MODEL_PROFILES_PAGE_COPY["no_selection"])
+            return
+        if self._actions.run_immediate is None:
+            self._show_status(MODEL_PROFILES_PAGE_COPY["model_catalog_unavailable"])
+            return
+        self._actions.run_immediate(
+            "list_profile_models",
+            {"profile_id": self._selected_profile_id},
+        )
+
+    def set_model_catalog_running(self, running: bool) -> None:
+        """Reflect the host's catalog worker without owning the task lock."""
+
+        if running:
+            self.profile_model_catalog_btn.setText(
+                MODEL_PROFILES_PAGE_COPY["model_catalog_running"]
+            )
+        else:
+            self.profile_model_catalog_btn.setText(
+                MODEL_PROFILES_PAGE_COPY["model_catalog_button"]
+            )
+
+    def _catalog_profile_matches(self, profile_id: str) -> bool:
+        """Return whether a catalog result belongs to the visible profile.
+
+        Callers must pass the profile id that produced the result; a missing or
+        mismatched id never writes into the currently selected profile.
+        """
+
+        return profile_id == self._selected_profile_id
+
+    def set_model_catalog(
+        self,
+        models: object,
+        *,
+        profile_id: str,
+        source: str = "",
+    ) -> None:
+        """Populate the read-only catalog combo; manual model entry stays valid.
+
+        A late result for a profile the user has already switched away from is
+        ignored so one provider's models cannot be written into another one.
+        """
+
+        if not self._catalog_profile_matches(profile_id):
+            self._show_status(
+                MODEL_PROFILES_PAGE_COPY["model_catalog_stale"].format(
+                    profile_id=profile_id
+                )
+            )
+            return
+        values = [
+            str(item).strip()
+            for item in (models or ())
+            if str(item).strip()
+        ]
+        self._loading = True
+        try:
+            self.profile_model_catalog_combo.clear()
+            self.profile_model_catalog_combo.addItem(
+                MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"],
+                "",
+            )
+            for model_id in values:
+                self.profile_model_catalog_combo.addItem(model_id, model_id)
+        finally:
+            self._loading = False
+        self._show_status(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_loaded"].format(
+                count=len(values),
+                source=source or "provider",
+            )
+        )
+
+    def set_model_catalog_error(self, code: str, *, profile_id: str) -> None:
+        """Show a stable catalog failure code without provider response text."""
+
+        if not self._catalog_profile_matches(profile_id):
+            return
+        self._show_status(
+            MODEL_PROFILES_PAGE_COPY["model_catalog_failed"].format(
+                code=str(code or "unknown")
+            )
+        )
+
+    def _on_model_catalog_selected(self, _index: int) -> None:
+        if self._loading:
+            return
+        model_id = str(self.profile_model_catalog_combo.currentData() or "")
+        if not model_id:
+            return
+        self.profile_model_edit.setText(model_id)
+        self._on_profile_fields_changed()
 
     def set_probe_running(self, running: bool) -> None:
         """Reflect the host's probe worker without owning the task lock."""

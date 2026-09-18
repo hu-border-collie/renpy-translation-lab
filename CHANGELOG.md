@@ -9,6 +9,7 @@
 ### 新增
 
 - #431 S1 新增直连 `openai_compatible` Sync 生成 adapter：通过标准库 HTTP 直接调用 Chat Completions，无需安装或导入 LiteLLM；Provider 连接支持 `base_url` / `models_url` / `credential_ref`（none / env / keyring）与非敏感 `extra_headers`，ModelProfile 支持白名单生成参数与 `capability_overrides.structured_output.mode`（`strict_json_schema` / `json_object` / `prompt_only_json`）。GUI「模型与 Provider」页新增 adapter、供应商预设、额外请求头与结构化输出模式；能力探测与连接测试复用同一 `build_sync_backend` 入口。S1 不删除 LiteLLM、不改默认值，final_review 仍限 `gemini_batch`。
+- #431 S2 直连 adapter 目录发现与诊断：新增 `profiles-list-models --profile <ID>` 与 GUI「拉取模型列表」，只读请求 `models_url`（或 `base_url + /models`），目录失败/未收录不阻止手填模型 ID，错误使用稳定 `MODEL_CATALOG_*` 机器码；`profiles-probe` 按 profile 声明的 `structured_output_mode` 发送 strict JSON schema 兼容样例，并增强 reasoning token 识别。共享 `openai_compatible_connection` 统一生成与目录路径的凭据、headers、URL 与脱敏合同；`generate_async` 取消语义边界已文档化。目录报告的 `base_url` / `models_url` 统一脱敏（去除 userinfo/query/fragment），且 `base_url` 拒绝 userinfo 与 fragment（凭据只走 `credential_ref` / `Authorization`，这是相对 S1 的有意收紧）。新增 LiteLLM 调用点清点与迁移矩阵文档，S2 不删除依赖、不改默认路径。
 
 - 新增启动前预检 `translate-preflight`：只扫描项目并构建共享 TranslationPlan，不调用 Provider/embedding，输出模型/策略、待处理文件/条目/chunk、source snapshot、上下文来源与风险；GUI「翻译」页开始任务前会执行该预检并展示确认框。
 - 同步运行页新增旁路实时进度：运行中轮询 `sync-status --latest`，持续刷新请求/条目/结果未知/usage 摘要；停止本机进程或任务结束即停止轮询，不影响耐久运行状态。

@@ -10,19 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import socket
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
-from urllib.parse import urlsplit, urlunsplit
 
+from openai_compatible_connection import (
+    OpenAICompatibleConnection,
+    redacted_endpoint,
+)
 from openai_compatible_contract import (
     DEFAULT_STRUCTURED_OUTPUT_MODE,
     REQUEST_BODY_PARAM_KEYS,
     STRUCTURED_OUTPUT_MODES,
-    is_sensitive_header,
 )
 from sync_model_backend import (
     SYNC_EXECUTION_MODE,
@@ -232,17 +233,17 @@ class OpenAICompatibleSyncBackend:
         transport: Transport | None = None,
     ) -> None:
         self.provider = str(provider or "openai_compatible")
-        self._base_url = str(base_url or "").strip()
-        self._credential_ref = dict(credential_ref or {})
-        self._extra_headers = {
-            str(key): str(value)
-            for key, value in dict(extra_headers or {}).items()
-        }
+        self._connection = OpenAICompatibleConnection(
+            provider=self.provider,
+            base_url=str(base_url or ""),
+            credential_ref=credential_ref,
+            extra_headers=extra_headers,
+            api_key=api_key,
+        )
         self._params = dict(params or {})
         self._structured_output_mode = str(
             structured_output_mode or DEFAULT_STRUCTURED_OUTPUT_MODE
         ).strip()
-        self._api_key = str(api_key or "").strip() or None
         self._transport = transport or _default_transport
 
     # ------------------------------------------------------------------
@@ -343,125 +344,15 @@ class OpenAICompatibleSyncBackend:
         return config
 
     def _chat_completions_url(self) -> str:
-        base = str(self._base_url or "").strip()
-        if not base:
-            raise SyncBackendError(
-                "unsupported_capability",
-                request_metadata={"reason": "missing_base_url"},
-            )
-        try:
-            parsed = urlsplit(base)
-        except ValueError as exc:
-            raise SyncBackendError(
-                "unsupported_capability",
-                request_metadata={"reason": "invalid_base_url"},
-            ) from exc
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise SyncBackendError(
-                "unsupported_capability",
-                request_metadata={"reason": "invalid_base_url"},
-            )
-        path = parsed.path.rstrip("/")
-        if not path.casefold().endswith("/chat/completions"):
-            path = f"{path}/chat/completions"
-        return urlunsplit((parsed.scheme, parsed.netloc, path, parsed.query, ""))
+        return self._connection.chat_completions_url()
 
     def _redacted_request_url(self) -> str:
         """Return the request URL without query/fragment for diagnostics."""
 
-        parsed = urlsplit(self._chat_completions_url())
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        return redacted_endpoint(self._chat_completions_url())
 
     def _build_headers(self) -> dict[str, str]:
-        headers = {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "User-Agent": "renpy-translation-lab/openai-compatible-sync",
-        }
-        api_key = self._resolve_api_key()
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        for key, value in self._extra_headers.items():
-            if not key or not value:
-                continue
-            if any(marker in key or marker in value for marker in ("\r", "\n")):
-                raise SyncBackendError(
-                    "unsupported_capability",
-                    request_metadata={
-                        "provider": self.provider,
-                        "reason": "invalid_extra_header",
-                    },
-                )
-            if is_sensitive_header(key, value):
-                # Defense in depth: an unvalidated/tolerated config path must
-                # not be able to override Authorization or smuggle credentials.
-                raise SyncBackendError(
-                    "unsupported_capability",
-                    request_metadata={
-                        "provider": self.provider,
-                        "reason": "sensitive_extra_header",
-                    },
-                )
-            try:
-                key.encode("ascii")
-                value.encode("latin-1")
-            except UnicodeEncodeError as exc:
-                raise SyncBackendError(
-                    "unsupported_capability",
-                    request_metadata={
-                        "provider": self.provider,
-                        "reason": "invalid_extra_header",
-                    },
-                ) from exc
-            headers[key] = value
-        return headers
-
-    def _resolve_api_key(self) -> str | None:
-        if self._api_key:
-            return self._api_key
-        ref = self._credential_ref
-        kind = str(ref.get("kind") or "none").strip().lower()
-        if kind == "none":
-            return None
-        if kind == "env":
-            name = str(ref.get("name") or ref.get("env_name") or "").strip()
-            value = str(os.environ.get(name) or "").strip()
-            if not value:
-                raise SyncBackendError(
-                    "authentication",
-                    request_metadata={"reason": "credential_env_missing"},
-                )
-            return value
-        if kind == "keyring":
-            name = str(ref.get("name") or self.provider or "").strip()
-            # ``litellm_provider_config`` is a credential-reference reader; it
-            # does not import the LiteLLM runtime at module import time.  A
-            # genuine import failure is still reported as missing_dependency
-            # instead of being mislabeled as a bad credential.
-            try:
-                from litellm_provider_config import load_provider_api_key
-            except Exception as exc:
-                raise SyncBackendError(
-                    "missing_dependency",
-                    request_metadata={"reason": "credential_reader_unavailable"},
-                ) from exc
-            try:
-                value = str(load_provider_api_key(name) or "").strip()
-            except Exception as exc:
-                raise SyncBackendError(
-                    "provider_error",
-                    request_metadata={"reason": "credential_reader_error"},
-                ) from exc
-            if not value:
-                raise SyncBackendError(
-                    "authentication",
-                    request_metadata={"reason": "credential_keyring_missing"},
-                )
-            return value
-        raise SyncBackendError(
-            "unsupported_capability",
-            request_metadata={"reason": "credential_kind_unsupported"},
-        )
+        return self._connection.request_headers()
 
     def _build_payload(
         self,

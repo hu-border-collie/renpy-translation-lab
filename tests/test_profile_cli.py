@@ -12,6 +12,8 @@ from unittest import mock
 import cli_contract
 import gemini_translate_batch as batch
 import model_capability_probe as capability_probe
+import model_profiles_editor as editor
+import openai_compatible_model_catalog as model_catalog
 import translator_runtime as legacy
 from model_routing_migration import preview_migration
 
@@ -328,6 +330,158 @@ class ProfileCliTests(unittest.TestCase):
         self.assertNotEqual(exit_code, 0)
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["error"]["code"], "BILLABLE_ACK_REQUIRED")
+
+    def _direct_section(
+        self,
+        *,
+        base_url: str = "https://api.example/v1",
+        models_url: str = "https://api.example/v1/models",
+    ):
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="OpenAI",
+            adapter="openai_compatible",
+            provider="openai",
+            base_url=base_url,
+            models_url=models_url,
+            credential_kind="none",
+        )
+        provider_id = editor.provider_ids(section)[0]
+        section = editor.add_profile(
+            section,
+            label="OpenAI GPT",
+            provider_id=provider_id,
+            model="gpt-4.1-mini",
+        )
+        profile_id = editor.profile_ids(section)[0]
+        return editor.set_defaults(
+            section,
+            primary_profile_id=profile_id,
+            execution_strategy="sync",
+        )
+
+    def test_profiles_list_models_returns_catalog(self) -> None:
+        section = self._direct_section()
+        self.config["model_routing"] = section
+        self._write_config(self.config)
+        with mock.patch.object(
+            model_catalog,
+            "fetch_models",
+            return_value=("gpt-4.1-mini", "gpt-4.1"),
+        ):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models",
+                "--profile",
+                editor.profile_ids(section)[0],
+                "--output",
+                "json",
+                "--non-interactive",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(envelope["ok"])
+        result = envelope["result"]
+        self.assertEqual(result["count"], 2)
+        self.assertEqual(result["models"], ["gpt-4.1-mini", "gpt-4.1"])
+        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["models_url"], "https://api.example/v1/models")
+
+    def test_profiles_list_models_rejects_non_direct_profile(self) -> None:
+        exit_code, envelope = self._run_json(
+            "profiles-list-models",
+            "--profile",
+            "legacy-batch",
+            "--output",
+            "json",
+            "--non-interactive",
+        )
+        self.assertNotEqual(exit_code, 0)
+        self.assertFalse(envelope["ok"])
+        self.assertEqual(envelope["error"]["code"], "MODEL_CATALOG_UNSUPPORTED")
+
+    def test_profiles_list_models_reports_missing_credential(self) -> None:
+        section = self._direct_section()
+        provider_id = editor.provider_ids(section)[0]
+        section = editor.update_provider(
+            section,
+            provider_id,
+            credential_kind="env",
+            credential_name="MISSING_MODEL_CATALOG_KEY",
+        )
+        self.config["model_routing"] = section
+        self._write_config(self.config)
+        with mock.patch.dict("os.environ", {}, clear=True):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models",
+                "--profile",
+                editor.profile_ids(section)[0],
+                "--output",
+                "json",
+                "--non-interactive",
+            )
+        self.assertNotEqual(exit_code, 0)
+        self.assertFalse(envelope["ok"])
+        self.assertEqual(envelope["error"]["code"], "CREDENTIAL_UNAVAILABLE")
+
+    def test_profiles_list_models_redacts_url_credentials(self) -> None:
+        section = self._direct_section(
+            base_url="https://user:pass@api.example/v1?key=SECRET",
+            models_url="https://api.example/v1/models",
+        )
+        self.config["model_routing"] = section
+        self._write_config(self.config)
+        with mock.patch.object(
+            batch,
+            "_require_valid_routing_section",
+        ), mock.patch.object(
+            model_catalog,
+            "fetch_models",
+            return_value=("gpt-4.1-mini",),
+        ):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models",
+                "--profile",
+                editor.profile_ids(section)[0],
+                "--output",
+                "json",
+                "--non-interactive",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(envelope["ok"])
+        serialized = json.dumps(envelope)
+        self.assertNotIn("SECRET", serialized)
+        self.assertNotIn("user:pass", serialized)
+        self.assertEqual(
+            envelope["result"]["base_url"],
+            "https://api.example/v1",
+        )
+        self.assertEqual(
+            envelope["result"]["models_url"],
+            "https://api.example/v1/models",
+        )
+
+    def test_profiles_list_models_text_mode_prints_catalog(self) -> None:
+        section = self._direct_section()
+        self.config["model_routing"] = section
+        self._write_config(self.config)
+        stream = io.StringIO()
+        with mock.patch.object(
+            model_catalog,
+            "fetch_models",
+            return_value=("gpt-4.1-mini",),
+        ), contextlib.redirect_stdout(stream):
+            exit_code = batch.main(
+                [
+                    "profiles-list-models",
+                    "--profile",
+                    editor.profile_ids(section)[0],
+                    "--non-interactive",
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        output = stream.getvalue()
+        self.assertIn("ModelCatalog: 1 model(s)", output)
+        self.assertIn("- gpt-4.1-mini", output)
 
     def test_text_mode_prints_human_summary(self) -> None:
         stream = io.StringIO()

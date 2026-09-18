@@ -169,10 +169,15 @@
 - `model_profiles_editor.editor_view()` 输出无凭据的 provider/profile/能力/阶段路由投影；
   `section_issues()` 复用 `model_routing_config.validate_model_routing_section()`。
 - CLI 对等入口：`profiles-show` / `profiles-validate` / `profiles-set-default` /
-  `profiles-set-route`（`gemini_translate_batch.py`，离线、原子写回、保留未知字段），
+  `profiles-set-route` / `profiles-list-models`（`gemini_translate_batch.py`，离线、原子写回、
+  保留未知字段；`profiles-list-models` 只读直连 provider 的 models 端点），
   与 GUI 页共用同一 editor 核心。
+- 直连 adapter：`openai_compatible_sync_backend.py` 调用 Chat Completions；
+  `openai_compatible_connection.py` 统一生成/目录路径的凭据、headers、URL 与脱敏；
+  `openai_compatible_model_catalog.py` 提供只读模型目录发现。
 - 测试：`tests.test_model_profiles_editor`、`tests.test_settings_profiles_page`、
-  `tests.test_settings_registry`、`tests.test_settings_save_apply`。
+  `tests.test_settings_registry`、`tests.test_settings_save_apply`、
+  `tests.test_openai_compatible_model_catalog`。
 
 ## 同步翻译
 

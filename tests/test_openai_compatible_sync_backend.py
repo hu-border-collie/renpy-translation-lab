@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -174,6 +175,29 @@ class RequestShapeTests(unittest.TestCase):
             captured.exception.request_metadata["reason"],
             "invalid_base_url",
         )
+
+    def test_base_url_with_userinfo_or_fragment_is_rejected(self) -> None:
+        for base_url in (
+            "https://user:pass@api.example/v1",
+            "https://api.example/v1#fragment",
+        ):
+            with self.subTest(base_url=base_url):
+                backend = OpenAICompatibleSyncBackend(
+                    provider="openai",
+                    base_url=base_url,
+                    credential_ref={"kind": "none"},
+                    transport=RecordingTransport(json_response(chat_payload())),
+                )
+                with self.assertRaises(SyncBackendError) as captured:
+                    backend.generate(SyncGenerationRequest(model="m", contents="x"))
+                self.assertEqual(
+                    captured.exception.category,
+                    "unsupported_capability",
+                )
+                self.assertEqual(
+                    captured.exception.request_metadata["reason"],
+                    "invalid_base_url",
+                )
 
     def test_base_url_with_query_preserves_query(self) -> None:
         transport = RecordingTransport(json_response(chat_payload()))
@@ -565,6 +589,31 @@ class ResponseAndErrorTests(unittest.TestCase):
 
 
 class AsyncWrapperTests(unittest.TestCase):
+    def test_generate_async_propagates_cancellation(self) -> None:
+        release = threading.Event()
+
+        def blocking_transport(_request, _timeout):
+            release.wait(timeout=2)
+            return json_response(chat_payload())
+
+        backend = make_backend(blocking_transport)
+
+        async def cancel_running_request():
+            task = asyncio.create_task(
+                backend.generate_async(
+                    SyncGenerationRequest(model="m", contents="x")
+                )
+            )
+            await asyncio.sleep(0.01)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        try:
+            asyncio.run(cancel_running_request())
+        finally:
+            release.set()
+
     def test_generate_async_returns_the_same_result(self) -> None:
         transport = RecordingTransport(json_response(chat_payload()))
         backend = make_backend(transport)

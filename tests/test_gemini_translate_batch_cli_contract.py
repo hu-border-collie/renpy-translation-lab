@@ -12,6 +12,7 @@ from unittest import mock
 import gemini_translate_batch as batch
 import model_capability_probe as capability_probe
 import model_profile
+import openai_compatible_model_catalog as model_catalog
 from sync_run_contracts import ErrorCode, SyncRunError
 
 
@@ -58,6 +59,8 @@ class BatchCliContractTests(unittest.TestCase):
                 "--acknowledge-billable-request",
                 "I_ACKNOWLEDGE_ONE_BILLABLE_PROVIDER_REQUEST",
             ]
+        if command == "profiles-list-models":
+            return [command, "--profile", "legacy-batch"]
         if command == "profiles-set-default":
             return [command, "--profile", "legacy-batch", "--strategy", "sync"]
         if command == "profiles-set-route":
@@ -2987,6 +2990,29 @@ class BatchCliContractTests(unittest.TestCase):
                             ]
                         )
 
+                    elif command == "profiles-list-models":
+                        catalog_connection = SimpleNamespace(
+                            provider="openai",
+                            base_url="https://api.example/v1",
+                            provider_models_url=lambda: (
+                                "https://api.example/v1/models"
+                            ),
+                        )
+                        handler_patches.extend(
+                            [
+                                mock.patch.object(
+                                    model_catalog,
+                                    "connection_for_profile",
+                                    return_value=catalog_connection,
+                                ),
+                                mock.patch.object(
+                                    model_catalog,
+                                    "fetch_models",
+                                    return_value=("gpt-4.1-mini",),
+                                ),
+                            ]
+                        )
+
                     with contextlib.ExitStack() as stack:
                         for patcher in handler_patches:
                             stack.enter_context(patcher)
@@ -3052,6 +3078,12 @@ class BatchCliContractTests(unittest.TestCase):
                                 "gemini-main",
                                 "--acknowledge-billable-request",
                                 capability_probe.BILLABLE_ACK_TOKEN,
+                            ]
+                        elif command == "profiles-list-models":
+                            argv = [
+                                "profiles-list-models",
+                                "--profile",
+                                "gemini-main",
                             ]
                         elif command == "profiles-set-default":
                             argv = [
