@@ -1136,6 +1136,12 @@ def build_campaign_manifest(
     unit_list = list(units or [])
     status_counts = summarize_unit_statuses(unit_list)
     campaign_status = derive_campaign_status(status_counts)
+    settings_dict = dict(settings or {})
+    frozen_generation_settings = {
+        key: settings_dict[key]
+        for key in ("temperature", "max_output_tokens", "thinking_level")
+        if key in settings_dict
+    }
 
     manifest: dict[str, Any] = {
         "version": 1,
@@ -1167,7 +1173,7 @@ def build_campaign_manifest(
         "settings": {
             "chunk_size": max(1, int(chunk_size or DEFAULT_CHUNK_SIZE)),
             "require_zero_pending": bool(readiness_dict.get("require_zero_pending", True)),
-            **dict(settings or {}),
+            **settings_dict,
         },
         "final_review_settings": {
             "chunk_size": max(1, int(chunk_size or DEFAULT_CHUNK_SIZE)),
@@ -1176,6 +1182,7 @@ def build_campaign_manifest(
             "report_only": True,
             "execution_strategy": _as_optional_str(execution_strategy)
             or EXECUTION_STRATEGY_GEMINI_BATCH,
+            **frozen_generation_settings,
         },
         "readiness": readiness_dict,
         "summary": {

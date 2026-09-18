@@ -336,6 +336,29 @@ class RunSyncCampaignTests(unittest.TestCase):
         persisted = fr.load_campaign_package(package_dir)
         self.assertEqual(persisted["units"][0]["status"], fr.STATUS_PENDING)
 
+    def test_provider_request_metadata_is_not_persisted(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=1)
+
+        def generate(_payload):
+            return {
+                "response_text": json.dumps({"findings": []}),
+                "provider": "fake",
+                "model": "test-model",
+                "request_metadata": {"Authorization": "Bearer SECRET-TOKEN"},
+                "response_payload": {"echo": "SECRET-TOKEN"},
+            }
+
+        frs.run_sync_campaign(package_dir, generate=generate)
+
+        package = fr.load_campaign_package(package_dir)
+        for key in ("review_units", "findings", "manifest", "report"):
+            path = package["paths"].get(key)
+            if not path:
+                continue
+            with open(path, "r", encoding="utf-8") as handle:
+                self.assertNotIn("SECRET-TOKEN", handle.read())
+
     def test_batch_package_is_rejected(self) -> None:
         package_dir = self._package_dir()
         build_package(package_dir, count=1, strategy=fr.EXECUTION_STRATEGY_GEMINI_BATCH)
@@ -511,6 +534,61 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
 
         self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_SYNC_ABORTED")
         self.assertFalse(captured.exception.retryable)
+
+    def test_run_sync_uses_frozen_generation_settings(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+        package = fr.load_campaign_package(package_dir)
+        manifest = dict(package["manifest"])
+        manifest["settings"] = {
+            "temperature": 0.7,
+            "max_output_tokens": 123,
+            "thinking_level": "LOW",
+        }
+        manifest["final_review_settings"] = {
+            **dict(manifest.get("final_review_settings") or {}),
+            "temperature": 0.7,
+            "max_output_tokens": 123,
+            "thinking_level": "LOW",
+        }
+        fr.write_campaign_package(
+            package_dir,
+            manifest=manifest,
+            snapshot=dict(package["snapshot"]),
+            units=list(package["units"]),
+            findings=list(package["findings"]),
+        )
+        context = {
+            "context_digest": "live-context",
+            "snapshot_digest": "live-snapshot",
+            "prompt_context": {},
+        }
+        captured: dict = {}
+
+        def fake_run_sync(payload, route, plan=None):
+            captured["config"] = dict(payload["generation_config"])
+            return {
+                "response_text": json.dumps({"findings": []}),
+                "provider": "fake",
+                "model": "gpt-4.1-mini",
+            }
+
+        with (
+            mock.patch.object(
+                batch,
+                "_collect_final_review_context_snapshot",
+                return_value=context,
+            ),
+            mock.patch.object(
+                batch,
+                "run_sync_request",
+                side_effect=fake_run_sync,
+            ),
+            mock.patch.object(batch, "remember_latest_manifest"),
+        ):
+            batch.run_final_review_run_sync(package_dir)
+
+        self.assertEqual(captured["config"]["temperature"], 0.7)
+        self.assertEqual(captured["config"]["max_output_tokens"], 123)
 
     def test_sync_campaign_missing_frozen_plan_is_rejected(self) -> None:
         package_dir, _profile_id = self._package_with_routing()

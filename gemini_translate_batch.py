@@ -7464,6 +7464,23 @@ def run_final_review_run_sync(
         + hashlib.sha256(package_dir.encode('utf-8')).hexdigest()[:20]
     )
     provider = str(getattr(profile, 'provider', '') or SYNC_BACKEND or 'unknown')
+    frozen_settings = dict(manifest.get('final_review_settings') or {})
+    manifest_settings = dict(manifest.get('settings') or {})
+
+    def _frozen_setting(key, default):
+        for source in (frozen_settings, manifest_settings):
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    temperature = float(_frozen_setting('temperature', BATCH_TEMPERATURE))
+    max_output_tokens = int(
+        _frozen_setting('max_output_tokens', BATCH_MAX_OUTPUT_TOKENS)
+    )
+    thinking_level = str(
+        _frozen_setting('thinking_level', BATCH_THINKING_LEVEL) or ''
+    )
 
     def _generate(payload):
         return run_sync_request(payload, route, plan=plan)
@@ -7482,7 +7499,7 @@ def run_final_review_run_sync(
             operation_id=operation_id,
             run_id=run_id,
             source_key=str(event.get('unit_id') or ''),
-            thinking_level=BATCH_THINKING_LEVEL,
+            thinking_level=thinking_level,
             source={
                 'kind': 'final_review_response',
                 'package_dir': package_dir,
@@ -7509,9 +7526,9 @@ def run_final_review_run_sync(
         fail_fast=bool(fail_fast),
         provider=provider,
         model=model,
-        temperature=BATCH_TEMPERATURE,
-        max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
-        thinking_level=BATCH_THINKING_LEVEL,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        thinking_level=thinking_level,
         structured_output_mode=structured_mode,
         safety_settings=BATCH_SAFETY_SETTINGS or None,
         progress=_progress,

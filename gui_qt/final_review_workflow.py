@@ -5,6 +5,8 @@ import json
 import re
 from typing import Sequence
 
+import final_review as fr
+
 from .batch_workflow_support import build_submit_cli_args, machine_output_args
 from .revision_report import summarize_revision_preview_output
 from .translation_workflow import (
@@ -54,19 +56,22 @@ def _extract_result_envelope(output: str) -> dict | None:
     return found
 
 
-def _execution_strategy_for_manifest(manifest_path: str) -> str:
-    """Read the campaign execution strategy without failing the workflow."""
+def _execution_strategy_for_manifest(manifest_path: str) -> str | None:
+    """Read the campaign execution strategy; ``None`` when unreadable."""
 
     if not manifest_path:
-        return "gemini_batch"
+        return None
     try:
         with open(manifest_path, "r", encoding="utf-8-sig") as handle:
             manifest = json.load(handle)
     except (OSError, ValueError):
-        return "gemini_batch"
+        return None
     if not isinstance(manifest, dict):
-        return "gemini_batch"
-    return str(manifest.get("execution_strategy") or "gemini_batch")
+        return None
+    return str(
+        manifest.get("execution_strategy")
+        or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+    )
 
 
 def _created_campaign(output: str) -> str:
@@ -102,7 +107,10 @@ class FinalReviewWorkflow:
             and done_count == unit_count
         ):
             return cls([], manifest_path, submit_max_cost=submit_max_cost)
-        if str(manifest.get("execution_strategy") or "gemini_batch") == "sync":
+        if str(
+            manifest.get("execution_strategy")
+            or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+        ) == fr.EXECUTION_STRATEGY_SYNC:
             return cls(
                 ["final-review-run-sync"],
                 manifest_path,
@@ -144,7 +152,16 @@ class FinalReviewWorkflow:
                 return WorkflowUpdate(status="failed", heading="无法准备最终审校",
                                       message="未生成最终审校任务包，请查看诊断日志。", facts=[])
             self.manifest_path = manifest_path_for_package(package)
-            if _execution_strategy_for_manifest(self.manifest_path) == "sync":
+            strategy = _execution_strategy_for_manifest(self.manifest_path)
+            if strategy is None:
+                self._steps.clear()
+                return WorkflowUpdate(
+                    status="failed",
+                    heading="无法读取最终审校任务",
+                    message="campaign manifest 暂时不可读，请重试。",
+                    facts=self._facts(),
+                )
+            if strategy == fr.EXECUTION_STRATEGY_SYNC:
                 self._steps = ["final-review-run-sync"]
         elif key == "submit":
             path = extract_manifest_path(output)

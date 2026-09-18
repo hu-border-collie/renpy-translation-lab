@@ -14,12 +14,41 @@ from gui_qt.work_modes import WorkMode
 
 class FinalReviewWorkflowTests(unittest.TestCase):
     def test_factory_starts_final_review_in_maintenance_workflow(self):
-        workflow = create_workflow(WorkMode.FINAL_REVIEW)
-        self.assertIsInstance(workflow, FinalReviewWorkflow)
-        self.assertEqual(workflow.current_step().args, ["final-review-build"])
-        update = workflow.complete_current_step(0, "Created final-review campaign: C:/tmp/review")
-        self.assertTrue(update.should_continue)
-        self.assertEqual(workflow.current_step().key, "submit")
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = os.path.join(tmp, "review")
+            os.makedirs(package_dir)
+            with open(
+                os.path.join(package_dir, "manifest.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "mode": "final_review",
+                        "execution_strategy": "gemini_batch",
+                    },
+                    handle,
+                )
+            workflow = create_workflow(WorkMode.FINAL_REVIEW)
+            self.assertIsInstance(workflow, FinalReviewWorkflow)
+            self.assertEqual(workflow.current_step().args, ["final-review-build"])
+            update = workflow.complete_current_step(
+                0,
+                f"Created final-review campaign: {package_dir}",
+            )
+            self.assertTrue(update.should_continue)
+            self.assertEqual(workflow.current_step().key, "submit")
+
+    def test_build_unreadable_manifest_stops_without_batch_fallback(self):
+        workflow = FinalReviewWorkflow.start_new()
+        update = workflow.complete_current_step(
+            0,
+            "Created final-review campaign: C:/tmp/definitely-missing/review",
+        )
+
+        self.assertEqual(update.status, "failed")
+        self.assertEqual(update.heading, "无法读取最终审校任务")
+        self.assertIsNone(workflow.current_step())
 
     def test_failed_step_stops_the_workflow(self):
         workflow = FinalReviewWorkflow.start_new()
