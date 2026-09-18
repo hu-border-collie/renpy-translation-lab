@@ -766,5 +766,115 @@ class ProfilesAppIntegrationTests(unittest.TestCase):
         )
 
 
+@gui_test_support.skip_unless_gui(ProfilesSettingsPage is None, IMPORT_ERROR)
+class ProfilesPageDirectAdapterTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = QApplication.instance()
+        if app is None:
+            cls._app = QApplication([])
+        else:
+            cls._app = app
+
+    def setUp(self) -> None:
+        self.messages: list[str] = []
+        self.page = ProfilesSettingsPage(
+            actions=SettingsPageActions(show_status=self.messages.append)
+        )
+        self.page.load({"model_routing": migrated_section()})
+        self.page.providers_list.setCurrentRow(0)
+
+    def tearDown(self) -> None:
+        self.page.widget.deleteLater()
+
+    def _apply_openai_preset(self) -> str:
+        provider_id = self.page._selected_provider_id
+        index = self.page.provider_preset_combo.findData("openai")
+        self.page.provider_preset_combo.setCurrentIndex(index)
+        return provider_id
+
+    def test_provider_preset_fills_direct_connection(self) -> None:
+        provider_id = self._apply_openai_preset()
+        provider = self.page.collect()["model_routing"]["providers"][provider_id]
+        self.assertEqual(provider["adapter"], "openai_compatible")
+        self.assertEqual(provider["provider"], "openai")
+        self.assertEqual(provider["base_url"], "https://api.openai.com/v1")
+        self.assertEqual(
+            provider["credential_ref"]["env_name"], "OPENAI_API_KEY"
+        )
+        self.assertEqual(provider["extra_headers"], {})
+
+    def test_provider_preset_applies_mode_to_unset_profile(self) -> None:
+        provider_id = self._apply_openai_preset()
+        profiles = [
+            profile
+            for profile in editor.editor_view(
+                self.page.collect()["model_routing"]
+            )["profiles"]
+            if profile["provider_id"] == provider_id
+        ]
+        self.assertTrue(profiles)
+        for profile in profiles:
+            self.assertEqual(
+                profile["capability_overrides"]["structured_output"],
+                {"mode": "strict_json_schema"},
+            )
+
+    def test_provider_preset_keeps_explicit_profile_mode(self) -> None:
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+        combo = self.page.profile_structured_output_combo
+        combo.setCurrentIndex(combo.findData("json_object"))
+        self.page._on_profile_capabilities_changed()
+
+        self._apply_openai_preset()
+
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertEqual(overrides["structured_output"], {"mode": "json_object"})
+
+    def test_provider_extra_headers_round_trip(self) -> None:
+        provider_id = self._apply_openai_preset()
+        self.page.provider_extra_headers_edit.setText('{"X-Trace": "abc"}')
+        self.page._on_provider_fields_changed()
+        provider = self.page.collect()["model_routing"]["providers"][provider_id]
+        self.assertEqual(provider["extra_headers"], {"X-Trace": "abc"})
+
+    def test_invalid_extra_headers_does_not_write(self) -> None:
+        provider_id = self._apply_openai_preset()
+        self.page.provider_extra_headers_edit.setText("{not json")
+        self.page._on_provider_fields_changed()
+        provider = self.page.collect()["model_routing"]["providers"][provider_id]
+        self.assertEqual(provider["extra_headers"], {})
+        self.assertTrue(self.messages)
+
+    def test_non_string_extra_header_value_does_not_write(self) -> None:
+        provider_id = self._apply_openai_preset()
+        self.page.provider_extra_headers_edit.setText('{"X-Test": null}')
+        self.page._on_provider_fields_changed()
+        provider = self.page.collect()["model_routing"]["providers"][provider_id]
+        self.assertEqual(provider["extra_headers"], {})
+        self.assertTrue(self.messages)
+
+    def test_structured_output_mode_round_trip(self) -> None:
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+        combo = self.page.profile_structured_output_combo
+        combo.setCurrentIndex(combo.findData("json_object"))
+        self.page._on_profile_capabilities_changed()
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertEqual(overrides["structured_output"], {"mode": "json_object"})
+
+        combo.setCurrentIndex(0)
+        self.page._on_profile_capabilities_changed()
+        overrides = self.page.collect()["model_routing"]["profiles"][profile_id][
+            "capability_overrides"
+        ]
+        self.assertNotIn("structured_output", overrides)
+
+
 if __name__ == "__main__":
     unittest.main()

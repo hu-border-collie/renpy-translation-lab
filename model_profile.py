@@ -41,6 +41,7 @@ from typing import Any, Callable, Mapping
 
 from cli_contract import EXIT_INVALID_STATE, MachineContractError
 from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+from openai_compatible_contract import DEFAULT_STRUCTURED_OUTPUT_MODE
 from litellm_provider_config import (
     CustomLiteLLMProvider,
     StructuredOutputCapability,
@@ -53,11 +54,21 @@ MODEL_PROFILE_SCHEMA_VERSION = 1
 
 ADAPTER_GEMINI = "gemini"
 ADAPTER_LITELLM = "litellm"
-KNOWN_ADAPTERS = frozenset({ADAPTER_GEMINI, ADAPTER_LITELLM})
+ADAPTER_OPENAI_COMPATIBLE = "openai_compatible"
+KNOWN_ADAPTERS = frozenset({
+    ADAPTER_GEMINI,
+    ADAPTER_LITELLM,
+    ADAPTER_OPENAI_COMPATIBLE,
+})
 
 SYNC_BACKEND_GEMINI = "gemini"
 SYNC_BACKEND_LITELLM = "litellm"
-KNOWN_SYNC_BACKENDS = frozenset({SYNC_BACKEND_GEMINI, SYNC_BACKEND_LITELLM})
+SYNC_BACKEND_OPENAI_COMPATIBLE = ADAPTER_OPENAI_COMPATIBLE
+KNOWN_SYNC_BACKENDS = frozenset({
+    SYNC_BACKEND_GEMINI,
+    SYNC_BACKEND_LITELLM,
+    SYNC_BACKEND_OPENAI_COMPATIBLE,
+})
 
 # Task stages that may appear in a routing plan.
 STAGE_TRANSLATION = "translation"
@@ -658,6 +669,35 @@ def _litellm_capabilities(
     return _apply_capability_overrides(caps, overrides)
 
 
+def _openai_compatible_capabilities(
+    overrides: Mapping[str, Any],
+) -> ModelCapabilities:
+    """Adapter defaults for the direct OpenAI-compatible sync backend.
+
+    A generic Chat Completions endpoint is not assumed to accept a strict
+    JSON-schema ``response_format``; the conservative default is prompt-only
+    JSON.  Providers/presets declare ``json_object`` or
+    ``strict_json_schema`` through ``capability_overrides`` instead of the
+    backend silently pretending the constraint was honored.  Reasoning
+    parameters and reasoning output are provider-specific and stay
+    conservatively unsupported in S1.
+    """
+    caps = ModelCapabilities(
+        sync_generation=CapabilityFlag(True),
+        structured_output=StructuredOutputSpec(
+            mode=DEFAULT_STRUCTURED_OUTPUT_MODE,
+            source=CAPABILITY_SOURCE_ADAPTER_DEFAULT,
+            basis=STRUCTURED_OUTPUT_BASIS_CONSERVATIVE_DEFAULT,
+        ),
+        reasoning_request=CapabilityFlag(False),
+        reasoning_response=CapabilityFlag(False),
+        usage_stats=CapabilityFlag(True),
+        remote_batch=CapabilityFlag(False),
+        embedding=CapabilityFlag(False),
+    )
+    return _apply_capability_overrides(caps, overrides)
+
+
 def _apply_capability_overrides(
     caps: ModelCapabilities,
     overrides: Mapping[str, Any],
@@ -710,6 +750,8 @@ def resolve_capabilities(
             custom_providers,
             profile.capability_overrides,
         )
+    if profile.adapter == ADAPTER_OPENAI_COMPATIBLE:
+        return _openai_compatible_capabilities(profile.capability_overrides)
     return _apply_capability_overrides(
         ModelCapabilities(
             structured_output=StructuredOutputSpec(
@@ -736,8 +778,15 @@ def _sync_profile(
     The adapter mirrors the runtime branch exactly: ``sync.backend`` decides
     gemini-direct vs LiteLLM, so a provider-prefixed model under the gemini
     backend stays a gemini-adapter profile and is rejected by validation
-    instead of being rerouted behind the config's back.
+    instead of being rerouted behind the config's back.  The direct
+    ``openai_compatible`` adapter is configured through ``model_routing``
+    providers/profiles; it has no legacy ``sync.backend`` representation.
     """
+    if sync_backend == SYNC_BACKEND_OPENAI_COMPATIBLE:
+        raise ModelRoutingConfigError(
+            "openai_compatible requires a model_routing provider/profile; "
+            "legacy sync.backend only supports 'gemini' or 'litellm'."
+        )
     if sync_backend == SYNC_BACKEND_LITELLM:
         provider = provider_from_model(model)
         custom = (custom_providers or {}).get(provider)
@@ -906,7 +955,8 @@ def resolve_routing_plan(
     if sync_backend not in KNOWN_SYNC_BACKENDS:
         raise ModelRoutingConfigError(
             f"Unsupported sync backend: {sync_backend}. "
-            "Choose 'gemini' or 'litellm'."
+            "Choose 'gemini' or 'litellm'; openai_compatible requires a "
+            "model_routing provider/profile."
         )
 
     strategy = (
@@ -1184,6 +1234,16 @@ def validate_routing_plan(
             ))
             continue
         if (
+            profile.adapter == ADAPTER_OPENAI_COMPATIBLE
+            and not str(profile.base_url or "").strip()
+        ):
+            issues.append(RoutingValidationIssue(
+                MODEL_PROFILE_INVALID,
+                f"Profile {profile_id} uses the openai_compatible adapter "
+                "without a provider base_url.",
+                profile_id=profile_id,
+            ))
+        if (
             profile.adapter == ADAPTER_LITELLM
             and not is_provider_prefixed_model_id(profile.model)
         ):
@@ -1218,7 +1278,12 @@ def validate_routing_plan(
 
         ref = profile.credential_ref
         custom = (custom_providers or {}).get(profile.provider)
-        requires_key = custom.requires_key if custom is not None else True
+        if profile.adapter == ADAPTER_OPENAI_COMPATIBLE:
+            # A direct connection with an explicit ``none`` reference is
+            # intentionally keyless (local runtimes, gateways).
+            requires_key = ref.kind != CREDENTIAL_KIND_NONE
+        else:
+            requires_key = custom.requires_key if custom is not None else True
         if not requires_key:
             continue
         if ref.kind == CREDENTIAL_KIND_ENV:
@@ -1532,6 +1597,22 @@ def build_sync_backend(
             api_key=str(diagnostic_api_key or "").strip() or None,
             custom_providers=connections,
             credential_ref=profile.credential_ref.to_manifest_dict(),
+        )
+    if profile.adapter == ADAPTER_OPENAI_COMPATIBLE:
+        from openai_compatible_sync_backend import OpenAICompatibleSyncBackend
+
+        capabilities = resolve_capabilities(
+            profile,
+            custom_providers=custom_providers,
+        )
+        return OpenAICompatibleSyncBackend(
+            provider=profile.provider,
+            base_url=profile.base_url,
+            credential_ref=profile.credential_ref.to_manifest_dict(),
+            extra_headers=profile.extra_headers,
+            params=profile.params,
+            structured_output_mode=capabilities.structured_output.mode,
+            api_key=str(diagnostic_api_key or "").strip() or None,
         )
     raise ValueError(
         f"Profile {profile.id} uses adapter {profile.adapter}, which has no "

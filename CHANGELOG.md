@@ -8,6 +8,8 @@
 
 ### 新增
 
+- #431 S1 新增直连 `openai_compatible` Sync 生成 adapter：通过标准库 HTTP 直接调用 Chat Completions，无需安装或导入 LiteLLM；Provider 连接支持 `base_url` / `models_url` / `credential_ref`（none / env / keyring）与非敏感 `extra_headers`，ModelProfile 支持白名单生成参数与 `capability_overrides.structured_output.mode`（`strict_json_schema` / `json_object` / `prompt_only_json`）。GUI「模型与 Provider」页新增 adapter、供应商预设、额外请求头与结构化输出模式；能力探测与连接测试复用同一 `build_sync_backend` 入口。S1 不删除 LiteLLM、不改默认值，final_review 仍限 `gemini_batch`。
+
 - 新增启动前预检 `translate-preflight`：只扫描项目并构建共享 TranslationPlan，不调用 Provider/embedding，输出模型/策略、待处理文件/条目/chunk、source snapshot、上下文来源与风险；GUI「翻译」页开始任务前会执行该预检并展示确认框。
 - 同步运行页新增旁路实时进度：运行中轮询 `sync-status --latest`，持续刷新请求/条目/结果未知/usage 摘要；停止本机进程或任务结束即停止轮询，不影响耐久运行状态。
 - 各任务页（翻译、关键词、订正、项目分析、最终审校）现在显示该阶段实际 resolved ModelProfile、执行方式以及「显式覆盖 / 继承默认」来源。

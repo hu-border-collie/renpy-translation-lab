@@ -666,11 +666,12 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if not isinstance(sync, dict):
         sync = {}
     backend_name = str(sync.get('backend') or 'gemini').strip().lower()
-    if backend_name not in {'gemini', 'litellm'}:
+    if backend_name not in {'gemini', 'litellm', 'openai_compatible'}:
         if not tolerate_routing_errors:
             exc = model_profile.ModelRoutingConfigError(
                 f"Unsupported sync backend: {backend_name}. "
-                "Choose 'gemini' or 'litellm'."
+                "Choose 'gemini', 'litellm', or configure an "
+                "openai_compatible ModelProfile."
             )
             raise model_profile.routing_resolution_error(exc) from exc
     SYNC_BACKEND = backend_name

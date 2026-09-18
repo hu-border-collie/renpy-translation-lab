@@ -12,6 +12,7 @@ so their models, providers and stage routes are not silently dropped (#457).
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 import model_profiles_editor as editor
+import openai_compatible_provider_config as openai_compatible_presets
+from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
 from .page_chrome import build_settings_scroll_page, settings_group
@@ -391,6 +394,24 @@ class ProfilesSettingsPage(QObject):
             row.addWidget(combo, 1)
             capabilities_layout.addLayout(row)
             self._capability_combos[key] = combo
+        structured_row = QHBoxLayout()
+        structured_row.addWidget(
+            QLabel(MODEL_PROFILES_PAGE_COPY["structured_output_label"])
+        )
+        self.profile_structured_output_combo = NoWheelComboBox()
+        self.profile_structured_output_combo.setObjectName(
+            "profiles_structured_output_combo"
+        )
+        self.profile_structured_output_combo.addItem(
+            MODEL_PROFILES_PAGE_COPY["inherit_value"], None
+        )
+        for mode in STRUCTURED_OUTPUT_MODE_ORDER:
+            self.profile_structured_output_combo.addItem(mode, mode)
+        self.profile_structured_output_combo.currentIndexChanged.connect(
+            self._on_profile_capabilities_changed
+        )
+        structured_row.addWidget(self.profile_structured_output_combo, 1)
+        capabilities_layout.addLayout(structured_row)
         for key, label in (
             ("context_limit_tokens", _CONTEXT_LABELS["context_limit_tokens"]),
             ("context_budget_tokens", _CONTEXT_LABELS["context_budget_tokens"]),
@@ -411,6 +432,22 @@ class ProfilesSettingsPage(QObject):
         layout.addWidget(capabilities)
 
     def _build_provider_editor(self, layout: QVBoxLayout) -> None:
+        self.provider_preset_combo = NoWheelComboBox()
+        self.provider_preset_combo.setObjectName("profiles_provider_preset_combo")
+        self.provider_preset_combo.addItem(
+            MODEL_PROFILES_PAGE_COPY["preset_placeholder"], ""
+        )
+        for preset_id in openai_compatible_presets.preset_ids():
+            preset = openai_compatible_presets.get_preset(preset_id)
+            self.provider_preset_combo.addItem(preset.label, preset_id)
+        self.provider_preset_combo.currentIndexChanged.connect(
+            self._on_provider_preset_selected
+        )
+        layout.addWidget(
+            QLabel(MODEL_PROFILES_PAGE_COPY["provider_fields"]["preset"])
+        )
+        layout.addWidget(self.provider_preset_combo)
+
         fields = (
             ("provider_label_edit", "label", QLineEdit),
             ("provider_upstream_edit", "upstream", QLineEdit),
@@ -418,6 +455,7 @@ class ProfilesSettingsPage(QObject):
             ("provider_models_url_edit", "models_url", QLineEdit),
             ("provider_credential_name_edit", "credential_name", QLineEdit),
             ("provider_credential_env_edit", "credential_env", QLineEdit),
+            ("provider_extra_headers_edit", "extra_headers", QLineEdit),
         )
         for attr, key, _cls in fields:
             edit = QLineEdit()
@@ -707,6 +745,7 @@ class ProfilesSettingsPage(QObject):
                 self.profile_label_edit.clear()
                 self.profile_model_edit.clear()
                 self.profile_models_edit.clear()
+                self.profile_structured_output_combo.setCurrentIndex(0)
                 return
             self.profile_label_edit.setText(profile["label"])
             self.profile_provider_combo.clear()
@@ -737,6 +776,20 @@ class ProfilesSettingsPage(QObject):
                 value = overrides.get(key)
                 index = combo.findData(value) if value is not None else 0
                 combo.setCurrentIndex(index if index >= 0 else 0)
+            structured = overrides.get("structured_output")
+            structured_mode = (
+                structured.get("mode")
+                if isinstance(structured, Mapping)
+                else None
+            )
+            structured_index = (
+                self.profile_structured_output_combo.findData(structured_mode)
+                if structured_mode
+                else 0
+            )
+            self.profile_structured_output_combo.setCurrentIndex(
+                structured_index if structured_index >= 0 else 0
+            )
             for key, edit in self._context_edits.items():
                 value = overrides.get(key)
                 edit.setText("" if value is None else str(value))
@@ -757,6 +810,7 @@ class ProfilesSettingsPage(QObject):
         )
         self._loading = True
         try:
+            self._set_combo_data(self.provider_preset_combo, "")
             if provider is None:
                 for edit in self._provider_edits().values():
                     edit.clear()
@@ -773,6 +827,12 @@ class ProfilesSettingsPage(QObject):
             )
             self.provider_credential_name_edit.setText(credential["name"])
             self.provider_credential_env_edit.setText(credential["env_name"])
+            extra_headers = dict(provider.get("extra_headers") or {})
+            self.provider_extra_headers_edit.setText(
+                json.dumps(extra_headers, ensure_ascii=False, sort_keys=True)
+                if extra_headers
+                else ""
+            )
         finally:
             self._loading = False
 
@@ -784,6 +844,7 @@ class ProfilesSettingsPage(QObject):
             "models_url": self.provider_models_url_edit,
             "credential_name": self.provider_credential_name_edit,
             "credential_env": self.provider_credential_env_edit,
+            "extra_headers": self.provider_extra_headers_edit,
         }
 
     def _refresh_routes(self) -> None:
@@ -1093,6 +1154,9 @@ class ProfilesSettingsPage(QObject):
             value = combo.currentData()
             if value is not None:
                 overrides[key] = bool(value)
+        structured_mode = self.profile_structured_output_combo.currentData()
+        if structured_mode:
+            overrides["structured_output"] = {"mode": str(structured_mode)}
         invalid_fields: list[str] = []
         existing_overrides: dict[str, Any] = {}
         if self._section is not None:
@@ -1141,6 +1205,9 @@ class ProfilesSettingsPage(QObject):
     def _on_provider_fields_changed(self, *_args: object) -> None:
         if self._loading or self._section is None or not self._selected_provider_id:
             return
+        extra_headers = self._parse_extra_headers()
+        if extra_headers is None:
+            return
         try:
             self._section = editor.update_provider(
                 self._section,
@@ -1155,6 +1222,7 @@ class ProfilesSettingsPage(QObject):
                 ),
                 credential_name=self.provider_credential_name_edit.text(),
                 credential_env_name=self.provider_credential_env_edit.text(),
+                extra_headers=extra_headers,
             )
         except editor.ModelProfilesEditorError as exc:
             self._show_error(exc)
@@ -1163,6 +1231,110 @@ class ProfilesSettingsPage(QObject):
         self._refresh_profiles_list()
         self._refresh_defaults()
         self._refresh_routes()
+
+    def _parse_extra_headers(self) -> dict[str, str] | None:
+        """Parse the provider extra-headers JSON field or show a local error."""
+
+        text = self.provider_extra_headers_edit.text().strip()
+        if not text:
+            return {}
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as exc:
+            self._show_status(
+                MODEL_PROFILES_PAGE_COPY["extra_headers_invalid"].format(
+                    reason=exc.msg
+                )
+            )
+            return None
+        if not isinstance(value, Mapping):
+            self._show_status(
+                MODEL_PROFILES_PAGE_COPY["extra_headers_invalid"].format(
+                    reason="根节点必须是对象"
+                )
+            )
+            return None
+        parsed: dict[str, str] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip() or not isinstance(item, str):
+                self._show_status(
+                    MODEL_PROFILES_PAGE_COPY["extra_headers_invalid"].format(
+                        reason="键和值都必须是字符串"
+                    )
+                )
+                return None
+            parsed[key] = item
+        return parsed
+
+    def _on_provider_preset_selected(self, _index: int) -> None:
+        """Fill the selected provider connection from one built-in preset."""
+
+        if self._loading or self._section is None or not self._selected_provider_id:
+            return
+        preset_id = str(self.provider_preset_combo.currentData() or "")
+        if not preset_id:
+            return
+        payload = openai_compatible_presets.preset_provider_payload(preset_id)
+        credential = payload["credential_ref"]
+        preset_mode = str(payload.get("structured_output_mode") or "")
+        try:
+            self._section = editor.update_provider(
+                self._section,
+                self._selected_provider_id,
+                label=payload["label"],
+                adapter=payload["adapter"],
+                provider=payload["provider"],
+                base_url=payload["base_url"],
+                models_url=payload["models_url"],
+                credential_kind=credential["kind"],
+                credential_name=credential["name"],
+                credential_env_name=credential["env_name"],
+                extra_headers=payload["extra_headers"],
+            )
+            if preset_mode:
+                self._section = self._apply_preset_structured_mode(
+                    self._section,
+                    self._selected_provider_id,
+                    preset_mode,
+                )
+        except editor.ModelProfilesEditorError as exc:
+            self._show_error(exc)
+            return
+        self._refresh_providers_list()
+        self._refresh_profiles_list()
+        self._refresh_defaults()
+        self._refresh_routes()
+        self._populate_provider_editor()
+
+    @staticmethod
+    def _apply_preset_structured_mode(
+        section: dict,
+        provider_id: str,
+        mode: str,
+    ) -> dict:
+        """Apply a preset's structured-output mode to profiles without one.
+
+        Profiles that already declare an explicit mode keep it; the preset is a
+        connection suggestion, not an override of an intentional capability
+        decision.
+        """
+
+        for profile in editor.editor_view(section)["profiles"]:
+            if str(profile.get("provider_id") or "") != provider_id:
+                continue
+            overrides = dict(profile.get("capability_overrides") or {})
+            structured = overrides.get("structured_output")
+            if isinstance(structured, Mapping) and str(
+                structured.get("mode") or ""
+            ).strip():
+                continue
+            overrides["structured_output"] = {"mode": mode}
+            section = editor.update_profile(
+                section,
+                str(profile["id"]),
+                capability_overrides=overrides,
+            )
+        return section
 
     def _on_defaults_changed(self, *_args: object) -> None:
         if self._loading or self._section is None:

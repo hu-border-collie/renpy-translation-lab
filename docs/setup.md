@@ -213,6 +213,55 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 - CLI 与 GUI 读取同一份 `translator_config.json` 配置。
 - 自定义 OpenAI 兼容 Provider 默认使用 JSON object 模式；若端点忽略该参数，提示词仍要求 JSON，响应仍须通过统一合同校验。未知的非自定义 Provider 则保守降级为 prompt-only JSON，不会被假定支持严格 schema。
 
+### 直连 OpenAI-compatible Provider（#431 S1）
+
+不安装 LiteLLM 时，也可以在 `model_routing` 中使用 adapter `openai_compatible`，由标准库 HTTP 直接调用 Chat Completions：
+
+```json
+{
+  "model_routing": {
+    "schema_version": 1,
+    "providers": {
+      "openai": {
+        "label": "OpenAI",
+        "adapter": "openai_compatible",
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "models_url": "https://api.openai.com/v1/models",
+        "credential_ref": {
+          "kind": "keyring",
+          "name": "openai",
+          "env_name": "OPENAI_API_KEY"
+        },
+        "extra_headers": {}
+      }
+    },
+    "profiles": {
+      "openai-sync": {
+        "label": "OpenAI Sync",
+        "provider_id": "openai",
+        "model": "gpt-4.1-mini",
+        "params": {"temperature": 0.2, "max_output_tokens": 4096},
+        "capability_overrides": {
+          "structured_output": {"mode": "json_object"}
+        }
+      }
+    },
+    "defaults": {
+      "primary_profile_id": "openai-sync",
+      "execution_strategy": "sync"
+    },
+    "legacy_entrypoints": {"sync_profile_id": "openai-sync"}
+  }
+}
+```
+
+- Provider 连接字段：`base_url`（必填）、`models_url`（可选）、`credential_ref`（`none` / `env` / `keyring`）与 `extra_headers`（仅非敏感请求头；凭据必须走 `credential_ref`）。
+- ModelProfile `params` 只接受白名单：`temperature`、`max_output_tokens`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`timeout`。
+- 结构化输出模式：`strict_json_schema` / `json_object` / `prompt_only_json`；未声明时直连 adapter 保守使用 `prompt_only_json`，Provider 返回“不支持 response_format”时按 `unsupported_capability` 失败，不会静默降级后宣称成功。
+- GUI「设置 → 模型与 Provider」提供内置供应商预设（OpenAI、OpenRouter、DeepSeek、xAI、Ollama、自定义）、额外请求头与结构化输出模式字段；预设只填充连接，不限制手填模型 ID。
+- 直连 adapter 目前只服务同步生成；Gemini Batch 仍要求 `gemini` adapter，最终审校仍限 `gemini_batch`（#431 后续切片解绑）。
+
 默认切块策略：
 
 - 同步与普通 Batch 初译通过共享 `TranslationPlan` 固定分块，默认每个 chunk 最多 60 条、`max_source_chars=18000`；旧配置中的显式 `sync.chunk_size` / `sync.max_source_chars` 仍会被读取。

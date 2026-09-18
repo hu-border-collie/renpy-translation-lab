@@ -1469,6 +1469,9 @@ MODEL_PROFILES_PAGE_COPY = {
     "inherit_value": "跟随适配器",
     "force_on": "强制支持",
     "force_off": "强制不支持",
+    "structured_output_label": "结构化输出模式",
+    "preset_placeholder": "选择预设以填充连接（不会自动保存）",
+    "extra_headers_invalid": "额外请求头必须是 JSON 对象：{reason}",
     "default_profile_label": "主模型",
     "default_strategy_label": "默认执行方式",
     "route_stage_labels": {
@@ -1484,12 +1487,14 @@ MODEL_PROFILES_PAGE_COPY = {
     "provider_fields": {
         "label": "标签",
         "adapter": "适配器",
+        "preset": "供应商预设",
         "upstream": "上游 Provider",
         "base_url": "API Base",
         "models_url": "模型目录 URL",
         "credential_kind": "凭据引用",
         "credential_name": "引用名称 / 环境变量",
         "credential_env": "备用环境变量",
+        "extra_headers": "额外请求头（JSON，非敏感）",
     },
     "credential_kind_labels": {
         "api_keys_json": "本机 api_keys.json 槽位",

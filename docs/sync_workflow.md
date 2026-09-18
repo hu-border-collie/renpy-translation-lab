@@ -30,6 +30,8 @@
 
 选择 LiteLLM 后端时，可通过 `sync.custom_litellm_providers` 注册 OpenAI 兼容但 LiteLLM 未内置的服务（OpenCode Go、中转站、本地 vLLM 等）：每项配置 `id` / `label` / `base_url` / `models_url` / `api_key_env`，请求会改写为 `openai/<模型>` 并逐请求透传 `api_base`，密钥优先使用系统凭据管理器。字段与示例见 [安装与本地配置 · 自定义 OpenAI 兼容 Provider](setup.md#自定义-openai-兼容-providerlitellm-同步)。
 
+不安装 LiteLLM 时，也可以在 `model_routing` 中配置 `adapter: "openai_compatible"` 的 Provider / ModelProfile，由标准库 HTTP 直接调用 Chat Completions；连接字段、生成参数白名单与结构化输出模式见 [安装与本地配置 · 直连 OpenAI-compatible Provider](setup.md#直连-openai-compatible-provider431-s1)。
+
 ## Reasoning 与输出预算诊断
 
 同步结果和实际模型用量账本会分别记录 Provider 可提供的 `completion_tokens`、`reasoning_tokens` 与正文输出 Token。正文计数缺失时显示 `unknown`，不会跨 Provider 假定 `completion - reasoning` 就是正文。若空正文/截断同时伴随 reasoning 计数和输出预算耗尽，结果会记录稳定原因码（例如 `reasoning_budget_exhausted`），GUI 摘要会显示 reasoning 预算告警和截断次数。结果、日志和 GUI 只显示计数与原因码，不回显 Provider 异常正文或凭据。
