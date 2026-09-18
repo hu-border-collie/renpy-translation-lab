@@ -7359,6 +7359,15 @@ def run_final_review_run_sync(
     import final_review as fr
     import final_review_sync as fr_sync
 
+    if int(limit or 0) < 0:
+        raise cli_contract.MachineContractError(
+            '--limit must be >= 0.',
+            code_name='FINAL_REVIEW_LIMIT_INVALID',
+            suggested_action='use_non_negative_limit',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            retryable=False,
+            details={'limit': int(limit or 0)},
+        )
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
     package_dir = str(package['paths']['package_dir'])

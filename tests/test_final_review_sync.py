@@ -289,6 +289,42 @@ class RunSyncCampaignTests(unittest.TestCase):
         self.assertEqual(limited["deferred_count"], 1)
         self.assertEqual(calls["count"], 2)
 
+    def test_negative_limit_is_rejected_without_provider_calls(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=1)
+        calls = {"count": 0}
+
+        with self.assertRaises(frs.FinalReviewSyncError):
+            frs.run_sync_campaign(
+                package_dir,
+                generate=lambda _payload: calls.__setitem__("count", calls["count"] + 1),
+                limit=-1,
+            )
+        self.assertEqual(calls["count"], 0)
+
+    def test_internal_payload_error_is_not_a_provider_failure(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=1)
+        package = fr.load_campaign_package(package_dir)
+        units = [dict(package["units"][0])]
+        units[0].pop("unit_id")
+        fr.write_campaign_package(
+            package_dir,
+            manifest=dict(package["manifest"]),
+            snapshot=dict(package["snapshot"]),
+            units=units,
+            findings=[],
+        )
+
+        with self.assertRaises(frs.FinalReviewSyncError):
+            frs.run_sync_campaign(
+                package_dir,
+                generate=lambda _payload: {"response_text": "{}"},
+            )
+
+        persisted = fr.load_campaign_package(package_dir)
+        self.assertEqual(persisted["units"][0]["status"], fr.STATUS_PENDING)
+
     def test_batch_package_is_rejected(self) -> None:
         package_dir = self._package_dir()
         build_package(package_dir, count=1, strategy=fr.EXECUTION_STRATEGY_GEMINI_BATCH)
@@ -464,6 +500,21 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
 
         self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_SYNC_ABORTED")
         self.assertFalse(captured.exception.retryable)
+
+    def test_negative_limit_returns_stable_usage_error(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+
+        with self.assertRaises(cli_contract.MachineContractError) as captured:
+            batch.run_final_review_run_sync(package_dir, limit=-1)
+
+        self.assertEqual(
+            captured.exception.code_name,
+            "FINAL_REVIEW_LIMIT_INVALID",
+        )
+        self.assertEqual(
+            captured.exception.semantic_exit_code,
+            cli_contract.EXIT_USAGE,
+        )
 
     def test_machine_envelope_exposes_sync_result_fields(self) -> None:
         result = {

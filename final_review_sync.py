@@ -214,7 +214,9 @@ def run_sync_campaign(
         live_context_digest=live_context_digest,
     )
     queued = list(planned["to_run"])
-    effective_limit = max(0, int(limit or 0))
+    effective_limit = int(limit or 0)
+    if effective_limit < 0:
+        raise FinalReviewSyncError("limit must be >= 0")
     to_run = queued[:effective_limit] if effective_limit else queued
     deferred_count = max(0, len(queued) - len(to_run))
     run_ids = [str(unit.get("unit_id") or "") for unit in to_run]
@@ -263,27 +265,31 @@ def run_sync_campaign(
                 "run_count": len(to_run),
             },
         )
+        payload = build_sync_request_payload(
+            unit,
+            shared_context=shared_context,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            thinking_level=thinking_level,
+            model=effective_model or str(unit.get("model") or ""),
+            structured_output_mode=structured_output_mode,
+            safety_settings=safety_settings,
+        )
         row: dict[str, Any]
         try:
-            payload = build_sync_request_payload(
-                unit,
-                shared_context=shared_context,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-                thinking_level=thinking_level,
-                model=effective_model or str(unit.get("model") or ""),
-                structured_output_mode=structured_output_mode,
-                safety_settings=safety_settings,
-            )
             result = generate(payload)
+        except Exception as exc:  # noqa: BLE001 - provider call failed for this unit
+            row = {
+                "key": unit_id,
+                "error": f"sync_{sync_error_category(exc)}: {sync_error_summary(exc)}",
+            }
+        else:
             effective_provider = _result_field(
                 result, "provider", effective_provider
             )
             effective_model = _result_field(result, "model", effective_model)
             row = _sync_row(unit_id, result, effective_model)
             _record_usage(usage_recorder, unit_id=unit_id, result=result)
-        except Exception as exc:  # noqa: BLE001 - recorded as a unit failure
-            row = {"key": unit_id, "error": f"sync_{sync_error_category(exc)}: {sync_error_summary(exc)}"}
 
         ingest = fr_llm.ingest_result_rows(
             [unit],
