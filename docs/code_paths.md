@@ -237,6 +237,11 @@
   `gui_qt/revision_selection_dialog.py` + `revision_selection.py` 的 staged selection →
   `confirm-revision-proposals` → `preview-revisions` / `apply-revisions`。最终审校的
   `final-review-create-revisions` 也汇入同一门禁。
+- 最终审校：`final_review.py` 管 campaign package / unit / findings / quality 映射，
+  `final_review_llm.py` 管 prompt / schema / Batch JSONL / ingest；`final-review-build`
+  按冻结的 `routes.final_review.strategy` 分流：Batch 走 `submit → download →
+  final-review-ingest-results`，sync 走 `final_review_sync.py` 的
+  `final-review-run-sync`（逐 unit 调用 `run_sync_request` 并原子落盘）。
 - GUI 编排：`gui_qt/workbench/revision_page.py`（`RevisionPage`）→
   `gui_qt/revision_workflow.py` 的 `RevisionBatchWorkflow` / `RevisionProposalImportWorkflow` /
   `RevisionProposalConfirmWorkflow` 与 `RevisionCorpusExportWorkflow`；

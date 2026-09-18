@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
 
 from gui_qt.final_review_workflow import FinalReviewWorkflow
@@ -96,6 +99,87 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             {"mode": "final_review", "summary": {"status_counts": {}}},
         )
         self.assertEqual(workflow.current_step().key, "final-review-resume")
+
+    def test_build_sync_campaign_switches_to_run_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_dir = os.path.join(tmp, "campaign")
+            os.makedirs(package_dir)
+            with open(
+                os.path.join(package_dir, "manifest.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {"mode": "final_review", "execution_strategy": "sync"},
+                    handle,
+                )
+
+            workflow = FinalReviewWorkflow.start_new()
+            update = workflow.complete_current_step(
+                0,
+                f"Created final-review campaign: {package_dir}",
+            )
+
+            self.assertTrue(update.should_continue)
+            self.assertEqual(workflow.current_step().key, "final-review-run-sync")
+            self.assertEqual(
+                workflow.current_step().args,
+                [
+                    "final-review-run-sync",
+                    workflow.manifest_path,
+                    "--output",
+                    "json",
+                    "--non-interactive",
+                ],
+            )
+            done = workflow.complete_current_step(
+                0,
+                json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "status": "completed",
+                            "done_delta": 2,
+                            "failed_delta": 0,
+                            "finding_count": 1,
+                        },
+                    }
+                ),
+            )
+            self.assertEqual(done.status, "done")
+            self.assertIsNone(workflow.current_step())
+
+    def test_resume_sync_manifest_runs_sync_step(self):
+        workflow = resume_workflow(
+            WorkMode.FINAL_REVIEW,
+            "C:/tmp/review/manifest.json",
+            {
+                "mode": "final_review",
+                "execution_strategy": "sync",
+                "summary": {"status_counts": {}, "unit_count": 2},
+            },
+        )
+        self.assertIsInstance(workflow, FinalReviewWorkflow)
+        self.assertEqual(workflow.current_step().key, "final-review-run-sync")
+
+    def test_sync_run_with_failed_units_reports_retry(self):
+        workflow = FinalReviewWorkflow(["final-review-run-sync"], "C:/tmp/review/manifest.json")
+        update = workflow.complete_current_step(
+            0,
+            json.dumps(
+                {
+                    "ok": True,
+                    "result": {
+                        "status": "completed",
+                        "done_delta": 1,
+                        "failed_delta": 1,
+                        "finding_count": 0,
+                    },
+                }
+            ),
+        )
+        self.assertEqual(update.status, "ready")
+        self.assertIn("重试", update.message)
 
 
 if __name__ == "__main__":

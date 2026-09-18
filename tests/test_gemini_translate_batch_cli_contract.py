@@ -79,6 +79,7 @@ class BatchCliContractTests(unittest.TestCase):
             "final-review-status",
             "final-review-export",
             "final-review-resume",
+            "final-review-run-sync",
             "final-review-ingest-results",
             "final-review-create-revisions",
         }:

@@ -43,7 +43,7 @@ ModelProfile 是运行时唯一模型来源；模型目录只用于发现与辅�
 | Sync 生成（初译 / 术语 / 订正 / 项目分析） | 经 `LiteLLMSyncBackend` | adapter 为 `openai_compatible` 时改走直连后端；其余 provider 继续 LiteLLM |
 | `build_sync_backend` | gemini / litellm 两分支 | 新增 `openai_compatible` 分支 |
 | GUI 连接诊断 / 能力探测 | `generate_async` | 直连后端提供 `generate_async` 包装，探测复用同一合同 |
-| final_review | 硬限 `gemini_batch` | 保持排除；解绑属 #431 后续切片 |
+| final_review | 硬限 `gemini_batch` | S1 保持排除；S3 已通过 `final-review-run-sync` 解绑 |
 | Embedding | `litellm.embedding` / Gemini | 不在 S1 范围，继续现状 |
 | Gemini Batch | Gemini 直连 | 不变 |
 | 默认值 | `legacy-batch + gemini_batch` | 不变（#457 维持现状） |

@@ -1,6 +1,7 @@
-"""Final-review Batch workflow and selected-finding hand-off for the GUI."""
+"""Final-review Batch/Sync workflow and selected-finding hand-off for the GUI."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Sequence
 
@@ -16,12 +17,28 @@ from .user_copy import format_job_state_fact, format_manifest_path_fact, job_sta
 STEP_TEXT = {
     "final-review-build": ("正在准备最终审校", "正在冻结项目上下文并生成审查任务。"),
     "final-review-resume": ("正在刷新审查范围", "正在重新采集上下文并重建未完成任务。"),
+    "final-review-run-sync": ("正在执行最终审校", "正在通过同步模型逐条审校并写入 findings。"),
     "submit": ("正在提交最终审校", "正在上传审查请求并创建云端批量任务。"),
     "status": ("正在刷新审查状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取审查结果", "任务已完成，正在下载问题报告。"),
     "final-review-ingest-results": ("正在整理问题报告", "正在校验结果并写入最终审校 findings。"),
     "final-review-create-revisions": ("正在生成订正预览", "正在把人工选择的问题转换为安全订正候选。"),
 }
+
+
+def _execution_strategy_for_manifest(manifest_path: str) -> str:
+    """Read the campaign execution strategy without failing the workflow."""
+
+    if not manifest_path:
+        return "gemini_batch"
+    try:
+        with open(manifest_path, "r", encoding="utf-8-sig") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return "gemini_batch"
+    if not isinstance(manifest, dict):
+        return "gemini_batch"
+    return str(manifest.get("execution_strategy") or "gemini_batch")
 
 
 def _created_campaign(output: str) -> str:
@@ -57,6 +74,12 @@ class FinalReviewWorkflow:
             and done_count == unit_count
         ):
             return cls([], manifest_path, submit_max_cost=submit_max_cost)
+        if str(manifest.get("execution_strategy") or "gemini_batch") == "sync":
+            return cls(
+                ["final-review-run-sync"],
+                manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
             steps = ["download", "final-review-ingest-results"]
         elif not manifest.get("job_name"):
@@ -89,6 +112,11 @@ class FinalReviewWorkflow:
                 return WorkflowUpdate(status="failed", heading="无法准备最终审校",
                                       message="未生成最终审校任务包，请查看诊断日志。", facts=[])
             self.manifest_path = manifest_path_for_package(package)
+            if _execution_strategy_for_manifest(self.manifest_path) == "sync":
+                self._steps = ["final-review-run-sync"]
+        elif key == "final-review-run-sync":
+            self._steps.clear()
+            return self._sync_completed_update(output)
         elif key == "submit":
             path = extract_manifest_path(output)
             if path:
@@ -124,6 +152,35 @@ class FinalReviewWorkflow:
                                   facts=self._facts(list(update.facts)))
         return self._continue()
 
+    def _sync_completed_update(self, output: str) -> WorkflowUpdate:
+        result = {}
+        try:
+            parsed = json.loads(str(output or "").strip())
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            raw_result = parsed.get("result")
+            if isinstance(raw_result, dict):
+                result = raw_result
+        failed = int(result.get("failed_delta") or 0)
+        findings = int(result.get("finding_count") or 0)
+        facts = self._facts(
+            [f"findings: {findings}", f"failed_units: {failed}"]
+        )
+        if failed:
+            return WorkflowUpdate(
+                status="ready",
+                heading="最终审校同步执行完成（有失败 unit）",
+                message="报告已写入；请查看状态并重试失败的 unit。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="最终审校报告已就绪",
+            message="同步审校完成；请审核问题并选择需要进入订正预览的项目。",
+            facts=facts,
+        )
+
     def _continue(self):
         step = self.current_step()
         if step is None:
@@ -143,6 +200,8 @@ class FinalReviewWorkflow:
                 args.extend(["--finding-id", finding_id])
             return args
         if key in {"status", "download"}:
+            return machine_output_args([key, self.manifest_path])
+        if key == "final-review-run-sync":
             return machine_output_args([key, self.manifest_path])
         return [key, self.manifest_path]
 

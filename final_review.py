@@ -32,6 +32,9 @@ MANIFEST_MODE_FINAL_REVIEW = "final_review"
 PROMPT_SCHEMA_VERSION = "final-review-v1"
 DEFAULT_CHUNK_SIZE = 16
 
+EXECUTION_STRATEGY_SYNC = "sync"
+EXECUTION_STRATEGY_GEMINI_BATCH = "gemini_batch"
+
 MANIFEST_FILENAME = "manifest.json"
 SNAPSHOT_FILENAME = "snapshot.json"
 REVIEW_UNITS_FILENAME = "review_units.jsonl"
@@ -1120,6 +1123,8 @@ def build_campaign_manifest(
     prompt_schema_version: str = PROMPT_SCHEMA_VERSION,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     batch_model: str = "",
+    execution_strategy: str = EXECUTION_STRATEGY_GEMINI_BATCH,
+    input_jsonl_path: str = REQUESTS_JSONL_FILENAME,
     settings: Mapping[str, Any] | None = None,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1137,6 +1142,8 @@ def build_campaign_manifest(
         "manifest_version": 1,
         "schema_version": SCHEMA_VERSION,
         "mode": MANIFEST_MODE_FINAL_REVIEW,
+        "execution_strategy": _as_optional_str(execution_strategy)
+        or EXECUTION_STRATEGY_GEMINI_BATCH,
         "created_at": utc_now_iso(),
         "display_name": _as_optional_str(display_name),
         "status": campaign_status,
@@ -1153,7 +1160,7 @@ def build_campaign_manifest(
         "snapshot_path": SNAPSHOT_FILENAME,
         "review_units_path": REVIEW_UNITS_FILENAME,
         "findings_path": FINDINGS_FILENAME,
-        "input_jsonl_path": REQUESTS_JSONL_FILENAME,
+        "input_jsonl_path": str(input_jsonl_path or ""),
         "result_jsonl_path": "",
         "job_name": "",
         "job_state": "LOCAL_ONLY",
@@ -1167,6 +1174,8 @@ def build_campaign_manifest(
             "prompt_schema_version": _as_optional_str(prompt_schema_version)
             or PROMPT_SCHEMA_VERSION,
             "report_only": True,
+            "execution_strategy": _as_optional_str(execution_strategy)
+            or EXECUTION_STRATEGY_GEMINI_BATCH,
         },
         "readiness": readiness_dict,
         "summary": {
@@ -1462,6 +1471,8 @@ def collect_campaign_status(
 
     return {
         "mode": MANIFEST_MODE_FINAL_REVIEW,
+        "execution_strategy": manifest.get("execution_strategy")
+        or EXECUTION_STRATEGY_GEMINI_BATCH,
         "report_only": True,
         "autofix": False,
         "status": campaign_status,
@@ -1498,6 +1509,7 @@ def format_status_text(status: Mapping[str, Any]) -> str:
     lines = [
         "Final Review Campaign",
         f"  status: {status.get('status')}",
+        f"  execution: {status.get('execution_strategy') or EXECUTION_STRATEGY_GEMINI_BATCH}",
         f"  report_only: {status.get('report_only')}  autofix: {status.get('autofix')}",
         f"  display_name: {status.get('display_name') or '(none)'}",
         f"  package: {status.get('package_dir') or '(none)'}",

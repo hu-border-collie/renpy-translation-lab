@@ -312,11 +312,18 @@ def resolve_runtime_plan(
     created_at="",
     config_origins=(),
     strict_override=True,
+    legacy_stage_strategies=None,
 ):
     """Freeze a v1 plan for a legacy entrypoint without consulting old model fields.
 
     Explicit model overrides retain the selected connection and credential reference;
     changing provider requires selecting a profile instead of a model string.
+
+    ``legacy_stage_strategies`` overrides the stage->strategy compatibility map
+    used by legacy entrypoints. ``None`` keeps the historical
+    ``project_analysis=sync`` / ``final_review=gemini_batch`` contract; callers
+    that can execute another strategy pass an explicit map (omitting a stage
+    skips its check).
     """
     strategy = routing.ExecutionStrategy(execution)
     section = apply_primary_profile_override(
@@ -329,9 +336,16 @@ def resolve_runtime_plan(
         legacy_execution=strategy.value,
     )
     # Existing entrypoints cannot execute arbitrary stage strategies yet.
-    for stage, expected in (("project_analysis", "sync"), ("final_review", "gemini_batch")):
-        if plan.routes[stage].strategy.value != expected:
-            raise routing.ModelRoutingConfigError("Unsupported legacy stage execution strategy")
+    expected_strategies = (
+        {"project_analysis": "sync", "final_review": "gemini_batch"}
+        if legacy_stage_strategies is None
+        else dict(legacy_stage_strategies)
+    )
+    for stage, expected in expected_strategies.items():
+        if stage in plan.routes and plan.routes[stage].strategy.value != expected:
+            raise routing.ModelRoutingConfigError(
+                "Unsupported legacy stage execution strategy"
+            )
     generation_ids = {route.profile_id for route in plan.routes.values()}
     for profile in plan.profiles.values():
         if (
@@ -437,9 +451,30 @@ def runtime_settings_view(config):
     return result
 
 
-def require_entrypoint_strategy(plan, *, execution, stages):
-    """Refuse routes that the selected legacy command cannot execute."""
+def require_entrypoint_strategy(plan, *, execution, stages, expected_strategies=None):
+    """Refuse routes that the selected legacy command cannot execute.
+
+    ``expected_strategies`` overrides the default stage->strategy map; a stage
+    omitted from it is not checked. Pass ``{}`` for callers that resolve the
+    stage strategy themselves (for example final-review build/run).
+    """
+    if expected_strategies is None:
+        for stage in stages or ():
+            expected = {
+                "project_analysis": "sync",
+                "final_review": "gemini_batch",
+            }.get(stage, routing.ExecutionStrategy(execution).value)
+            if stage in plan.routes and plan.routes[stage].strategy.value != expected:
+                raise routing.ModelRoutingConfigError(
+                    "Selected command cannot execute the configured stage strategy"
+                )
+        return
+    expected_map = dict(expected_strategies)
     for stage in stages or ():
-        expected = {"project_analysis": "sync", "final_review": "gemini_batch"}.get(stage, routing.ExecutionStrategy(execution).value)
+        expected = expected_map.get(stage)
+        if expected is None:
+            continue
         if stage in plan.routes and plan.routes[stage].strategy.value != expected:
-            raise routing.ModelRoutingConfigError("Selected command cannot execute the configured stage strategy")
+            raise routing.ModelRoutingConfigError(
+                "Selected command cannot execute the configured stage strategy"
+            )
