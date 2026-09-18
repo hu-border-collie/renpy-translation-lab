@@ -7403,10 +7403,17 @@ def run_final_review_run_sync(
             details={'execution_strategy': strategy},
         )
 
-    plan = resolve_manifest_routing_plan(
-        manifest,
-        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-    )
+    plan = routing_plan_from_manifest(manifest)
+    if plan is None:
+        raise cli_contract.MachineContractError(
+            'sync final-review campaigns require a frozen model_routing '
+            'snapshot; rebuild the campaign.',
+            code_name='FINAL_REVIEW_PLAN_MISSING',
+            suggested_action='rebuild_final_review_campaign',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'manifest_path': str(package['paths']['manifest'])},
+        )
     route = route_for_manifest(plan, manifest)
     if route.strategy.value != fr.EXECUTION_STRATEGY_SYNC:
         raise cli_contract.MachineContractError(
@@ -17298,6 +17305,9 @@ def run_sync_request(
         backend_kwargs = {}
         if profile.adapter == model_profile.ADAPTER_LITELLM:
             backend_kwargs['custom_providers'] = legacy.CUSTOM_LITELLM_PROVIDERS
+        # openai_compatible profiles carry base_url / credential_ref /
+        # extra_headers on the frozen ModelProfile; the LiteLLM custom-provider
+        # registry is deliberately not part of that contract.
         backend = model_profile.build_sync_backend(profile, **backend_kwargs)
         request = SyncGenerationRequest(
             model=effective_model,

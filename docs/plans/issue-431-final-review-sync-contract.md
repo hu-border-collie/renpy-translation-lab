@@ -78,7 +78,8 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
 
 1. 只接受最终审校 package；从 manifest 读取冻结 `model_routing`，取
    `routes.final_review`；manifest 无快照的旧 package 视为 `gemini_batch`，本命令拒绝并
-   提示改用 Batch 流程。
+   提示改用 Batch 流程；`execution_strategy=sync` 但缺少冻结 `model_routing` 的损坏 package
+   返回 `FINAL_REVIEW_PLAN_MISSING`，不会退化成 Batch 计划。
 2. 实时重算 shared prompt context 与 digest；用 `plan_units_for_run(force=...)` 计算
    `to_run / to_skip`：
    - done 且 digest 未变：skip；
@@ -160,6 +161,9 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
   `sync_invalid_response` / `sync_unsupported_capability` /
   `sync_missing_dependency` / `sync_provider_error`。
 - 命令级错误（package 不存在、旧 package 无 routing、manifest 不是 final_review、
-  Batch 专用命令收到 sync package）使用 `cli_contract.MachineContractError` 稳定
-  code；不把 provider 原始异常正文写入公开输出。
+  Batch 专用命令收到 sync package、负 limit）使用 `cli_contract.MachineContractError`
+  稳定 code：`FINAL_REVIEW_NOT_SYNC` / `FINAL_REVIEW_ROUTE_NOT_SYNC` /
+  `FINAL_REVIEW_PLAN_MISSING` / `FINAL_REVIEW_USE_RUN_SYNC` /
+  `FINAL_REVIEW_LIMIT_INVALID` / `FINAL_REVIEW_SYNC_ABORTED`；不把 provider 原始异常正文
+  写入公开输出。
 - report-only / autofix=false 不变；任何情况下不得把失败 unit 标成 done。

@@ -509,6 +509,27 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
         self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_SYNC_ABORTED")
         self.assertFalse(captured.exception.retryable)
 
+    def test_sync_campaign_missing_frozen_plan_is_rejected(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+        package = fr.load_campaign_package(package_dir)
+        manifest = dict(package["manifest"])
+        manifest.pop("model_routing", None)
+        fr.write_campaign_package(
+            package_dir,
+            manifest=manifest,
+            snapshot=dict(package["snapshot"]),
+            units=list(package["units"]),
+            findings=list(package["findings"]),
+        )
+
+        with self.assertRaises(cli_contract.MachineContractError) as captured:
+            batch.run_final_review_run_sync(package_dir)
+
+        self.assertEqual(
+            captured.exception.code_name,
+            "FINAL_REVIEW_PLAN_MISSING",
+        )
+
     def test_negative_limit_returns_stable_usage_error(self) -> None:
         package_dir, _profile_id = self._package_with_routing()
 
