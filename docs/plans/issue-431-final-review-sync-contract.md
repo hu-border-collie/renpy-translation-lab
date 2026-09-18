@@ -132,7 +132,10 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
   `safety_settings` 在 Sync 路径按现有同步请求合同传参。
 - provider / model / usage / finish_reason 与失败分类进入 unit 结果与 usage ledger；
   usage ledger 使用 `task_mode='final_review'`、`stage='final_review'`、operation 绑定
-  campaign unit，尽力记录、不因账本失败中断审校。
+  campaign unit，只接收 `usage_metadata` / provider / model / response_payload 等必要字段，
+  不把 `request_metadata` 透传进账本；尽力记录、不因账本失败中断审校。
+  unit 调用抛出 `TypeError` / `AttributeError` / `NotImplementedError` / `KeyError` /
+  `IndexError` 等内部编程错误时直接向上抛出，不伪装成可重试的 provider 失败。
 
 ## 7. CLI / GUI
 

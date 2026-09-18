@@ -30,6 +30,16 @@ FATAL_SYNC_CATEGORIES = frozenset({
     "unsupported_capability",
 })
 
+# Internal programming/validation failures must surface instead of being
+# recorded as retryable provider failures for every remaining unit.
+INTERNAL_SYNC_EXCEPTIONS = (
+    TypeError,
+    AttributeError,
+    NotImplementedError,
+    KeyError,
+    IndexError,
+)
+
 
 class FinalReviewSyncError(fr.FinalReviewError):
     """Stable campaign-level refusal for sync execution."""
@@ -283,6 +293,10 @@ def run_sync_campaign(
         row: dict[str, Any]
         try:
             result = generate(payload)
+        except INTERNAL_SYNC_EXCEPTIONS:
+            # A TypeError/AttributeError etc. from our own call path is a bug,
+            # not a provider failure; surface it instead of retrying N units.
+            raise
         except Exception as exc:  # noqa: BLE001 - provider call failed for this unit
             row = {
                 "key": unit_id,

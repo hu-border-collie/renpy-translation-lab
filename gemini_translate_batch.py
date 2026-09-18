@@ -7489,9 +7489,16 @@ def run_final_review_run_sync(
         raw = event.get('result')
         if not isinstance(raw, dict):
             return
-        usage_result = dict(raw)
-        usage_result.setdefault('provider', provider)
-        usage_result.setdefault('model', model)
+        # Only pass ledger inputs; request_metadata is deliberately omitted so
+        # provider request headers can never reach the usage ledger.
+        usage_result = {
+            'provider': str(raw.get('provider') or provider),
+            'model': str(raw.get('model') or model),
+            'usage_metadata': dict(raw.get('usage_metadata') or {}),
+            'response_payload': raw.get('response_payload') or {},
+            'output_diagnostics': dict(raw.get('output_diagnostics') or {}),
+            'execution_mode': str(raw.get('execution_mode') or ''),
+        }
         record_generation_usage_best_effort(
             task_mode='final_review',
             stage=model_profile.STAGE_FINAL_REVIEW,

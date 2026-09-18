@@ -359,6 +359,19 @@ class RunSyncCampaignTests(unittest.TestCase):
             with open(path, "r", encoding="utf-8") as handle:
                 self.assertNotIn("SECRET-TOKEN", handle.read())
 
+    def test_internal_generate_exception_is_not_recorded_as_failure(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=1)
+
+        def generate(_payload):
+            raise TypeError("internal caller bug")
+
+        with self.assertRaises(TypeError):
+            frs.run_sync_campaign(package_dir, generate=generate)
+
+        persisted = fr.load_campaign_package(package_dir)
+        self.assertEqual(persisted["units"][0]["status"], fr.STATUS_PENDING)
+
     def test_batch_package_is_rejected(self) -> None:
         package_dir = self._package_dir()
         build_package(package_dir, count=1, strategy=fr.EXECUTION_STRATEGY_GEMINI_BATCH)
@@ -589,6 +602,46 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
 
         self.assertEqual(captured["config"]["temperature"], 0.7)
         self.assertEqual(captured["config"]["max_output_tokens"], 123)
+
+    def test_usage_recording_never_receives_request_metadata(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+        context = {
+            "context_digest": "live-context",
+            "snapshot_digest": "live-snapshot",
+            "prompt_context": {},
+        }
+        with (
+            mock.patch.object(
+                batch,
+                "_collect_final_review_context_snapshot",
+                return_value=context,
+            ),
+            mock.patch.object(
+                batch,
+                "run_sync_request",
+                return_value={
+                    "response_text": json.dumps({"findings": []}),
+                    "provider": "fake",
+                    "model": "gpt-4.1-mini",
+                    "usage_metadata": {"total_tokens": 4},
+                    "request_metadata": {
+                        "Authorization": "Bearer SECRET-TOKEN",
+                    },
+                },
+            ),
+            mock.patch.object(batch, "remember_latest_manifest"),
+            mock.patch.object(
+                batch,
+                "record_generation_usage_best_effort",
+            ) as usage_recorder,
+        ):
+            batch.run_final_review_run_sync(package_dir)
+
+        usage_recorder.assert_called_once()
+        passed = usage_recorder.call_args.kwargs["result"]
+        serialized = json.dumps(passed, ensure_ascii=False)
+        self.assertNotIn("SECRET-TOKEN", serialized)
+        self.assertNotIn("request_metadata", passed)
 
     def test_sync_campaign_missing_frozen_plan_is_rejected(self) -> None:
         package_dir, _profile_id = self._package_with_routing()
