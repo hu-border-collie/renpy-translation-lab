@@ -331,15 +331,20 @@ class ProfileCliTests(unittest.TestCase):
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["error"]["code"], "BILLABLE_ACK_REQUIRED")
 
-    def _direct_section(self):
+    def _direct_section(
+        self,
+        *,
+        base_url: str = "https://api.example/v1",
+        models_url: str = "https://api.example/v1/models",
+    ):
         section = editor.empty_section()
         section = editor.add_provider(
             section,
             label="OpenAI",
             adapter="openai_compatible",
             provider="openai",
-            base_url="https://api.example/v1",
-            models_url="https://api.example/v1/models",
+            base_url=base_url,
+            models_url=models_url,
             credential_kind="none",
         )
         provider_id = editor.provider_ids(section)[0]
@@ -417,6 +422,42 @@ class ProfileCliTests(unittest.TestCase):
         self.assertNotEqual(exit_code, 0)
         self.assertFalse(envelope["ok"])
         self.assertEqual(envelope["error"]["code"], "CREDENTIAL_UNAVAILABLE")
+
+    def test_profiles_list_models_redacts_url_queries(self) -> None:
+        section = self._direct_section(
+            base_url="https://api.example/v1?key=SECRET",
+            models_url="",
+        )
+        self.config["model_routing"] = section
+        self._write_config(self.config)
+        with mock.patch.object(
+            batch,
+            "_require_valid_routing_section",
+        ), mock.patch.object(
+            model_catalog,
+            "fetch_models",
+            return_value=("gpt-4.1-mini",),
+        ):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models",
+                "--profile",
+                editor.profile_ids(section)[0],
+                "--output",
+                "json",
+                "--non-interactive",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(envelope["ok"])
+        serialized = json.dumps(envelope)
+        self.assertNotIn("SECRET", serialized)
+        self.assertEqual(
+            envelope["result"]["base_url"],
+            "https://api.example/v1",
+        )
+        self.assertEqual(
+            envelope["result"]["models_url"],
+            "https://api.example/v1/models",
+        )
 
     def test_profiles_list_models_text_mode_prints_catalog(self) -> None:
         section = self._direct_section()

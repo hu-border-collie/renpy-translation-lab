@@ -392,6 +392,7 @@ from .user_copy import (
     TRANSLATION_TARGET_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
+    MODEL_CATALOG_SOURCE_LABELS,
     APP_SHUTDOWN_COPY,
     REVISION_CORPUS_COPY,
     REVISION_PROPOSAL_COPY,
@@ -13657,9 +13658,13 @@ class MainWindow(QMainWindow):
                 raw_result = envelope.get("result")
                 result = dict(raw_result) if isinstance(raw_result, Mapping) else {}
                 if page is not None:
+                    source = str(result.get("source") or "")
+                    source_label = MODEL_CATALOG_SOURCE_LABELS.get(
+                        source, source or "供应商模型列表"
+                    )
                     page.set_model_catalog(
                         result.get("models") or (),
-                        source=str(result.get("source") or "provider"),
+                        source=source_label,
                     )
                 self.statusBar().showMessage(
                     f"模型目录完成：{int(result.get('count') or 0)} 个模型",

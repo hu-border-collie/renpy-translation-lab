@@ -22557,7 +22557,7 @@ def run_profile_command(args):
             'status': 'ready',
             'profile_id': str(getattr(args, 'profile', '') or ''),
             'provider': connection.provider,
-            'base_url': connection.base_url,
+            'base_url': catalog.redacted_endpoint(connection.base_url),
             'models_url': catalog.redacted_endpoint(connection.provider_models_url()),
             'count': len(models),
             'models': list(models),

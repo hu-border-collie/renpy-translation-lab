@@ -35,6 +35,9 @@ def _parsed_http_url(value: object) -> tuple[str, str, str, str]:
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
+        # Deliberate tightening vs. S1: credentials belong in credential_ref /
+        # the Authorization header, and fragments never reach the server, so a
+        # URL carrying either is rejected instead of being sent or logged.
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment

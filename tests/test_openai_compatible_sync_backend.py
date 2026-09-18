@@ -176,6 +176,29 @@ class RequestShapeTests(unittest.TestCase):
             "invalid_base_url",
         )
 
+    def test_base_url_with_userinfo_or_fragment_is_rejected(self) -> None:
+        for base_url in (
+            "https://user:pass@api.example/v1",
+            "https://api.example/v1#fragment",
+        ):
+            with self.subTest(base_url=base_url):
+                backend = OpenAICompatibleSyncBackend(
+                    provider="openai",
+                    base_url=base_url,
+                    credential_ref={"kind": "none"},
+                    transport=RecordingTransport(json_response(chat_payload())),
+                )
+                with self.assertRaises(SyncBackendError) as captured:
+                    backend.generate(SyncGenerationRequest(model="m", contents="x"))
+                self.assertEqual(
+                    captured.exception.category,
+                    "unsupported_capability",
+                )
+                self.assertEqual(
+                    captured.exception.request_metadata["reason"],
+                    "invalid_base_url",
+                )
+
     def test_base_url_with_query_preserves_query(self) -> None:
         transport = RecordingTransport(json_response(chat_payload()))
         backend = OpenAICompatibleSyncBackend(

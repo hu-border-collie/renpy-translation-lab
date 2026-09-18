@@ -1383,6 +1383,10 @@ DURABLE_SYNC_RUN_COPY = {
 
 
 # Settings · Model Profiles page copy (#348 P3). Credential references only.
+MODEL_CATALOG_SOURCE_LABELS = {
+    "provider_models_endpoint": "供应商模型列表",
+}
+
 MODEL_PROFILES_PAGE_COPY = {
     "hint": (
         "统一的模型与 Provider 配置：一个 Provider 可被多个 ModelProfile 复用，"
