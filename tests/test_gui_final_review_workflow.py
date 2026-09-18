@@ -185,6 +185,34 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             "final-review-run-sync",
         )
 
+    def test_sync_run_parses_envelope_around_banner_text(self):
+        workflow = FinalReviewWorkflow(
+            ["final-review-run-sync"],
+            "C:/tmp/review/manifest.json",
+        )
+        output = "\n".join(
+            [
+                "banner line",
+                json.dumps(
+                    {
+                        "ok": True,
+                        "result": {
+                            "status": "completed",
+                            "done_delta": 2,
+                            "failed_delta": 0,
+                            "finding_count": 1,
+                        },
+                    }
+                ),
+                "FINAL_REVIEW_PROGRESS trailing line",
+            ]
+        )
+
+        update = workflow.complete_current_step(0, output)
+
+        self.assertEqual(update.status, "done")
+        self.assertIsNone(workflow.current_step())
+
     def test_sync_run_error_envelope_stops_workflow(self):
         workflow = FinalReviewWorkflow(
             ["final-review-run-sync"],

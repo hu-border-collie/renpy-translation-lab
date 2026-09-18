@@ -26,6 +26,34 @@ STEP_TEXT = {
 }
 
 
+def _extract_result_envelope(output: str) -> dict | None:
+    """Return the last versioned envelope embedded in *output*, if any.
+
+    GUI workflows may receive banner/progress text around the JSON document
+    depending on how the process streams are captured; tolerate both by
+    decoding JSON objects wherever they start and keeping the last valid
+    envelope-shaped object.
+    """
+
+    text = str(output or "")
+    decoder = json.JSONDecoder()
+    found: dict | None = None
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start < 0:
+            return found
+        try:
+            parsed, end = decoder.raw_decode(text[start:])
+        except ValueError:
+            index = start + 1
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("ok"), bool):
+            found = parsed
+        index = start + max(1, int(end))
+    return found
+
+
 def _execution_strategy_for_manifest(manifest_path: str) -> str:
     """Read the campaign execution strategy without failing the workflow."""
 
@@ -155,10 +183,7 @@ class FinalReviewWorkflow:
 
     def _sync_completed_update(self, output: str) -> WorkflowUpdate:
         result = {}
-        try:
-            parsed = json.loads(str(output or "").strip())
-        except ValueError:
-            parsed = None
+        parsed = _extract_result_envelope(output)
         if not isinstance(parsed, dict) or not parsed.get("ok"):
             self._steps.clear()
             return WorkflowUpdate(
