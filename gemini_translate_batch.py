@@ -7014,19 +7014,35 @@ def _collect_final_review_context_snapshot(translation_items):
 
 
 def freeze_final_review_routing_plan():
-    """Resolve the final-review stage without forcing the Gemini Batch strategy.
+    """Resolve the final-review stage with explicit sync opt-in.
 
-    v1 ``model_routing`` configs may route final_review to sync and are not
-    required to carry the legacy batch/sync entrypoint pointers, so read the
-    section directly. Legacy configs keep the historical gemini_batch
-    resolution.
+    final_review keeps the historical gemini_batch strategy unless
+    ``routes.final_review.strategy`` is explicitly configured. This prevents a
+    v1 config whose ``defaults.execution_strategy`` is sync from silently
+    switching an existing final-review path from Batch to sync.
     """
     from model_routing_reader import read_routing_plan
 
     section = legacy.MODEL_ROUTING_CONFIG
     try:
         if isinstance(section, dict):
-            plan = read_routing_plan({"model_routing": section})
+            routes = section.get("routes")
+            raw_route = (
+                routes.get("final_review") if isinstance(routes, dict) else {}
+            )
+            raw_route = raw_route if isinstance(raw_route, dict) else {}
+            explicit_strategy = str(raw_route.get("strategy") or "").strip()
+            if explicit_strategy:
+                plan = read_routing_plan({"model_routing": section})
+            elif raw_route.get("profile_id"):
+                raise model_profile.ModelRoutingConfigError(
+                    "routes.final_review.profile_id requires an explicit strategy"
+                )
+            else:
+                plan = freeze_runtime_routing_plan(
+                    execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+                    required_stages={model_profile.STAGE_FINAL_REVIEW},
+                )
         else:
             plan = freeze_runtime_routing_plan(
                 execution=model_profile.ExecutionStrategy.GEMINI_BATCH,

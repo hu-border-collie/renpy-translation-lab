@@ -561,6 +561,17 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
         self.assertEqual(payload["finding_count"], 3)
         self.assertEqual(payload["campaign_status"], {"status": "done"})
 
+    def test_missing_final_review_route_does_not_follow_sync_default(self) -> None:
+        section, _profile_id = self._sync_section()
+        section = editor.set_route(section, "final_review", enabled=False)
+        self.assertNotIn("final_review", section.get("routes", {}))
+
+        with runtime.runtime_config_scope(
+            runtime.RuntimeConfig(model_routing_config=section)
+        ):
+            with self.assertRaises(cli_contract.MachineContractError):
+                batch.freeze_final_review_routing_plan()
+
     def test_freeze_final_review_plan_accepts_v1_sync_without_legacy_entrypoints(self) -> None:
         section, _profile_id = self._sync_section()
         self.assertNotIn("legacy_entrypoints", section)

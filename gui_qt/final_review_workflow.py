@@ -192,6 +192,7 @@ class FinalReviewWorkflow:
                 heading="最终审校同步执行完成（有失败 unit）",
                 message="报告已写入；点击继续可只重试失败的 unit。",
                 facts=facts,
+                should_continue=False,
             )
         self._steps.clear()
         return WorkflowUpdate(

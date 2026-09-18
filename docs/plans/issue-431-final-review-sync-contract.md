@@ -32,8 +32,9 @@ S3 让「最终审校」按 ModelProfile 已声明的 stage route strategy 执�
 
 - `final_review` 是普通可配置 stage；`routes.final_review.strategy` 允许 `sync` 与
   `gemini_batch`，profile 必须声明对应 strategy 能力（`require_valid_routing_plan` 检查）。
-- v1 `model_routing` 中未显式写 `routes.final_review` 时，沿用
-  `defaults.execution_strategy`；旧配置迁移仍显式生成 `gemini_batch`，语义不变。
+- v1 `model_routing` 中 final_review **只有显式配置 `routes.final_review.strategy`** 时才采用该
+  策略；未显式配置时不会跟随 `defaults.execution_strategy` 静默切换，而是保留/要求 legacy
+  `gemini_batch` 入口解析。旧配置迁移仍显式生成 `gemini_batch`，语义不变。
 - 旧（无 `model_routing`）配置继续解析为 `gemini_batch`，不自动升级。
 - final-review build 对 v1 `model_routing` 直接按配置解析，不经过 legacy entrypoint 的
   `final_review == gemini_batch` 策略检查，因此也不要求 `legacy_entrypoints` 指针；
