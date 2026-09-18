@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 import model_profiles_editor as editor
 import openai_compatible_provider_config as openai_compatible_presets
+from model_profile import ADAPTER_OPENAI_COMPATIBLE
 from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
@@ -656,7 +657,7 @@ class ProfilesSettingsPage(QObject):
         )
         return bool(
             provider
-            and str(provider.get("adapter") or "") == "openai_compatible"
+            and str(provider.get("adapter") or "") == ADAPTER_OPENAI_COMPATIBLE
         )
 
     def _refresh_profiles_list(self) -> None:
@@ -1124,14 +1125,31 @@ class ProfilesSettingsPage(QObject):
                 MODEL_PROFILES_PAGE_COPY["model_catalog_button"]
             )
 
+    def _catalog_profile_matches(self, profile_id: str) -> bool:
+        """Return whether a catalog result still belongs to the visible profile."""
+
+        return not profile_id or profile_id == self._selected_profile_id
+
     def set_model_catalog(
         self,
         models: object,
         *,
         source: str = "",
+        profile_id: str = "",
     ) -> None:
-        """Populate the read-only catalog combo; manual model entry stays valid."""
+        """Populate the read-only catalog combo; manual model entry stays valid.
 
+        A late result for a profile the user has already switched away from is
+        ignored so one provider's models cannot be written into another one.
+        """
+
+        if not self._catalog_profile_matches(profile_id):
+            self._show_status(
+                MODEL_PROFILES_PAGE_COPY["model_catalog_stale"].format(
+                    profile_id=profile_id
+                )
+            )
+            return
         values = [
             str(item).strip()
             for item in (models or ())
@@ -1155,9 +1173,11 @@ class ProfilesSettingsPage(QObject):
             )
         )
 
-    def set_model_catalog_error(self, code: str) -> None:
+    def set_model_catalog_error(self, code: str, *, profile_id: str = "") -> None:
         """Show a stable catalog failure code without provider response text."""
 
+        if not self._catalog_profile_matches(profile_id):
+            return
         self._show_status(
             MODEL_PROFILES_PAGE_COPY["model_catalog_failed"].format(
                 code=str(code or "unknown")

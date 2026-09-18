@@ -32,8 +32,8 @@ S2 在 S1 直连生成后端之上补齐四块：
   `MODEL_CATALOG_RATE_LIMITED`、`MODEL_CATALOG_UNAVAILABLE`、
   `MODEL_CATALOG_UNSUPPORTED`、`MODEL_CATALOG_INVALID`、`MODEL_CATALOG_FAILED`）。
 - GUI：profile 编辑区提供「拉取模型列表」与只读目录下拉，选择后填入模型字段；
-  模型字段始终可手动编辑。切换 Profile 时清空上一 Provider 的目录缓存，避免跨供应商误填；
-  目录错误只提示，不阻止保存或启动。
+  模型字段始终可手动编辑。切换 Profile 时清空上一 Provider 的目录缓存，并丢弃
+  迟到且 `profile_id` 已不匹配的目录结果，避免跨供应商误填；目录错误只提示，不阻止保存或启动。
 - 非目标：后台定时刷新、跨 Provider 聚合目录、把目录当白名单、目录失败自动切换模型。
 
 ## 3. 连接诊断

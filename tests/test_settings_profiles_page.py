@@ -912,7 +912,11 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         self.page.profiles_list.setCurrentRow(0)
         profile_id = self.page._selected_profile_id
 
-        self.page.set_model_catalog(["gpt-4.1", "gpt-4.1-mini"], source="openai")
+        self.page.set_model_catalog(
+            ["gpt-4.1", "gpt-4.1-mini"],
+            source="openai",
+            profile_id=profile_id,
+        )
         self.assertEqual(self.page.profile_model_catalog_combo.count(), 3)
         self.page.profile_model_catalog_combo.setCurrentIndex(1)
 
@@ -925,6 +929,23 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         self.page._populate_profile_editor()
         self.assertEqual(self.page.profile_model_catalog_combo.count(), 1)
         self.assertEqual(self.page.profile_model_catalog_combo.currentData(), "")
+
+    def test_model_catalog_ignores_result_for_other_profile(self) -> None:
+        section = self._direct_section()
+        self.page.load({"model_routing": section})
+        self.page.profiles_list.setCurrentRow(0)
+
+        self.page.set_model_catalog(
+            ["gpt-4.1"],
+            source="供应商模型列表",
+            profile_id="some-other-profile",
+        )
+
+        self.assertEqual(self.page.profile_model_catalog_combo.count(), 1)
+        self.assertEqual(self.page.profile_model_catalog_combo.currentData(), "")
+        self.assertTrue(
+            any("some-other-profile" in message for message in self.messages)
+        )
 
     def test_model_catalog_running_and_error_feedback(self) -> None:
         page = ProfilesSettingsPage(

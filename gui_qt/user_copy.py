@@ -1485,6 +1485,7 @@ MODEL_PROFILES_PAGE_COPY = {
     ),
     "model_catalog_loaded": "已拉取 {count} 个模型（来源：{source}）；手动输入始终可用。",
     "model_catalog_failed": "模型目录拉取失败：{code}。仍可手动输入模型 ID。",
+    "model_catalog_stale": "已忽略 Profile「{profile_id}」的过期目录结果，请重新拉取。",
     "model_catalog_unavailable": "当前宿主不支持模型目录拉取，请手动输入模型 ID。",
     "default_profile_label": "主模型",
     "default_strategy_label": "默认执行方式",

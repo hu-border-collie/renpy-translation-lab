@@ -629,6 +629,7 @@ class MainWindow(QMainWindow):
         self._probe_output_lines: list[str] = []
         self._profile_probe_output_lines: list[str] = []
         self._profile_models_output_lines: list[str] = []
+        self._profile_models_profile_id = ""
         self._translate_preflight_output_lines: list[str] = []
         self._pending_translation_start: dict[str, object] | None = None
         # Live durable-run progress (#348 P3 A2): a read-only status poller
@@ -3911,6 +3912,7 @@ class MainWindow(QMainWindow):
         if page is not None:
             page.set_model_catalog_running(True)
         self._profile_models_output_lines = []
+        self._profile_models_profile_id = profile_id
         self._append_log(f"=== 正在拉取模型目录：{profile_id} ===\n")
         self._start_cli_command(
             "profile_models",
@@ -13665,6 +13667,10 @@ class MainWindow(QMainWindow):
                     page.set_model_catalog(
                         result.get("models") or (),
                         source=source_label,
+                        profile_id=str(
+                            result.get("profile_id")
+                            or self._profile_models_profile_id
+                        ),
                     )
                 self.statusBar().showMessage(
                     f"模型目录完成：{int(result.get('count') or 0)} 个模型",
@@ -13677,11 +13683,15 @@ class MainWindow(QMainWindow):
                     if isinstance(error, Mapping):
                         code = str(error.get("code") or "")
                 if page is not None:
-                    page.set_model_catalog_error(code or f"exit_{exit_code}")
+                    page.set_model_catalog_error(
+                        code or f"exit_{exit_code}",
+                        profile_id=self._profile_models_profile_id,
+                    )
                 self.statusBar().showMessage(
                     "模型目录拉取失败，仍可手动输入模型 ID。",
                     8000,
                 )
+            self._profile_models_profile_id = ""
             if page is not None:
                 page.set_model_catalog_running(False)
             self._active_command = ""
