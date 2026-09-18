@@ -238,6 +238,8 @@ def run_sync_campaign(
             "failed_delta": 0,
             "finding_count": len(findings),
             "to_run_unit_ids": run_ids,
+            "planned_unit_ids": run_ids,
+            "attempted_unit_ids": [],
             "campaign_status": {
                 "status": fr.derive_campaign_status(status_counts),
                 "status_counts": status_counts,
@@ -252,10 +254,12 @@ def run_sync_campaign(
     aborted = False
     abort_category = ""
     abort_unit_id = ""
+    attempted_unit_ids: list[str] = []
     effective_provider = str(provider or "")
     effective_model = str(model or "")
     for index, unit in enumerate(to_run, start=1):
         unit_id = str(unit.get("unit_id") or "")
+        attempted_unit_ids.append(unit_id)
         _call_progress(
             progress,
             {
@@ -338,6 +342,7 @@ def run_sync_campaign(
                 break
 
     status = fr.collect_campaign_status(package_root)
+    attempted_count = len(attempted_unit_ids)
     payload: dict[str, Any] = {
         "status": (
             "aborted"
@@ -353,13 +358,15 @@ def run_sync_campaign(
         "execution_strategy": strategy,
         "provider": effective_provider,
         "model": effective_model,
-        "run_count": len(to_run),
+        "run_count": attempted_count,
         "skip_count": skip_count,
-        "deferred_count": deferred_count,
+        "deferred_count": max(0, len(queued) - attempted_count),
         "done_delta": done_delta,
         "failed_delta": failed_delta,
         "finding_count": int(status.get("finding_count") or 0),
-        "to_run_unit_ids": run_ids,
+        "to_run_unit_ids": attempted_unit_ids,
+        "planned_unit_ids": run_ids,
+        "attempted_unit_ids": attempted_unit_ids,
         "campaign_status": status,
         "dry_run": False,
         "limit": effective_limit,

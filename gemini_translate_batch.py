@@ -25045,6 +25045,8 @@ def build_machine_success_envelope(command, value, args):
             'failed_delta': int(sync.get('failed_delta') or 0),
             'finding_count': int(sync.get('finding_count') or 0),
             'to_run_unit_ids': list(sync.get('to_run_unit_ids') or []),
+            'planned_unit_ids': list(sync.get('planned_unit_ids') or []),
+            'attempted_unit_ids': list(sync.get('attempted_unit_ids') or []),
             'dry_run': bool(sync.get('dry_run')),
             'limit': int(sync.get('limit') or 0),
             'campaign_status': campaign,

@@ -101,6 +101,10 @@ class FinalReviewWorkflow:
 
     def complete_current_step(self, exit_code: int, output: str):
         key = self._steps.pop(0)
+        if key == "final-review-run-sync":
+            # The envelope carries the real outcome; strict exit codes may map
+            # partial failures to a non-zero code without an error envelope.
+            return self._sync_completed_update(output)
         if exit_code != 0:
             self._steps.clear()
             return WorkflowUpdate(status="failed", heading="最终审校流程中断",
@@ -114,8 +118,6 @@ class FinalReviewWorkflow:
             self.manifest_path = manifest_path_for_package(package)
             if _execution_strategy_for_manifest(self.manifest_path) == "sync":
                 self._steps = ["final-review-run-sync"]
-        elif key == "final-review-run-sync":
-            return self._sync_completed_update(output)
         elif key == "submit":
             path = extract_manifest_path(output)
             if path:

@@ -95,12 +95,13 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
      unit；`authentication` / `missing_dependency` / `unsupported_capability` 视为系统性
      失败，记录该 unit 后中止。
 4. `--limit N` 最多执行 N 个 unit；`--dry-run` 只返回 to_run/to_skip 计划；
-   `--fail-fast` 首个 unit 失败即中止。
+   `--fail-fast` 首个 unit 失败即中止。实际结果中 `run_count` = 本次真正发起过的 unit 数，
+   `deferred_count` = 计划队列中未发起的 unit 数（limit 剩余或 systemic abort 跳过）。
 5. 返回 JSON result：`status`（`completed` / `failed` / `no_work` / `dry_run`）与
    `profile_id / provider / model / execution_strategy / package_dir /
    manifest_path / run_count / skip_count / done_delta / failed_delta / finding_count /
-   to_run_unit_ids / campaign_status / dry_run / limit`。存在失败 unit 时 `status=failed`，
-   严格模式退出 `4`，自动化不应只看 `ok=true`。
+   planned_unit_ids / attempted_unit_ids / to_run_unit_ids / campaign_status / dry_run / limit`。
+   存在失败 unit 时 `status=failed`，严格模式退出 `4`，自动化不应只看 `ok=true`。
 6. 文本模式打印 summary 与 campaign status；进度事件可写 stderr，不污染 `--output json`。
 
 ## 5. 状态、持久化与幂等

@@ -191,7 +191,7 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             "C:/tmp/review/manifest.json",
         )
         update = workflow.complete_current_step(
-            0,
+            4,
             json.dumps(
                 {
                     "ok": False,
@@ -206,6 +206,30 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(update.status, "failed")
         self.assertEqual(update.heading, "最终审校同步执行中断")
         self.assertIsNone(workflow.current_step())
+
+    def test_sync_run_partial_failure_with_strict_exit_keeps_retry_step(self):
+        workflow = FinalReviewWorkflow(
+            ["final-review-run-sync"],
+            "C:/tmp/review/manifest.json",
+        )
+        update = workflow.complete_current_step(
+            4,
+            json.dumps(
+                {
+                    "ok": True,
+                    "status": "failed",
+                    "result": {
+                        "status": "failed",
+                        "done_delta": 1,
+                        "failed_delta": 1,
+                        "finding_count": 0,
+                    },
+                }
+            ),
+        )
+
+        self.assertEqual(update.status, "ready")
+        self.assertEqual(workflow.current_step().key, "final-review-run-sync")
 
 
 if __name__ == "__main__":

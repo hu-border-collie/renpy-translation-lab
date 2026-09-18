@@ -262,6 +262,14 @@ class RunSyncCampaignTests(unittest.TestCase):
                 self.assertEqual(result["status"], "aborted")
                 self.assertEqual(result["abort_category"], category)
                 self.assertEqual(calls["count"], 1)
+                self.assertEqual(result["run_count"], 1)
+                self.assertEqual(result["deferred_count"], 2)
+                self.assertEqual(len(result["planned_unit_ids"]), 3)
+                self.assertEqual(len(result["attempted_unit_ids"]), 1)
+                self.assertEqual(
+                    result["to_run_unit_ids"],
+                    result["attempted_unit_ids"],
+                )
                 statuses = [
                     unit["status"]
                     for unit in fr.load_campaign_package(package_dir)["units"]
