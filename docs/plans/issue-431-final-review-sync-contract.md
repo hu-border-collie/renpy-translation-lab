@@ -166,5 +166,6 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
   稳定 code：`FINAL_REVIEW_NOT_SYNC` / `FINAL_REVIEW_ROUTE_NOT_SYNC` /
   `FINAL_REVIEW_PLAN_MISSING` / `FINAL_REVIEW_USE_RUN_SYNC` /
   `FINAL_REVIEW_LIMIT_INVALID` / `FINAL_REVIEW_SYNC_ABORTED`；不把 provider 原始异常正文
-  写入公开输出。
+  写入公开输出。`FINAL_REVIEW_SYNC_ABORTED` 对系统性类别不 retryable，对 `--fail-fast`
+  的非系统性中止 retryable=true，并提示重新运行 `final-review-run-sync`。
 - report-only / autofix=false 不变；任何情况下不得把失败 unit 标成 done。

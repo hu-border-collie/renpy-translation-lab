@@ -7563,12 +7563,21 @@ def run_final_review_run_sync(
         print('Report-only: no .rpy writes.', file=sys.stderr)
     if result.get('status') == 'aborted':
         abort_category = str(result.get('abort_category') or '')
+        systemic = abort_category in fr_sync.FATAL_SYNC_CATEGORIES
         raise cli_contract.MachineContractError(
-            'final review sync aborted after a systemic provider failure.',
+            (
+                'final review sync aborted after a systemic provider failure.'
+                if systemic
+                else 'final review sync stopped after a unit failure (--fail-fast).'
+            ),
             code_name='FINAL_REVIEW_SYNC_ABORTED',
-            suggested_action='inspect_provider_settings_and_retry',
+            suggested_action=(
+                'inspect_provider_settings_and_retry'
+                if systemic
+                else 'rerun_final_review_run_sync'
+            ),
             semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-            retryable=abort_category not in fr_sync.FATAL_SYNC_CATEGORIES,
+            retryable=not systemic,
             details=dict(result),
         )
     return result

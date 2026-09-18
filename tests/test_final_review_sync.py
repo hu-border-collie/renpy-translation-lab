@@ -626,6 +626,37 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
             cli_contract.EXIT_USAGE,
         )
 
+    def test_fail_fast_abort_is_retryable_with_rerun_action(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+        context = {
+            "context_digest": "live-context",
+            "snapshot_digest": "live-snapshot",
+            "prompt_context": {},
+        }
+        with (
+            mock.patch.object(
+                batch,
+                "_collect_final_review_context_snapshot",
+                return_value=context,
+            ),
+            mock.patch.object(
+                batch,
+                "run_sync_request",
+                side_effect=SyncBackendError("provider_error"),
+            ),
+            mock.patch.object(batch, "remember_latest_manifest"),
+        ):
+            with self.assertRaises(cli_contract.MachineContractError) as captured:
+                batch.run_final_review_run_sync(package_dir, fail_fast=True)
+
+        self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_SYNC_ABORTED")
+        self.assertTrue(captured.exception.retryable)
+        self.assertEqual(
+            captured.exception.suggested_action,
+            "rerun_final_review_run_sync",
+        )
+        self.assertIn("fail-fast", str(captured.exception))
+
     def test_machine_envelope_exposes_sync_result_fields(self) -> None:
         result = {
             "status": "completed",
@@ -758,6 +789,7 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
         self.assertEqual(raw["response_text"], '{"findings": []}')
         self.assertEqual(raw["provider"], "openai")
         factory.assert_called_once()
+        self.assertNotIn("custom_providers", factory.call_args.kwargs)
 
 
 if __name__ == "__main__":
