@@ -215,23 +215,32 @@ class RunSyncCampaignTests(unittest.TestCase):
         )
         self.assertTrue(str(failed["error"]).startswith("sync_provider_error"))
 
-    def test_authentication_failure_aborts_campaign(self) -> None:
-        package_dir = self._package_dir()
-        build_package(package_dir, count=3)
-        calls = {"count": 0}
+    def test_systemic_failures_abort_campaign(self) -> None:
+        for category in (
+            "authentication",
+            "missing_dependency",
+            "unsupported_capability",
+        ):
+            with self.subTest(category=category):
+                package_dir = self._package_dir(f"campaign-{category}")
+                build_package(package_dir, count=3)
+                calls = {"count": 0}
 
-        def generate(_payload):
-            calls["count"] += 1
-            raise SyncBackendError("authentication")
+                def generate(_payload):
+                    calls["count"] += 1
+                    raise SyncBackendError(category)
 
-        result = frs.run_sync_campaign(package_dir, generate=generate)
+                result = frs.run_sync_campaign(package_dir, generate=generate)
 
-        self.assertEqual(result["status"], "aborted")
-        self.assertEqual(result["abort_category"], "authentication")
-        self.assertEqual(calls["count"], 1)
-        statuses = [unit["status"] for unit in fr.load_campaign_package(package_dir)["units"]]
-        self.assertEqual(statuses.count(fr.STATUS_FAILED), 1)
-        self.assertEqual(statuses.count(fr.STATUS_PENDING), 2)
+                self.assertEqual(result["status"], "aborted")
+                self.assertEqual(result["abort_category"], category)
+                self.assertEqual(calls["count"], 1)
+                statuses = [
+                    unit["status"]
+                    for unit in fr.load_campaign_package(package_dir)["units"]
+                ]
+                self.assertEqual(statuses.count(fr.STATUS_FAILED), 1)
+                self.assertEqual(statuses.count(fr.STATUS_PENDING), 2)
 
     def test_dry_run_and_limit_do_not_call_provider(self) -> None:
         package_dir = self._package_dir()

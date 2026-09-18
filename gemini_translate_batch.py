@@ -7196,7 +7196,7 @@ def create_final_review_package(
     print(f"Items: {manifest['summary']['item_count']}")
     print(f'Execution: {strategy}')
     if strategy == fr.EXECUTION_STRATEGY_SYNC:
-        print(f'Requests: 0 (sync execution)')
+        print('Requests: 0 (sync execution)')
     else:
         print(f'Requests: {request_count} → {requests_path}')
     print(f"Context digest: {str(snapshot.get('context_digest') or '')[:16]}…")
@@ -17070,16 +17070,11 @@ def freeze_runtime_routing_plan(
     stage_overrides=None,
     created_at='',
     required_stages=None,
-    legacy_stage_strategies=None,
 ):
     """Snapshot routing from loaded globals and optionally fail fast.
 
     ``required_stages`` scopes validation to the routes this task will really
     execute. Callers must invoke this before creating task artifacts.
-
-    ``legacy_stage_strategies`` overrides the legacy entrypoint
-    stage->strategy compatibility map; final-review commands that can execute
-    a sync final_review pass a map that omits ``final_review``.
     """
     custom_providers = _runtime_custom_providers()
     try:
@@ -17096,16 +17091,10 @@ def freeze_runtime_routing_plan(
             stage_overrides=stage_overrides,
             created_at=created_at,
             config_origins=_routing_config_origins(),
-            legacy_stage_strategies=legacy_stage_strategies,
         )
         from model_routing_reader import require_entrypoint_strategy
         if legacy.MODEL_ROUTING_CONFIG is not None:
-            require_entrypoint_strategy(
-                plan,
-                execution=execution,
-                stages=required_stages,
-                expected_strategies=legacy_stage_strategies,
-            )
+            require_entrypoint_strategy(plan, execution=execution, stages=required_stages)
     except (ValueError, TypeError) as exc:
         stages = tuple(sorted(str(item) for item in (required_stages or ())))
         stage = stages[0] if stages else ''

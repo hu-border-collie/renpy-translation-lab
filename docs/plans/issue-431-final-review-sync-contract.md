@@ -35,9 +35,9 @@ S3 让「最终审校」按 ModelProfile 已声明的 stage route strategy 执�
 - v1 `model_routing` 中未显式写 `routes.final_review` 时，沿用
   `defaults.execution_strategy`；旧配置迁移仍显式生成 `gemini_batch`，语义不变。
 - 旧（无 `model_routing`）配置继续解析为 `gemini_batch`，不自动升级。
-- `model_routing_reader.resolve_runtime_plan` / `require_entrypoint_strategy` 的
-  “Gemini Batch 专用入口”检查改为可参数化：只有 Batch 专用路径保留
-  `final_review == gemini_batch`；final-review build/run 路径显式允许 sync。
+- final-review build 对 v1 `model_routing` 直接按配置解析，不经过 legacy entrypoint 的
+  `final_review == gemini_batch` 策略检查，因此也不要求 `legacy_entrypoints` 指针；
+  Batch 专用入口仍保留该检查。无 `model_routing` 的旧配置继续按 `gemini_batch` 解析。
 - `run_sync_request` 明确支持 `openai_compatible` adapter：直接走
   `build_sync_backend`，不再为该分支创建 Gemini client / 要求 Gemini API key；
   与 LiteLLM / Gemini 分支并列，重试仍复用同一同步恢复合同。

@@ -1492,7 +1492,6 @@ def resolve_routing_plan_from_runtime(
     stage_overrides: Mapping[str, str] | None = None,
     created_at: str = "",
     config_origins: tuple[ConfigOrigin, ...] = (),
-    legacy_stage_strategies: Mapping[str, str] | None = None,
 ) -> ModelRoutingPlan:
     """Build a plan from already-loaded runtime settings.
 
@@ -1508,7 +1507,6 @@ def resolve_routing_plan_from_runtime(
             {"model_routing": model_routing_config}, execution=execution,
             stage_overrides=stage_overrides, created_at=created_at,
             config_origins=config_origins,
-            legacy_stage_strategies=legacy_stage_strategies,
         )
     translator_config: dict[str, Any] = {
         "sync": {"backend": _clean_str(sync_backend) or SYNC_BACKEND_GEMINI},
