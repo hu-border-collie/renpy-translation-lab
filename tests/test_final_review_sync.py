@@ -265,11 +265,8 @@ class RunSyncCampaignTests(unittest.TestCase):
                 self.assertEqual(result["run_count"], 1)
                 self.assertEqual(result["deferred_count"], 2)
                 self.assertEqual(len(result["planned_unit_ids"]), 3)
+                self.assertEqual(len(result["to_run_unit_ids"]), 3)
                 self.assertEqual(len(result["attempted_unit_ids"]), 1)
-                self.assertEqual(
-                    result["to_run_unit_ids"],
-                    result["attempted_unit_ids"],
-                )
                 statuses = [
                     unit["status"]
                     for unit in fr.load_campaign_package(package_dir)["units"]
@@ -290,11 +287,17 @@ class RunSyncCampaignTests(unittest.TestCase):
         self.assertEqual(dry["status"], "dry_run")
         self.assertEqual(dry["run_count"], 1)
         self.assertEqual(dry["deferred_count"], 2)
+        self.assertEqual(len(dry["planned_unit_ids"]), 3)
+        self.assertEqual(len(dry["to_run_unit_ids"]), 1)
+        self.assertEqual(dry["attempted_unit_ids"], [])
         self.assertEqual(calls["count"], 0)
 
         limited = frs.run_sync_campaign(package_dir, generate=generate, limit=2)
         self.assertEqual(limited["run_count"], 2)
         self.assertEqual(limited["deferred_count"], 1)
+        self.assertEqual(len(limited["planned_unit_ids"]), 3)
+        self.assertEqual(len(limited["to_run_unit_ids"]), 2)
+        self.assertEqual(len(limited["attempted_unit_ids"]), 2)
         self.assertEqual(calls["count"], 2)
 
     def test_negative_limit_is_rejected_without_provider_calls(self) -> None:
@@ -581,6 +584,43 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
         self.assertEqual(payload["done_delta"], 2)
         self.assertEqual(payload["finding_count"], 3)
         self.assertEqual(payload["campaign_status"], {"status": "done"})
+
+    def test_route_profile_without_strategy_keeps_batch_behavior(self) -> None:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="Gemini",
+            adapter="gemini",
+            provider="gemini",
+            credential_kind="api_keys_json",
+            credential_name="api_keys",
+        )
+        provider_id = editor.provider_ids(section)[0]
+        section = editor.add_profile(
+            section,
+            label="Gemini Batch",
+            provider_id=provider_id,
+            model="gemini-3.5-flash",
+        )
+        profile_id = editor.profile_ids(section)[0]
+        section = editor.set_defaults(
+            section,
+            primary_profile_id=profile_id,
+            execution_strategy="gemini_batch",
+        )
+        section["legacy_entrypoints"] = {"batch_profile_id": profile_id}
+        section["routes"] = {
+            "project_analysis": {"profile_id": profile_id, "strategy": "sync"},
+            "final_review": {"profile_id": profile_id},
+        }
+
+        with runtime.runtime_config_scope(
+            runtime.RuntimeConfig(model_routing_config=section)
+        ):
+            plan = batch.freeze_final_review_routing_plan()
+
+        self.assertEqual(plan.routes["final_review"].strategy.value, "gemini_batch")
+        self.assertEqual(plan.routes["final_review"].profile_id, profile_id)
 
     def test_missing_final_review_route_does_not_follow_sync_default(self) -> None:
         section, _profile_id = self._sync_section()

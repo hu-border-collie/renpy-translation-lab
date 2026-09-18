@@ -97,8 +97,9 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
      unit；`authentication` / `missing_dependency` / `unsupported_capability` 视为系统性
      失败，记录该 unit 后中止。
 4. `--limit N` 最多执行 N 个 unit；`--dry-run` 只返回 to_run/to_skip 计划；
-   `--fail-fast` 首个 unit 失败即中止。实际结果中 `run_count` = 本次真正发起过的 unit 数，
-   `deferred_count` = 计划队列中未发起的 unit 数（limit 剩余或 systemic abort 跳过）。
+   `--fail-fast` 首个 unit 失败即中止。字段语义：`planned_unit_ids` = 本次全部待跑 unit；
+   `to_run_unit_ids` = 经 `--limit` 截断后计划执行的 unit；`attempted_unit_ids` = 实际发起过
+   的 unit（dry-run 为空）；`run_count` = 实际发起数，`deferred_count` = 计划但未发起数。
 5. 返回 JSON result：`status`（`completed` / `failed` / `no_work` / `dry_run`）与
    `profile_id / provider / model / execution_strategy / package_dir /
    manifest_path / run_count / skip_count / done_delta / failed_delta / finding_count /

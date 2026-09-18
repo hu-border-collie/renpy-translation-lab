@@ -219,6 +219,7 @@ def run_sync_campaign(
         raise FinalReviewSyncError("limit must be >= 0")
     to_run = queued[:effective_limit] if effective_limit else queued
     deferred_count = max(0, len(queued) - len(to_run))
+    queued_ids = [str(unit.get("unit_id") or "") for unit in queued]
     run_ids = [str(unit.get("unit_id") or "") for unit in to_run]
     skip_count = int(planned["skip_count"])
 
@@ -238,7 +239,7 @@ def run_sync_campaign(
             "failed_delta": 0,
             "finding_count": len(findings),
             "to_run_unit_ids": run_ids,
-            "planned_unit_ids": run_ids,
+            "planned_unit_ids": queued_ids,
             "attempted_unit_ids": [],
             "campaign_status": {
                 "status": fr.derive_campaign_status(status_counts),
@@ -364,8 +365,8 @@ def run_sync_campaign(
         "done_delta": done_delta,
         "failed_delta": failed_delta,
         "finding_count": int(status.get("finding_count") or 0),
-        "to_run_unit_ids": attempted_unit_ids,
-        "planned_unit_ids": run_ids,
+        "to_run_unit_ids": run_ids,
+        "planned_unit_ids": queued_ids,
         "attempted_unit_ids": attempted_unit_ids,
         "campaign_status": status,
         "dry_run": False,

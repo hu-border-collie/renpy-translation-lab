@@ -7034,11 +7034,10 @@ def freeze_final_review_routing_plan():
             explicit_strategy = str(raw_route.get("strategy") or "").strip()
             if explicit_strategy:
                 plan = read_routing_plan({"model_routing": section})
-            elif raw_route.get("profile_id"):
-                raise model_profile.ModelRoutingConfigError(
-                    "routes.final_review.profile_id requires an explicit strategy"
-                )
             else:
+                # Preserve the pre-#431 behavior exactly: final_review used
+                # the Batch entrypoint contract unless the route explicitly
+                # opted into another strategy.
                 plan = freeze_runtime_routing_plan(
                     execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
                     required_stages={model_profile.STAGE_FINAL_REVIEW},

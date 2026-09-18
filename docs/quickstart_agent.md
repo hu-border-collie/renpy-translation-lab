@@ -134,7 +134,8 @@ python gemini_translate_batch.py profiles-list-models --profile <PROFILE_ID> --o
   裸 JSON，仅为兼容保留，新代码请使用 `--output json`。
 - `final-review-run-sync` 的 `status` 为 `completed / failed / no_work / dry_run`；
   `result` 暴露 `run_count / skip_count / deferred_count / done_delta / failed_delta / finding_count`、
-  `planned_unit_ids / attempted_unit_ids` 与 `campaign_status`（`run_count` 是真正发起过的
+  `planned_unit_ids / attempted_unit_ids` 与 `campaign_status`（`planned_unit_ids` 为全量待跑，
+  `to_run_unit_ids` 为 limit 后计划执行，`attempted_unit_ids` 为实际发起；`run_count` 是真正发起过的
   unit 数）。存在失败 unit 时 `status=failed`（严格模式退出 `4`）；unit 级失败按稳定
   `sync_<category>` 前缀记录后继续，系统性失败（鉴权 / 缺少依赖 / 不支持能力）返回
   `FINAL_REVIEW_SYNC_ABORTED` 与已落盘的部分结果。
