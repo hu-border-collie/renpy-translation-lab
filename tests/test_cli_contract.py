@@ -267,6 +267,42 @@ class CliContractTests(unittest.TestCase):
         )
         self.assertEqual(cli_contract.strict_exit_code(ingest_done), cli_contract.EXIT_OK)
 
+        sync_run_completed = cli_contract.success_envelope(
+            "final-review-run-sync", status="completed"
+        )
+        sync_run_no_work = cli_contract.success_envelope(
+            "final-review-run-sync", status="no_work"
+        )
+        sync_run_dry_run = cli_contract.success_envelope(
+            "final-review-run-sync", status="dry_run"
+        )
+        sync_run_failed = cli_contract.success_envelope(
+            "final-review-run-sync", status="failed"
+        )
+        sync_run_aborted = cli_contract.success_envelope(
+            "final-review-run-sync", status="aborted"
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_run_completed),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_run_no_work),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_run_dry_run),
+            cli_contract.EXIT_OK,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_run_failed),
+            cli_contract.EXIT_BLOCKED,
+        )
+        self.assertEqual(
+            cli_contract.strict_exit_code(sync_run_aborted),
+            cli_contract.EXIT_BLOCKED,
+        )
+
         sync_preview_warn = cli_contract.success_envelope(
             "sync-revisions",
             status="ready_with_warnings",

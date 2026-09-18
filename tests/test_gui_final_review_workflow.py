@@ -180,6 +180,10 @@ class FinalReviewWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(update.status, "ready")
         self.assertIn("重试", update.message)
+        self.assertEqual(
+            workflow.current_step().key,
+            "final-review-run-sync",
+        )
 
     def test_sync_run_error_envelope_stops_workflow(self):
         workflow = FinalReviewWorkflow(

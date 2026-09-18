@@ -115,7 +115,6 @@ class FinalReviewWorkflow:
             if _execution_strategy_for_manifest(self.manifest_path) == "sync":
                 self._steps = ["final-review-run-sync"]
         elif key == "final-review-run-sync":
-            self._steps.clear()
             return self._sync_completed_update(output)
         elif key == "submit":
             path = extract_manifest_path(output)
@@ -159,6 +158,7 @@ class FinalReviewWorkflow:
         except ValueError:
             parsed = None
         if not isinstance(parsed, dict) or not parsed.get("ok"):
+            self._steps.clear()
             return WorkflowUpdate(
                 status="failed",
                 heading="最终审校同步执行中断",
@@ -169,6 +169,7 @@ class FinalReviewWorkflow:
         if isinstance(raw_result, dict):
             result = raw_result
         else:
+            self._steps.clear()
             return WorkflowUpdate(
                 status="failed",
                 heading="最终审校同步执行中断",
@@ -181,12 +182,16 @@ class FinalReviewWorkflow:
             [f"findings: {findings}", f"failed_units: {failed}"]
         )
         if failed:
+            # Keep the same step available so the user can retry just the
+            # failed/stale units; done units are skipped by digest.
+            self._steps = ["final-review-run-sync"]
             return WorkflowUpdate(
                 status="ready",
                 heading="最终审校同步执行完成（有失败 unit）",
-                message="报告已写入；请查看状态并重试失败的 unit。",
+                message="报告已写入；点击继续可只重试失败的 unit。",
                 facts=facts,
             )
+        self._steps.clear()
         return WorkflowUpdate(
             status="done",
             heading="最终审校报告已就绪",

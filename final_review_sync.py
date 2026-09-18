@@ -336,7 +336,11 @@ def run_sync_campaign(
         "status": (
             "aborted"
             if aborted
-            else ("completed" if done_delta or failed_delta else "no_work")
+            else (
+                "failed"
+                if failed_delta
+                else ("completed" if done_delta else "no_work")
+            )
         ),
         "package_dir": package_root,
         "manifest_path": str(package["paths"]["manifest"]),

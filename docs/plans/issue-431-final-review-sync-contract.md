@@ -83,6 +83,8 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
    - done 且 digest 未变：skip；
    - pending / failed / stale / running：重新入队；
    - `--force`：全部重新入队。
+   `to_run` unit 携带本次 live `input_digest` / `context_digest`；成功 ingest 时写回同一
+   摘要，因此共享上下文变化后重跑一次即可重新收敛到 `no_work`。
 3. 对 `to_run` 中每个 unit：
    - 用 `final_review_llm.build_system_instruction` + `build_user_prompt` 生成 prompt；
    - 用冻结 route/profile 经 `run_sync_request` 执行恰好一次逻辑请求
@@ -94,10 +96,11 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
      失败，记录该 unit 后中止。
 4. `--limit N` 最多执行 N 个 unit；`--dry-run` 只返回 to_run/to_skip 计划；
    `--fail-fast` 首个 unit 失败即中止。
-5. 返回 JSON result：
-   `status / profile_id / provider / model / execution_strategy / package_dir /
+5. 返回 JSON result：`status`（`completed` / `failed` / `no_work` / `dry_run`）与
+   `profile_id / provider / model / execution_strategy / package_dir /
    manifest_path / run_count / skip_count / done_delta / failed_delta / finding_count /
-   to_run_unit_ids / campaign_status / dry_run / limit`。
+   to_run_unit_ids / campaign_status / dry_run / limit`。存在失败 unit 时 `status=failed`，
+   严格模式退出 `4`，自动化不应只看 `ok=true`。
 6. 文本模式打印 summary 与 campaign status；进度事件可写 stderr，不污染 `--output json`。
 
 ## 5. 状态、持久化与幂等

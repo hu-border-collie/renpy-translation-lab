@@ -166,6 +166,32 @@ class RunSyncCampaignTests(unittest.TestCase):
         self.assertEqual(result3["done_delta"], 3)
         self.assertEqual(len(seen), 6)
 
+    def test_live_context_change_converges_to_no_work(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=2)
+        calls = {"count": 0}
+
+        def generate(_payload):
+            calls["count"] += 1
+            return {"response_text": json.dumps({"findings": []})}
+
+        first = frs.run_sync_campaign(
+            package_dir,
+            generate=generate,
+            live_context_digest="live-context-after-build",
+        )
+        self.assertEqual(first["status"], "completed")
+        self.assertEqual(first["done_delta"], 2)
+
+        second = frs.run_sync_campaign(
+            package_dir,
+            generate=generate,
+            live_context_digest="live-context-after-build",
+        )
+        self.assertEqual(second["status"], "no_work")
+        self.assertEqual(second["skip_count"], 2)
+        self.assertEqual(calls["count"], 2)
+
     def test_records_findings_from_sync_responses(self) -> None:
         package_dir = self._package_dir()
         package = build_package(package_dir, count=2)
@@ -201,6 +227,7 @@ class RunSyncCampaignTests(unittest.TestCase):
 
         result = frs.run_sync_campaign(package_dir, generate=generate)
 
+        self.assertEqual(result["status"], "failed")
         self.assertEqual(result["run_count"], 3)
         self.assertEqual(result["done_delta"], 2)
         self.assertEqual(result["failed_delta"], 1)
@@ -410,6 +437,33 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
             batch.run_final_review_run_sync(manifest_path)
 
         self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_NOT_SYNC")
+
+    def test_aborted_sync_is_not_retryable_for_systemic_categories(self) -> None:
+        package_dir, _profile_id = self._package_with_routing()
+        context = {
+            "context_digest": "live-context",
+            "snapshot_digest": "live-snapshot",
+            "prompt_context": {},
+        }
+        with (
+            mock.patch.object(
+                batch,
+                "_collect_final_review_context_snapshot",
+                return_value=context,
+            ),
+            mock.patch.object(
+                batch,
+                "run_sync_request",
+                side_effect=SyncBackendError("authentication"),
+            ),
+            mock.patch.object(batch, "remember_latest_manifest"),
+            mock.patch.object(batch, "print_banner"),
+        ):
+            with self.assertRaises(cli_contract.MachineContractError) as captured:
+                batch.run_final_review_run_sync(package_dir)
+
+        self.assertEqual(captured.exception.code_name, "FINAL_REVIEW_SYNC_ABORTED")
+        self.assertFalse(captured.exception.retryable)
 
     def test_machine_envelope_exposes_sync_result_fields(self) -> None:
         result = {

@@ -7509,12 +7509,13 @@ def run_final_review_run_sync(
         print(f"Campaign status: {(result.get('campaign_status') or {}).get('status')}")
         print('Report-only: no .rpy writes.')
     if result.get('status') == 'aborted':
+        abort_category = str(result.get('abort_category') or '')
         raise cli_contract.MachineContractError(
             'final review sync aborted after a systemic provider failure.',
             code_name='FINAL_REVIEW_SYNC_ABORTED',
             suggested_action='inspect_provider_settings_and_retry',
             semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
-            retryable=True,
+            retryable=abort_category not in fr_sync.FATAL_SYNC_CATEGORIES,
             details=dict(result),
         )
     return result
