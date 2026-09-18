@@ -7187,12 +7187,16 @@ def create_final_review_package(
         },
         extra={
             **_manifest_target_language_fields(),
-            'build_warnings': get_batch_risk_warnings(),
+            'build_warnings': (
+                [] if strategy == fr.EXECUTION_STRATEGY_SYNC
+                else get_batch_risk_warnings()
+            ),
             'request_count': request_count,
             'model_routing': routing_plan.to_manifest_dict(),
         },
     )
-    # batch_cost_estimate uses summary.chunk_count for max output tokens.
+    # Batch uses chunk_count for Gemini max-token cost estimates. Sync has no
+    # batch cost estimate, so the value is only the unit count for status.
     manifest.setdefault('summary', {})
     manifest['summary']['chunk_count'] = chunk_count
     manifest['summary']['request_count'] = request_count
