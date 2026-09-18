@@ -1472,6 +1472,16 @@ MODEL_PROFILES_PAGE_COPY = {
     "structured_output_label": "结构化输出模式",
     "preset_placeholder": "选择预设以填充连接（不会自动保存）",
     "extra_headers_invalid": "额外请求头必须是 JSON 对象：{reason}",
+    "model_catalog_label": "模型目录（只读建议）",
+    "model_catalog_placeholder": "（选择目录模型以填入模型字段）",
+    "model_catalog_button": "拉取模型列表",
+    "model_catalog_running": "正在拉取模型…",
+    "model_catalog_tooltip": (
+        "只读请求 Provider 的模型列表端点；失败或未收录时仍可手动输入模型 ID。"
+    ),
+    "model_catalog_loaded": "已拉取 {count} 个模型（来源：{source}）；手动输入始终可用。",
+    "model_catalog_failed": "模型目录拉取失败：{code}。仍可手动输入模型 ID。",
+    "model_catalog_unavailable": "当前宿主不支持模型目录拉取，请手动输入模型 ID。",
     "default_profile_label": "主模型",
     "default_strategy_label": "默认执行方式",
     "route_stage_labels": {

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -565,6 +566,31 @@ class ResponseAndErrorTests(unittest.TestCase):
 
 
 class AsyncWrapperTests(unittest.TestCase):
+    def test_generate_async_propagates_cancellation(self) -> None:
+        release = threading.Event()
+
+        def blocking_transport(_request, _timeout):
+            release.wait(timeout=2)
+            return json_response(chat_payload())
+
+        backend = make_backend(blocking_transport)
+
+        async def cancel_running_request():
+            task = asyncio.create_task(
+                backend.generate_async(
+                    SyncGenerationRequest(model="m", contents="x")
+                )
+            )
+            await asyncio.sleep(0.01)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+        try:
+            asyncio.run(cancel_running_request())
+        finally:
+            release.set()
+
     def test_generate_async_returns_the_same_result(self) -> None:
         transport = RecordingTransport(json_response(chat_payload()))
         backend = make_backend(transport)

@@ -19,6 +19,9 @@
 - [#431 S1 直连 OpenAI-compatible Sync 生成合同](issue-431-openai-compatible-contract.md)：
   冻结协议适配器 / Provider 连接 / ModelProfile 职责、首期迁移矩阵、配置与结构化输出合同、
   错误映射、GUI 最小接线和离线测试范围；真实 smoke、final_review 解绑与 LiteLLM 移除属后续切片。
+- [#431 S2 目录发现、诊断与迁移矩阵合同](issue-431-openai-compatible-s2-contract.md)：
+  冻结模型目录只读发现、`profiles-probe` 结构化诊断、取消语义边界，以及
+  [LiteLLM 调用点迁移矩阵](issue-431-litellm-migration-matrix.md)；不删除 LiteLLM、不改默认路径。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、
   串行与子代理并行协作，以及首个 Ren'Py 章节实验。待评审、待验证，尚未实现。

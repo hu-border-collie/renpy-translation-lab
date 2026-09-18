@@ -8,6 +8,7 @@ from unittest import mock
 
 import cli_contract
 import model_profiles_editor as editor
+from gui_qt.user_copy import MODEL_PROFILES_PAGE_COPY
 from model_routing_migration import preview_migration
 
 try:
@@ -856,6 +857,90 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
         provider = self.page.collect()["model_routing"]["providers"][provider_id]
         self.assertEqual(provider["extra_headers"], {})
         self.assertTrue(self.messages)
+
+    def _direct_section(self) -> dict:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="OpenAI",
+            adapter="openai_compatible",
+            provider="openai",
+            base_url="https://api.example/v1",
+            models_url="https://api.example/v1/models",
+            credential_kind="none",
+        )
+        provider_id = editor.provider_ids(section)[0]
+        section = editor.add_profile(
+            section,
+            label="OpenAI GPT",
+            provider_id=provider_id,
+            model="gpt-4.1-mini",
+        )
+        profile_id = editor.profile_ids(section)[0]
+        return editor.set_defaults(
+            section,
+            primary_profile_id=profile_id,
+            execution_strategy="sync",
+        )
+
+    def test_model_catalog_button_invokes_immediate_action(self) -> None:
+        calls: list[tuple[str, dict]] = []
+        page = ProfilesSettingsPage(
+            actions=SettingsPageActions(
+                show_status=self.messages.append,
+                run_immediate=lambda action, payload: calls.append((action, dict(payload))) or True,
+            )
+        )
+        self.addCleanup(page.widget.deleteLater)
+        section = self._direct_section()
+        page.load({"model_routing": section})
+        page.profiles_list.setCurrentRow(0)
+
+        self.assertTrue(page.profile_model_catalog_btn.isEnabled())
+        page.profile_model_catalog_btn.click()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "list_profile_models")
+        self.assertEqual(
+            calls[0][1]["profile_id"],
+            editor.profile_ids(section)[0],
+        )
+
+    def test_model_catalog_populates_and_selects_model(self) -> None:
+        section = self._direct_section()
+        self.page.load({"model_routing": section})
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+
+        self.page.set_model_catalog(["gpt-4.1", "gpt-4.1-mini"], source="openai")
+        self.assertEqual(self.page.profile_model_catalog_combo.count(), 3)
+        self.page.profile_model_catalog_combo.setCurrentIndex(1)
+
+        collected = self.page.collect()["model_routing"]["profiles"][profile_id]
+        self.assertEqual(collected["model"], "gpt-4.1")
+        self.assertTrue(self.messages)
+
+    def test_model_catalog_running_and_error_feedback(self) -> None:
+        page = ProfilesSettingsPage(
+            actions=SettingsPageActions(show_status=self.messages.append)
+        )
+        self.addCleanup(page.widget.deleteLater)
+
+        page.set_model_catalog_running(True)
+        self.assertEqual(
+            page.profile_model_catalog_btn.text(),
+            MODEL_PROFILES_PAGE_COPY["model_catalog_running"],
+        )
+        page.set_model_catalog_running(False)
+        self.assertEqual(
+            page.profile_model_catalog_btn.text(),
+            MODEL_PROFILES_PAGE_COPY["model_catalog_button"],
+        )
+
+        page.set_model_catalog_error("MODEL_CATALOG_TIMEOUT")
+        self.assertTrue(
+            any("MODEL_CATALOG_TIMEOUT" in message for message in self.messages)
+        )
 
     def test_structured_output_mode_round_trip(self) -> None:
         self.page.profiles_list.setCurrentRow(0)

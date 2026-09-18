@@ -627,6 +627,7 @@ class MainWindow(QMainWindow):
         self._recheck_output_lines: list[str] = []
         self._probe_output_lines: list[str] = []
         self._profile_probe_output_lines: list[str] = []
+        self._profile_models_output_lines: list[str] = []
         self._translate_preflight_output_lines: list[str] = []
         self._pending_translation_start: dict[str, object] | None = None
         # Live durable-run progress (#348 P3 A2): a read-only status poller
@@ -3894,7 +3895,35 @@ class MainWindow(QMainWindow):
             return True
         if action_id == "probe_profile":
             return self._on_profile_probe(payload)
+        if action_id == "list_profile_models":
+            return self._on_profile_models(payload)
         return False
+
+    def _on_profile_models(self, payload) -> bool:
+        """Fetch one direct-adapter provider model list through the CLI."""
+
+        profile_id = str((payload or {}).get("profile_id") or "")
+        if not profile_id:
+            message_box_information(self, "无法拉取模型", "请先选择一个 ModelProfile。")
+            return True
+        page = self._profiles_page()
+        if page is not None:
+            page.set_model_catalog_running(True)
+        self._profile_models_output_lines = []
+        self._append_log(f"=== 正在拉取模型目录：{profile_id} ===\n")
+        self._start_cli_command(
+            "profile_models",
+            self.state.get_batch_script_path(),
+            [
+                "profiles-list-models",
+                "--profile",
+                profile_id,
+                "--output",
+                "json",
+                "--non-interactive",
+            ],
+        )
+        return True
 
     def _on_profile_probe(self, payload) -> bool:
         """Confirm and run one bounded capability probe through the CLI."""
@@ -12857,6 +12886,8 @@ class MainWindow(QMainWindow):
             self._probe_output_lines.append(text)
         elif self._active_command == "profile_probe":
             self._profile_probe_output_lines.append(text)
+        elif self._active_command == "profile_models":
+            self._profile_models_output_lines.append(text)
         elif self._active_command == "translate_preflight":
             self._translate_preflight_output_lines.append(text)
         elif self._active_command == "compare_variants":
@@ -13610,6 +13641,44 @@ class MainWindow(QMainWindow):
                 )
             if page is not None:
                 page.set_probe_running(False)
+            self._active_command = ""
+            self._set_task_running(False)
+            self._refresh_diagnostics_context()
+            return
+
+        if self._active_command == "profile_models":
+            output = "\n".join(self._profile_models_output_lines)
+            try:
+                envelope = cli_contract.parse_result_envelope(output)
+            except ValueError:
+                envelope = None
+            page = self._profiles_page()
+            if envelope is not None and envelope.get("ok"):
+                raw_result = envelope.get("result")
+                result = dict(raw_result) if isinstance(raw_result, Mapping) else {}
+                if page is not None:
+                    page.set_model_catalog(
+                        result.get("models") or (),
+                        source=str(result.get("source") or "provider"),
+                    )
+                self.statusBar().showMessage(
+                    f"模型目录完成：{int(result.get('count') or 0)} 个模型",
+                    6000,
+                )
+            else:
+                code = ""
+                if envelope is not None:
+                    error = envelope.get("error")
+                    if isinstance(error, Mapping):
+                        code = str(error.get("code") or "")
+                if page is not None:
+                    page.set_model_catalog_error(code or f"exit_{exit_code}")
+                self.statusBar().showMessage(
+                    "模型目录拉取失败，仍可手动输入模型 ID。",
+                    8000,
+                )
+            if page is not None:
+                page.set_model_catalog_running(False)
             self._active_command = ""
             self._set_task_running(False)
             self._refresh_diagnostics_context()

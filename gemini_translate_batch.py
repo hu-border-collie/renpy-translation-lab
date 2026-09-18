@@ -143,6 +143,7 @@ PROFILE_COMMANDS = frozenset(
         'profiles-set-default',
         'profiles-set-route',
         'profiles-probe',
+        'profiles-list-models',
     }
 )
 COVERAGE_COMMANDS = frozenset(
@@ -21610,6 +21611,27 @@ def build_arg_parser():
         help='Response token cap for the probe request (1-256).',
     )
 
+    profiles_models_parser = subparsers.add_parser(
+        'profiles-list-models',
+        help=(
+            'Fetch the provider model list for an openai_compatible ModelProfile '
+            '(read-only discovery; manual model ids remain valid).'
+        ),
+    )
+    add_machine_output_argument(profiles_models_parser)
+    profiles_models_parser.add_argument(
+        '--profile',
+        required=True,
+        metavar='PROFILE_ID',
+        help='openai_compatible ModelProfile whose provider model list is fetched.',
+    )
+    profiles_models_parser.add_argument(
+        '--timeout-seconds',
+        type=int,
+        default=15,
+        help='Model-list request timeout in seconds (5-600).',
+    )
+
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
     add_machine_output_argument(submit_parser)
     submit_parser.add_argument(
@@ -22495,6 +22517,58 @@ def run_profile_command(args):
         for item in report['capabilities']:
             detail = f" ({item['detail']})" if item["detail"] else ""
             print(f"- {item['name']}: {item['status']}{detail}")
+        return report
+
+    if command == 'profiles-list-models':
+        import openai_compatible_model_catalog as catalog
+        from sync_model_backend import SyncBackendError
+
+        _require_valid_routing_section(section, command)
+        try:
+            connection = catalog.connection_for_profile(
+                section,
+                str(getattr(args, 'profile', '') or ''),
+            )
+            models = catalog.fetch_models(
+                connection,
+                timeout_seconds=int(getattr(args, 'timeout_seconds', 15) or 15),
+            )
+        except SyncBackendError as exc:
+            code_by_category = {
+                'authentication': 'CREDENTIAL_UNAVAILABLE',
+                'missing_dependency': 'MODEL_CATALOG_DEPENDENCY_MISSING',
+                'timeout': 'MODEL_CATALOG_TIMEOUT',
+                'rate_limit': 'MODEL_CATALOG_RATE_LIMITED',
+                'service_unavailable': 'MODEL_CATALOG_UNAVAILABLE',
+                'unsupported_capability': 'MODEL_CATALOG_UNSUPPORTED',
+                'invalid_response': 'MODEL_CATALOG_INVALID',
+                'provider_error': 'MODEL_CATALOG_FAILED',
+            }
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=code_by_category.get(
+                    str(getattr(exc, 'category', '') or ''),
+                    'MODEL_CATALOG_FAILED',
+                ),
+                suggested_action='check_provider_models_endpoint',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            ) from exc
+        report = {
+            'status': 'ready',
+            'profile_id': str(getattr(args, 'profile', '') or ''),
+            'provider': connection.provider,
+            'base_url': connection.base_url,
+            'models_url': catalog.redacted_endpoint(connection.provider_models_url()),
+            'count': len(models),
+            'models': list(models),
+            'source': 'provider_models_endpoint',
+        }
+        print(
+            f"ModelCatalog: {report['count']} model(s) "
+            f"provider={report['provider']} profile={report['profile_id']}"
+        )
+        for model_id in report['models']:
+            print(f"- {model_id}")
         return report
 
     if command == 'profiles-set-default':

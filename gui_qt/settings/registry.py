@@ -100,7 +100,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
         "_create_profiles_settings_page",
         config_page=True,
         config_keys=frozenset({"model_routing"}),
-        immediate_action_ids=frozenset({"probe_profile"}),
+        immediate_action_ids=frozenset({"probe_profile", "list_profile_models"}),
     ),
     SettingsPageSpec(
         "litellm",

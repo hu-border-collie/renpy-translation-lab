@@ -260,6 +260,8 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 - ModelProfile `params` 只接受白名单：`temperature`、`max_output_tokens`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`timeout`。
 - 结构化输出模式：`strict_json_schema` / `json_object` / `prompt_only_json`；未声明时直连 adapter 保守使用 `prompt_only_json`，Provider 返回“不支持 response_format”时按 `unsupported_capability` 失败，不会静默降级后宣称成功。
 - GUI「设置 → 模型与 Provider」提供内置供应商预设（OpenAI、OpenRouter、DeepSeek、xAI、Ollama、自定义）、额外请求头与结构化输出模式字段；预设只填充连接，不限制手填模型 ID。
+- Profile 编辑区提供「拉取模型列表」：只读请求 `models_url`（或 `base_url + /models`），选择后填入模型字段；目录失败、未收录或端点缺失时仍可手动输入模型 ID。CLI 等价命令为 `profiles-list-models --profile <ID> --output json`，失败返回稳定 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 机器码。
+- 连接诊断复用 `profiles-probe` / GUI「测试所选 Profile 能力」：探测请求按 profile 声明的结构化输出模式发送 strict JSON schema 兼容样例，并区分鉴权、基本生成、结构化输出、reasoning 与 usage。
 - 直连 adapter 目前只服务同步生成；Gemini Batch 仍要求 `gemini` adapter，最终审校仍限 `gemini_batch`（#431 后续切片解绑）。
 
 默认切块策略：

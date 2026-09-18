@@ -172,6 +172,10 @@ def _usage_fields(usage: Mapping[str, Any]) -> tuple[bool, bool]:
     usage = dict(usage or {})
     has_usage = bool(usage)
     reasoning = usage.get("reasoning_tokens")
+    if reasoning is None:
+        details = usage.get("completion_tokens_details")
+        if isinstance(details, Mapping):
+            reasoning = details.get("reasoning_tokens")
     return has_usage, reasoning is not None
 
 
@@ -384,13 +388,18 @@ def probe_profile(
 
 
 def _translation_schema() -> dict[str, Any]:
+    # Keep this schema strict-JSON-schema compatible: OpenAI's strict mode
+    # requires ``additionalProperties: false`` on every object and every
+    # declared property in ``required``.
     return {
         "type": "object",
+        "additionalProperties": False,
         "properties": {
             "translations": {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "additionalProperties": False,
                     "properties": {
                         "id": {"type": "string"},
                         "translation": {"type": "string"},
@@ -443,11 +452,18 @@ def default_generator(request: ProbeRequest) -> ProbeResponse:
         diagnostic_api_key=diagnostic_api_key,
         client=client,
     )
+    capabilities = routing.resolve_capabilities(
+        profile,
+        custom_providers=custom_providers,
+    )
     config: dict[str, Any] = {
         "temperature": 0,
         "max_output_tokens": request.max_output_tokens,
         "timeout": request.timeout_seconds,
         "response_json_schema": _translation_schema(),
+        # Probe the declared structured-output mode instead of always using the
+        # adapter default; Gemini's backend strips this provider-neutral hint.
+        "structured_output_mode": capabilities.structured_output.mode,
     }
     if request.adapter == routing.ADAPTER_GEMINI:
         config["response_mime_type"] = "application/json"

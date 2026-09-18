@@ -236,6 +236,94 @@ class ProbeReportTests(unittest.TestCase):
         self.assertLessEqual(seen[0].timeout_seconds, probe.MAX_TIMEOUT_SECONDS)
         self.assertLessEqual(seen[0].max_output_tokens, probe.MAX_OUTPUT_TOKENS)
 
+    def test_nested_reasoning_tokens_are_recognized(self) -> None:
+        has_usage, has_reasoning = probe._usage_fields(
+            {
+                "total_tokens": 9,
+                "completion_tokens_details": {"reasoning_tokens": 2},
+            }
+        )
+
+        self.assertTrue(has_usage)
+        self.assertTrue(has_reasoning)
+
+
+class DirectAdapterProbeTests(unittest.TestCase):
+    def _direct_section(self) -> dict:
+        section = editor.empty_section()
+        section = editor.add_provider(
+            section,
+            label="OpenAI",
+            adapter="openai_compatible",
+            provider="openai",
+            base_url="https://api.example/v1",
+            credential_kind="none",
+        )
+        provider_id = editor.provider_ids(section)[0]
+        section = editor.add_profile(
+            section,
+            label="OpenAI GPT",
+            provider_id=provider_id,
+            model="gpt-4.1-mini",
+            capability_overrides={"structured_output": {"mode": "json_object"}},
+        )
+        profile_id = editor.profile_ids(section)[0]
+        section = editor.set_defaults(
+            section,
+            primary_profile_id=profile_id,
+            execution_strategy="sync",
+        )
+        return section
+
+    def test_probe_schema_is_strict_json_schema_compatible(self) -> None:
+        schema = probe._translation_schema()
+        self.assertFalse(schema["additionalProperties"])
+        items = schema["properties"]["translations"]["items"]
+        self.assertFalse(items["additionalProperties"])
+        self.assertEqual(set(items["required"]), {"id", "translation"})
+
+    def test_default_generator_probes_declared_structured_mode(self) -> None:
+        section = self._direct_section()
+        profile_id = editor.profile_ids(section)[0]
+        captured: dict = {}
+
+        class FakeBackend:
+            def generate(self, request):
+                captured["config"] = dict(request.config)
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "response_text": "{}",
+                        "usage_metadata": {},
+                        "finish_reason": "stop",
+                    },
+                )()
+
+        with mock.patch(
+            "model_profile.build_sync_backend",
+            return_value=FakeBackend(),
+        ):
+            probe.default_generator(
+                probe.ProbeRequest(
+                    model="gpt-4.1-mini",
+                    prompt="probe",
+                    json_schema=probe._translation_schema(),
+                    max_output_tokens=64,
+                    timeout_seconds=10,
+                    adapter="openai_compatible",
+                    provider="openai",
+                    api_base="https://api.example/v1",
+                    profile_id=profile_id,
+                    section=section,
+                )
+            )
+
+        self.assertEqual(
+            captured["config"]["structured_output_mode"],
+            "json_object",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
