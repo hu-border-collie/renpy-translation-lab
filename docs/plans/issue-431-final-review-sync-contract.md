@@ -134,8 +134,9 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
   usage ledger 使用 `task_mode='final_review'`、`stage='final_review'`、operation 绑定
   campaign unit，只接收 `usage_metadata` / provider / model / response_payload 等必要字段，
   不把 `request_metadata` 透传进账本；尽力记录、不因账本失败中断审校。
-  unit 调用抛出 `TypeError` / `AttributeError` / `NotImplementedError` / `KeyError` /
-  `IndexError` 等内部编程错误时直接向上抛出，不伪装成可重试的 provider 失败。
+  unit 调用抛出 `TypeError` / `AttributeError` / `NotImplementedError` 等内部编程错误时
+  直接向上抛出，不伪装成可重试的 provider 失败；provider 响应形状导致的
+  `KeyError` / `IndexError` 仍按 unit 失败记录，避免单个坏响应炸掉整个 campaign。
 
 ## 7. CLI / GUI
 

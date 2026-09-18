@@ -36,8 +36,6 @@ INTERNAL_SYNC_EXCEPTIONS = (
     TypeError,
     AttributeError,
     NotImplementedError,
-    KeyError,
-    IndexError,
 )
 
 
@@ -117,7 +115,6 @@ def _sync_row(unit_id: str, result: object, fallback_model: str) -> dict[str, An
             "response_payload",
             "usage_metadata",
             "finish_reason",
-            "request_metadata",
         ):
             if result.get(key) not in (None, "", {}, ()):
                 row[key] = result[key]

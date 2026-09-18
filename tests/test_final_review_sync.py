@@ -372,6 +372,22 @@ class RunSyncCampaignTests(unittest.TestCase):
         persisted = fr.load_campaign_package(package_dir)
         self.assertEqual(persisted["units"][0]["status"], fr.STATUS_PENDING)
 
+    def test_key_error_from_generate_is_recorded_as_unit_failure(self) -> None:
+        package_dir = self._package_dir()
+        build_package(package_dir, count=1)
+
+        def generate(_payload):
+            raise KeyError("choices")
+
+        result = frs.run_sync_campaign(package_dir, generate=generate)
+
+        self.assertEqual(result["failed_delta"], 1)
+        persisted = fr.load_campaign_package(package_dir)
+        self.assertEqual(persisted["units"][0]["status"], fr.STATUS_FAILED)
+        self.assertTrue(
+            str(persisted["units"][0]["error"]).startswith("sync_provider_error")
+        )
+
     def test_batch_package_is_rejected(self) -> None:
         package_dir = self._package_dir()
         build_package(package_dir, count=1, strategy=fr.EXECUTION_STRATEGY_GEMINI_BATCH)
