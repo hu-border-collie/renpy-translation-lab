@@ -35,6 +35,7 @@ REASON_FONT_NOT_DECLARED = "font.not_declared"
 REASON_FONT_EXPRESSION_UNPARSED = "font.expression_unparsed"
 REASON_FONT_PATH_OUTSIDE_GAME = "font.path_outside_game"
 REASON_TEXT_NO_SAMPLES = "text.no_samples"
+REASON_FONT_ENGINE_SEARCH_PATH = "font.engine_search_path_unknown"
 
 _REASON_TEXT = {
     REASON_FONT_FILE_MISSING: "字体文件不存在",
@@ -47,6 +48,7 @@ _REASON_TEXT = {
     REASON_FONT_EXPRESSION_UNPARSED: "字体表达式无法安全解析",
     REASON_FONT_PATH_OUTSIDE_GAME: "字体路径不在 game_root 内，已按输入边界拒绝读取",
     REASON_TEXT_NO_SAMPLES: "没有可检查的文本样本，无法判定字形覆盖",
+    REASON_FONT_ENGINE_SEARCH_PATH: "字体名可能由 Ren'Py 引擎/搜索路径解析，只读扫描无法确定",
 }
 
 _STYLE_HEADER_RE = re.compile(
@@ -845,15 +847,30 @@ def analyze_font_coverage(
         try:
             face = load_font_face(font_path)
         except FontCoverageError as exc:
+            # A bare file name (for example DejaVuSans.ttf) is commonly
+            # resolved by Ren'Py's engine/search path rather than by
+            # game_root; do not report it as a definite user typo.
+            engine_search_path = (
+                exc.code == REASON_FONT_FILE_MISSING
+                and Path(reference.path).name == reference.path
+            )
             checks.append(
                 FontCheck(
                     reference=reference,
-                    status=STATUS_UNAVAILABLE,
-                    reason=exc.code,
+                    status=(
+                        STATUS_UNKNOWN
+                        if engine_search_path
+                        else STATUS_UNAVAILABLE
+                    ),
+                    reason=(
+                        REASON_FONT_ENGINE_SEARCH_PATH
+                        if engine_search_path
+                        else exc.code
+                    ),
                     font_path=font_rel,
                     evidence=(
                         f"{reference.script}:{reference.line} font={font_rel} "
-                        f"reason={exc.code}"
+                        f"reason={REASON_FONT_ENGINE_SEARCH_PATH if engine_search_path else exc.code}"
                     ),
                 )
             )

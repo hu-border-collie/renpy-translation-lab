@@ -362,6 +362,24 @@ class AnalyzeTests(unittest.TestCase, CanaryEnvMixin):
             )
         )
 
+    def test_bare_engine_font_name_is_unknown_not_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            game_root.mkdir()
+            (game_root / "styles.rpy").write_text(
+                'style default:\n    font "DejaVuSans.ttf"\n',
+                encoding="utf-8",
+            )
+
+            report = fc.analyze_font_coverage(game_root, text_values=["Hello"])
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(
+            report["fonts"][0]["reason"],
+            fc.REASON_FONT_ENGINE_SEARCH_PATH,
+        )
+        self.assertEqual(report["unavailable"], [])
+
     def test_no_font_declaration_is_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             game_root = Path(tmp) / "game"

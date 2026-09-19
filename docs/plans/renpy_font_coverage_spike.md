@@ -92,6 +92,7 @@ JSON 顶层：
 | `font.expression_unparsed` | 表达式无法安全解析 | unknown |
 | `font.path_outside_game` | 引用越出 `game_root` 输入边界 | unknown；拒绝读取 |
 | `text.no_samples` | 没有显式/文件/TL 文本样本 | unknown；不把空字集当通过 |
+| `font.engine_search_path_unknown` | 裸字体名可能由 Ren'Py 引擎/搜索路径解析 | unknown；只读扫描不猜 engine/common 路径 |
 
 `unknown` 不当作通过，也不默认作为结构 blocker；`missing` 只表示确定缺字，
 `unavailable` 只表示字体文件缺失/损坏/无法解析。两者都可以在 doctor/preflight 中作为
@@ -139,7 +140,9 @@ Noto 字体子集：
 - 性能预算：只扫描 `.rpy` 文本与静态字体文件；单字体上限 64 MiB；不启动 Ren'Py、
   不加载 Qt、不执行游戏代码。真实大型项目的覆盖率/耗时需要在接入前重新测量。
 - 误报风险：TTC face 选择、FontGroup/fallback、运行时 style 覆盖、shaping/排版、
-  动态插值文本；这些在 spike 中全部进入 unknown 或限制说明，不宣称游戏必然缺字/必然可显示。
+  动态插值文本，以及 Ren'Py 引擎/`renpy/common` 搜索路径中的裸字体名（如
+  `DejaVuSans.ttf`）；这些在 spike 中全部进入 unknown 或限制说明，不宣称游戏必然缺字/
+  必然可显示。
 
 ## 9. 结论
 
