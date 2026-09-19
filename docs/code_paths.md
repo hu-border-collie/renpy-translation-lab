@@ -132,6 +132,18 @@
   `tests.test_gui_doctor_gating`、`tests.test_doctor_recommendations`、
   `tests.test_doctor_layout_status`、`tests.test_gui_games_registry_doctor_compare`。
 
+## 字体字形覆盖 spike（#487）
+
+- 只读核心：`font_coverage.py` 的 `load_font_face()` / `scan_font_references()` /
+  `extract_translation_strings()` / `analyze_font_coverage()` / `format_report_markdown()`；
+  只解析 `.rpy` 文本与 sfnt cmap，不启动 Ren'Py、不执行游戏 Python、不写项目。
+- CLI：`scripts/font_coverage_report.py --game-root ... [--tl-dir ...] [--text-file ...]`
+  `--output markdown|json`；路径边界限定在 `game_root` 内，越界字体引用标记 unknown。
+- Fixture：`tests/fixtures/font_coverage_minimal/`（原创脚本/文本 + 可再分发 Noto 子集
+  字体 + 损坏字体；许可证见 `game/fonts/README.md` / `LICENSE-OFL-1.1.txt`）。
+- 测试：`tests.test_font_coverage`；合同与 doctor / preflight 接入建议见
+  [Ren'Py 字体字形覆盖只读 spike](plans/renpy_font_coverage_spike.md)。
+
 ## Batch 翻译主路径
 
 - CLI：`build` → `submit` → `status` → `download` → `check` → `apply`；辅助入口包括
