@@ -41,8 +41,8 @@
 
 ## 4. 文本与样式解析边界
 
-- `.rpy` 只按行解析 `style <name>:` / `style <name> is <parent>:` 块内的 `font` 属性与
-  `define gui.*_font = ...` 赋值；
+- `.rpy` 只按行解析 `style <name>:` / `style <name> is <parent>:` /
+  `translate <language> style <name>:` 块内的 `font` 属性与 `define gui.*_font = ...` 赋值；
   不执行 `init python`、`$` 或任意表达式。
 - 只有**完整字符串字面量**会解析为静态字体路径；含 `+` / `%` / 变量 / 下标 /
   方法调用的表达式标记 `font.dynamic_expression`。

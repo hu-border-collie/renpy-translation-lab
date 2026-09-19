@@ -51,6 +51,10 @@ _REASON_TEXT = {
 _STYLE_HEADER_RE = re.compile(
     r"^style\s+([A-Za-z_][\w.]*)(?:\s+is\s+[A-Za-z_][\w.]*)?\s*:\s*$"
 )
+_TRANSLATE_STYLE_HEADER_RE = re.compile(
+    r"^translate\s+[A-Za-z0-9_.-]+\s+style\s+"
+    r"([A-Za-z_][\w.]*)(?:\s+is\s+[A-Za-z_][\w.]*)?\s*:\s*$"
+)
 _FONT_PROPERTY_RE = re.compile(r"^font\s+(.+?)\s*$")
 _GUI_FONT_ASSIGN_RE = re.compile(
     r"^(?:define\s+)?(gui\.[A-Za-z_]\w*font)\s*=\s*(.+?)\s*$"
@@ -611,6 +615,8 @@ def scan_font_references(game_root: str | Path) -> tuple[FontReference, ...]:
                         )
                     continue
             header = _STYLE_HEADER_RE.match(stripped)
+            if header is None:
+                header = _TRANSLATE_STYLE_HEADER_RE.match(stripped)
             if header:
                 current_style = header.group(1)
                 style_indent = indent
@@ -791,7 +797,7 @@ def analyze_font_coverage(
         )
     limit = max(1, int(max_missing_chars or DEFAULT_MAX_MISSING_CHARS))
     for reference in references:
-        if not samples.samples:
+        if not required:
             checks.append(
                 FontCheck(
                     reference=reference,

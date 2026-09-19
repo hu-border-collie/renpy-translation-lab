@@ -1,3 +1,6 @@
 init python:
+    import os
     import pathlib
-    pathlib.Path("FONT_COVERAGE_SIDE_EFFECT.txt").write_text("must not run", encoding="utf-8")
+    marker = os.environ.get("FONT_COVERAGE_CANARY_PATH")
+    if marker:
+        pathlib.Path(marker).write_text("must not run", encoding="utf-8")

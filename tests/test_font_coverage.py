@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -80,7 +81,22 @@ TL_DIR = FIXTURES / "tl"
 CJK_FONT = GAME_ROOT / "fonts" / "test_cjk_subset.ttf"
 LATIN_FONT = GAME_ROOT / "fonts" / "test_latin_subset.ttf"
 CORRUPT_FONT = GAME_ROOT / "fonts" / "corrupt.ttf"
-SIDE_EFFECT = REPO_ROOT / "FONT_COVERAGE_SIDE_EFFECT.txt"
+class CanaryEnvMixin:
+    """Point the fixture canary at a temp path so CWD never matters."""
+
+    def _set_up_canary(self) -> None:
+        self._canary_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._canary_tmp.cleanup)
+        self.canary_path = Path(self._canary_tmp.name) / "canary.txt"
+        self._canary_previous = os.environ.get("FONT_COVERAGE_CANARY_PATH")
+        os.environ["FONT_COVERAGE_CANARY_PATH"] = str(self.canary_path)
+        self.addCleanup(self._restore_canary_env)
+
+    def _restore_canary_env(self) -> None:
+        if self._canary_previous is None:
+            os.environ.pop("FONT_COVERAGE_CANARY_PATH", None)
+        else:
+            os.environ["FONT_COVERAGE_CANARY_PATH"] = self._canary_previous
 
 
 class FontFaceTests(unittest.TestCase):
@@ -181,20 +197,27 @@ class FontFaceTests(unittest.TestCase):
         self.assertEqual(captured.exception.code, fc.REASON_FONT_INVALID)
 
 
-class ReferenceScanTests(unittest.TestCase):
+class ReferenceScanTests(unittest.TestCase, CanaryEnvMixin):
     def setUp(self) -> None:
-        if SIDE_EFFECT.exists():
-            SIDE_EFFECT.unlink()
-
-    def tearDown(self) -> None:
-        if SIDE_EFFECT.exists():
-            SIDE_EFFECT.unlink()
+        self._set_up_canary()
 
     def test_scan_never_executes_game_python(self) -> None:
         references = fc.scan_font_references(GAME_ROOT)
 
         self.assertTrue(references)
-        self.assertFalse(SIDE_EFFECT.exists())
+        self.assertFalse(self.canary_path.exists())
+
+    def test_translate_style_font_override_is_scanned(self) -> None:
+        references = fc.scan_font_references(GAME_ROOT)
+        translated = [
+            item for item in references if item.script.startswith("tl/")
+        ]
+
+        self.assertTrue(translated)
+        self.assertTrue(all(item.kind == "static" for item in translated))
+        self.assertTrue(
+            any(item.style == "default" for item in translated)
+        )
 
     def test_scan_classifies_static_dynamic_and_group_references(self) -> None:
         by_style = {item.style: item for item in fc.scan_font_references(GAME_ROOT)}
@@ -219,7 +242,10 @@ class ReferenceScanTests(unittest.TestCase):
         )
 
 
-class AnalyzeTests(unittest.TestCase):
+class AnalyzeTests(unittest.TestCase, CanaryEnvMixin):
+    def setUp(self) -> None:
+        self._set_up_canary()
+
     def test_mixed_fixture_reports_every_acceptance_case(self) -> None:
         report = fc.analyze_font_coverage(
             GAME_ROOT,
@@ -256,7 +282,7 @@ class AnalyzeTests(unittest.TestCase):
             by_style["grouped_font"]["reason"],
             fc.REASON_FONT_GROUP_UNSUPPORTED,
         )
-        self.assertFalse(SIDE_EFFECT.exists())
+        self.assertFalse(self.canary_path.exists())
 
     def test_positive_fixture_reaches_checked_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -285,6 +311,21 @@ class AnalyzeTests(unittest.TestCase):
         report = fc.analyze_font_coverage(GAME_ROOT)
 
         self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertTrue(
+            any(
+                item["reason"] == fc.REASON_TEXT_NO_SAMPLES
+                for item in report["fonts"]
+            )
+        )
+
+    def test_only_nonprintable_samples_is_unknown(self) -> None:
+        report = fc.analyze_font_coverage(
+            GAME_ROOT,
+            text_values=["\u200b"],
+        )
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(report["text"]["unique_char_count"], 0)
         self.assertTrue(
             any(
                 item["reason"] == fc.REASON_TEXT_NO_SAMPLES
@@ -376,10 +417,11 @@ class TextExtractionTests(unittest.TestCase):
         self.assertIn("font.glyph_missing", markdown)
 
 
-class CliTests(unittest.TestCase):
+class CliTests(unittest.TestCase, CanaryEnvMixin):
+    def setUp(self) -> None:
+        self._set_up_canary()
+
     def test_cli_emits_json_without_touching_project(self) -> None:
-        if SIDE_EFFECT.exists():
-            SIDE_EFFECT.unlink()
         result = subprocess.run(
             [
                 sys.executable,
@@ -398,12 +440,16 @@ class CliTests(unittest.TestCase):
             text=True,
             encoding="utf-8",
             check=False,
+            env={
+                **os.environ,
+                "FONT_COVERAGE_CANARY_PATH": str(self.canary_path),
+            },
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         self.assertEqual(report["spike"], "font_coverage")
-        self.assertFalse(SIDE_EFFECT.exists())
+        self.assertFalse(self.canary_path.exists())
 
 
 if __name__ == "__main__":
