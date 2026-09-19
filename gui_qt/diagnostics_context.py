@@ -523,64 +523,107 @@ def build_cli_commands(
     mode = manifest.get("mode")
     mode_text = mode.strip() if isinstance(mode, str) else ""
     if mode_text == "final_review":
-        commands.extend(
-            [
-                DiagnosticsCommand(
-                    label="最终审校状态（当前包）",
-                    command=format_cli_command(
-                        python_exe,
-                        batch_script_path,
-                        ["final-review-status", manifest_path],
-                    ),
-                ),
-                DiagnosticsCommand(
-                    label="导出最终审校报告",
-                    command=format_cli_command(
-                        python_exe,
-                        batch_script_path,
-                        ["final-review-export", manifest_path],
-                    ),
-                ),
-                DiagnosticsCommand(
-                    label="续跑最终审校 requests",
-                    command=format_cli_command(
-                        python_exe,
-                        batch_script_path,
-                        ["final-review-resume", manifest_path],
-                    ),
-                ),
-                DiagnosticsCommand(
-                    label="摄入最终审校结果",
-                    command=format_cli_command(
-                        python_exe,
-                        batch_script_path,
-                        ["final-review-ingest-results", manifest_path],
-                    ),
-                ),
-            ]
+        execution_strategy = str(
+            manifest.get("execution_strategy") or "gemini_batch"
         )
-        commands.append(
-            DiagnosticsCommand(
-                label="把已选 findings 生成订正预览",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["final-review-create-revisions", manifest_path],
-                ),
+        if execution_strategy == "sync":
+            commands.extend(
+                [
+                    DiagnosticsCommand(
+                        label="最终审校状态（当前包）",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-status", manifest_path],
+                        ),
+                    ),
+                    DiagnosticsCommand(
+                        label="执行同步最终审校",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-run-sync", manifest_path],
+                        ),
+                    ),
+                    DiagnosticsCommand(
+                        label="导出最终审校报告",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-export", manifest_path],
+                        ),
+                    ),
+                ]
             )
-        )
-        commands.extend(
-            build_cloud_job_commands(
-                python_exe=python_exe,
-                batch_script_path=batch_script_path,
-                manifest_path=manifest_path,
-                manifest=manifest,
-                submit_max_cost=submit_max_cost,
-                submit_label="提交最终审校任务",
-                status_label="查询最终审校状态",
-                download_label="下载最终审校结果",
+            commands.append(
+                DiagnosticsCommand(
+                    label="把已选 findings 生成订正预览",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-create-revisions", manifest_path],
+                    ),
+                )
             )
-        )
+        else:
+            commands.extend(
+                [
+                    DiagnosticsCommand(
+                        label="最终审校状态（当前包）",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-status", manifest_path],
+                        ),
+                    ),
+                    DiagnosticsCommand(
+                        label="导出最终审校报告",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-export", manifest_path],
+                        ),
+                    ),
+                    DiagnosticsCommand(
+                        label="续跑最终审校 requests",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-resume", manifest_path],
+                        ),
+                    ),
+                    DiagnosticsCommand(
+                        label="摄入最终审校结果",
+                        command=format_cli_command(
+                            python_exe,
+                            batch_script_path,
+                            ["final-review-ingest-results", manifest_path],
+                        ),
+                    ),
+                ]
+            )
+            commands.append(
+                DiagnosticsCommand(
+                    label="把已选 findings 生成订正预览",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["final-review-create-revisions", manifest_path],
+                    ),
+                )
+            )
+            commands.extend(
+                build_cloud_job_commands(
+                    python_exe=python_exe,
+                    batch_script_path=batch_script_path,
+                    manifest_path=manifest_path,
+                    manifest=manifest,
+                    submit_max_cost=submit_max_cost,
+                    submit_label="提交最终审校任务",
+                    status_label="查询最终审校状态",
+                    download_label="下载最终审校结果",
+                )
+            )
     if mode_text == "revision":
         proposal_import = manifest.get("proposal_import")
         proposal_path = str(

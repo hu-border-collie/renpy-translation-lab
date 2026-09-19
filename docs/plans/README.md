@@ -22,6 +22,9 @@
 - [#431 S2 目录发现、诊断与迁移矩阵合同](issue-431-openai-compatible-s2-contract.md)：
   冻结模型目录只读发现、`profiles-probe` 结构化诊断、取消语义边界，以及
   [LiteLLM 调用点迁移矩阵](issue-431-litellm-migration-matrix.md)；不删除 LiteLLM、不改默认路径。
+- [#431 S3 最终审校 Sync 执行合同](issue-431-final-review-sync-contract.md)：
+  冻结 `final_review` 解绑 `gemini_batch` 的策略解析、`final-review-run-sync` 命令、
+  package 状态/幂等/错误合同与 GUI 分流；Batch 路径保持默认且语义不变。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、
   串行与子代理并行协作，以及首个 Ren'Py 章节实验。待评审、待验证，尚未实现。

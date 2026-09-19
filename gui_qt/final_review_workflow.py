@@ -1,8 +1,11 @@
-"""Final-review Batch workflow and selected-finding hand-off for the GUI."""
+"""Final-review Batch/Sync workflow and selected-finding hand-off for the GUI."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Sequence
+
+import final_review as fr
 
 from .batch_workflow_support import build_submit_cli_args, machine_output_args
 from .revision_report import summarize_revision_preview_output
@@ -16,12 +19,59 @@ from .user_copy import format_job_state_fact, format_manifest_path_fact, job_sta
 STEP_TEXT = {
     "final-review-build": ("正在准备最终审校", "正在冻结项目上下文并生成审查任务。"),
     "final-review-resume": ("正在刷新审查范围", "正在重新采集上下文并重建未完成任务。"),
+    "final-review-run-sync": ("正在执行最终审校", "正在通过同步模型逐条审校并写入 findings。"),
     "submit": ("正在提交最终审校", "正在上传审查请求并创建云端批量任务。"),
     "status": ("正在刷新审查状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取审查结果", "任务已完成，正在下载问题报告。"),
     "final-review-ingest-results": ("正在整理问题报告", "正在校验结果并写入最终审校 findings。"),
     "final-review-create-revisions": ("正在生成订正预览", "正在把人工选择的问题转换为安全订正候选。"),
 }
+
+
+def _extract_result_envelope(output: str) -> dict | None:
+    """Return the last versioned envelope embedded in *output*, if any.
+
+    GUI workflows may receive banner/progress text around the JSON document
+    depending on how the process streams are captured; tolerate both by
+    decoding JSON objects wherever they start and keeping the last valid
+    envelope-shaped object.
+    """
+
+    text = str(output or "")
+    decoder = json.JSONDecoder()
+    found: dict | None = None
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start < 0:
+            return found
+        try:
+            parsed, end = decoder.raw_decode(text[start:])
+        except ValueError:
+            index = start + 1
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("ok"), bool):
+            found = parsed
+        index = start + max(1, int(end))
+    return found
+
+
+def _execution_strategy_for_manifest(manifest_path: str) -> str | None:
+    """Read the campaign execution strategy; ``None`` when unreadable."""
+
+    if not manifest_path:
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8-sig") as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict):
+        return None
+    return str(
+        manifest.get("execution_strategy")
+        or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+    )
 
 
 def _created_campaign(output: str) -> str:
@@ -57,6 +107,15 @@ class FinalReviewWorkflow:
             and done_count == unit_count
         ):
             return cls([], manifest_path, submit_max_cost=submit_max_cost)
+        if str(
+            manifest.get("execution_strategy")
+            or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+        ) == fr.EXECUTION_STRATEGY_SYNC:
+            return cls(
+                ["final-review-run-sync"],
+                manifest_path,
+                submit_max_cost=submit_max_cost,
+            )
         if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
             steps = ["download", "final-review-ingest-results"]
         elif not manifest.get("job_name"):
@@ -78,6 +137,10 @@ class FinalReviewWorkflow:
 
     def complete_current_step(self, exit_code: int, output: str):
         key = self._steps.pop(0)
+        if key == "final-review-run-sync":
+            # The envelope carries the real outcome; strict exit codes may map
+            # partial failures to a non-zero code without an error envelope.
+            return self._sync_completed_update(output)
         if exit_code != 0:
             self._steps.clear()
             return WorkflowUpdate(status="failed", heading="最终审校流程中断",
@@ -89,6 +152,17 @@ class FinalReviewWorkflow:
                 return WorkflowUpdate(status="failed", heading="无法准备最终审校",
                                       message="未生成最终审校任务包，请查看诊断日志。", facts=[])
             self.manifest_path = manifest_path_for_package(package)
+            strategy = _execution_strategy_for_manifest(self.manifest_path)
+            if strategy is None:
+                self._steps.clear()
+                return WorkflowUpdate(
+                    status="failed",
+                    heading="无法读取最终审校任务",
+                    message="campaign manifest 暂时不可读，请重试。",
+                    facts=self._facts(),
+                )
+            if strategy == fr.EXECUTION_STRATEGY_SYNC:
+                self._steps = ["final-review-run-sync"]
         elif key == "submit":
             path = extract_manifest_path(output)
             if path:
@@ -124,6 +198,52 @@ class FinalReviewWorkflow:
                                   facts=self._facts(list(update.facts)))
         return self._continue()
 
+    def _sync_completed_update(self, output: str) -> WorkflowUpdate:
+        result = {}
+        parsed = _extract_result_envelope(output)
+        if not isinstance(parsed, dict) or not parsed.get("ok"):
+            self._steps.clear()
+            return WorkflowUpdate(
+                status="failed",
+                heading="最终审校同步执行中断",
+                message="同步执行没有正常完成，请查看原始输出。",
+                facts=self._facts(),
+            )
+        raw_result = parsed.get("result")
+        if isinstance(raw_result, dict):
+            result = raw_result
+        else:
+            self._steps.clear()
+            return WorkflowUpdate(
+                status="failed",
+                heading="最终审校同步执行中断",
+                message="同步执行返回了无法识别的结果，请查看原始输出。",
+                facts=self._facts(),
+            )
+        failed = int(result.get("failed_delta") or 0)
+        findings = int(result.get("finding_count") or 0)
+        facts = self._facts(
+            [f"findings: {findings}", f"failed_units: {failed}"]
+        )
+        if failed:
+            # Keep the same step available so the user can retry just the
+            # failed/stale units; done units are skipped by digest.
+            self._steps = ["final-review-run-sync"]
+            return WorkflowUpdate(
+                status="ready",
+                heading="最终审校同步执行完成（有失败 unit）",
+                message="报告已写入；点击继续可只重试失败的 unit。",
+                facts=facts,
+                should_continue=False,
+            )
+        self._steps.clear()
+        return WorkflowUpdate(
+            status="done",
+            heading="最终审校报告已就绪",
+            message="同步审校完成；请审核问题并选择需要进入订正预览的项目。",
+            facts=facts,
+        )
+
     def _continue(self):
         step = self.current_step()
         if step is None:
@@ -143,6 +263,8 @@ class FinalReviewWorkflow:
                 args.extend(["--finding-id", finding_id])
             return args
         if key in {"status", "download"}:
+            return machine_output_args([key, self.manifest_path])
+        if key == "final-review-run-sync":
             return machine_output_args([key, self.manifest_path])
         return [key, self.manifest_path]
 

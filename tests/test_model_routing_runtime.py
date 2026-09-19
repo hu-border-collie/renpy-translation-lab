@@ -319,6 +319,24 @@ class ProductionRoutingTests(TestCase):
             plan = batch.freeze_runtime_routing_plan(execution="sync")
             self.assertEqual(plan.routes["keyword"].strategy.value, "sync")
 
+    def test_final_review_command_accepts_configured_sync_strategy(self):
+        from cli_contract import MachineContractError
+        config = migrated()
+        section = config["model_routing"]
+        section["routes"]["final_review"] = {
+            "profile_id": section["legacy_entrypoints"]["sync_profile_id"],
+            "strategy": "sync",
+        }
+        with runtime.runtime_config_scope(runtime.RuntimeConfig(model_routing_config=section)):
+            plan = batch.freeze_final_review_routing_plan()
+            self.assertEqual(plan.routes["final_review"].strategy.value, "sync")
+            # Batch-only entrypoints still refuse the same plan.
+            with self.assertRaises(MachineContractError):
+                batch.freeze_runtime_routing_plan(
+                    execution="gemini_batch",
+                    required_stages={"final_review"},
+                )
+
     def test_frozen_native_profile_does_not_acquire_live_custom_endpoint(self):
         plan = read_routing_plan(migrated("litellm_builtin"), legacy_execution="sync")
         profile = plan.profiles[plan.routes["translation"].profile_id]

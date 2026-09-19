@@ -89,7 +89,7 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 严格模式下也不能只看退出码：必须同时读取 envelope 的 `ok`、`status` 和 `error`。job pending/running 是成功查询，退出 `0`；`check` 在 `ready` 时退出 `0`，`ready_with_warnings` 退出 `3` 但仍满足写回门禁（`writeback_gate.decision=allow`），`blocked` 退出 `4`。错误时优先使用稳定的 `error.code`、`retryable`、`suggested_action` 与权威的 `details.semantic_exit_code`，不要解析自然语言 `message`。
 
 
-需要确定性调用时追加 `--non-interactive`。该选项保证支持该选项的命令不等待 stdin，并让 `submit / status / download / check / apply / quality-ack / quality-unack / quality-report` 以及 `preview-revisions / export-keywords / final-review-status / final-review-export / final-review-resume / final-review-ingest-results / final-review-create-revisions` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。`merge-keywords-to-glossary` 的 target 本就是必选参数，`--non-interactive` 下若未同时传 `--yes` 或 `--dry-run` 会直接拒绝交互式逐条确认。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
+需要确定性调用时追加 `--non-interactive`。该选项保证支持该选项的命令不等待 stdin，并让 `submit / status / download / check / apply / quality-ack / quality-unack / quality-report` 以及 `preview-revisions / export-keywords / final-review-status / final-review-export / final-review-resume / final-review-run-sync / final-review-ingest-results / final-review-create-revisions` 必须显式接收 manifest 或 package target；因此不会读取 latest manifest，`submit` 也不会隐式 build。`merge-keywords-to-glossary` 的 target 本就是必选参数，`--non-interactive` 下若未同时传 `--yes` 或 `--dry-run` 会直接拒绝交互式逐条确认。缺少 target 时 JSON envelope 返回 `EXPLICIT_TARGET_REQUIRED`，配合 `--strict-exit-codes` 退出 `5`。
 
 ```powershell
 python gemini_translate_batch.py apply logs/batch_jobs/<package>/manifest.json --output json --non-interactive --strict-exit-codes
@@ -214,7 +214,7 @@ python gemini_translate_batch.py sync-revisions --apply
 
 最终审校先以**独立 campaign** 批量发现问题，默认 **report-only**：不调用 autofix，也不直接写 `.rpy`。只有用户明确选择的 findings 才会转成普通 revision manifest，并强制走 `preview-revisions → apply-revisions`；模型不能声称问题已经修复或写回。
 
-最终审校的模型取冻结的 `final_review` 阶段路由：campaign manifest 的 `model` / `batch_model`、resume 重建请求与结果解析使用同一模型；无 `model_routing` 的旧 campaign 回退到 manifest 记录的模型。legacy 入口仍要求 final_review 策略为 `gemini_batch`。
+最终审校的模型与执行方式取冻结的 `final_review` 阶段路由：campaign manifest 记录 `execution_strategy`（`gemini_batch` / `sync`）与 `model_routing` 快照；无 `model_routing` 的旧 campaign 回退到 manifest 记录的模型并按 `gemini_batch` 处理。v1 配置必须显式把 `routes.final_review.strategy` 配为 `sync` 才会切换执行方式；未显式配置时保持/要求 legacy `gemini_batch`，不会跟随 `defaults.execution_strategy` 静默切换。旧配置迁移仍生成 `gemini_batch`。
 
 ```bash
 # 构建 campaign：完成度闸门 + 冻结上下文 digest + review units + requests.jsonl
@@ -235,15 +235,21 @@ python gemini_translate_batch.py final-review-ingest-results logs/batch_jobs/<pa
 python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
 # 需要全部重审时，把第一条 resume 改为：final-review-resume <manifest> --force
 
+# Sync 最终审校：build 后逐 unit 同步执行；重复运行按 digest 续跑
+python gemini_translate_batch.py final-review-build
+python gemini_translate_batch.py final-review-run-sync logs/batch_jobs/<package>/manifest.json
+python gemini_translate_batch.py final-review-status logs/batch_jobs/<package>/manifest.json
+# --force 全部重审；--limit N / --dry-run 便于分步执行
+
 # 将明确选择的问题转换为订正候选并立即生成预览（--finding-id 可重复）
 python gemini_translate_batch.py final-review-create-revisions logs/batch_jobs/<package>/manifest.json --finding-id <finding-id>
 # 确认预览后，仍使用现有安全写回入口
 python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-package>/manifest.json
 ```
 
-通用 `status` 必须轮询到远端 job 成功后才能 `download`；pending/running 不是失败，也不能跳过轮询直接下载。`final-review-status` 查看的是 campaign 内 review unit / finding 生命周期，不能替代远端 job 的通用 `status`。`final-review-resume` 若报告 `Units to run: 0`，说明当前 digest 已是最新，不应再次 submit；若有待跑 unit，则必须完整执行 `submit -> status -> download -> final-review-ingest-results`，不能复用 resume 前的 `results.jsonl`。
+通用 `status` 必须轮询到远端 job 成功后才能 `download`；pending/running 不是失败，也不能跳过轮询直接下载。`final-review-status` 查看的是 campaign 内 review unit / finding 生命周期，不能替代远端 job 的通用 `status`。`final-review-resume` 若报告 `Units to run: 0`，说明当前 digest 已是最新，不应再次 submit；若有待跑 unit，则必须完整执行 `submit -> status -> download -> final-review-ingest-results`，不能复用 resume 前的 `results.jsonl`。sync campaign 不使用 `submit / status / download`：`final-review-run-sync` 自己逐 unit 执行并落盘；`final-review-resume` 与 `final-review-ingest-results` 遇到 sync package 返回 `FINAL_REVIEW_USE_RUN_SYNC`，续跑统一再次运行 `final-review-run-sync`（`--force` 全部重审）。
 
-全部六个 `final-review-*` 命令都支持 `--output json` 版本化 envelope：`final-review-status` / `final-review-ingest-results` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`，严格模式下 `failed` 退出 `4`、`stale` 退出 `3`）；`final-review-resume` 用 `rebuilt / no_work` 区分是否需要重新 submit；`final-review-create-revisions` 的 envelope 与 `preview-revisions` 相同。`final-review-status --json` 的裸 JSON 输出仅为兼容保留，自动化请使用 `--output json`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
+全部七个 `final-review-*` 命令都支持 `--output json` 版本化 envelope：`final-review-status` / `final-review-ingest-results` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`，严格模式下 `failed` 退出 `4`、`stale` 退出 `3`）；`final-review-resume` 用 `rebuilt / no_work` 区分是否需要重新 submit；`final-review-run-sync` 用 `completed / failed / no_work / dry_run` 返回 `run_count / skip_count / deferred_count / done_delta / failed_delta / planned_unit_ids / attempted_unit_ids / campaign_status`（`planned_unit_ids` 为全量待跑、`to_run_unit_ids` 为 limit 后计划执行、`attempted_unit_ids` 为实际发起；`run_count` 是真正发起过的 unit 数；存在失败 unit 时 `failed`，严格模式退出 `4`），系统性失败返回 `FINAL_REVIEW_SYNC_ABORTED`；`final-review-create-revisions` 的 envelope 与 `preview-revisions` 相同。`final-review-status --json` 的裸 JSON 输出仅为兼容保留，自动化请使用 `--output json`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
 
 ### 启动闸门
 
@@ -263,7 +269,7 @@ python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-packa
 
 每个 review unit 保存 `input_digest`（本 unit 的 `items_digest` + **共享** `context_digest` + model + prompt schema）。`context_digest` 只绑定 glossary / macro / Story Memory / Source Index / 可注入 PA brief 等共享上下文；**不**把全项目 `translations_digest` 塞进 unit，因此改 A 文件不会让 B 文件的已完成 unit 变 stale。全量译文审计摘要仍记在 campaign 级 `snapshot_digest`。构建时会把可注入的简要上下文冻结到 `snapshot.prompt_context`（宏设定 / PA brief / glossary 词条），并写入每条 request 的 user prompt。
 
-`final-review-resume` 会**重新采集 live 共享上下文**（而非只读冻结 snapshot）来判断 skip / stale，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。有待跑 unit 时会清空 `job_name` / 下载字段，并把旧 `results.jsonl` 改名为 `results.jsonl.pre_resume_*`，避免 `download` 短路复用上一轮结果。`final-review-ingest-results` 在归一化前按 response schema 校验每个 finding：成功（含合法空 findings）→ `done`，并在成功时写回本次 live `input_digest`；JSON 语法、缺 `findings`、字段/枚举/未知 item 或精确重复 finding → `failed`（**不会**记成「零问题 done」）。resume 之后若尚未重新 download，默认**拒绝**用 resume 前的 `results.jsonl`（可用 `--result` 或 `--allow-stale-results` 显式覆盖）。
+以下 resume / ingest 语义仅适用于 `gemini_batch` campaign。`final-review-resume` 会**重新采集 live 共享上下文**（而非只读冻结 snapshot）来判断 skip / stale，只为 pending / stale / failed 重建 `requests.jsonl`；`--force` 才重审全部。有待跑 unit 时会清空 `job_name` / 下载字段，并把旧 `results.jsonl` 改名为 `results.jsonl.pre_resume_*`，避免 `download` 短路复用上一轮结果。`final-review-ingest-results` 在归一化前按 response schema 校验每个 finding：成功（含合法空 findings）→ `done`，并在成功时写回本次 live `input_digest`；JSON 语法、缺 `findings`、字段/枚举/未知 item 或精确重复 finding → `failed`（**不会**记成「零问题 done」）。resume 之后若尚未重新 download，默认**拒绝**用 resume 前的 `results.jsonl`（可用 `--result` 或 `--allow-stale-results` 显式覆盖）。
 
 失败 unit 的 `error` 保留人类可读 detail，并以稳定分类开头：`failed_to_parse_model_json`（JSON 语法 / root 容器）、`missing_findings`（缺 findings 数组）、`schema`（root/finding 形状、必填字段、类型、枚举或未知 item 引用）、`duplicate_item`（同一 item 的同一规范化 finding 完全重复）。detail 只包含 finding 索引、字段名和本地 item 身份，不回显 provider 原文；`final-review-status` 的 `failure_reason_counts` 与 `final-review-ingest-results` 的 `summary.reason_counts`（以及 GUI 状态行）展示同一分类。旧软别名继续兼容：根 `issues`，finding 的 `id` / `identity_v2`、`type`、`detail`、`suggestion`（规范字段优先）；合法空 findings 成功。completion receipt（`complete` / `reviewed_item_count`）仍不是强制合同，未知额外字段按前向兼容忽略；本阶段也不启用宽松 JSON repair。fixture 对比、候选稳定码、unit 级 targeted resume 合约和 receipt 暂缓结论见 [Final Review 结果失败分类 fixture spike](archive/final_review_result_failure_spike.md)。
 

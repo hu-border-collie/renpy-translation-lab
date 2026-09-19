@@ -272,6 +272,10 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
         if status == "stale":
             return EXIT_NEEDS_ACTION
         return EXIT_OK
+    if command == "final-review-run-sync":
+        if status in {"failed", "aborted"}:
+            return EXIT_BLOCKED
+        return EXIT_OK
     if command == "reconcile-project-snapshots":
         if status == "ready":
             return EXIT_OK

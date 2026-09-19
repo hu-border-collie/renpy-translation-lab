@@ -199,6 +199,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'final-review-status',
         'final-review-export',
         'final-review-resume',
+        'final-review-run-sync',
         'final-review-ingest-results',
         'final-review-create-revisions',
         *DURABLE_SYNC_COMMANDS,
@@ -222,6 +223,7 @@ EXPLICIT_TARGET_COMMANDS = frozenset(
         'final-review-status',
         'final-review-export',
         'final-review-resume',
+        'final-review-run-sync',
         'final-review-ingest-results',
         'final-review-create-revisions',
     }
@@ -7011,6 +7013,49 @@ def _collect_final_review_context_snapshot(translation_items):
     return snapshot
 
 
+def freeze_final_review_routing_plan():
+    """Resolve the final-review stage with explicit sync opt-in.
+
+    final_review keeps the historical gemini_batch strategy unless
+    ``routes.final_review.strategy`` is explicitly configured. This prevents a
+    v1 config whose ``defaults.execution_strategy`` is sync from silently
+    switching an existing final-review path from Batch to sync.
+    """
+    from model_routing_reader import read_routing_plan
+
+    section = legacy.MODEL_ROUTING_CONFIG
+    try:
+        if isinstance(section, dict):
+            routes = section.get("routes")
+            raw_route = (
+                routes.get("final_review") if isinstance(routes, dict) else {}
+            )
+            raw_route = raw_route if isinstance(raw_route, dict) else {}
+            explicit_strategy = str(raw_route.get("strategy") or "").strip()
+            if explicit_strategy:
+                plan = read_routing_plan({"model_routing": section})
+            else:
+                # Preserve the pre-#431 behavior exactly: final_review used
+                # the Batch entrypoint contract unless the route explicitly
+                # opted into another strategy.
+                plan = freeze_runtime_routing_plan(
+                    execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+                    required_stages={model_profile.STAGE_FINAL_REVIEW},
+                )
+        else:
+            plan = freeze_runtime_routing_plan(
+                execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
+                required_stages={model_profile.STAGE_FINAL_REVIEW},
+            )
+    except (ValueError, TypeError) as exc:
+        raise model_profile.routing_resolution_error(
+            exc,
+            stage=model_profile.STAGE_FINAL_REVIEW,
+        ) from exc
+    require_valid_routing_plan(plan, {model_profile.STAGE_FINAL_REVIEW})
+    return plan
+
+
 def create_final_review_package(
     display_name_override='',
     skip_prepare=False,
@@ -7026,10 +7071,7 @@ def create_final_review_package(
             'Final review is disabled in config (batch.final_review.enabled=false).'
         )
 
-    routing_plan = freeze_runtime_routing_plan(
-        execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-        required_stages={model_profile.STAGE_FINAL_REVIEW},
-    )
+    routing_plan = freeze_final_review_routing_plan()
 
     if not skip_prepare:
         legacy.run_prepare_steps()
@@ -7078,6 +7120,7 @@ def create_final_review_package(
     chunk_size = max(1, int(chunk_size or FINAL_REVIEW_CHUNK_SIZE or fr.DEFAULT_CHUNK_SIZE))
     final_review_route = routing_plan.routes[model_profile.STAGE_FINAL_REVIEW]
     model = route_model(routing_plan, final_review_route)
+    strategy = final_review_route.strategy.value
     prompt_schema = FINAL_REVIEW_PROMPT_SCHEMA_VERSION or fr.PROMPT_SCHEMA_VERSION
 
     snapshot = _collect_final_review_context_snapshot(translation_items)
@@ -7104,16 +7147,24 @@ def create_final_review_package(
     import final_review_llm as fr_llm
 
     requests_path = os.path.join(package_dir, fr.REQUESTS_JSONL_FILENAME)
-    request_count = fr_llm.write_requests_jsonl(
-        requests_path,
-        units,
-        temperature=BATCH_TEMPERATURE,
-        max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
-        thinking_level=BATCH_THINKING_LEVEL,
-        model=model,
-        safety_settings=BATCH_SAFETY_SETTINGS or None,
-        shared_context=snapshot.get('prompt_context') or {},
-    )
+    if strategy == fr.EXECUTION_STRATEGY_SYNC:
+        # Sync units are executed by final-review-run-sync; do not synthesize a
+        # Gemini Batch JSONL or a fake cloud submission as the next step.
+        requests_path = ''
+        request_count = 0
+        chunk_count = len(units)
+    else:
+        request_count = fr_llm.write_requests_jsonl(
+            requests_path,
+            units,
+            temperature=BATCH_TEMPERATURE,
+            max_output_tokens=BATCH_MAX_OUTPUT_TOKENS,
+            thinking_level=BATCH_THINKING_LEVEL,
+            model=model,
+            safety_settings=BATCH_SAFETY_SETTINGS or None,
+            shared_context=snapshot.get('prompt_context') or {},
+        )
+        chunk_count = request_count
 
     manifest = fr.build_campaign_manifest(
         package_dir=package_dir,
@@ -7127,6 +7178,8 @@ def create_final_review_package(
         prompt_schema_version=prompt_schema,
         chunk_size=chunk_size,
         batch_model=model,
+        execution_strategy=strategy,
+        input_jsonl_path=requests_path,
         settings={
             'max_output_tokens': BATCH_MAX_OUTPUT_TOKENS,
             'temperature': BATCH_TEMPERATURE,
@@ -7134,15 +7187,18 @@ def create_final_review_package(
         },
         extra={
             **_manifest_target_language_fields(),
-            'build_warnings': get_batch_risk_warnings(),
-            'input_jsonl_path': requests_path,
+            'build_warnings': (
+                [] if strategy == fr.EXECUTION_STRATEGY_SYNC
+                else get_batch_risk_warnings()
+            ),
             'request_count': request_count,
             'model_routing': routing_plan.to_manifest_dict(),
         },
     )
-    # batch_cost_estimate uses summary.chunk_count for max output tokens.
+    # Batch uses chunk_count for Gemini max-token cost estimates. Sync has no
+    # batch cost estimate, so the value is only the unit count for status.
     manifest.setdefault('summary', {})
-    manifest['summary']['chunk_count'] = request_count
+    manifest['summary']['chunk_count'] = chunk_count
     manifest['summary']['request_count'] = request_count
     paths = fr.write_campaign_package(
         package_dir,
@@ -7157,14 +7213,21 @@ def create_final_review_package(
     print(f'Created final-review campaign: {package_dir}')
     print(f"Units: {manifest['summary']['unit_count']}")
     print(f"Items: {manifest['summary']['item_count']}")
-    print(f'Requests: {request_count} → {requests_path}')
+    print(f'Execution: {strategy}')
+    if strategy == fr.EXECUTION_STRATEGY_SYNC:
+        print('Requests: 0 (sync execution)')
+    else:
+        print(f'Requests: {request_count} → {requests_path}')
     print(f"Context digest: {str(snapshot.get('context_digest') or '')[:16]}…")
     print(f"Snapshot digest: {str(snapshot.get('snapshot_digest') or '')[:16]}…")
     print('Mode: final_review (report-only; no autofix)')
-    print(
-        'Next: submit → status → download → final-review-ingest-results '
-        '(or final-review-resume after partial completion)'
-    )
+    if strategy == fr.EXECUTION_STRATEGY_SYNC:
+        print(f'Next: final-review-run-sync {paths["manifest"]}')
+    else:
+        print(
+            'Next: submit → status → download → final-review-ingest-results '
+            '(or final-review-resume after partial completion)'
+        )
     if readiness.reasons:
         print('Notes:')
         for reason in readiness.reasons:
@@ -7236,6 +7299,20 @@ def run_final_review_resume(target=None, force=False):
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
     package_dir = package['paths']['package_dir']
+    strategy = str(
+        package['manifest'].get('execution_strategy')
+        or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+    )
+    if strategy == fr.EXECUTION_STRATEGY_SYNC:
+        raise cli_contract.MachineContractError(
+            'final-review-resume only rebuilds Gemini Batch requests; '
+            'resume this sync campaign with final-review-run-sync.',
+            code_name='FINAL_REVIEW_USE_RUN_SYNC',
+            suggested_action='run_final_review_sync',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'execution_strategy': strategy},
+        )
     model = _final_review_effective_model(package['manifest'])
     frozen_snapshot = dict(package.get('snapshot') or {})
     frozen_context = str(
@@ -7289,6 +7366,234 @@ def run_final_review_resume(target=None, force=False):
     return result
 
 
+def run_final_review_run_sync(
+    target=None,
+    *,
+    force=False,
+    limit=0,
+    dry_run=False,
+    fail_fast=False,
+):
+    """Execute a sync final-review campaign through the frozen stage route."""
+    import final_review as fr
+    import final_review_sync as fr_sync
+
+    if int(limit or 0) < 0:
+        raise cli_contract.MachineContractError(
+            '--limit must be >= 0.',
+            code_name='FINAL_REVIEW_LIMIT_INVALID',
+            suggested_action='use_non_negative_limit',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            retryable=False,
+            details={'limit': int(limit or 0)},
+        )
+    package_target = manifest_path_for_target(target)
+    package = fr.load_campaign_package(package_target)
+    package_dir = str(package['paths']['package_dir'])
+    manifest = dict(package['manifest'] or {})
+    strategy = str(
+        manifest.get('execution_strategy')
+        or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+    )
+    if strategy != fr.EXECUTION_STRATEGY_SYNC:
+        raise cli_contract.MachineContractError(
+            'final-review-run-sync requires a sync final-review campaign; '
+            f'this package uses execution_strategy={strategy!r}.',
+            code_name='FINAL_REVIEW_NOT_SYNC',
+            suggested_action='use_final_review_batch_flow',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'execution_strategy': strategy},
+        )
+
+    plan = routing_plan_from_manifest(manifest)
+    if plan is None:
+        raise cli_contract.MachineContractError(
+            'sync final-review campaigns require a frozen model_routing '
+            'snapshot; rebuild the campaign.',
+            code_name='FINAL_REVIEW_PLAN_MISSING',
+            suggested_action='rebuild_final_review_campaign',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'manifest_path': str(package['paths']['manifest'])},
+        )
+    route = route_for_manifest(plan, manifest)
+    if route.strategy.value != fr.EXECUTION_STRATEGY_SYNC:
+        raise cli_contract.MachineContractError(
+            'the frozen final_review route is not sync; rebuild the campaign '
+            'after changing the stage strategy.',
+            code_name='FINAL_REVIEW_ROUTE_NOT_SYNC',
+            suggested_action='rebuild_final_review_campaign',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'execution_strategy': route.strategy.value},
+        )
+    profile = model_profile.profile_for_route(plan, route)
+    model = route_model(plan, route)
+    capabilities = model_profile.resolve_capabilities(
+        profile,
+        custom_providers=_runtime_custom_providers(),
+    )
+    structured_mode = str(capabilities.structured_output.mode or '')
+
+    frozen_snapshot = dict(package.get('snapshot') or {})
+    frozen_context = str(
+        frozen_snapshot.get('context_digest')
+        or manifest.get('context_digest')
+        or ''
+    )
+    frozen_prompt_context = dict(frozen_snapshot.get('prompt_context') or {})
+    items = []
+    for unit in package.get('units') or []:
+        if isinstance(unit, dict):
+            items.extend(unit.get('items') or [])
+    try:
+        live_snapshot = _collect_final_review_context_snapshot(items)
+        live_context = str(live_snapshot.get('context_digest') or '') or frozen_context
+        live_prompt_context = (
+            dict(live_snapshot.get('prompt_context') or {}) or frozen_prompt_context
+        )
+    except Exception as exc:  # noqa: BLE001 - fall back to the frozen snapshot
+        print(
+            f'Warning: live final-review context refresh failed ({exc}); '
+            'using frozen campaign snapshot.',
+            file=sys.stderr,
+        )
+        live_context = frozen_context
+        live_prompt_context = frozen_prompt_context
+
+    run_id = model_usage_ledger.new_run_id('final-review')
+    operation_id = (
+        'final-review-'
+        + hashlib.sha256(package_dir.encode('utf-8')).hexdigest()[:20]
+    )
+    provider = str(getattr(profile, 'provider', '') or SYNC_BACKEND or 'unknown')
+    frozen_settings = dict(manifest.get('final_review_settings') or {})
+    manifest_settings = dict(manifest.get('settings') or {})
+
+    def _frozen_setting(key, default):
+        for source in (frozen_settings, manifest_settings):
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+        return default
+
+    temperature = float(_frozen_setting('temperature', BATCH_TEMPERATURE))
+    max_output_tokens = int(
+        _frozen_setting('max_output_tokens', BATCH_MAX_OUTPUT_TOKENS)
+    )
+    thinking_level = str(
+        _frozen_setting('thinking_level', BATCH_THINKING_LEVEL) or ''
+    )
+
+    def _generate(payload):
+        return run_sync_request(payload, route, plan=plan)
+
+    def _record_usage(event):
+        raw = event.get('result')
+        if not isinstance(raw, dict):
+            return
+        # Only pass ledger inputs; request_metadata is deliberately omitted so
+        # provider request headers can never reach the usage ledger.
+        usage_result = {
+            'provider': str(raw.get('provider') or provider),
+            'model': str(raw.get('model') or model),
+            'usage_metadata': dict(raw.get('usage_metadata') or {}),
+            'response_payload': raw.get('response_payload') or {},
+            'output_diagnostics': dict(raw.get('output_diagnostics') or {}),
+            'execution_mode': str(raw.get('execution_mode') or ''),
+        }
+        record_generation_usage_best_effort(
+            task_mode='final_review',
+            stage=model_profile.STAGE_FINAL_REVIEW,
+            result=usage_result,
+            operation_id=operation_id,
+            run_id=run_id,
+            source_key=str(event.get('unit_id') or ''),
+            thinking_level=thinking_level,
+            source={
+                'kind': 'final_review_response',
+                'package_dir': package_dir,
+                'unit_id': str(event.get('unit_id') or ''),
+            },
+        )
+
+    def _progress(event):
+        print(
+            'FINAL_REVIEW_PROGRESS '
+            + json.dumps(dict(event), ensure_ascii=False, sort_keys=True),
+            file=sys.stderr,
+            flush=True,
+        )
+
+    result = fr_sync.run_sync_campaign(
+        package_dir,
+        generate=_generate,
+        shared_context=live_prompt_context,
+        live_context_digest=live_context,
+        force=bool(force),
+        limit=int(limit or 0),
+        dry_run=bool(dry_run),
+        fail_fast=bool(fail_fast),
+        provider=provider,
+        model=model,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        thinking_level=thinking_level,
+        structured_output_mode=structured_mode,
+        safety_settings=BATCH_SAFETY_SETTINGS or None,
+        progress=_progress,
+        usage_recorder=_record_usage,
+    )
+    result['profile_id'] = profile.id
+    result['requested_profile'] = profile.id
+    result['structured_output_mode'] = structured_mode
+    if live_context and frozen_context and live_context != frozen_context:
+        result['live_context_changed'] = True
+    remember_latest_manifest(result['manifest_path'])
+    if result.get('dry_run'):
+        print(
+            'Final review sync dry-run: '
+            f"{result['run_count']} unit(s) to run, "
+            f"{result['skip_count']} skipped, "
+            f"{result['deferred_count']} deferred.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            'Final review sync: '
+            f"run={result['run_count']} skip={result['skip_count']} "
+            f"done={result['done_delta']} failed={result['failed_delta']} "
+            f"findings={result['finding_count']}",
+            file=sys.stderr,
+        )
+        print(
+            f"Campaign status: {(result.get('campaign_status') or {}).get('status')}",
+            file=sys.stderr,
+        )
+        print('Report-only: no .rpy writes.', file=sys.stderr)
+    if result.get('status') == 'aborted':
+        abort_category = str(result.get('abort_category') or '')
+        systemic = abort_category in fr_sync.FATAL_SYNC_CATEGORIES
+        raise cli_contract.MachineContractError(
+            (
+                'final review sync aborted after a systemic provider failure.'
+                if systemic
+                else 'final review sync stopped after a unit failure (--fail-fast).'
+            ),
+            code_name='FINAL_REVIEW_SYNC_ABORTED',
+            suggested_action=(
+                'inspect_provider_settings_and_retry'
+                if systemic
+                else 'rerun_final_review_run_sync'
+            ),
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=not systemic,
+            details=dict(result),
+        )
+    return result
+
+
 def run_final_review_ingest_results(target=None, result_path='', allow_stale_results=False):
     """Parse downloaded Batch/sync results into findings (report-only)."""
     import final_review as fr
@@ -7297,6 +7602,20 @@ def run_final_review_ingest_results(target=None, result_path='', allow_stale_res
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
     package_dir = package['paths']['package_dir']
+    strategy = str(
+        package['manifest'].get('execution_strategy')
+        or fr.EXECUTION_STRATEGY_GEMINI_BATCH
+    )
+    if strategy == fr.EXECUTION_STRATEGY_SYNC:
+        raise cli_contract.MachineContractError(
+            'sync campaigns ingest their own unit results during '
+            'final-review-run-sync; final-review-ingest-results is batch-only.',
+            code_name='FINAL_REVIEW_USE_RUN_SYNC',
+            suggested_action='run_final_review_sync',
+            semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            retryable=False,
+            details={'execution_strategy': strategy},
+        )
     model = _final_review_effective_model(package['manifest'])
     try:
         result = fr_llm.ingest_results_into_package(
@@ -17018,13 +17337,19 @@ def run_sync_request(
         config['safety_settings'] = safety_settings
     config = filter_gemini_generation_config(effective_model, config)
 
-    if profile.adapter == model_profile.ADAPTER_LITELLM:
+    if profile.adapter in {
+        model_profile.ADAPTER_LITELLM,
+        model_profile.ADAPTER_OPENAI_COMPATIBLE,
+    }:
         if api_key_index is not None:
             raise SystemExit('--api-key-index is only supported by the Gemini sync backend.')
-        backend = model_profile.build_sync_backend(
-            profile,
-            custom_providers=legacy.CUSTOM_LITELLM_PROVIDERS,
-        )
+        backend_kwargs = {}
+        if profile.adapter == model_profile.ADAPTER_LITELLM:
+            backend_kwargs['custom_providers'] = legacy.CUSTOM_LITELLM_PROVIDERS
+        # openai_compatible profiles carry base_url / credential_ref /
+        # extra_headers on the frozen ModelProfile; the LiteLLM custom-provider
+        # registry is deliberately not part of that contract.
+        backend = model_profile.build_sync_backend(profile, **backend_kwargs)
         request = SyncGenerationRequest(
             model=effective_model,
             contents=request_payload.get('contents') or [],
@@ -21271,6 +21596,42 @@ def build_arg_parser():
     )
     add_machine_output_argument(final_review_resume_parser)
 
+    final_review_run_sync_parser = subparsers.add_parser(
+        'final-review-run-sync',
+        help=(
+            'Execute pending/stale/failed final-review units through the frozen sync '
+            'stage route (report-only; rerun to resume).'
+        ),
+    )
+    final_review_run_sync_parser.add_argument(
+        'target',
+        nargs='?',
+        default='',
+        help='Campaign package dir or manifest path. Defaults to latest package.',
+    )
+    final_review_run_sync_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Re-run all units, including done units with matching digests.',
+    )
+    final_review_run_sync_parser.add_argument(
+        '--limit',
+        type=int,
+        default=0,
+        help='Run at most N units in this invocation (0 = no limit).',
+    )
+    final_review_run_sync_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Report the units that would run without calling the provider.',
+    )
+    final_review_run_sync_parser.add_argument(
+        '--fail-fast',
+        action='store_true',
+        help='Abort on the first unit failure instead of continuing.',
+    )
+    add_machine_output_argument(final_review_run_sync_parser)
+
     final_review_ingest_parser = subparsers.add_parser(
         'final-review-ingest-results',
         help=(
@@ -23431,6 +23792,7 @@ def dispatch_command(parser, args):
         'final-review-status',
         'final-review-export',
         'final-review-resume',
+        'final-review-run-sync',
         'final-review-ingest-results',
         'final-review-create-revisions',
     }:
@@ -23467,6 +23829,22 @@ def dispatch_command(parser, args):
             return run_final_review_resume(
                 getattr(args, 'target', '') or None,
                 force=bool(getattr(args, 'force', False)),
+            )
+        if command == 'final-review-run-sync':
+            try:
+                legacy.load_config()
+            except model_profile.ModelRoutingConfigError as exc:
+                raise model_profile.routing_resolution_error(
+                    exc,
+                    stage=model_profile.STAGE_FINAL_REVIEW,
+                ) from exc
+            print_banner()
+            return run_final_review_run_sync(
+                getattr(args, 'target', '') or None,
+                force=bool(getattr(args, 'force', False)),
+                limit=int(getattr(args, 'limit', 0) or 0),
+                dry_run=bool(getattr(args, 'dry_run', False)),
+                fail_fast=bool(getattr(args, 'fail_fast', False)),
             )
         if command == 'final-review-ingest-results':
             print_banner()
@@ -24715,6 +25093,38 @@ def build_machine_success_envelope(command, value, args):
                 manifest=result['manifest_path'],
                 review_units=paths.get('review_units') or '',
                 campaign_report=paths.get('report') or '',
+            ),
+        )
+    elif command == 'final-review-run-sync':
+        sync = dict(value or {})
+        campaign = dict(sync.get('campaign_status') or {})
+        result = {
+            'package_dir': sync.get('package_dir') or '',
+            'manifest_path': sync.get('manifest_path') or '',
+            'execution_strategy': sync.get('execution_strategy') or 'sync',
+            'profile_id': sync.get('profile_id') or '',
+            'provider': sync.get('provider') or '',
+            'model': sync.get('model') or '',
+            'run_count': int(sync.get('run_count') or 0),
+            'skip_count': int(sync.get('skip_count') or 0),
+            'deferred_count': int(sync.get('deferred_count') or 0),
+            'done_delta': int(sync.get('done_delta') or 0),
+            'failed_delta': int(sync.get('failed_delta') or 0),
+            'finding_count': int(sync.get('finding_count') or 0),
+            'to_run_unit_ids': list(sync.get('to_run_unit_ids') or []),
+            'planned_unit_ids': list(sync.get('planned_unit_ids') or []),
+            'attempted_unit_ids': list(sync.get('attempted_unit_ids') or []),
+            'dry_run': bool(sync.get('dry_run')),
+            'limit': int(sync.get('limit') or 0),
+            'campaign_status': campaign,
+        }
+        return cli_contract.success_envelope(
+            command,
+            status=str(sync.get('status') or 'completed'),
+            result=result,
+            artifacts=_nonempty_artifacts(
+                manifest=result['manifest_path'],
+                package_dir=result['package_dir'],
             ),
         )
     elif command == 'final-review-ingest-results':

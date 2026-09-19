@@ -675,7 +675,12 @@ def apply_unit_result(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Update one unit from a result row. Returns (unit, findings)."""
     if row_error:
-        failed = mark_unit_failed(unit, f"row_error: {row_error}")
+        # Sync runners already pass a stable ``sync_<category>`` code; keep it
+        # visible to classify_unit_error instead of burying it under row_error.
+        error_text = str(row_error or "").strip() or "row_error"
+        if not error_text.startswith("sync_"):
+            error_text = f"row_error: {error_text}"
+        failed = mark_unit_failed(unit, error_text)
         assert_failure_not_done(failed)
         return failed, []
 
