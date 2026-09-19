@@ -158,6 +158,9 @@ final-review-run-sync [TARGET] [--force] [--limit N] [--dry-run] [--fail-fast]
 - CLI：`--output json` envelope、错误机器码、文本模式、对旧 package 的拒绝。
 - GUI：workflow 分步、sync resume、命令参数；无 PySide6 时按既有约定跳过。
 - 回归：Batch 的 build/resume/ingest 行为与现有测试不变；final-review-create-revisions 不变。
+- 真实 smoke 路径、调用预算与记录模板见
+  [Provider / 执行策略 / 最终审校 Smoke Matrix](../provider_smoke_matrix.md)；
+  本切片只交付离线合同测试，真实 Provider 结果不在此冒充。
 
 ## 9. 机器码与失败边界
 

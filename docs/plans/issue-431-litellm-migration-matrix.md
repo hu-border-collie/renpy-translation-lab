@@ -46,6 +46,7 @@
   按真实需求另开切片。
 - 真实 Provider smoke 矩阵：直连 adapter 至少覆盖 OpenAI / OpenRouter / DeepSeek /
   xAI / Ollama 中可获得的连接；结果记录环境与日期，不把 mocked 测试当作兼容性证明。
+  路径与记录模板见 [Provider / 执行策略 / 最终审校 Smoke Matrix](../provider_smoke_matrix.md)。
 
 ## 3. 迁移与回滚原则（后续切片沿用）
 
