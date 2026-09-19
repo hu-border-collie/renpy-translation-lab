@@ -14,14 +14,14 @@ from pathlib import Path
 import font_coverage as fc
 
 
-def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
-    """Build a minimal cmap with one format 12 subtable."""
+def format_12_subtable(groups: list[tuple[int, int]]) -> bytes:
+    """Build one cmap format 12 subtable."""
 
     group_bytes = b"".join(
         struct.pack(">III", start, start, glyph_id)
         for start, glyph_id in groups
     )
-    subtable = struct.pack(
+    return struct.pack(
         ">HHIII",
         12,
         0,
@@ -29,8 +29,39 @@ def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
         0,
         len(groups),
     ) + group_bytes
+
+
+def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
+    """Build a minimal cmap with one format 12 subtable."""
+
     header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
-    return header + subtable
+    return header + format_12_subtable(groups)
+
+
+def format_4_subtable(pairs: list[tuple[int, int]]) -> bytes:
+    """Build one cmap format 4 subtable with one segment per pair."""
+
+    segments = [(codepoint, codepoint, glyph_id) for codepoint, glyph_id in pairs]
+    segments.append((0xFFFF, 0xFFFF, 1))
+    seg_count = len(segments)
+    end_codes = b"".join(struct.pack(">H", end) for _start, end, _gid in segments)
+    start_codes = b"".join(
+        struct.pack(">H", start) for start, _end, _gid in segments
+    )
+    deltas = b"".join(
+        struct.pack(">H", (glyph_id - start) & 0xFFFF)
+        for start, _end, glyph_id in segments
+    )
+    range_offsets = b"\x00\x00" * seg_count
+    length = 16 + 8 * seg_count
+    return (
+        struct.pack(">HHHHHHH", 4, length, 0, seg_count * 2, 0, 0, 0)
+        + end_codes
+        + b"\x00\x00"
+        + start_codes
+        + deltas
+        + range_offsets
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "font_coverage_minimal"
@@ -66,6 +97,22 @@ class FontFaceTests(unittest.TestCase):
             captured.exception.code,
             fc.REASON_FONT_CMAP_UNSUPPORTED,
         )
+
+    def test_multiple_cmap_subtables_are_merged(self) -> None:
+        format_4 = format_4_subtable([(0x41, 3)])
+        format_12 = format_12_subtable([(0x20000, 7)])
+        header = struct.pack(">HH", 0, 2)
+        records = (
+            struct.pack(">HHI", 3, 1, 20)
+            + struct.pack(">HHI", 3, 10, 20 + len(format_4))
+        )
+        data = header + records + format_4 + format_12
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.subtable_count, 2)
+        self.assertEqual(index.glyph_id(0x41), 3)
+        self.assertEqual(index.glyph_id(0x20000), 7)
 
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)

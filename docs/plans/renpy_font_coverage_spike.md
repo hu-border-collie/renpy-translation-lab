@@ -29,8 +29,9 @@
 ## 3. 字体解析边界
 
 - 支持 sfnt：TrueType `0x00010000`、`OTTO`、`true`、`typ1`；TTC 只读取第一个 face。
-- 支持 cmap format 12（UCS-4）、4（BMP）、6、0；按 Unicode 子表优先级选择；
-  截断/声明长度与实际数据不一致的子表按 `font.cmap_unsupported` 拒绝，不越界访问。
+- 支持 cmap format 12（UCS-4）、4（BMP）、6、0；同一 cmap 中多个受支持 Unicode 子表会合并
+  （高优先级先命中），避免稀疏 format 12 掩盖 BMP 覆盖；截断/声明长度与实际数据不一致的
+  子表按 `font.cmap_unsupported` 拒绝，不越界访问。
 - 读取 `maxp.numGlyphs` 与 `name` family 作为证据；字体文件上限 64 MiB。
 - 字体引用路径必须解析在 `game_root` 内；越界引用标记
   `font.path_outside_game`，不读取任意本机文件。

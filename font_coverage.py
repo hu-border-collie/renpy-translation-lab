@@ -92,11 +92,12 @@ class CmapRange:
 
 @dataclass(frozen=True)
 class CmapIndex:
-    """Parsed cmap subtable, preserving ranges for bounded lookup."""
+    """Parsed cmap coverage, preserving ranges for bounded lookup."""
 
     format: int
     ranges: tuple[CmapRange, ...]
     codepoint_count: int
+    subtable_count: int = 1
 
     def glyph_id(self, codepoint: int) -> int | None:
         for item in self.ranges:
@@ -145,6 +146,7 @@ class FontCheck:
     reason: str
     font_path: str = ""
     cmap_format: int = 0
+    cmap_subtables: int = 0
     glyph_count: int = 0
     family_name: str = ""
     missing_chars: tuple[str, ...] = ()
@@ -361,6 +363,7 @@ def _parse_cmap(data: bytes, offset: int, length: int) -> CmapIndex:
             REASON_FONT_CMAP_UNSUPPORTED, "字体没有受支持的 Unicode cmap 子表"
         )
     errors: list[Exception] = []
+    parsed: list[CmapIndex] = []
     for _score, fmt, sub_offset, _platform, _encoding in sorted(
         candidates, reverse=True
     ):
@@ -373,12 +376,29 @@ def _parse_cmap(data: bytes, offset: int, length: int) -> CmapIndex:
                 sub_length = struct.unpack(
                     ">H", sub[sub_offset + 2:sub_offset + 4]
                 )[0]
-            return _CMAP_FORMAT_PARSERS[fmt](sub, sub_offset, sub_length)
+            parsed.append(
+                _CMAP_FORMAT_PARSERS[fmt](sub, sub_offset, sub_length)
+            )
         except FontCoverageError as exc:
             errors.append(exc)
-    if errors:
-        raise errors[0]
-    raise FontCoverageError(REASON_FONT_CMAP_UNSUPPORTED, "字体 cmap 子表解析失败")
+    if not parsed:
+        if errors:
+            raise errors[0]
+        raise FontCoverageError(
+            REASON_FONT_CMAP_UNSUPPORTED, "字体 cmap 子表解析失败"
+        )
+    # Keep every successfully parsed Unicode subtable: a sparse high-priority
+    # subtable (for example format 12 for supplementary planes) must not hide
+    # BMP coverage that only exists in a lower-priority subtable.
+    ranges = tuple(
+        item for parsed_index in parsed for item in parsed_index.ranges
+    )
+    return CmapIndex(
+        format=parsed[0].format,
+        ranges=ranges,
+        codepoint_count=sum(item.codepoint_count for item in parsed),
+        subtable_count=len(parsed),
+    )
 
 
 def _glyph_count(data: bytes, table: tuple[int, int] | None) -> int:
@@ -827,6 +847,7 @@ def analyze_font_coverage(
                     reason=REASON_FONT_GLYPH_MISSING,
                     font_path=font_rel,
                     cmap_format=face.cmap_format,
+                    cmap_subtables=face.cmap.subtable_count,
                     glyph_count=face.glyph_count,
                     family_name=face.family_name,
                     missing_chars=missing[:limit],
@@ -845,11 +866,13 @@ def analyze_font_coverage(
                     reason="",
                     font_path=font_rel,
                     cmap_format=face.cmap_format,
+                    cmap_subtables=face.cmap.subtable_count,
                     glyph_count=face.glyph_count,
                     family_name=face.family_name,
                     evidence=(
                         f"{reference.script}:{reference.line} font={font_rel} "
-                        f"cmap={face.cmap_format} glyphs={face.glyph_count}"
+                        f"cmap={face.cmap_format} subtables={face.cmap.subtable_count} "
+                        f"glyphs={face.glyph_count}"
                     ),
                 )
             )
@@ -882,6 +905,7 @@ def analyze_font_coverage(
                 "reason_text": _REASON_TEXT.get(check.reason, ""),
                 "font_path": check.font_path,
                 "cmap_format": check.cmap_format,
+                "cmap_subtables": check.cmap_subtables,
                 "glyph_count": check.glyph_count,
                 "family_name": check.family_name,
                 "missing_chars": list(check.missing_chars),
