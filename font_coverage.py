@@ -560,15 +560,15 @@ def _classify_font_expression(expression: str) -> tuple[str, str, str]:
     text = str(expression or "").strip()
     if not text:
         return "unparsed", "", REASON_FONT_EXPRESSION_UNPARSED
-    if "FontGroup" in text:
-        return "group", "", REASON_FONT_GROUP_UNSUPPORTED
-    if text.lower() == "none":
-        return "none", "", REASON_FONT_NOT_DECLARED
     literal = _literal_expression_value(text)
     if literal is not None:
         if not literal.strip():
             return "none", "", REASON_FONT_NOT_DECLARED
         return "static", literal, ""
+    if "FontGroup" in text:
+        return "group", "", REASON_FONT_GROUP_UNSUPPORTED
+    if text.lower() == "none":
+        return "none", "", REASON_FONT_NOT_DECLARED
     if any(marker in text for marker in ('"', "'", "+", "%", "[", "(", ".")):
         return "dynamic", "", REASON_FONT_DYNAMIC_EXPRESSION
     if re.search(r"[A-Za-z_]", text):
@@ -658,19 +658,36 @@ def scan_font_references(game_root: str | Path) -> tuple[FontReference, ...]:
 
 
 def _unescape_renpy_string(value: str) -> str:
-    return (
-        value.replace("\\n", "\n")
-        .replace('\\"', '"')
-        .replace("\\'", "'")
-        .replace("\\\\", "\\")
-    )
+    result: list[str] = []
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "\\" and index + 1 < len(value):
+            escaped = value[index + 1]
+            if escaped == "n":
+                result.append("\n")
+            elif escaped == "t":
+                result.append("\t")
+            elif escaped in {'\\', '"', "'"}:
+                result.append(escaped)
+            else:
+                result.append(escaped)
+            index += 2
+            continue
+        result.append(character)
+        index += 1
+    return "".join(result)
 
 
 def _literal_from_line(line: str) -> str:
-    match = re.search(r'"((?:[^"\\]|\\.)*)"', line)
+    match = re.search(
+        r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'',
+        line,
+    )
     if not match:
         return ""
-    return _unescape_renpy_string(match.group(1))
+    value = match.group(1) if match.group(1) is not None else match.group(2)
+    return _unescape_renpy_string(value)
 
 
 def extract_translation_strings(tl_dir: str | Path) -> tuple[str, ...]:

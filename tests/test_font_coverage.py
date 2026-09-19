@@ -465,6 +465,34 @@ class TextExtractionTests(unittest.TestCase):
         self.assertNotIn("Start Game", values)
         self.assertNotIn("Continue", values)
 
+    def test_single_quoted_tl_strings_are_extracted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            (tl_dir / "strings.rpy").write_text(
+                "translate schinese strings:\n"
+                "    old 'Start Game'\n"
+                "    new '开始游戏'\n",
+                encoding="utf-8",
+            )
+
+            values = fc.extract_translation_strings(tl_dir)
+
+        self.assertIn("开始游戏", values)
+        self.assertNotIn("Start Game", values)
+
+    def test_fontgroup_named_literal_path_is_static(self) -> None:
+        kind, path, reason = fc._classify_font_expression(
+            '"fonts/FontGroup-Regular.ttf"'
+        )
+
+        self.assertEqual(kind, "static")
+        self.assertEqual(path, "fonts/FontGroup-Regular.ttf")
+        self.assertEqual(reason, "")
+
+    def test_escape_sequences_are_decoded_in_one_pass(self) -> None:
+        self.assertEqual(fc._unescape_renpy_string(r"a\\nb"), r"a\nb")
+        self.assertEqual(fc._unescape_renpy_string(r"say \"hi\""), 'say "hi"')
+
     def test_renpy_tags_are_removed_and_substitution_is_flagged(self) -> None:
         normalized, dynamic = fc.normalize_renpy_text("{b}你好{/b} [name]")
 
