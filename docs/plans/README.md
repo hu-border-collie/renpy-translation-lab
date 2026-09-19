@@ -26,7 +26,7 @@
   冻结 `final_review` 解绑 `gemini_batch` 的策略解析、`final-review-run-sync` 命令、
   package 状态/幂等/错误合同与 GUI 分流；Batch 路径保持默认且语义不变。
 - [#487 Ren'Py 字体字形覆盖只读 spike](renpy_font_coverage_spike.md)：
-  冻结静态 `font` 引用解析、cmap 覆盖报告、`checked / missing / unknown` 语义、
+  冻结静态 `font` 引用解析、cmap 覆盖报告、`checked / missing / unavailable / unknown` 语义、
   可再分发 fixture 与 doctor / preflight 接入建议；不启动游戏、不替换字体。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、

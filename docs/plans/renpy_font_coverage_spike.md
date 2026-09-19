@@ -11,7 +11,7 @@
 能力，但没有面向游戏译文字集的字体字形覆盖检查。本 spike 只做 Ren'Py 范围的只读验证：
 
 - 解析静态 `font` 引用（style 属性、`gui.*_font` 赋值、字符串字面量）。
-- 解析字体 `cmap`，对目标译文字集做 `checked / missing / unknown` 报告。
+- 解析字体 `cmap`，对目标译文字集做 `checked / missing / unavailable / unknown` 报告。
 - 对动态表达式、`FontGroup` / fallback 链、TTC 多 face 等无法可靠确定的配置标记 unknown。
 - 区分「字体文件缺失 / 损坏」「字体确定缺字」「实际渲染字体链不确定」。
 
@@ -61,7 +61,7 @@ JSON 顶层：
 {
   "schema_version": 1,
   "spike": "font_coverage",
-  "status": "checked | missing | unknown",
+  "status": "checked | missing | unavailable | unknown",
   "text": {"sample_count": 3, "unique_char_count": 31, "dynamic_sample_count": 0, "sources": ["tl", "cjk_covered.txt"]},
   "fonts": [
     {
@@ -72,7 +72,7 @@ JSON 顶层：
       "missing_chars": [], "evidence": "scripts/styles.rpy:3 font=... cmap=4 glyphs=34"
     }
   ],
-  "checked": ["..."], "missing": ["..."], "unknown": ["..."],
+  "checked": ["..."], "missing": ["..."], "unavailable": ["..."], "unknown": ["..."],
   "limits": {"max_missing_chars": 200, "max_font_bytes": 67108864},
   "limitations": ["..."]
 }
@@ -82,10 +82,10 @@ JSON 顶层：
 
 | code | 含义 | 建议处理 |
 |---|---|---|
-| `font.file_missing` | 静态字体路径不存在 | doctor/preflight warning；提示补充字体或改为正确路径 |
-| `font.invalid` | 字体文件损坏 / 不是可解析 sfnt | warning；不自动替换 |
-| `font.cmap_unsupported` | 缺少受支持的 Unicode cmap 子表 | warning；必要时人工确认 |
-| `font.glyph_missing` | 字体确定缺少目标字符 | warning（不默认 blocker）；提示换字体/子集 |
+| `font.file_missing` | 静态字体路径不存在 | `unavailable`；warning，提示补充字体或改为正确路径 |
+| `font.invalid` | 字体文件损坏 / 不是可解析 sfnt | `unavailable`；warning，不自动替换 |
+| `font.cmap_unsupported` | 缺少受支持的 Unicode cmap 子表 | `unavailable`；warning，必要时人工确认 |
+| `font.glyph_missing` | 字体确定缺少目标字符 | `missing`；warning（不默认 blocker），提示换字体/子集 |
 | `font.dynamic_expression` | 字体引用是动态表达式 | unknown；不猜运行时值 |
 | `font.group_unsupported` | FontGroup / fallback 链不可静态解析 | unknown；不宣称必然缺字 |
 | `font.not_declared` | 未找到静态字体声明 | unknown；提示显式配置或人工确认 |
@@ -93,8 +93,9 @@ JSON 顶层：
 | `font.path_outside_game` | 引用越出 `game_root` 输入边界 | unknown；拒绝读取 |
 | `text.no_samples` | 没有显式/文件/TL 文本样本 | unknown；不把空字集当通过 |
 
-`unknown` 不当作通过，也不默认作为结构 blocker；`missing` 的确定性缺字可以在
-doctor/preflight 中作为 warning，是否升级为 blocked 由后续产品决策决定。
+`unknown` 不当作通过，也不默认作为结构 blocker；`missing` 只表示确定缺字，
+`unavailable` 只表示字体文件缺失/损坏/无法解析。两者都可以在 doctor/preflight 中作为
+warning，是否升级为 blocked 由后续产品决策决定。
 
 ## 6. Fixture 与许可证
 
@@ -125,15 +126,15 @@ Noto 字体子集：
 
 建议只在 doctor / `translate-preflight` 增加**只读 warning**，不进入写回授权：
 
-- doctor 字段：`font_coverage.status`、`font_coverage.checked` / `missing` / `unknown`、
-  `font_coverage.reason_counts`、`font_coverage.evidence`。
+- doctor 字段：`font_coverage.status`、`font_coverage.checked` / `missing` /
+  `unavailable` / `unknown`、`font_coverage.reason_counts`、`font_coverage.evidence`。
 - preflight 字段：把 `missing` 的缺字数与涉及文件加入 readiness reasons；
   `unknown` 单独展示，不参与 blocker 计算。
 - 中文文案建议：
   - 缺字：`目标译文字符集有 {count} 个字符未被声明的字体覆盖；请确认字体或 fallback。`
   - unknown：`无法静态确定实际渲染字体链（动态表达式 / FontGroup）；需要人工或运行时验证。`
   - 字体缺失：`字体文件不存在：{path}；当前不会自动替换或下载。`
-- GUI 展示建议：诊断页按字体引用逐行显示 `checked/missing/unknown`、证据路径与缺字样例；
+- GUI 展示建议：诊断页按字体引用逐行显示 `checked/missing/unavailable/unknown`、证据路径与缺字样例；
   不提供一键替换字体按钮，不把 unknown 显示成“通过”。
 - 性能预算：只扫描 `.rpy` 文本与静态字体文件；单字体上限 64 MiB；不启动 Ren'Py、
   不加载 Qt、不执行游戏代码。真实大型项目的覆盖率/耗时需要在接入前重新测量。

@@ -168,6 +168,26 @@ class FontFaceTests(unittest.TestCase):
             fc.REASON_FONT_CMAP_UNSUPPORTED,
         )
 
+    def test_unicode_platform_name_record_decodes_as_utf16(self) -> None:
+        encoded = "测试字体".encode("utf-16-be")
+        string_offset = 6 + 12
+        record = struct.pack(
+            ">HHHHHH",
+            0,
+            0,
+            0,
+            1,
+            len(encoded),
+            0,
+        )
+        name_table = (
+            struct.pack(">HHH", 0, 1, string_offset) + record + encoded
+        )
+
+        family = fc._family_name(name_table, (0, len(name_table)))
+
+        self.assertEqual(family, "测试字体")
+
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)
 
@@ -267,13 +287,22 @@ class AnalyzeTests(unittest.TestCase, CanaryEnvMixin):
         self.assertGreater(by_style["latin_only"]["missing_char_count"], 0)
         self.assertIn("缺少目标字符", by_style["latin_only"]["reason_text"])
         self.assertEqual(
+            by_style["missing_file"]["status"],
+            fc.STATUS_UNAVAILABLE,
+        )
+        self.assertEqual(
             by_style["missing_file"]["reason"],
             fc.REASON_FONT_FILE_MISSING,
+        )
+        self.assertEqual(
+            by_style["corrupt_font"]["status"],
+            fc.STATUS_UNAVAILABLE,
         )
         self.assertEqual(
             by_style["corrupt_font"]["reason"],
             fc.REASON_FONT_INVALID,
         )
+        self.assertTrue(report["unavailable"])
         self.assertEqual(
             by_style["dynamic_font"]["reason"],
             fc.REASON_FONT_DYNAMIC_EXPRESSION,

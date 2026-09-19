@@ -22,6 +22,7 @@ DEFAULT_MAX_MISSING_CHARS = 200
 
 STATUS_CHECKED = "checked"
 STATUS_MISSING = "missing"
+STATUS_UNAVAILABLE = "unavailable"
 STATUS_UNKNOWN = "unknown"
 
 REASON_FONT_FILE_MISSING = "font.file_missing"
@@ -450,7 +451,7 @@ def _family_name(data: bytes, table: tuple[int, int] | None) -> str:
         if start < 0 or end > len(sub):
             continue
         raw = sub[start:end]
-        if platform_id == 3:
+        if platform_id in {0, 3}:
             try:
                 text = raw.decode("utf-16-be")
             except UnicodeDecodeError:
@@ -847,7 +848,7 @@ def analyze_font_coverage(
             checks.append(
                 FontCheck(
                     reference=reference,
-                    status=STATUS_MISSING,
+                    status=STATUS_UNAVAILABLE,
                     reason=exc.code,
                     font_path=font_rel,
                     evidence=(
@@ -898,6 +899,8 @@ def analyze_font_coverage(
             )
     if any(check.status == STATUS_MISSING for check in checks):
         status = STATUS_MISSING
+    elif any(check.status == STATUS_UNAVAILABLE for check in checks):
+        status = STATUS_UNAVAILABLE
     elif any(check.status == STATUS_UNKNOWN for check in checks):
         status = STATUS_UNKNOWN
     else:
@@ -939,6 +942,11 @@ def analyze_font_coverage(
         ],
         "missing": [
             check.evidence for check in checks if check.status == STATUS_MISSING
+        ],
+        "unavailable": [
+            check.evidence
+            for check in checks
+            if check.status == STATUS_UNAVAILABLE
         ],
         "unknown": [
             check.evidence for check in checks if check.status == STATUS_UNKNOWN
