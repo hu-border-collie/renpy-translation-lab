@@ -68,6 +68,7 @@
 
 进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿迁至 [archive/](archive/README.md)。
 
+- [七类规划方向重新评估（2026-09-19）](plans/plan_reassessment_2026-09-19.md)：代码与离线验证证据、实施取舍及触发条件；复用决策 GUI 与质量白名单拆分进入 #512 / #513，其余继续关联已有任务。
 - [Agent 翻译工具包：方向评估与最小验证提案](plans/agent_translation_toolkit.md)：由宿主 Agent 决策和翻译，项目提供工作包、成果接收与安全写回；包含串并行协作和真实任务对照实验，尚未实现。
 - [#202 Phase A：Settings 页面契约与现状基线](plans/issue-202-settings-page-contract.md)：冻结 page adapter/coordinator 合同，记录 10 页字段/即时持久化所有权与 as-is 缺口；Phase B 最小接线已合并（PR #434）；Phase C LiteLLM 垂直迁移已落地独立 `SettingsPage`；Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；legacy adapter 与旧 builder 已删除；两文件写盘仍在 `MainWindow`。
 - [#348 P0–P2：Model Routing 配置、迁移合同与生产读取](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力与 P2 兼容入口生产读取已落地，P3 统一设置页待推进。
