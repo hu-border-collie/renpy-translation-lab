@@ -20,6 +20,32 @@ from atomic_io import atomic_write_text  # noqa: E402
 import font_coverage  # noqa: E402
 
 
+def _write_stdout(text: str) -> None:
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(text.encode("utf-8"))
+        buffer.flush()
+        return
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    sys.stdout.write(text)
+
+
+def _write_stderr(text: str) -> None:
+    buffer = getattr(sys.stderr, "buffer", None)
+    if buffer is not None:
+        buffer.write((text + "\n").encode("utf-8"))
+        buffer.flush()
+        return
+    try:
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    sys.stderr.write(text + "\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -72,15 +98,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     game_root = Path(args.game_root)
     if not game_root.is_dir():
-        print(f"game-root 不是目录：{game_root}", file=sys.stderr)
+        _write_stderr(f"game-root 不是目录：{game_root}")
         return 2
     tl_dir = Path(args.tl_dir) if args.tl_dir else None
     if tl_dir is not None and not tl_dir.is_dir():
-        print(f"tl-dir 不是目录：{tl_dir}", file=sys.stderr)
+        _write_stderr(f"tl-dir 不是目录：{tl_dir}")
         return 2
     text_file = Path(args.text_file) if args.text_file else None
     if text_file is not None and not text_file.is_file():
-        print(f"text-file 不存在：{text_file}", file=sys.stderr)
+        _write_stderr(f"text-file 不存在：{text_file}")
         return 2
     try:
         report = font_coverage.analyze_font_coverage(
@@ -91,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
             max_missing_chars=args.max_missing_chars,
         )
     except font_coverage.FontCoverageError as exc:
-        print(f"font coverage error [{exc.code}]: {exc}", file=sys.stderr)
+        _write_stderr(f"font coverage error [{exc.code}]: {exc}")
         return 2
     rendered = (
         font_coverage.report_to_json(report)
@@ -101,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.output_file:
         atomic_write_text(os.fspath(args.output_file), rendered)
     else:
-        sys.stdout.write(rendered)
+        _write_stdout(rendered)
     return 0
 
 

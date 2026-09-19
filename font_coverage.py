@@ -33,6 +33,7 @@ REASON_FONT_GROUP_UNSUPPORTED = "font.group_unsupported"
 REASON_FONT_NOT_DECLARED = "font.not_declared"
 REASON_FONT_EXPRESSION_UNPARSED = "font.expression_unparsed"
 REASON_FONT_PATH_OUTSIDE_GAME = "font.path_outside_game"
+REASON_TEXT_NO_SAMPLES = "text.no_samples"
 
 _REASON_TEXT = {
     REASON_FONT_FILE_MISSING: "字体文件不存在",
@@ -44,6 +45,7 @@ _REASON_TEXT = {
     REASON_FONT_NOT_DECLARED: "未找到静态字体声明",
     REASON_FONT_EXPRESSION_UNPARSED: "字体表达式无法安全解析",
     REASON_FONT_PATH_OUTSIDE_GAME: "字体路径不在 game_root 内，已按输入边界拒绝读取",
+    REASON_TEXT_NO_SAMPLES: "没有可检查的文本样本，无法判定字形覆盖",
 }
 
 _STYLE_HEADER_RE = re.compile(r"^style\s+([A-Za-z_][\w.]*)\s*:\s*$")
@@ -742,6 +744,19 @@ def analyze_font_coverage(
         )
     limit = max(1, int(max_missing_chars or DEFAULT_MAX_MISSING_CHARS))
     for reference in references:
+        if not samples.samples:
+            checks.append(
+                FontCheck(
+                    reference=reference,
+                    status=STATUS_UNKNOWN,
+                    reason=REASON_TEXT_NO_SAMPLES,
+                    evidence=(
+                        f"{reference.script}:{reference.line} "
+                        f"reason={REASON_TEXT_NO_SAMPLES}"
+                    ),
+                )
+            )
+            continue
         if reference.kind != "static":
             checks.append(
                 FontCheck(

@@ -86,6 +86,7 @@ JSON 顶层：
 | `font.not_declared` | 未找到静态字体声明 | unknown；提示显式配置或人工确认 |
 | `font.expression_unparsed` | 表达式无法安全解析 | unknown |
 | `font.path_outside_game` | 引用越出 `game_root` 输入边界 | unknown；拒绝读取 |
+| `text.no_samples` | 没有显式/文件/TL 文本样本 | unknown；不把空字集当通过 |
 
 `unknown` 不当作通过，也不默认作为结构 blocker；`missing` 的确定性缺字可以在
 doctor/preflight 中作为 warning，是否升级为 blocked 由后续产品决策决定。

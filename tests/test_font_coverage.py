@@ -148,6 +148,17 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(report["unknown"], [])
         self.assertEqual(report["fonts"][0]["status"], fc.STATUS_CHECKED)
 
+    def test_no_text_samples_is_unknown(self) -> None:
+        report = fc.analyze_font_coverage(GAME_ROOT)
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertTrue(
+            any(
+                item["reason"] == fc.REASON_TEXT_NO_SAMPLES
+                for item in report["fonts"]
+            )
+        )
+
     def test_no_font_declaration_is_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             game_root = Path(tmp) / "game"
@@ -252,6 +263,7 @@ class CliTests(unittest.TestCase):
             cwd=str(REPO_ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             check=False,
         )
 
