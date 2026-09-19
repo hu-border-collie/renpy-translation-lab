@@ -38,6 +38,15 @@ def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
     return header + format_12_subtable(groups)
 
 
+def format_0_subtable(mapping: dict[int, int]) -> bytes:
+    """Build one cmap format 0 subtable."""
+
+    glyphs = [0] * 256
+    for codepoint, glyph_id in mapping.items():
+        glyphs[codepoint] = glyph_id
+    return struct.pack(">HHH", 0, 262, 0) + bytes(glyphs)
+
+
 def format_4_subtable(pairs: list[tuple[int, int]]) -> bytes:
     """Build one cmap format 4 subtable with one segment per pair."""
 
@@ -113,6 +122,35 @@ class FontFaceTests(unittest.TestCase):
         self.assertEqual(index.subtable_count, 2)
         self.assertEqual(index.glyph_id(0x41), 3)
         self.assertEqual(index.glyph_id(0x20000), 7)
+
+    def test_non_unicode_cmap_subtable_is_ignored(self) -> None:
+        unicode_table = format_4_subtable([(0x41, 3)])
+        mac_table = format_0_subtable({0xC5: 9})
+        header = struct.pack(">HH", 0, 2)
+        records = (
+            struct.pack(">HHI", 3, 1, 20)
+            + struct.pack(">HHI", 1, 0, 20 + len(unicode_table))
+        )
+        data = header + records + unicode_table + mac_table
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.subtable_count, 1)
+        self.assertEqual(index.glyph_id(0x41), 3)
+        self.assertIsNone(index.glyph_id(0xC5))
+
+    def test_truncated_format_12_subtable_is_cmap_unsupported(self) -> None:
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+        truncated = struct.pack(">HHII", 12, 0, 16, 0)
+        data = header + truncated
+
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(
+            captured.exception.code,
+            fc.REASON_FONT_CMAP_UNSUPPORTED,
+        )
 
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)

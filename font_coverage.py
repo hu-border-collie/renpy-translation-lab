@@ -346,6 +346,13 @@ def _parse_cmap(data: bytes, offset: int, length: int) -> CmapIndex:
         )
         if sub_offset + 4 > len(sub):
             continue
+        # Only Unicode cmaps participate in glyph coverage: platform 0
+        # (Unicode) and Windows BMP/UCS-4. Macintosh/symbol encodings are not
+        # Unicode and must not create false "covered" answers.
+        if platform_id != 0 and not (
+            platform_id == 3 and encoding_id in {1, 10}
+        ):
+            continue
         fmt = struct.unpack(">H", sub[sub_offset:sub_offset + 2])[0]
         if fmt not in _CMAP_FORMAT_PARSERS:
             continue
@@ -381,6 +388,13 @@ def _parse_cmap(data: bytes, offset: int, length: int) -> CmapIndex:
             )
         except FontCoverageError as exc:
             errors.append(exc)
+        except (struct.error, IndexError, ValueError) as exc:
+            errors.append(
+                FontCoverageError(
+                    REASON_FONT_CMAP_UNSUPPORTED,
+                    "cmap 子表数据截断或越界",
+                )
+            )
     if not parsed:
         if errors:
             raise errors[0]
