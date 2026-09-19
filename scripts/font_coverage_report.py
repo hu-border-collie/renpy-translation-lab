@@ -26,10 +26,12 @@ def _write_stdout(text: str) -> None:
         buffer.write(text.encode("utf-8"))
         buffer.flush()
         return
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-    except (AttributeError, ValueError):
-        pass
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
     sys.stdout.write(text)
 
 
@@ -39,10 +41,12 @@ def _write_stderr(text: str) -> None:
         buffer.write((text + "\n").encode("utf-8"))
         buffer.flush()
         return
-    try:
-        sys.stderr.reconfigure(encoding="utf-8")
-    except (AttributeError, ValueError):
-        pass
+    reconfigure = getattr(sys.stderr, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
     sys.stderr.write(text + "\n")
 
 
