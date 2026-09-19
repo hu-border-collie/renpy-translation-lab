@@ -54,6 +54,19 @@ class FontFaceTests(unittest.TestCase):
         self.assertEqual(index.glyph_id(0x1F600), 8)
         self.assertIsNone(index.glyph_id(0x41))
 
+    def test_truncated_format_0_cmap_is_rejected(self) -> None:
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 1, 12)
+        subtable = struct.pack(">HHH", 0, 262, 0) + b"\x00" * 20
+        data = header + subtable
+
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(
+            captured.exception.code,
+            fc.REASON_FONT_CMAP_UNSUPPORTED,
+        )
+
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)
 
@@ -103,6 +116,11 @@ class ReferenceScanTests(unittest.TestCase):
 
         self.assertEqual(by_style["default"].kind, "static")
         self.assertEqual(by_style["default"].path, "fonts/test_cjk_subset.ttf")
+        self.assertEqual(by_style["inherited_font"].kind, "static")
+        self.assertEqual(
+            by_style["inherited_font"].path,
+            "fonts/test_cjk_subset.ttf",
+        )
         self.assertEqual(by_style["missing_file"].kind, "static")
         self.assertEqual(by_style["dynamic_font"].kind, "dynamic")
         self.assertEqual(

@@ -48,7 +48,9 @@ _REASON_TEXT = {
     REASON_TEXT_NO_SAMPLES: "没有可检查的文本样本，无法判定字形覆盖",
 }
 
-_STYLE_HEADER_RE = re.compile(r"^style\s+([A-Za-z_][\w.]*)\s*:\s*$")
+_STYLE_HEADER_RE = re.compile(
+    r"^style\s+([A-Za-z_][\w.]*)(?:\s+is\s+[A-Za-z_][\w.]*)?\s*:\s*$"
+)
 _FONT_PROPERTY_RE = re.compile(r"^font\s+(.+?)\s*$")
 _GUI_FONT_ASSIGN_RE = re.compile(
     r"^(?:define\s+)?(gui\.[A-Za-z_]\w*font)\s*=\s*(.+?)\s*$"
@@ -80,6 +82,8 @@ class CmapRange:
             return None
         if self.glyph_ids is not None:
             index = codepoint - self.start
+            if index < 0 or index >= len(self.glyph_ids):
+                return None
             glyph_id = self.glyph_ids[index]
             return glyph_id or None
         glyph_id = (codepoint + self.delta) & 0xFFFF
@@ -296,6 +300,8 @@ def _parse_format_0(data: bytes, offset: int, length: int) -> CmapIndex:
     if length < 262:
         raise FontCoverageError(REASON_FONT_CMAP_UNSUPPORTED, "cmap format 0 过短")
     sub = data[offset:offset + length]
+    if len(sub) < 262:
+        raise FontCoverageError(REASON_FONT_CMAP_UNSUPPORTED, "cmap format 0 数据截断")
     glyph_ids = tuple(sub[6:262])
     if not any(glyph_ids):
         raise FontCoverageError(REASON_FONT_CMAP_UNSUPPORTED, "cmap format 0 无可映射字符")

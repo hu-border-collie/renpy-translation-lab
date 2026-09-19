@@ -22,3 +22,7 @@ style dynamic_font:
 # FontGroup / fallback chains cannot be reliably resolved without Ren'Py runtime.
 style grouped_font:
     font FontGroup().add("fonts/test_cjk_subset.ttf", 0x0000, 0xffff)
+
+# Ren'Py style inheritance syntax must still expose the font property.
+style inherited_font is default:
+    font "fonts/test_cjk_subset.ttf"
