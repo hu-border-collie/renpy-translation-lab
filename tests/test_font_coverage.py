@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,25 @@ import unittest
 from pathlib import Path
 
 import font_coverage as fc
+
+
+def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
+    """Build a minimal cmap with one format 12 subtable."""
+
+    group_bytes = b"".join(
+        struct.pack(">III", start, start, glyph_id)
+        for start, glyph_id in groups
+    )
+    subtable = struct.pack(
+        ">HHIII",
+        12,
+        0,
+        16 + len(group_bytes),
+        0,
+        len(groups),
+    ) + group_bytes
+    header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+    return header + subtable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).parent / "fixtures" / "font_coverage_minimal"
@@ -24,6 +44,16 @@ SIDE_EFFECT = REPO_ROOT / "FONT_COVERAGE_SIDE_EFFECT.txt"
 
 
 class FontFaceTests(unittest.TestCase):
+    def test_format_12_cmap_supports_supplementary_codepoints(self) -> None:
+        data = cmap_format_12_bytes([(0x20000, 7), (0x1F600, 8)])
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.format, 12)
+        self.assertEqual(index.glyph_id(0x20000), 7)
+        self.assertEqual(index.glyph_id(0x1F600), 8)
+        self.assertIsNone(index.glyph_id(0x41))
+
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)
 

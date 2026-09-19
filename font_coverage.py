@@ -358,8 +358,15 @@ def _parse_cmap(data: bytes, offset: int, length: int) -> CmapIndex:
     for _score, fmt, sub_offset, _platform, _encoding in sorted(
         candidates, reverse=True
     ):
-        sub_length = struct.unpack(">H", sub[sub_offset + 2:sub_offset + 4])[0]
         try:
+            if fmt in {8, 10, 12, 13}:
+                sub_length = struct.unpack(
+                    ">I", sub[sub_offset + 4:sub_offset + 8]
+                )[0]
+            else:
+                sub_length = struct.unpack(
+                    ">H", sub[sub_offset + 2:sub_offset + 4]
+                )[0]
             return _CMAP_FORMAT_PARSERS[fmt](sub, sub_offset, sub_length)
         except FontCoverageError as exc:
             errors.append(exc)
