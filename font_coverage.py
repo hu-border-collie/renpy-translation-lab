@@ -36,6 +36,7 @@ REASON_FONT_EXPRESSION_UNPARSED = "font.expression_unparsed"
 REASON_FONT_PATH_OUTSIDE_GAME = "font.path_outside_game"
 REASON_TEXT_NO_SAMPLES = "text.no_samples"
 REASON_FONT_ENGINE_SEARCH_PATH = "font.engine_search_path_unknown"
+REASON_FONT_TOO_LARGE = "font.too_large"
 
 _REASON_TEXT = {
     REASON_FONT_FILE_MISSING: "字体文件不存在",
@@ -49,6 +50,7 @@ _REASON_TEXT = {
     REASON_FONT_PATH_OUTSIDE_GAME: "字体路径不在 game_root 内，已按输入边界拒绝读取",
     REASON_TEXT_NO_SAMPLES: "没有可检查的文本样本，无法判定字形覆盖",
     REASON_FONT_ENGINE_SEARCH_PATH: "字体名可能由 Ren'Py 引擎/搜索路径解析，只读扫描无法确定",
+    REASON_FONT_TOO_LARGE: "字体文件超过只读检查体积上限",
 }
 
 _STYLE_HEADER_RE = re.compile(
@@ -271,7 +273,12 @@ def _parse_format_12(data: bytes, offset: int, length: int) -> CmapIndex:
     for index in range(group_count):
         record = 16 + index * 12
         start, end, start_gid = struct.unpack(">III", sub[record:record + 12])
-        if start > end or start_gid == 0:
+        if start > end:
+            continue
+        # startGlyphID == 0 only means the first codepoint maps to .notdef;
+        # following codepoints still map to glyphs 1..N.  Skip only the
+        # single-codepoint group that can never produce a real glyph.
+        if start_gid == 0 and start == end:
             continue
         ranges.append(
             CmapRange(start=start, end=end, delta=start_gid - start)
@@ -480,8 +487,13 @@ def load_font_face(path: str | Path) -> FontFace:
         size = font_path.stat().st_size
     except OSError as exc:
         raise FontCoverageError(REASON_FONT_INVALID, "无法读取字体文件") from exc
-    if size <= 0 or size > MAX_FONT_BYTES:
+    if size <= 0:
         raise FontCoverageError(REASON_FONT_INVALID, "字体文件大小异常")
+    if size > MAX_FONT_BYTES:
+        raise FontCoverageError(
+            REASON_FONT_TOO_LARGE,
+            f"字体文件超过只读检查上限（{MAX_FONT_BYTES} bytes）",
+        )
     try:
         data = font_path.read_bytes()
         offset = _sfnt_offset(data)

@@ -34,7 +34,8 @@
   避免假阳性覆盖。多个受支持 Unicode 子表按高优先级先命中合并，避免稀疏 format 12
   掩盖 BMP 覆盖；截断/声明长度与实际数据不一致的子表按 `font.cmap_unsupported` 拒绝，
   不越界访问。
-- 读取 `maxp.numGlyphs` 与 `name` family 作为证据；字体文件上限 64 MiB。
+- 读取 `maxp.numGlyphs` 与 `name` family 作为证据；字体文件上限 64 MiB，
+  超限单独返回 `font.too_large`，不与损坏文件混淆。
 - 字体引用路径必须解析在 `game_root` 内；越界引用标记
   `font.path_outside_game`，不读取任意本机文件。
 - 损坏/缺表/不支持 cmap 都返回稳定 reason code，不抛 Provider 风格异常。
@@ -93,6 +94,7 @@ JSON 顶层：
 | `font.path_outside_game` | 引用越出 `game_root` 输入边界 | unknown；拒绝读取 |
 | `text.no_samples` | 没有显式/文件/TL 文本样本 | unknown；不把空字集当通过 |
 | `font.engine_search_path_unknown` | 裸字体名可能由 Ren'Py 引擎/搜索路径解析 | unknown；只读扫描不猜 engine/common 路径 |
+| `font.too_large` | 字体文件超过 64 MiB 只读检查上限 | unavailable；区分体积上限与损坏，必要时人工抽样 |
 
 `unknown` 不当作通过，也不默认作为结构 blocker；`missing` 只表示确定缺字，
 `unavailable` 只表示字体文件缺失/损坏/无法解析。两者都可以在 doctor/preflight 中作为
@@ -119,8 +121,8 @@ Noto 字体子集：
 - 动态表达式 / FontGroup：`gui.dynamic_font`、`FontGroup().add(...)` → `unknown`。
 - 无字体声明：只有普通 `.rpy` 的临时 game_root → `font.not_declared`。
 - 输入边界：`../outside.ttf` → `font.path_outside_game`，不读取外部字体。
-- 无副作用：fixture 中的 `init python` 会写 `FONT_COVERAGE_SIDE_EFFECT.txt`；
-  扫描/CLI 运行后该文件必须不存在。
+- 无副作用：fixture 中的 `init python` 读取 `FONT_COVERAGE_CANARY_PATH` 并写入该路径；
+  测试把环境变量指向临时文件后运行扫描/CLI，断言临时 canary 不存在（不依赖进程 CWD）。
 - CLI：`--output json` 输出稳定 envelope 形状，不修改项目。
 
 ## 8. 生产接入建议（后续切片）

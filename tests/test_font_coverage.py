@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import font_coverage as fc
 
@@ -187,6 +188,25 @@ class FontFaceTests(unittest.TestCase):
         family = fc._family_name(name_table, (0, len(name_table)))
 
         self.assertEqual(family, "测试字体")
+
+    def test_format_12_zero_start_glyph_group_keeps_later_codepoints(self) -> None:
+        group = struct.pack(">III", 0x100, 0x102, 0)
+        subtable = struct.pack(">HHIII", 12, 0, 16 + len(group), 0, 1) + group
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+        data = header + subtable
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertIsNone(index.glyph_id(0x100))
+        self.assertEqual(index.glyph_id(0x101), 1)
+        self.assertEqual(index.glyph_id(0x102), 2)
+
+    def test_font_over_size_limit_has_stable_reason(self) -> None:
+        with mock.patch.object(fc, "MAX_FONT_BYTES", 10):
+            with self.assertRaises(fc.FontCoverageError) as captured:
+                fc.load_font_face(CJK_FONT)
+
+        self.assertEqual(captured.exception.code, fc.REASON_FONT_TOO_LARGE)
 
     def test_cjk_subset_covers_chinese_sample(self) -> None:
         face = fc.load_font_face(CJK_FONT)
