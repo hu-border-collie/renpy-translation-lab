@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -157,6 +158,51 @@ class BuildIndexTests(unittest.TestCase):
             )
         )
         self.assertTrue(all(entry["review"]["lifecycle"] == "open" for entry in entries))
+
+    def test_explicit_missing_decisions_path_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+
+            with self.assertRaises(ri.ReviewIndexError) as captured:
+                ri.build_review_index(
+                    corpus,
+                    decisions_path=root / "missing_decisions.jsonl",
+                    output_dir=root / "index",
+                )
+
+        self.assertEqual(
+            captured.exception.code,
+            "REVIEW_INDEX_INPUT_MISSING",
+        )
+
+    def test_load_index_without_paths_jsonl_uses_single_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            manifest = json.loads(
+                (package / ri.REVIEW_INDEX_MANIFEST_NAME).read_text(
+                    encoding="utf-8"
+                )
+            )
+            manifest.pop("paths", None)
+            fallback = root / "fallback"
+            fallback.mkdir()
+            (fallback / ri.REVIEW_INDEX_MANIFEST_NAME).write_text(
+                json.dumps(manifest, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (fallback / ri.REVIEW_INDEX_JSONL_NAME).write_text(
+                (package / ri.REVIEW_INDEX_JSONL_NAME).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            with contextlib.chdir(root):
+                loaded_manifest, entries = ri.load_review_index("fallback")
+
+        self.assertEqual(loaded_manifest["kind"], "review_index")
+        self.assertEqual(len(entries), 3)
 
     def test_rebuild_is_deterministic_and_preserves_duplicate_occurrences(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -342,6 +388,41 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(refreshed["review"]["previous_lifecycle"], "resolved")
         self.assertEqual(manifest_b["scope"]["needs_recheck_count"], 1)
         self.assertEqual(decision_line_count, 1)
+
+    def test_matching_decision_clears_stale_previous_lifecycle(self) -> None:
+        entry = {
+            "occurrence_id": "occ-1",
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "review": {
+                "lifecycle": "needs_recheck",
+                "needs_recheck": True,
+                "changed_bindings": ["target_digest"],
+                "previous_lifecycle": "resolved",
+            },
+        }
+        decision = {
+            "decision_id": "d1",
+            "occurrence_id": "occ-1",
+            "lifecycle": "resolved",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "note": "",
+            "decided_at": "2026-09-20T00:00:00+00:00",
+            "binding": dict(entry["binding"]),
+        }
+
+        applied, _ = ri.apply_decisions([entry], [decision])
+
+        self.assertEqual(applied[0]["review"]["lifecycle"], "resolved")
+        self.assertFalse(applied[0]["review"]["needs_recheck"])
+        self.assertEqual(applied[0]["review"]["changed_bindings"], [])
+        self.assertEqual(applied[0]["review"]["previous_lifecycle"], "")
 
     def test_invalid_decision_is_rejected(self) -> None:
         with self.assertRaises(ri.ReviewIndexError) as captured:

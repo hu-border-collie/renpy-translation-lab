@@ -765,6 +765,7 @@ def apply_decisions(
                     "decided_at": "",
                     "needs_recheck": False,
                     "changed_bindings": [],
+                    "previous_lifecycle": "",
                 }
             )
         else:
@@ -797,6 +798,7 @@ def apply_decisions(
                         "decided_at": str(latest.get("decided_at") or ""),
                         "needs_recheck": False,
                         "changed_bindings": [],
+                        "previous_lifecycle": "",
                     }
                 )
         item["review"] = review
@@ -873,7 +875,13 @@ def build_review_index(
     )
     decision_source = Path(decisions_path) if decisions_path else None
     decisions: list[dict[str, Any]] = []
-    if decision_source is not None and decision_source.is_file():
+    if decision_source is not None:
+        if not decision_source.is_file():
+            raise ReviewIndexError(
+                "REVIEW_INDEX_INPUT_MISSING",
+                f"decisions 文件不存在：{decision_source}",
+                details={"path": str(decision_source)},
+            )
         decisions = load_decisions(decision_source)
     entries, decision_diagnostics = apply_decisions(entries, decisions)
     diagnostics.extend(decision_diagnostics)
@@ -1005,9 +1013,12 @@ def load_review_index(
         if isinstance(manifest.get("paths"), Mapping)
         else ""
     )
-    candidate = Path(str(jsonl_path)) if jsonl_path else supplied.parent / REVIEW_INDEX_JSONL_NAME
-    if not candidate.is_absolute():
-        candidate = supplied.parent / candidate
+    if jsonl_path:
+        candidate = Path(str(jsonl_path))
+        if not candidate.is_absolute():
+            candidate = supplied.parent / candidate
+    else:
+        candidate = supplied.parent / REVIEW_INDEX_JSONL_NAME
     if not candidate.is_file():
         raise ReviewIndexError(
             "REVIEW_INDEX_MISSING",
