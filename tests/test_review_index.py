@@ -21,6 +21,7 @@ def _write_corpus(
     *,
     current_translation: str = "你好",
     game_root: Path | None = None,
+    project_slug: str = "demo",
 ) -> Path:
     target = root / "corpus"
     file_jobs = [
@@ -65,7 +66,7 @@ def _write_corpus(
     revision_corpus.export_revision_corpus(
         str(target),
         file_jobs,
-        project_slug="demo",
+        project_slug=project_slug,
         game_root=str(game_root or root / "game"),
         tl_dir=str((game_root or root / "game") / "tl"),
         tl_subdir="schinese",
@@ -252,6 +253,56 @@ class BuildIndexTests(unittest.TestCase):
         self.assertEqual(
             captured.exception.code,
             "REVIEW_INDEX_INPUT_MISSING",
+        )
+
+    def test_output_dir_reuse_does_not_borrow_other_project_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus_a = _write_corpus(root / "a", project_slug="project-a")
+            package = root / "index"
+            ri.build_review_index(corpus_a, output_dir=package)
+            entries_a = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target = next(
+                entry for entry in entries_a if entry["occurrence_id"] == "occ-1"
+            )
+            decisions_file = root / "project_a_decisions.jsonl"
+            decisions_file.write_text(
+                json.dumps(
+                    {
+                        "occurrence_id": "occ-1",
+                        "project_identity_digest": target["project"]["identity_digest"],
+                        "lifecycle": "resolved",
+                        "reviewer": {"type": "human", "name": "reviewer-a"},
+                        "binding": dict(target["binding"]),
+                        "note": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ri.build_review_index(
+                corpus_a,
+                decisions_path=decisions_file,
+                output_dir=package,
+            )
+
+            corpus_b = _write_corpus(root / "b", project_slug="project-b")
+            rebuilt = ri.build_review_index(corpus_b, output_dir=package)
+            entries_b = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(rebuilt["inputs"]["decisions"]["path"], "")
+        self.assertTrue(
+            any(
+                item.get("code") == ri.DIAGNOSTIC_INDEX_INPUT_PROJECT_MISMATCH
+                for item in rebuilt["diagnostics"]
+            )
+        )
+        self.assertTrue(
+            all(
+                entry["review"]["lifecycle"] == "open"
+                for entry in entries_b
+            )
         )
 
     def test_rebuild_is_deterministic_and_preserves_duplicate_occurrences(self) -> None:
@@ -639,6 +690,64 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["note"], note)
+
+    def test_timestamp_iso_variants_compare_by_instant(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "",
+        }
+        resolved = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "resolved",
+                "decided_at": "2026-09-20T10:00:00Z",
+            }
+        )
+        ignored = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "ignored",
+                "decided_at": "2026-09-20T10:00:00+00:00",
+            }
+        )
+
+        merged, summary = ri.merge_decisions([resolved], [ignored])
+
+        self.assertEqual(summary["stale_count"], 0)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[-1]["lifecycle"], "ignored")
+
+    def test_invalid_decided_at_is_rejected(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.normalize_decision(
+                {
+                    "occurrence_id": "occ-1",
+                    "project_identity_digest": "project-a",
+                    "lifecycle": "resolved",
+                    "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "x",
+                        "snapshot_digest": "x",
+                        "source_digest": "x",
+                        "target_digest": "x",
+                        "context_digest": "x",
+                        "evidence_digest": "x",
+                    },
+                    "decided_at": "not-a-timestamp",
+                }
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
 
     def test_reimporting_older_file_does_not_revert_newer_decision(self) -> None:
         base = {

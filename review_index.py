@@ -62,6 +62,8 @@ MAX_NOTE_LENGTH = 4000
 DIAGNOSTIC_FINDING_UNMATCHED = "REVIEW_QUALITY_FINDING_UNMATCHED"
 DIAGNOSTIC_DECISION_ORPHANED = "REVIEW_DECISION_ORPHANED"
 DIAGNOSTIC_DECISION_PROJECT_MISMATCH = "REVIEW_DECISION_PROJECT_MISMATCH"
+DIAGNOSTIC_INDEX_INPUT_PROJECT_MISMATCH = "REVIEW_INDEX_INPUT_PROJECT_MISMATCH"
+DIAGNOSTIC_INDEX_INPUT_CORPUS_MISMATCH = "REVIEW_INDEX_INPUT_CORPUS_MISMATCH"
 DIAGNOSTIC_DECISION_AMBIGUOUS_FINDING = "REVIEW_QUALITY_FINDING_AMBIGUOUS"
 
 
@@ -76,6 +78,36 @@ class ReviewIndexError(ValueError):
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_decision_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_decision_timestamp(value: Any, *, default: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        fallback = str(default or "").strip()
+        if fallback:
+            return _normalize_decision_timestamp(fallback)
+        return _utc_now()
+    parsed = _parse_decision_timestamp(text)
+    if parsed is None:
+        raise ReviewIndexError(
+            "REVIEW_DECISION_INVALID",
+            f"decision.decided_at 不是有效的 ISO-8601 时间：{text}",
+            details={"decided_at": text},
+        )
+    return parsed.isoformat(timespec="seconds")
 
 
 def stable_text_sha256(value: str) -> str:
@@ -643,7 +675,10 @@ def normalize_decision(
             f"decision.note 超过 {MAX_NOTE_LENGTH} 字符上限。",
             details={"occurrence_id": occurrence_id},
         )
-    decided_at = str(raw.get("decided_at") or "").strip() or now or _utc_now()
+    decided_at = _normalize_decision_timestamp(
+        raw.get("decided_at"),
+        default=now,
+    )
     project_identity_digest = str(
         raw.get("project_identity_digest") or ""
     ).strip()
@@ -783,10 +818,12 @@ def merge_decisions(
         incoming_decided_at = str(decision.get("decided_at") or "")
         if latest_existing is not None:
             latest_decided_at = str(latest_existing.get("decided_at") or "")
+            incoming_time = _parse_decision_timestamp(incoming_decided_at)
+            latest_time = _parse_decision_timestamp(latest_decided_at)
             if (
-                incoming_decided_at
-                and latest_decided_at
-                and incoming_decided_at < latest_decided_at
+                incoming_time is not None
+                and latest_time is not None
+                and incoming_time < latest_time
             ):
                 # Re-importing an older exported file must not silently revert
                 # a newer decision; it is a stale replay, not a new action.
@@ -994,6 +1031,9 @@ def build_review_index(
     """Build (or rebuild) one index package; decisions file is never overwritten."""
 
     target_dir = Path(output_dir)
+    corpus = load_corpus_bundle(corpus_path)
+    current_project = project_identity(corpus["manifest"])
+    reuse_diagnostics: list[dict[str, Any]] = []
     if decisions_path is None:
         existing_manifest_path = target_dir / REVIEW_INDEX_MANIFEST_NAME
         if existing_manifest_path.is_file():
@@ -1001,9 +1041,27 @@ def build_review_index(
                 existing_manifest = _read_json_object(existing_manifest_path)
             except ReviewIndexError:
                 existing_manifest = {}
+            existing_project = existing_manifest.get("project")
+            existing_project_id = (
+                str(existing_project.get("identity_digest") or "").strip()
+                if isinstance(existing_project, Mapping)
+                else ""
+            )
+            same_project = bool(existing_project_id) and (
+                existing_project_id == current_project["identity_digest"]
+            )
             existing_inputs = existing_manifest.get("inputs")
             existing_inputs = (
                 existing_inputs if isinstance(existing_inputs, Mapping) else {}
+            )
+            corpus_meta = existing_inputs.get("corpus_jsonl")
+            recorded_corpus_digest = (
+                str(corpus_meta.get("digest") or "").strip()
+                if isinstance(corpus_meta, Mapping)
+                else ""
+            )
+            same_corpus = bool(recorded_corpus_digest) and (
+                recorded_corpus_digest == corpus["jsonl_digest"]
             )
             decisions_meta = existing_inputs.get("decisions")
             recorded_path = (
@@ -1012,7 +1070,20 @@ def build_review_index(
                 else ""
             )
             if recorded_path:
-                decisions_path = recorded_path
+                if same_project:
+                    decisions_path = recorded_path
+                else:
+                    reuse_diagnostics.append(
+                        {
+                            "code": DIAGNOSTIC_INDEX_INPUT_PROJECT_MISMATCH,
+                            "input": "decisions",
+                            "recorded_path": recorded_path,
+                            "recorded_project_identity_digest": existing_project_id,
+                            "current_project_identity_digest": current_project[
+                                "identity_digest"
+                            ],
+                        }
+                    )
             if quality_findings_path is None:
                 findings_meta = existing_inputs.get("quality_findings")
                 recorded_findings = (
@@ -1021,7 +1092,16 @@ def build_review_index(
                     else ""
                 )
                 if recorded_findings:
-                    quality_findings_path = recorded_findings
+                    if same_project and same_corpus:
+                        quality_findings_path = recorded_findings
+                    else:
+                        reuse_diagnostics.append(
+                            {
+                                "code": DIAGNOSTIC_INDEX_INPUT_CORPUS_MISMATCH,
+                                "input": "quality_findings",
+                                "recorded_path": recorded_findings,
+                            }
+                        )
             if translation_records_path is None:
                 records_meta = existing_inputs.get("translation_records")
                 recorded_records = (
@@ -1030,8 +1110,16 @@ def build_review_index(
                     else ""
                 )
                 if recorded_records:
-                    translation_records_path = recorded_records
-    corpus = load_corpus_bundle(corpus_path)
+                    if same_project and same_corpus:
+                        translation_records_path = recorded_records
+                    else:
+                        reuse_diagnostics.append(
+                            {
+                                "code": DIAGNOSTIC_INDEX_INPUT_CORPUS_MISMATCH,
+                                "input": "translation_records",
+                                "recorded_path": recorded_records,
+                            }
+                        )
     findings_bundle = load_quality_findings(quality_findings_path)
     records_bundle = load_translation_records(translation_records_path)
     entries, diagnostics = build_index_entries(
@@ -1040,6 +1128,7 @@ def build_review_index(
         findings=findings_bundle["findings"],
         records=records_bundle["records"],
     )
+    diagnostics.extend(reuse_diagnostics)
     decision_source = Path(decisions_path) if decisions_path else None
     decisions: list[dict[str, Any]] = []
     if decision_source is not None:

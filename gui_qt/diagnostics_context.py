@@ -345,7 +345,7 @@ def build_cli_commands(
                             manifest_path,
                             "--file",
                             join_directory_file(
-                                index_dir, "review_decisions_export.jsonl"
+                                index_dir, "review_decisions_roundtrip.jsonl"
                             ),
                         ],
                     ),
@@ -361,7 +361,7 @@ def build_cli_commands(
                             manifest_path,
                             "--file",
                             join_directory_file(
-                                index_dir, "review_decisions_import.jsonl"
+                                index_dir, "review_decisions_roundtrip.jsonl"
                             ),
                         ],
                     ),

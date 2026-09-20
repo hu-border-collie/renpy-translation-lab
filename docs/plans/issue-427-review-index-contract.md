@@ -77,6 +77,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
   `REVIEW_DECISION_PROJECT_MISMATCH` 诊断，避免切换项目复用旧决定。
 - `decision_id` 与决定内容绑定（occurrence、project、lifecycle、reviewer、binding、note），
   不含导入时自动填入的 `decided_at`，因此模板未填时间时重复导入同一内容会被判为 duplicate；
+  `decided_at` 会规范化为 UTC ISO-8601，并按时间点（而非字符串）比较新旧；
   若提供的 id 与重算摘要不一致返回 `REVIEW_DECISION_INVALID`。要修改已有决定，请去掉
   `decision_id` 或追加一条新动作，而不是原地改 lifecycle/note。
 - `project_identity_digest` 必填；导入时若任何决定属于其他项目，整批导入在写盘前返回
@@ -131,6 +132,8 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 | `REVIEW_QUALITY_FINDING_UNMATCHED` | quality finding 未能匹配任何 corpus occurrence；仍保留在 manifest diagnostics |
 | `REVIEW_DECISION_ORPHANED` | 决定引用的 occurrence 不在当前索引；决定保留但不应用 |
 | `REVIEW_DECISION_PROJECT_MISMATCH` | 决定项目身份与当前索引不一致；不应用该决定 |
+| `REVIEW_INDEX_INPUT_PROJECT_MISMATCH` | 同一 output_dir 的旧 manifest 属于其他项目；不复用其决定路径 |
+| `REVIEW_INDEX_INPUT_CORPUS_MISMATCH` | 旧 manifest 的 corpus digest 已变化；不复用 findings / records |
 | `REVIEW_QUALITY_FINDING_AMBIGUOUS` | 同一 occurrence 匹配到多个来源不明的 finding，需人工确认 |
 | `REVIEW_CORPUS_ROW_MISSING_IDENTITY` | corpus row 缺 occurrence_id，跳过并显式诊断 |
 | `REVIEW_INDEX_INPUT_MISSING` / `REVIEW_INDEX_INPUT_INVALID` | corpus / findings / decisions 输入缺失或不可解析 |
@@ -148,7 +151,9 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
   重新导入早于当前最新决定的旧文件会记为 `stale_count` 并跳过，不会静默把审计状态改回旧值。
 - 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
 - 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
-  决定路径；记录路径不存在时报 `REVIEW_INDEX_INPUT_MISSING`，不静默清空人工历史。
+  决定路径，但要求旧 manifest 的 project identity 与当前 corpus 一致；项目不同则忽略记录路径并写
+  `REVIEW_INDEX_INPUT_PROJECT_MISMATCH`，不把 A 项目的决定写进 B 项目。findings / translation
+  records 仅在 corpus JSONL digest 一致时复用，否则写 `REVIEW_INDEX_INPUT_CORPUS_MISMATCH`。
 - 模板中的 `reviewer.name = "TODO"` 会被导入校验拒绝，避免整份未编辑模板写入决定日志。
 - 真实大语料的分页、性能与窗口交互在 S2 测量；S1 只保证离线 JSONL 可复现。
 - 本地索引 manifest 为定位输入/决定文件会记录本机绝对路径；它属于本地工作产物，不应直接
