@@ -16,7 +16,12 @@ import revision_corpus
 import translation_quality
 
 
-def _write_corpus(root: Path, *, current_translation: str = "你好") -> Path:
+def _write_corpus(
+    root: Path,
+    *,
+    current_translation: str = "你好",
+    game_root: Path | None = None,
+) -> Path:
     target = root / "corpus"
     file_jobs = [
         {
@@ -61,8 +66,8 @@ def _write_corpus(root: Path, *, current_translation: str = "你好") -> Path:
         str(target),
         file_jobs,
         project_slug="demo",
-        game_root=str(root / "game"),
-        tl_dir=str(root / "game" / "tl"),
+        game_root=str(game_root or root / "game"),
+        tl_dir=str((game_root or root / "game") / "tl"),
         tl_subdir="schinese",
         source_digests_before={
             "tl/chapter01.rpy": "a" * 64,
@@ -424,6 +429,62 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(applied[0]["review"]["changed_bindings"], [])
         self.assertEqual(applied[0]["review"]["previous_lifecycle"], "")
 
+    def test_decision_id_must_match_content(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.normalize_decision(
+                {
+                    "decision_id": "tampered",
+                    "occurrence_id": "occ-1",
+                    "lifecycle": "resolved",
+                    "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "x",
+                        "snapshot_digest": "x",
+                        "source_digest": "x",
+                        "target_digest": "x",
+                        "context_digest": "x",
+                        "evidence_digest": "x",
+                    },
+                }
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
+
+    def test_cross_project_decision_is_not_applied(self) -> None:
+        entry = {
+            "occurrence_id": "occ-1",
+            "project": {"identity_digest": "project-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "review": {},
+        }
+        decision = {
+            "decision_id": "d1",
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-b",
+            "lifecycle": "resolved",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "note": "",
+            "decided_at": "2026-09-20T00:00:00+00:00",
+            "binding": dict(entry["binding"]),
+        }
+
+        applied, diagnostics = ri.apply_decisions([entry], [decision])
+
+        self.assertEqual(applied[0]["review"]["lifecycle"], "open")
+        self.assertTrue(
+            any(
+                item["code"] == ri.DIAGNOSTIC_DECISION_PROJECT_MISMATCH
+                for item in diagnostics
+            )
+        )
+
     def test_invalid_decision_is_rejected(self) -> None:
         with self.assertRaises(ri.ReviewIndexError) as captured:
             ri.normalize_decision(
@@ -553,6 +614,43 @@ class CliTests(unittest.TestCase):
             self.assertEqual(
                 imported_payload["result"]["scope"]["lifecycle_counts"]["resolved"],
                 1,
+            )
+
+            changed_corpus = _write_corpus(
+                root / "changed",
+                current_translation="您好",
+                game_root=root / "game",
+            )
+            rebuilt = self._run(
+                "review-index-build",
+                "--corpus",
+                str(changed_corpus),
+                "--decisions",
+                str(index_dir / ri.REVIEW_DECISIONS_JSONL_NAME),
+                "--output-dir",
+                str(root / "index-changed"),
+                "--output",
+                "json",
+            )
+            self.assertEqual(rebuilt.returncode, 0, rebuilt.stderr)
+            rebuilt_payload = json.loads(rebuilt.stdout)
+            self.assertEqual(rebuilt_payload["status"], "needs_recheck")
+            self.assertEqual(
+                rebuilt_payload["result"]["scope"]["needs_recheck_count"],
+                1,
+            )
+
+            rebuilt_status = self._run(
+                "review-index-status",
+                "--index",
+                str(root / "index-changed"),
+                "--output",
+                "json",
+            )
+            self.assertEqual(rebuilt_status.returncode, 0, rebuilt_status.stderr)
+            self.assertEqual(
+                json.loads(rebuilt_status.stdout)["status"],
+                "needs_recheck",
             )
 
 

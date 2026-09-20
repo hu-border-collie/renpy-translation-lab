@@ -56,6 +56,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
   "schema_version": 1,
   "decision_id": "…",
   "occurrence_id": "occ-1",
+  "project_identity_digest": "…",
   "lifecycle": "open | ignored | resolved",
   "reviewer": {"type": "human | agent", "name": "…", "run_id": ""},
   "binding": {"entry_id": "…", "snapshot_digest": "…", "source_digest": "…",
@@ -71,13 +72,18 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 - 重建时按 `occurrence_id` 找最新决定；绑定完全一致才沿用生命周期；任一 binding digest 变化 →
   `needs_recheck`，记录 `changed_bindings` 与 `previous_lifecycle`。
 - 决定历史按 occurrence 保存在 `review.history`，导入/导出不删除旧动作；决定记录不存在时默认 `open`。
-- 找不到 occurrence 的决定写入 manifest `REVIEW_DECISION_ORPHANED` 诊断，决定本身不丢。
+- 找不到 occurrence 的决定写入 manifest `REVIEW_DECISION_ORPHANED` 诊断，决定本身不丢；
+  `project_identity_digest` 与当前索引不一致的决定不参与应用，写入
+  `REVIEW_DECISION_PROJECT_MISMATCH` 诊断，避免切换项目复用旧决定。
+- `decision_id` 与决定 canonical 内容绑定；导入时若提供的 id 与重算摘要不一致会返回
+  `REVIEW_DECISION_INVALID`。要修改已有决定，请去掉 `decision_id` 或追加一条新动作，
+  而不是原地改 lifecycle/note。
 
 ## 4. CLI
 
 | 命令 | 说明 |
 |---|---|
-| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest/JSONL/dir，构建/重建索引；输出 JSONL + manifest + Markdown；无 decisions 时写模板 |
+| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest/JSONL/dir，构建/重建索引；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在时报 `REVIEW_INDEX_INPUT_MISSING` |
 | `review-index-status --index PATH` | 只读汇总条目数、finding 附着数、生命周期计数、needs_recheck 与诊断 |
 | `review-decisions-export --index PATH --file PATH` | 导出当前决定日志；无决定时导出可编辑模板（reviewer.name 为 `TODO`） |
 | `review-decisions-import --index PATH --file PATH` | 校验并追加决定；重复 `decision_id` 跳过，孤儿 occurrence 记诊断；随后刷新索引 review 状态，不覆盖输入决定文件 |
@@ -118,6 +124,7 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 |---|---|
 | `REVIEW_QUALITY_FINDING_UNMATCHED` | quality finding 未能匹配任何 corpus occurrence；仍保留在 manifest diagnostics |
 | `REVIEW_DECISION_ORPHANED` | 决定引用的 occurrence 不在当前索引；决定保留但不应用 |
+| `REVIEW_DECISION_PROJECT_MISMATCH` | 决定项目身份与当前索引不一致；不应用该决定 |
 | `REVIEW_QUALITY_FINDING_AMBIGUOUS` | 同一 occurrence 匹配到多个来源不明的 finding，需人工确认 |
 | `REVIEW_CORPUS_ROW_MISSING_IDENTITY` | corpus row 缺 occurrence_id，跳过并显式诊断 |
 | `REVIEW_INDEX_INPUT_MISSING` / `REVIEW_INDEX_INPUT_INVALID` | corpus / findings / decisions 输入缺失或不可解析 |

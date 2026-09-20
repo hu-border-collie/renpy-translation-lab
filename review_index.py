@@ -61,6 +61,7 @@ MAX_NOTE_LENGTH = 4000
 
 DIAGNOSTIC_FINDING_UNMATCHED = "REVIEW_QUALITY_FINDING_UNMATCHED"
 DIAGNOSTIC_DECISION_ORPHANED = "REVIEW_DECISION_ORPHANED"
+DIAGNOSTIC_DECISION_PROJECT_MISMATCH = "REVIEW_DECISION_PROJECT_MISMATCH"
 DIAGNOSTIC_DECISION_AMBIGUOUS_FINDING = "REVIEW_QUALITY_FINDING_AMBIGUOUS"
 
 
@@ -609,8 +610,12 @@ def normalize_decision(
             details={"occurrence_id": occurrence_id},
         )
     decided_at = str(raw.get("decided_at") or "").strip() or now or _utc_now()
+    project_identity_digest = str(
+        raw.get("project_identity_digest") or ""
+    ).strip()
     canonical = {
         "occurrence_id": occurrence_id,
+        "project_identity_digest": project_identity_digest,
         "lifecycle": lifecycle,
         "reviewer": {
             "type": reviewer_type,
@@ -621,13 +626,20 @@ def normalize_decision(
         "note": note,
         "decided_at": decided_at,
     }
-    decision_id = str(raw.get("decision_id") or "").strip() or _digest_payload(
-        canonical
-    )[:24]
+    computed_id = _digest_payload(canonical)[:24]
+    provided_id = str(raw.get("decision_id") or "").strip()
+    if provided_id and provided_id != computed_id:
+        raise ReviewIndexError(
+            "REVIEW_DECISION_INVALID",
+            "decision_id 与决定内容不一致；修改已有决定请去掉 decision_id 或追加新动作。",
+            details={"occurrence_id": occurrence_id},
+        )
+    decision_id = provided_id or computed_id
     record = {
         "schema_version": REVIEW_DECISION_SCHEMA_VERSION,
         "decision_id": decision_id,
         "occurrence_id": occurrence_id,
+        "project_identity_digest": project_identity_digest,
         "lifecycle": lifecycle,
         "reviewer": canonical["reviewer"],
         "binding": normalized_binding,
@@ -704,6 +716,9 @@ def _latest_by_occurrence(
 def _decision_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "decision_id": str(decision.get("decision_id") or ""),
+        "project_identity_digest": str(
+            decision.get("project_identity_digest") or ""
+        ),
         "lifecycle": str(decision.get("lifecycle") or ""),
         "reviewer": dict(decision.get("reviewer") or {}),
         "note": str(decision.get("note") or ""),
@@ -752,7 +767,24 @@ def apply_decisions(
     for entry in entries:
         item = dict(entry)
         occurrence_id = str(item.get("occurrence_id") or "")
-        history = by_occurrence.get(occurrence_id, [])
+        entry_project = str(
+            (item.get("project") or {}).get("identity_digest") or ""
+        )
+        history: list[dict[str, Any]] = []
+        for row in by_occurrence.get(occurrence_id, []):
+            row_project = str(row.get("project_identity_digest") or "")
+            if row_project and row_project != entry_project:
+                diagnostics.append(
+                    {
+                        "code": DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
+                        "occurrence_id": occurrence_id,
+                        "decision_id": str(row.get("decision_id") or ""),
+                        "decision_project_identity_digest": row_project,
+                        "entry_project_identity_digest": entry_project,
+                    }
+                )
+                continue
+            history.append(row)
         review = dict(item.get("review") or {})
         review["history"] = [_decision_summary(row) for row in history]
         if not history:
@@ -813,6 +845,9 @@ def decision_template(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, An
             {
                 "schema_version": REVIEW_DECISION_SCHEMA_VERSION,
                 "occurrence_id": str(entry.get("occurrence_id") or ""),
+                "project_identity_digest": str(
+                    (entry.get("project") or {}).get("identity_digest") or ""
+                ),
                 "lifecycle": LIFECYCLE_OPEN,
                 "reviewer": {"type": "human", "name": "TODO"},
                 "binding": dict(entry.get("binding") or {}),

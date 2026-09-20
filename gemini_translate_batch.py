@@ -5117,7 +5117,14 @@ def run_review_index_command(args):
                 f"unmatched diagnostics: "
                 f"{sum(1 for item in payload.get('diagnostics') or [] if item.get('code') == 'REVIEW_QUALITY_FINDING_UNMATCHED')}"
             )
-            return {'status': 'ready', **payload}
+            return {
+                'status': (
+                    'needs_recheck'
+                    if int(payload.get('needs_recheck_count') or 0)
+                    else 'ready'
+                ),
+                **payload,
+            }
 
         if command == 'review-decisions-import':
             result = review_index.import_decisions_into_index(
