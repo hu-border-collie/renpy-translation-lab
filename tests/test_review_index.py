@@ -502,6 +502,63 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
 
+    def test_template_import_is_idempotent_without_decided_at(self) -> None:
+        raw = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "lifecycle": "resolved",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "",
+        }
+
+        first = ri.normalize_decision(dict(raw))
+        second = ri.normalize_decision(dict(raw))
+        merged, summary = ri.merge_decisions([], [first, second])
+
+        self.assertEqual(first["decision_id"], second["decision_id"])
+        self.assertEqual(summary["duplicate_count"], 1)
+        self.assertEqual(len(merged), 1)
+
+    def test_import_project_mismatch_reports_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
+            decision = {
+                "occurrence_id": "occ-1",
+                "project_identity_digest": "other-project",
+                "lifecycle": "resolved",
+                "reviewer": {"type": "human", "name": "reviewer-a"},
+                "binding": dict(target["binding"]),
+                "note": "",
+            }
+            incoming = root / "incoming.jsonl"
+            incoming.write_text(
+                json.dumps(decision, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            result = ri.import_decisions_into_index(package, incoming)
+            refreshed = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(result["status"], "blocked")
+        self.assertEqual(result["merge"]["mismatched_count"], 1)
+        refreshed_target = next(
+            entry for entry in refreshed if entry["occurrence_id"] == "occ-1"
+        )
+        self.assertEqual(refreshed_target["review"]["lifecycle"], "open")
+
     def test_decision_without_project_identity_is_rejected(self) -> None:
         with self.assertRaises(ri.ReviewIndexError) as captured:
             ri.normalize_decision(

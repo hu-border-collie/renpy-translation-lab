@@ -619,7 +619,7 @@ def normalize_decision(
             "decision.project_identity_digest 不能为空。",
             details={"occurrence_id": occurrence_id},
         )
-    canonical = {
+    identity_payload = {
         "occurrence_id": occurrence_id,
         "project_identity_digest": project_identity_digest,
         "lifecycle": lifecycle,
@@ -630,9 +630,8 @@ def normalize_decision(
         },
         "binding": normalized_binding,
         "note": note,
-        "decided_at": decided_at,
     }
-    computed_id = _digest_payload(canonical)[:24]
+    computed_id = _digest_payload(identity_payload)[:24]
     provided_id = str(raw.get("decision_id") or "").strip()
     if provided_id and provided_id != computed_id:
         raise ReviewIndexError(
@@ -647,7 +646,7 @@ def normalize_decision(
         "occurrence_id": occurrence_id,
         "project_identity_digest": project_identity_digest,
         "lifecycle": lifecycle,
-        "reviewer": canonical["reviewer"],
+        "reviewer": identity_payload["reviewer"],
         "binding": normalized_binding,
         "note": note,
         "decided_at": decided_at,
@@ -1154,6 +1153,11 @@ def import_decisions_into_index(
         if item.get("code") != DIAGNOSTIC_DECISION_ORPHANED
     ]
     diagnostics.extend(decision_diagnostics)
+    mismatched_count = sum(
+        1
+        for item in diagnostics
+        if item.get("code") == DIAGNOSTIC_DECISION_PROJECT_MISMATCH
+    )
     manifest["diagnostics"] = diagnostics
     status = review_index_status(manifest, entries)
     scope = dict(manifest.get("scope") or {})
@@ -1189,8 +1193,15 @@ def import_decisions_into_index(
         ensure_ascii=False,
         indent=2,
     )
+    merge_summary = {**merge_summary, "mismatched_count": mismatched_count}
+    if mismatched_count:
+        status = "blocked"
+    elif manifest["scope"].get("needs_recheck_count"):
+        status = "needs_recheck"
+    else:
+        status = "ready"
     return {
-        "status": "needs_recheck" if manifest["scope"].get("needs_recheck_count") else "ready",
+        "status": status,
         "merge": merge_summary,
         "scope": manifest["scope"],
         "decisions_path": str(decisions_file),

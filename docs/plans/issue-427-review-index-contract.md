@@ -75,10 +75,12 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 - 找不到 occurrence 的决定写入 manifest `REVIEW_DECISION_ORPHANED` 诊断，决定本身不丢；
   `project_identity_digest` 与当前索引不一致的决定不参与应用，写入
   `REVIEW_DECISION_PROJECT_MISMATCH` 诊断，避免切换项目复用旧决定。
-- `decision_id` 与决定 canonical 内容绑定；导入时若提供的 id 与重算摘要不一致会返回
-  `REVIEW_DECISION_INVALID`。要修改已有决定，请去掉 `decision_id` 或追加一条新动作，
-  而不是原地改 lifecycle/note。
+- `decision_id` 与决定内容绑定（occurrence、project、lifecycle、reviewer、binding、note），
+  不含导入时自动填入的 `decided_at`，因此模板未填时间时重复导入同一内容会被判为 duplicate；
+  若提供的 id 与重算摘要不一致返回 `REVIEW_DECISION_INVALID`。要修改已有决定，请去掉
+  `decision_id` 或追加一条新动作，而不是原地改 lifecycle/note。
 - `project_identity_digest` 必填；缺失或与当前索引不一致的决定不应用，避免跨项目复用。
+  导入结果会在 `merge.mismatched_count` 暴露数量，并返回 `status=blocked`，不会只显示 ready。
 - manifest 中 `inputs.decisions.path` 一律保存绝对路径；导入/导出发现 manifest 引用的
   决定文件不存在时返回 `REVIEW_INDEX_INPUT_MISSING`，不会静默新建到错误目录。
 

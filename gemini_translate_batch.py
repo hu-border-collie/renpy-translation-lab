@@ -5136,7 +5136,8 @@ def run_review_index_command(args):
             print(
                 f"- imported: {merge.get('imported_count', 0)}, "
                 f"duplicates: {merge.get('duplicate_count', 0)}, "
-                f"orphaned: {merge.get('orphaned_count', 0)}"
+                f"orphaned: {merge.get('orphaned_count', 0)}, "
+                f"mismatched: {merge.get('mismatched_count', 0)}"
             )
             print(f"- status: {result.get('status') or ''}")
             return result
