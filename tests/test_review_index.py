@@ -765,8 +765,8 @@ class DecisionTests(unittest.TestCase):
             entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
 
         self.assertEqual(
-            rebuilt["inputs"]["quality_findings"]["path"],
-            str(findings),
+            Path(rebuilt["inputs"]["quality_findings"]["path"]).resolve(),
+            findings.resolve(),
         )
         target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
         self.assertTrue(target["quality_finding_ids"])
@@ -805,8 +805,8 @@ class DecisionTests(unittest.TestCase):
             refreshed = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
 
         self.assertEqual(
-            rebuilt["inputs"]["decisions"]["path"],
-            str(external_decisions),
+            Path(rebuilt["inputs"]["decisions"]["path"]).resolve(),
+            external_decisions.resolve(),
         )
         refreshed_target = next(
             entry for entry in refreshed if entry["occurrence_id"] == "occ-1"
