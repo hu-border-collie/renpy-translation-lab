@@ -551,6 +551,21 @@ def normalize_decision(
 
     if not isinstance(raw, Mapping):
         raise ReviewIndexError("REVIEW_DECISION_INVALID", "decision 必须是对象。")
+    raw_version = raw.get("schema_version")
+    if raw_version not in (None, ""):
+        try:
+            version = int(raw_version)
+        except (TypeError, ValueError) as exc:
+            raise ReviewIndexError(
+                "REVIEW_DECISION_INVALID",
+                "decision.schema_version 必须是整数。",
+            ) from exc
+        if version != REVIEW_DECISION_SCHEMA_VERSION:
+            raise ReviewIndexError(
+                "REVIEW_DECISION_INVALID",
+                f"不支持的 decision schema_version：{version}",
+                details={"schema_version": version},
+            )
     occurrence_id = str(raw.get("occurrence_id") or "").strip()
     if not occurrence_id:
         raise ReviewIndexError(
@@ -685,19 +700,41 @@ def merge_decisions(
 
     known = set(known_occurrence_ids)
     merged: list[dict[str, Any]] = [dict(item) for item in existing]
-    seen = {str(item.get("decision_id") or "") for item in merged}
+    latest_by_occurrence: dict[str, str] = {}
+    for item in merged:
+        occurrence_id = str(item.get("occurrence_id") or "")
+        if occurrence_id:
+            latest_by_occurrence[occurrence_id] = str(
+                item.get("decision_id") or ""
+            )
+    # Stable chronological append: explicit timestamps first, original order
+    # for template rows without a timestamp.
+    ordered_incoming = [
+        decision
+        for _index, decision in sorted(
+            enumerate(incoming),
+            key=lambda pair: (
+                str(pair[1].get("decided_at") or ""),
+                pair[0],
+            ),
+        )
+    ]
     duplicate_count = 0
     orphaned_count = 0
-    for row in incoming:
+    for row in ordered_incoming:
         decision = normalize_decision(row)
+        occurrence_id = str(decision.get("occurrence_id") or "")
         decision_id = str(decision.get("decision_id") or "")
-        if decision_id in seen:
+        # Repeating the latest action is an idempotent duplicate; repeating an
+        # older action (for example ignored -> resolved -> ignored) is a new
+        # reversion action and must be appended.
+        if decision_id == latest_by_occurrence.get(occurrence_id):
             duplicate_count += 1
             continue
-        seen.add(decision_id)
-        if known and str(decision.get("occurrence_id") or "") not in known:
+        if known and occurrence_id not in known:
             orphaned_count += 1
         merged.append(decision)
+        latest_by_occurrence[occurrence_id] = decision_id
     return merged, {
         "existing_count": len(existing),
         "imported_count": len(incoming),
@@ -904,6 +941,22 @@ def build_review_index(
 ) -> dict[str, Any]:
     """Build (or rebuild) one index package; decisions file is never overwritten."""
 
+    target_dir = Path(output_dir)
+    if decisions_path is None:
+        existing_manifest_path = target_dir / REVIEW_INDEX_MANIFEST_NAME
+        if existing_manifest_path.is_file():
+            try:
+                existing_manifest = _read_json_object(existing_manifest_path)
+            except ReviewIndexError:
+                existing_manifest = {}
+            recorded_path = str(
+                ((existing_manifest.get("inputs") or {}).get("decisions") or {}).get(
+                    "path"
+                )
+                or ""
+            ).strip()
+            if recorded_path:
+                decisions_path = recorded_path
     corpus = load_corpus_bundle(corpus_path)
     findings_bundle = load_quality_findings(quality_findings_path)
     records_bundle = load_translation_records(translation_records_path)
@@ -926,7 +979,6 @@ def build_review_index(
     entries, decision_diagnostics = apply_decisions(entries, decisions)
     diagnostics.extend(decision_diagnostics)
 
-    target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     index_path = target_dir / REVIEW_INDEX_JSONL_NAME
     manifest_path = target_dir / REVIEW_INDEX_MANIFEST_NAME

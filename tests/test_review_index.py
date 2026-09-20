@@ -598,6 +598,96 @@ class DecisionTests(unittest.TestCase):
             "open",
         )
 
+    def test_repeating_older_decision_is_a_new_reversion_action(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "same note",
+        }
+        ignored = ri.normalize_decision({**base, "lifecycle": "ignored"})
+        resolved = ri.normalize_decision(
+            {**base, "lifecycle": "resolved", "note": "resolved note"}
+        )
+
+        merged, summary = ri.merge_decisions([ignored, resolved], [ignored])
+
+        self.assertEqual(summary["duplicate_count"], 0)
+        self.assertEqual(len(merged), 3)
+        self.assertEqual(merged[-1]["lifecycle"], "ignored")
+
+    def test_unsupported_decision_schema_version_is_rejected(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.normalize_decision(
+                {
+                    "schema_version": 99,
+                    "occurrence_id": "occ-1",
+                    "project_identity_digest": "project-a",
+                    "lifecycle": "resolved",
+                    "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "x",
+                        "snapshot_digest": "x",
+                        "source_digest": "x",
+                        "target_digest": "x",
+                        "context_digest": "x",
+                        "evidence_digest": "x",
+                    },
+                }
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
+
+    def test_rebuild_reuses_recorded_external_decisions_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
+            external_decisions = root / "external_decisions.jsonl"
+            external_decisions.write_text(
+                json.dumps(
+                    {
+                        "occurrence_id": "occ-1",
+                        "project_identity_digest": target["project"]["identity_digest"],
+                        "lifecycle": "resolved",
+                        "reviewer": {"type": "human", "name": "reviewer-a"},
+                        "binding": dict(target["binding"]),
+                        "note": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            ri.build_review_index(
+                corpus,
+                decisions_path=external_decisions,
+                output_dir=package,
+            )
+            rebuilt = ri.build_review_index(corpus, output_dir=package)
+            refreshed = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(
+            rebuilt["inputs"]["decisions"]["path"],
+            str(external_decisions),
+        )
+        refreshed_target = next(
+            entry for entry in refreshed if entry["occurrence_id"] == "occ-1"
+        )
+        self.assertEqual(refreshed_target["review"]["lifecycle"], "resolved")
+
     def test_decision_without_project_identity_is_rejected(self) -> None:
         with self.assertRaises(ri.ReviewIndexError) as captured:
             ri.normalize_decision(

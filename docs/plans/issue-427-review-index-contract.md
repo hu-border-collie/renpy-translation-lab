@@ -142,5 +142,10 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 - 索引是派生缓存；S1 不实现 GUI、不生成 revision proposal、不直接写 `.rpy`。
 - 质量 finding 的匹配依赖 corpus row 的 file/line 与 item_id；路径规范化范围有限，
   未匹配会显式诊断，不会静默当作通过。
-- 决定日志按 occurrence 的最新一条生效；时间戳用于展示/审计，不参与绑定 freshness。
+- 决定日志按 occurrence 的最新一条生效；导入按 `decided_at`（缺失时按输入顺序）稳定追加，
+  重复“最新动作”按 duplicate 跳过；重复“较早动作”（如 ignored → resolved → ignored）
+  视为新的回退动作并追加，保证用户意图不被静默忽略。
+- 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
+- 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
+  决定路径；记录路径不存在时报 `REVIEW_INDEX_INPUT_MISSING`，不静默清空人工历史。
 - 真实大语料的分页、性能与窗口交互在 S2 测量；S1 只保证离线 JSONL 可复现。
