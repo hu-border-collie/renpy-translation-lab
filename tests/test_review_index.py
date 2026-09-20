@@ -209,6 +209,51 @@ class BuildIndexTests(unittest.TestCase):
         self.assertEqual(loaded_manifest["kind"], "review_index")
         self.assertEqual(len(entries), 3)
 
+    def test_relative_decisions_path_is_persisted_absolute(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            decisions_file = root / "decisions.jsonl"
+            decisions_file.write_text("", encoding="utf-8")
+            with contextlib.chdir(root):
+                manifest = ri.build_review_index(
+                    "corpus",
+                    decisions_path="decisions.jsonl",
+                    output_dir="index",
+                )
+
+        self.assertTrue(
+            os.path.isabs(manifest["inputs"]["decisions"]["path"])
+        )
+
+    def test_manifest_missing_decisions_file_is_rejected_on_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            manifest = ri.build_review_index(corpus, output_dir=package)
+            manifest_path = package / ri.REVIEW_INDEX_MANIFEST_NAME
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["inputs"]["decisions"] = {
+                "path": str(root / "missing_decisions.jsonl"),
+                "digest": "",
+                "count": 0,
+            }
+            manifest_path.write_text(
+                json.dumps(payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            incoming = root / "incoming.jsonl"
+            incoming.write_text("", encoding="utf-8")
+
+            with self.assertRaises(ri.ReviewIndexError) as captured:
+                ri.import_decisions_into_index(manifest_path, incoming)
+
+        self.assertEqual(
+            captured.exception.code,
+            "REVIEW_INDEX_INPUT_MISSING",
+        )
+
     def test_rebuild_is_deterministic_and_preserves_duplicate_occurrences(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -281,6 +326,7 @@ class DecisionTests(unittest.TestCase):
             target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
             decision = {
                 "occurrence_id": "occ-1",
+                "project_identity_digest": target["project"]["identity_digest"],
                 "lifecycle": "resolved",
                 "reviewer": {"type": "human", "name": "reviewer-a"},
                 "binding": dict(target["binding"]),
@@ -362,6 +408,7 @@ class DecisionTests(unittest.TestCase):
             target = next(entry for entry in entries_a if entry["occurrence_id"] == "occ-1")
             decision = {
                 "occurrence_id": "occ-1",
+                "project_identity_digest": target["project"]["identity_digest"],
                 "lifecycle": "resolved",
                 "reviewer": {"type": "human", "name": "reviewer-a"},
                 "binding": dict(target["binding"]),
@@ -373,7 +420,11 @@ class DecisionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            corpus_b = _write_corpus(root / "b", current_translation="您好")
+            corpus_b = _write_corpus(
+                root / "b",
+                current_translation="您好",
+                game_root=root / "a" / "game",
+            )
             index_b = root / "index-b"
             manifest_b = ri.build_review_index(
                 corpus_b,
@@ -434,6 +485,27 @@ class DecisionTests(unittest.TestCase):
             ri.normalize_decision(
                 {
                     "decision_id": "tampered",
+                    "occurrence_id": "occ-1",
+                    "project_identity_digest": "project-a",
+                    "lifecycle": "resolved",
+                    "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "x",
+                        "snapshot_digest": "x",
+                        "source_digest": "x",
+                        "target_digest": "x",
+                        "context_digest": "x",
+                        "evidence_digest": "x",
+                    },
+                }
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
+
+    def test_decision_without_project_identity_is_rejected(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.normalize_decision(
+                {
                     "occurrence_id": "occ-1",
                     "lifecycle": "resolved",
                     "reviewer": {"type": "human", "name": "reviewer-a"},

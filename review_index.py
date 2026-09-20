@@ -613,6 +613,12 @@ def normalize_decision(
     project_identity_digest = str(
         raw.get("project_identity_digest") or ""
     ).strip()
+    if not project_identity_digest:
+        raise ReviewIndexError(
+            "REVIEW_DECISION_INVALID",
+            "decision.project_identity_digest 不能为空。",
+            details={"occurrence_id": occurrence_id},
+        )
     canonical = {
         "occurrence_id": occurrence_id,
         "project_identity_digest": project_identity_digest,
@@ -773,7 +779,7 @@ def apply_decisions(
         history: list[dict[str, Any]] = []
         for row in by_occurrence.get(occurrence_id, []):
             row_project = str(row.get("project_identity_digest") or "")
-            if row_project and row_project != entry_project:
+            if row_project != entry_project:
                 diagnostics.append(
                     {
                         "code": DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
@@ -929,10 +935,10 @@ def build_review_index(
     decisions_file = target_dir / REVIEW_DECISIONS_JSONL_NAME
     template_path = target_dir / REVIEW_DECISIONS_TEMPLATE_NAME
     if decision_source is None and decisions_file.is_file():
-        decisions = load_decisions(decisions_file)
+        decision_source = decisions_file.resolve()
+        decisions = load_decisions(decision_source)
         entries, extra = apply_decisions(entries, decisions)
         diagnostics.extend(extra)
-        decision_source = decisions_file
     if not decisions and not decisions_file.is_file():
         atomic_write_jsonl(
             template_path,
@@ -984,7 +990,11 @@ def build_review_index(
                 "count": records_bundle["count"],
             },
             "decisions": {
-                "path": str(decision_source) if decision_source else "",
+                "path": (
+                    os.path.abspath(str(decision_source))
+                    if decision_source
+                    else ""
+                ),
                 "digest": _file_digest(decision_source) if decision_source else "",
                 "count": len(decisions),
             },
@@ -1100,10 +1110,20 @@ def import_decisions_into_index(
     decisions_path = str(
         ((manifest.get("inputs") or {}).get("decisions") or {}).get("path") or ""
     ).strip()
-    if not decisions_path:
-        decisions_path = str(
-            Path(manifest.get("_manifest_path", "")).parent / REVIEW_DECISIONS_JSONL_NAME
+    if decisions_path:
+        decisions_file = Path(decisions_path)
+        if not decisions_file.is_file():
+            raise ReviewIndexError(
+                "REVIEW_INDEX_INPUT_MISSING",
+                f"manifest 引用的 decisions 文件不存在：{decisions_file}",
+                details={"path": str(decisions_file)},
+            )
+    else:
+        decisions_file = (
+            Path(manifest.get("_manifest_path", "")).parent
+            / REVIEW_DECISIONS_JSONL_NAME
         )
+        decisions_path = str(decisions_file)
     existing = load_decisions(decisions_path)
     incoming_rows = load_jsonl(decisions_input, label="review decisions import")
     incoming = [normalize_decision(row) for row in incoming_rows]
@@ -1113,7 +1133,6 @@ def import_decisions_into_index(
         incoming,
         known_occurrence_ids=known_ids,
     )
-    decisions_file = Path(decisions_path)
     atomic_write_jsonl(decisions_file, merged, ensure_ascii=False)
     entries, decision_diagnostics = apply_decisions(entries, merged)
     jsonl_path = str(manifest.get("_jsonl_path") or "")
@@ -1190,8 +1209,15 @@ def export_decisions(
     decisions_path = str(
         ((manifest.get("inputs") or {}).get("decisions") or {}).get("path") or ""
     ).strip()
-    if decisions_path and Path(decisions_path).is_file():
-        decisions = load_decisions(decisions_path)
+    if decisions_path:
+        decisions_file = Path(decisions_path)
+        if not decisions_file.is_file():
+            raise ReviewIndexError(
+                "REVIEW_INDEX_INPUT_MISSING",
+                f"manifest 引用的 decisions 文件不存在：{decisions_file}",
+                details={"path": str(decisions_file)},
+            )
+        decisions = load_decisions(decisions_file)
         mode = "decisions"
     else:
         decisions = decision_template(entries)
