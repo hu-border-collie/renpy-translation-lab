@@ -12,6 +12,9 @@
 
 ## 当前设计
 
+- [七类规划方向重新评估（2026-09-19）](plan_reassessment_2026-09-19.md)：
+  记录固定基线的代码与离线验证证据、继续推进或暂缓的理由及触发条件；
+  复用决策 GUI、质量白名单拆分已登记为 #512 / #513，其余映射到已有任务。
 - [#488 翻译预检最小增量字段合同](issue-488-preflight-summary-contract.md)：
   冻结现有 `translate-preflight` payload 基线，以及成本 / coverage / 已有质量摘要三个最小新增字段的来源、
   freshness / unknown 语义与 CLI/GUI 展示合同。S1 payload、S2/S3 展示/文档与 S1.5
