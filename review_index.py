@@ -1106,6 +1106,14 @@ def import_decisions_into_index(
         if item.get("code") == DIAGNOSTIC_FINDING_UNMATCHED
     )
     manifest["scope"] = scope
+    markdown_path = str(
+        ((manifest.get("paths") or {}).get("markdown") or "")
+    ).strip()
+    if markdown_path:
+        atomic_write_text(
+            markdown_path,
+            render_review_index_markdown(entries, manifest),
+        )
     atomic_write_json(
         str(manifest.get("_manifest_path") or ""),
         {

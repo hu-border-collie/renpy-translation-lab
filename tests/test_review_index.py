@@ -243,6 +243,9 @@ class DecisionTests(unittest.TestCase):
 
             result = ri.import_decisions_into_index(index_path, decisions_file)
             refreshed = ri.load_jsonl(root / "index" / ri.REVIEW_INDEX_JSONL_NAME)
+            markdown = (
+                root / "index" / ri.REVIEW_INDEX_MARKDOWN_NAME
+            ).read_text(encoding="utf-8")
 
         self.assertEqual(result["merge"]["imported_count"], 1)
         refreshed_target = next(
@@ -253,6 +256,7 @@ class DecisionTests(unittest.TestCase):
             refreshed_target["review"]["reviewer"]["name"], "reviewer-a"
         )
         self.assertFalse(refreshed_target["review"]["needs_recheck"])
+        self.assertIn("[resolved]", markdown)
         self.assertEqual(manifest["scope"]["entry_count"], 3)
 
     def test_binding_change_derives_needs_recheck(self) -> None:
