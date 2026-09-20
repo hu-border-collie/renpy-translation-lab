@@ -640,6 +640,67 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["note"], note)
 
+    def test_reimporting_older_file_does_not_revert_newer_decision(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "",
+        }
+        ignored = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "ignored",
+                "decided_at": "2026-09-20T00:00:00+00:00",
+            }
+        )
+        resolved = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "resolved",
+                "decided_at": "2026-09-20T01:00:00+00:00",
+            }
+        )
+
+        merged, summary = ri.merge_decisions([ignored, resolved], [ignored])
+
+        self.assertEqual(summary["stale_count"], 1)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[-1]["lifecycle"], "resolved")
+
+    def test_bare_corpus_jsonl_without_manifest_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jsonl = root / "revision_corpus.jsonl"
+            jsonl.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "occurrence_id": "occ-1",
+                        "file_rel_path": "tl/ch1.rpy",
+                        "source": "Hello",
+                        "current_translation": "你好",
+                        "locator": {"line": 1},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ri.ReviewIndexError) as captured:
+                ri.build_review_index(jsonl, output_dir=root / "index")
+
+        self.assertEqual(captured.exception.code, "REVIEW_INDEX_INPUT_MISSING")
+
     def test_repeated_multi_action_import_is_idempotent(self) -> None:
         base = {
             "occurrence_id": "occ-1",

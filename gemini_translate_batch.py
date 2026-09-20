@@ -5138,6 +5138,7 @@ def run_review_index_command(args):
                 f"- imported: {merge.get('imported_count', 0)}, "
                 f"duplicates: {merge.get('duplicate_count', 0)}, "
                 f"orphaned: {merge.get('orphaned_count', 0)}, "
+                f"stale: {merge.get('stale_count', 0)}, "
                 f"mismatched: {merge.get('mismatched_count', 0)}"
             )
             print(f"- status: {result.get('status') or ''}")
@@ -21345,7 +21346,10 @@ def build_arg_parser():
     review_index_build_parser.add_argument(
         '--corpus',
         required=True,
-        help='Revision corpus manifest / JSONL / directory from export-revision-corpus.',
+        help=(
+            'Revision corpus manifest / directory, or a JSONL with its sibling '
+            'revision_corpus_manifest.json; bare JSONL without manifest is rejected.'
+        ),
     )
     review_index_build_parser.add_argument(
         '--quality-findings',

@@ -89,7 +89,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 
 | 命令 | 说明 |
 |---|---|
-| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest/JSONL/dir，构建/重建索引；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在时报 `REVIEW_INDEX_INPUT_MISSING` |
+| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest / 目录，或带同目录 manifest 的 JSONL；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在或裸 JSONL 缺 manifest 时报 `REVIEW_INDEX_INPUT_MISSING` |
 | `review-index-status --index PATH` | 只读汇总条目数、finding 附着数、生命周期计数、needs_recheck 与诊断 |
 | `review-decisions-export --index PATH --file PATH` | 导出当前决定日志；无决定时导出可编辑模板（reviewer.name 为 `TODO`）；manifest 引用的决定文件缺失时报错 |
 | `review-decisions-import --index PATH --file PATH` | 校验并追加决定；重复 `decision_id` 跳过，孤儿 occurrence 记诊断；跨项目决定整批拒绝（`REVIEW_DECISION_PROJECT_MISMATCH`）；随后刷新索引 review 状态，不覆盖输入决定文件 |
@@ -144,7 +144,8 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
   未匹配会显式诊断，不会静默当作通过。
 - 决定日志按 occurrence 的最新一条生效；导入按 `decided_at`（缺失时按输入顺序）稳定追加。
   重复导入同一段动作序列（如 ignored → resolved）按最长尾部重叠判定为 duplicate；重复“较早
-  动作”（如 ignored → resolved → ignored）视为新的回退动作并追加，保证用户意图不被静默忽略。
+  动作”（如 ignored → resolved → ignored）在时间戳不早于当前最新决定时视为新的回退动作并追加。
+  重新导入早于当前最新决定的旧文件会记为 `stale_count` 并跳过，不会静默把审计状态改回旧值。
 - 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
 - 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
   决定路径；记录路径不存在时报 `REVIEW_INDEX_INPUT_MISSING`，不静默清空人工历史。

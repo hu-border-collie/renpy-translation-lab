@@ -233,7 +233,11 @@ def load_corpus_bundle(corpus_path: str | os.PathLike[str]) -> dict[str, Any]:
             details={"path": str(jsonl_path), "error": str(exc)},
         ) from exc
     if not isinstance(manifest, dict) or not manifest:
-        manifest = {"schema_version": 0, "project": {}, "source": {}, "paths": {}}
+        raise ReviewIndexError(
+            "REVIEW_INDEX_INPUT_MISSING",
+            f"corpus JSONL 缺少同目录 revision_corpus_manifest.json：{jsonl_path}",
+            details={"jsonl": str(jsonl_path)},
+        )
     return {
         "manifest": manifest,
         "manifest_path": str(manifest_path) if manifest_path else "",
@@ -728,12 +732,14 @@ def merge_decisions(
         )
     ]
     existing_ids_by_occurrence: dict[str, list[str]] = {}
+    latest_existing_by_occurrence: dict[str, dict[str, Any]] = {}
     for item in merged:
         occurrence_id = str(item.get("occurrence_id") or "")
         if occurrence_id:
             existing_ids_by_occurrence.setdefault(occurrence_id, []).append(
                 str(item.get("decision_id") or "")
             )
+            latest_existing_by_occurrence[occurrence_id] = dict(item)
     incoming_ids_by_occurrence: dict[str, list[str]] = {}
     for decision in ordered_incoming:
         occurrence_id = str(decision.get("occurrence_id") or "")
@@ -755,6 +761,7 @@ def merge_decisions(
         overlap_by_occurrence[occurrence_id] = overlap
     duplicate_count = 0
     orphaned_count = 0
+    stale_count = 0
     incoming_index_by_occurrence: dict[str, int] = {}
     current_ids_by_occurrence = {
         occurrence_id: list(existing_ids)
@@ -772,14 +779,29 @@ def merge_decisions(
         if current_ids and decision_id == current_ids[-1]:
             duplicate_count += 1
             continue
+        latest_existing = latest_existing_by_occurrence.get(occurrence_id)
+        incoming_decided_at = str(decision.get("decided_at") or "")
+        if latest_existing is not None:
+            latest_decided_at = str(latest_existing.get("decided_at") or "")
+            if (
+                incoming_decided_at
+                and latest_decided_at
+                and incoming_decided_at < latest_decided_at
+            ):
+                # Re-importing an older exported file must not silently revert
+                # a newer decision; it is a stale replay, not a new action.
+                stale_count += 1
+                continue
         if known and occurrence_id not in known:
             orphaned_count += 1
         merged.append(decision)
         current_ids.append(decision_id)
+        latest_existing_by_occurrence[occurrence_id] = decision
     return merged, {
         "existing_count": len(existing),
         "imported_count": len(incoming),
         "duplicate_count": duplicate_count,
+        "stale_count": stale_count,
         "orphaned_count": orphaned_count,
         "total_count": len(merged),
     }
