@@ -275,15 +275,19 @@ class BuildIndexTests(unittest.TestCase):
 
 
 class DecisionTests(unittest.TestCase):
-    def test_project_identity_distinguishes_game_roots(self) -> None:
+    def test_project_identity_is_portable_across_game_root_move(self) -> None:
         first = ri.project_identity(
             {"project": {"slug": "demo", "tl_subdir": "schinese", "game_root": "/a"}}
         )
         second = ri.project_identity(
             {"project": {"slug": "demo", "tl_subdir": "schinese", "game_root": "/b"}}
         )
+        other_project = ri.project_identity(
+            {"project": {"slug": "other", "tl_subdir": "schinese", "game_root": "/a"}}
+        )
 
-        self.assertNotEqual(first["identity_digest"], second["identity_digest"])
+        self.assertEqual(first["identity_digest"], second["identity_digest"])
+        self.assertNotEqual(first["identity_digest"], other_project["identity_digest"])
         self.assertNotIn("/a", json.dumps(first, ensure_ascii=False))
 
     def test_ignored_decision_is_lifecycle_only(self) -> None:
@@ -343,6 +347,11 @@ class DecisionTests(unittest.TestCase):
             markdown = (
                 root / "index" / ri.REVIEW_INDEX_MARKDOWN_NAME
             ).read_text(encoding="utf-8")
+            manifest_payload = json.loads(
+                (root / "index" / ri.REVIEW_INDEX_MANIFEST_NAME).read_text(
+                    encoding="utf-8"
+                )
+            )
 
         self.assertEqual(result["merge"]["imported_count"], 1)
         refreshed_target = next(
@@ -355,6 +364,12 @@ class DecisionTests(unittest.TestCase):
         self.assertFalse(refreshed_target["review"]["needs_recheck"])
         self.assertIn("[resolved]", markdown)
         self.assertEqual(manifest["scope"]["entry_count"], 3)
+        recorded_decisions = manifest_payload["inputs"]["decisions"]["path"]
+        self.assertTrue(os.path.isabs(recorded_decisions))
+        self.assertEqual(
+            manifest_payload["paths"]["decisions"],
+            recorded_decisions,
+        )
 
     def test_binding_change_derives_needs_recheck(self) -> None:
         entry = {
@@ -633,6 +648,27 @@ class DecisionTests(unittest.TestCase):
                     "project_identity_digest": "project-a",
                     "lifecycle": "resolved",
                     "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "x",
+                        "snapshot_digest": "x",
+                        "source_digest": "x",
+                        "target_digest": "x",
+                        "context_digest": "x",
+                        "evidence_digest": "x",
+                    },
+                }
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
+
+    def test_template_placeholder_reviewer_is_rejected(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.normalize_decision(
+                {
+                    "occurrence_id": "occ-1",
+                    "project_identity_digest": "project-a",
+                    "lifecycle": "open",
+                    "reviewer": {"type": "human", "name": "TODO"},
                     "binding": {
                         "entry_id": "x",
                         "snapshot_digest": "x",

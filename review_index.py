@@ -247,17 +247,13 @@ def project_identity(corpus_manifest: Mapping[str, Any]) -> dict[str, Any]:
     project = project if isinstance(project, Mapping) else {}
     slug = str(project.get("slug") or "").strip() or "unknown"
     tl_subdir = str(project.get("tl_subdir") or "").strip()
-    game_root = str(project.get("game_root") or "").strip()
-    game_root_digest = (
-        stable_text_sha256(os.path.abspath(game_root)) if game_root else ""
-    )
-    identity_digest = stable_text_sha256(
-        f"project\0{slug}\0{tl_subdir}\0{game_root_digest}"
-    )
+    # Identity is deliberately path-portable: moving or copying a project must
+    # keep human decisions recoverable.  Cross-project isolation relies on the
+    # slug + target subdir plus occurrence/binding digests, not machine paths.
+    identity_digest = stable_text_sha256(f"project\0{slug}\0{tl_subdir}")
     return {
         "slug": slug,
         "tl_subdir": tl_subdir,
-        "game_root_digest": game_root_digest,
         "identity_digest": identity_digest,
     }
 
@@ -598,6 +594,12 @@ def normalize_decision(
         raise ReviewIndexError(
             "REVIEW_DECISION_INVALID",
             "decision.reviewer.name 不能为空。",
+            details={"occurrence_id": occurrence_id},
+        )
+    if reviewer_name.upper() == "TODO":
+        raise ReviewIndexError(
+            "REVIEW_DECISION_INVALID",
+            "decision.reviewer.name 仍是模板占位值 TODO，请填写实际 reviewer。",
             details={"occurrence_id": occurrence_id},
         )
     binding = raw.get("binding")
@@ -990,17 +992,15 @@ def build_review_index(
         decisions = load_decisions(decision_source)
         entries, extra = apply_decisions(entries, decisions)
         diagnostics.extend(extra)
+    template_written = False
     if not decisions and not decisions_file.is_file():
         atomic_write_jsonl(
             template_path,
             decision_template(entries),
             ensure_ascii=False,
         )
+        template_written = True
     atomic_write_jsonl(index_path, entries, ensure_ascii=False)
-    atomic_write_text(
-        markdown_path,
-        render_review_index_markdown(entries, {"scope": {}}),
-    )
     lifecycle_counts = {key: 0 for key in sorted(LIFECYCLE_ALL)}
     for entry in entries:
         review = entry.get("review") if isinstance(entry.get("review"), Mapping) else {}
@@ -1085,9 +1085,7 @@ def build_review_index(
             "markdown": os.path.abspath(markdown_path),
             "decisions": os.path.abspath(decision_source) if decision_source else "",
             "template": (
-                os.path.abspath(template_path)
-                if template_path.is_file()
-                else ""
+                os.path.abspath(template_path) if template_written else ""
             ),
         },
     }
@@ -1192,7 +1190,7 @@ def import_decisions_into_index(
             )
     else:
         decisions_file = (
-            Path(manifest.get("_manifest_path", "")).parent
+            Path(manifest.get("_manifest_path", "")).resolve().parent
             / REVIEW_DECISIONS_JSONL_NAME
         )
         decisions_path = str(decisions_file)
@@ -1243,6 +1241,9 @@ def import_decisions_into_index(
     )
     manifest_inputs["decisions"] = decisions_meta
     manifest["inputs"] = manifest_inputs
+    manifest_paths = dict(manifest.get("paths") or {})
+    manifest_paths["decisions"] = str(decisions_file)
+    manifest["paths"] = manifest_paths
     stale_decision_codes = {
         DIAGNOSTIC_DECISION_ORPHANED,
         DIAGNOSTIC_DECISION_PROJECT_MISMATCH,

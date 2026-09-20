@@ -35,7 +35,7 @@ review-decisions-import ──> review_decisions.jsonl   人工决定日志，�
 | 字段 | 说明 |
 |---|---|
 | `entry_id` | 由 project_id + occurrence_id + file/line + source/target/context/evidence digest 派生；内容变化会生成新 entry_id |
-| `project` | `slug`、`tl_subdir`、`identity_digest`；与 #348 项目/任务身份约定对齐，不引入绝对路径 |
+| `project` | `slug`、`tl_subdir`、`identity_digest`；身份与机器路径无关，项目移动/复制后决定仍可恢复，不同 slug/subdir 相互隔离 |
 | `occurrence_id` / `identity_v2` | 复用 #320 的 occurrence 身份；重复原文不合并 |
 | `file_rel_path` / `locator` / `display_line` / `speaker_id` | 定位与展示 |
 | `source` / `current_translation` / `context` | 原文、当前译文与同文件前后上下文 |
@@ -148,4 +148,7 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 - 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
 - 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
   决定路径；记录路径不存在时报 `REVIEW_INDEX_INPUT_MISSING`，不静默清空人工历史。
+- 模板中的 `reviewer.name = "TODO"` 会被导入校验拒绝，避免整份未编辑模板写入决定日志。
 - 真实大语料的分页、性能与窗口交互在 S2 测量；S1 只保证离线 JSONL 可复现。
+- 本地索引 manifest 为定位输入/决定文件会记录本机绝对路径；它属于本地工作产物，不应直接
+  附到公开 issue/PR。对外交接请使用决定 JSONL 模板/导出，而不是原始 manifest。
