@@ -1,10 +1,10 @@
 # 七类规划方向重新评估
 
-> **状态（2026-09-19）：评估已完成，两项后续实现已登记为 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512) / [#513](https://github.com/hu-border-collie/renpy-translation-lab/issues/513)，尚未交付。** 其他方向按已有任务或本文触发条件推进。全量计划状态整理仍由 [#510](https://github.com/hu-border-collie/renpy-translation-lab/issues/510) 跟踪。
+> **状态（2026-09-19 评估；2026-09-20 更新）：评估已完成，两项后续实现已登记为 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512) / [#513](https://github.com/hu-border-collie/renpy-translation-lab/issues/513)，尚未交付；字体只读 spike PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已合并为 [main@a107ca4](https://github.com/hu-border-collie/renpy-translation-lab/commit/a107ca4e04d1e31c1cc84c83ad1e50a9eda92157)，[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 已关闭，生产接入范围待评估。** 其他方向按已有任务或本文触发条件推进。全量计划状态整理仍由 [#510](https://github.com/hu-border-collie/renpy-translation-lab/issues/510) 跟踪。
 
 评估日期：2026-09-19。固定代码基线：[main@a94ff89](https://github.com/hu-border-collie/renpy-translation-lab/commit/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb)。评估验证阶段在该提交的临时源码副本上检查和运行离线验证，未修改产品代码或执行真实模型调用。
 
-入库前再次核对：主干为 [main@3ddca7a](https://github.com/hu-border-collie/renpy-translation-lab/commit/3ddca7aa17b12b9c88aaa0927b3b39fcc65dddb1)，相对评估基线只增加 PR [#507](https://github.com/hu-border-collie/renpy-translation-lab/pull/507) 的验证准备文档。字体只读 spike 已有开放 PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511)，尚未合并；本文没有复验该 PR 的运行结果。以下源码证据与测试数字仍对应固定评估基线，任务状态为此次日期快照。
+入库前核对（2026-09-20 更新）：主干为 [main@a107ca4](https://github.com/hu-border-collie/renpy-translation-lab/commit/a107ca4e04d1e31c1cc84c83ad1e50a9eda92157)，相对评估基线增加了 PR [#507](https://github.com/hu-border-collie/renpy-translation-lab/pull/507) 的验证准备文档与已合并的字体只读 spike PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511)（[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 已关闭）。本文没有复验 PR #511 的运行结果。以下源码证据与测试数字仍对应固定评估基线 [main@a94ff89](https://github.com/hu-border-collie/renpy-translation-lab/commit/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb)，其余任务状态为 2026-09-19 快照，字体接入状态以本节更新与第 6 节为准。
 
 本报告区分已验证事实、工程判断和仍需实验的数据。它是当前取舍建议，不把原研究中的全部建议转成开发承诺。
 
@@ -17,7 +17,7 @@
 | 复用、恢复和回滚 GUI | 拆开处理；复用决策 GUI 已具备立项条件，成功写回撤销还需要新合同 | 已建 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512)，只包装已有复用核心；成功写回撤销暂不开发 |
 | 扫描、术语及质量规则 | 白名单拆分具备立项依据；通用过滤、术语强制占位和自动断行暂缓 | 已建 [#513](https://github.com/hu-border-collie/renpy-translation-lab/issues/513)，保留旧配置语义；其他改动等待具体样例与误报评估 |
 | LiteLLM、新协议与默认策略 | 保留可选 LiteLLM；先补现有直连的真实验证 | [#431](https://github.com/hu-border-collie/renpy-translation-lab/issues/431)/[#344](https://github.com/hu-border-collie/renpy-translation-lab/issues/344)；按实际 Provider / embedding 需求再拆协议或迁移单 |
-| 字体检查产品接入 | 明确值得做，但先完成只读能力的支持范围 | 跟踪 [#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) / 待审 PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511)，之后再决定 doctor/preflight/GUI 接入范围 |
+| 字体检查产品接入 | 明确值得做，但先完成只读能力的支持范围 | PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已合并、[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 已关闭；评估其支持范围后再决定 doctor/preflight/GUI 接入范围 |
 | Story Graph、终审 Agent Loop、RAG | 质量架构扩展暂缓；RAG 存在可测量性能成本，但尚不支持换库决定 | [#147](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) 收集质量收益；[#305](https://github.com/hu-border-collie/renpy-translation-lab/issues/305) 保持触发式方向；真实任务中记录 RAG 的耗时占比 |
 
 本轮评估后新增的实现任务只有两项：
@@ -25,7 +25,7 @@
 1. [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512)：**在现有复用候选界面提交审校决定并导出复用结果**。
 2. [#513](https://github.com/hu-border-collie/renpy-translation-lab/issues/513)：**区分语言允许词与排版豁免词，保留旧白名单语义**。
 
-二者已进入待办，但不抢占 [#508](https://github.com/hu-border-collie/renpy-translation-lab/issues/508) 的主线实验与已有 [#427](https://github.com/hu-border-collie/renpy-translation-lab/issues/427)/[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487)。RAG 读侧优化是低优先级候选：只有实际使用这条路径并确认准备/检索耗时明显时，再拆小优化单；不能把合成基准阈值直接当成整个产品的性能事故。
+二者已进入待办，但不抢占 [#508](https://github.com/hu-border-collie/renpy-translation-lab/issues/508) 的主线实验与 [#427](https://github.com/hu-border-collie/renpy-translation-lab/issues/427) 等在办任务。RAG 读侧优化是低优先级候选：只有实际使用这条路径并确认准备/检索耗时明显时，再拆小优化单；不能把合成基准阈值直接当成整个产品的性能事故。
 
 ## 1. 两阶段翻译与上下文编排
 
@@ -86,11 +86,11 @@
 
 ## 6. 字体检查正式产品接入
 
-**决定：值得做，继续跟踪 [#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487)；生产接入等待其结果。** 在固定评估基线中，字体工作主要服务工具 GUI，未找到游戏实际译文字集的覆盖检查实现。入库时 PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已提交只读覆盖 spike，仍处于开放待审状态；应先审查并验证其支持范围，不能重复安排为尚未开工，也不能视为已交付。[fontTools 官方接口](https://fonttools.readthedocs.io/en/latest/ttLib/ttFont.html)可读取字体映射，本机只读探针也验证：Arial 对 A/é 有映射、对“中”无映射；Microsoft YaHei 第一个字面对三者都有映射。本轮没有分发字体或将该环境中已安装的库视为项目已声明依赖。
+**决定：值得做；[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 已关闭、PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已合并，生产接入等待对已合并 spike 支持范围的评估结果。** 在固定评估基线中，字体工作主要服务工具 GUI，未找到游戏实际译文字集的覆盖检查实现。PR #511 已交付只读覆盖 spike，但仍应先审查并验证其支持范围，不能重复安排为尚未开工，也不能视为生产接入已交付。[fontTools 官方接口](https://fonttools.readthedocs.io/en/latest/ttLib/ttFont.html)可读取字体映射，本机只读探针也验证：Arial 对 A/é 有映射、对“中”无映射；Microsoft YaHei 字体对三者都有映射。本轮没有分发字体或将该环境中已安装的库视为项目已声明依赖。
 
 这只验证静态 cmap 查询的可行性。[Ren'Py FontGroup](https://www.renpy.org/doc/html/text.html#font-groups)可按范围、顺序和映射选择字体，样式、字体集合索引、替换、动态配置和实际渲染还会影响结果。
 
-首版只承诺：可解析的静态字体引用、实际译文字符集、确定缺失和无法判定的 checked/missing/unknown 证据。unknown 不等于通过；静态覆盖也不等于 shaping、溢出或游戏显示通过。[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 应产出可再分发 fixture、明确支持范围与成本预算，然后才拆 doctor/preflight/GUI 接入；不同时做自动注入字体或通用游戏解释器。
+首版只承诺：可解析的静态字体引用、实际译文字符集、确定缺失和无法判定的 checked/missing/unknown 证据。unknown 不等于通过；静态覆盖也不等于 shaping、溢出或游戏显示通过。已合并的 PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已交付可再分发 fixture 与支持范围；在此基础上明确成本预算，然后才拆 doctor/preflight/GUI 接入；不同时做自动注入字体或通用游戏解释器。
 
 ## 7. Story Graph、终审 Agent Loop 与 RAG
 
@@ -121,4 +121,4 @@
 - `python -B benchmark_rag_store.py --sizes 100,1000,5000 --queries 5 --dim 768 --seed 42`：完成；表中为实际输出。
 - 独立合成探针验证白名单耦合、显式场景边界和成功事务清理；本机字体只读探针验证 cmap 层可行性。
 
-没有执行真实 Provider 计费调用、真实游戏翻译、盲评或游戏启动，也没有完成 [#508](https://github.com/hu-border-collie/renpy-translation-lab/issues/508)/[#509](https://github.com/hu-border-collie/renpy-translation-lab/issues/509)/[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 的正式验收。评估结论已经给出；这些真实结果是后续实施或扩大范围的触发条件，而非本轮已经获得的证据。
+没有执行真实 Provider 计费调用、真实游戏翻译、盲评或游戏启动，也没有完成 [#508](https://github.com/hu-border-collie/renpy-translation-lab/issues/508)/[#509](https://github.com/hu-border-collie/renpy-translation-lab/issues/509) 的正式验收或复验 [#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 的字体 spike 结果。评估结论已经给出；这些真实结果是后续实施或扩大范围的触发条件，而非本轮已经获得的证据。
