@@ -613,6 +613,73 @@ class DecisionTests(unittest.TestCase):
             "open",
         )
 
+    def test_jsonl_round_trip_keeps_unicode_line_separators(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "decisions.jsonl"
+            note = "line one\u2028line two\u0085line three"
+            decision = ri.normalize_decision(
+                {
+                    "occurrence_id": "occ-1",
+                    "project_identity_digest": "project-a",
+                    "lifecycle": "resolved",
+                    "reviewer": {"type": "human", "name": "reviewer-a"},
+                    "binding": {
+                        "entry_id": "entry",
+                        "snapshot_digest": "snapshot",
+                        "source_digest": "source",
+                        "target_digest": "target",
+                        "context_digest": "context",
+                        "evidence_digest": "evidence",
+                    },
+                    "note": note,
+                }
+            )
+            ri.atomic_write_jsonl(path, [decision], ensure_ascii=False)
+            rows = ri.load_jsonl(path, label="decisions")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["note"], note)
+
+    def test_repeated_multi_action_import_is_idempotent(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "",
+        }
+        ignored = ri.normalize_decision({**base, "lifecycle": "ignored"})
+        resolved = ri.normalize_decision({**base, "lifecycle": "resolved"})
+
+        merged, summary = ri.merge_decisions([ignored, resolved], [ignored, resolved])
+
+        self.assertEqual(summary["duplicate_count"], 2)
+        self.assertEqual(len(merged), 2)
+
+    def test_corpus_without_project_identity_is_rejected(self) -> None:
+        with self.assertRaises(ri.ReviewIndexError) as captured:
+            ri.build_index_entries(
+                [
+                    {
+                        "occurrence_id": "occ-1",
+                        "file_rel_path": "tl/ch1.rpy",
+                        "source": "Hello",
+                        "current_translation": "你好",
+                        "locator": {"line": 1},
+                    }
+                ],
+                {},
+            )
+
+        self.assertEqual(captured.exception.code, "REVIEW_INDEX_INPUT_INVALID")
+
     def test_repeating_older_decision_is_a_new_reversion_action(self) -> None:
         base = {
             "occurrence_id": "occ-1",

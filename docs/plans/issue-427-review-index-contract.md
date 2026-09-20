@@ -35,7 +35,7 @@ review-decisions-import ──> review_decisions.jsonl   人工决定日志，�
 | 字段 | 说明 |
 |---|---|
 | `entry_id` | 由 project_id + occurrence_id + file/line + source/target/context/evidence digest 派生；内容变化会生成新 entry_id |
-| `project` | `slug`、`tl_subdir`、`identity_digest`；身份与机器路径无关，项目移动/复制后决定仍可恢复，不同 slug/subdir 相互隔离 |
+| `project` | `slug`、`tl_subdir`、`identity_digest`；身份与机器路径无关，项目移动/复制后决定仍可恢复，不同 slug/subdir 相互隔离；缺 manifest project 信息时拒绝构建而不是回落到 `unknown` |
 | `occurrence_id` / `identity_v2` | 复用 #320 的 occurrence 身份；重复原文不合并 |
 | `file_rel_path` / `locator` / `display_line` / `speaker_id` | 定位与展示 |
 | `source` / `current_translation` / `context` | 原文、当前译文与同文件前后上下文 |
@@ -142,9 +142,9 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 - 索引是派生缓存；S1 不实现 GUI、不生成 revision proposal、不直接写 `.rpy`。
 - 质量 finding 的匹配依赖 corpus row 的 file/line 与 item_id；路径规范化范围有限，
   未匹配会显式诊断，不会静默当作通过。
-- 决定日志按 occurrence 的最新一条生效；导入按 `decided_at`（缺失时按输入顺序）稳定追加，
-  重复“最新动作”按 duplicate 跳过；重复“较早动作”（如 ignored → resolved → ignored）
-  视为新的回退动作并追加，保证用户意图不被静默忽略。
+- 决定日志按 occurrence 的最新一条生效；导入按 `decided_at`（缺失时按输入顺序）稳定追加。
+  重复导入同一段动作序列（如 ignored → resolved）按最长尾部重叠判定为 duplicate；重复“较早
+  动作”（如 ignored → resolved → ignored）视为新的回退动作并追加，保证用户意图不被静默忽略。
 - 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
 - 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
   决定路径；记录路径不存在时报 `REVIEW_INDEX_INPUT_MISSING`，不静默清空人工历史。

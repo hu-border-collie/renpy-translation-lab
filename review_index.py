@@ -147,7 +147,7 @@ def load_jsonl(path: str | os.PathLike[str], *, label: str = "JSONL") -> list[di
         )
     rows: list[dict[str, Any]] = []
     try:
-        lines = source.read_text(encoding="utf-8-sig").splitlines()
+        lines = source.read_text(encoding="utf-8-sig").split("\n")
     except (OSError, UnicodeError) as exc:
         raise ReviewIndexError(
             "REVIEW_INDEX_INPUT_INVALID",
@@ -394,6 +394,17 @@ def build_index_entries(
     """Build derived entries; findings/records only attach by stable identity."""
 
     project = project_identity(corpus_manifest)
+    if (
+        not project.get("slug")
+        or project.get("slug") == "unknown"
+        or not project.get("tl_subdir")
+    ):
+        raise ReviewIndexError(
+            "REVIEW_INDEX_INPUT_INVALID",
+            "corpus manifest 缺少 project.slug / project.tl_subdir，"
+            "无法建立可隔离的项目身份。",
+            details={"project": dict(project)},
+        )
     findings_by_key: dict[tuple[str, int], list[dict[str, Any]]] = {}
     findings_by_item: dict[str, list[dict[str, Any]]] = {}
     for finding in findings:
@@ -702,18 +713,11 @@ def merge_decisions(
 
     known = set(known_occurrence_ids)
     merged: list[dict[str, Any]] = [dict(item) for item in existing]
-    latest_by_occurrence: dict[str, str] = {}
-    for item in merged:
-        occurrence_id = str(item.get("occurrence_id") or "")
-        if occurrence_id:
-            latest_by_occurrence[occurrence_id] = str(
-                item.get("decision_id") or ""
-            )
     # Stable chronological append: explicit timestamps first, original order
     # for template rows without a timestamp.
     ordered_incoming = [
-        decision
-        for _index, decision in sorted(
+        normalize_decision(row)
+        for _index, row in sorted(
             enumerate(incoming),
             key=lambda pair: (
                 str(pair[1].get("decided_at") or ""),
@@ -721,22 +725,55 @@ def merge_decisions(
             ),
         )
     ]
+    existing_ids_by_occurrence: dict[str, list[str]] = {}
+    for item in merged:
+        occurrence_id = str(item.get("occurrence_id") or "")
+        if occurrence_id:
+            existing_ids_by_occurrence.setdefault(occurrence_id, []).append(
+                str(item.get("decision_id") or "")
+            )
+    incoming_ids_by_occurrence: dict[str, list[str]] = {}
+    for decision in ordered_incoming:
+        occurrence_id = str(decision.get("occurrence_id") or "")
+        if occurrence_id:
+            incoming_ids_by_occurrence.setdefault(occurrence_id, []).append(
+                str(decision.get("decision_id") or "")
+            )
+    # A repeated multi-action import (for example ignored -> resolved) must be
+    # idempotent: skip the longest incoming prefix that already matches the
+    # tail of the existing per-occurrence log, then append only the new suffix.
+    overlap_by_occurrence: dict[str, int] = {}
+    for occurrence_id, incoming_ids in incoming_ids_by_occurrence.items():
+        existing_ids = existing_ids_by_occurrence.get(occurrence_id, [])
+        overlap = 0
+        for size in range(min(len(incoming_ids), len(existing_ids)), 0, -1):
+            if incoming_ids[:size] == existing_ids[-size:]:
+                overlap = size
+                break
+        overlap_by_occurrence[occurrence_id] = overlap
     duplicate_count = 0
     orphaned_count = 0
-    for row in ordered_incoming:
-        decision = normalize_decision(row)
+    incoming_index_by_occurrence: dict[str, int] = {}
+    current_ids_by_occurrence = {
+        occurrence_id: list(existing_ids)
+        for occurrence_id, existing_ids in existing_ids_by_occurrence.items()
+    }
+    for decision in ordered_incoming:
         occurrence_id = str(decision.get("occurrence_id") or "")
         decision_id = str(decision.get("decision_id") or "")
-        # Repeating the latest action is an idempotent duplicate; repeating an
-        # older action (for example ignored -> resolved -> ignored) is a new
-        # reversion action and must be appended.
-        if decision_id == latest_by_occurrence.get(occurrence_id):
+        decision_index = incoming_index_by_occurrence.get(occurrence_id, 0)
+        incoming_index_by_occurrence[occurrence_id] = decision_index + 1
+        if decision_index < overlap_by_occurrence.get(occurrence_id, 0):
+            duplicate_count += 1
+            continue
+        current_ids = current_ids_by_occurrence.setdefault(occurrence_id, [])
+        if current_ids and decision_id == current_ids[-1]:
             duplicate_count += 1
             continue
         if known and occurrence_id not in known:
             orphaned_count += 1
         merged.append(decision)
-        latest_by_occurrence[occurrence_id] = decision_id
+        current_ids.append(decision_id)
     return merged, {
         "existing_count": len(existing),
         "imported_count": len(incoming),
@@ -744,17 +781,6 @@ def merge_decisions(
         "orphaned_count": orphaned_count,
         "total_count": len(merged),
     }
-
-
-def _latest_by_occurrence(
-    decisions: Sequence[Mapping[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    latest: dict[str, dict[str, Any]] = {}
-    for decision in decisions:
-        occurrence_id = str(decision.get("occurrence_id") or "")
-        if occurrence_id:
-            latest[occurrence_id] = dict(decision)
-    return latest
 
 
 def _decision_summary(decision: Mapping[str, Any]) -> dict[str, Any]:
