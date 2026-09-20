@@ -148,7 +148,10 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             manifest={
                 "kind": "review_index",
                 "inputs": {
-                    "corpus_manifest": {"path": r"C:\jobs\corpus\revision_corpus_manifest.json"}
+                    "corpus_manifest": {
+                        "path": r"C:\jobs\corpus\revision_corpus_manifest.json"
+                    },
+                    "quality_findings": {"path": r"C:\jobs\corpus\quality_findings.jsonl"},
                 },
             },
         )
@@ -156,9 +159,15 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
         self.assertIn("逐条审校·重建索引", by_label)
         self.assertIn("review-index-build", by_label["逐条审校·重建索引"])
-        self.assertIn("逐条审校·状态", by_label)
+        self.assertIn(
+            "--quality-findings",
+            by_label["逐条审校·重建索引"],
+        )
+        self.assertIn("--index", by_label["逐条审校·状态"])
         self.assertIn("review-index-status", by_label["逐条审校·状态"])
+        self.assertIn("--index", by_label["逐条审校·导出决定"])
         self.assertIn("review-decisions-export", by_label["逐条审校·导出决定"])
+        self.assertIn("--index", by_label["逐条审校·导入决定"])
         self.assertIn("review-decisions-import", by_label["逐条审校·导入决定"])
 
     def test_command_reference_includes_quality_html_report(self):

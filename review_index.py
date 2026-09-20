@@ -216,6 +216,8 @@ def load_corpus_bundle(corpus_path: str | os.PathLike[str]) -> dict[str, Any]:
         elif manifest_path is not None:
             candidate = manifest_path.parent / revision_corpus.CORPUS_JSONL_NAME
             jsonl_path = candidate if candidate.is_file() else None
+    manifest_path = manifest_path.resolve() if manifest_path else None
+    jsonl_path = jsonl_path.resolve() if jsonl_path else None
     if jsonl_path is None or not jsonl_path.is_file():
         raise ReviewIndexError(
             "REVIEW_INDEX_INPUT_MISSING",
@@ -282,7 +284,7 @@ def _finding_summary(finding: Mapping[str, Any]) -> dict[str, Any]:
 def load_quality_findings(path: str | os.PathLike[str] | None) -> dict[str, Any]:
     if not path or not str(path).strip():
         return {"findings": [], "path": "", "digest": "", "count": 0}
-    source = Path(path)
+    source = Path(path).resolve()
     rows = load_jsonl(source, label="quality findings")
     findings: list[dict[str, Any]] = []
     for row in rows:
@@ -305,7 +307,7 @@ def load_quality_findings(path: str | os.PathLike[str] | None) -> dict[str, Any]
 def load_translation_records(path: str | os.PathLike[str] | None) -> dict[str, Any]:
     if not path or not str(path).strip():
         return {"records": [], "path": "", "digest": "", "count": 0}
-    source = Path(path)
+    source = Path(path).resolve()
     rows = load_jsonl(source, label="translation records")
     records: list[dict[str, Any]] = []
     for row in rows:
@@ -977,14 +979,36 @@ def build_review_index(
                 existing_manifest = _read_json_object(existing_manifest_path)
             except ReviewIndexError:
                 existing_manifest = {}
-            recorded_path = str(
-                ((existing_manifest.get("inputs") or {}).get("decisions") or {}).get(
-                    "path"
-                )
-                or ""
-            ).strip()
+            existing_inputs = existing_manifest.get("inputs")
+            existing_inputs = (
+                existing_inputs if isinstance(existing_inputs, Mapping) else {}
+            )
+            decisions_meta = existing_inputs.get("decisions")
+            recorded_path = (
+                str(decisions_meta.get("path") or "").strip()
+                if isinstance(decisions_meta, Mapping)
+                else ""
+            )
             if recorded_path:
                 decisions_path = recorded_path
+            if quality_findings_path is None:
+                findings_meta = existing_inputs.get("quality_findings")
+                recorded_findings = (
+                    str(findings_meta.get("path") or "").strip()
+                    if isinstance(findings_meta, Mapping)
+                    else ""
+                )
+                if recorded_findings:
+                    quality_findings_path = recorded_findings
+            if translation_records_path is None:
+                records_meta = existing_inputs.get("translation_records")
+                recorded_records = (
+                    str(records_meta.get("path") or "").strip()
+                    if isinstance(records_meta, Mapping)
+                    else ""
+                )
+                if recorded_records:
+                    translation_records_path = recorded_records
     corpus = load_corpus_bundle(corpus_path)
     findings_bundle = load_quality_findings(quality_findings_path)
     records_bundle = load_translation_records(translation_records_path)

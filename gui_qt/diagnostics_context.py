@@ -291,19 +291,36 @@ def build_cli_commands(
         corpus_meta = corpus_meta if isinstance(corpus_meta, dict) else {}
         corpus_path = str(corpus_meta.get("path") or "").strip()
         if corpus_path:
+            build_args = [
+                "review-index-build",
+                "--corpus",
+                corpus_path,
+                "--output-dir",
+                index_dir,
+            ]
+            findings_meta = inputs.get("quality_findings")
+            findings_path = (
+                str(findings_meta.get("path") or "").strip()
+                if isinstance(findings_meta, dict)
+                else ""
+            )
+            if findings_path:
+                build_args.extend(["--quality-findings", findings_path])
+            records_meta = inputs.get("translation_records")
+            records_path = (
+                str(records_meta.get("path") or "").strip()
+                if isinstance(records_meta, dict)
+                else ""
+            )
+            if records_path:
+                build_args.extend(["--translation-records", records_path])
             commands.append(
                 DiagnosticsCommand(
                     label="逐条审校·重建索引",
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
-                        [
-                            "review-index-build",
-                            "--corpus",
-                            corpus_path,
-                            "--output-dir",
-                            index_dir,
-                        ],
+                        build_args,
                     ),
                 )
             )
@@ -314,7 +331,7 @@ def build_cli_commands(
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
-                        ["review-index-status", manifest_path],
+                        ["review-index-status", "--index", manifest_path],
                     ),
                 ),
                 DiagnosticsCommand(
@@ -324,6 +341,7 @@ def build_cli_commands(
                         batch_script_path,
                         [
                             "review-decisions-export",
+                            "--index",
                             manifest_path,
                             "--file",
                             join_directory_file(
@@ -339,6 +357,7 @@ def build_cli_commands(
                         batch_script_path,
                         [
                             "review-decisions-import",
+                            "--index",
                             manifest_path,
                             "--file",
                             join_directory_file(

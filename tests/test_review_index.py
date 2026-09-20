@@ -749,6 +749,28 @@ class DecisionTests(unittest.TestCase):
 
         self.assertEqual(captured.exception.code, "REVIEW_DECISION_INVALID")
 
+    def test_rebuild_reuses_recorded_quality_findings_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            findings = _write_findings(root)
+            package = root / "index"
+            ri.build_review_index(
+                corpus,
+                quality_findings_path=findings,
+                output_dir=package,
+            )
+
+            rebuilt = ri.build_review_index(corpus, output_dir=package)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(
+            rebuilt["inputs"]["quality_findings"]["path"],
+            str(findings),
+        )
+        target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
+        self.assertTrue(target["quality_finding_ids"])
+
     def test_rebuild_reuses_recorded_external_decisions_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
