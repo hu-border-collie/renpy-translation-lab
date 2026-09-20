@@ -5084,12 +5084,14 @@ def run_review_index_command(args):
                 f"resolved={lifecycle_counts.get('resolved', 0)}, "
                 f"needs_recheck={lifecycle_counts.get('needs_recheck', 0)}"
             )
+            if int(scope.get('project_mismatch_count') or 0):
+                status = 'blocked'
+            elif int(scope.get('needs_recheck_count') or 0):
+                status = 'needs_recheck'
+            else:
+                status = 'ready'
             return {
-                'status': (
-                    'needs_recheck'
-                    if int(scope.get('needs_recheck_count') or 0)
-                    else 'ready'
-                ),
+                'status': status,
                 'index_manifest': manifest['paths']['manifest'],
                 'index_jsonl': manifest['paths']['jsonl'],
                 'decisions': manifest['paths'].get('decisions', ''),
@@ -5117,14 +5119,13 @@ def run_review_index_command(args):
                 f"unmatched diagnostics: "
                 f"{sum(1 for item in payload.get('diagnostics') or [] if item.get('code') == 'REVIEW_QUALITY_FINDING_UNMATCHED')}"
             )
-            return {
-                'status': (
-                    'needs_recheck'
-                    if int(payload.get('needs_recheck_count') or 0)
-                    else 'ready'
-                ),
-                **payload,
-            }
+            if int(payload.get('project_mismatch_count') or 0):
+                status = 'blocked'
+            elif int(payload.get('needs_recheck_count') or 0):
+                status = 'needs_recheck'
+            else:
+                status = 'ready'
+            return {'status': status, **payload}
 
         if command == 'review-decisions-import':
             result = review_index.import_decisions_into_index(

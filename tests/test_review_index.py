@@ -549,15 +549,54 @@ class DecisionTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ri.import_decisions_into_index(package, incoming)
-            refreshed = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            with self.assertRaises(ri.ReviewIndexError) as captured:
+                ri.import_decisions_into_index(package, incoming)
+            decisions_file_exists = (
+                package / ri.REVIEW_DECISIONS_JSONL_NAME
+            ).exists()
 
-        self.assertEqual(result["status"], "blocked")
-        self.assertEqual(result["merge"]["mismatched_count"], 1)
-        refreshed_target = next(
-            entry for entry in refreshed if entry["occurrence_id"] == "occ-1"
+        self.assertEqual(
+            captured.exception.code,
+            ri.DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
         )
-        self.assertEqual(refreshed_target["review"]["lifecycle"], "open")
+        self.assertFalse(decisions_file_exists)
+
+    def test_manual_mismatched_decision_reports_blocked_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
+            decision = {
+                "occurrence_id": "occ-1",
+                "project_identity_digest": "other-project",
+                "lifecycle": "resolved",
+                "reviewer": {"type": "human", "name": "reviewer-a"},
+                "binding": dict(target["binding"]),
+                "note": "",
+            }
+            decisions_file = root / "manual_decisions.jsonl"
+            decisions_file.write_text(
+                json.dumps(decision, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            manifest = ri.build_review_index(
+                corpus,
+                decisions_path=decisions_file,
+                output_dir=root / "index-manual",
+            )
+            refreshed = ri.load_jsonl(root / "index-manual" / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(manifest["scope"]["project_mismatch_count"], 1)
+        self.assertEqual(
+            next(
+                entry for entry in refreshed if entry["occurrence_id"] == "occ-1"
+            )["review"]["lifecycle"],
+            "open",
+        )
 
     def test_decision_without_project_identity_is_rejected(self) -> None:
         with self.assertRaises(ri.ReviewIndexError) as captured:

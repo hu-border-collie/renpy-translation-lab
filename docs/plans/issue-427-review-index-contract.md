@@ -79,8 +79,9 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
   不含导入时自动填入的 `decided_at`，因此模板未填时间时重复导入同一内容会被判为 duplicate；
   若提供的 id 与重算摘要不一致返回 `REVIEW_DECISION_INVALID`。要修改已有决定，请去掉
   `decision_id` 或追加一条新动作，而不是原地改 lifecycle/note。
-- `project_identity_digest` 必填；缺失或与当前索引不一致的决定不应用，避免跨项目复用。
-  导入结果会在 `merge.mismatched_count` 暴露数量，并返回 `status=blocked`，不会只显示 ready。
+- `project_identity_digest` 必填；导入时若任何决定属于其他项目，整批导入在写盘前返回
+  `REVIEW_DECISION_PROJECT_MISMATCH`，不会污染 append-only 决定日志；手工放入包目录的
+  跨项目决定不应用，manifest/status 暴露 `project_mismatch_count` 并返回 `blocked`。
 - manifest 中 `inputs.decisions.path` 一律保存绝对路径；导入/导出发现 manifest 引用的
   决定文件不存在时返回 `REVIEW_INDEX_INPUT_MISSING`，不会静默新建到错误目录。
 
@@ -91,7 +92,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 | `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest/JSONL/dir，构建/重建索引；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在时报 `REVIEW_INDEX_INPUT_MISSING` |
 | `review-index-status --index PATH` | 只读汇总条目数、finding 附着数、生命周期计数、needs_recheck 与诊断 |
 | `review-decisions-export --index PATH --file PATH` | 导出当前决定日志；无决定时导出可编辑模板（reviewer.name 为 `TODO`）；manifest 引用的决定文件缺失时报错 |
-| `review-decisions-import --index PATH --file PATH` | 校验并追加决定；重复 `decision_id` 跳过，孤儿 occurrence / 跨项目决定记诊断；随后刷新索引 review 状态，不覆盖输入决定文件 |
+| `review-decisions-import --index PATH --file PATH` | 校验并追加决定；重复 `decision_id` 跳过，孤儿 occurrence 记诊断；跨项目决定整批拒绝（`REVIEW_DECISION_PROJECT_MISMATCH`）；随后刷新索引 review 状态，不覆盖输入决定文件 |
 
 全部命令支持 `--output json`，并加入 `capabilities` / machine envelope 合同。S1 不修改
 translator config、API key、glossary、quality acknowledgement 或任何 `.rpy`。

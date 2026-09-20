@@ -1013,6 +1013,16 @@ def build_review_index(
             "needs_recheck_count": lifecycle_counts.get(
                 LIFECYCLE_NEEDS_RECHECK, 0
             ),
+            "project_mismatch_count": sum(
+                1
+                for item in diagnostics
+                if item.get("code") == DIAGNOSTIC_DECISION_PROJECT_MISMATCH
+            ),
+            "orphaned_decision_count": sum(
+                1
+                for item in diagnostics
+                if item.get("code") == DIAGNOSTIC_DECISION_ORPHANED
+            ),
             "lifecycle_counts": lifecycle_counts,
         },
         "diagnostics": diagnostics,
@@ -1085,6 +1095,7 @@ def review_index_status(
         lifecycle = str(review.get("lifecycle") or LIFECYCLE_OPEN)
         lifecycle_counts[lifecycle] = lifecycle_counts.get(lifecycle, 0) + 1
     scope = manifest.get("scope") if isinstance(manifest.get("scope"), Mapping) else {}
+    diagnostics = list(manifest.get("diagnostics") or [])
     return {
         "entry_count": len(entries),
         "finding_count": _coerce_int(scope.get("finding_count")),
@@ -1092,8 +1103,18 @@ def review_index_status(
             1 for entry in entries if entry.get("quality_finding_ids")
         ),
         "needs_recheck_count": lifecycle_counts.get(LIFECYCLE_NEEDS_RECHECK, 0),
+        "project_mismatch_count": sum(
+            1
+            for item in diagnostics
+            if item.get("code") == DIAGNOSTIC_DECISION_PROJECT_MISMATCH
+        ),
+        "orphaned_decision_count": sum(
+            1
+            for item in diagnostics
+            if item.get("code") == DIAGNOSTIC_DECISION_ORPHANED
+        ),
         "lifecycle_counts": lifecycle_counts,
-        "diagnostics": list(manifest.get("diagnostics") or []),
+        "diagnostics": diagnostics,
         "index_manifest": str(manifest.get("_manifest_path") or ""),
         "index_jsonl": str(manifest.get("_jsonl_path") or ""),
     }
@@ -1126,6 +1147,29 @@ def import_decisions_into_index(
     existing = load_decisions(decisions_path)
     incoming_rows = load_jsonl(decisions_input, label="review decisions import")
     incoming = [normalize_decision(row) for row in incoming_rows]
+    current_project_id = (
+        str((entries[0].get("project") or {}).get("identity_digest") or "")
+        if entries
+        else str((manifest.get("project") or {}).get("identity_digest") or "")
+    )
+    mismatched_incoming = [
+        decision
+        for decision in incoming
+        if str(decision.get("project_identity_digest") or "")
+        != current_project_id
+    ]
+    if mismatched_incoming:
+        raise ReviewIndexError(
+            DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
+            f"{len(mismatched_incoming)} 条决定属于其他项目，已拒绝导入。",
+            details={
+                "count": len(mismatched_incoming),
+                "occurrence_ids": sorted(
+                    str(decision.get("occurrence_id") or "")
+                    for decision in mismatched_incoming
+                ),
+            },
+        )
     known_ids = [str(entry.get("occurrence_id") or "") for entry in entries]
     merged, merge_summary = merge_decisions(
         existing,
@@ -1147,10 +1191,14 @@ def import_decisions_into_index(
     )
     manifest_inputs["decisions"] = decisions_meta
     manifest["inputs"] = manifest_inputs
+    stale_decision_codes = {
+        DIAGNOSTIC_DECISION_ORPHANED,
+        DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
+    }
     diagnostics = [
         item
         for item in (manifest.get("diagnostics") or [])
-        if item.get("code") != DIAGNOSTIC_DECISION_ORPHANED
+        if item.get("code") not in stale_decision_codes
     ]
     diagnostics.extend(decision_diagnostics)
     mismatched_count = sum(
@@ -1166,6 +1214,8 @@ def import_decisions_into_index(
         "finding_count",
         "entry_with_findings_count",
         "needs_recheck_count",
+        "project_mismatch_count",
+        "orphaned_decision_count",
         "lifecycle_counts",
     ):
         scope[key] = status[key]
