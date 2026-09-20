@@ -1,0 +1,551 @@
+"""Offline tests for the read-only font coverage spike (#487)."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import font_coverage as fc
+
+
+def format_12_subtable(groups: list[tuple[int, int]]) -> bytes:
+    """Build one cmap format 12 subtable."""
+
+    group_bytes = b"".join(
+        struct.pack(">III", start, start, glyph_id)
+        for start, glyph_id in groups
+    )
+    return struct.pack(
+        ">HHIII",
+        12,
+        0,
+        16 + len(group_bytes),
+        0,
+        len(groups),
+    ) + group_bytes
+
+
+def cmap_format_12_bytes(groups: list[tuple[int, int]]) -> bytes:
+    """Build a minimal cmap with one format 12 subtable."""
+
+    header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+    return header + format_12_subtable(groups)
+
+
+def format_0_subtable(mapping: dict[int, int]) -> bytes:
+    """Build one cmap format 0 subtable."""
+
+    glyphs = [0] * 256
+    for codepoint, glyph_id in mapping.items():
+        glyphs[codepoint] = glyph_id
+    return struct.pack(">HHH", 0, 262, 0) + bytes(glyphs)
+
+
+def format_4_subtable(pairs: list[tuple[int, int]]) -> bytes:
+    """Build one cmap format 4 subtable with one segment per pair."""
+
+    segments = [(codepoint, codepoint, glyph_id) for codepoint, glyph_id in pairs]
+    segments.append((0xFFFF, 0xFFFF, 1))
+    seg_count = len(segments)
+    end_codes = b"".join(struct.pack(">H", end) for _start, end, _gid in segments)
+    start_codes = b"".join(
+        struct.pack(">H", start) for start, _end, _gid in segments
+    )
+    deltas = b"".join(
+        struct.pack(">H", (glyph_id - start) & 0xFFFF)
+        for start, _end, glyph_id in segments
+    )
+    range_offsets = b"\x00\x00" * seg_count
+    length = 16 + 8 * seg_count
+    return (
+        struct.pack(">HHHHHHH", 4, length, 0, seg_count * 2, 0, 0, 0)
+        + end_codes
+        + b"\x00\x00"
+        + start_codes
+        + deltas
+        + range_offsets
+    )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = Path(__file__).parent / "fixtures" / "font_coverage_minimal"
+GAME_ROOT = FIXTURES / "game"
+TEXTS = FIXTURES / "texts"
+TL_DIR = FIXTURES / "tl"
+CJK_FONT = GAME_ROOT / "fonts" / "test_cjk_subset.ttf"
+LATIN_FONT = GAME_ROOT / "fonts" / "test_latin_subset.ttf"
+CORRUPT_FONT = GAME_ROOT / "fonts" / "corrupt.ttf"
+class CanaryEnvMixin:
+    """Point the fixture canary at a temp path so CWD never matters."""
+
+    def _set_up_canary(self) -> None:
+        self._canary_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._canary_tmp.cleanup)
+        self.canary_path = Path(self._canary_tmp.name) / "canary.txt"
+        self._canary_previous = os.environ.get("FONT_COVERAGE_CANARY_PATH")
+        os.environ["FONT_COVERAGE_CANARY_PATH"] = str(self.canary_path)
+        self.addCleanup(self._restore_canary_env)
+
+    def _restore_canary_env(self) -> None:
+        if self._canary_previous is None:
+            os.environ.pop("FONT_COVERAGE_CANARY_PATH", None)
+        else:
+            os.environ["FONT_COVERAGE_CANARY_PATH"] = self._canary_previous
+
+
+class FontFaceTests(unittest.TestCase):
+    def test_format_12_cmap_supports_supplementary_codepoints(self) -> None:
+        data = cmap_format_12_bytes([(0x20000, 7), (0x1F600, 8)])
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.format, 12)
+        self.assertEqual(index.glyph_id(0x20000), 7)
+        self.assertEqual(index.glyph_id(0x1F600), 8)
+        self.assertIsNone(index.glyph_id(0x41))
+
+    def test_truncated_format_0_cmap_is_rejected(self) -> None:
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 1, 12)
+        subtable = struct.pack(">HHH", 0, 262, 0) + b"\x00" * 20
+        data = header + subtable
+
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(
+            captured.exception.code,
+            fc.REASON_FONT_CMAP_UNSUPPORTED,
+        )
+
+    def test_multiple_cmap_subtables_are_merged(self) -> None:
+        format_4 = format_4_subtable([(0x41, 3)])
+        format_12 = format_12_subtable([(0x20000, 7)])
+        header = struct.pack(">HH", 0, 2)
+        records = (
+            struct.pack(">HHI", 3, 1, 20)
+            + struct.pack(">HHI", 3, 10, 20 + len(format_4))
+        )
+        data = header + records + format_4 + format_12
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.subtable_count, 2)
+        self.assertEqual(index.glyph_id(0x41), 3)
+        self.assertEqual(index.glyph_id(0x20000), 7)
+
+    def test_non_unicode_cmap_subtable_is_ignored(self) -> None:
+        unicode_table = format_4_subtable([(0x41, 3)])
+        mac_table = format_0_subtable({0xC5: 9})
+        header = struct.pack(">HH", 0, 2)
+        records = (
+            struct.pack(">HHI", 3, 1, 20)
+            + struct.pack(">HHI", 1, 0, 20 + len(unicode_table))
+        )
+        data = header + records + unicode_table + mac_table
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(index.subtable_count, 1)
+        self.assertEqual(index.glyph_id(0x41), 3)
+        self.assertIsNone(index.glyph_id(0xC5))
+
+    def test_truncated_format_12_subtable_is_cmap_unsupported(self) -> None:
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+        truncated = struct.pack(">HHII", 12, 0, 16, 0)
+        data = header + truncated
+
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc._parse_cmap(data, 0, len(data))
+
+        self.assertEqual(
+            captured.exception.code,
+            fc.REASON_FONT_CMAP_UNSUPPORTED,
+        )
+
+    def test_unicode_platform_name_record_decodes_as_utf16(self) -> None:
+        encoded = "测试字体".encode("utf-16-be")
+        string_offset = 6 + 12
+        record = struct.pack(
+            ">HHHHHH",
+            0,
+            0,
+            0,
+            1,
+            len(encoded),
+            0,
+        )
+        name_table = (
+            struct.pack(">HHH", 0, 1, string_offset) + record + encoded
+        )
+
+        family = fc._family_name(name_table, (0, len(name_table)))
+
+        self.assertEqual(family, "测试字体")
+
+    def test_format_12_zero_start_glyph_group_keeps_later_codepoints(self) -> None:
+        group = struct.pack(">III", 0x100, 0x102, 0)
+        subtable = struct.pack(">HHIII", 12, 0, 16 + len(group), 0, 1) + group
+        header = struct.pack(">HH", 0, 1) + struct.pack(">HHI", 3, 10, 12)
+        data = header + subtable
+
+        index = fc._parse_cmap(data, 0, len(data))
+
+        self.assertIsNone(index.glyph_id(0x100))
+        self.assertEqual(index.glyph_id(0x101), 1)
+        self.assertEqual(index.glyph_id(0x102), 2)
+
+    def test_font_over_size_limit_has_stable_reason(self) -> None:
+        with mock.patch.object(fc, "MAX_FONT_BYTES", 10):
+            with self.assertRaises(fc.FontCoverageError) as captured:
+                fc.load_font_face(CJK_FONT)
+
+        self.assertEqual(captured.exception.code, fc.REASON_FONT_TOO_LARGE)
+
+    def test_cjk_subset_covers_chinese_sample(self) -> None:
+        face = fc.load_font_face(CJK_FONT)
+
+        self.assertEqual(face.cmap_format, 4)
+        self.assertGreater(face.glyph_count, 0)
+        for character in "开始游戏你好继续，。—":
+            with self.subTest(character=character):
+                self.assertTrue(face.covers(character))
+
+    def test_latin_subset_is_missing_cjk_glyphs(self) -> None:
+        face = fc.load_font_face(LATIN_FONT)
+
+        self.assertTrue(face.covers("S"))
+        self.assertFalse(face.covers("你"))
+        self.assertFalse(face.covers("好"))
+
+    def test_missing_font_reports_stable_code(self) -> None:
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc.load_font_face(GAME_ROOT / "fonts" / "not_here.ttf")
+
+        self.assertEqual(captured.exception.code, fc.REASON_FONT_FILE_MISSING)
+
+    def test_corrupt_font_reports_stable_code(self) -> None:
+        with self.assertRaises(fc.FontCoverageError) as captured:
+            fc.load_font_face(CORRUPT_FONT)
+
+        self.assertEqual(captured.exception.code, fc.REASON_FONT_INVALID)
+
+
+class ReferenceScanTests(unittest.TestCase, CanaryEnvMixin):
+    def setUp(self) -> None:
+        self._set_up_canary()
+
+    def test_scan_never_executes_game_python(self) -> None:
+        references = fc.scan_font_references(GAME_ROOT)
+
+        self.assertTrue(references)
+        self.assertFalse(self.canary_path.exists())
+
+    def test_translate_style_font_override_is_scanned(self) -> None:
+        references = fc.scan_font_references(GAME_ROOT)
+        translated = [
+            item for item in references if item.script.startswith("tl/")
+        ]
+
+        self.assertTrue(translated)
+        self.assertTrue(all(item.kind == "static" for item in translated))
+        self.assertTrue(
+            any(item.style == "default" for item in translated)
+        )
+
+    def test_scan_classifies_static_dynamic_and_group_references(self) -> None:
+        by_style = {item.style: item for item in fc.scan_font_references(GAME_ROOT)}
+
+        self.assertEqual(by_style["default"].kind, "static")
+        self.assertEqual(by_style["default"].path, "fonts/test_cjk_subset.ttf")
+        self.assertEqual(by_style["inherited_font"].kind, "static")
+        self.assertEqual(
+            by_style["inherited_font"].path,
+            "fonts/test_cjk_subset.ttf",
+        )
+        self.assertEqual(by_style["missing_file"].kind, "static")
+        self.assertEqual(by_style["dynamic_font"].kind, "dynamic")
+        self.assertEqual(
+            by_style["dynamic_font"].reason,
+            fc.REASON_FONT_DYNAMIC_EXPRESSION,
+        )
+        self.assertEqual(by_style["grouped_font"].kind, "group")
+        self.assertEqual(
+            by_style["grouped_font"].reason,
+            fc.REASON_FONT_GROUP_UNSUPPORTED,
+        )
+
+
+class AnalyzeTests(unittest.TestCase, CanaryEnvMixin):
+    def setUp(self) -> None:
+        self._set_up_canary()
+
+    def test_mixed_fixture_reports_every_acceptance_case(self) -> None:
+        report = fc.analyze_font_coverage(
+            GAME_ROOT,
+            text_file=TEXTS / "cjk_covered.txt",
+            tl_dir=TL_DIR,
+        )
+        by_style = {item["style"]: item for item in report["fonts"]}
+
+        self.assertEqual(report["status"], fc.STATUS_MISSING)
+        self.assertEqual(by_style["default"]["status"], fc.STATUS_CHECKED)
+        self.assertEqual(
+            by_style["latin_only"]["status"],
+            fc.STATUS_MISSING,
+        )
+        self.assertEqual(
+            by_style["latin_only"]["reason"],
+            fc.REASON_FONT_GLYPH_MISSING,
+        )
+        self.assertGreater(by_style["latin_only"]["missing_char_count"], 0)
+        self.assertIn("缺少目标字符", by_style["latin_only"]["reason_text"])
+        self.assertEqual(
+            by_style["missing_file"]["status"],
+            fc.STATUS_UNAVAILABLE,
+        )
+        self.assertEqual(
+            by_style["missing_file"]["reason"],
+            fc.REASON_FONT_FILE_MISSING,
+        )
+        self.assertEqual(
+            by_style["corrupt_font"]["status"],
+            fc.STATUS_UNAVAILABLE,
+        )
+        self.assertEqual(
+            by_style["corrupt_font"]["reason"],
+            fc.REASON_FONT_INVALID,
+        )
+        self.assertTrue(report["unavailable"])
+        self.assertEqual(
+            by_style["dynamic_font"]["reason"],
+            fc.REASON_FONT_DYNAMIC_EXPRESSION,
+        )
+        self.assertEqual(
+            by_style["grouped_font"]["reason"],
+            fc.REASON_FONT_GROUP_UNSUPPORTED,
+        )
+        self.assertFalse(self.canary_path.exists())
+
+    def test_positive_fixture_reaches_checked_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            scripts = game_root / "scripts"
+            fonts = game_root / "fonts"
+            scripts.mkdir(parents=True)
+            fonts.mkdir(parents=True)
+            shutil.copyfile(CJK_FONT, fonts / "font.ttf")
+            (scripts / "styles.rpy").write_text(
+                'style default:\n    font "fonts/font.ttf"\n',
+                encoding="utf-8",
+            )
+
+            report = fc.analyze_font_coverage(
+                game_root,
+                text_values=["开始游戏，你好。继续"],
+            )
+
+        self.assertEqual(report["status"], fc.STATUS_CHECKED)
+        self.assertEqual(report["missing"], [])
+        self.assertEqual(report["unknown"], [])
+        self.assertEqual(report["fonts"][0]["status"], fc.STATUS_CHECKED)
+
+    def test_no_text_samples_is_unknown(self) -> None:
+        report = fc.analyze_font_coverage(GAME_ROOT)
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertTrue(
+            any(
+                item["reason"] == fc.REASON_TEXT_NO_SAMPLES
+                for item in report["fonts"]
+            )
+        )
+
+    def test_only_nonprintable_samples_is_unknown(self) -> None:
+        report = fc.analyze_font_coverage(
+            GAME_ROOT,
+            text_values=["\u200b"],
+        )
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(report["text"]["unique_char_count"], 0)
+        self.assertTrue(
+            any(
+                item["reason"] == fc.REASON_TEXT_NO_SAMPLES
+                for item in report["fonts"]
+            )
+        )
+
+    def test_bare_engine_font_name_is_unknown_not_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            game_root.mkdir()
+            (game_root / "styles.rpy").write_text(
+                'style default:\n    font "DejaVuSans.ttf"\n',
+                encoding="utf-8",
+            )
+
+            report = fc.analyze_font_coverage(game_root, text_values=["Hello"])
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(
+            report["fonts"][0]["reason"],
+            fc.REASON_FONT_ENGINE_SEARCH_PATH,
+        )
+        self.assertEqual(report["unavailable"], [])
+
+    def test_no_font_declaration_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            game_root.mkdir()
+            (game_root / "script.rpy").write_text(
+                'label start:\n    "Hello"\n',
+                encoding="utf-8",
+            )
+
+            report = fc.analyze_font_coverage(game_root, text_values=["Hello"])
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(
+            report["fonts"][0]["reason"],
+            fc.REASON_FONT_NOT_DECLARED,
+        )
+
+    def test_font_reference_outside_game_root_is_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            game_root.mkdir()
+            outside = Path(tmp) / "outside.ttf"
+            shutil.copyfile(CJK_FONT, outside)
+            (game_root / "styles.rpy").write_text(
+                'style default:\n    font "../outside.ttf"\n',
+                encoding="utf-8",
+            )
+
+            report = fc.analyze_font_coverage(game_root, text_values=["Hello"])
+
+        self.assertEqual(report["status"], fc.STATUS_UNKNOWN)
+        self.assertEqual(
+            report["fonts"][0]["reason"],
+            fc.REASON_FONT_PATH_OUTSIDE_GAME,
+        )
+
+    def test_dynamic_text_samples_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            game_root = Path(tmp) / "game"
+            game_root.mkdir()
+            (game_root / "styles.rpy").write_text(
+                'style default:\n    font "fonts/font.ttf"\n',
+                encoding="utf-8",
+            )
+            fonts = game_root / "fonts"
+            fonts.mkdir()
+            shutil.copyfile(CJK_FONT, fonts / "font.ttf")
+
+            report = fc.analyze_font_coverage(
+                game_root,
+                text_values=["{b}Hello{/b} [name]"],
+            )
+
+        self.assertEqual(report["text"]["dynamic_sample_count"], 1)
+
+
+class TextExtractionTests(unittest.TestCase):
+    def test_tl_extraction_keeps_target_strings_only(self) -> None:
+        values = fc.extract_translation_strings(TL_DIR)
+
+        self.assertIn("开始游戏", values)
+        self.assertIn("继续", values)
+        self.assertNotIn("Start Game", values)
+        self.assertNotIn("Continue", values)
+
+    def test_single_quoted_tl_strings_are_extracted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tl_dir = Path(tmp)
+            (tl_dir / "strings.rpy").write_text(
+                "translate schinese strings:\n"
+                "    old 'Start Game'\n"
+                "    new '开始游戏'\n",
+                encoding="utf-8",
+            )
+
+            values = fc.extract_translation_strings(tl_dir)
+
+        self.assertIn("开始游戏", values)
+        self.assertNotIn("Start Game", values)
+
+    def test_fontgroup_named_literal_path_is_static(self) -> None:
+        kind, path, reason = fc._classify_font_expression(
+            '"fonts/FontGroup-Regular.ttf"'
+        )
+
+        self.assertEqual(kind, "static")
+        self.assertEqual(path, "fonts/FontGroup-Regular.ttf")
+        self.assertEqual(reason, "")
+
+    def test_escape_sequences_are_decoded_in_one_pass(self) -> None:
+        self.assertEqual(fc._unescape_renpy_string(r"a\\nb"), r"a\nb")
+        self.assertEqual(fc._unescape_renpy_string(r"say \"hi\""), 'say "hi"')
+
+    def test_renpy_tags_are_removed_and_substitution_is_flagged(self) -> None:
+        normalized, dynamic = fc.normalize_renpy_text("{b}你好{/b} [name]")
+
+        self.assertEqual(normalized, "你好 ")
+        self.assertTrue(dynamic)
+
+    def test_report_json_and_markdown_are_rendered(self) -> None:
+        report = fc.analyze_font_coverage(
+            GAME_ROOT,
+            text_file=TEXTS / "cjk_covered.txt",
+        )
+        document = json.loads(fc.report_to_json(report))
+        markdown = fc.format_report_markdown(report)
+
+        self.assertEqual(document["spike"], "font_coverage")
+        self.assertIn("Ren'Py Font Coverage Spike", markdown)
+        self.assertIn("font.glyph_missing", markdown)
+
+
+class CliTests(unittest.TestCase, CanaryEnvMixin):
+    def setUp(self) -> None:
+        self._set_up_canary()
+
+    def test_cli_emits_json_without_touching_project(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "scripts" / "font_coverage_report.py"),
+                "--game-root",
+                str(GAME_ROOT),
+                "--text-file",
+                str(TEXTS / "cjk_covered.txt"),
+                "--tl-dir",
+                str(TL_DIR),
+                "--output",
+                "json",
+            ],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            env={
+                **os.environ,
+                "FONT_COVERAGE_CANARY_PATH": str(self.canary_path),
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["spike"], "font_coverage")
+        self.assertFalse(self.canary_path.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
