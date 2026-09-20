@@ -139,6 +139,28 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("提交批量任务", labels)
         self.assertIn("查询任务状态", labels)
 
+    def test_command_reference_includes_review_index_commands(self):
+        manifest_path = r"C:\jobs\review_index_manifest.json"
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path=manifest_path,
+            manifest={
+                "kind": "review_index",
+                "inputs": {
+                    "corpus_manifest": {"path": r"C:\jobs\corpus\revision_corpus_manifest.json"}
+                },
+            },
+        )
+        by_label = {command.label: command.command for command in commands}
+
+        self.assertIn("逐条审校·重建索引", by_label)
+        self.assertIn("review-index-build", by_label["逐条审校·重建索引"])
+        self.assertIn("逐条审校·状态", by_label)
+        self.assertIn("review-index-status", by_label["逐条审校·状态"])
+        self.assertIn("review-decisions-export", by_label["逐条审校·导出决定"])
+        self.assertIn("review-decisions-import", by_label["逐条审校·导入决定"])
+
     def test_command_reference_includes_quality_html_report(self):
         manifest_path = r"C:\jobs\manifest.json"
         commands = build_cli_commands(

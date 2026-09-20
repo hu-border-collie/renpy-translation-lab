@@ -283,6 +283,73 @@ def build_cli_commands(
     preflight = _translate_preflight_command(python_exe, batch_script_path)
     if preflight is not None:
         commands.append(preflight)
+    if str(manifest.get("kind") or "").strip() == "review_index":
+        index_dir = parent_directory(manifest_path)
+        inputs = manifest.get("inputs")
+        inputs = inputs if isinstance(inputs, dict) else {}
+        corpus_meta = inputs.get("corpus_manifest")
+        corpus_meta = corpus_meta if isinstance(corpus_meta, dict) else {}
+        corpus_path = str(corpus_meta.get("path") or "").strip()
+        if corpus_path:
+            commands.append(
+                DiagnosticsCommand(
+                    label="逐条审校·重建索引",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        [
+                            "review-index-build",
+                            "--corpus",
+                            corpus_path,
+                            "--output-dir",
+                            index_dir,
+                        ],
+                    ),
+                )
+            )
+        commands.extend(
+            [
+                DiagnosticsCommand(
+                    label="逐条审校·状态",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        ["review-index-status", manifest_path],
+                    ),
+                ),
+                DiagnosticsCommand(
+                    label="逐条审校·导出决定",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        [
+                            "review-decisions-export",
+                            manifest_path,
+                            "--file",
+                            join_directory_file(
+                                index_dir, "review_decisions_export.jsonl"
+                            ),
+                        ],
+                    ),
+                ),
+                DiagnosticsCommand(
+                    label="逐条审校·导入决定",
+                    command=format_cli_command(
+                        python_exe,
+                        batch_script_path,
+                        [
+                            "review-decisions-import",
+                            manifest_path,
+                            "--file",
+                            join_directory_file(
+                                index_dir, "review_decisions_import.jsonl"
+                            ),
+                        ],
+                    ),
+                ),
+            ]
+        )
+        return commands
     commands.extend(
         [
         DiagnosticsCommand(
