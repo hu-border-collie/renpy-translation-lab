@@ -422,6 +422,8 @@ class ExternalWorkTests(unittest.TestCase):
 
     def test_results_change_during_transaction_rolls_back_all_writes(self):
         self.ready()
+        # Force an equivalent spelling, as Windows CI does with 8.3 temp paths.
+        self.rpy = self.rpy.parent / '..' / self.rpy.parent.name / self.rpy.name
         before = self.rpy.read_bytes()
         manifest = batch.load_manifest(self.target)
         results = Path(batch.resolve_manifest_result_path(manifest))
@@ -431,7 +433,7 @@ class ExternalWorkTests(unittest.TestCase):
         def race(source, target):
             nonlocal changed
             result = original(source, target)
-            if Path(target) == self.rpy and not changed:
+            if Path(target).resolve() == self.rpy.resolve() and not changed:
                 changed = True
                 results.write_bytes(results.read_bytes() + b'\n')
             return result
@@ -439,10 +441,13 @@ class ExternalWorkTests(unittest.TestCase):
         with mock.patch.object(atomic_io.os, 'replace', side_effect=race):
             with self.assertRaises(ValueError):
                 work.apply_work(self.target)
+        self.assertTrue(changed, 'The fault must occur after replacing the game file.')
         self.assertEqual(self.rpy.read_bytes(), before)
 
     def test_process_death_leaves_prepared_transaction_and_recovery_uses_it(self):
         self.ready()
+        # Keep alias handling under regression coverage on every platform.
+        self.rpy = self.rpy.parent / '..' / self.rpy.parent.name / self.rpy.name
         original = atomic_io.os.replace
         changed = False
 
@@ -452,7 +457,7 @@ class ExternalWorkTests(unittest.TestCase):
         def stop_after_replace(source, target):
             nonlocal changed
             result = original(source, target)
-            if Path(target) == self.rpy and not changed:
+            if Path(target).resolve() == self.rpy.resolve() and not changed:
                 changed = True
                 raise SimulatedDeath()
             return result
@@ -460,6 +465,7 @@ class ExternalWorkTests(unittest.TestCase):
         with mock.patch.object(atomic_io.os, 'replace', side_effect=stop_after_replace):
             with self.assertRaises(SimulatedDeath):
                 work.apply_work(self.target)
+        self.assertTrue(changed, 'The fault must occur after replacing the game file.')
         self.assertEqual(work.status_work(self.target)['writeback'], 'recovery_required')
         self.assertEqual(work.apply_work(self.target)['status'], 'applied')
         self.assertEqual(work.status_work(self.target)['writeback'], 'applied')
