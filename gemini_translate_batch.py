@@ -84,6 +84,7 @@ import quality_report_export
 import revision_corpus
 import revision_proposals
 import revision_selection
+import review_index
 import translation_ab_experiment
 import story_memory
 import sync_translation_preview
@@ -129,6 +130,7 @@ PROJECT_SNAPSHOTS_DIR = os.path.join(LOG_DIR, 'project_snapshots')
 PROJECT_RECONCILIATIONS_DIR = os.path.join(LOG_DIR, 'project_reconciliations')
 PROJECT_TRANSLATION_RECORDS_DIR = os.path.join(LOG_DIR, 'translation_records')
 PROJECT_REUSE_DIR = os.path.join(LOG_DIR, 'translation_reuse')
+REVIEW_INDEX_DIR = os.path.join(LOG_DIR, 'review_index')
 SYNC_BACKEND = 'gemini'
 SYNC_MODEL = ''
 SYNC_TIMEOUT_SECONDS = DEFAULT_SYNC_TIMEOUT_SECONDS
@@ -150,6 +152,14 @@ COVERAGE_COMMANDS = frozenset(
     {
         'coverage-status',
         'coverage-review-import',
+    }
+)
+REVIEW_INDEX_COMMANDS = frozenset(
+    {
+        'review-index-build',
+        'review-index-status',
+        'review-decisions-import',
+        'review-decisions-export',
     }
 )
 def _profile_stage_choices():
@@ -205,6 +215,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         *DURABLE_SYNC_COMMANDS,
         *PROFILE_COMMANDS,
         *COVERAGE_COMMANDS,
+        *REVIEW_INDEX_COMMANDS,
         TRANSLATE_PREFLIGHT_COMMAND,
     }
 )
@@ -235,6 +246,7 @@ OFFLINE_BATCH_COMMANDS = frozenset(
         'apply',
         *PROFILE_COMMANDS,
         *COVERAGE_COMMANDS,
+        *REVIEW_INDEX_COMMANDS,
         TRANSLATE_PREFLIGHT_COMMAND,
         'estimate-cost',
         'preview-revisions',
@@ -5032,6 +5044,153 @@ def run_revision_corpus_export(output_dir=None):
             'rerun export for a consistent snapshot.'
         )
     return manifest
+
+
+def run_review_index_command(args):
+    """Run one #427 review index / decisions command (offline, read/write local index only)."""
+
+    command = str(getattr(args, 'command', '') or '')
+    try:
+        if command == 'review-index-build':
+            output_dir = str(getattr(args, 'output_dir', '') or '').strip()
+            if output_dir:
+                target_dir = os.path.abspath(output_dir)
+            else:
+                stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+                os.makedirs(REVIEW_INDEX_DIR, exist_ok=True)
+                target_dir = os.path.join(
+                    REVIEW_INDEX_DIR,
+                    f'{stamp}_{guess_project_slug()}_review_index',
+                )
+            manifest = review_index.build_review_index(
+                getattr(args, 'corpus', ''),
+                quality_findings_path=getattr(args, 'quality_findings', '') or None,
+                translation_records_path=(
+                    getattr(args, 'translation_records', '') or None
+                ),
+                decisions_path=getattr(args, 'decisions', '') or None,
+                output_dir=target_dir,
+            )
+            scope = dict(manifest.get('scope') or {})
+            lifecycle_counts = dict(scope.get('lifecycle_counts') or {})
+            manifest_paths = dict(manifest.get('paths') or {})
+            output_dir = str(manifest_paths.get('output_dir') or '')
+
+            def _absolute_index_path(key):
+                value = str(manifest_paths.get(key) or '').strip()
+                if not value:
+                    return ''
+                candidate = Path(value)
+                return str(
+                    candidate
+                    if candidate.is_absolute()
+                    else Path(output_dir) / candidate
+                )
+
+            print(f"Review index: {_absolute_index_path('manifest')}")
+            print(
+                f"- entries: {scope.get('entry_count', 0)}, "
+                f"with findings: {scope.get('entry_with_findings_count', 0)}"
+            )
+            print(
+                f"- lifecycle: open={lifecycle_counts.get('open', 0)}, "
+                f"ignored={lifecycle_counts.get('ignored', 0)}, "
+                f"resolved={lifecycle_counts.get('resolved', 0)}, "
+                f"needs_recheck={lifecycle_counts.get('needs_recheck', 0)}"
+            )
+            if int(scope.get('project_mismatch_count') or 0):
+                status = 'blocked'
+            elif int(scope.get('needs_recheck_count') or 0):
+                status = 'needs_recheck'
+            else:
+                status = 'ready'
+            return {
+                'status': status,
+                'output_dir': output_dir,
+                'index_manifest': _absolute_index_path('manifest'),
+                'index_jsonl': _absolute_index_path('jsonl'),
+                'decisions': _absolute_index_path('decisions'),
+                'template': _absolute_index_path('template'),
+                'scope': scope,
+                'diagnostics': manifest.get('diagnostics') or [],
+            }
+
+        if command == 'review-index-status':
+            manifest, entries = review_index.load_review_index(
+                getattr(args, 'index', '')
+            )
+            payload = review_index.review_index_status(manifest, entries)
+            print(f"Review index: {payload.get('index_manifest') or ''}")
+            print(f"- entries: {payload.get('entry_count', 0)}")
+            lifecycle_counts = dict(payload.get('lifecycle_counts') or {})
+            print(
+                f"- lifecycle: open={lifecycle_counts.get('open', 0)}, "
+                f"ignored={lifecycle_counts.get('ignored', 0)}, "
+                f"resolved={lifecycle_counts.get('resolved', 0)}, "
+                f"needs_recheck={lifecycle_counts.get('needs_recheck', 0)}"
+            )
+            print(
+                f"- findings: {payload.get('finding_count', 0)}, "
+                f"unmatched diagnostics: "
+                f"{sum(1 for item in payload.get('diagnostics') or [] if item.get('code') == 'REVIEW_QUALITY_FINDING_UNMATCHED')}"
+            )
+            if int(payload.get('project_mismatch_count') or 0):
+                status = 'blocked'
+            elif int(payload.get('needs_recheck_count') or 0):
+                status = 'needs_recheck'
+            else:
+                status = 'ready'
+            return {'status': status, **payload}
+
+        if command == 'review-decisions-import':
+            result = review_index.import_decisions_into_index(
+                getattr(args, 'index', ''),
+                getattr(args, 'file', ''),
+            )
+            merge = dict(result.get('merge') or {})
+            print(f"Decisions: {result.get('decisions_path') or ''}")
+            print(
+                f"- imported: {merge.get('imported_count', 0)}, "
+                f"duplicates: {merge.get('duplicate_count', 0)}, "
+                f"orphaned: {merge.get('orphaned_count', 0)}, "
+                f"stale: {merge.get('stale_count', 0)}, "
+                f"template skipped: {merge.get('skipped_template_count', 0)}, "
+                f"mismatched: {merge.get('mismatched_count', 0)}"
+            )
+            print(f"- status: {result.get('status') or ''}")
+            return result
+
+        if command == 'review-decisions-export':
+            result = review_index.export_decisions(
+                getattr(args, 'index', ''),
+                output_file=getattr(args, 'file', ''),
+            )
+            print(f"Decisions export: {result.get('output_file') or ''}")
+            print(f"- mode: {result.get('mode')}, rows: {result.get('decision_count')}")
+            return result
+
+        raise cli_contract.MachineContractError(
+            f'unsupported review index command: {command}',
+            code_name='REVIEW_INDEX_COMMAND_UNSUPPORTED',
+            suggested_action='use_capabilities_to_list_commands',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+        )
+    except review_index.ReviewIndexError as exc:
+        raise cli_contract.MachineContractError(
+            str(exc),
+            code_name=exc.code,
+            suggested_action=(
+                'pass_existing_review_index_or_corpus_inputs'
+                if exc.code in {
+                    'REVIEW_INDEX_MISSING',
+                    'REVIEW_INDEX_INPUT_MISSING',
+                }
+                else 'fix_review_index_input'
+            ),
+            semantic_exit_code=cli_contract.EXIT_BLOCKED,
+            retryable=False,
+            details=exc.details,
+        ) from exc
 
 
 def _versioning_artifact_component(value):
@@ -21193,6 +21352,92 @@ def build_arg_parser():
     )
     add_machine_output_argument(export_revision_corpus_parser)
 
+    review_index_build_parser = subparsers.add_parser(
+        'review-index-build',
+        help=(
+            'Build a rebuildable ordinary-translation review index from a revision '
+            'corpus and optional quality findings / translation records.'
+        ),
+    )
+    review_index_build_parser.add_argument(
+        '--corpus',
+        required=True,
+        help=(
+            'Revision corpus manifest / directory, or a JSONL with its sibling '
+            'revision_corpus_manifest.json; bare JSONL without manifest is rejected.'
+        ),
+    )
+    review_index_build_parser.add_argument(
+        '--quality-findings',
+        default='',
+        help='Optional quality_findings.jsonl to attach by file/line/item identity.',
+    )
+    review_index_build_parser.add_argument(
+        '--translation-records',
+        default='',
+        help='Optional translation_records.jsonl for record provenance.',
+    )
+    review_index_build_parser.add_argument(
+        '--decisions',
+        default='',
+        help='Optional existing review_decisions.jsonl to apply while rebuilding.',
+    )
+    review_index_build_parser.add_argument(
+        '--output-dir',
+        default='',
+        help='Write the index package into DIR instead of logs/review_index/.',
+    )
+    add_machine_output_argument(review_index_build_parser)
+
+    review_index_status_parser = subparsers.add_parser(
+        'review-index-status',
+        help='Read-only status of one review index package.',
+    )
+    review_index_status_parser.add_argument(
+        '--index',
+        required=True,
+        help='review_index_manifest.json or its package directory.',
+    )
+    add_machine_output_argument(review_index_status_parser)
+
+    review_decisions_import_parser = subparsers.add_parser(
+        'review-decisions-import',
+        help=(
+            'Validate review decisions JSONL against one index and append them to '
+            'the package decision log; bindings are rechecked on the next rebuild.'
+        ),
+    )
+    review_decisions_import_parser.add_argument(
+        '--index',
+        required=True,
+        help='review_index_manifest.json or its package directory.',
+    )
+    review_decisions_import_parser.add_argument(
+        '--file',
+        required=True,
+        help='review_decisions.jsonl to validate and import.',
+    )
+    add_machine_output_argument(review_decisions_import_parser)
+
+    review_decisions_export_parser = subparsers.add_parser(
+        'review-decisions-export',
+        help=(
+            'Export the current package decision log, or an editable template when '
+            'no decisions have been imported yet.'
+        ),
+    )
+    review_decisions_export_parser.add_argument(
+        '--index',
+        required=True,
+        help='review_index_manifest.json or its package directory.',
+    )
+    review_decisions_export_parser.add_argument(
+        '--file',
+        required=True,
+        help='Write review decisions / template JSONL to this path.',
+    )
+    add_machine_output_argument(review_decisions_export_parser)
+
     import_revision_proposals_parser = subparsers.add_parser(
         'import-revision-proposals',
         help=(
@@ -24227,6 +24472,9 @@ def dispatch_command(parser, args):
             getattr(args, 'output_dir', '') or None,
         )
 
+    if command in REVIEW_INDEX_COMMANDS:
+        return run_review_index_command(args)
+
     if command == 'import-revision-proposals':
         # Local candidate conversion and preview only: no provider/API setup,
         # prepare command, or game-file write is allowed here.
@@ -24658,6 +24906,7 @@ def build_machine_success_envelope(command, value, args):
     if (
         command in PROFILE_COMMANDS
         or command in COVERAGE_COMMANDS
+        or command in REVIEW_INDEX_COMMANDS
         or command == TRANSLATE_PREFLIGHT_COMMAND
     ):
         payload = dict(value or {})

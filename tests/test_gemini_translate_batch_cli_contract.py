@@ -51,6 +51,18 @@ class BatchCliContractTests(unittest.TestCase):
             return [command]
         if command == "coverage-review-import":
             return [command, "--file", "review.json"]
+        if command == "review-index-build":
+            return [command, "--corpus", "corpus.jsonl"]
+        if command == "review-index-status":
+            return [command, "--index", "review_index_manifest.json"]
+        if command in {"review-decisions-import", "review-decisions-export"}:
+            return [
+                command,
+                "--index",
+                "review_index_manifest.json",
+                "--file",
+                "review_decisions.jsonl",
+            ]
         if command == "profiles-probe":
             return [
                 command,
@@ -2890,6 +2902,14 @@ class BatchCliContractTests(unittest.TestCase):
                                 ),
                             ]
                         )
+                    elif command in batch.REVIEW_INDEX_COMMANDS:
+                        handler_patches.append(
+                            mock.patch.object(
+                                batch,
+                                "run_review_index_command",
+                                return_value={"status": "ready", "entry_count": 0},
+                            )
+                        )
                     elif command == "export-revision-corpus":
                         handler_patches.append(
                             mock.patch.object(
@@ -3066,6 +3086,8 @@ class BatchCliContractTests(unittest.TestCase):
                                 "reuse.json",
                                 "manifest.json",
                             ]
+                        elif command in batch.REVIEW_INDEX_COMMANDS:
+                            argv = self._machine_command_argv(command)
                         elif command == "translate-preflight":
                             argv = ["translate-preflight", "--strategy", "sync"]
                         elif command == "profiles-show":
@@ -3128,6 +3150,7 @@ class BatchCliContractTests(unittest.TestCase):
                     "import-reuse-decisions",
                     "export-reuse-results",
                     *batch.PROFILE_COMMANDS,
+                    *batch.REVIEW_INDEX_COMMANDS,
                 }:
                     # Read-only export takes an early dispatch path that must
                     # not load (or rewrite) API-key / translator config.

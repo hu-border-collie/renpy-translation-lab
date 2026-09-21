@@ -79,6 +79,7 @@
 - [#364 真实项目质量规则校准执行手册](plans/issue-364-calibration-runbook.md) · [校准基线](plans/quality_calibration_baseline.md)
 - [#426 Ren'Py coverage block 归因报告](plans/renpy_coverage_block_attribution.md)：只读脚本与原创 fixture 的 unknown / unsupported / parse_error 归因、漏扫检查和后续拆单草案；#460–#464 五条 follow-up 与跨行 writeback（#471）已全部实现；真实大型项目频率归因见 #470。
 - [#487 Ren'Py 字体字形覆盖只读 spike](plans/renpy_font_coverage_spike.md)：静态字体引用解析、字体 cmap 覆盖、`checked / missing / unavailable / unknown` 报告、可再分发 Noto 子集 fixture 与 doctor / preflight 接入建议；不启动游戏、不替换字体。
+- [#427 普通译文逐条审校索引与订正页合同](plans/issue-427-review-index-contract.md)：可重建的普通译文 review index、独立人工决定日志与 `needs_recheck` 绑定语义，以及 `review-index-*` / `review-decisions-*` CLI；GUI 订正页与 revision proposal 属 S2。
 
 
 ### 历史参考（已归档）

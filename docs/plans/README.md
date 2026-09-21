@@ -31,6 +31,9 @@
 - [#487 Ren'Py 字体字形覆盖只读 spike](renpy_font_coverage_spike.md)：
   冻结静态 `font` 引用解析、cmap 覆盖报告、`checked / missing / unavailable / unknown` 语义、
   可再分发 fixture 与 doctor / preflight 接入建议；不启动游戏、不替换字体。
+- [#427 普通译文逐条审校索引与订正页合同](issue-427-review-index-contract.md)：
+  冻结可重建的普通译文 review index、人工决定日志与 binding / needs_recheck 语义，
+  以及 `review-index-*` / `review-decisions-*` CLI；S2 GUI 订正页与 revision proposal 待做。
 - [Agent 翻译工具包：方向评估与最小验证提案](agent_translation_toolkit.md)：
   评估由宿主 Agent 决策和翻译、项目提供材料与可靠执行的边界；提出工作包、外部成果接收、
   串行与子代理并行协作，以及首个 Ren'Py 章节实验。待评审、待验证，尚未实现。
