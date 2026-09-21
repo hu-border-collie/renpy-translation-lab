@@ -141,6 +141,45 @@ def _normalize_rel_path(value: Any) -> str:
     return text
 
 
+def _manifest_relative(path: Path, base_dir: Path) -> str:
+    """Store package-internal paths relative; external inputs stay absolute."""
+
+    try:
+        return path.resolve().relative_to(base_dir.resolve()).as_posix()
+    except (OSError, ValueError):
+        return os.path.abspath(str(path))
+
+
+def _resolve_decisions_file(
+    manifest: Mapping[str, Any],
+    *,
+    create_fallback: bool,
+) -> Path | None:
+    """Resolve decisions portably: prefer package-local, then recorded path."""
+
+    manifest_dir = Path(str(manifest.get("_manifest_path") or "")).resolve().parent
+    package_file = manifest_dir / REVIEW_DECISIONS_JSONL_NAME
+    if package_file.is_file():
+        return package_file
+    inputs = manifest.get("inputs")
+    inputs = inputs if isinstance(inputs, Mapping) else {}
+    decisions_meta = inputs.get("decisions")
+    recorded = (
+        str(decisions_meta.get("path") or "").strip()
+        if isinstance(decisions_meta, Mapping)
+        else ""
+    )
+    if recorded:
+        candidate = Path(recorded)
+        if not candidate.is_absolute():
+            candidate = manifest_dir / candidate
+        if candidate.is_file():
+            return candidate
+    if create_fallback:
+        return package_file
+    return None
+
+
 def _file_digest(path: Path) -> str:
     if not path.is_file():
         return ""
@@ -675,6 +714,12 @@ def normalize_decision(
             f"decision.note 超过 {MAX_NOTE_LENGTH} 字符上限。",
             details={"occurrence_id": occurrence_id},
         )
+    raw_decided_at = str(raw.get("decided_at") or "").strip()
+    decided_at_inferred = (
+        bool(raw.get("decided_at_inferred"))
+        if "decided_at_inferred" in raw
+        else not bool(raw_decided_at)
+    )
     decided_at = _normalize_decision_timestamp(
         raw.get("decided_at"),
         default=now,
@@ -719,6 +764,7 @@ def normalize_decision(
         "binding": normalized_binding,
         "note": note,
         "decided_at": decided_at,
+        "decided_at_inferred": decided_at_inferred,
         "supersedes": str(raw.get("supersedes") or ""),
     }
     return record
@@ -767,12 +813,17 @@ def merge_decisions(
         )
     ]
     existing_ids_by_occurrence: dict[str, list[str]] = {}
+    existing_id_set_by_occurrence: dict[str, set[str]] = {}
     latest_existing_by_occurrence: dict[str, dict[str, Any]] = {}
     for item in merged:
         occurrence_id = str(item.get("occurrence_id") or "")
         if occurrence_id:
+            decision_id = str(item.get("decision_id") or "")
             existing_ids_by_occurrence.setdefault(occurrence_id, []).append(
-                str(item.get("decision_id") or "")
+                decision_id
+            )
+            existing_id_set_by_occurrence.setdefault(occurrence_id, set()).add(
+                decision_id
             )
             latest_existing_by_occurrence[occurrence_id] = dict(item)
     incoming_ids_by_occurrence: dict[str, list[str]] = {}
@@ -814,6 +865,13 @@ def merge_decisions(
         if current_ids and decision_id == current_ids[-1]:
             duplicate_count += 1
             continue
+        if decision.get("decided_at_inferred") and decision_id in (
+            existing_id_set_by_occurrence.get(occurrence_id, set())
+        ):
+            # A template row without a timestamp replaying an older action must
+            # not look newer just because normalize filled "now".
+            stale_count += 1
+            continue
         latest_existing = latest_existing_by_occurrence.get(occurrence_id)
         incoming_decided_at = str(decision.get("decided_at") or "")
         if latest_existing is not None:
@@ -833,6 +891,9 @@ def merge_decisions(
             orphaned_count += 1
         merged.append(decision)
         current_ids.append(decision_id)
+        existing_id_set_by_occurrence.setdefault(occurrence_id, set()).add(
+            decision_id
+        )
         latest_existing_by_occurrence[occurrence_id] = decision
     return merged, {
         "existing_count": len(existing),
@@ -1071,7 +1132,25 @@ def build_review_index(
             )
             if recorded_path:
                 if same_project:
-                    decisions_path = recorded_path
+                    candidate = Path(recorded_path)
+                    if not candidate.is_absolute():
+                        candidate = existing_manifest_path.parent / candidate
+                    if candidate.is_file():
+                        decisions_path = candidate
+                    else:
+                        local_decisions = (
+                            existing_manifest_path.parent / REVIEW_DECISIONS_JSONL_NAME
+                        )
+                        if local_decisions.is_file():
+                            decisions_path = local_decisions
+                        else:
+                            reuse_diagnostics.append(
+                                {
+                                    "code": "REVIEW_INDEX_INPUT_MISSING",
+                                    "input": "decisions",
+                                    "recorded_path": recorded_path,
+                                }
+                            )
                 else:
                     reuse_diagnostics.append(
                         {
@@ -1093,7 +1172,10 @@ def build_review_index(
                 )
                 if recorded_findings:
                     if same_project and same_corpus:
-                        quality_findings_path = recorded_findings
+                        candidate = Path(recorded_findings)
+                        if not candidate.is_absolute():
+                            candidate = existing_manifest_path.parent / candidate
+                        quality_findings_path = candidate
                     else:
                         reuse_diagnostics.append(
                             {
@@ -1111,7 +1193,10 @@ def build_review_index(
                 )
                 if recorded_records:
                     if same_project and same_corpus:
-                        translation_records_path = recorded_records
+                        candidate = Path(recorded_records)
+                        if not candidate.is_absolute():
+                            candidate = existing_manifest_path.parent / candidate
+                        translation_records_path = candidate
                     else:
                         reuse_diagnostics.append(
                             {
@@ -1203,7 +1288,7 @@ def build_review_index(
             },
             "decisions": {
                 "path": (
-                    os.path.abspath(str(decision_source))
+                    _manifest_relative(decision_source, target_dir)
                     if decision_source
                     else ""
                 ),
@@ -1241,13 +1326,15 @@ def build_review_index(
         "diagnostics": diagnostics,
         "paths": {
             "output_dir": os.path.abspath(target_dir),
-            "jsonl": os.path.abspath(index_path),
-            "manifest": os.path.abspath(manifest_path),
-            "markdown": os.path.abspath(markdown_path),
-            "decisions": os.path.abspath(decision_source) if decision_source else "",
-            "template": (
-                os.path.abspath(template_path) if template_written else ""
+            "jsonl": index_path.name,
+            "manifest": manifest_path.name,
+            "markdown": markdown_path.name,
+            "decisions": (
+                _manifest_relative(decision_source, target_dir)
+                if decision_source
+                else ""
             ),
+            "template": template_path.name if template_written else "",
         },
     }
     atomic_write_text(
@@ -1282,6 +1369,8 @@ def load_review_index(
         candidate = Path(str(jsonl_path))
         if not candidate.is_absolute():
             candidate = supplied.parent / candidate
+        if not candidate.is_file():
+            candidate = supplied.parent / REVIEW_INDEX_JSONL_NAME
     else:
         candidate = supplied.parent / REVIEW_INDEX_JSONL_NAME
     if not candidate.is_file():
@@ -1338,26 +1427,22 @@ def import_decisions_into_index(
     """Merge validated decisions into the package decision log and refresh index."""
 
     manifest, entries = load_review_index(index_path)
-    decisions_path = str(
-        ((manifest.get("inputs") or {}).get("decisions") or {}).get("path") or ""
-    ).strip()
-    if decisions_path:
-        decisions_file = Path(decisions_path)
-        if not decisions_file.is_file():
-            raise ReviewIndexError(
-                "REVIEW_INDEX_INPUT_MISSING",
-                f"manifest 引用的 decisions 文件不存在：{decisions_file}",
-                details={"path": str(decisions_file)},
-            )
-    else:
-        decisions_file = (
-            Path(manifest.get("_manifest_path", "")).resolve().parent
-            / REVIEW_DECISIONS_JSONL_NAME
-        )
-        decisions_path = str(decisions_file)
-    existing = load_decisions(decisions_path)
+    manifest_dir = Path(str(manifest.get("_manifest_path") or "")).resolve().parent
+    decisions_file = _resolve_decisions_file(manifest, create_fallback=True)
+    if decisions_file is None:
+        decisions_file = manifest_dir / REVIEW_DECISIONS_JSONL_NAME
+    existing = load_decisions(decisions_file)
     incoming_rows = load_jsonl(decisions_input, label="review decisions import")
-    incoming = [normalize_decision(row) for row in incoming_rows]
+    skipped_template_count = 0
+    incoming: list[dict[str, Any]] = []
+    for row in incoming_rows:
+        reviewer = row.get("reviewer")
+        if isinstance(reviewer, Mapping) and (
+            str(reviewer.get("name") or "").strip().upper() == "TODO"
+        ):
+            skipped_template_count += 1
+            continue
+        incoming.append(normalize_decision(row))
     current_project_id = (
         str((entries[0].get("project") or {}).get("identity_digest") or "")
         if entries
@@ -1387,15 +1472,17 @@ def import_decisions_into_index(
         incoming,
         known_occurrence_ids=known_ids,
     )
+    merge_summary["skipped_template_count"] = skipped_template_count
     atomic_write_jsonl(decisions_file, merged, ensure_ascii=False)
     entries, decision_diagnostics = apply_decisions(entries, merged)
     jsonl_path = str(manifest.get("_jsonl_path") or "")
     atomic_write_jsonl(jsonl_path, entries, ensure_ascii=False)
     manifest_inputs = dict(manifest.get("inputs") or {})
     decisions_meta = dict(manifest_inputs.get("decisions") or {})
+    decisions_rel = _manifest_relative(decisions_file, manifest_dir)
     decisions_meta.update(
         {
-            "path": str(decisions_file),
+            "path": decisions_rel,
             "digest": _file_digest(decisions_file),
             "count": len(merged),
         }
@@ -1403,7 +1490,7 @@ def import_decisions_into_index(
     manifest_inputs["decisions"] = decisions_meta
     manifest["inputs"] = manifest_inputs
     manifest_paths = dict(manifest.get("paths") or {})
-    manifest_paths["decisions"] = str(decisions_file)
+    manifest_paths["decisions"] = decisions_rel
     manifest["paths"] = manifest_paths
     stale_decision_codes = {
         DIAGNOSTIC_DECISION_ORPHANED,
@@ -1439,10 +1526,13 @@ def import_decisions_into_index(
         if item.get("code") == DIAGNOSTIC_FINDING_UNMATCHED
     )
     manifest["scope"] = scope
-    markdown_path = str(
+    markdown_recorded = str(
         ((manifest.get("paths") or {}).get("markdown") or "")
     ).strip()
-    if markdown_path:
+    if markdown_recorded:
+        markdown_path = Path(markdown_recorded)
+        if not markdown_path.is_absolute():
+            markdown_path = manifest_dir / markdown_path
         atomic_write_text(
             markdown_path,
             render_review_index_markdown(entries, manifest),
@@ -1481,17 +1571,8 @@ def export_decisions(
     """Export current decisions, or a template when none have been imported."""
 
     manifest, entries = load_review_index(index_path)
-    decisions_path = str(
-        ((manifest.get("inputs") or {}).get("decisions") or {}).get("path") or ""
-    ).strip()
-    if decisions_path:
-        decisions_file = Path(decisions_path)
-        if not decisions_file.is_file():
-            raise ReviewIndexError(
-                "REVIEW_INDEX_INPUT_MISSING",
-                f"manifest 引用的 decisions 文件不存在：{decisions_file}",
-                details={"path": str(decisions_file)},
-            )
+    decisions_file = _resolve_decisions_file(manifest, create_fallback=False)
+    if decisions_file is not None:
         decisions = load_decisions(decisions_file)
         mode = "decisions"
     else:
@@ -1507,7 +1588,7 @@ def export_decisions(
         "status": mode,
         "mode": mode,
         "decision_count": len(decisions),
-        "decisions_path": decisions_path,
+        "decisions_path": str(decisions_file) if decisions_file else "",
         "output_file": str(output_file or ""),
         "index_manifest": str(manifest.get("_manifest_path") or ""),
     }

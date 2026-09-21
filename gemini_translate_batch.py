@@ -5139,6 +5139,7 @@ def run_review_index_command(args):
                 f"duplicates: {merge.get('duplicate_count', 0)}, "
                 f"orphaned: {merge.get('orphaned_count', 0)}, "
                 f"stale: {merge.get('stale_count', 0)}, "
+                f"template skipped: {merge.get('skipped_template_count', 0)}, "
                 f"mismatched: {merge.get('mismatched_count', 0)}"
             )
             print(f"- status: {result.get('status') or ''}")

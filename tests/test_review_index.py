@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -210,50 +211,72 @@ class BuildIndexTests(unittest.TestCase):
         self.assertEqual(loaded_manifest["kind"], "review_index")
         self.assertEqual(len(entries), 3)
 
-    def test_relative_decisions_path_is_persisted_absolute(self) -> None:
+    def test_package_internal_decisions_path_is_persisted_relative(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             corpus = _write_corpus(root)
-            decisions_file = root / "decisions.jsonl"
-            decisions_file.write_text("", encoding="utf-8")
+            (root / "index").mkdir()
+            (root / "index" / "review_decisions.jsonl").write_text(
+                "", encoding="utf-8"
+            )
             with contextlib.chdir(root):
                 manifest = ri.build_review_index(
                     "corpus",
-                    decisions_path="decisions.jsonl",
+                    decisions_path="index/review_decisions.jsonl",
                     output_dir="index",
                 )
 
-        self.assertTrue(
+        self.assertFalse(
             os.path.isabs(manifest["inputs"]["decisions"]["path"])
         )
+        self.assertEqual(
+            manifest["inputs"]["decisions"]["path"],
+            "review_decisions.jsonl",
+        )
 
-    def test_manifest_missing_decisions_file_is_rejected_on_import(self) -> None:
+    def test_missing_recorded_decisions_falls_back_to_package_local(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             corpus = _write_corpus(root)
             package = root / "index"
-            manifest = ri.build_review_index(corpus, output_dir=package)
+            ri.build_review_index(corpus, output_dir=package)
             manifest_path = package / ri.REVIEW_INDEX_MANIFEST_NAME
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            missing_external = root / "missing_decisions.jsonl"
             payload["inputs"]["decisions"] = {
-                "path": str(root / "missing_decisions.jsonl"),
+                "path": str(missing_external),
                 "digest": "",
                 "count": 0,
             }
+            payload["paths"]["decisions"] = str(missing_external)
             manifest_path.write_text(
                 json.dumps(payload, ensure_ascii=False),
                 encoding="utf-8",
             )
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target = next(entry for entry in entries if entry["occurrence_id"] == "occ-1")
             incoming = root / "incoming.jsonl"
-            incoming.write_text("", encoding="utf-8")
+            incoming.write_text(
+                json.dumps(
+                    {
+                        "occurrence_id": "occ-1",
+                        "project_identity_digest": target["project"]["identity_digest"],
+                        "lifecycle": "resolved",
+                        "reviewer": {"type": "human", "name": "reviewer-a"},
+                        "binding": dict(target["binding"]),
+                        "note": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
-            with self.assertRaises(ri.ReviewIndexError) as captured:
-                ri.import_decisions_into_index(manifest_path, incoming)
+            ri.import_decisions_into_index(manifest_path, incoming)
+            local_exists = (package / ri.REVIEW_DECISIONS_JSONL_NAME).is_file()
 
-        self.assertEqual(
-            captured.exception.code,
-            "REVIEW_INDEX_INPUT_MISSING",
-        )
+        self.assertTrue(local_exists)
+        self.assertFalse(missing_external.exists())
 
     def test_output_dir_reuse_does_not_borrow_other_project_decisions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -416,7 +439,8 @@ class DecisionTests(unittest.TestCase):
         self.assertIn("[resolved]", markdown)
         self.assertEqual(manifest["scope"]["entry_count"], 3)
         recorded_decisions = manifest_payload["inputs"]["decisions"]["path"]
-        self.assertTrue(os.path.isabs(recorded_decisions))
+        self.assertFalse(os.path.isabs(recorded_decisions))
+        self.assertEqual(recorded_decisions, "review_decisions.jsonl")
         self.assertEqual(
             manifest_payload["paths"]["decisions"],
             recorded_decisions,
@@ -691,6 +715,134 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["note"], note)
 
+    def test_copied_package_reads_and_writes_its_own_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+            target_one = next(
+                entry for entry in entries if entry["occurrence_id"] == "occ-1"
+            )
+            incoming_one = root / "one.jsonl"
+            incoming_one.write_text(
+                json.dumps(
+                    {
+                        "occurrence_id": "occ-1",
+                        "project_identity_digest": target_one["project"]["identity_digest"],
+                        "lifecycle": "resolved",
+                        "reviewer": {"type": "human", "name": "reviewer-a"},
+                        "binding": dict(target_one["binding"]),
+                        "note": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ri.import_decisions_into_index(package, incoming_one)
+            copied = root / "copy"
+            shutil.copytree(package, copied)
+            original_decisions = (
+                package / ri.REVIEW_DECISIONS_JSONL_NAME
+            ).read_text(encoding="utf-8")
+            copied_status = ri.review_index_status(
+                *ri.load_review_index(copied)
+            )
+            copied_entries = ri.load_jsonl(copied / ri.REVIEW_INDEX_JSONL_NAME)
+            target_two = next(
+                entry for entry in copied_entries if entry["occurrence_id"] == "occ-2"
+            )
+            incoming_two = root / "two.jsonl"
+            incoming_two.write_text(
+                json.dumps(
+                    {
+                        "occurrence_id": "occ-2",
+                        "project_identity_digest": target_two["project"]["identity_digest"],
+                        "lifecycle": "ignored",
+                        "reviewer": {"type": "human", "name": "reviewer-b"},
+                        "binding": dict(target_two["binding"]),
+                        "note": "",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            ri.import_decisions_into_index(copied, incoming_two)
+            copied_decisions = (
+                copied / ri.REVIEW_DECISIONS_JSONL_NAME
+            ).read_text(encoding="utf-8")
+            original_after = (
+                package / ri.REVIEW_DECISIONS_JSONL_NAME
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(copied_status["entry_count"], 3)
+        self.assertEqual(original_decisions, original_after)
+        self.assertEqual(original_after.count("\n"), 1)
+        self.assertEqual(copied_decisions.count("\n"), 2)
+
+    def test_partial_template_import_skips_todo_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            package = root / "index"
+            ri.build_review_index(corpus, output_dir=package)
+            template_path = root / "template.jsonl"
+            ri.export_decisions(package, output_file=template_path)
+            rows = ri.load_jsonl(template_path, label="template")
+            rows[0]["lifecycle"] = "resolved"
+            rows[0]["reviewer"] = {"type": "human", "name": "reviewer-a"}
+            edited = root / "edited.jsonl"
+            edited.write_text(
+                "\n".join(
+                    json.dumps(row, ensure_ascii=False) for row in rows
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = ri.import_decisions_into_index(package, edited)
+            entries = ri.load_jsonl(package / ri.REVIEW_INDEX_JSONL_NAME)
+
+        self.assertEqual(result["merge"]["imported_count"], 1)
+        self.assertGreater(result["merge"]["skipped_template_count"], 0)
+        by_occurrence = {entry["occurrence_id"]: entry for entry in entries}
+        self.assertEqual(by_occurrence["occ-1"]["review"]["lifecycle"], "resolved")
+        self.assertEqual(by_occurrence["occ-2"]["review"]["lifecycle"], "open")
+
+    def test_inferred_timestamp_does_not_replay_older_action(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "same note",
+        }
+        ignored = ri.normalize_decision({**base, "lifecycle": "ignored"})
+        resolved = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "resolved",
+                "decided_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+        replay = ri.normalize_decision({**base, "lifecycle": "ignored"})
+
+        merged, summary = ri.merge_decisions([ignored, resolved], [replay])
+
+        self.assertEqual(summary["stale_count"], 1)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[-1]["lifecycle"], "resolved")
+
     def test_timestamp_iso_variants_compare_by_instant(self) -> None:
         base = {
             "occurrence_id": "occ-1",
@@ -865,12 +1017,30 @@ class DecisionTests(unittest.TestCase):
             },
             "note": "same note",
         }
-        ignored = ri.normalize_decision({**base, "lifecycle": "ignored"})
+        ignored = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "ignored",
+                "decided_at": "2026-09-20T00:00:00+00:00",
+            }
+        )
         resolved = ri.normalize_decision(
-            {**base, "lifecycle": "resolved", "note": "resolved note"}
+            {
+                **base,
+                "lifecycle": "resolved",
+                "note": "resolved note",
+                "decided_at": "2026-09-20T01:00:00+00:00",
+            }
+        )
+        reverted = ri.normalize_decision(
+            {
+                **base,
+                "lifecycle": "ignored",
+                "decided_at": "2026-09-20T02:00:00+00:00",
+            }
         )
 
-        merged, summary = ri.merge_decisions([ignored, resolved], [ignored])
+        merged, summary = ri.merge_decisions([ignored, resolved], [reverted])
 
         self.assertEqual(summary["duplicate_count"], 0)
         self.assertEqual(len(merged), 3)

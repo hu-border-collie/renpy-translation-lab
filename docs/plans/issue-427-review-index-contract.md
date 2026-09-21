@@ -83,8 +83,9 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 - `project_identity_digest` 必填；导入时若任何决定属于其他项目，整批导入在写盘前返回
   `REVIEW_DECISION_PROJECT_MISMATCH`，不会污染 append-only 决定日志；手工放入包目录的
   跨项目决定不应用，manifest/status 暴露 `project_mismatch_count` 并返回 `blocked`。
-- manifest 中 `inputs.decisions.path` 一律保存绝对路径；导入/导出发现 manifest 引用的
-  决定文件不存在时返回 `REVIEW_INDEX_INPUT_MISSING`，不会静默新建到错误目录。
+- 包内 `review_index.jsonl` / `review_decisions.jsonl` / Markdown 路径以 manifest 目录相对路径
+  保存；外部输入路径保持绝对。复制/移动 index 包后，导入/导出/状态会优先使用包内决定文件，
+  不会写到原包的绝对路径；记录的外部决定路径不存在时回退到包内 `review_decisions.jsonl`。
 
 ## 4. CLI
 
@@ -93,7 +94,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 | `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest / 目录，或带同目录 manifest 的 JSONL；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在或裸 JSONL 缺 manifest 时报 `REVIEW_INDEX_INPUT_MISSING` |
 | `review-index-status --index PATH` | 只读汇总条目数、finding 附着数、生命周期计数、needs_recheck 与诊断 |
 | `review-decisions-export --index PATH --file PATH` | 导出当前决定日志；无决定时导出可编辑模板（reviewer.name 为 `TODO`）；manifest 引用的决定文件缺失时报错 |
-| `review-decisions-import --index PATH --file PATH` | 校验并追加决定；重复 `decision_id` 跳过，孤儿 occurrence 记诊断；跨项目决定整批拒绝（`REVIEW_DECISION_PROJECT_MISMATCH`）；随后刷新索引 review 状态，不覆盖输入决定文件 |
+| `review-decisions-import --index PATH --file PATH` | 校验并追加决定；未编辑的 `TODO` 模板行跳过并计数，重复动作按尾部重叠/时间戳判 duplicate/stale，孤儿 occurrence 记诊断；跨项目决定整批拒绝（`REVIEW_DECISION_PROJECT_MISMATCH`）；随后刷新索引 review 状态，不覆盖输入决定文件 |
 
 全部命令支持 `--output json`，并加入 `capabilities` / machine envelope 合同。S1 不修改
 translator config、API key、glossary、quality acknowledgement 或任何 `.rpy`。
@@ -146,6 +147,8 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 - 质量 finding 的匹配依赖 corpus row 的 file/line 与 item_id；路径规范化范围有限，
   未匹配会显式诊断，不会静默当作通过。
 - 决定日志按 occurrence 的最新一条生效；导入按 `decided_at`（缺失时按输入顺序）稳定追加。
+  缺少 `decided_at` 的行会标记为 inferred；若其内容等于历史中较早动作，按 stale 跳过，
+  避免用“回填 now”的旧模板动作静默回退当前状态。
   重复导入同一段动作序列（如 ignored → resolved）按最长尾部重叠判定为 duplicate；重复“较早
   动作”（如 ignored → resolved → ignored）在时间戳不早于当前最新决定时视为新的回退动作并追加。
   重新导入早于当前最新决定的旧文件会记为 `stale_count` 并跳过，不会静默把审计状态改回旧值。
@@ -154,7 +157,8 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
   决定路径，但要求旧 manifest 的 project identity 与当前 corpus 一致；项目不同则忽略记录路径并写
   `REVIEW_INDEX_INPUT_PROJECT_MISMATCH`，不把 A 项目的决定写进 B 项目。findings / translation
   records 仅在 corpus JSONL digest 一致时复用，否则写 `REVIEW_INDEX_INPUT_CORPUS_MISMATCH`。
-- 模板中的 `reviewer.name = "TODO"` 会被导入校验拒绝，避免整份未编辑模板写入决定日志。
+- 模板中的 `reviewer.name = "TODO"` 行在导入时跳过并计入 `merge.skipped_template_count`，
+  因此只填写部分模板行也可以导入；直接调用 `normalize_decision` 仍拒绝 TODO 占位值。
 - 真实大语料的分页、性能与窗口交互在 S2 测量；S1 只保证离线 JSONL 可复现。
 - 本地索引 manifest 为定位输入/决定文件会记录本机绝对路径；它属于本地工作产物，不应直接
   附到公开 issue/PR。对外交接请使用决定 JSONL 模板/导出，而不是原始 manifest。
