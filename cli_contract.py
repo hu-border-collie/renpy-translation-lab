@@ -212,6 +212,15 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
 
     command = str(envelope.get("command") or "")
     status = str(envelope.get("status") or "").strip().lower()
+    if command.startswith('work-'):
+        if status == 'stale':
+            return EXIT_INVALID_STATE
+        if status == 'conflict':
+            return EXIT_BLOCKED
+        result = envelope.get('result') or {}
+        if result.get('writeback') == 'recovery_required':
+            return EXIT_NEEDS_ACTION
+        return EXIT_OK
     if command in {
         "sync-start",
         "sync-resume",

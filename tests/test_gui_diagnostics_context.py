@@ -21,6 +21,16 @@ from gui_qt.diagnostics_context import (
 
 
 class GuiDiagnosticsContextTests(unittest.TestCase):
+    def test_external_work_uses_shared_cli_without_provider_commands(self):
+        commands = build_cli_commands(python_exe='python', batch_script_path='batch.py',
+                                      manifest_path='work/manifest.json', manifest={'external_work': {}})
+        text = '\n'.join(item.command for item in commands)
+        self.assertIn('work-preview', text)
+        self.assertIn('work-submit', text)
+        self.assertIn('check work/manifest.json', text)
+        self.assertNotIn(' download ', text)
+        self.assertNotIn(' submit ', text)
+
     def test_quote_cli_arg_quotes_paths_with_spaces(self):
         self.assertEqual(quote_cli_arg("C:\\Games\\My Game\\manifest.json"), '"C:\\Games\\My Game\\manifest.json"')
         self.assertEqual(quote_cli_arg("doctor"), "doctor")

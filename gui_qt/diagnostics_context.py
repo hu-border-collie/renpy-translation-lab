@@ -21,6 +21,7 @@ from .batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    EXTERNAL_WORK_COPY,
     MODEL_CONFIG_MIGRATION_COPY,
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
@@ -261,6 +262,13 @@ def build_cli_commands(
     manifest: dict[str, object],
     submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
+    if isinstance(manifest.get('external_work'), dict):
+        return [DiagnosticsCommand(
+            label=label,
+            command=format_cli_command(python_exe, batch_script_path,
+                                       [name, *([] if name == 'work-export' else [manifest_path]),
+                                        *(['<SUBMISSION.json>'] if name == 'work-submit' else [])]),
+        ) for name, label in EXTERNAL_WORK_COPY.items()]
     if not manifest_path:
         commands = []
         preflight = _translate_preflight_command(python_exe, batch_script_path)
@@ -271,6 +279,10 @@ def build_cli_commands(
                 python_exe=python_exe, script_path=batch_script_path
             )
         )
+        commands.append(DiagnosticsCommand(
+            label=EXTERNAL_WORK_COPY['work-export'],
+            command=format_cli_command(python_exe, batch_script_path, ['work-export']),
+        ))
         return commands
 
     commands: list[DiagnosticsCommand] = [

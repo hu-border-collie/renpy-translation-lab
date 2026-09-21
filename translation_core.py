@@ -1774,6 +1774,11 @@ def normalize_model_results(payload, mode=MODE_TRANSLATION):
 
 
 def translation_writeback_action(unit, result, chunk_key=''):
+    """Replace the live catalog literal while retaining original text for validation.
+
+    Empty native templates carry the original in ``text`` and the empty target
+    in ``live_catalog_text``; the latter is the required writeback preimage.
+    """
     result = result or {}
     return WritebackAction(
         mode=MODE_TRANSLATION,
@@ -1784,7 +1789,7 @@ def translation_writeback_action(unit, result, chunk_key=''):
         replacement=str(result.get('translation') or ''),
         prefix=unit.prefix,
         quote=unit.quote,
-        expected_text=unit.text,
+        expected_text=str(unit.metadata.get('live_catalog_text', unit.text)),
         item_id=unit.id,
         chunk_key=chunk_key,
     )
