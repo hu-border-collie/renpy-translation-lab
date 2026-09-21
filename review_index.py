@@ -865,28 +865,39 @@ def merge_decisions(
         if current_ids and decision_id == current_ids[-1]:
             duplicate_count += 1
             continue
-        if decision.get("decided_at_inferred") and decision_id in (
-            existing_id_set_by_occurrence.get(occurrence_id, set())
-        ):
-            # A template row without a timestamp replaying an older action must
-            # not look newer just because normalize filled "now".
-            stale_count += 1
-            continue
         latest_existing = latest_existing_by_occurrence.get(occurrence_id)
-        incoming_decided_at = str(decision.get("decided_at") or "")
-        if latest_existing is not None:
-            latest_decided_at = str(latest_existing.get("decided_at") or "")
-            incoming_time = _parse_decision_timestamp(incoming_decided_at)
-            latest_time = _parse_decision_timestamp(latest_decided_at)
-            if (
+        incoming_time = _parse_decision_timestamp(
+            str(decision.get("decided_at") or "")
+        )
+        latest_time = (
+            _parse_decision_timestamp(
+                str(latest_existing.get("decided_at") or "")
+            )
+            if latest_existing is not None
+            else None
+        )
+        if decision_id in existing_id_set_by_occurrence.get(
+            occurrence_id, set()
+        ):
+            # Replaying an existing action is only a new explicit reversion when
+            # the caller supplied a strictly newer timestamp.  Inferred "now"
+            # values and same-second/older replays stay stale.
+            if decision.get("decided_at_inferred") or not (
                 incoming_time is not None
                 and latest_time is not None
-                and incoming_time < latest_time
+                and incoming_time > latest_time
             ):
-                # Re-importing an older exported file must not silently revert
-                # a newer decision; it is a stale replay, not a new action.
                 stale_count += 1
                 continue
+        if (
+            incoming_time is not None
+            and latest_time is not None
+            and incoming_time < latest_time
+        ):
+            # Re-importing an older exported file must not silently revert
+            # a newer decision; it is a stale replay, not a new action.
+            stale_count += 1
+            continue
         if known and occurrence_id not in known:
             orphaned_count += 1
         merged.append(decision)
@@ -1380,8 +1391,8 @@ def load_review_index(
             details={"path": str(candidate)},
         )
     entries = load_jsonl(candidate, label="review index")
-    manifest["_manifest_path"] = str(supplied)
-    manifest["_jsonl_path"] = str(candidate)
+    manifest["_manifest_path"] = str(supplied.resolve())
+    manifest["_jsonl_path"] = str(candidate.resolve())
     return manifest, entries
 
 

@@ -5073,7 +5073,21 @@ def run_review_index_command(args):
             )
             scope = dict(manifest.get('scope') or {})
             lifecycle_counts = dict(scope.get('lifecycle_counts') or {})
-            print(f"Review index: {manifest['paths']['manifest']}")
+            manifest_paths = dict(manifest.get('paths') or {})
+            output_dir = str(manifest_paths.get('output_dir') or '')
+
+            def _absolute_index_path(key):
+                value = str(manifest_paths.get(key) or '').strip()
+                if not value:
+                    return ''
+                candidate = Path(value)
+                return str(
+                    candidate
+                    if candidate.is_absolute()
+                    else Path(output_dir) / candidate
+                )
+
+            print(f"Review index: {_absolute_index_path('manifest')}")
             print(
                 f"- entries: {scope.get('entry_count', 0)}, "
                 f"with findings: {scope.get('entry_with_findings_count', 0)}"
@@ -5092,10 +5106,11 @@ def run_review_index_command(args):
                 status = 'ready'
             return {
                 'status': status,
-                'index_manifest': manifest['paths']['manifest'],
-                'index_jsonl': manifest['paths']['jsonl'],
-                'decisions': manifest['paths'].get('decisions', ''),
-                'template': manifest['paths'].get('template', ''),
+                'output_dir': output_dir,
+                'index_manifest': _absolute_index_path('manifest'),
+                'index_jsonl': _absolute_index_path('jsonl'),
+                'decisions': _absolute_index_path('decisions'),
+                'template': _absolute_index_path('template'),
                 'scope': scope,
                 'diagnostics': manifest.get('diagnostics') or [],
             }

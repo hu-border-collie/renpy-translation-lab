@@ -843,6 +843,38 @@ class DecisionTests(unittest.TestCase):
         self.assertEqual(len(merged), 2)
         self.assertEqual(merged[-1]["lifecycle"], "resolved")
 
+    def test_same_second_existing_action_replay_is_stale(self) -> None:
+        base = {
+            "occurrence_id": "occ-1",
+            "project_identity_digest": "project-a",
+            "reviewer": {"type": "human", "name": "reviewer-a"},
+            "binding": {
+                "entry_id": "entry",
+                "snapshot_digest": "snapshot",
+                "source_digest": "source",
+                "target_digest": "target",
+                "context_digest": "context",
+                "evidence_digest": "evidence",
+            },
+            "note": "",
+        }
+        timestamp = "2026-09-20T10:00:00+00:00"
+        ignored = ri.normalize_decision(
+            {**base, "lifecycle": "ignored", "decided_at": timestamp}
+        )
+        resolved = ri.normalize_decision(
+            {**base, "lifecycle": "resolved", "decided_at": timestamp}
+        )
+        replay = ri.normalize_decision(
+            {**base, "lifecycle": "ignored", "decided_at": timestamp}
+        )
+
+        merged, summary = ri.merge_decisions([ignored, resolved], [replay])
+
+        self.assertEqual(summary["stale_count"], 1)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(merged[-1]["lifecycle"], "resolved")
+
     def test_timestamp_iso_variants_compare_by_instant(self) -> None:
         base = {
             "occurrence_id": "occ-1",
@@ -1288,6 +1320,15 @@ class CliTests(unittest.TestCase):
             built_payload = json.loads(built.stdout)
             self.assertEqual(built_payload["command"], "review-index-build")
             self.assertEqual(built_payload["result"]["scope"]["entry_count"], 3)
+            self.assertTrue(
+                os.path.isabs(built_payload["result"]["index_manifest"])
+            )
+            self.assertTrue(
+                Path(built_payload["result"]["index_manifest"]).is_file()
+            )
+            self.assertTrue(
+                os.path.isabs(built_payload["result"]["index_jsonl"])
+            )
 
             status = self._run(
                 "review-index-status",
@@ -1299,6 +1340,9 @@ class CliTests(unittest.TestCase):
             self.assertEqual(status.returncode, 0, status.stderr)
             status_payload = json.loads(status.stdout)
             self.assertEqual(status_payload["result"]["entry_count"], 3)
+            self.assertTrue(
+                os.path.isabs(status_payload["result"]["index_manifest"])
+            )
 
             template_path = root / "template.jsonl"
             exported = self._run(
