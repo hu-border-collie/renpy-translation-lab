@@ -23,9 +23,9 @@ EXTERNAL_WORK_COPY = {
     'work-read': '外部初译：读取材料',
     'work-submit': '外部初译：接收成果',
     'work-status': '外部初译：剩余条目与恢复状态',
+    'check': '外部初译：结构与质量检查',
     'work-preview': '外部初译：生成绑定预览',
     'work-apply': '外部初译：写回或恢复',
-    'check': '外部初译：结构与质量检查',
 }
 
 CHECK_STATUS_LABELS = {

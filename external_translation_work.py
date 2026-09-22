@@ -49,10 +49,10 @@ def _batch():
     return gemini_translate_batch
 
 
-def _fail(code, message, **details):
+def _fail(code, message, *, suggested_action="inspect_work_status_and_inputs", **details):
     raise MachineContractError(
-        message, code_name=code, suggested_action="inspect_work_status_and_inputs",
-        semantic_exit_code=EXIT_BLOCKED if "CONFLICT" in code else EXIT_INVALID_STATE,
+        message, code_name=code, suggested_action=suggested_action,
+        semantic_exit_code=EXIT_BLOCKED if "CONFLICT" in code or code.endswith("_BLOCKED") else EXIT_INVALID_STATE,
         details=details,
     )
 
@@ -78,6 +78,24 @@ def _json(path):
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, ValueError) as exc:
         _fail("WORK_ARTIFACT_INVALID", "工作包制品无法读取。", error=str(exc))
+
+
+def _reference_file(path, *, allow_missing=False):
+    """Freeze readable UTF-8 inputs; only a missing configured glossary is valid."""
+    try:
+        resolved = Path(path).resolve()
+        try:
+            content = resolved.read_bytes()
+        except FileNotFoundError:
+            if not allow_missing:
+                raise
+            content = None
+        return {"kind": "file", "path": str(resolved),
+                "sha256": hashlib.sha256(content).hexdigest() if content is not None else None,
+                "text": content.decode("utf-8-sig") if content is not None else ""}
+    except (OSError, UnicodeError, ValueError) as exc:
+        _fail("WORK_REFERENCE_INVALID", "参考文件须为可读取的 UTF-8 文件。",
+              suggested_action="provide_readable_utf8_reference_file", path=str(path), error=str(exc))
 
 
 def _artifact(manifest, path):
@@ -202,32 +220,63 @@ def _preview(manifest):
     ref = manifest["external_work"].get("preview")
     if not ref:
         return None
-    preview = sync_translation_preview.load_sync_preview(_artifact(manifest, ref["path"]))
+    try:
+        preview = sync_translation_preview.load_sync_preview(_artifact(manifest, ref["path"]))
+    except (OSError, UnicodeError, ValueError) as exc:
+        _fail("WORK_PREVIEW_CHANGED", "绑定预览缺失或损坏；还原原预览，或在源文件未变且未开始写回时重新 check。",
+              suggested_action="restore_bound_preview_or_recheck_unchanged_sources",
+              path=ref["path"], error=str(exc))
     if preview["preview_fingerprint"] != ref["fingerprint"]:
-        _fail("WORK_PREVIEW_CHANGED", "绑定预览已变化。")
+        _fail("WORK_PREVIEW_CHANGED", "绑定预览已变化；请还原原预览或在写回前重新 check。",
+              suggested_action="restore_bound_preview_or_recheck_unchanged_sources", path=ref["path"])
     return preview
 
 
 def _writeback_state(manifest):
+    """Keep durable writeback facts queryable even if the bound preview is lost."""
     state = manifest["external_work"]
-    preview = _preview(manifest)
+    ref = state.get("preview")
+    if ref and (_artifact(manifest, ref["path"]).parent / ".sync_writeback_transaction.json").exists():
+        return "recovery_required"
+    if state.get("applied"):
+        return "applied"
+    try:
+        preview = _preview(manifest)
+    except MachineContractError as exc:
+        if exc.code_name != "WORK_PREVIEW_CHANGED":
+            raise
+        return "preview_unavailable"
     if preview:
-        if (Path(preview["_manifest_path"]).parent / ".sync_writeback_transaction.json").exists():
-            return "recovery_required"
         changed_files = [item for item in preview["files"] if item["source_sha256"] != item["preview_sha256"]]
         committed = any(
             (Path(manifest["tl_dir"]) / item["relative_path"]).is_file()
             and file_sha256(Path(manifest["tl_dir"]) / item["relative_path"]) == item["preview_sha256"]
             for item in changed_files
         )
-        if state.get("applied"):
-            return "applied"
         if committed or preview.get("state") == "applied":
             return "recovery_required"
         return "previewed"
     if (manifest.get("last_check_summary", {}).get("writeback_gate") or {}).get("decision") == "allow":
         return "checked"
     return "not_applied"
+
+
+def _require_unapplied(manifest):
+    """Never discard recovery evidence; lost previews can reset only on preimages."""
+    writeback = _writeback_state(manifest)
+    if writeback == "applied":
+        _fail("WORK_ALREADY_APPLIED", "已完成写回；后续订正请导出新的订正语料。",
+              suggested_action="export_revision_corpus")
+    if writeback == "recovery_required":
+        _preview(manifest)
+        _fail("WORK_RECOVERY_REQUIRED", "已开始写回，请重放 work-apply 完成恢复。",
+              suggested_action="replay_work_apply")
+    if writeback == "preview_unavailable":
+        try:
+            _fresh(manifest)
+        except MachineContractError as exc:
+            _fail("WORK_PREVIEW_CHANGED", "预览不可用且原始输入已变化；须还原原预览，不能丢弃写回绑定。",
+                  suggested_action="restore_bound_preview", cause=exc.code_name)
 
 
 def _invalidate(manifest):
@@ -279,16 +328,9 @@ def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), refer
     references = []
     glossary_path = _quality_glossary_path()
     if glossary_path:
-        glossary = Path(glossary_path)
-        content = glossary.read_bytes() if glossary.is_file() else None
-        references.append({'kind': 'file', 'role': 'quality_glossary', 'path': glossary_path,
-                           'sha256': hashlib.sha256(content).hexdigest() if content is not None else None,
-                           'text': content.decode('utf-8-sig') if content is not None else ''})
+        references.append({**_reference_file(glossary_path, allow_missing=True), 'role': 'quality_glossary'})
     for path in reference_files:
-        resolved = str(Path(path).resolve())
-        content = Path(resolved).read_bytes()
-        references.append({"kind": "file", "path": resolved, "sha256": hashlib.sha256(content).hexdigest(),
-                           "text": content.decode('utf-8-sig')})
+        references.append(_reference_file(path))
     for target in reference_works:
         with _locked(target) as other:
             _fresh(other, preview=_preview(other))
@@ -362,13 +404,18 @@ def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), refer
     }
     if _file_versions(package) != package["file_digests"]:
         _fail("WORK_SOURCE_STALE", "导出扫描期间文件变化，请重试。")
-    if output_dir:
-        root = Path(output_dir).resolve()
-        if root.is_relative_to(Path(batch.legacy.TL_DIR).resolve()):
-            _fail("WORK_OUTPUT_INVALID", "工作包不能写入翻译源目录。")
-        root.mkdir(parents=True, exist_ok=False)
-    else:
-        root = Path(batch.create_batch_package_dir(f"external_{package['package_id']}"))
+    try:
+        if output_dir:
+            root = Path(output_dir).resolve()
+            if root.is_relative_to(Path(batch.legacy.TL_DIR).resolve()):
+                raise ValueError("工作包不能写入翻译源目录。")
+            root.mkdir(parents=True, exist_ok=False)
+        else:
+            root = Path(batch.create_batch_package_dir(f"external_{package['package_id']}"))
+    except (OSError, ValueError) as exc:
+        _fail("WORK_OUTPUT_INVALID", "无法创建工作包目录；请使用 TL 目录外可写的新路径。",
+              suggested_action="choose_new_writable_output_directory_outside_tl",
+              path=str(output_dir or batch.BATCH_JOBS_DIR), error=str(exc))
     manifest.update(_package_dir=str(root), _manifest_path=str(root / "manifest.json"))
     atomic_write_jsonl(root / "results.empty.jsonl", [])
     manifest["external_work"] = {
@@ -414,9 +461,8 @@ def submit_work(target, submission):
             if old["submission_digest"] != submission_digest:
                 _conflict(manifest, submission, 'WORK_SUBMISSION_CONFLICT', '同一提交 ID 的内容不同。', old['accepted_ids'])
             return copy.deepcopy(old)
+        _require_unapplied(manifest)
         _fresh(manifest)
-        if _writeback_state(manifest) in {"applied", "recovery_required"}:
-            _fail("WORK_RECOVERY_REQUIRED", "先完成写回恢复；写回后请导出新的订正语料。")
         expected = {"schema_version": VERSION, "kind": "external_translation_submission",
                     "package_digest": state["package_digest"],
                     **{key: package[key] for key in ("project_id", "package_id", "reference_digest")}}
@@ -430,6 +476,9 @@ def submit_work(target, submission):
         rows = submission.get("items")
         if not isinstance(rows, list) or not rows:
             _fail("WORK_SUBMISSION_INVALID", "提交必须包含非空 items 数组。")
+        if any(not isinstance(row, dict) or not isinstance(row.get("expected_candidate_digest"), str)
+               for row in rows):
+            _fail("WORK_SUBMISSION_INVALID", "每条成果必须提供字符串 expected_candidate_digest；首次提交使用空字符串。")
         proposals = submission.get("reference_proposals", [])
         if not isinstance(proposals, list) or any(
             not isinstance(row, dict) or row.get("kind") not in {"term", "style"}
@@ -525,11 +574,13 @@ def status_work(target, *, include_items=False, offset=0, limit=100, remaining=F
         candidates = _candidates(manifest)
         pending = [row["occurrence_id"] for row in scope if row["occurrence_id"] not in candidates]
         diagnostics = []
+        writeback = "preview_unavailable"
         try:
+            writeback = _writeback_state(manifest)
             _fresh(manifest, preview=_preview(manifest))
         except MachineContractError as exc:
-            diagnostics.append({"code": exc.code_name, "message": str(exc), **exc.details})
-        writeback = _writeback_state(manifest)
+            diagnostics.append({"code": exc.code_name, "message": str(exc),
+                                "suggested_action": exc.suggested_action, **exc.details})
         conflicts = list(state.get('conflicts', {}).values())
         current_status = 'conflict' if any(row['status'] == 'unresolved' for row in conflicts) else 'current'
         result = {"status": "stale" if diagnostics else current_status, "manifest_path": manifest["_manifest_path"],
@@ -552,8 +603,7 @@ def status_work(target, *, include_items=False, offset=0, limit=100, remaining=F
 def check_work(target):
     """Revoke prior authorization first, then run the shared Batch check service."""
     with _locked(target) as manifest:
-        if _writeback_state(manifest) in {"applied", "recovery_required"}:
-            _fail("WORK_RECOVERY_REQUIRED", "已开始写回，请重放 apply 完成恢复。")
+        _require_unapplied(manifest)
         _invalidate(manifest)
         manifest["external_work"]["check_id"] = uuid4().hex
         _save(manifest)
@@ -588,6 +638,7 @@ def _checked(manifest):
 def preview_work(target):
     """Bind the latest allow check to the existing full-file preview artifacts."""
     with _locked(target) as manifest:
+        _require_unapplied(manifest)
         _checked(manifest)
         replacements, translated, failures, summary = _batch().collect_result_actions(manifest, validate_sources=True)
         if failures or summary.get("skipped_items"):

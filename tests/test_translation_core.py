@@ -816,6 +816,19 @@ class TranslationCoreRegressionTests(unittest.TestCase):
             )
         )
 
+    def test_translation_writeback_preimage_uses_live_catalog_including_empty_slots(self):
+        for metadata, expected in (({'live_catalog_text': ''}, ''),
+                                   ({'live_catalog_text': '旧译文'}, '旧译文'),
+                                   ({}, 'Hello')):
+            with self.subTest(metadata=metadata):
+                unit = translation_core.unit_from_translation_item(
+                    {'id': 'script.rpy:0:4', 'text': 'Hello', 'line': 0, 'start': 4, 'end': 6,
+                     'quote': '"', **metadata}, file_rel_path='script.rpy')
+                action = translation_core.translation_writeback_action(unit, {'translation': '你好'})
+                self.assertEqual(unit.text, 'Hello')
+                self.assertEqual(action.expected_text, expected)
+                self.assertEqual(action.replacement, '你好')
+
     def test_manifest_item_dispatches_by_mode_with_chunk_defaults(self):
         revision_unit = translation_core.unit_from_manifest_item(
             {

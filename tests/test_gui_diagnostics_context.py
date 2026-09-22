@@ -28,6 +28,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn('work-preview', text)
         self.assertIn('work-submit', text)
         self.assertIn('check work/manifest.json', text)
+        self.assertLess(text.index('check work/manifest.json'), text.index('work-preview'))
+        self.assertLess(text.index('work-preview'), text.index('work-apply'))
         self.assertNotIn(' download ', text)
         self.assertNotIn(' submit ', text)
 

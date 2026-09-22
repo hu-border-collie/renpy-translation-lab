@@ -85,6 +85,157 @@ class ExternalWorkTests(unittest.TestCase):
         self.assertEqual(caught.exception.code_name, code)
         self.assertEqual(self.rpy.read_bytes(), before)
 
+    def work_cli(self, *args):
+        output, diagnostics = io.StringIO(), io.StringIO()
+        with (mock.patch.object(batch.legacy, 'load_translator_settings'),
+              mock.patch.object(batch, 'load_batch_settings'),
+              contextlib.redirect_stdout(output), contextlib.redirect_stderr(diagnostics)):
+            code = batch.main([*map(str, args), '--output', 'json', '--strict-exit-codes'])
+        self.assertNotIn('Traceback', diagnostics.getvalue())
+        return code, json.loads(output.getvalue())
+
+    def test_invalid_export_inputs_have_machine_diagnostics(self):
+        invalid_utf8 = self.root / 'invalid.txt'
+        invalid_utf8.write_bytes(b'\xff')
+        for reference in (self.root / 'missing.txt', self.root, invalid_utf8):
+            with self.subTest(reference=reference):
+                code, result = self.work_cli('work-export', '--reference-file', reference,
+                                             '--output-dir', self.root / 'invalid-export')
+                self.assertEqual(code, 5)
+                self.assertEqual(result['error']['code'], 'WORK_REFERENCE_INVALID')
+                self.assertEqual(result['error']['suggested_action'], 'provide_readable_utf8_reference_file')
+                self.assertFalse((self.root / 'invalid-export').exists())
+        for glossary in (self.root, invalid_utf8):
+            with self.subTest(glossary=glossary), mock.patch.object(batch.legacy, 'GLOSSARY_FILE', str(glossary)):
+                code, result = self.work_cli('work-export', '--output-dir', self.root / 'invalid-glossary')
+                self.assertEqual(code, 5)
+                self.assertEqual(result['error']['code'], 'WORK_REFERENCE_INVALID')
+                self.assertFalse((self.root / 'invalid-glossary').exists())
+        before = Path(self.target).read_bytes()
+        code, result = self.work_cli('work-export', '--output-dir', Path(self.target).parent)
+        self.assertEqual(code, 5)
+        self.assertEqual(result['error']['code'], 'WORK_OUTPUT_INVALID')
+        self.assertEqual(result['error']['suggested_action'], 'choose_new_writable_output_directory_outside_tl')
+        self.assertEqual(Path(self.target).read_bytes(), before)
+
+    def test_unreadable_reference_and_unwritable_output_are_contract_errors(self):
+        reference = self.root / 'private.txt'
+        reference.write_text('style', encoding='utf-8')
+        original_read = Path.read_bytes
+
+        def deny_reference(path):
+            if path.resolve() == reference.resolve():
+                raise PermissionError('reference denied')
+            return original_read(path)
+
+        with mock.patch.object(Path, 'read_bytes', deny_reference):
+            with self.assertRaises(MachineContractError) as caught:
+                work.export_work(output_dir=self.root / 'unreadable', reference_files=[reference])
+        self.assertEqual(caught.exception.code_name, 'WORK_REFERENCE_INVALID')
+        with mock.patch.object(Path, 'mkdir', side_effect=PermissionError('output denied')):
+            self.assert_refused('WORK_OUTPUT_INVALID', work.export_work, output_dir=self.root / 'unwritable')
+
+    def test_invalid_candidate_version_does_not_persist_conflicts_or_revoke_check(self):
+        for checked in (False, True):
+            if checked:
+                self.ready()
+            manifest_before = Path(self.target).read_bytes()
+            for fields in ({}, {'expected_candidate_digest': None},
+                           {'expected_candidate_digest': 1}, {'expected_candidate_digest': []}):
+                with self.subTest(checked=checked, fields=fields):
+                    document = self.submission([0], sid='malformed')
+                    document['items'][0].pop('expected_candidate_digest')
+                    document['items'][0].update(fields)
+                    self.assert_refused('WORK_SUBMISSION_INVALID', work.submit_work, self.target, document)
+                    self.assertEqual(Path(self.target).read_bytes(), manifest_before)
+        self.assertEqual(work.status_work(self.target)['conflicts'], [])
+
+    def test_missing_preview_before_apply_can_be_rechecked_without_losing_candidates(self):
+        preview = self.ready()
+        Path(preview['preview_path']).unlink()
+        status = work.status_work(self.target)
+        self.assertEqual(status['writeback'], 'preview_unavailable')
+        self.assertEqual(status['diagnostics'][0]['code'], 'WORK_PREVIEW_CHANGED')
+        self.assert_refused('WORK_PREVIEW_CHANGED', work.apply_work, self.target)
+        self.assertEqual(batch.check_results(self.target)['last_check_summary']['writeback_gate']['decision'], 'allow')
+        self.assertEqual(work.status_work(self.target)['received_count'], 6)
+        work.preview_work(self.target)
+        self.assertEqual(work.apply_work(self.target)['status'], 'applied')
+
+    def test_damaged_applied_preview_preserves_receipt_and_structured_status(self):
+        preview = self.ready()
+        receipt = work.apply_work(self.target)['receipt']
+        path = Path(preview['preview_path'])
+        before = path.read_bytes()
+        manifest_before = Path(self.target).read_bytes()
+        for contents in (None, b'{', b'{}', b'\xff'):
+            with self.subTest(contents=contents):
+                if contents is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(contents)
+                code, result = self.work_cli('work-status', self.target)
+                self.assertEqual(code, 5)
+                self.assertTrue(result['ok'])
+                self.assertEqual(result['result']['writeback'], 'applied')
+                self.assertEqual(result['result']['diagnostics'][0]['code'], 'WORK_PREVIEW_CHANGED')
+                code, result = self.work_cli('work-apply', self.target)
+                self.assertEqual(code, 5)
+                self.assertEqual(result['error']['code'], 'WORK_PREVIEW_CHANGED')
+                self.assert_refused('WORK_ALREADY_APPLIED', batch.check_results, self.target)
+                self.assertEqual(Path(self.target).read_bytes(), manifest_before)
+        path.write_bytes(before)
+        with mock.patch.object(sync_translation_preview, 'atomic_write_many_lines', side_effect=AssertionError('rewritten')):
+            self.assertEqual(work.apply_work(self.target)['receipt'], receipt)
+
+    def test_missing_preview_after_unrecorded_write_never_discards_recovery_binding(self):
+        preview = self.ready()
+        with mock.patch.object(work, '_save', side_effect=OSError('lost receipt')):
+            with self.assertRaises(OSError):
+                work.apply_work(self.target)
+        path = Path(preview['preview_path'])
+        contents = path.read_bytes()
+        path.unlink()
+        manifest_before = Path(self.target).read_bytes()
+        self.assertEqual(work.status_work(self.target)['writeback'], 'preview_unavailable')
+        self.assert_refused('WORK_PREVIEW_CHANGED', batch.check_results, self.target)
+        self.assert_refused('WORK_PREVIEW_CHANGED', work.preview_work, self.target)
+        self.assert_refused('WORK_PREVIEW_CHANGED', work.submit_work, self.target, self.submission([0], sid='later'))
+        self.assertEqual(Path(self.target).read_bytes(), manifest_before)
+        path.write_bytes(contents)
+        with mock.patch.object(sync_translation_preview, 'atomic_write_many_lines', side_effect=AssertionError('rewritten')):
+            self.assertEqual(work.apply_work(self.target)['status'], 'applied')
+
+    def test_missing_preview_with_journal_never_rechecks_even_when_sources_unchanged(self):
+        preview = self.ready()
+        path = Path(preview['preview_path'])
+        path.unlink()
+        journal = path.parent / '.sync_writeback_transaction.json'
+        journal.write_text('{}', encoding='utf-8')
+        manifest_before = Path(self.target).read_bytes()
+        self.assertEqual(work.status_work(self.target)['writeback'], 'recovery_required')
+        for operation in (batch.check_results, work.preview_work):
+            self.assert_refused('WORK_PREVIEW_CHANGED', operation, self.target)
+        self.assert_refused('WORK_PREVIEW_CHANGED', work.submit_work, self.target, self.submission([0], sid='later'))
+        self.assertEqual(Path(self.target).read_bytes(), manifest_before)
+        self.assertEqual(journal.read_text(encoding='utf-8'), '{}')
+
+    def test_after_apply_replays_receipt_but_new_submission_requires_revision_corpus(self):
+        self.ready()
+        original = work.submit_work(self.target, self.submission())
+        work.apply_work(self.target)
+        self.assertEqual(work.submit_work(self.target, self.submission()), original)
+        self.assert_refused('WORK_ALREADY_APPLIED', work.submit_work, self.target, self.submission([0], sid='later'))
+
+    def test_structure_refusal_uses_blocked_exit_code(self):
+        document = self.submission([2])
+        document['items'][0]['translation'] = '不要跟过去。'
+        path = self.root / 'submission.json'
+        path.write_text(json.dumps(document, ensure_ascii=False), encoding='utf-8')
+        code, result = self.work_cli('work-submit', self.target, path)
+        self.assertEqual(code, 4)
+        self.assertEqual(result['error']['code'], 'WORK_STRUCTURE_BLOCKED')
+
     def test_partial_replay_revision_and_complete_shared_writeback(self):
         self.assertEqual(len(self.package['items']), 6)
         first, second = self.package['items'][:2]

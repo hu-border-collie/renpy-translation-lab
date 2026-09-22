@@ -84,12 +84,15 @@ Python 调用方可用 `external_translation_work.submission_template` 生成包
   引擎标识为 Ren'Py；本入口不启动 SDK，无法观察的引擎运行时版本记为 `unknown`。
   文件快照覆盖本次 discovery 范围内的原生 TL 文件（包含原文/现译），不覆盖游戏资源或
   所有原始剧情脚本；需要绑定后者时显式加入 `--reference-file`。
+  `work.json` 是本地交换件，含本机绝对路径、源/现译以及 glossary 和参考文件全文。
+  分享或公开前请另制脱敏副本并核对素材授权；脱敏副本不能用于原工作包的提交或写回。
 - 成果只存于 manifest 指向的规范化 results JSONL。每次接收先写不可变结果代，再原子
   替换 manifest 中的结果指针和回执。中断留下的未引用结果代不是已接收成果；重放可恢复。
   不新增 SQLite、成果主库或 Provider job。模型和用量不可观察时写 `unknown`。
 - 提交绑定 `submission_id`、`package_id`、`project_id`、`package_digest`、
   `reference_digest`。逐条绑定 occurrence、`snapshot_digest` 和
   `expected_candidate_digest`；首次提交为空字符串，订正必须精确指向当前候选版本。
+  该字段不可省略或使用非字符串；此类格式错误返回 `WORK_SUBMISSION_INVALID`，不记录竞争冲突。
   接收为整次提交原子操作，可只提交包内部分条目。同 ID/同内容返回原回执；同 ID/异内容
   报冲突。竞争提交不覆盖；显式订正需要新提交 ID、当前候选摘要和原因。
 - 候选的 `review` 仅记录外部审校证据，不创建 #427 的审校索引，也不等同质量确认或写回授权。
@@ -105,8 +108,9 @@ Python 调用方可用 `external_translation_work.submission_template` 生成包
 ## 状态与恢复
 
 成果完整性（empty / partial / complete）、外部语义审校（待审 ID 集合）、写回
-（not_applied / checked / previewed / recovery_required / applied）分别报告。
+（not_applied / checked / previewed / preview_unavailable / recovery_required / applied）分别报告。
 未知、跨项目或包外 occurrence 被拒绝；partial 永远列出剩余 ID。
+状态查询会重扫 discovery 范围内的原生 TL 文件以核对快照；大项目的查询耗时随文件规模增加。
 
 源文件、现译、工作包、Adapter 版本、目标语言或相关参考变化为 stale；提交竞争为 conflict。
 work.json、manifest 合同和当前结果代摘要不符属于完整性错误。拒绝不会覆盖已接收译文。
@@ -118,14 +122,19 @@ work.json、manifest 合同和当前结果代摘要不符属于完整性错误�
 | 未知、其他项目或范围外成果 | `WORK_UNKNOWN_OCCURRENCE` / `WORK_SUBMISSION_STALE` | 核对包级字段和分配范围，不能改 ID 猜测归属 |
 | 同提交 ID 不同内容、候选版本竞争 | `WORK_SUBMISSION_CONFLICT` / `WORK_CANDIDATE_CONFLICT` | 查询持久冲突记录，用新提交 ID 和当前候选摘要显式处置；可重新确认保留原译文 |
 | 尚有未决冲突 | `status=conflict` / `WORK_UNRESOLVED_CONFLICT` | 先处置冲突；旧检查与预览已撤销 |
+| 参考文件缺失、不可读、不是 UTF-8 文件 | `WORK_REFERENCE_INVALID` | 提供可读的 UTF-8 文件；配置的 glossary 尚不存在仍是可绑定状态 |
+| 输出目录已存在或不可创建 | `WORK_OUTPUT_INVALID` | 选择 TL 目录外可写的新目录，不覆盖旧包 |
 | 源/现译、参考或包变化 | `WORK_SOURCE_STALE` / `WORK_REFERENCE_STALE` / `WORK_PACKAGE_CHANGED` | 重新导出并按新快照审阅成果；不原地修改摘要 |
 | 结果代变化 | `WORK_RESULTS_CHANGED` | 查明非合同写入，使用可信成果重新导出/提交 |
 | 缺项、结构错误或质量 blocker | 现有 `writeback_gate.decision=deny`；接收时结构错误为 `WORK_STRUCTURE_BLOCKED` | 补齐、订正后重新检查和预览 |
 | 已写文件但状态未记完 | `writeback=recovery_required` | 核对当前事实后重放 `work-apply`；第三方后续改动不会被覆盖 |
+| 绑定预览缺失、损坏或摘要变化 | `status=stale`，诊断 `WORK_PREVIEW_CHANGED` | 还原原预览；只有源快照和参考均未变、且没有事务日志或写回回执时，才可重新 `check` → `work-preview` |
+| 写回完成后再次提交或检查 | `WORK_ALREADY_APPLIED` | 导出新的订正语料；同 ID/同内容的已接收提交仍可重放原回执 |
 
 严格模式下，成功接收、当前状态和写回返回 0；状态查询发现恢复待办返回 3、未决冲突返回 4、
 stale 或合同不匹配返回 5。缺少 CLI 参数沿用 2。`check` 沿用原合同：allow 且无报警为 0，
-allow 且有 warning 为 3，deny 为 4。`ok=true` 只表示查询成功，须同时读取状态及门禁。
+allow 且有 warning 为 3，deny 为 4。接收时 `WORK_STRUCTURE_BLOCKED` 和预览时
+`WORK_PREVIEW_BLOCKED` 同样返回 4。`ok=true` 只表示查询成功，须同时读取状态及门禁。
 
 ## 唯一检查与写回边界
 
@@ -141,6 +150,10 @@ allow 且有 warning 为 3，deny 为 4。`ok=true` 只表示查询成功，须�
 文件已提交而状态补记失败时，状态查询根据绑定预览和实际文件摘要显示
 `recovery_required`；重放 apply 只补记可验证事实。第三方随后修改文件时必须拒绝恢复，
 不能重新覆盖。预备事务仍由既有事务恢复器校验并回滚。聊天记录不是恢复依据。
+绑定预览不可读时，状态查询仍返回诊断、候选和已持久化的写回事实；`applied` 表示存在写回
+回执，此时不代表已重新验证当前文件。既无回执又无法从预览核对时显示 `preview_unavailable`，
+不能据此认定尚未写回。有事务日志、回执或源文件变化时，`check` 不会丢弃恢复绑定；先还原
+原预览，再按诊断恢复。`work-apply` 始终要求完整且匹配的绑定预览。
 
 ## 产品范围
 
@@ -180,13 +193,13 @@ python -B scripts/run_external_work_fixture.py --output-dir outputs/external-par
 现有订正提案导入/写回的互操作。空 TL 槽的写回预镜像复用 Adapter 的实际 catalog 文本，
 原文仅用于翻译输入；没有放宽原文或目标文件校验。
 
-本次工程门禁（Python 3.14，Windows）结果：
+2026-09-22 完成审查修复并接入 `main@cb00ce1` 后的工程门禁（Python 3.14，Windows）结果：
 
 | 验证 | 结果 |
 |---|---|
-| `python -B -m unittest tests.test_external_translation_work -q` | 33 项通过，已包含在完整 CLI 集合中 |
-| `python -B tests/run_cli_tests.py -q` | 共 2650 项，运行成功（4 项跳过） |
-| `python -B tests/run_gui_tests.py -q` | 1323 项通过 |
+| `tests.test_external_translation_work` | 42 项通过，已包含在针对性组合与完整 CLI 集合中 |
+| `python -B tests/run_cli_tests.py -q` | 共 2698 项，运行成功（4 项跳过） |
+| `python -B tests/run_gui_tests.py -q` | 1324 项通过 |
 | `scripts/run_quality_gates.py all` 的全部门禁 | Ruff、mypy 与五份锁的 pip-audit 均通过，使用现有审计例外 |
 | 本地 Markdown 链接与 `git diff --check` | 文件目标与差异空白检查通过 |
 
