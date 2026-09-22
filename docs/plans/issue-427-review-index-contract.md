@@ -51,7 +51,7 @@ TranslationRecord 的 `occurrence_id` 是适配器 `occ1:…`，corpus 的 occur
 `identity_v2`；关联必须使用记录保留的 `unit_id`（或相同 occurrence_id），不能按原文匹配。
 记录先经现有 `TranslationRecord.from_dict` 校验 schema、ID 与内容 digest，然后要求：
 
-- 当前记录 `active`，目标语言、文件路径、1-based 行号、原文与当前译文逐项一致；
+- 当前记录 `active`，目标语言、文件路径、1-based 行号、原文与当前译文逐项一致；corpus 的 `source` 保留 `.rpy` 原文转义，而 record 存解码后的文本时，按 corpus source 的解码形式比较，两种表示不同不视为不符；
 - 记录生成器写入 `provenance.source_binding`：schema_version、engine、target_language、
   project_snapshot_fingerprint，以及整个 snapshot 的 `{file_rel_path: sha256}` 稳定摘要；
   Ren'Py 记录的该摘要必须与 corpus 的 `source.file_digests` / `snapshot_digest` 一致，

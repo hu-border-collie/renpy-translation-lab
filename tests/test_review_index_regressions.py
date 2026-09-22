@@ -15,6 +15,22 @@ import translation_quality
 from tests.test_review_index import _write_corpus, _write_findings
 
 
+DEFAULT_RECORD_SCRIPT = (
+    'translate schinese start:\n    old "Hello world"\n    new "你好..."\n'
+    '\n    old "Hello world"\n    new "你好..."\n'
+)
+
+ESCAPED_RECORD_SCRIPT = (
+    'translate schinese start:\n'
+    '    old "Placed \\n\\"%s\\"\\n on clipboard"\n'
+    '    new "已放置 \\n\\"%s\\"\\n 到剪贴板"\n'
+    '\n'
+    'translate schinese escaped_1:\n'
+    '    # a "Say \\"hi\\"\\nnow"\n'
+    '    a "现在说\\"你好\\""\n'
+)
+
+
 def write_rows(path, rows):
     path.write_text(
         "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
@@ -258,7 +274,7 @@ class FindingBindingTests(unittest.TestCase):
             self.assertEqual(applied[0]["review"]["lifecycle"], "needs_recheck")
 
 
-def production_record_fixture(root):
+def production_record_fixture(root, script_text=DEFAULT_RECORD_SCRIPT):
     """Use the actual scanner, snapshot and record/corpus exporters."""
     import gemini_translate_batch as batch
     import translator_runtime as runtime
@@ -278,11 +294,7 @@ def production_record_fixture(root):
     tl = root / "game" / "tl" / "schinese"
     tl.mkdir(parents=True)
     script = tl / "script.rpy"
-    script.write_text(
-        'translate schinese start:\n    old "Hello world"\n    new "你好..."\n'
-        '\n    old "Hello world"\n    new "你好..."\n',
-        encoding="utf-8",
-    )
+    script.write_text(script_text, encoding="utf-8")
     scan = build_translation_snapshot(
         RenPyAdapter(legacy_module=runtime),
         ProjectDiscoveryRequest(
@@ -363,6 +375,33 @@ class TranslationRecordBindingTests(unittest.TestCase):
                 self.assertTrue(record["snapshot_digest"])
                 self.assertTrue(record["provenance"])
             self.assertEqual(manifest["diagnostics"], [])
+
+    def test_escaped_source_representation_attaches_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus, records = production_record_fixture(
+                root, script_text=ESCAPED_RECORD_SCRIPT
+            )
+            ri.build_review_index(
+                corpus, translation_records_path=records, output_dir=root / "index"
+            )
+            manifest, entries = ri.load_review_index(root / "index")
+            self.assertEqual(manifest["diagnostics"], [])
+            self.assertEqual(len(entries), 2)
+            self.assertTrue(all(entry["translation_record"] is not None for entry in entries))
+            for entry in entries:
+                # Corpus keeps the .rpy escapes; the record stores decoded text.
+                self.assertIn("\\", entry["source"])
+                self.assertNotEqual(entry["source"], entry["translation_record"]["source_text"])
+                self.assertEqual(
+                    ri._decoded_corpus_source(entry["source"]),
+                    entry["translation_record"]["source_text"],
+                )
+
+    def test_undecodable_corpus_source_falls_back_to_raw(self):
+        self.assertEqual(ri._decoded_corpus_source("plain text"), "plain text")
+        self.assertEqual(ri._decoded_corpus_source("trailing \\"), "trailing \\")
+        self.assertEqual(ri._decoded_corpus_source('say \\"hi\\"'), 'say "hi"')
 
     def test_missing_stale_and_incompatible_record_evidence_is_diagnosed(self):
         with tempfile.TemporaryDirectory() as tmp:

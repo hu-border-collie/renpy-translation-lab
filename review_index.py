@@ -10,9 +10,11 @@ is touched here.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -397,6 +399,28 @@ def load_translation_records(path: str | os.PathLike[str] | None) -> dict[str, A
     }
 
 
+def _decoded_corpus_source(source: str) -> str:
+    """Decode the raw literal body kept by the legacy revision scanner.
+
+    Corpus rows keep the text between the .rpy quotes (escapes intact), while
+    adapter TranslationRecords store the decoded string value. Accepting the
+    decoded form keeps correct records attached without loosening identity or
+    digest checks; an undecodable body falls back to the raw text so genuinely
+    different sources still fail the match.
+    """
+
+    if not source or "\\" not in source:
+        return source
+    try:
+        with warnings.catch_warnings():
+            # Unknown escapes stay literal in the adapter's literal_eval too.
+            warnings.simplefilter("ignore", SyntaxWarning)
+            decoded = ast.literal_eval('"' + source + '"')
+    except (SyntaxError, ValueError, TypeError):
+        return source
+    return decoded if isinstance(decoded, str) else source
+
+
 def _attach_translation_records(
     entries: list[dict[str, Any]],
     records: Sequence[Mapping[str, Any]],
@@ -484,7 +508,10 @@ def _attach_translation_records(
             or _coerce_int(provenance.get("line_number")) != entry["locator"]["line_number"]
         ):
             reasons.append("locator_mismatch")
-        if record.source_text != entry["source"]:
+        if (
+            record.source_text != entry["source"]
+            and record.source_text != _decoded_corpus_source(entry["source"])
+        ):
             reasons.append("source_mismatch")
         if record.translation_text != entry["current_translation"]:
             reasons.append("target_mismatch")
