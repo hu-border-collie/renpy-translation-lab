@@ -41,11 +41,30 @@ review-decisions-import ──> review_decisions.jsonl   人工决定日志，�
 | `source` / `current_translation` / `context` | 原文、当前译文与同文件前后上下文 |
 | `snapshot_digest` / `binding` | `entry_id`、`snapshot_digest`、`source_digest`、`target_digest`、`context_digest`、`evidence_digest`；决定绑定用 |
 | `quality_findings` / `quality_finding_ids` / `issue_count` | 附着 finding 摘要；未匹配 finding 进入 manifest diagnostics，不静默丢弃 |
-| `translation_record` | 可选 `translation_records.jsonl` provenance 摘要（record_id / origin / status / revision_history 计数） |
+| `translation_record` | 可选、经校验的 TranslationRecord：保留 adapter occurrence_id、unit_id、version_id、snapshot_digest、record_id/digest、origin/status、provenance 与 revision_history/计数 |
 | `review` | 当前生命周期、reviewer、note、decided_at、history、`needs_recheck` / `changed_bindings` |
 
 finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；匹配不到时在 manifest 写
 `REVIEW_QUALITY_FINDING_UNMATCHED` 诊断。重复 occurrence 通过 occurrence_id 保持独立。
+
+TranslationRecord 的 `occurrence_id` 是适配器 `occ1:…`，corpus 的 occurrence_id 是旧
+`identity_v2`；关联必须使用记录保留的 `unit_id`（或相同 occurrence_id），不能按原文匹配。
+记录先经现有 `TranslationRecord.from_dict` 校验 schema、ID 与内容 digest，然后要求：
+
+- 当前记录 `active`，目标语言、文件路径、1-based 行号、原文与当前译文逐项一致；corpus 的 `source` 保留 `.rpy` 原文转义，而 record 存解码后的文本时，按 corpus source 的解码形式比较，两种表示不同不视为不符；
+- 记录生成器写入 `provenance.source_binding`：schema_version、engine、target_language、
+  project_snapshot_fingerprint，以及整个 snapshot 的 `{file_rel_path: sha256}` 稳定摘要；
+  Ren'Py 记录的该摘要必须与 corpus 的 `source.file_digests` / `snapshot_digest` 一致，
+  且 corpus 没有扫描期间变化或缺失 digest 的标记；
+- 身份只能指向一个 corpus 条目；同一条目存在多个不同 record digest（包括不同版本）时，
+  记录歧义且不选择任何一条。完全相同记录的重复行不制造歧义。
+
+所有未匹配、无效、缺失证据、过期和歧义记录都有 diagnostics；输入 count 包含未附着行。
+关联保留的是记录明确标注的来源版本，**不赋予 corpus 同一版本号，也不授予人工确认**。
+旧 TranslationRecord 仍可由原加载器读取，但没有 `source_binding` 时，本索引明确报告
+`missing_source_binding` 并不附着；需要使用同一文件集的当前快照重新导出记录。记录冻结后
+发生过 apply、其他文件改动或扫描范围变化，也会诊断为 `source_snapshot_mismatch`，不猜测
+跨版本关系。此校验只消费已提供的产物，不读取游戏文件来补造证据。
 
 ## 3. 人工决定与 needs_recheck
 
@@ -71,6 +90,11 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
   不允许直接导入。`ignored` 只表示本次审校生命周期，不等于 quality-ack、reuse accept 或 apply 授权。
 - 重建时按 `occurrence_id` 找最新决定；绑定完全一致才沿用生命周期；任一 binding digest 变化 →
   `needs_recheck`，记录 `changed_bindings` 与 `previous_lifecycle`。
+- finding 证据摘要绑定 ID、schema、reason/rule、severity、disposition、item/file/line、
+  evidence、suggestion 和 rule_version。同 ID 的 warning → blocker 等语义变化必须复核；
+  finding 顺序、JSON evidence 对象键顺序及请求时间/run 元数据不影响摘要。
+  旧版只绑定 finding_ids 的决定保留原日志与 history：带 finding 的条目在首次重建时进入
+  `needs_recheck`，重新审校并导入当前 binding 后恢复；无 finding 的原有绑定保持兼容。
 - 决定历史按 occurrence 保存在 `review.history`，导入/导出不删除旧动作；决定记录不存在时默认 `open`。
 - 找不到 occurrence 的决定写入 manifest `REVIEW_DECISION_ORPHANED` 诊断，决定本身不丢；
   `project_identity_digest` 与当前索引不一致的决定不参与应用，写入
@@ -82,7 +106,10 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
   `decision_id` 或追加一条新动作，而不是原地改 lifecycle/note。
 - `project_identity_digest` 必填；导入时若任何决定属于其他项目，整批导入在写盘前返回
   `REVIEW_DECISION_PROJECT_MISMATCH`，不会污染 append-only 决定日志；手工放入包目录的
-  跨项目决定不应用，manifest/status 暴露 `project_mismatch_count` 并返回 `blocked`。
+  跨项目日志（包含孤儿 occurrence）会使重建/导入在任何写入前失败，日志及已有派生产物
+  保持原字节。显式提供外置决定文件也不能掩盖包内的跨项目日志。显式读取外置跨项目决定
+  构建诊断索引时仍不应用它，manifest/status 暴露 `project_mismatch_count` 并返回 `blocked`；
+  后续导入仍须先校验现存日志，不能以报告 blocked 代替写入前拒绝。
 - 包内 `review_index.jsonl` / `review_decisions.jsonl` / Markdown 路径以 manifest 目录相对路径
   保存；外部输入路径保持绝对。复制/移动 index 包后，导入/导出/状态会优先使用包内决定文件，
   不会写到原包的绝对路径；记录的外部决定路径不存在时回退到包内 `review_decisions.jsonl`。
@@ -91,7 +118,7 @@ finding 匹配顺序：`(file_rel_path, line)` → `item_id == occurrence_id`；
 
 | 命令 | 说明 |
 |---|---|
-| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest / 目录，或带同目录 manifest 的 JSONL；输出 JSONL + manifest + Markdown；无 decisions 时写模板；显式 `--decisions` 不存在或裸 JSONL 缺 manifest 时报 `REVIEW_INDEX_INPUT_MISSING`；返回值中的产物路径为绝对路径 |
+| `review-index-build --corpus PATH [--quality-findings PATH] [--translation-records PATH] [--decisions PATH] [--output-dir DIR]` | 读取 corpus manifest / 目录，或带同目录 manifest 的 JSONL；输出 JSONL + manifest + Markdown；无 decisions 时写模板；包内日志跨项目时在写入前拒绝；record 关联失败写 diagnostics；显式 `--decisions` 不存在或裸 JSONL 缺 manifest 时报 `REVIEW_INDEX_INPUT_MISSING`；返回值中的产物路径为绝对路径 |
 | `review-index-status --index PATH` | 只读汇总条目数、finding 附着数、生命周期计数、needs_recheck 与诊断 |
 | `review-decisions-export --index PATH --file PATH` | 导出当前决定日志；无决定时导出可编辑模板（reviewer.name 为 `TODO`）；manifest 引用的决定文件缺失时报错 |
 | `review-decisions-import --index PATH --file PATH` | 校验并追加决定；未编辑的 `TODO` 模板行跳过并计数，重复动作按尾部重叠/时间戳判 duplicate/stale，孤儿 occurrence 记诊断；跨项目决定整批拒绝（`REVIEW_DECISION_PROJECT_MISMATCH`）；随后刷新索引 review 状态，不覆盖输入决定文件 |
@@ -131,6 +158,8 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 | code | 含义 |
 |---|---|
 | `REVIEW_QUALITY_FINDING_UNMATCHED` | quality finding 未能匹配任何 corpus occurrence；仍保留在 manifest diagnostics |
+| `REVIEW_TRANSLATION_RECORD_UNMATCHED` | 记录无效、缺少源绑定、源快照/身份/定位/语言/内容不符或非 active；reason/reasons 说明原因，不附着记录 |
+| `REVIEW_TRANSLATION_RECORD_AMBIGUOUS` | 一个身份对应多个条目，或一个条目对应多个不同记录；不采用首条兜底 |
 | `REVIEW_DECISION_ORPHANED` | 决定引用的 occurrence 不在当前索引；决定保留但不应用 |
 | `REVIEW_DECISION_PROJECT_MISMATCH` | 决定项目身份与当前索引不一致；不应用该决定 |
 | `REVIEW_INDEX_INPUT_PROJECT_MISMATCH` | 同一 output_dir 的旧 manifest 属于其他项目；不复用其决定路径 |
@@ -156,7 +185,9 @@ translator config、API key、glossary、quality acknowledgement 或任何 `.rpy
 - 决定 schema 版本不受支持时返回 `REVIEW_DECISION_INVALID`，不按当前语义接受未知版本。
 - 用同一 `--output-dir` 重建且未显式传 `--decisions` 时，会优先复用上一份 manifest 记录的
   决定路径，但要求旧 manifest 的 project identity 与当前 corpus 一致；项目不同则忽略记录路径并写
-  `REVIEW_INDEX_INPUT_PROJECT_MISMATCH`，不把 A 项目的决定写进 B 项目。findings / translation
+  `REVIEW_INDEX_INPUT_PROJECT_MISMATCH`。若默认包内日志仍含其他项目历史，整个构建在写入前
+  返回 `REVIEW_DECISION_PROJECT_MISMATCH`，应为新项目选择独立输出目录；不会删除或混写原历史。
+  findings / translation
   records 仅在 corpus JSONL digest 一致时复用，否则写 `REVIEW_INDEX_INPUT_CORPUS_MISMATCH`。
 - 模板中的 `reviewer.name = "TODO"` 行在导入时跳过并计入 `merge.skipped_template_count`，
   因此只填写部分模板行也可以导入；直接调用 `normalize_decision` 仍拒绝 TODO 占位值。

@@ -10,9 +10,11 @@ is touched here.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -21,6 +23,7 @@ from atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text
 
 import revision_corpus
 import translation_quality
+from engine_adapters.reuse import TranslationRecord
 
 REVIEW_INDEX_SCHEMA_VERSION = 1
 REVIEW_ENTRY_SCHEMA_VERSION = 1
@@ -65,6 +68,8 @@ DIAGNOSTIC_DECISION_PROJECT_MISMATCH = "REVIEW_DECISION_PROJECT_MISMATCH"
 DIAGNOSTIC_INDEX_INPUT_PROJECT_MISMATCH = "REVIEW_INDEX_INPUT_PROJECT_MISMATCH"
 DIAGNOSTIC_INDEX_INPUT_CORPUS_MISMATCH = "REVIEW_INDEX_INPUT_CORPUS_MISMATCH"
 DIAGNOSTIC_DECISION_AMBIGUOUS_FINDING = "REVIEW_QUALITY_FINDING_AMBIGUOUS"
+DIAGNOSTIC_RECORD_UNMATCHED = "REVIEW_TRANSLATION_RECORD_UNMATCHED"
+DIAGNOSTIC_RECORD_AMBIGUOUS = "REVIEW_TRANSLATION_RECORD_AMBIGUOUS"
 
 
 class ReviewIndexError(ValueError):
@@ -380,39 +385,172 @@ def load_quality_findings(path: str | os.PathLike[str] | None) -> dict[str, Any]
 
 
 def load_translation_records(path: str | os.PathLike[str] | None) -> dict[str, Any]:
+    """Read full record evidence; validation/matching emits per-record diagnostics."""
+
     if not path or not str(path).strip():
         return {"records": [], "path": "", "digest": "", "count": 0}
     source = Path(path).resolve()
     rows = load_jsonl(source, label="translation records")
-    records: list[dict[str, Any]] = []
-    for row in rows:
-        occurrence_id = str(row.get("occurrence_id") or "").strip()
-        if not occurrence_id:
-            continue
-        records.append(
-            {
-                "occurrence_id": occurrence_id,
-                "record_id": str(row.get("record_id") or ""),
-                "record_digest": str(row.get("record_digest") or ""),
-                "origin": str(row.get("origin") or ""),
-                "status": str(row.get("status") or ""),
-                "translation_text": str(row.get("translation_text") or ""),
-                "target_language": str(row.get("target_language") or ""),
-                "revision_history_count": len(
-                    row.get("revision_history") or []
-                ),
-            }
-        )
     return {
-        "records": records,
+        "records": rows,
         "path": str(source),
         "digest": _file_digest(source),
-        "count": len(records),
+        "count": len(rows),
     }
+
+
+def _decoded_corpus_source(source: str) -> str:
+    """Decode the raw literal body kept by the legacy revision scanner.
+
+    Corpus rows keep the text between the .rpy quotes (escapes intact), while
+    adapter TranslationRecords store the decoded string value. Accepting the
+    decoded form keeps correct records attached without loosening identity or
+    digest checks; an undecodable body falls back to the raw text so genuinely
+    different sources still fail the match.
+    """
+
+    if not source or "\\" not in source:
+        return source
+    try:
+        with warnings.catch_warnings():
+            # Unknown escapes stay literal in the adapter's literal_eval too.
+            warnings.simplefilter("ignore", SyntaxWarning)
+            decoded = ast.literal_eval('"' + source + '"')
+    except (SyntaxError, ValueError, TypeError):
+        return source
+    return decoded if isinstance(decoded, str) else source
+
+
+def _attach_translation_records(
+    entries: list[dict[str, Any]],
+    records: Sequence[Mapping[str, Any]],
+    corpus_manifest: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Bridge adapter/legacy IDs only with matching immutable source evidence.
+
+    The supplied record remains provenance from its named version, not a claim
+    that the corpus has that version ID. Missing proof, stale content and
+    conflicting records are diagnosed; neither text-only nor first-hit fallback
+    may select a record. No live project files are read to reconstruct evidence.
+    """
+
+    if not records:
+        return []
+    by_identity: dict[str, set[int]] = {}
+    for index, entry in enumerate(entries):
+        for key in ("occurrence_id", "identity_v2"):
+            identity = str(entry.get(key) or "")
+            if identity:
+                by_identity.setdefault(identity, set()).add(index)
+    project = corpus_manifest.get("project")
+    project = project if isinstance(project, Mapping) else {}
+    language = _normalize_rel_path(project.get("tl_subdir")).rstrip("/").split("/")[-1]
+    source = corpus_manifest.get("source")
+    source = source if isinstance(source, Mapping) else {}
+    file_digests = source.get("file_digests") or {}
+    corpus_digest = str(source.get("snapshot_digest") or "")
+    if (
+        not isinstance(file_digests, Mapping) or not file_digests
+        or corpus_digest != revision_corpus.aggregate_digest(file_digests)
+        or source.get("source_changed_during_scan")
+        or source.get("scanned_files_missing_digest")
+        or source.get("scanned_files_digest_mismatch")
+    ):
+        corpus_digest = ""
+    diagnostics: list[dict[str, Any]] = []
+    matched: dict[int, dict[str, TranslationRecord]] = {}
+    for raw in records:
+        diagnostic = {
+            "code": DIAGNOSTIC_RECORD_UNMATCHED,
+            "record_id": str(raw.get("record_id") or ""),
+            "occurrence_id": str(raw.get("occurrence_id") or ""),
+            "unit_id": str(raw.get("unit_id") or ""),
+        }
+        try:
+            record = TranslationRecord.from_dict(raw)
+        except (ValueError, TypeError, KeyError) as exc:
+            diagnostics.append({**diagnostic, "reason": "invalid_record", "error": str(exc)})
+            continue
+        candidates = (
+            by_identity.get(record.unit_id, set())
+            | by_identity.get(record.occurrence_id, set())
+        )
+        if len(candidates) != 1:
+            diagnostics.append({
+                **diagnostic,
+                "code": DIAGNOSTIC_RECORD_AMBIGUOUS if candidates else DIAGNOSTIC_RECORD_UNMATCHED,
+                "reason": "ambiguous_identity" if candidates else "identity_not_found",
+            })
+            continue
+        index = next(iter(candidates))
+        entry = entries[index]
+        provenance = record.provenance
+        binding = provenance.get("source_binding")
+        binding = binding if isinstance(binding, Mapping) else {}
+        reasons = []
+        if not binding:
+            reasons.append("missing_source_binding")
+        elif (
+            binding.get("schema_version") != 1
+            or binding.get("engine") != "renpy"
+            or binding.get("target_language") != language
+            or not corpus_digest
+            or binding.get("source_digest") != corpus_digest
+        ):
+            reasons.append("source_snapshot_mismatch")
+        if record.status != "active":
+            reasons.append("record_not_active")
+        if record.target_language != language:
+            reasons.append("target_language_mismatch")
+        if (
+            _normalize_rel_path(provenance.get("file_rel_path")) != entry["file_rel_path"]
+            or _coerce_int(provenance.get("line_number")) <= 0
+            or _coerce_int(provenance.get("line_number")) != entry["locator"]["line_number"]
+        ):
+            reasons.append("locator_mismatch")
+        if (
+            record.source_text != entry["source"]
+            and record.source_text != _decoded_corpus_source(entry["source"])
+        ):
+            reasons.append("source_mismatch")
+        if record.translation_text != entry["current_translation"]:
+            reasons.append("target_mismatch")
+        if reasons:
+            diagnostics.append({**diagnostic, "reason": reasons[0], "reasons": reasons})
+            continue
+        matched.setdefault(index, {})[record.record_digest] = record
+    for index, candidates in matched.items():
+        if len(candidates) != 1:
+            diagnostics.append({
+                "code": DIAGNOSTIC_RECORD_AMBIGUOUS,
+                "reason": "multiple_records",
+                "occurrence_id": entries[index]["occurrence_id"],
+                "record_ids": sorted(record.record_id for record in candidates.values()),
+            })
+            continue
+        record = next(iter(candidates.values()))
+        entries[index]["translation_record"] = {
+            **record.to_dict(), "revision_history_count": len(record.revision_history),
+        }
+    return diagnostics
 
 
 def _context_digest(context: Any) -> str:
     return _digest_payload(context if isinstance(context, Mapping) else {})
+
+
+def _finding_semantics(finding: Mapping[str, Any]) -> dict[str, Any]:
+    """Bind review-relevant fields, ignoring run metadata and JSON key order."""
+
+    summary = _finding_summary(finding)
+    try:
+        evidence = json.loads(summary["evidence"])
+    except (ValueError, TypeError):
+        pass
+    else:
+        if isinstance(evidence, (dict, list)):
+            summary["evidence"] = evidence
+    return summary
 
 
 def _entry_binding(
@@ -438,6 +576,12 @@ def _entry_binding(
             str(item.get("finding_id") or "") for item in findings
         ),
     }
+    if findings:
+        # Old ID-only decisions with findings intentionally need recheck once.
+        # Entries without findings keep their original binding unchanged.
+        evidence_payload["finding_semantics"] = sorted(
+            (_finding_semantics(item) for item in findings), key=_stable_json
+        )
     evidence_digest = _digest_payload(evidence_payload)
     entry_id = _digest_payload(
         {
@@ -490,12 +634,6 @@ def build_index_entries(
         item_id = str(summary.get("item_id") or "")
         if item_id:
             findings_by_item.setdefault(item_id, []).append(summary)
-    records_by_occurrence: dict[str, dict[str, Any]] = {}
-    for record in records:
-        occurrence_id = str(record.get("occurrence_id") or "")
-        if occurrence_id:
-            records_by_occurrence.setdefault(occurrence_id, dict(record))
-
     diagnostics: list[dict[str, Any]] = []
     matched_finding_ids: set[str] = set()
     entries: list[dict[str, Any]] = []
@@ -559,7 +697,6 @@ def build_index_entries(
             snapshot_digest=snapshot_digest,
             findings=matched,
         )
-        record = records_by_occurrence.get(occurrence_id)
         entries.append(
             {
                 "schema_version": REVIEW_ENTRY_SCHEMA_VERSION,
@@ -590,7 +727,7 @@ def build_index_entries(
                 ),
                 "issue_count": len(matched),
                 "has_issues": bool(matched),
-                "translation_record": record,
+                "translation_record": None,
                 "review": {
                     "lifecycle": LIFECYCLE_OPEN,
                     "decision_id": "",
@@ -623,6 +760,7 @@ def build_index_entries(
             str(entry.get("occurrence_id") or ""),
         )
     )
+    diagnostics.extend(_attach_translation_records(entries, records, corpus_manifest))
     return entries, diagnostics
 
 
@@ -788,6 +926,29 @@ def load_decisions(path: str | os.PathLike[str] | None) -> list[dict[str, Any]]:
                 details={"path": str(source), "line": index, **exc.details},
             ) from exc
     return decisions
+
+
+def _require_decision_project(
+    decisions: Sequence[Mapping[str, Any]], project_id: str, *, path: Path
+) -> None:
+    """Reject foreign log history before any package mutation, including orphans."""
+
+    mismatched = [
+        row for row in decisions
+        if str(row.get("project_identity_digest") or "") != project_id
+    ]
+    if mismatched:
+        raise ReviewIndexError(
+            DIAGNOSTIC_DECISION_PROJECT_MISMATCH,
+            "现存决定日志包含其他项目的历史；请使用独立索引目录，原日志未修改。",
+            details={
+                "path": str(path),
+                "count": len(mismatched),
+                "occurrence_ids": sorted({
+                    str(row.get("occurrence_id") or "") for row in mismatched
+                }),
+            },
+        )
 
 
 def merge_decisions(
@@ -1105,6 +1266,13 @@ def build_review_index(
     target_dir = Path(output_dir)
     corpus = load_corpus_bundle(corpus_path)
     current_project = project_identity(corpus["manifest"])
+    # This file wins during import even when an external --decisions is supplied.
+    # Validate it before replacing the manifest or any other derived artifact.
+    package_log = target_dir / REVIEW_DECISIONS_JSONL_NAME
+    if package_log.is_file():
+        _require_decision_project(
+            load_decisions(package_log), current_project["identity_digest"], path=package_log
+        )
     reuse_diagnostics: list[dict[str, Any]] = []
     if decisions_path is None:
         existing_manifest_path = target_dir / REVIEW_INDEX_MANIFEST_NAME
@@ -1459,6 +1627,7 @@ def import_decisions_into_index(
         if entries
         else str((manifest.get("project") or {}).get("identity_digest") or "")
     )
+    _require_decision_project(existing, current_project_id, path=decisions_file)
     mismatched_incoming = [
         decision
         for decision in incoming
