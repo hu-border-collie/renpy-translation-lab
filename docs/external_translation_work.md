@@ -125,7 +125,10 @@ work.json、manifest 合同和当前结果代摘要不符属于完整性错误�
 | 参考文件缺失、不可读、不是 UTF-8 文件 | `WORK_REFERENCE_INVALID` | 提供可读的 UTF-8 文件；配置的 glossary 尚不存在仍是可绑定状态 |
 | 输出目录已存在或不可创建 | `WORK_OUTPUT_INVALID` | 选择 TL 目录外可写的新目录，不覆盖旧包 |
 | 损坏工作包无法确定输出保护路径 | `WORK_MANIFEST_INVALID` | 恢复或重新导出工作包；`--output-file` 预检失败时只向终端报告，保留原输出文件 |
+| `external_work` 状态字段（receipts / conflicts / applied）或预览引用损坏 | `WORK_MANIFEST_INVALID` / `WORK_PREVIEW_CHANGED` | 从可信副本恢复；预览引用损坏时源未变且无写回证据可重新 `check` |
 | 工作包或项目锁无法取得 | `WORK_LOCK_UNAVAILABLE` | 检查锁路径、目录权限或占用进程；有其他写回进程时等待其完成，不删除活动锁 |
+| `work-read` / `work-status` 分页参数非法 | `WORK_PAGE_INVALID` | offset 必须非负、limit 在 1–1000；修正后重试 |
+| `apply <work-manifest>` 带 Batch 导出参数 | `WORK_EXPORT_UNSUPPORTED` | 外部包只消费绑定预览：先 `work-preview` 再 `work-apply` |
 | 源/现译、参考或包变化 | `WORK_SOURCE_STALE` / `WORK_REFERENCE_STALE` / `WORK_PACKAGE_CHANGED` | 重新导出并按新快照审阅成果；不原地修改摘要 |
 | 结果代变化 | `WORK_RESULTS_CHANGED` | 查明非合同写入，使用可信成果重新导出/提交 |
 | 缺项、结构错误或质量 blocker | 现有 `writeback_gate.decision=deny`；接收时结构错误为 `WORK_STRUCTURE_BLOCKED` | 补齐、订正后重新检查和预览 |

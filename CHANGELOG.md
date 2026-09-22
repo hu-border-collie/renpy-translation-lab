@@ -46,6 +46,7 @@
 
 - 外部初译工作包在绑定预览缺失或损坏时仍可查询状态；源快照未变且无写回证据时可重新检查，已开始写回时保留恢复绑定。参考文件、输出目录和候选版本字段的输入错误返回稳定诊断，不再泄漏异常或误记为持久竞争冲突；已写回包提示使用订正语料。
 - 损坏的外部工作包在输出文件预检中返回受控错误并保留原输出，GUI 保持外部命令路由；工作包或项目锁无法取得时返回可处理的锁诊断。
+- 外部初译工作包的 `receipts` / `conflicts` / `applied` 与预览引用损坏时返回稳定 `WORK_MANIFEST_INVALID` / `WORK_PREVIEW_CHANGED`，不再泄漏 `INTERNAL_ERROR`；对工作包执行 Provider `submit` 在读取 API Key 前即返回 `WORK_PROVIDER_DISABLED`；共享预览 apply 只读取一次预览制品。
 
 - durable Sync 的 `sync-status` 快照新增只读 `frozen_profile`（profile / adapter / provider / model / embedding profile / execution strategy / source）：优先取 run 启动时冻结的 plan 快照，旧 run 回退到 attempt 记录的 provider/model，缺失时诚实标 `unknown`；CLI 文本与 GUI 运行事实同步显示，失败或降级时能看到真实 Provider/模型（#344 ⑦）。
 - `build-revisions` / `build-keywords` 的 Batch 作业模型改为取冻结的 revision / keyword 阶段路由，`manifest.batch_model` 与请求 generation config 使用同一模型；显式 `model_routing` 阶段路由（含 `--profile`）现在真正作用于 Gemini Batch 作业。未配置 `model_routing` 的旧配置仍解析为原 `batch_model`，行为不变（#344）。

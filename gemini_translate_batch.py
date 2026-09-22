@@ -9258,6 +9258,10 @@ def submit_manifest(
             return None
         manifest = load_manifest(manifest_path)
 
+    if external_translation_work.is_work_manifest(manifest):
+        # Fail before routing/keys/provider setup with the same contract as check.
+        external_translation_work.validate_work_manifest(manifest, operation='submit')
+
     if manifest.get('submit_disabled'):
         raise SystemExit(
             'Submit disabled for this manifest: it contains local revision candidates '
@@ -24581,6 +24585,15 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
     require_api_key = command not in OFFLINE_BATCH_COMMANDS
+    if command == 'submit' and getattr(args, 'target', ''):
+        # External work packages never reach Provider submission; refuse before
+        # key loading so the diagnostic is about the contract, not credentials.
+        try:
+            peeked_manifest = load_manifest(args.target)
+        except (SystemExit, OSError, ValueError):
+            peeked_manifest = None
+        if isinstance(peeked_manifest, dict) and external_translation_work.is_work_manifest(peeked_manifest):
+            require_api_key = False
     from model_routing_reader import primary_profile_override
 
     with primary_profile_override(getattr(args, 'profile', '') or ''):

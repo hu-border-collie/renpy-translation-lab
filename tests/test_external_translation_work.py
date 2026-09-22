@@ -415,6 +415,34 @@ class ExternalWorkTests(unittest.TestCase):
                 self.assert_refused('WORK_PROVIDER_DISABLED', batch.validate_batch_translation_plan_before_dispatch,
                                     manifest, operation='submit')
 
+    def test_damaged_state_fields_return_contract_errors_without_writes(self):
+        original = batch.load_manifest(self.target)
+        for field, value in (('preview', 'boom'), ('conflicts', ['oops']),
+                             ('receipts', ['oops']), ('applied', 'yes')):
+            with self.subTest(field=field):
+                manifest = copy.deepcopy(original)
+                manifest['external_work'][field] = value
+                batch.save_manifest(manifest, update_latest=False)
+                if field == 'preview':
+                    status = work.status_work(self.target)
+                    self.assertEqual(status['writeback'], 'preview_unavailable')
+                    self.assertEqual(status['diagnostics'][0]['code'], 'WORK_PREVIEW_CHANGED')
+                    self.assert_refused('WORK_PREVIEW_CHANGED', work.apply_work, self.target)
+                    # Source unchanged and no writeback evidence: re-check may drop the damaged ref.
+                    checked = batch.check_results(self.target)
+                    self.assertNotIn('preview', checked['external_work'])
+                else:
+                    self.assert_refused('WORK_MANIFEST_INVALID', work.status_work, self.target)
+                    self.assert_refused('WORK_MANIFEST_INVALID', batch.check_results, self.target)
+        batch.save_manifest(original, update_latest=False)
+
+    def test_provider_submit_on_work_manifest_is_refused_before_credentials(self):
+        self.assert_refused('WORK_PROVIDER_DISABLED', batch.submit_manifest, self.target)
+        code, result = self.work_cli('submit', self.target)
+        self.assertEqual(code, 5)
+        self.assertEqual(result['error']['code'], 'WORK_PROVIDER_DISABLED')
+        self.assertEqual(result['error']['suggested_action'], 'use_work_submit')
+
     def test_malformed_submission_never_commits_receipt(self):
         for malformed in ([], True, float('nan')):
             document = self.submission([0])

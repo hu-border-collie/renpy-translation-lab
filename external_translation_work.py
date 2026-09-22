@@ -136,6 +136,11 @@ def _load(target):
     if (not isinstance(state, dict) or type(state.get("schema_version")) is not int
             or state["schema_version"] != VERSION):
         _fail("WORK_MANIFEST_INVALID", "目标不是支持的外部初译工作包。")
+    for key in ("receipts", "conflicts"):
+        if not isinstance(state.get(key, {}), dict):
+            _fail("WORK_MANIFEST_INVALID", "工作包状态字段损坏；请从可信副本恢复。", field=key)
+    if state.get("applied") and not isinstance(state["applied"], dict):
+        _fail("WORK_MANIFEST_INVALID", "工作包状态字段损坏；请从可信副本恢复。", field="applied")
     package = state.get("package")
     if not isinstance(package, dict) or digest(package) != state.get("package_digest"):
         _fail("WORK_PACKAGE_CHANGED", "工作包合同已变化；请重新导出。")
@@ -228,9 +233,21 @@ def _fresh(manifest, *, preview=None, references=True):
                               occurrence_id=row["occurrence_id"])
 
 
-def _preview(manifest):
+def _preview_ref(manifest):
+    """Return a usable bound-preview pointer; damaged pointers fail closed."""
     ref = manifest["external_work"].get("preview")
     if not ref:
+        return None
+    if (not isinstance(ref, dict) or not isinstance(ref.get("path"), str)
+            or not ref["path"].strip() or not isinstance(ref.get("fingerprint"), str)):
+        _fail("WORK_PREVIEW_CHANGED", "绑定预览引用缺失或损坏；还原原预览，或在源文件未变且未开始写回时重新 check。",
+              suggested_action="restore_bound_preview_or_recheck_unchanged_sources")
+    return ref
+
+
+def _preview(manifest):
+    ref = _preview_ref(manifest)
+    if ref is None:
         return None
     try:
         preview = sync_translation_preview.load_sync_preview(_artifact(manifest, ref["path"]))
@@ -248,7 +265,12 @@ def _writeback_state(manifest):
     """Keep durable writeback facts queryable even if the bound preview is lost."""
     state = manifest["external_work"]
     ref = state.get("preview")
-    if ref and (_artifact(manifest, ref["path"]).parent / ".sync_writeback_transaction.json").exists():
+    ref_path = (
+        ref.get("path")
+        if isinstance(ref, dict) and isinstance(ref.get("path"), str) and ref["path"].strip()
+        else ""
+    )
+    if ref_path and (_artifact(manifest, ref_path).parent / ".sync_writeback_transaction.json").exists():
         return "recovery_required"
     if state.get("applied"):
         return "applied"
@@ -634,7 +656,8 @@ def check_work(target):
 def validate_work_manifest(manifest, *, operation):
     """Validate work identity in the shared checker; external work has no model plan."""
     if operation != 'check':
-        _fail('WORK_PROVIDER_DISABLED', '外部工作包没有 Provider 执行计划，请使用 work-submit。')
+        _fail('WORK_PROVIDER_DISABLED', '外部工作包没有 Provider 执行计划，请使用 work-submit。',
+              suggested_action='use_work_submit')
     _load(manifest['_manifest_path'])
     _fresh(manifest)
     return {'code': 'EXTERNAL_WORK_CURRENT', 'mode': 'external_work',
