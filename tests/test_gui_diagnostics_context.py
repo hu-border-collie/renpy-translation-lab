@@ -37,6 +37,19 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(quote_cli_arg("C:\\Games\\My Game\\manifest.json"), '"C:\\Games\\My Game\\manifest.json"')
         self.assertEqual(quote_cli_arg("doctor"), "doctor")
 
+    def test_damaged_external_work_markers_keep_external_commands(self):
+        for manifest in ({'external_work': None}, {'external_work': []},
+                         {'external_work': 'damaged'}, {'execution': 'external_work'}):
+            with self.subTest(manifest=manifest):
+                commands = build_cli_commands(python_exe='python', batch_script_path='batch.py',
+                                              manifest_path='work/manifest.json', manifest=manifest)
+                text = '\n'.join(item.command for item in commands)
+                self.assertIn('work-status work/manifest.json', text)
+                self.assertIn('work-submit', text)
+                self.assertNotIn(' submit ', text)
+                self.assertNotIn(' download ', text)
+                self.assertNotIn(' apply ', text)
+
     def test_format_cli_command_uses_argument_list_style(self):
         command = format_cli_command(
             "python",

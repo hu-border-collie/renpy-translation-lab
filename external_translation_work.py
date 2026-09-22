@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import sys
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -112,9 +112,21 @@ def _save(manifest):
 
 
 @contextmanager
+def _work_lock(path):
+    """Normalize lock acquisition failures without relabeling failures in its body."""
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(exclusive_file_lock(path))
+        except OSError as exc:
+            _fail("WORK_LOCK_UNAVAILABLE", "无法取得工作包或项目锁；请检查路径、权限及占用进程。",
+                  suggested_action="inspect_work_lock_path_permissions_and_owner", path=str(path), error=str(exc))
+        yield
+
+
+@contextmanager
 def _locked(target):
     manifest = _batch().load_manifest(target)
-    with exclusive_file_lock(Path(manifest["_package_dir"]) / ".external_work.lock"):
+    with _work_lock(Path(manifest["_package_dir"]) / ".external_work.lock"):
         yield _load(target)
 
 
@@ -688,8 +700,7 @@ def apply_work(target):
         batch = _batch()
         # One coordinator at a time across external packages in the same project.
         project_lock = Path(manifest["base_dir"]) / "translation_context" / ".external_work_apply.lock"
-        project_lock.parent.mkdir(parents=True, exist_ok=True)
-        with exclusive_file_lock(project_lock):
+        with _work_lock(project_lock):
             batch.require_manifest_project_match(manifest, 'work-apply')
             applied = sync_translation_preview.apply_sync_preview(
                 preview["_manifest_path"], active_project_root=batch.legacy.BASE_DIR,

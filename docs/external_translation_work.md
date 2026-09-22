@@ -124,6 +124,8 @@ work.json、manifest 合同和当前结果代摘要不符属于完整性错误�
 | 尚有未决冲突 | `status=conflict` / `WORK_UNRESOLVED_CONFLICT` | 先处置冲突；旧检查与预览已撤销 |
 | 参考文件缺失、不可读、不是 UTF-8 文件 | `WORK_REFERENCE_INVALID` | 提供可读的 UTF-8 文件；配置的 glossary 尚不存在仍是可绑定状态 |
 | 输出目录已存在或不可创建 | `WORK_OUTPUT_INVALID` | 选择 TL 目录外可写的新目录，不覆盖旧包 |
+| 损坏工作包无法确定输出保护路径 | `WORK_MANIFEST_INVALID` | 恢复或重新导出工作包；`--output-file` 预检失败时只向终端报告，保留原输出文件 |
+| 工作包或项目锁无法取得 | `WORK_LOCK_UNAVAILABLE` | 检查锁路径、目录权限或占用进程；有其他写回进程时等待其完成，不删除活动锁 |
 | 源/现译、参考或包变化 | `WORK_SOURCE_STALE` / `WORK_REFERENCE_STALE` / `WORK_PACKAGE_CHANGED` | 重新导出并按新快照审阅成果；不原地修改摘要 |
 | 结果代变化 | `WORK_RESULTS_CHANGED` | 查明非合同写入，使用可信成果重新导出/提交 |
 | 缺项、结构错误或质量 blocker | 现有 `writeback_gate.decision=deny`；接收时结构错误为 `WORK_STRUCTURE_BLOCKED` | 补齐、订正后重新检查和预览 |
@@ -142,6 +144,10 @@ allow 且有 warning 为 3，deny 为 4。接收时 `WORK_STRUCTURE_BLOCKED` 和
 结果代和提交版本。`work-preview` 要求最近一次 check=allow，再使用已有完整文件预览
 服务生成源快照、diff、结构写回计划与质量报告。`apply` / `work-apply` 消费该绑定预览，
 使用现有 `sync_translation_preview` / `atomic_io` 写回事务；没有外部专用文件 writer。
+项目间写回互斥使用 `translation_context/.external_work_apply.lock`，工作包接收使用包内
+`.external_work.lock`；两者均复用既有内核锁。锁文件会保留，释放互斥由操作系统完成，
+不会据此修改游戏脚本。取得锁时的路径、权限和锁超时错误统一返回 `WORK_LOCK_UNAVAILABLE`；
+写回事务自身的错误仍由原事务路径处理。
 
 共享预览服务复核项目、最近 check、成果、参考、全部源快照、预览制品和写回计划。
 事务绑定目标 preimage 并在提交边界复核输入；force 不绕过任何约束。质量 warning 默认
@@ -197,10 +203,10 @@ python -B scripts/run_external_work_fixture.py --output-dir outputs/external-par
 
 | 验证 | 结果 |
 |---|---|
-| `tests.test_external_translation_work` | 42 项通过，已包含在针对性组合与完整 CLI 集合中 |
-| `python -B tests/run_cli_tests.py -q` | 共 2698 项，运行成功（4 项跳过） |
-| `python -B tests/run_gui_tests.py -q` | 1324 项通过 |
-| `scripts/run_quality_gates.py all` 的全部门禁 | Ruff、mypy 与五份锁的 pip-audit 均通过，使用现有审计例外 |
+| `tests.test_external_translation_work` | 44 项通过，已包含在针对性组合与完整 CLI 集合中 |
+| `python -B tests/run_cli_tests.py -q` | 共 2700 项，运行成功（4 项跳过） |
+| `python -B tests/run_gui_tests.py -q` | 1325 项中 1 项设置页焦点断言失败；修复前的 `630304d` 隔离基线同样失败，协调器 26 项单独运行通过 |
+| 质量门禁 | Ruff、mypy 本轮通过；五份未变依赖锁沿用同日 pip-audit 通过记录及现有审计例外 |
 | 本地 Markdown 链接与 `git diff --check` | 文件目标与差异空白检查通过 |
 
 依赖审计的复跑仅在该进程指定工作区内缓存并对 PyPI 绕过本机代理，解决缓存权限及代理

@@ -10,6 +10,7 @@ from typing import Callable
 
 import model_usage_ledger
 import translation_plan
+from external_translation_work import is_work_manifest
 from keyword_glossary_merge import build_merge_keywords_cli_command
 
 from .batch_workflow_support import (
@@ -262,7 +263,7 @@ def build_cli_commands(
     manifest: dict[str, object],
     submit_max_cost: float | None = None,
 ) -> list[DiagnosticsCommand]:
-    if isinstance(manifest.get('external_work'), dict):
+    if is_work_manifest(manifest):
         return [DiagnosticsCommand(
             label=label,
             command=format_cli_command(python_exe, batch_script_path,

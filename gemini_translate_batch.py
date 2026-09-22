@@ -25818,14 +25818,29 @@ def collect_manifest_protected_paths(manifest_path, *, _seen=None):
         except SystemExit:
             protected.append(os.path.abspath(os.path.join(package_dir, raw)))
 
-    if isinstance(manifest.get('external_work'), dict):
+    if external_translation_work.is_work_manifest(manifest):
+        state = manifest.get('external_work')
+        package = state.get('package') if isinstance(state, dict) else None
+        tl_dir = manifest.get('tl_dir')
+        if (not isinstance(tl_dir, str) or not tl_dir.strip()
+                or not isinstance(package, dict)
+                or not isinstance(package.get('file_digests'), dict)
+                or not isinstance(package.get('references'), list)
+                or any(not isinstance(ref, dict) or ref.get('kind') not in {'file', 'work'}
+                       or not isinstance(ref.get('path' if ref.get('kind') == 'file' else 'manifest_path'), str)
+                       for ref in package.get('references', []))):
+            raise cli_contract.MachineContractError(
+                'External work paths are incomplete or malformed; output safety cannot be verified.',
+                code_name='WORK_MANIFEST_INVALID',
+                suggested_action='restore_or_reexport_work_manifest',
+                details={'manifest_path': manifest_path},
+            )
         add_path('work.json')
         for path in Path(package_dir).rglob('*'):
             if path.is_file():
                 add_path(str(path))
-        package = manifest['external_work'].get('package', {})
         for file_key in package.get('file_digests', {}):
-            add_path(str(Path(manifest['tl_dir']) / file_key))
+            add_path(str(Path(tl_dir) / file_key))
         for ref in package.get('references', []):
             if ref.get('kind') == 'file':
                 add_path(ref.get('path'))

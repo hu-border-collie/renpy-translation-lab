@@ -642,6 +642,51 @@ class ExternalWorkTests(unittest.TestCase):
         for protected in (Path(self.target).parent / 'work.json', self.root / 'submission.json', self.rpy):
             self.assertIsNotNone(batch._find_output_file_path_conflict(args, str(protected)))
 
+    def test_output_file_preflight_rejects_malformed_work_without_overwriting_output(self):
+        original = json.loads(Path(self.target).read_text(encoding='utf-8'))
+        output = self.root / 'status.json'
+        output.write_bytes(b'keep existing output')
+        for field, value in (('tl_dir', None), ('tl_dir', ''), ('tl_dir', []),
+                             ('external_work', None), ('external_work', []),
+                             ('package', None), ('file_digests', None), ('references', [None])):
+            with self.subTest(field=field, value=value):
+                manifest = copy.deepcopy(original)
+                if field in ('package', 'file_digests', 'references'):
+                    owner = manifest['external_work'] if field == 'package' else manifest['external_work']['package']
+                else:
+                    owner = manifest
+                if field == 'tl_dir' and value is None:
+                    owner.pop(field)
+                else:
+                    owner[field] = value
+                Path(self.target).write_text(json.dumps(manifest), encoding='utf-8')
+                code, result = self.work_cli('work-status', self.target, '--output-file', output)
+                self.assertEqual(code, 5)
+                self.assertEqual(result['error']['code'], 'WORK_MANIFEST_INVALID')
+                self.assertFalse(result['error']['details']['workflow_started'])
+                self.assertEqual(output.read_bytes(), b'keep existing output')
+
+    def test_project_lock_path_errors_preserve_files_and_return_actionable_diagnostics(self):
+        self.ready()
+        before = self.rpy.read_bytes()
+        manifest_before = Path(self.target).read_bytes()
+        context = self.root / 'translation_context'
+        context.write_bytes(b'existing project file')
+        code, result = self.work_cli('work-apply', self.target)
+        self.assertEqual(code, 5)
+        self.assertEqual(result['error']['code'], 'WORK_LOCK_UNAVAILABLE')
+        self.assertEqual(result['error']['suggested_action'], 'inspect_work_lock_path_permissions_and_owner')
+        self.assertEqual(context.read_bytes(), b'existing project file')
+        context.unlink()
+        lock = context / '.external_work_apply.lock'
+        lock.mkdir(parents=True)
+        code, result = self.work_cli('work-apply', self.target)
+        self.assertEqual(code, 5)
+        self.assertEqual(result['error']['code'], 'WORK_LOCK_UNAVAILABLE')
+        self.assertTrue(lock.is_dir())
+        self.assertEqual(self.rpy.read_bytes(), before)
+        self.assertEqual(Path(self.target).read_bytes(), manifest_before)
+
     def test_output_file_protection_covers_unselected_context_and_reference_artifacts(self):
         context = self.tl / 'context.rpy'
         context.write_text('# Read-only context file\n', encoding='utf-8')
