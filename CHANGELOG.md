@@ -8,6 +8,7 @@
 
 ### 新增
 
+- #508 新增 [外部初译工作包（实验 CLI）](docs/external_translation_work.md)：宿主提供译文，工具导出材料、接收部分成果与订正，记录冲突和剩余项，并复用现有 check、预览及事务写回。无需项目模型调用，GUI 提供诊断命令参考；已用原创 fixture 验证串行与独立子代理成果，真实章节质量对照仍待授权样本和预算。
 - #431 S1 新增直连 `openai_compatible` Sync 生成 adapter：通过标准库 HTTP 直接调用 Chat Completions，无需安装或导入 LiteLLM；Provider 连接支持 `base_url` / `models_url` / `credential_ref`（none / env / keyring）与非敏感 `extra_headers`，ModelProfile 支持白名单生成参数与 `capability_overrides.structured_output.mode`（`strict_json_schema` / `json_object` / `prompt_only_json`）。GUI「模型与 Provider」页新增 adapter、供应商预设、额外请求头与结构化输出模式；能力探测与连接测试复用同一 `build_sync_backend` 入口。S1 不删除 LiteLLM、不改默认值，final_review 仍限 `gemini_batch`（S3 已解绑）。
 - #431 S2 直连 adapter 目录发现与诊断：新增 `profiles-list-models --profile <ID>` 与 GUI「拉取模型列表」，只读请求 `models_url`（或 `base_url + /models`），目录失败/未收录不阻止手填模型 ID，错误使用稳定 `MODEL_CATALOG_*` 机器码；`profiles-probe` 按 profile 声明的 `structured_output_mode` 发送 strict JSON schema 兼容样例，并增强 reasoning token 识别。共享 `openai_compatible_connection` 统一生成与目录路径的凭据、headers、URL 与脱敏合同；`generate_async` 取消语义边界已文档化。目录报告的 `base_url` / `models_url` 统一脱敏（去除 userinfo/query/fragment），且 `base_url` 拒绝 userinfo 与 fragment（凭据只走 `credential_ref` / `Authorization`，这是相对 S1 的有意收紧）。新增 LiteLLM 调用点清点与迁移矩阵文档，S2 不删除依赖、不改默认路径。
 - #431 S3 最终审校解绑 `gemini_batch`：`final-review-build` 按冻结的 `routes.final_review.strategy` 记录 `execution_strategy`（只有显式配置 `strategy` 才切换执行方式；未显式配置不会跟随 `defaults.execution_strategy` 静默从 Batch 切到 sync）；新增 `final-review-run-sync`，用冻结 ModelRoutingPlan / TaskRoute 与 `run_sync_request` 逐 unit 执行、复用同一 prompt / response schema / findings 与 report-only 合同，每个 unit 原子落盘，重复运行按 input/context digest 续跑（`--force` 全部重审）。unit 失败按稳定 `sync_<category>` 分类后继续（存在失败 unit 时返回 `status=failed`，严格模式退出 `4`），鉴权/缺依赖/不支持能力等系统性失败返回 `FINAL_REVIEW_SYNC_ABORTED`；Batch 子命令遇到 sync package 返回 `FINAL_REVIEW_USE_RUN_SYNC`，不静默切换执行方式。GUI 最终审校流程与 doctor 命令参考按 `execution_strategy` 分流；旧配置迁移与既有 Batch campaign 行为不变。
@@ -42,6 +43,10 @@
 - 同步初译 prompt 中词法术语（`normalize_map` 命中）的渲染顺序改为按键排序的稳定顺序（#346 确定性要求）；配置中同批多个命中且插入序非字典序的项目，glossary 行顺序会与旧版不同，词法注入块内容不变（始终全量）。RAG 开启时 `LOCKED TERMS` 参考列表按 `top_k_terms` 取排序后命中前缀，命中数超过 top_k 时保留的术语集合可能与旧版不同（排序后的字典序首个优先保留）。chunking、hash key 与局部上下文的委托保持行为不变。
 
 ### 修复
+
+- 外部初译工作包在绑定预览缺失或损坏时仍可查询状态；源快照未变且无写回证据时可重新检查，已开始写回时保留恢复绑定。参考文件、输出目录和候选版本字段的输入错误返回稳定诊断，不再泄漏异常或误记为持久竞争冲突；已写回包提示使用订正语料。
+- 损坏的外部工作包在输出文件预检中返回受控错误并保留原输出，GUI 保持外部命令路由；工作包或项目锁无法取得时返回可处理的锁诊断。
+- 外部初译工作包的 `receipts` / `conflicts` / `applied` 与预览引用损坏时返回稳定 `WORK_MANIFEST_INVALID` / `WORK_PREVIEW_CHANGED`，不再泄漏 `INTERNAL_ERROR`；对工作包执行 Provider `submit` 在读取 API Key 前即返回 `WORK_PROVIDER_DISABLED`；共享预览 apply 只读取一次预览制品。
 
 - durable Sync 的 `sync-status` 快照新增只读 `frozen_profile`（profile / adapter / provider / model / embedding profile / execution strategy / source）：优先取 run 启动时冻结的 plan 快照，旧 run 回退到 attempt 记录的 provider/model，缺失时诚实标 `unknown`；CLI 文本与 GUI 运行事实同步显示，失败或降级时能看到真实 Provider/模型（#344 ⑦）。
 - `build-revisions` / `build-keywords` 的 Batch 作业模型改为取冻结的 revision / keyword 阶段路由，`manifest.batch_model` 与请求 generation config 使用同一模型；显式 `model_routing` 阶段路由（含 `--profile`）现在真正作用于 Gemini Batch 作业。未配置 `model_routing` 的旧配置仍解析为原 `batch_model`，行为不变（#344）。

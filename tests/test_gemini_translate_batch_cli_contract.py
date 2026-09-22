@@ -19,6 +19,10 @@ from sync_run_contracts import ErrorCode, SyncRunError
 class BatchCliContractTests(unittest.TestCase):
     @staticmethod
     def _machine_command_argv(command):
+        if command == 'work-submit':
+            return [command, 'manifest.json', 'submission.json']
+        if command.startswith('work-') and command != 'work-export':
+            return [command, 'manifest.json']
         if command in {'sync-resume', 'sync-cancel', 'sync-derive'}:
             return [command, 'sync-run-v1-00000000-0000-0000-0000-000000000000']
         if command == 'sync-status':
@@ -910,6 +914,10 @@ class BatchCliContractTests(unittest.TestCase):
                     )
 
                 payload = json.loads(stdout.getvalue())
+                if command in batch.external_translation_work.COMMANDS:
+                    self.assertEqual(exit_code, batch.cli_contract.EXIT_USAGE)
+                    self.assertFalse(payload['ok'])
+                    continue
                 self.assertEqual(exit_code, batch.cli_contract.EXIT_INVALID_STATE)
                 self.assertEqual(
                     payload["error"]["code"],
@@ -3035,9 +3043,14 @@ class BatchCliContractTests(unittest.TestCase):
                         )
 
                     with contextlib.ExitStack() as stack:
+                        if command in batch.external_translation_work.COMMANDS:
+                            stack.enter_context(mock.patch.object(batch.external_translation_work, 'run_cli',
+                                                                  return_value={'status': 'current'}))
                         for patcher in handler_patches:
                             stack.enter_context(patcher)
-                        if command == "merge-retry":
+                        if command in batch.external_translation_work.COMMANDS:
+                            argv = self._machine_command_argv(command)
+                        elif command == "merge-retry":
                             argv = ["merge-retry", "parent.json", "retry.json"]
                         elif command == "merge-keywords-to-glossary":
                             argv = ["merge-keywords-to-glossary", "candidates.jsonl", "--yes"]
@@ -3151,6 +3164,7 @@ class BatchCliContractTests(unittest.TestCase):
                     "export-reuse-results",
                     *batch.PROFILE_COMMANDS,
                     *batch.REVIEW_INDEX_COMMANDS,
+                    *batch.external_translation_work.COMMANDS,
                 }:
                     # Read-only export takes an early dispatch path that must
                     # not load (or rewrite) API-key / translator config.

@@ -46,6 +46,7 @@ import preflight_display
 import batch_submit_recovery
 import cli_contract
 import cli_discovery
+import external_translation_work
 import doctor_recommendations as doctor_rec
 import generation_target
 from engine_adapters.contracts import (
@@ -272,6 +273,9 @@ OFFLINE_BATCH_COMMANDS = frozenset(
 )
 
 REVISION_PREVIEW_CONTRACT_VERSION = 1
+MACHINE_OUTPUT_COMMANDS = MACHINE_OUTPUT_COMMANDS | external_translation_work.COMMANDS
+OFFLINE_BATCH_COMMANDS = OFFLINE_BATCH_COMMANDS | external_translation_work.COMMANDS
+EXPLICIT_TARGET_COMMANDS = EXPLICIT_TARGET_COMMANDS | (external_translation_work.COMMANDS - {'work-export'})
 REVISION_APPLY_STATES = frozenset({'applied', 'no_op', 'blocked', 'partial'})
 
 
@@ -2819,6 +2823,8 @@ def build_check_fingerprint(manifest):
     }
     if isinstance(manifest.get('durable_sync_source'), dict):
         payload['durable_sync_source'] = dict(manifest['durable_sync_source'])
+    if isinstance(manifest.get('external_work'), dict):
+        payload['external_work'] = external_translation_work.check_binding(manifest)
     plan = manifest.get('translation_plan')
     if isinstance(plan, dict) and plan:
         payload['translation_plan'] = {
@@ -9129,6 +9135,8 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
     Current packages must keep their plan fingerprint, root request rows,
     source snapshot, and adapter identity intact.
     """
+    if external_translation_work.is_work_manifest(manifest):
+        return external_translation_work.validate_work_manifest(manifest, operation=operation)
     diagnostic = translation_plan_compatibility_diagnostic(manifest)
     plan = manifest.get('translation_plan')
     if not isinstance(plan, dict) or not plan:
@@ -9249,6 +9257,10 @@ def submit_manifest(
         if not manifest_path:
             return None
         manifest = load_manifest(manifest_path)
+
+    if external_translation_work.is_work_manifest(manifest):
+        # Fail before routing/keys/provider setup with the same contract as check.
+        external_translation_work.validate_work_manifest(manifest, operation='submit')
 
     if manifest.get('submit_disabled'):
         raise SystemExit(
@@ -13548,7 +13560,8 @@ def _build_durable_sync_check_manifest(store):
     return load_manifest(str(manifest_path))
 
 
-def _durable_sync_preview_files(manifest, replacements_by_file, translated_by_file):
+def _translation_preview_files(manifest, replacements_by_file, translated_by_file):
+    """Build shared preview inputs from fully checked translation replacements."""
     quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
     quality_by_file = {}
     for subject in quality_subjects:
@@ -13607,7 +13620,7 @@ def _create_checked_durable_sync_preview(store, manifest):
             code_name='STALE_CHECK',
             suggested_action='run_check_again',
         )
-    preview_files = _durable_sync_preview_files(manifest, replacements, translated)
+    preview_files = _translation_preview_files(manifest, replacements, translated)
     bindings = {
         'run_manifest': _verified_store_artifact(store, 'run_manifest_json'),
         'results': _verified_store_artifact(store, 'results_jsonl'),
@@ -13759,6 +13772,13 @@ def check_results(target=None):
     if durable_store is not None:
         return check_durable_sync_results(durable_store)
     manifest = load_manifest(target)
+    if external_translation_work.is_work_manifest(manifest):
+        return external_translation_work.check_work(manifest['_manifest_path'])
+    return check_translation_results(manifest)
+
+
+def check_translation_results(manifest):
+    """Check canonical translation results with the existing structural/quality gates."""
     require_manifest_mode(manifest, MANIFEST_MODE_TRANSLATION, 'check')
     require_manifest_project_match(manifest, 'check')
     validate_batch_translation_plan_before_dispatch(manifest, operation='check')
@@ -13848,7 +13868,7 @@ def check_results(target=None):
     # these findings; split/retry packages and GUI readers consume the snapshot.
     manifest['quality_policy'] = translation_quality.normalize_policy(BATCH_QUALITY_POLICY)
     manifest.pop('last_apply_failure_report_path', None)
-    save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
+    save_manifest(manifest, update_latest=manifest.get('execution') not in {'sync', 'external_work'})
     print(f"Manifest: {manifest['_manifest_path']}")
     print_check_summary(summary)
     print(f"Check failure report: {check_report_path}")
@@ -15119,6 +15139,13 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
         # intentionally cannot bypass check/source/artifact predicates.
         return apply_durable_sync_results(durable_store)
     manifest = load_manifest(target)
+    if external_translation_work.is_work_manifest(manifest):
+        if export_requested:
+            raise cli_contract.MachineContractError(
+                'External work uses its bound preview; export flags are unsupported.',
+                code_name='WORK_EXPORT_UNSUPPORTED', suggested_action='use_work_preview_then_apply',
+            )
+        return external_translation_work.apply_work(manifest['_manifest_path'])
     if export_requested:
         _reject_export_option_unsupported(manifest, option=option_label)
     durable_source = manifest.get('durable_sync_source')
@@ -21194,6 +21221,7 @@ def build_arg_parser():
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command', required=True)
+    external_translation_work.add_cli(subparsers, add_machine_output_argument)
 
     doctor_parser = subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
     add_machine_output_argument(doctor_parser)
@@ -23999,6 +24027,13 @@ def dispatch_command(parser, args):
     if command in PROFILE_COMMANDS:
         return run_profile_command(args)
 
+    if command in external_translation_work.COMMANDS:
+        legacy.load_translator_settings(persist_corrected_game_root=False, tolerate_routing_errors=True)
+        load_batch_settings(tolerate_routing_errors=True)
+        result = external_translation_work.run_cli(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return result
+
     if command == 'doctor':
         # doctor is read-only: never persist auto-corrected game_root.
         legacy.load_translator_settings(
@@ -24550,6 +24585,15 @@ def dispatch_command(parser, args):
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
     require_api_key = command not in OFFLINE_BATCH_COMMANDS
+    if command == 'submit' and getattr(args, 'target', ''):
+        # External work packages never reach Provider submission; refuse before
+        # key loading so the diagnostic is about the contract, not credentials.
+        try:
+            peeked_manifest = load_manifest(args.target)
+        except (SystemExit, OSError, ValueError):
+            peeked_manifest = None
+        if isinstance(peeked_manifest, dict) and external_translation_work.is_work_manifest(peeked_manifest):
+            require_api_key = False
     from model_routing_reader import primary_profile_override
 
     with primary_profile_override(getattr(args, 'profile', '') or ''):
@@ -24902,6 +24946,13 @@ def _load_machine_manifest(command, value, args):
 
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
+
+    if command in external_translation_work.COMMANDS or (
+        command == 'apply' and isinstance(value, dict) and 'receipt' in value
+    ):
+        payload = dict(value or {})
+        status = payload.pop('status', 'completed')
+        return cli_contract.success_envelope(command, status=status, result=payload, artifacts={})
 
     if (
         command in PROFILE_COMMANDS
@@ -25744,9 +25795,14 @@ def _candidate_manifest_paths_from_args(args):
     return candidates
 
 
-def collect_manifest_protected_paths(manifest_path):
+def collect_manifest_protected_paths(manifest_path, *, _seen=None):
     """Return task inputs and writeback targets associated with one manifest."""
 
+    seen = set() if _seen is None else _seen
+    identity = _canonical_abs_path(manifest_path)
+    if identity in seen:
+        return [manifest_path]
+    seen.add(identity)
     protected = [manifest_path]
     package_dir = os.path.dirname(manifest_path)
     try:
@@ -25775,6 +25831,34 @@ def collect_manifest_protected_paths(manifest_path):
         except SystemExit:
             protected.append(os.path.abspath(os.path.join(package_dir, raw)))
 
+    if external_translation_work.is_work_manifest(manifest):
+        state = manifest.get('external_work')
+        package = state.get('package') if isinstance(state, dict) else None
+        tl_dir = manifest.get('tl_dir')
+        if (not isinstance(tl_dir, str) or not tl_dir.strip()
+                or not isinstance(package, dict)
+                or not isinstance(package.get('file_digests'), dict)
+                or not isinstance(package.get('references'), list)
+                or any(not isinstance(ref, dict) or ref.get('kind') not in {'file', 'work'}
+                       or not isinstance(ref.get('path' if ref.get('kind') == 'file' else 'manifest_path'), str)
+                       for ref in package.get('references', []))):
+            raise cli_contract.MachineContractError(
+                'External work paths are incomplete or malformed; output safety cannot be verified.',
+                code_name='WORK_MANIFEST_INVALID',
+                suggested_action='restore_or_reexport_work_manifest',
+                details={'manifest_path': manifest_path},
+            )
+        add_path('work.json')
+        for path in Path(package_dir).rglob('*'):
+            if path.is_file():
+                add_path(str(path))
+        for file_key in package.get('file_digests', {}):
+            add_path(str(Path(tl_dir) / file_key))
+        for ref in package.get('references', []):
+            if ref.get('kind') == 'file':
+                add_path(ref.get('path'))
+            elif ref.get('manifest_path'):
+                protected.extend(collect_manifest_protected_paths(ref['manifest_path'], _seen=seen))
     try:
         result_path = resolve_manifest_result_path(manifest)
     except SystemExit:
@@ -25864,6 +25948,7 @@ def _collect_output_file_protected_paths(args):
         'summary_markdown',
         'variants_file',
         'proposal',
+        'submission',
         'corpus_manifest',
     ):
         value = getattr(args, attr, None)
@@ -25876,6 +25961,11 @@ def _collect_output_file_protected_paths(args):
             add_path(os.path.join(abs_path, 'manifest.json'))
 
     command = str(getattr(args, 'command', '') or '')
+    for ref in getattr(args, 'reference_file', []) or []:
+        add_path(ref)
+    for ref in getattr(args, 'reference_work', []) or []:
+        for path in collect_manifest_protected_paths(str(Path(ref) / 'manifest.json') if Path(ref).is_dir() else ref):
+            add_path(path)
     output_dir = str(getattr(args, 'output_dir', '') or '').strip()
     if output_dir and command == 'export-project-snapshot':
         add_path(os.path.join(output_dir, engine_versioning.DEFAULT_SNAPSHOT_FILENAME))
@@ -25970,6 +26060,11 @@ def _find_output_file_path_conflict(args, output_target):
     """Return conflict details when --output-file collides with a task path."""
 
     output_key = _normalized_abs_path(output_target)
+    if getattr(args, 'command', '') == 'work-export' and getattr(args, 'output_dir', None):
+        output_root = Path(args.output_dir).resolve()
+        if Path(output_target).resolve().is_relative_to(output_root):
+            return {'output_file': str(Path(output_target).resolve()), 'conflict_path': str(output_root),
+                    'command': args.command}
     for protected in _collect_output_file_protected_paths(args):
         if _normalized_abs_path(protected) == output_key:
             return {

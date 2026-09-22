@@ -6,6 +6,11 @@
 
 CLI 是自动化操作的事实来源。必要时可以使用 GUI 做可视验证，但不要依赖点击界面完成可重复的无人值守流程。
 
+宿主 Agent 自己生成初译时，可使用 [外部初译工作包（实验 CLI）](external_translation_work.md)：
+`work-export → work-read → work-submit → check → work-preview → work-apply`。
+该路径不调用项目翻译、Embedding 或项目分析模型，支持部分成果、订正、冲突与恢复；
+限已准备好的 Ren'Py 原生 TL 目录。它是高级脚本入口，真实章节质量对照尚待验证。
+
 ## 操作原则
 
 - 使用 Python 3.11 或更高版本，在仓库根目录运行命令。

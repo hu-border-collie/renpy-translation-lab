@@ -4,6 +4,11 @@
 
 本文档记录 Batch 流程中偏内部或高级的部分。日常入口见根目录 `README.md`。
 
+宿主生成译文的 [外部初译工作包（实验 CLI）](external_translation_work.md) 使用
+`work-export / work-read / work-submit / work-status / work-preview / work-apply`，并复用本文的
+`check` 和安全写回门禁。它保存版本化成果而不创建 Provider 请求；外部包没有 TranslationPlan，
+也不走旧包的兼容回退。真实章节 A/B1/B2/C 对照尚待授权样本和预算。
+
 ## TranslationPlan 与请求诊断
 
 普通初译的 `build` 与 Sync 共用同一套 `TranslationPlan`、chunk、canonical

@@ -185,6 +185,7 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "translation_plan_diagnostics",
         "plan_fingerprint",
         "request_ids",
+        "external_check_binding",
     ):
         if key in manifest:
             payload[key] = manifest.get(key)
@@ -280,6 +281,7 @@ def create_sync_preview(
     translation_plan_payload: dict[str, Any] | None = None,
     request_ids: Iterable[str] = (),
     durable_check_binding: dict[str, Any] | None = None,
+    external_check_binding: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
@@ -491,6 +493,8 @@ def create_sync_preview(
         _validate_translation_plan_binding(manifest)
     if durable_check_binding is not None:
         manifest['durable_check_binding'] = dict(durable_check_binding)
+    if external_check_binding is not None:
+        manifest['external_check_binding'] = dict(external_check_binding)
     manifest["preview_fingerprint"] = _fingerprint(manifest)
     manifest_path = package_dir / "manifest.json"
     atomic_write_json(manifest_path, manifest, ensure_ascii=False, indent=2)
@@ -538,9 +542,10 @@ def prepare_sync_preview_apply(
     active_tl_dir: str | os.PathLike[str],
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
+    loaded_manifest: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate every source and artifact before the first project write."""
-    manifest = load_sync_preview(manifest_path)
+    manifest = loaded_manifest if loaded_manifest is not None else load_sync_preview(manifest_path)
     _validate_translation_plan_binding(manifest)
     durable_binding = manifest.get('durable_check_binding')
     if durable_binding is not None:
@@ -575,7 +580,11 @@ def prepare_sync_preview_apply(
             'decision'
         ) != translation_quality.GATE_ALLOW:
             raise ValueError('Durable Sync check no longer allows writeback.')
-    if manifest.get("state") == "applied" and durable_binding is None:
+    external_binding = manifest.get('external_check_binding')
+    if external_binding is not None:
+        from external_translation_work import validate_preview_binding
+        validate_preview_binding(manifest)
+    if manifest.get("state") == "applied" and durable_binding is None and external_binding is None:
         raise ValueError("Sync preview has already been applied.")
     if _canonical(manifest.get("project_root", "")) != _canonical(active_project_root):
         raise ValueError("Sync preview belongs to a different project.")
@@ -720,8 +729,13 @@ def apply_sync_preview(
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
+    allow_external: bool = False,
 ) -> dict[str, Any]:
     manifest_file = Path(manifest_path).resolve()
+    loaded_preview = load_sync_preview(manifest_path)
+    external = loaded_preview.get('external_check_binding') is not None
+    if external and not allow_external:
+        raise ValueError('External work must be applied through work-apply under its coordinator lock.')
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
     recover_atomic_write_transaction(transaction_path, verify_targets=True)
     manifest, prepared = prepare_sync_preview_apply(
@@ -730,6 +744,7 @@ def apply_sync_preview(
         active_tl_dir=active_tl_dir,
         active_quality_policy=active_quality_policy,
         active_glossary_file=active_glossary_file,
+        loaded_manifest=loaded_preview,
     )
     applied_paths: list[str] = []
     try:
@@ -739,10 +754,30 @@ def apply_sync_preview(
             if not item["already_applied"]
         ]
         if writes:
+            external_guards = {}
+            if external:
+                from external_translation_work import validate_preview_binding
+
+                def validate_external_commit():
+                    # MachineContractError is a SystemExit; normalize it so the
+                    # existing transaction rolls back immediately on a refusal.
+                    try:
+                        validate_preview_binding(manifest)
+                    except SystemExit as exc:
+                        raise ValueError(str(exc)) from exc
+
+                external_guards = {
+                    'expected_preimages': {
+                        item['target']: item['entry']['source_sha256']
+                        for item in prepared if not item['already_applied']
+                    },
+                    'post_commit_validator': validate_external_commit,
+                }
             atomic_write_many_lines(
                 writes,
                 journal_path=transaction_path,
                 encoding="utf-8",
+                **external_guards,
             )
         for item in prepared:
             entry = item["entry"]
