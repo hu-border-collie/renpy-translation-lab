@@ -21375,7 +21375,11 @@ def build_arg_parser():
     review_index_build_parser.add_argument(
         '--translation-records',
         default='',
-        help='Optional translation_records.jsonl for record provenance.',
+        help=(
+            'Optional translation_records.jsonl for provenance; requires matching '
+            'source snapshot, unit identity, locator, language and text. '
+            'Unmatched or ambiguous records are reported in diagnostics.'
+        ),
     )
     review_index_build_parser.add_argument(
         '--decisions',

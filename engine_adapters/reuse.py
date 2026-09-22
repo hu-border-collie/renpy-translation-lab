@@ -329,11 +329,26 @@ def build_translation_records(
     *,
     generated_at: str | None = None,
 ) -> TranslationRecordSet:
-    """Freeze validated translations as records linked to snapshot occurrences."""
+    """Freeze translations with occurrence identity and portable source evidence.
+
+    ``provenance.source_binding`` lets corpus consumers verify the exact source
+    file set without equating the adapter occurrence ID with a legacy unit ID.
+    It is additive provenance; old records remain readable by the record loader.
+    """
 
     from .versioning import validate_project_snapshot
 
     validate_project_snapshot(snapshot)
+    source_binding = {
+        "schema_version": 1,
+        "engine": snapshot.engine,
+        "target_language": snapshot.target_language,
+        "source_digest": digest_json({
+            str(item["file_rel_path"]): str(item["sha256"])
+            for item in snapshot.source_files
+        }),
+        "project_snapshot_fingerprint": snapshot.project_snapshot_fingerprint,
+    }
     occurrence_by_unit: dict[str, UnitOccurrenceRecord] = {}
     for occurrence in snapshot.occurrences:
         if occurrence.unit_id in occurrence_by_unit:
@@ -384,6 +399,7 @@ def build_translation_records(
                 "extra": dict(item.extra or {}),
                 "file_rel_path": occurrence.file_rel_path,
                 "line_number": occurrence.line_number,
+                "source_binding": dict(source_binding),
             },
         )
         records.append(record)
