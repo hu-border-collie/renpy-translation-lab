@@ -329,7 +329,13 @@ ROMAN_NUMERAL_LABEL_RE = re.compile(r"^(?:[+-][IVXLCDM]+|[IVXLCDM]{2,})$", re.IG
 STRFTIME_FORMAT_RE = re.compile(r"^(?:%[A-Za-z]|[%:\s,./\-0-9])+$")
 RENPY_IDENTIFIER_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:_name|_label|_id)$")
 STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
-TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+# Source markers may be followed by the say statement's own clauses, e.g.
+# ``# m "Noooooo!" with vpunch`` / ``nointeract`` / ``id confirm``; keep the
+# clause out of the source text.
+TL_COMMENT_SOURCE_RE = re.compile(
+    r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"'
+    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract\b.*|id\s+\S.*))?\s*$'
+)
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 CHARACTER_DEFINE_RE = re.compile(

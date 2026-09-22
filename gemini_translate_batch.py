@@ -16071,7 +16071,13 @@ def apply_revisions(target=None, force=False):
     return manifest
 
 
-REPAIR_LINE_COMMENT_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+# Keep this in sync with translator_runtime.TL_COMMENT_SOURCE_RE: Ren'Py emits
+# the say statement's trailing clauses (``with vpunch`` / ``nointeract`` /
+# ``id confirm``) inside the marker.
+REPAIR_LINE_COMMENT_RE = re.compile(
+    r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"'
+    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract\b.*|id\s+\S.*))?\s*$'
+)
 REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 
@@ -24428,6 +24434,17 @@ def dispatch_command(parser, args):
                 output_dir=getattr(args, 'output_dir', '') or None,
                 coverage_review_path=getattr(args, 'coverage_review', '') or None,
             )
+        except engine_versioning.SnapshotOccurrenceIdentityError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code,
+                suggested_action='fix_source_identity_and_reexport_snapshot',
+                details={
+                    'file_rel_path': exc.file_rel_path,
+                    'line_number': exc.line_number,
+                    'occurrence_id': exc.occurrence_id,
+                },
+            ) from exc
         except ValueError as exc:
             raise SystemExit(f'Project snapshot error: {exc}') from exc
 
