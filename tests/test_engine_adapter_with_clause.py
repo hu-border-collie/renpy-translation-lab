@@ -186,6 +186,38 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                 self.assertTrue(candidate.evidence.get("source_marker_missing"))
                 self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
 
+    def test_clause_tokens_ignore_spacing_and_target_trailing_comment(self):
+        text = (
+            "translate schinese clause_spacing:\n"
+            "\n"
+            '    # m "Wait!" with MoveTransition(0.4,enter=Dissolve(0.2))\n'
+            '    m "等等！" with MoveTransition(0.4, enter=Dissolve(0.2)) # note\n'
+        )
+        lines = text.splitlines(keepends=True)
+        self.assertEqual(len(runtime.collect_translation_entries_from_lines(lines)), 1)
+        self.assertEqual(len(batch.collect_translation_entries_from_lines(lines, "script.rpy")), 1)
+        snapshot = self.snapshot_for(text)
+        self.assertEqual(len(snapshot.occurrences), 1)
+        self.assertEqual(snapshot.occurrences[0].unit.source_text, "Wait!")
+
+    def test_changed_clause_keeps_missing_marker_evidence(self):
+        text = (
+            "translate schinese changed_clause:\n"
+            "\n"
+            '    # m "Wait!" with vpunch\n'
+            '    m "等等！" with hpunch\n'
+        )
+        lines = text.splitlines(keepends=True)
+        self.assertEqual(runtime.collect_translation_entries_from_lines(lines), [])
+        self.assertEqual(batch.collect_translation_entries_from_lines(lines, "script.rpy"), [])
+        snapshot = self.snapshot_for(text)
+        candidate = next(
+            candidate for candidate in snapshot.inventory.candidates
+            if candidate.unit is not None and candidate.unit.display_line_number == 4
+        )
+        self.assertTrue(candidate.evidence.get("source_marker_missing"))
+        self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
+
     def test_with_clause_lines_keep_identity_across_views(self):
         root, tl_dir, script = self.make_project(SCRIPT)
         lines = SCRIPT.splitlines(keepends=True)

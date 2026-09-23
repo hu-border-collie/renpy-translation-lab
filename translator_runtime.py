@@ -4533,13 +4533,28 @@ def tl_source_marker_matches_target(comment_match, target_line):
     token = extract_string_token_from_line(target_line)
     if token is None:
         return False
-    normalize = lambda value: " ".join(str(value).split())
-    prefix = normalize(comment_match.group("prefix"))
-    target_prefix = normalize(target_line[:token["start"]])
-    return (
-        prefix == target_prefix
-        and normalize(target_line.rstrip()).endswith(normalize(suffix))
-    )
+    prefix = " ".join(str(comment_match.group("prefix")).split())
+    target_prefix = " ".join(target_line[:token["start"]].split())
+    if prefix != target_prefix:
+        return False
+
+    def code_tokens(value):
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(value).readline)
+            return [
+                (part.type, part.string)
+                for part in tokens
+                if part.type not in {
+                    tokenize.INDENT, tokenize.DEDENT, tokenize.NL,
+                    tokenize.NEWLINE, tokenize.ENDMARKER, tokenize.COMMENT,
+                }
+            ]
+        except (SyntaxError, tokenize.TokenError):
+            return []
+
+    marker_suffix = code_tokens(suffix)
+    target_tokens = code_tokens(target_line)
+    return bool(marker_suffix) and target_tokens[-len(marker_suffix):] == marker_suffix
 
 
 def decode_string_literal_text(raw_text):
