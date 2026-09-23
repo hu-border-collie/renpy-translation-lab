@@ -4530,12 +4530,7 @@ def tl_source_marker_matches_target(comment_match, target_line):
     suffix = comment_match.group("suffix")
     if not suffix:
         return True
-    token = extract_string_token_from_line(target_line)
-    if token is None:
-        return False
-    prefix = " ".join(str(comment_match.group("prefix")).split())
-    target_prefix = " ".join(target_line[:token["start"]].split())
-    if prefix != target_prefix:
+    if not tl_source_marker_has_target_prefix(comment_match, target_line):
         return False
 
     def code_tokens(value):
@@ -4555,6 +4550,17 @@ def tl_source_marker_matches_target(comment_match, target_line):
     marker_suffix = code_tokens(suffix)
     target_tokens = code_tokens(target_line)
     return bool(marker_suffix) and target_tokens[-len(marker_suffix):] == marker_suffix
+
+
+def tl_source_marker_has_target_prefix(comment_match, target_line):
+    """Distinguish a plausible say marker from a quoted prose comment."""
+
+    token = extract_string_token_from_line(target_line)
+    if token is None:
+        return False
+    prefix = " ".join(str(comment_match.group("prefix")).split())
+    target_prefix = " ".join(target_line[:token["start"]].split())
+    return prefix == target_prefix
 
 
 def decode_string_literal_text(raw_text):
@@ -6867,6 +6873,8 @@ def find_source_text_for_translation_line(lines, idx):
             if is_voice_comment_match(comment_match):
                 continue
             if not tl_source_marker_matches_target(comment_match, lines[idx]):
+                if not tl_source_marker_has_target_prefix(comment_match, lines[idx]):
+                    continue
                 break
             return decode_string_literal_text(comment_match.group("text"))
 

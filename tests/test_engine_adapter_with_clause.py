@@ -218,6 +218,20 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
         self.assertTrue(candidate.evidence.get("source_marker_missing"))
         self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
 
+    def test_prose_comment_between_marker_and_target_does_not_hide_marker(self):
+        text = (
+            "translate schinese note_between:\n"
+            "\n"
+            '    # m "Noooooo!" with vpunch\n'
+            '    # see "note" with care\n'
+            '    m "不——！" with vpunch\n'
+        )
+        lines = text.splitlines(keepends=True)
+        self.assertEqual(runtime.find_source_text_for_translation_line(lines, 4), "Noooooo!")
+        snapshot = self.snapshot_for(text)
+        self.assertEqual(len(snapshot.occurrences), 1)
+        self.assertEqual(snapshot.occurrences[0].unit.source_text, "Noooooo!")
+
     def test_with_clause_lines_keep_identity_across_views(self):
         root, tl_dir, script = self.make_project(SCRIPT)
         lines = SCRIPT.splitlines(keepends=True)

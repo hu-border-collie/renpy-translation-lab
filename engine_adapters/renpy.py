@@ -1432,6 +1432,8 @@ class RenPyAdapter:
                 if legacy.is_voice_comment_match(comment_match):
                     continue
                 if not legacy.tl_source_marker_matches_target(comment_match, lines[line_index]):
+                    if not legacy.tl_source_marker_has_target_prefix(comment_match, lines[line_index]):
+                        continue
                     break
                 raw_text = comment_match.group("text")
                 # The comment regex is greedy and captures every quoted string
