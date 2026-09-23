@@ -4527,9 +4527,10 @@ def tl_source_marker_matches_target(comment_match, target_line):
     Markers without a suffix retain their historical pairing behavior.
     """
 
-    suffix = comment_match.group("suffix")
+    suffix = str(comment_match.group("suffix") or "").rstrip("\r\n")
     if not suffix:
         return True
+    target_line = target_line.rstrip("\r\n")
     if not tl_source_marker_has_target_prefix(comment_match, target_line):
         return False
 
@@ -4555,6 +4556,7 @@ def tl_source_marker_matches_target(comment_match, target_line):
 def tl_source_marker_has_target_prefix(comment_match, target_line):
     """Distinguish a plausible say marker from a quoted prose comment."""
 
+    target_line = target_line.rstrip("\r\n")
     token = extract_string_token_from_line(target_line)
     if token is None:
         return False

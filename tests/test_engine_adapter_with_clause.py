@@ -136,6 +136,18 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                 double = regex.match('    # "Who" "text"')
                 self.assertEqual(double.group("text"), 'Who" "text')
 
+    def test_clause_match_accepts_crlf_lines(self):
+        marker = runtime.TL_COMMENT_SOURCE_RE.match(
+            '    # m "Noooooo!" with vpunch\r'
+        )
+        self.assertIsNotNone(marker)
+        self.assertTrue(marker.group("suffix").endswith("\r"))
+        self.assertTrue(
+            runtime.tl_source_marker_matches_target(
+                marker, '    m "不——！" with vpunch\r\n'
+            )
+        )
+
     def test_other_say_clauses_pair_like_with(self):
         for clause in (
             "nointeract", "id confirm_1",
