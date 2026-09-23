@@ -16071,15 +16071,8 @@ def apply_revisions(target=None, force=False):
     return manifest
 
 
-# Keep this in sync with translator_runtime.TL_COMMENT_SOURCE_RE: Ren'Py emits
-# the say statement's trailing clauses (``with vpunch`` / ``nointeract`` /
-# ``id confirm``) inside the marker.
-REPAIR_LINE_COMMENT_RE = re.compile(
-    r'^\s*#\s*(?P<prefix>[^\":]*?)"(?P<text>.*)"'
-    r'(?P<suffix>\s+(?:with\s+[A-Za-z_]\w*(?:\([^\r\n)]*\))?'
-    r'|nointeract|id\s+[A-Za-z_]\w*)'
-    r'(?:\s+(?:nointeract|id\s+[A-Za-z_]\w*))*)?\s*$'
-)
+# Corpus and adapter must recognize exactly the same Ren'Py source markers.
+REPAIR_LINE_COMMENT_RE = runtime.TL_COMMENT_SOURCE_RE
 REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 
@@ -16197,7 +16190,9 @@ def collect_translation_entries_from_lines(lines, file_rel_path=''):
             next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
-                if token:
+                if token and runtime.tl_source_marker_matches_target(
+                    comment_match, lines[next_index]
+                ):
                     speaker_id = infer_repair_speaker_id(
                         comment_match.group('prefix'),
                         lines[next_index],

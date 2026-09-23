@@ -86,6 +86,7 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
         )
 
     def test_marker_regex_keeps_say_clauses_out_of_source(self):
+        self.assertIs(batch.REPAIR_LINE_COMMENT_RE, runtime.TL_COMMENT_SOURCE_RE)
         for regex in (runtime.TL_COMMENT_SOURCE_RE, batch.REPAIR_LINE_COMMENT_RE):
             with self.subTest(regex=regex.pattern):
                 for line, expected in (
@@ -95,6 +96,8 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                     ('    # m "Got it" id confirm_1', "Got it"),
                     ('    # m "Got it" with vpunch id confirm_1', "Got it"),
                     ('    # m "Fade" with Dissolve(0.5)', "Fade"),
+                    ('    # m "Fade" with MoveTransition(0.4, enter=Dissolve(0.2))', "Fade"),
+                    ('    # m "Fade" with store.my_trans', "Fade"),
                 ):
                     match = regex.match(line)
                     self.assertIsNotNone(match)
@@ -123,18 +126,33 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                 self.assertIsNone(regex.match('    # m "text" without a clause'))
                 self.assertIsNone(regex.match('    # TODO: fix "this" with better wording'))
                 self.assertIsNone(regex.match('    # TODO: fix "this" with better'))
+                marker = regex.match('    # m "old" with vpunch')
+                self.assertFalse(
+                    runtime.tl_source_marker_matches_target(
+                        marker, '    m "新译" with hpunch'
+                    )
+                )
                 # Double-string dialogue keeps its historical greedy text.
                 double = regex.match('    # "Who" "text"')
                 self.assertEqual(double.group("text"), 'Who" "text')
 
     def test_other_say_clauses_pair_like_with(self):
-        for clause in ("nointeract", "id confirm_1"):
+        for clause in (
+            "nointeract", "id confirm_1",
+            "with MoveTransition(0.4, enter=Dissolve(0.2))",
+            "with store.my_trans",
+        ):
             with self.subTest(clause=clause):
                 text = (
                     "translate schinese clause_1:\n"
                     "\n"
                     f'    # m "Got it!" {clause}\n'
                     f'    m "明白了！" {clause}\n'
+                )
+                lines = text.splitlines(keepends=True)
+                self.assertEqual(len(runtime.collect_translation_entries_from_lines(lines)), 1)
+                self.assertEqual(
+                    len(batch.collect_translation_entries_from_lines(lines, "script.rpy")), 1
                 )
                 snapshot = self.snapshot_for(text)
                 self.assertEqual(len(snapshot.occurrences), 1)
@@ -144,24 +162,29 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                 self.assertEqual(occurrence.unit.current_translation, "明白了！")
 
     def test_free_text_comment_is_not_paired_as_source_marker(self):
-        text = (
-            "translate schinese note_1:\n"
-            "\n"
-            '    # TODO: fix "this" with better wording\n'
-            '    m "已译"\n'
-        )
-        lines = text.splitlines(keepends=True)
-        self.assertEqual(runtime.collect_translation_entries_from_lines(lines), [])
-        self.assertEqual(batch.collect_translation_entries_from_lines(lines, "script.rpy"), [])
-        snapshot = self.snapshot_for(text)
-        self.assertEqual(len(snapshot.occurrences), 1)
-        candidate = next(
-            candidate
-            for candidate in snapshot.inventory.candidates
-            if candidate.unit is not None and candidate.unit.display_line_number == 4
-        )
-        self.assertTrue(candidate.evidence.get("source_marker_missing"))
-        self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
+        for comment in (
+            '# TODO: fix "this" with better wording',
+            '# use "dissolve" with care',
+        ):
+            with self.subTest(comment=comment):
+                text = (
+                    "translate schinese note_1:\n"
+                    "\n"
+                    f"    {comment}\n"
+                    '    m "已译"\n'
+                )
+                lines = text.splitlines(keepends=True)
+                self.assertEqual(runtime.collect_translation_entries_from_lines(lines), [])
+                self.assertEqual(batch.collect_translation_entries_from_lines(lines, "script.rpy"), [])
+                snapshot = self.snapshot_for(text)
+                self.assertEqual(len(snapshot.occurrences), 1)
+                candidate = next(
+                    candidate
+                    for candidate in snapshot.inventory.candidates
+                    if candidate.unit is not None and candidate.unit.display_line_number == 4
+                )
+                self.assertTrue(candidate.evidence.get("source_marker_missing"))
+                self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
 
     def test_with_clause_lines_keep_identity_across_views(self):
         root, tl_dir, script = self.make_project(SCRIPT)

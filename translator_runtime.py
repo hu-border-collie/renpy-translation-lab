@@ -334,9 +334,7 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 # clause out of the source text.
 TL_COMMENT_SOURCE_RE = re.compile(
     r'^\s*#\s*(?P<prefix>[^\":]*?)"(?P<text>.*)"'
-    r'(?P<suffix>\s+(?:with\s+[A-Za-z_]\w*(?:\([^\r\n)]*\))?'
-    r'|nointeract|id\s+[A-Za-z_]\w*)'
-    r'(?:\s+(?:nointeract|id\s+[A-Za-z_]\w*))*)?\s*$'
+    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract(?:\s+.*)?|id\s+\S.*))?\s*$'
 )
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
@@ -4520,6 +4518,30 @@ def extract_string_token_from_line(line):
     return None
 
 
+def tl_source_marker_matches_target(comment_match, target_line):
+    """Verify a source marker's trailing clause against its target say line.
+
+    A ``with`` expression can contain nested calls or attribute access, so the
+    marker regex only isolates its suffix. Requiring the same say prefix and
+    suffix on the target prevents prose comments from becoming source text.
+    Markers without a suffix retain their historical pairing behavior.
+    """
+
+    suffix = comment_match.group("suffix")
+    if not suffix:
+        return True
+    token = extract_string_token_from_line(target_line)
+    if token is None:
+        return False
+    normalize = lambda value: " ".join(str(value).split())
+    prefix = normalize(comment_match.group("prefix"))
+    target_prefix = normalize(target_line[:token["start"]])
+    return (
+        prefix == target_prefix
+        and normalize(target_line.rstrip()).endswith(normalize(suffix))
+    )
+
+
 def decode_string_literal_text(raw_text):
     if not isinstance(raw_text, str):
         return ""
@@ -4570,7 +4592,7 @@ def collect_translation_entries_from_lines(lines):
                     token = extract_string_token_from_line(lines[next_index])
                 else:
                     token = None
-                if token:
+                if token and tl_source_marker_matches_target(comment_match, lines[next_index]):
                     entries.append(
                         {
                             "line_number": next_index + 1,
@@ -6829,6 +6851,8 @@ def find_source_text_for_translation_line(lines, idx):
         if comment_match:
             if is_voice_comment_match(comment_match):
                 continue
+            if not tl_source_marker_matches_target(comment_match, lines[idx]):
+                break
             return decode_string_literal_text(comment_match.group("text"))
 
         old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
