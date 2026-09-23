@@ -355,6 +355,171 @@ class TranslationRecordBindingTests(unittest.TestCase):
         }
         return TranslationRecord.create(**{**fields, **changes}).to_dict()
 
+    def test_double_string_say_records_attach_to_both_literal_spans(self):
+        script = (
+            "translate schinese test_one:\n"
+            '    # "Guard" "Hello, traveler."\n'
+            '    "守卫" "你好，旅人。"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus, records = production_record_fixture(root, script_text=script)
+            ri.build_review_index(
+                corpus, translation_records_path=records, output_dir=root / "index"
+            )
+            manifest, entries = ri.load_review_index(root / "index")
+            self.assertEqual(manifest["diagnostics"], [])
+            self.assertEqual(
+                [(entry["source"], entry["current_translation"]) for entry in entries],
+                [("Guard", "守卫"), ("Hello, traveler.", "你好，旅人。")],
+            )
+            self.assertTrue(all(entry["translation_record"] is not None for entry in entries))
+            for entry in entries:
+                self.assertEqual(entry["identity_v2"], entry["translation_record"]["unit_id"])
+
+    def test_double_string_legacy_body_record_and_stale_evidence_are_rejected(self):
+        import translation_core
+
+        script = (
+            "translate schinese test_one:\n"
+            '    # "Guard" "Hello, traveler."\n'
+            '    "守卫" "你好，旅人。"\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus, records_path = production_record_fixture(root, script_text=script)
+            bundle = ri.load_corpus_bundle(corpus)
+            body_record = next(
+                record for record in ri.load_jsonl(records_path)
+                if record["translation_text"] == "你好，旅人。"
+            )
+            old_id = translation_core.build_identity_v2(
+                "script.rpy", "test_one", 2, "Guard"
+            )
+            self.assertNotEqual(old_id, body_record["unit_id"])
+            old_record = self.recreate_record(
+                body_record,
+                unit_id=old_id,
+                occurrence_id="occ1:" + "0" * 64,
+                source_text="Guard",
+            )
+            stale_provenance = copy.deepcopy(body_record["provenance"])
+            stale_provenance["source_binding"]["source_digest"] = "other-project"
+            stale_record = self.recreate_record(
+                body_record, provenance=stale_provenance
+            )
+            for record, reason in (
+                (old_record, "identity_not_found"),
+                (stale_record, "source_snapshot_mismatch"),
+            ):
+                with self.subTest(reason=reason):
+                    entries, diagnostics = ri.build_index_entries(
+                        bundle["rows"], bundle["manifest"], records=[record]
+                    )
+                    self.assertTrue(
+                        all(entry["translation_record"] is None for entry in entries)
+                    )
+                    self.assertEqual([item["reason"] for item in diagnostics], [reason])
+
+    def test_double_string_say_repeated_sources_clauses_escapes_and_variable_speaker(self):
+        import ast
+        import gemini_translate_batch as batch
+        import translator_runtime as runtime
+        import translation_core
+        from engine_adapters import ProjectDiscoveryRequest, RenPyAdapter, build_translation_snapshot
+
+        script = (
+            "translate schinese gate_a:\n"
+            '    # "Guard" "Hello, traveler."\n'
+            '    "守卫" "你好，旅人。"\n'
+            "translate schinese gate_b:\n"
+            '    # "Merchant" "Hello, traveler."\n'
+            '    "商人" "你好，旅人。"\n'
+            "translate schinese gate_c:\n"
+            '    # "Guard" "Hello, traveler." with vpunch\n'
+            '    "守卫" "你好，旅人。" with vpunch\n'
+            "translate schinese gate_d:\n"
+            '    # "Guard" "Hello, traveler." with hpunch\n'
+            '    "守卫" "你好，旅人。" with hpunch\n'
+            "translate schinese escaped:\n"
+            r'    # "Guard \"Ace\"" "Use C:\\gate and say \"go\"."' + "\n"
+            r'    "守卫 \"王牌\"" "使用 C:\\门并说 \"走\"。"' + "\n"
+            "translate schinese variable_speaker:\n"
+            '    # m "Hello, traveler."\n'
+            '    m "你好，旅人。"\n'
+        )
+        expected = [
+            ("Guard", "守卫"), ("Hello, traveler.", "你好，旅人。"),
+            ("Merchant", "商人"), ("Hello, traveler.", "你好，旅人。"),
+            ("Guard", "守卫"), ("Hello, traveler.", "你好，旅人。"),
+            ("Guard", "守卫"), ("Hello, traveler.", "你好，旅人。"),
+            ('Guard "Ace"', '守卫 "王牌"'),
+            ('Use C:\\gate and say "go".', '使用 C:\\门并说 "走"。'),
+            ("Hello, traveler.", "你好，旅人。"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus, records = production_record_fixture(root, script_text=script)
+            script_path = root / "game" / "tl" / "schinese" / "script.rpy"
+            lines = script.splitlines(keepends=True)
+            scan = build_translation_snapshot(
+                RenPyAdapter(legacy_module=runtime),
+                ProjectDiscoveryRequest(
+                    project_root=str(root),
+                    localization_root=str(script_path.parent),
+                    target_language="schinese",
+                ),
+            )
+            occurrences = list(scan.occurrences)
+            self.assertEqual(
+                [(item.unit.source_text, item.unit.current_translation) for item in occurrences],
+                expected,
+            )
+            runtime_entries = runtime.collect_translation_entries_from_lines(lines)
+            self.assertEqual(
+                [(item["source"], item["translation"]) for item in runtime_entries], expected
+            )
+            batch_entries = batch.collect_translation_entries_from_lines(lines, "script.rpy")
+            identity_by_span = {
+                (line + 1, start, end): unit_id
+                for unit_id, (line, start, end, _text) in runtime.scan_all_translation_units(
+                    lines, "script.rpy", mode=translation_core.MODE_REVISION
+                ).items()
+            }
+            self.assertEqual(len(identity_by_span), len(expected))
+            for occurrence, entry in zip(occurrences, batch_entries):
+                span = (entry["line_number"], entry["start"], entry["end"])
+                self.assertEqual(entry["identity_v2"], identity_by_span[span])
+                self.assertEqual(occurrence.unit.id, identity_by_span[span])
+                self.assertEqual(
+                    ast.literal_eval(lines[span[0] - 1][span[1]:span[2]]),
+                    entry["translation"],
+                )
+
+            ri.build_review_index(
+                corpus, translation_records_path=records, output_dir=root / "index"
+            )
+            manifest, entries = ri.load_review_index(root / "index")
+            self.assertEqual(manifest["diagnostics"], [])
+            self.assertEqual(
+                [
+                    (ri._decoded_corpus_source(item["source"]), item["current_translation"])
+                    for item in entries
+                ],
+                expected,
+            )
+            self.assertEqual(len({item["identity_v2"] for item in entries}), len(expected))
+            self.assertEqual(
+                len({item["identity_v2"] for item in entries if item["source"] == "Hello, traveler."}),
+                5,
+            )
+            for entry in entries:
+                record = entry["translation_record"]
+                self.assertIsNotNone(record)
+                self.assertEqual(record["unit_id"], entry["identity_v2"])
+                self.assertEqual(record["source_text"], ri._decoded_corpus_source(entry["source"]))
+                self.assertEqual(record["translation_text"], entry["current_translation"])
+
     def test_real_record_round_trip_keeps_distinct_occurrences_and_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

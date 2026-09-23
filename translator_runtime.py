@@ -4565,6 +4565,128 @@ def tl_source_marker_has_target_prefix(comment_match, target_line):
     return prefix == target_prefix
 
 
+def paired_tl_comment_literals(comment_match, target_line, *, allow_dynamic=False):
+    """Pair say-marker literals with target literals by syntax and exact span.
+
+    A generated ``# "Name" "Dialogue"`` marker has two independent source
+    strings. The regex's greedy ``text`` capture is only a recognition aid;
+    neither it nor the first target string is a source for the whole line.
+    Multi-literal say shapes and trailing clauses must match, so callers
+    cannot silently bind a marker to the wrong target span. Single-literal
+    markers retain their existing loose-prefix pairing contract. An adapter
+    inventory may set ``allow_dynamic`` to bind marker evidence to a single
+    unsupported f-string without exporting it as a translated corpus entry.
+    """
+    if not comment_match or not tl_source_marker_matches_target(comment_match, target_line):
+        return []
+
+    ignored = {
+        tokenize.INDENT, tokenize.DEDENT, tokenize.NL,
+        tokenize.NEWLINE, tokenize.ENDMARKER, tokenize.COMMENT,
+    }
+
+    def code_tokens(value):
+        return [
+            token for token in tokenize.generate_tokens(io.StringIO(value).readline)
+            if token.type not in ignored
+        ]
+
+    source_code = f'{comment_match.group("prefix")}"{comment_match.group("text")}"'
+    suffix = str(comment_match.group("suffix") or "").rstrip("\r\n")
+    try:
+        source_tokens = code_tokens(source_code)
+        target_tokens = code_tokens(target_line.rstrip("\r\n"))
+        if suffix:
+            suffix_tokens = code_tokens(suffix)
+            if not suffix_tokens or len(target_tokens) < len(suffix_tokens):
+                return []
+            target_tokens = target_tokens[:-len(suffix_tokens)]
+        if allow_dynamic and sum(token.type == tokenize.STRING for token in source_tokens) == 1:
+            source_prefix_tokens = source_tokens[:-1]
+            dynamic_tokens = target_tokens[len(source_prefix_tokens):]
+            fstring_start = getattr(tokenize, "FSTRING_START", -1)
+            fstring_end = getattr(tokenize, "FSTRING_END", -1)
+            dynamic_span = None
+            if (
+                len(dynamic_tokens) == 1
+                and dynamic_tokens[0].type == tokenize.STRING
+                and dynamic_tokens[0].string.lower().startswith("f")
+            ):
+                dynamic_span = (dynamic_tokens[0].start[1], dynamic_tokens[0].end[1])
+            elif (
+                len(dynamic_tokens) >= 2
+                and dynamic_tokens[0].type == fstring_start
+                and dynamic_tokens[-1].type == fstring_end
+            ):
+                dynamic_span = (dynamic_tokens[0].start[1], dynamic_tokens[-1].end[1])
+            if dynamic_span is not None and [
+                (token.type, token.string) for token in source_prefix_tokens
+            ] == [
+                (token.type, token.string)
+                for token in target_tokens[:len(source_prefix_tokens)]
+            ]:
+                source = source_tokens[-1]
+                source_text = ast.literal_eval(source.string)
+                if isinstance(source_text, str):
+                    source_prefix, source_quote = parse_string_literal_format(source.string)
+                    return [{
+                        "source": source_text,
+                        "source_raw": source.string[
+                            len(source_prefix) + len(source_quote):-len(source_quote)
+                        ],
+                        "translation": None,
+                        "start": dynamic_span[0],
+                        "end": dynamic_span[1],
+                        "prefix": "f",
+                        "quote": '"',
+                    }]
+        # Historical one-string markers may use a display-name comment before
+        # a bare target (and the batch reader also recognizes a comment before
+        # an ``old`` line). Keep that contract only when both say portions have
+        # exactly one literal. A multi-string marker always requires the same
+        # complete say shape, never a first-literal fallback.
+        single_legacy_pair = (
+            not suffix
+            and 1 <= len(source_tokens) <= 2
+            and 1 <= len(target_tokens) <= 2
+            and source_tokens[-1].type == target_tokens[-1].type == tokenize.STRING
+            and all(token.type == tokenize.NAME for token in source_tokens[:-1])
+            and all(token.type == tokenize.NAME for token in target_tokens[:-1])
+        )
+        if single_legacy_pair:
+            source_tokens = source_tokens[-1:]
+            target_tokens = target_tokens[-1:]
+        elif not tl_source_marker_has_target_prefix(comment_match, target_line):
+            return []
+        if not source_tokens or len(source_tokens) != len(target_tokens):
+            return []
+        pairs = []
+        for source, target in zip(source_tokens, target_tokens):
+            if source.type == target.type == tokenize.STRING:
+                source_text = ast.literal_eval(source.string)
+                target_text = ast.literal_eval(target.string)
+                if not isinstance(source_text, str) or not isinstance(target_text, str):
+                    return []
+                source_prefix, source_quote = parse_string_literal_format(source.string)
+                target_prefix, target_quote = parse_string_literal_format(target.string)
+                pairs.append({
+                    "source": source_text,
+                    "source_raw": source.string[
+                        len(source_prefix) + len(source_quote):-len(source_quote)
+                    ],
+                    "translation": target_text,
+                    "start": target.start[1],
+                    "end": target.end[1],
+                    "prefix": target_prefix,
+                    "quote": target_quote,
+                })
+            elif (source.type, source.string) != (target.type, target.string):
+                return []
+        return pairs
+    except (SyntaxError, ValueError, tokenize.TokenError):
+        return []
+
+
 def decode_string_literal_text(raw_text):
     if not isinstance(raw_text, str):
         return ""
@@ -4615,19 +4737,20 @@ def collect_translation_entries_from_lines(lines):
                     token = extract_string_token_from_line(lines[next_index])
                 else:
                     token = None
-                if token and tl_source_marker_matches_target(comment_match, lines[next_index]):
-                    entries.append(
-                        {
+                if token:
+                    pairs = paired_tl_comment_literals(comment_match, lines[next_index])
+                    for pair in pairs:
+                        entries.append({
                             "line_number": next_index + 1,
-                            "source": decode_string_literal_text(comment_match.group("text")),
-                            "translation": token["text"],
-                            "start": token["start"],
-                            "end": token["end"],
-                            "prefix": token.get("prefix", ""),
-                            "quote": token["quote"],
-                        }
-                    )
-                    index = next_index
+                            "source": pair["source"],
+                            "translation": pair["translation"],
+                            "start": pair["start"],
+                            "end": pair["end"],
+                            "prefix": pair["prefix"],
+                            "quote": pair["quote"],
+                        })
+                    if pairs:
+                        index = next_index
         else:
             old_match = TL_OLD_LINE_RE.match(raw_line)
             if old_match:
@@ -6864,7 +6987,12 @@ def _is_character_display_token(line_idx, token, display_spans):
     return any(_token_matches_span(line_idx, token, span) for span in display_spans)
 
 
-def find_source_text_for_translation_line(lines, idx):
+def find_source_text_for_translation_line(lines, idx, start_col=None, end_col=None):
+    """Find the marker source for one target literal span.
+
+    A multi-literal say line requires ``start_col`` and ``end_col``. Without
+    them there is no safe whole-line source to return.
+    """
     for prev_idx in range(idx - 1, -1, -1):
         prev_line = lines[prev_idx].strip()
         if not prev_line:
@@ -6878,7 +7006,13 @@ def find_source_text_for_translation_line(lines, idx):
                 if not tl_source_marker_has_target_prefix(comment_match, lines[idx]):
                     continue
                 break
-            return decode_string_literal_text(comment_match.group("text"))
+            pairs = paired_tl_comment_literals(comment_match, lines[idx])
+            if start_col is None and end_col is None and len(pairs) == 1:
+                return pairs[0]["source"]
+            for pair in pairs:
+                if (pair["start"], pair["end"]) == (start_col, end_col):
+                    return pair["source"]
+            return None
 
         old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
         if old_match:
@@ -7086,7 +7220,11 @@ def scan_all_translation_units(lines, file_rel_path, mode=translation_core.MODE_
                 if not isinstance(text_val, str):
                     continue
 
-                source_marker = find_source_text_for_translation_line(lines, idx) if is_translation_file else None
+                source_marker = (
+                    find_source_text_for_translation_line(
+                        lines, idx, token.start[1], token.end[1]
+                    ) if is_translation_file else None
+                )
                 source_for_id = source_marker if source_marker is not None else text_val
                 if source_for_id is None:
                     source_for_id = text_val
@@ -7203,7 +7341,11 @@ def collect_tasks_with_progress(lines, skip_translated=True):
 
                 # Simple heuristic: if it contains Chinese, it's already translated or source is CN
                 # If it's pure ASCII/English, we want to translate it.
-                source_marker = find_source_text_for_translation_line(lines, idx) if is_translation_file else None
+                source_marker = (
+                    find_source_text_for_translation_line(
+                        lines, idx, token.start[1], token.end[1]
+                    ) if is_translation_file else None
+                )
                 pending_from_empty = empty_target_source_for_pending(source_marker, text_val)
                 should_translate = (
                     _is_translation_target_text(text_val) or pending_from_empty is not None

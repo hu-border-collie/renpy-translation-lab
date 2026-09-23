@@ -28,9 +28,11 @@ from engine_adapters.contracts import (
     Occurrence,
     OpaqueLocator,
     ProjectDiscoveryRequest,
+    ValidatedTranslation,
 )
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.reuse import TranslationInput, build_translation_records
+from engine_adapters.writeback import WritebackPlanError, render_writeback_plan
 
 SCRIPT = (
     "translate schinese start_abc123:\n"
@@ -132,9 +134,17 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                         marker, '    m "新译" with hpunch'
                     )
                 )
-                # Double-string dialogue keeps its historical greedy text.
+                # The recognition regex remains greedy; the shared token
+                # parser resolves the two independent source/target spans.
                 double = regex.match('    # "Who" "text"')
                 self.assertEqual(double.group("text"), 'Who" "text')
+                pairs = runtime.paired_tl_comment_literals(
+                    double, '    "谁" "正文"'
+                )
+                self.assertEqual(
+                    [(pair["source"], pair["translation"]) for pair in pairs],
+                    [("Who", "谁"), ("text", "正文")],
+                )
 
     def test_clause_match_accepts_crlf_lines(self):
         marker = runtime.TL_COMMENT_SOURCE_RE.match(
@@ -395,6 +405,107 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
         self.assertIn(":escaped_1:1:", occurrence.unit.id)
         self.assertEqual(occurrence.unit.source_text, 'Say "hi"\nnow')
         self.assertEqual(occurrence.unit.current_translation, '说"你好"\n现在')
+
+    def test_double_string_say_excludes_only_empty_body_from_revision(self):
+        text = (
+            "translate schinese pending_say:\n"
+            '    # "Guard" "Wait here." with hpunch\n'
+            '    "守卫" "" with hpunch\n'
+        )
+        root, tl_dir, script = self.make_project(text)
+        snapshot = build_translation_snapshot(
+            RenPyAdapter(legacy_module=runtime),
+            ProjectDiscoveryRequest(
+                project_root=str(root), localization_root=str(tl_dir),
+                target_language="schinese",
+            ),
+        )
+        self.assertEqual(
+            [
+                (item.unit.source_text, item.unit.current_translation)
+                for item in snapshot.occurrences
+            ],
+            [("Guard", "守卫"), ("Wait here.", "")],
+        )
+        entries = batch.collect_translation_entries_from_lines(text.splitlines(), "script.rpy")
+        self.assertEqual(
+            [(item["source"], item["translation"]) for item in entries],
+            [("Guard", "守卫"), ("Wait here.", "")],
+        )
+        self.assertEqual(
+            [batch.should_include_revision_entry(item) for item in entries],
+            [True, False],
+        )
+        jobs = batch.collect_revision_file_jobs(file_paths=[("script.rpy", str(script))])
+        self.assertEqual([item["source"] for item in jobs[0]["items"]], ["Guard"])
+        self.assertEqual(len(runtime.collect_tasks(text.splitlines(keepends=True))), 1)
+
+    def test_double_string_say_shape_mismatch_reports_unpaired_marker(self):
+        text = (
+            "translate schinese malformed_say:\n"
+            '    # "Guard" "Wait here."\n'
+            '    "守卫"\n'
+        )
+        snapshot = self.snapshot_for(text)
+        self.assertEqual(
+            batch.collect_translation_entries_from_lines(text.splitlines(), "script.rpy"),
+            [],
+        )
+        self.assertEqual(
+            runtime.scan_all_translation_units(
+                text.splitlines(keepends=True), "script.rpy",
+                mode=translation_core.MODE_REVISION,
+            ),
+            {},
+        )
+        self.assertTrue(
+            any(
+                candidate.classification == "parse_error"
+                and "renpy.source_marker_unpaired" in candidate.reason_codes
+                for candidate in snapshot.inventory.candidates
+            )
+        )
+
+    def test_double_string_say_writeback_changes_only_selected_literal(self):
+        text = (
+            "translate schinese selected_say:\n"
+            '    # "Guard" "Hello, traveler." with vpunch\n'
+            '    "守卫" "你好，旅人。" with vpunch\n'
+        )
+        root, tl_dir, script = self.make_project(text)
+        adapter = RenPyAdapter(legacy_module=runtime)
+        request = ProjectDiscoveryRequest(
+            project_root=str(root), localization_root=str(tl_dir),
+            target_language="schinese",
+        )
+        snapshot = build_translation_snapshot(adapter, request)
+        name, body = snapshot.occurrences
+        self.assertEqual(
+            (name.unit.source_text, body.unit.source_text),
+            ("Guard", "Hello, traveler."),
+        )
+        validation = adapter.validate_translation(body, "欢迎，旅人。")
+        self.assertEqual(validation.status, "pass")
+        plan = adapter.build_writeback_plan(
+            snapshot.project,
+            (ValidatedTranslation(body, "欢迎，旅人。", validation),),
+            snapshot.project.source_documents,
+        )
+        self.assertEqual(len(plan.operations), 1)
+        self.assertEqual(plan.operations[0].kind, "text_span_replace")
+        rendered = "".join(
+            render_writeback_plan(plan, snapshot.project.source_documents)["script.rpy"]
+        )
+        self.assertEqual(
+            rendered.replace("\r\n", "\n"),
+            text.replace('"你好，旅人。" with vpunch', '"欢迎，旅人。" with vpunch'),
+        )
+        self.assertEqual(script.read_text(encoding="utf-8"), text)
+
+        script.write_text(text.replace("你好，旅人。", "已变动。"), encoding="utf-8")
+        live = adapter.discover_project(request)
+        with self.assertRaises(WritebackPlanError):
+            render_writeback_plan(plan, live.source_documents)
 
     def test_unmarked_target_uses_locator_fallback_identity(self):
         snapshot = self.snapshot_for(SCRIPT)

@@ -56,39 +56,13 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.8"
+ADAPTER_VERSION = "1.1.9"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
 # Typical unique stale-block fallback scores 140+ (shared block_occurrence / speaker).
 CONTENT_EVIDENCE_MIN_SCORE = 140
 LIVE_OCCURRENCE_CACHE_LIMIT = 8
-
-
-def _first_comment_literal(raw_text: str) -> str:
-    """Return the first string literal captured by the greedy comment regex.
-
-    The regex captures from the opening quote to the final quote, so a
-    multi-literal line (``# "Terry" "Hello there."``) arrives as
-    ``Terry" "Hello there.``. This returns the content before the first
-    unescaped quote (``Terry``) and returns the input unchanged when no
-    unescaped quote is found (a single literal with escaped quotes such as
-    ``He said \\"hi\\".``).
-    """
-    out: list[str] = []
-    index = 0
-    while index < len(raw_text):
-        char = raw_text[index]
-        if char == "\\" and index + 1 < len(raw_text):
-            out.append(char)
-            out.append(raw_text[index + 1])
-            index += 2
-            continue
-        if char == '"':
-            return "".join(out)
-        out.append(char)
-        index += 1
-    return raw_text
 
 
 MAX_MULTILINE_STRING_LINES = 200
@@ -839,6 +813,9 @@ class RenPyAdapter:
                         legacy,
                         lines,
                         line_index,
+                        token.start[1],
+                        token.end[1],
+                        token.end[0] - token.start[0],
                         is_translation_file=is_translation_file,
                     )
                     if (
@@ -1418,11 +1395,15 @@ class RenPyAdapter:
         legacy: ModuleType,
         lines: Sequence[str],
         line_index: int,
+        start_col: int,
+        end_col: int,
+        end_line_offset: int,
         *,
         is_translation_file: bool,
     ) -> Mapping[str, Any] | None:
         if not is_translation_file:
             return None
+        target_statement = "".join(lines[line_index:line_index + end_line_offset + 1])
         for previous_index in range(line_index - 1, -1, -1):
             previous_line = lines[previous_index].strip()
             if not previous_line:
@@ -1431,26 +1412,20 @@ class RenPyAdapter:
             if comment_match:
                 if legacy.is_voice_comment_match(comment_match):
                     continue
-                if not legacy.tl_source_marker_matches_target(comment_match, lines[line_index]):
-                    if not legacy.tl_source_marker_has_target_prefix(comment_match, lines[line_index]):
+                if not legacy.tl_source_marker_matches_target(comment_match, target_statement):
+                    if not legacy.tl_source_marker_has_target_prefix(comment_match, target_statement):
                         continue
                     break
-                raw_text = comment_match.group("text")
-                # The comment regex is greedy and captures every quoted string
-                # on the line. Speaker-label markers like
-                # ``# "Terry" "Hello there."`` therefore concatenate adjacent
-                # string literals into ``TerryHello there.``. Keep only the
-                # first literal (the replaceable name span) in that case.
-                # Escaped quotes inside one literal (``# "He said \\"hi\\"."``)
-                # must not count as separators.
-                first_literal = _first_comment_literal(raw_text)
-                if first_literal != raw_text:
-                    raw_text = first_literal
-                return {
-                    "kind": "comment",
-                    "line_index": previous_index,
-                    "text": legacy.decode_string_literal_text(raw_text),
-                }
+                for pair in legacy.paired_tl_comment_literals(
+                    comment_match, target_statement, allow_dynamic=True
+                ):
+                    if (pair["start"], pair["end"]) == (start_col, end_col):
+                        return {
+                            "kind": "comment",
+                            "line_index": previous_index,
+                            "text": pair["source"],
+                        }
+                return None
             old_match = legacy.TL_OLD_LINE_RE.match(lines[previous_index].rstrip("\r\n"))
             if old_match:
                 return {
