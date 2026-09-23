@@ -78,6 +78,25 @@ identity / occurrence 视图保留该 span。若快照仍收到空 `unit_id`（�
 occurrence），`build_project_snapshot` fail closed 并返回稳定
 `ADAPTER_UNIT_ID_MISSING` 与文件 / 行 locator，CLI 机器 envelope 可直接解析。
 
+双字符串 say 行（`# "Guard" "Hello, traveler."` / `"守卫" "你好，旅人。"`）
+按注释和目标行的 token 结构及目标半开列 span 一一配对：角色名与正文各有独立
+source、target、identity 和 occurrence；`with vpunch` / `hpunch` 从句、转义引号与
+反斜杠不进入正文 source。`translator_runtime.paired_tl_comment_literals()` 是
+adapter、task / identity 扫描和 revision corpus 共用的解析合同；形状或从句不匹配时
+不从整行、首个字符串或同文案兜底，未配对 marker 由 inventory 诊断
+`renpy.source_marker_unpaired`。正文为空时它仍是待翻译任务，revision corpus 仅排除
+该空目标 span，并保留同一行已译角色名 span。
+
+修复前的双字符串产物需要从当前文件集重新扫描、导出 project snapshot、
+TranslationRecord、revision corpus 和 review index。角色名的 identity v2 一般不变；
+正文原先以角色名构造的 unit ID 会改为以正文 source 构造，正文 source 与 record
+digest 也相应改变。`source_binding.source_digest` 是文件集摘要；文件未改时它可保持
+相同，但不能代替逐条 unit ID、source、target 和 locator 校验。单字符串条目保持
+原有 ID 规则。旧 corpus 合并的 source 与新 records 不匹配；旧正文 record 的
+ID/source 与新 corpus 不匹配。review index
+仍检查 source binding、目标语言、文件/行 locator、source/target 与文件快照摘要，
+对 stale、冲突或跨项目证据拒绝附着；重新导出不是将旧 record 按文字迁移到新 ID。
+
 ## Coverage 产物
 
 同步预览写入：

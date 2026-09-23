@@ -16190,28 +16190,29 @@ def collect_translation_entries_from_lines(lines, file_rel_path=''):
             next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
-                if token and runtime.tl_source_marker_matches_target(
-                    comment_match, lines[next_index]
-                ):
-                    speaker_id = infer_repair_speaker_id(
-                        comment_match.group('prefix'),
-                        lines[next_index],
-                        token['start'],
-                    )
-                    entry = {
-                        'line_number': next_index + 1,
-                        'source_line_number': index + 1,
-                        'source': comment_match.group('text'),
-                        'translation': token['text'],
-                        'start': token['start'],
-                        'end': token['end'],
-                        'prefix': token.get('prefix', ''),
-                        'quote': token['quote'],
-                    }
-                    if speaker_id:
-                        entry['speaker_id'] = speaker_id
-                        entry['speaker'] = speaker_id
-                    entries.append(attach_identity_v2(entry, identity_v2_by_span))
+                if token:
+                    for pair in runtime.paired_tl_comment_literals(
+                        comment_match, lines[next_index]
+                    ):
+                        speaker_id = infer_repair_speaker_id(
+                            comment_match.group('prefix'),
+                            lines[next_index],
+                            pair['start'],
+                        )
+                        entry = {
+                            'line_number': next_index + 1,
+                            'source_line_number': index + 1,
+                            'source': pair['source_raw'],
+                            'translation': pair['translation'],
+                            'start': pair['start'],
+                            'end': pair['end'],
+                            'prefix': pair['prefix'],
+                            'quote': pair['quote'],
+                        }
+                        if speaker_id:
+                            entry['speaker_id'] = speaker_id
+                            entry['speaker'] = speaker_id
+                        entries.append(attach_identity_v2(entry, identity_v2_by_span))
             index = next_index
         else:
             old_match = REPAIR_OLD_LINE_RE.match(raw_line)

@@ -150,7 +150,7 @@ adapter / schema / snapshot / 写回前置检查不复用「建议」结构，�
 {
   "status": "ok | attention | blocked",
   "engine": "renpy",
-  "adapter_version": "1.1.8",
+  "adapter_version": "1.1.9",
   "locator_schema_version": 1,
   "capabilities": {},
   "live": {},
