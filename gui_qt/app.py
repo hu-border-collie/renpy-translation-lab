@@ -395,6 +395,7 @@ from .user_copy import (
     MODEL_CATALOG_SOURCE_LABELS,
     APP_SHUTDOWN_COPY,
     REVISION_CORPUS_COPY,
+    REVIEW_WORKSPACE_COPY,
     REVISION_PROPOSAL_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
@@ -2023,6 +2024,9 @@ class MainWindow(QMainWindow):
                     )
                 )
                 self.revision_page = page
+                page.review_workspace.proposal_ready.connect(
+                    self._import_review_workspace_proposals
+                )
             else:
                 page = QWidget()
                 page.setObjectName(f"workbench_page_{nav_item.value}")
@@ -8285,6 +8289,19 @@ class MainWindow(QMainWindow):
         game_root = self.state.get_game_root() if hasattr(self, "state") else None
         return revision_corpus_export_identity(game_root=game_root)
 
+    def _current_review_workspace_identity(self) -> str:
+        """Bind delayed review loading to the active project, language and mode."""
+        root = str(self.state.get_game_root() or "")
+        runtime = self._snapshot_runtime_config_for_job(
+            persist_corrected_game_root=False
+        )
+        tl_dir = str(getattr(runtime, "tl_dir", "") or "")
+        return json.dumps(
+            [canonical_abs_path(root), canonical_abs_path(tl_dir),
+             self._current_work_mode().value],
+            ensure_ascii=False,
+        )
+
     def _current_revision_proposal_operation_identity(
         self,
         proposal_path: str,
@@ -8505,6 +8522,29 @@ class MainWindow(QMainWindow):
         if action == "open_doctor":
             self._activate_shell_route(_SHELL_ROUTE_PROJECT_PREPARE)
             return
+        if action == "open_review_workspace":
+            if (
+                bool(getattr(self, "_task_running", False))
+                or self._current_work_mode() != WorkMode.REVISION
+            ):
+                return
+            result = self._revision_corpus_result_for_action()
+            default_path = result.manifest_path if result is not None else ""
+            selected, _filter = QFileDialog.getOpenFileName(
+                self, REVIEW_WORKSPACE_COPY["dialog_title"], default_path,
+                "JSON (*.json);;All files (*)",
+            )
+            if selected:
+                game_root = str(self.state.get_game_root() or "")
+                runtime_config = self._snapshot_runtime_config_for_job(
+                    persist_corrected_game_root=False
+                )
+                tl_dir = str(getattr(runtime_config, "tl_dir", "") or "")
+                self.revision_page.load_review_workspace(
+                    selected, game_root, tl_dir,
+                    lambda: self._current_review_workspace_identity(),
+                )
+            return
         if action == "export_revision_corpus":
             self._on_export_revision_corpus()
             return
@@ -8517,10 +8557,6 @@ class MainWindow(QMainWindow):
         if action == "import_revision_proposals":
             if bool(getattr(self, "_task_running", False)):
                 return
-            if not self._confirm_unsaved_config_before_workflow():
-                return
-            from .user_copy import REVISION_PROPOSAL_COPY
-
             selected, _filter = QFileDialog.getOpenFileName(
                 self,
                 REVISION_PROPOSAL_COPY["dialog_title"],
@@ -8542,29 +8578,7 @@ class MainWindow(QMainWindow):
                     str(Path(selected).parent),
                     "JSON (*.json);;All files (*)",
                 )
-            self._set_writeback_summary(
-                idle_writeback_summary_for_work_mode(WorkMode.REVISION)
-            )
-            operation_identity = self._current_revision_proposal_operation_identity(
-                selected,
-                corpus_manifest_path,
-            )
-            self._revision_proposal_stage_result = None
-            page = getattr(self, "revision_page", None)
-            if page is not None:
-                page.set_proposal_stage_result(None)
-            self._clear_log_view()
-            self._show_workbench_log_drawer()
-            self._begin_translation_workflow(
-                RevisionProposalImportWorkflow(
-                    selected,
-                    corpus_manifest_path,
-                    stage=True,
-                    operation_identity=operation_identity,
-                ),
-                log_heading=REVISION_PROPOSAL_COPY["running"],
-                status_tab=1,
-            )
+            self._import_review_workspace_proposals(selected, corpus_manifest_path)
             return
         if action == "select_revision_proposals":
             self._open_revision_proposal_selection()
@@ -8604,6 +8618,35 @@ class MainWindow(QMainWindow):
             log_heading="正在把所选问题生成订正预览",
             status_tab=1,
         )
+
+    def _import_review_workspace_proposals(
+        self, proposal_path: str, corpus_manifest_path: str
+    ) -> None:
+        """Route generated proposals through the existing staged CLI import."""
+        if bool(getattr(self, "_task_running", False)):
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+        self._set_writeback_summary(
+            idle_writeback_summary_for_work_mode(WorkMode.REVISION)
+        )
+        operation_identity = self._current_revision_proposal_operation_identity(
+            proposal_path, corpus_manifest_path
+        )
+        self._revision_proposal_stage_result = None
+        page = getattr(self, "revision_page", None)
+        if page is not None:
+            page.set_proposal_stage_result(None)
+        self._clear_log_view()
+        self._show_workbench_log_drawer()
+        self._begin_translation_workflow(
+            RevisionProposalImportWorkflow(
+                proposal_path, corpus_manifest_path, stage=True,
+                operation_identity=operation_identity,
+            ),
+            log_heading=REVISION_PROPOSAL_COPY["running"], status_tab=1,
+        )
+
     def _sync_revision_page_controls(self, *, running: bool | None = None) -> None:
         """Mirror coordinator-owned revision actions onto the real page."""
         page = getattr(self, "revision_page", None)
