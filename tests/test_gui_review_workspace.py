@@ -67,7 +67,7 @@ class GuiReviewWorkspaceTests(unittest.TestCase):
             self.assertEqual(len(paths), 1)
             self.assertEqual(panel.table.selectedItems()[0].row(), 1)
             self.assertTrue(Path(paths[0][0]).is_file())
-            self.assertEqual(paths[0][1], str(corpus / "revision_corpus_manifest.json"))
+            self.assertTrue(Path(paths[0][1]).samefile(corpus / "revision_corpus_manifest.json"))
             self.assertGreater(panel.minimumSizeHint().height(), 0)
 
     def test_late_result_ignored_after_project_or_task_switch(self) -> None:
