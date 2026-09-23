@@ -333,8 +333,10 @@ STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\
 # ``# m "Noooooo!" with vpunch`` / ``nointeract`` / ``id confirm``; keep the
 # clause out of the source text.
 TL_COMMENT_SOURCE_RE = re.compile(
-    r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"'
-    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract\b.*|id\s+\S.*))?\s*$'
+    r'^\s*#\s*(?P<prefix>[^\":]*?)"(?P<text>.*)"'
+    r'(?P<suffix>\s+(?:with\s+[A-Za-z_]\w*(?:\([^\r\n)]*\))?'
+    r'|nointeract|id\s+[A-Za-z_]\w*)'
+    r'(?:\s+(?:nointeract|id\s+[A-Za-z_]\w*))*)?\s*$'
 )
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')

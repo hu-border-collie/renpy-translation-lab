@@ -94,6 +94,7 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                     ('    # m "Wait" nointeract', "Wait"),
                     ('    # m "Got it" id confirm_1', "Got it"),
                     ('    # m "Got it" with vpunch id confirm_1', "Got it"),
+                    ('    # m "Fade" with Dissolve(0.5)', "Fade"),
                 ):
                     match = regex.match(line)
                     self.assertIsNotNone(match)
@@ -120,6 +121,8 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
 
                 # Unrelated trailing text is still not a source marker.
                 self.assertIsNone(regex.match('    # m "text" without a clause'))
+                self.assertIsNone(regex.match('    # TODO: fix "this" with better wording'))
+                self.assertIsNone(regex.match('    # TODO: fix "this" with better'))
                 # Double-string dialogue keeps its historical greedy text.
                 double = regex.match('    # "Who" "text"')
                 self.assertEqual(double.group("text"), 'Who" "text')
@@ -139,6 +142,26 @@ class RenPyWithClauseIdentityTests(unittest.TestCase):
                 self.assertIn(":clause_1:1:", occurrence.unit.id)
                 self.assertEqual(occurrence.unit.source_text, "Got it!")
                 self.assertEqual(occurrence.unit.current_translation, "明白了！")
+
+    def test_free_text_comment_is_not_paired_as_source_marker(self):
+        text = (
+            "translate schinese note_1:\n"
+            "\n"
+            '    # TODO: fix "this" with better wording\n'
+            '    m "已译"\n'
+        )
+        lines = text.splitlines(keepends=True)
+        self.assertEqual(runtime.collect_translation_entries_from_lines(lines), [])
+        self.assertEqual(batch.collect_translation_entries_from_lines(lines, "script.rpy"), [])
+        snapshot = self.snapshot_for(text)
+        self.assertEqual(len(snapshot.occurrences), 1)
+        candidate = next(
+            candidate
+            for candidate in snapshot.inventory.candidates
+            if candidate.unit is not None and candidate.unit.display_line_number == 4
+        )
+        self.assertTrue(candidate.evidence.get("source_marker_missing"))
+        self.assertEqual(candidate.evidence.get("identity_source"), "locator_fallback")
 
     def test_with_clause_lines_keep_identity_across_views(self):
         root, tl_dir, script = self.make_project(SCRIPT)

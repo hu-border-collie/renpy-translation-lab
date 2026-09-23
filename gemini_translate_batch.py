@@ -16075,8 +16075,10 @@ def apply_revisions(target=None, force=False):
 # the say statement's trailing clauses (``with vpunch`` / ``nointeract`` /
 # ``id confirm``) inside the marker.
 REPAIR_LINE_COMMENT_RE = re.compile(
-    r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"'
-    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract\b.*|id\s+\S.*))?\s*$'
+    r'^\s*#\s*(?P<prefix>[^\":]*?)"(?P<text>.*)"'
+    r'(?P<suffix>\s+(?:with\s+[A-Za-z_]\w*(?:\([^\r\n)]*\))?'
+    r'|nointeract|id\s+[A-Za-z_]\w*)'
+    r'(?:\s+(?:nointeract|id\s+[A-Za-z_]\w*))*)?\s*$'
 )
 REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
@@ -21535,7 +21537,8 @@ def build_arg_parser():
         'export-project-snapshot',
         help=(
             'Export a source-only project/game-version snapshot '
-            '(JSON + JSONL) without modifying game files.'
+            '(JSON + JSONL) without modifying game files; missing unit IDs '
+            'report ADAPTER_UNIT_ID_MISSING with a file/line locator.'
         ),
     )
     export_project_snapshot_parser.add_argument(

@@ -21,6 +21,19 @@ from gui_qt.diagnostics_context import (
 
 
 class GuiDiagnosticsContextTests(unittest.TestCase):
+    def test_snapshot_error_details_command_uses_machine_envelope(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path="work/manifest.json",
+            manifest={"mode": "translation"},
+        )
+        by_label = {item.label: item.command for item in commands}
+        command = by_label["版本资产·快照错误详情（JSON）"]
+        self.assertIn("export-project-snapshot", command)
+        self.assertIn("--output json", command)
+        self.assertIn("--strict-exit-codes", command)
+
     def test_external_work_uses_shared_cli_without_provider_commands(self):
         commands = build_cli_commands(python_exe='python', batch_script_path='batch.py',
                                       manifest_path='work/manifest.json', manifest={'external_work': {}})
