@@ -103,6 +103,7 @@ MANIFEST_MODE_LABELS = {
 
 VERSION_ASSET_COPY = {
     "export_snapshot": "版本资产·导出项目快照",
+    "export_snapshot_diagnostics": "版本资产·快照错误详情（JSON）",
     "reconcile_snapshots": "版本资产·比较两个快照",
     "build_translation_records": "版本资产·冻结译文记录",
     "build_reuse_candidates": "版本资产·生成复用候选",

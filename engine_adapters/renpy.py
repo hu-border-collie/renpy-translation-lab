@@ -1243,11 +1243,25 @@ class RenPyAdapter:
         ):
             reasons.append("renpy.catalog.missing_entry")
 
+        identity_fallback = ""
         if classification in {"translatable", "already_translated"}:
             item = dict(final_legacy_item or {})
             if not item:
+                item_id = str(identity or "").strip()
+                if not item_id:
+                    # No legacy task and no identity span: fall back to the
+                    # stable literal address instead of synthesizing an empty
+                    # unit_id that fails the project snapshot (#518).
+                    item_id = self._locator_fallback_identity(
+                        document.file_rel_path,
+                        block_name,
+                        block_occurrence,
+                        line_index,
+                        token.start[1],
+                    )
+                    identity_fallback = item_id
                 item = {
-                    "id": identity or "",
+                    "id": item_id,
                     "text": str(text_value),
                     "line": line_index,
                     "start": token.start[1],
@@ -1312,7 +1326,8 @@ class RenPyAdapter:
             "speaker_id": speaker_id,
             "speaker_name": speaker_names.get(speaker_id, ""),
             "identity_v2": identity
-            or (str(legacy_item.get("id") or "") if legacy_item is not None else ""),
+            or (str(legacy_item.get("id") or "") if legacy_item is not None else "")
+            or identity_fallback,
             "context_before": (
                 _bounded_excerpt(lines[line_index - 1].strip()) if line_index > 0 else ""
             ),
@@ -1327,6 +1342,8 @@ class RenPyAdapter:
             evidence["source_text"] = _bounded_excerpt(source_text)
         if source_marker_missing:
             evidence["source_marker_missing"] = True
+        if identity_fallback:
+            evidence["identity_source"] = "locator_fallback"
         if literal_error is not None:
             evidence["parse_error"] = _stable_error_text(f"{type(literal_error).__name__}: {literal_error}")
         if is_multiline:
@@ -1365,6 +1382,33 @@ class RenPyAdapter:
         return " " not in text and ("/" in text or "\\" in text)
 
     @staticmethod
+    def _locator_fallback_identity(
+        file_rel_path: str,
+        block_name: str,
+        block_occurrence: int,
+        line_index: int,
+        start_col: int,
+    ) -> str:
+        """Return a stable literal address for a unit without a legacy identity.
+
+        Used only when neither the legacy task view nor the identity view
+        exposes a span, e.g. a target-language line whose optional source
+        marker is missing (#462). The ``loc`` segment keeps it distinct from
+        ``translation_core.build_identity_v2`` ids and no empty ``unit_id``
+        reaches the project snapshot (#518).
+        """
+
+        clean_path = str(file_rel_path or "").replace("\\", "/").strip()
+        clean_block = str(block_name or "_global").strip() or "_global"
+        try:
+            occurrence = max(1, int(block_occurrence or 1))
+        except (TypeError, ValueError):
+            occurrence = 1
+        if occurrence > 1:
+            clean_block = f"{clean_block}#{occurrence}"
+        return f"{clean_path}:{clean_block}:loc:{int(line_index) + 1}:{int(start_col)}"
+
+    @staticmethod
     def _looks_like_nonstandard_source_comment(line: str) -> bool:
         stripped = str(line or "").strip()
         return stripped.startswith("#") and any(quote in stripped[1:] for quote in {'"', "'"})
@@ -1387,6 +1431,10 @@ class RenPyAdapter:
             if comment_match:
                 if legacy.is_voice_comment_match(comment_match):
                     continue
+                if not legacy.tl_source_marker_matches_target(comment_match, lines[line_index]):
+                    if not legacy.tl_source_marker_has_target_prefix(comment_match, lines[line_index]):
+                        continue
+                    break
                 raw_text = comment_match.group("text")
                 # The comment regex is greedy and captures every quoted string
                 # on the line. Speaker-label markers like

@@ -62,7 +62,10 @@ TranslationRecord 的 `occurrence_id` 是适配器 `occ1:…`，corpus 的 occur
 所有未匹配、无效、缺失证据、过期和歧义记录都有 diagnostics；输入 count 包含未附着行。
 关联保留的是记录明确标注的来源版本，**不赋予 corpus 同一版本号，也不授予人工确认**。
 旧 TranslationRecord 仍可由原加载器读取，但没有 `source_binding` 时，本索引明确报告
-`missing_source_binding` 并不附着；需要使用同一文件集的当前快照重新导出记录。记录冻结后
+`missing_source_binding` 并不附着；需要使用同一文件集的当前快照重新导出记录。
+#518 修复带 `with` 从句的 say marker 身份与快照空 `unit_id` 后，这些行可进入
+本合同的严格记录关联；无 marker 的 locator 回退身份仍须通过上述绑定校验，
+不能仅凭原文附着。记录冻结后
 发生过 apply、其他文件改动或扫描范围变化，也会诊断为 `source_snapshot_mismatch`，不猜测
 跨版本关系。此校验只消费已提供的产物，不读取游戏文件来补造证据。
 

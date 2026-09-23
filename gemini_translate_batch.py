@@ -16071,7 +16071,8 @@ def apply_revisions(target=None, force=False):
     return manifest
 
 
-REPAIR_LINE_COMMENT_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+# Corpus and adapter must recognize exactly the same Ren'Py source markers.
+REPAIR_LINE_COMMENT_RE = runtime.TL_COMMENT_SOURCE_RE
 REPAIR_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 REPAIR_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 
@@ -16189,7 +16190,9 @@ def collect_translation_entries_from_lines(lines, file_rel_path=''):
             next_index = next_translation_entry_target_index(lines, index)
             if next_index < len(lines):
                 token = extract_string_token_from_line(lines[next_index])
-                if token:
+                if token and runtime.tl_source_marker_matches_target(
+                    comment_match, lines[next_index]
+                ):
                     speaker_id = infer_repair_speaker_id(
                         comment_match.group('prefix'),
                         lines[next_index],
@@ -21529,7 +21532,8 @@ def build_arg_parser():
         'export-project-snapshot',
         help=(
             'Export a source-only project/game-version snapshot '
-            '(JSON + JSONL) without modifying game files.'
+            '(JSON + JSONL) without modifying game files; missing unit IDs '
+            'report ADAPTER_UNIT_ID_MISSING with a file/line locator.'
         ),
     )
     export_project_snapshot_parser.add_argument(
@@ -24428,6 +24432,17 @@ def dispatch_command(parser, args):
                 output_dir=getattr(args, 'output_dir', '') or None,
                 coverage_review_path=getattr(args, 'coverage_review', '') or None,
             )
+        except engine_versioning.SnapshotOccurrenceIdentityError as exc:
+            raise cli_contract.MachineContractError(
+                str(exc),
+                code_name=exc.code,
+                suggested_action='fix_source_identity_and_reexport_snapshot',
+                details={
+                    'file_rel_path': exc.file_rel_path,
+                    'line_number': exc.line_number,
+                    'occurrence_id': exc.occurrence_id,
+                },
+            ) from exc
         except ValueError as exc:
             raise SystemExit(f'Project snapshot error: {exc}') from exc
 

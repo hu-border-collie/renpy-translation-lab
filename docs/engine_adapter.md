@@ -63,6 +63,21 @@ plan digest；旧消费者遇到未知 operation kind 会 fail closed，adapter 
 tokenize 失败、AST/literal 解析失败进入可定位的 `parse_error`。这些项目不会再因为
 旧扫描器的宽泛异常处理而被当作“没有文本”。
 
+带 `with` 从句的 say 行（`m "…" with vpunch` / `hpunch`，生成的 TL source marker
+同样带从句，另含 `nointeract` / `id confirm` 等 say 附加 clause）由 adapter 与
+revision corpus 共用的 source marker 正则识别，并核对 marker 与目标行的说话人前缀
+和尾随从句 token；属性访问、嵌套调用、从句内部空格差异与目标行行尾注释均可配对，
+从句不进入
+原文；task 视图、identity 视图与 corpus 对同一 span 的覆盖一致。无 marker 的既有目标
+语言 say 行（#462）仍分类为 `already_translated` 并保留 `source_marker_missing`
+证据，但 adapter 不再合成空 `unit_id`：两个旧扫描视图都没有该 span 时，使用稳定的
+locator 身份 `<file>:<block>:loc:<line>:<col>`，并在 candidate evidence 标
+`identity_source=locator_fallback`。空目标（`m ""`）在 revision corpus 中仍按既有
+`should_include_revision_entry` 排除，因为它属于 pending 任务而不是订正候选；task /
+identity / occurrence 视图保留该 span。若快照仍收到空 `unit_id`（例如手写
+occurrence），`build_project_snapshot` fail closed 并返回稳定
+`ADAPTER_UNIT_ID_MISSING` 与文件 / 行 locator，CLI 机器 envelope 可直接解析。
+
 ## Coverage 产物
 
 同步预览写入：

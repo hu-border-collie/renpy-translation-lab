@@ -435,6 +435,17 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
+            label=VERSION_ASSET_COPY["export_snapshot_diagnostics"],
+            command=format_cli_command(
+                python_exe,
+                batch_script_path,
+                [
+                    "export-project-snapshot", "--version-id", "<GAME_VERSION>",
+                    "--output", "json", "--strict-exit-codes",
+                ],
+            ),
+        ),
+        DiagnosticsCommand(
             label=VERSION_ASSET_COPY["reconcile_snapshots"],
             command=format_cli_command(
                 python_exe,

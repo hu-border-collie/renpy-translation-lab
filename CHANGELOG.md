@@ -44,6 +44,7 @@
 
 ### 修复
 
+- Ren'Py 带 `with` 等 say 附加 clause 的行与生成 TL source marker 正确配对（`# m "…" with vpunch` / `nointeract` / `id confirm` 的从句不再进入原文），task 视图、identity 视图与 revision corpus 对同一 span 的覆盖一致，不再产生空 `unit_id`；无可识别 marker 的既有目标语言行使用稳定 locator 回退身份并在 evidence 标注 `identity_source=locator_fallback`。若项目快照仍收到空 `unit_id`（例如手写 occurrence），`build_project_snapshot` fail closed 并返回稳定 `ADAPTER_UNIT_ID_MISSING` 与文件 / 行 locator，CLI 机器 envelope 可直接解析（#518）。
 - 外部初译工作包在绑定预览缺失或损坏时仍可查询状态；源快照未变且无写回证据时可重新检查，已开始写回时保留恢复绑定。参考文件、输出目录和候选版本字段的输入错误返回稳定诊断，不再泄漏异常或误记为持久竞争冲突；已写回包提示使用订正语料。
 - 损坏的外部工作包在输出文件预检中返回受控错误并保留原输出，GUI 保持外部命令路由；工作包或项目锁无法取得时返回可处理的锁诊断。
 - 外部初译工作包的 `receipts` / `conflicts` / `applied` 与预览引用损坏时返回稳定 `WORK_MANIFEST_INVALID` / `WORK_PREVIEW_CHANGED`，不再泄漏 `INTERNAL_ERROR`；对工作包执行 Provider `submit` 在读取 API Key 前即返回 `WORK_PROVIDER_DISABLED`；共享预览 apply 只读取一次预览制品。

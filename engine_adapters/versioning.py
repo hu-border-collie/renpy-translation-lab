@@ -67,6 +67,32 @@ class VersioningArtifactError(ValueError):
     """Raised when a snapshot or reconciliation artifact is invalid or stale."""
 
 
+class SnapshotOccurrenceIdentityError(VersioningArtifactError):
+    """Raised when an occurrence has no stable translation unit identity."""
+
+    code = "ADAPTER_UNIT_ID_MISSING"
+
+    def __init__(
+        self,
+        *,
+        file_rel_path: str,
+        line_number: int,
+        occurrence_id: str = "",
+    ) -> None:
+        self.file_rel_path = str(file_rel_path or "").replace("\\", "/")
+        self.line_number = int(line_number or 0)
+        self.occurrence_id = str(occurrence_id or "")
+        locator = (
+            f"{self.file_rel_path}:{self.line_number}"
+            if self.file_rel_path
+            else "unknown-locator"
+        )
+        super().__init__(
+            "occurrence.translation_unit.unit_id must not be empty "
+            f"({locator})."
+        )
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -584,6 +610,12 @@ def build_unit_occurrence_records(
     records: list[UnitOccurrenceRecord] = []
     for index, (sort_key, occurrence) in enumerate(ordered):
         unit = occurrence.unit
+        if not str(unit.id or "").strip():
+            raise SnapshotOccurrenceIdentityError(
+                file_rel_path=unit.file_rel_path,
+                line_number=unit.display_line_number,
+                occurrence_id=occurrence.occurrence_id,
+            )
         current_path = str(sort_key[0])
         before = ""
         after = ""

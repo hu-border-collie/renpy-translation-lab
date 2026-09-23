@@ -329,7 +329,13 @@ ROMAN_NUMERAL_LABEL_RE = re.compile(r"^(?:[+-][IVXLCDM]+|[IVXLCDM]{2,})$", re.IG
 STRFTIME_FORMAT_RE = re.compile(r"^(?:%[A-Za-z]|[%:\s,./\-0-9])+$")
 RENPY_IDENTIFIER_LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:_name|_label|_id)$")
 STRING_LITERAL_PREFIX_RE = re.compile(r"(?is)^(?P<prefix>[rubf]*)(?P<quote>'''|\"\"\"|'|\")")
-TL_COMMENT_SOURCE_RE = re.compile(r'^\s*#\s*(?P<prefix>[^\"]*?)"(?P<text>.*)"\s*$')
+# Source markers may be followed by the say statement's own clauses, e.g.
+# ``# m "Noooooo!" with vpunch`` / ``nointeract`` / ``id confirm``; keep the
+# clause out of the source text.
+TL_COMMENT_SOURCE_RE = re.compile(
+    r'^\s*#\s*(?P<prefix>[^\":]*?)"(?P<text>.*)"'
+    r'(?P<suffix>\s+(?:with\s+\S.*|nointeract(?:\s+.*)?|id\s+\S.*))?\s*$'
+)
 TL_OLD_LINE_RE = re.compile(r'^\s*old\s+"(?P<text>.*)"\s*$')
 TL_NEW_LINE_RE = re.compile(r'^\s*new\s+"(?P<text>.*)"\s*$')
 CHARACTER_DEFINE_RE = re.compile(
@@ -4512,6 +4518,53 @@ def extract_string_token_from_line(line):
     return None
 
 
+def tl_source_marker_matches_target(comment_match, target_line):
+    """Verify a source marker's trailing clause against its target say line.
+
+    A ``with`` expression can contain nested calls or attribute access, so the
+    marker regex only isolates its suffix. Requiring the same say prefix and
+    suffix on the target prevents prose comments from becoming source text.
+    Markers without a suffix retain their historical pairing behavior.
+    """
+
+    suffix = str(comment_match.group("suffix") or "").rstrip("\r\n")
+    if not suffix:
+        return True
+    target_line = target_line.rstrip("\r\n")
+    if not tl_source_marker_has_target_prefix(comment_match, target_line):
+        return False
+
+    def code_tokens(value):
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(value).readline)
+            return [
+                (part.type, part.string)
+                for part in tokens
+                if part.type not in {
+                    tokenize.INDENT, tokenize.DEDENT, tokenize.NL,
+                    tokenize.NEWLINE, tokenize.ENDMARKER, tokenize.COMMENT,
+                }
+            ]
+        except (SyntaxError, tokenize.TokenError):
+            return []
+
+    marker_suffix = code_tokens(suffix)
+    target_tokens = code_tokens(target_line)
+    return bool(marker_suffix) and target_tokens[-len(marker_suffix):] == marker_suffix
+
+
+def tl_source_marker_has_target_prefix(comment_match, target_line):
+    """Distinguish a plausible say marker from a quoted prose comment."""
+
+    target_line = target_line.rstrip("\r\n")
+    token = extract_string_token_from_line(target_line)
+    if token is None:
+        return False
+    prefix = " ".join(str(comment_match.group("prefix")).split())
+    target_prefix = " ".join(target_line[:token["start"]].split())
+    return prefix == target_prefix
+
+
 def decode_string_literal_text(raw_text):
     if not isinstance(raw_text, str):
         return ""
@@ -4562,7 +4615,7 @@ def collect_translation_entries_from_lines(lines):
                     token = extract_string_token_from_line(lines[next_index])
                 else:
                     token = None
-                if token:
+                if token and tl_source_marker_matches_target(comment_match, lines[next_index]):
                     entries.append(
                         {
                             "line_number": next_index + 1,
@@ -6821,6 +6874,10 @@ def find_source_text_for_translation_line(lines, idx):
         if comment_match:
             if is_voice_comment_match(comment_match):
                 continue
+            if not tl_source_marker_matches_target(comment_match, lines[idx]):
+                if not tl_source_marker_has_target_prefix(comment_match, lines[idx]):
+                    continue
+                break
             return decode_string_literal_text(comment_match.group("text"))
 
         old_match = TL_OLD_LINE_RE.match(lines[prev_idx].rstrip("\n"))
