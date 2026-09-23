@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from ..empty_state import EmptyStateWidget
 from ..revision_corpus_report import RevisionCorpusExportResult
 from ..user_copy import (
+    REVIEW_WORKSPACE_COPY,
     REVISION_CORPUS_COPY,
     REVISION_PROPOSAL_COPY,
     TASK_PROJECT_GATE_COPY,
@@ -24,6 +25,7 @@ from ..user_copy import (
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
+from .review_workspace import ReviewWorkspaceWidget
 from .task_controls import TaskPageLayout, task_status_has_result
 
 
@@ -97,6 +99,12 @@ class RevisionPage(QFrame):
         self.import_proposals_btn.setToolTip(REVISION_PROPOSAL_COPY["tooltip"])
         self.import_proposals_btn.clicked.connect(self._trigger_import_proposals)
         self.actions.add_action(self.import_proposals_btn, min_width=128)
+
+        self.open_review_btn = QPushButton(REVIEW_WORKSPACE_COPY["open"])
+        self.open_review_btn.setObjectName("revision_open_review_btn")
+        self.open_review_btn.setToolTip(REVIEW_WORKSPACE_COPY["tooltip"])
+        self.open_review_btn.clicked.connect(self._trigger_open_review)
+        self.actions.add_action(self.open_review_btn, min_width=128)
 
         self.resume_btn = QPushButton("继续订正")
         self.resume_btn.setObjectName("revision_resume_btn")
@@ -216,6 +224,10 @@ class RevisionPage(QFrame):
         proposal_layout.setColumnStretch(1, 1)
         self.proposal_result.setVisible(False)
         self.task_layout.root.addWidget(self.proposal_result)
+
+        self.review_workspace = ReviewWorkspaceWidget(self.content_page)
+        self.review_workspace.setVisible(False)
+        self.task_layout.root.addWidget(self.review_workspace)
 
         self.status_section = self.task_layout.add_status_section(
             TASK_PROJECT_GATE_COPY["status_section_title"]
@@ -390,6 +402,10 @@ class RevisionPage(QFrame):
         self.writeback_btn.setText("写回所选订正" if final_review else "写回订正")
         self.review_findings_btn.setVisible(final_review)
         self.import_proposals_btn.setVisible(mode == WorkMode.REVISION)
+        self.open_review_btn.setVisible(mode == WorkMode.REVISION)
+        if mode != WorkMode.REVISION:
+            self.review_workspace.reset()
+            self.review_workspace.setVisible(False)
         self.result_hint.setText(
             "审查完成后，选择需要处理的问题并生成订正预览。"
             if final_review
@@ -410,12 +426,15 @@ class RevisionPage(QFrame):
         self.mode_combo.setEnabled(not running)
         self.stop_btn.setEnabled(running)
         if running:
+            self.review_workspace.reset()
+            self.review_workspace.setVisible(False)
             self.start_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
             self.writeback_btn.setEnabled(False)
             self.review_findings_btn.setEnabled(False)
             self.export_corpus_btn.setEnabled(False)
             self.import_proposals_btn.setEnabled(False)
+            self.open_review_btn.setEnabled(False)
             self.select_proposals_btn.setEnabled(False)
 
     def set_controls(
@@ -447,6 +466,11 @@ class RevisionPage(QFrame):
             export_tooltip or REVISION_CORPUS_COPY["tooltip"]
         )
         self.import_proposals_btn.setEnabled(start_enabled and not self._running)
+        self.open_review_btn.setEnabled(
+            (start_enabled or export_enabled)
+            and not self._running
+            and self._active_mode == WorkMode.REVISION
+        )
         stage_result = self.proposal_stage_result()
         self.select_proposals_btn.setEnabled(
             selection_enabled
@@ -461,6 +485,8 @@ class RevisionPage(QFrame):
         self.updateGeometry()
 
     def reset_project(self) -> None:
+        self.review_workspace.reset()
+        self.review_workspace.setVisible(False)
         self.set_task_running(False)
         self.status_section.set_status("", "", "", [])
         self.status_section.set_progress(None)
@@ -514,6 +540,16 @@ class RevisionPage(QFrame):
             and self._actions.action is not None
         ):
             self._actions.action("import_revision_proposals")
+
+    def _trigger_open_review(self) -> None:
+        if not self._running and self.open_review_btn.isEnabled() and self._actions.action is not None:
+            self._actions.action("open_review_workspace")
+
+    def load_review_workspace(self, corpus_path: str, game_root: str, tl_dir: str, current_context: object) -> None:
+        """Open a derived review index without blocking the window."""
+        self.review_workspace.setVisible(True)
+        self.review_workspace.load(corpus_path, game_root, tl_dir, current_context)
+        self.task_layout.reflow()
 
     def _trigger_export_corpus(self) -> None:
         if (

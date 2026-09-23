@@ -129,7 +129,13 @@ TranslationRecord 的 `occurrence_id` 是适配器 `occ1:…`，corpus 的 occur
 全部命令支持 `--output json`，并加入 `capabilities` / machine envelope 合同。S1 不修改
 translator config、API key、glossary、quality acknowledgement 或任何 `.rpy`。
 
-## 5. S2 GUI 订正页（后续）
+## 5. S2 GUI 订正页
+
+当前工程接入现有订正页「逐条审校」入口，读取当前项目语料或已附着证据的 review index，
+后台重建派生索引。草稿保存在索引包的 `review_drafts.json`，按 occurrence 和当前
+binding 校验；仅当前页明确选中的完整草稿生成 `review_proposals.jsonl`，再交给既有
+`import-revision-proposals` staged selection。该 JSONL 不是写回授权，实际项目验收仍待
+真实语料与游戏检查。
 
 在现有订正页内增加「逐条审校」工作区，不新增主页面：
 

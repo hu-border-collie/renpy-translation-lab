@@ -44,10 +44,11 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
     def _activate_window(self) -> None:
         self.window.show()
         self.window.activateWindow()
-        if QApplication.focusWidget() is None:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                QApplication.setActiveWindow(self.window)
+        # A previous test can leave focus on an inactive workbench window.
+        # Make this test's window active before asserting its field focus.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            QApplication.setActiveWindow(self.window)
 
     def test_litellm_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.litellm_page import LiteLLMSettingsPage
