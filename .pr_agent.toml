@@ -2,19 +2,23 @@
 # Docs:
 # - https://github.com/The-PR-Agent/pr-agent/blob/main/docs/docs/installation/github.md
 # - https://github.com/The-PR-Agent/pr-agent/blob/main/docs/docs/usage-guide/changing_a_model.md
-# - https://api-docs.deepseek.com/
+# - https://opencode.ai/v2/docs/console/go
 #
 # Important: PR-Agent loads this file from the repository default branch
 # (or CONFIG.CONFIG_BRANCH / PR_AGENT_CONFIG_BRANCH). Feature-branch-only
 # copies are not applied until merged. Workflow env in
 # .github/workflows/pr-agent.yml therefore duplicates the critical model
-# knobs so first-time enablement PRs can still run DeepSeek.
+# knobs so first-time enablement PRs can still use OpenCode Go.
+
+[openai]
+# OpenCode Go exposes its coding models through an OpenAI-compatible endpoint.
+# The API key is supplied by the GitHub Actions secret in pr-agent.yml.
+api_base = "https://opencode.ai/zen/go/v1"
 
 [config]
-# DeepSeek official model IDs: deepseek-v4-flash / deepseek-v4-pro
-# PR-Agent LiteLLM provider prefix: deepseek/
-model = "deepseek/deepseek-v4-flash"
-fallback_models = ["deepseek/deepseek-v4-flash"]
+# OpenCode Go model ID via PR-Agent's OpenAI-compatible LiteLLM route.
+model = "openai/deepseek-v4.1-flash"
+fallback_models = ["openai/deepseek-v4.1-flash"]
 
 # Keep review-only mode least-privileged: no contents:write needed.
 restricted_mode = true

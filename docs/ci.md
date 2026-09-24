@@ -20,11 +20,12 @@
 
 `.github/workflows/pr-agent.yml` 在 pull request 的 opened / reopened / ready_for_review / synchronize 事件上运行 PR-Agent，并允许仓库 OWNER / MEMBER / COLLABORATOR 在开放 PR 评论区用 `/review` 手动触发。外部用户评论、Bot 评论、普通 issue 评论和已关闭 PR 不会触发，以免评论注入或消耗供应商额度。
 
-- 使用 DeepSeek V4 Flash；需要仓库 Actions secret `DEEPSEEK_KEY`。
+- 使用 OpenCode Go 作为 API 供应商，并运行 DeepSeek V4.1 Flash；LiteLLM 通过 OpenAI-compatible Chat Completions endpoint `https://opencode.ai/zen/go/v1` 调用。需要仓库 Actions secret `OPENCODE_GO_API_KEY`。
+- 请求带有专用 `User-Agent` 和按 workflow run 稳定的 `x-opencode-session`，符合 [OpenCode Go 的客户端要求](https://opencode.ai/v2/docs/console/go)。模型列表、端点和数据保留说明可能变化，维护者应以该文档当前内容为准。
 - action 固定到不可变 commit，启用 restricted mode，并从默认分支读取 `AGENTS.md` 作为仓库上下文。
 - `GITHUB_TOKEN` 权限为 `contents: read`、`issues: write`、`pull-requests: write`，用于读取变更并写入持久化审查评论；不授予 contents write。
 - 该 workflow 是自动审查辅助，不属于 `tests.yml` 的确定性 blocking 测试，也不能代替人工审阅和合并门禁。
-- PR diff、提示词和配置的上下文会发送给 DeepSeek。不要在 PR 中放入 API Key、私有游戏脚本、Batch 结果或其他无权发送的敏感内容；供应商数据处理以当前账号和 DeepSeek 条款为准。
+- PR diff、提示词和配置的上下文会发送给 OpenCode Go，并由其路由到所选模型。不要在 PR 中放入 API Key、私有游戏脚本、Batch 结果或其他无权发送的敏感内容；数据保留与训练政策按 OpenCode Go 当前隐私说明及具体模型而异。
 
 自动审查失败不应被解释为产品测试失败；先区分 action / secret / provider 故障与 PR 自身代码问题。审查内容仍需由维护者验证，不能把模型评论当作权威事实源。
 

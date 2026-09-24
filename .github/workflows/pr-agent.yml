@@ -32,7 +32,7 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    name: Review pull request with DeepSeek V4 Flash
+    name: Review pull request with OpenCode Go (DeepSeek V4.1 Flash)
 
     steps:
       - name: Run PR-Agent
@@ -40,16 +40,20 @@ jobs:
         uses: the-pr-agent/pr-agent@743f52d80f3513193dfc7626f778c73478df6d0a # v0.41.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # DeepSeek native provider via LiteLLM.
-          # Secret: Settings > Secrets and variables > Actions > DEEPSEEK_KEY
-          # Get a key from https://platform.deepseek.com/api_keys
-          DEEPSEEK.KEY: ${{ secrets.DEEPSEEK_KEY }}
+          # OpenCode Go's OpenAI-compatible Chat Completions API via LiteLLM.
+          # Secret: Settings > Secrets and variables > Actions > OPENCODE_GO_API_KEY
+          OPENAI.KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENAI.API_BASE: "https://opencode.ai/zen/go/v1"
+          # OpenCode Go asks coding agents to identify themselves and send a stable
+          # session ID. A workflow run is one review conversation.
+          LITELLM.EXTRA_HEADERS: >-
+            {"User-Agent":"renpy-translation-lab-pr-agent/1.0","x-opencode-session":"renpy-translation-lab-${{ github.repository_id }}-${{ github.run_id }}"}
 
           # PR-Agent loads .pr_agent.toml from the default branch first.
           # Keep model/language knobs in workflow env so feature-branch PRs
-          # still use DeepSeek before this config is merged to main.
-          config.model: "deepseek/deepseek-v4-flash"
-          config.fallback_models: '["deepseek/deepseek-v4-flash"]'
+          # still route DeepSeek V4.1 Flash through OpenCode Go before merge.
+          config.model: "openai/deepseek-v4.1-flash"
+          config.fallback_models: '["openai/deepseek-v4.1-flash"]'
           config.response_language: "zh-CN"
           config.restricted_mode: "true"
           config.repo_context_files: '["AGENTS.md"]'
