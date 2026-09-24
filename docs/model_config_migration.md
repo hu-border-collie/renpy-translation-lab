@@ -114,8 +114,10 @@ read-then-unlink 竞态；锁文件释放后保留，不应手动删除。latest
 - `config_store`：GUI 与迁移共用原始 JSON 保存边界；不引入另一个配置状态源。
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
-四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。P3 由 #202 的页面合同
-承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。迁移完成后可在「设置 → 模型与供应商」统一维护 providers / profiles / 默认值与阶段路由；该页直接编辑 `model_routing` 并保留未知字段。
+四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。首次迁移须先通过
+`model_config_migration.py preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
+迁移完成后，P3 的「设置 → 模型与供应商」页面可统一维护 providers / profiles / 默认值与阶段路由；
+该页按 #202 的页面合同编辑 `model_routing`、跟踪未保存修改并保留未知字段。
 
 参见 [配置合同](plans/issue-348-model-routing-config-contract.md)、
 [架构概览](architecture.md)、[代码路径](code_paths.md)。

@@ -242,7 +242,6 @@ class TranslationTargetAppTests(unittest.TestCase):
         # The legacy-config hint in the reported screen is long enough to
         # expose a stack cap based only on the task buttons.
         self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
-        self.window.resize(1775, 1217)
         self.window.show()
         for mode, page in (
             (WorkMode.BATCH_TRANSLATION, self.window.batch_translation_page),
@@ -259,13 +258,9 @@ class TranslationTargetAppTests(unittest.TestCase):
                 )
                 for _ in range(4):
                     self._app.processEvents()
-                selector = self.window._translation_target_sections[mode]
+                stack = self.window._workbench_coordinator._stack
                 self.assertGreaterEqual(
-                    selector.height(), selector.minimumSizeHint().height()
-                )
-                self.assertGreaterEqual(
-                    page.content_page.height(),
-                    page.content_page.minimumSizeHint().height(),
+                    stack.maximumHeight(), page.minimumSizeHint().height()
                 )
 
     def test_strategy_selection_switches_execution_page(self) -> None:

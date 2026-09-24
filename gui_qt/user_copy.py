@@ -1514,12 +1514,12 @@ MODEL_PROFILES_PAGE_COPY = {
     "diagnostics_group": "诊断",
     "create_button": "创建模型路由配置",
     "create_tooltip": (
-        "创建一个最小的 Model Routing 配置"
-        "（Gemini Provider + Gemini Main，暂定执行方式为 Gemini Batch）。"
+        "创建一个最小的模型路由配置"
+        "（Google Gemini 供应商连接 + Gemini Main 模型方案，暂定执行方式为 Gemini Batch）。"
     ),
     "create_blocked_tooltip": (
         "检测到旧模型配置：请先按页面说明完成迁移；"
-        "空白创建会丢失旧模型、Provider 与阶段路由。"
+        "空白创建会丢失旧模型、供应商连接与阶段路由。"
     ),
     "create_invalid_tooltip": (
         "model_routing 当前无效：请先修正或移除，不能从空白创建覆盖。"
