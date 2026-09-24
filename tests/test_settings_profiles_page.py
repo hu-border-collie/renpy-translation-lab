@@ -126,11 +126,22 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertFalse(self.page.legacy_fields_label.isHidden())
         self.assertIn("sync.model", self.page.legacy_fields_label.text())
         self.assertIn("batch.model", self.page.legacy_fields_label.text())
+        self.page._refresh_all()
+        self.assertTrue(self.page.legacy_fields_toggle.isChecked())
+        self.assertFalse(self.page.legacy_fields_label.isHidden())
+        self.page.load({})
+        self.assertTrue(self.page.legacy_fields_toggle.isChecked())
+        self.assertFalse(self.page.legacy_fields_label.isHidden())
         self.assertEqual(self.page.collect(), {})
 
         # The read-only detection result is never part of the saved config.
         self.page.load({"model_routing": migrated_section()})
+        self.assertFalse(self.page.legacy_fields_toggle.isChecked())
+        self.assertTrue(self.page.legacy_fields_label.isHidden())
         self.assertEqual(set(self.page.collect()), {"model_routing"})
+        self.page.load({})
+        self.assertFalse(self.page.legacy_fields_toggle.isChecked())
+        self.assertTrue(self.page.legacy_fields_label.isHidden())
 
     def test_invalid_raw_model_routing_is_not_treated_as_empty(self) -> None:
         for raw in ("broken", ["broken"], 7, False):

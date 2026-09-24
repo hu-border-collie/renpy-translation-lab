@@ -640,9 +640,11 @@ class ProfilesSettingsPage(QObject):
         self.notice_group.setTitle(title)
 
         self.legacy_fields_label.setText("、".join(self._legacy_fields))
-        self.legacy_fields_toggle.setChecked(False)
         self.legacy_fields_toggle.setVisible(legacy)
-        self._toggle_legacy_fields(False)
+        if not legacy and self.legacy_fields_toggle.isChecked():
+            self.legacy_fields_toggle.setChecked(False)
+        else:
+            self._toggle_legacy_fields(self.legacy_fields_toggle.isChecked())
         self.create_btn.setVisible(not has_section)
         self.remove_btn.setVisible(
             has_section or self._invalid_raw is not None
