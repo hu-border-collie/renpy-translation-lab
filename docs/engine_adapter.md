@@ -304,9 +304,20 @@ digest）变化时，`validate_reuse_freshness()` 会把候选标记为 `stale`�
 决策导入与结果导出都会拒绝继续。高置信匹配同样以 pending 候选开始，没有免审
 通道；reference-only 候选即使接受也只保留旧译文供参考，不会计入可写回的复用。
 
-P4 的决策与结果导出仍只在 CLI 执行；P6（#424）GUI「上下文库 → 复用候选…」
-只读加载已有 `reuse_report.json`，展示候选类别、状态、歧义目标、译文来源、
-证据与 `reuse_review.md`，不代替人工决策，也不写回。
+P6（#424）GUI「上下文库 → 复用候选…」读取已有 `reuse_report.json`，展示候选
+类别、状态、歧义目标、译文来源、证据、完整旧译文与审计记录。#512 增加逐条
+`accept` / `reject`：审阅者必须填写真实的人类身份；接受歧义候选前必须显式选择
+合法 target occurrence。GUI 调用 `run_reuse_decisions_import()` 生成新的审计候选包，
+原包保持不变；表格每页最多显示 500 条且译文摘要最多 160 字符，候选可翻页，编辑详情展示完整文本，
+决定仍由共用核心从完整候选包读取并做 freshness 校验。`override_translation`、
+`split_lineage` 与 `merge_lineage` 仍使用 CLI。
+
+用户显式选择目标 translation manifest 后，GUI 调用既有
+`run_reuse_results_export()` / `export-reuse-results` 合同，将结果与簿记写入 Batch
+包并显示输出位置。该操作不直接修改游戏文件；必须继续运行 `check`，且只有当前
+manifest/results 对应的最近一次 `writeback_gate.decision=allow` 才能进入 `apply`。
+切换候选包或 manifest 会清除未提交编辑，迟到的后台结果会因项目/包/manifest
+上下文不匹配而被忽略。普通条目审校（#427）与复用接受/拒绝仍是独立状态。
 
 ## 真实项目门禁实测
 

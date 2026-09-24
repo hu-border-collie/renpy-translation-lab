@@ -235,6 +235,67 @@ class EngineSnapshotActionsTests(unittest.TestCase):
         self.assertEqual(row["reuse_class"], "ambiguous")
         self.assertEqual(row["candidate_target_occurrence_ids"], ["target:1", "target:2"])
 
+    def test_reuse_overview_pages_large_packages_and_keeps_full_detail(self):
+        long_translation = "原创测试旧译文甲" * 30
+        candidates = tuple(
+            SimpleNamespace(
+                candidate_id=f"reusecand1:{index}",
+                reuse_class="exact_reuse",
+                status="pending",
+                confidence=0.95,
+                reference_only=False,
+                has_translation_record=True,
+                reference_origin="model_initial",
+                base_version_id="1.0.0",
+                target_version_id="1.1.0",
+                base_occurrence_id=f"base:{index}",
+                target_occurrence_id=f"target:{index}",
+                candidate_target_occurrence_ids=(),
+                reference_translation=long_translation,
+                effective_translation=long_translation,
+                evidence={"source_equal": True},
+                decision={},
+                audit=({"action": "reject", "note": "原创审计条目"},),
+            )
+            for index in range(501)
+        )
+        candidate_set = SimpleNamespace(
+            status="attention",
+            stale_reasons=(),
+            summary={"class_exact_reuse": 501},
+            base_version_id="1.0.0",
+            target_version_id="1.1.0",
+            reconciliation_digest="digest",
+            candidate_set_digest="setdigest",
+            candidates=candidates,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            package = Path(tmp) / "reuse"
+            package.mkdir()
+            (package / "reuse_report.json").write_text("{}", encoding="utf-8")
+            with mock.patch(
+                "engine_adapters.reuse.load_reuse_candidates",
+                return_value=candidate_set,
+            ):
+                first_page = load_reuse_candidates_overview(str(package))
+                last_page = load_reuse_candidates_overview(
+                    str(package),
+                    candidate_offset=500,
+                )
+
+        self.assertEqual(first_page["candidate_count"], 501)
+        self.assertEqual(first_page["candidate_start"], 1)
+        self.assertEqual(first_page["candidate_end"], 500)
+        self.assertEqual(len(first_page["candidates"]), 500)
+        first = first_page["candidates"][0]
+        self.assertEqual(len(first["effective_translation"]), 160)
+        self.assertEqual(first["effective_translation_full"], long_translation)
+        self.assertEqual(first["audit"], [{"action": "reject", "note": "原创审计条目"}])
+        self.assertEqual(last_page["candidate_start"], 501)
+        self.assertEqual(last_page["candidate_end"], 501)
+        self.assertEqual(last_page["candidates"][0]["candidate_id"], "reusecand1:500")
+        self.assertEqual(last_page["candidates"][0]["effective_translation_full"], long_translation)
+
     def test_load_reuse_candidates_overview_requires_path(self):
         with self.assertRaises(EngineSnapshotActionError):
             load_reuse_candidates_overview("")

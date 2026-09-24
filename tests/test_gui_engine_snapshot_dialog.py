@@ -123,6 +123,8 @@ def _reuse_payload():
         "candidate_set_digest": "setdigest",
         "candidate_count": 1,
         "candidate_limit": 500,
+        "candidate_start": 1,
+        "candidate_end": 1,
         "candidates": [
             {
                 "candidate_id": "reusecand1:abcdef",
@@ -134,8 +136,11 @@ def _reuse_payload():
                 "candidate_target_occurrence_ids": ["target:1", "target:2"],
                 "reference_translation": "回忆",
                 "effective_translation": "回忆",
+                "reference_translation_full": "回忆",
+                "effective_translation_full": "回忆",
                 "evidence": {"source_equal": True},
                 "decision": {},
+                "audit": [{"action": "reject", "reviewer_name": "测试审阅员"}],
             }
         ],
     }
@@ -230,6 +235,157 @@ class GuiEngineSnapshotDialogTests(unittest.TestCase):
         )
         self.assertTrue(self.dialog.reuse_open_review_btn.isEnabled())
         self.assertIn("reuse_review.md", self.dialog.reuse_open_review_btn.toolTip())
+
+    def test_reuse_selection_shows_full_record_and_requires_explicit_ambiguous_target(self) -> None:
+        self.dialog.reuse_path_edit.setText("C:/reuse")
+        self.dialog._on_reuse_loaded(
+            EngineSnapshotTaskResult(ok=True, payload=_reuse_payload())
+        )
+        self.assertEqual(self.dialog.reuse_reviewer_edit.text(), "")
+        self.dialog.reuse_table.selectRow(0)
+        details = self.dialog.reuse_detail.toPlainText()
+        self.assertIn("旧译文：\n回忆", details)
+        self.assertIn('"reviewer_name": "测试审阅员"', details)
+        self.assertEqual(self.dialog.reuse_target_combo.count(), 3)
+        self.assertEqual(self.dialog.reuse_target_combo.currentData(), "")
+        self.assertTrue(self.dialog.reuse_accept_btn.isEnabled())
+        self.dialog.reuse_reviewer_edit.setText("原创测试审阅者")
+        with mock.patch.object(self.dialog, "_set_controls_enabled") as set_controls:
+            self.dialog.reuse_accept_btn.click()
+        set_controls.assert_not_called()
+        self.assertIn("显式选择", self.dialog.reuse_status_label.text())
+
+        self.dialog.reuse_target_combo.setCurrentIndex(2)
+        submitted = {}
+        with (
+            mock.patch.object(self.dialog, "_start_task", side_effect=lambda task, handler: submitted.update(task=task, handler=handler)),
+            mock.patch(
+                "gui_qt.engine_snapshot_dialog.submit_reuse_candidate_decision",
+                return_value={"status": "accepted", "paths": {"output_dir": "C:/reuse/out"}},
+            ) as submit,
+        ):
+            self.dialog.reuse_accept_btn.click()
+            submitted["task"]()
+
+        submit.assert_called_once_with(
+            "C:/reuse",
+            "reusecand1:abcdef",
+            "accept",
+            "原创测试审阅者",
+            note="",
+            target_occurrence_id="target:2",
+        )
+
+    def test_reuse_table_pages_past_500_and_details_keep_long_translation(self) -> None:
+        long_translation = "原创超长译文甲" * 30
+        candidates = [
+            {
+                "candidate_id": f"reusecand1:{index}",
+                "reuse_class": "exact_reuse",
+                "status": "pending",
+                "confidence": 0.9,
+                "reference_only": False,
+                "reference_origin": "synthetic_test_data",
+                "target_occurrence_id": f"target:{index}",
+                "reference_translation": "摘要",
+                "effective_translation": "摘要",
+                "reference_translation_full": long_translation,
+                "effective_translation_full": long_translation,
+                "evidence": {"source_equal": True},
+                "decision": {},
+                "audit": [],
+            }
+            for index in range(500)
+        ]
+        payload = _reuse_payload()
+        payload.update(
+            {
+                "candidate_count": 501,
+                "candidate_limit": 500,
+                "candidate_start": 1,
+                "candidate_end": 500,
+                "candidates": candidates,
+            }
+        )
+        self.dialog._on_reuse_loaded(EngineSnapshotTaskResult(ok=True, payload=payload))
+        self.assertEqual(self.dialog.reuse_table.rowCount(), 500)
+        self.assertIn("每页最多 500 条", self.dialog.reuse_summary_label.text())
+        self.assertTrue(self.dialog.reuse_next_page_btn.isEnabled())
+        self.dialog.reuse_table.selectRow(0)
+        self.assertIn(long_translation, self.dialog.reuse_detail.toPlainText())
+        self.assertGreater(len(long_translation), 160)
+
+        last_page = dict(payload)
+        last_page.update(
+            {
+                "candidate_start": 501,
+                "candidate_end": 501,
+                "candidates": [dict(candidates[-1], candidate_id="reusecand1:500")],
+            }
+        )
+        self.dialog._reuse_page_offset = 500
+        self.dialog._on_reuse_loaded(EngineSnapshotTaskResult(ok=True, payload=last_page))
+        self.assertEqual(self.dialog.reuse_table.rowCount(), 1)
+        self.assertIn("第 501–501 条 / 共 501 条", self.dialog.reuse_page_label.text())
+        self.assertTrue(self.dialog.reuse_previous_page_btn.isEnabled())
+        self.assertFalse(self.dialog.reuse_next_page_btn.isEnabled())
+
+    def test_cancel_clears_only_unsubmitted_reuse_editor_fields(self) -> None:
+        self.dialog._on_reuse_loaded(
+            EngineSnapshotTaskResult(ok=True, payload=_reuse_payload())
+        )
+        self.dialog.reuse_table.selectRow(0)
+        self.dialog.reuse_reviewer_edit.setText("原创测试审阅者")
+        self.dialog.reuse_note_edit.setText("未提交的原创备注")
+        self.dialog.reuse_target_combo.setCurrentIndex(1)
+
+        self.dialog.reuse_cancel_decision_btn.click()
+
+        self.assertEqual(self.dialog.reuse_reviewer_edit.text(), "")
+        self.assertEqual(self.dialog.reuse_note_edit.text(), "")
+        self.assertEqual(self.dialog.reuse_table.currentRow(), -1)
+        self.assertEqual(self.dialog.reuse_target_combo.currentData(), "")
+        self.assertIn("没有提交决定", self.dialog.reuse_status_label.text())
+
+    def test_manifest_switch_clears_unsubmitted_reuse_editor(self) -> None:
+        self.dialog._on_reuse_loaded(
+            EngineSnapshotTaskResult(ok=True, payload=_reuse_payload())
+        )
+        self.dialog.reuse_table.selectRow(0)
+        self.dialog.reuse_reviewer_edit.setText("原创测试审阅者")
+        self.dialog.reuse_note_edit.setText("未提交的原创备注")
+
+        self.dialog.reuse_manifest_edit.setText("C:/batch/other/manifest.json")
+
+        self.assertEqual(self.dialog.reuse_reviewer_edit.text(), "")
+        self.assertEqual(self.dialog.reuse_note_edit.text(), "")
+        self.assertEqual(self.dialog.reuse_table.currentRow(), -1)
+        self.assertIn("manifest 已更改", self.dialog.reuse_status_label.text())
+
+    def test_late_worker_result_is_discarded_after_project_package_or_manifest_switch(self) -> None:
+        for change in (
+            lambda: setattr(self.dialog, "_game_root", "C:/Game/other"),
+            lambda: self.dialog.reuse_path_edit.setText("C:/reuse/other"),
+            lambda: self.dialog.reuse_manifest_edit.setText(
+                "C:/batch/other/manifest.json"
+            ),
+        ):
+            with self.subTest(change=change):
+                expected = self.dialog._async_context_key()
+                handler = mock.Mock()
+                change()
+
+                self.dialog._on_task_completed(
+                    EngineSnapshotTaskResult(
+                        ok=True,
+                        payload=_reuse_payload(),
+                    ),
+                    handler,
+                    expected,
+                )
+
+                handler.assert_not_called()
+                self.assertIn("已忽略", self.dialog.reuse_status_label.text())
 
     def test_error_result_shows_message_box(self) -> None:
         with mock.patch.object(QMessageBox, "warning") as warning:
