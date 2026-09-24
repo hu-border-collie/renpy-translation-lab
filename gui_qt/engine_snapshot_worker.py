@@ -1,4 +1,4 @@
-"""Background worker for the read-only engine/snapshot/reuse dialog (#424 P6)."""
+"""Background worker for engine/snapshot/reuse service tasks (#424 P6, #512)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from PySide6.QtCore import QThread, Signal
 
 @dataclass(frozen=True)
 class EngineSnapshotTaskResult:
-    """Result of one read-only snapshot/reuse task."""
+    """Result of one snapshot/reuse task."""
 
     ok: bool
     payload: Any = None
@@ -20,7 +20,7 @@ class EngineSnapshotTaskResult:
 
 
 class EngineSnapshotTaskWorker(QThread):
-    """Run one pure loader/formatter task outside the GUI thread."""
+    """Run one snapshot/reuse loader or shared-service action in the worker thread."""
 
     completed = Signal(object)
 

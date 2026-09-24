@@ -1,13 +1,16 @@
-"""Pure read-only loaders for the GUI engine/snapshot/reuse dialog (#424 P6).
+"""Shared-service adapters for the GUI engine/snapshot/reuse dialog.
 
-All matching, reconciliation and reuse semantics stay in ``engine_adapters``;
-this module only loads existing artifacts and shapes them for presentation.
-It deliberately has no PySide6 import so the contract is CLI-testable.
+Matching, reconciliation, decision and export semantics stay in
+``engine_adapters`` and the Batch runner. This module only shapes existing
+artifacts for presentation and forwards explicit user actions to those
+services. It deliberately has no PySide6 import so the contract is
+CLI-testable.
 """
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -17,7 +20,7 @@ EXCERPT_LIMIT = 160
 
 
 class EngineSnapshotActionError(ValueError):
-    """Raised when a snapshot/reuse artifact cannot be presented read-only."""
+    """Raised when a snapshot/reuse GUI action cannot be completed."""
 
 
 def snapshot_locator_text(locator: Any) -> str:
@@ -245,8 +248,9 @@ def load_reuse_candidates_overview(
     path: str,
     *,
     candidate_limit: int = MAX_REUSE_CANDIDATES,
+    candidate_offset: int = 0,
 ) -> dict[str, Any]:
-    """Load one existing reuse package/report for read-only presentation."""
+    """Load one bounded page of a reuse package for GUI presentation."""
     source = str(path or "").strip()
     if not source:
         raise EngineSnapshotActionError("复用候选包路径不能为空。")
@@ -265,8 +269,10 @@ def load_reuse_candidates_overview(
     )
     review_path = str(report_path.parent / engine_reuse.DEFAULT_REUSE_REVIEW_FILENAME)
     limit = max(0, int(candidate_limit or 0))
+    offset = max(0, int(candidate_offset or 0))
     candidates: list[dict[str, Any]] = []
-    for candidate in candidate_set.candidates[:limit]:
+    page_candidates = candidate_set.candidates[offset : offset + limit]
+    for candidate in page_candidates:
         candidates.append(
             {
                 "candidate_id": str(candidate.candidate_id),
@@ -283,10 +289,18 @@ def load_reuse_candidates_overview(
                 "candidate_target_occurrence_ids": list(
                     candidate.candidate_target_occurrence_ids or ()
                 ),
+                "target_occurrence_id": str(candidate.target_occurrence_id or ""),
                 "reference_translation": excerpt_text(candidate.reference_translation),
                 "effective_translation": excerpt_text(candidate.effective_translation),
+                "reference_translation_full": str(candidate.reference_translation or ""),
+                "effective_translation_full": str(candidate.effective_translation or ""),
                 "evidence": dict(candidate.evidence or {}),
                 "decision": dict(candidate.decision or {}),
+                "audit": [
+                    dict(item)
+                    for item in candidate.audit or ()
+                    if isinstance(item, Mapping)
+                ],
                 "audit_count": len(candidate.audit or ()),
             }
         )
@@ -303,5 +317,88 @@ def load_reuse_candidates_overview(
         "candidate_set_digest": str(candidate_set.candidate_set_digest or ""),
         "candidate_count": len(candidate_set.candidates),
         "candidate_limit": limit,
+        "candidate_offset": offset,
+        "candidate_start": offset + 1 if page_candidates else 0,
+        "candidate_end": offset + len(page_candidates),
         "candidates": candidates,
     }
+
+
+def submit_reuse_candidate_decision(
+    reuse_path: str,
+    candidate_id: str,
+    action: str,
+    reviewer_name: str,
+    *,
+    note: str = "",
+    target_occurrence_id: str = "",
+    output_dir: str = "",
+) -> dict[str, Any]:
+    """Submit one human accept/reject through the existing Batch import service.
+
+    The service reloads the authoritative candidate package and all recorded
+    P3 inputs, so displayed excerpts and the 500-row presentation limit never
+    become decision or freshness inputs.
+    """
+    source = str(reuse_path or "").strip()
+    candidate = str(candidate_id or "").strip()
+    normalized_action = str(action or "").strip()
+    reviewer = str(reviewer_name or "").strip()
+    if not source:
+        raise EngineSnapshotActionError("复用候选包路径不能为空。")
+    if not candidate:
+        raise EngineSnapshotActionError("请先选择一个复用候选。")
+    if normalized_action not in {"accept", "reject"}:
+        raise EngineSnapshotActionError("GUI 首版只支持 accept / reject。")
+    if not reviewer:
+        raise EngineSnapshotActionError("请填写真实的人类审阅者姓名。")
+
+    from engine_adapters import reuse as engine_reuse
+    import gemini_translate_batch as batch_mod
+
+    decision = engine_reuse.ReuseDecision(
+        candidate_id=candidate,
+        action=normalized_action,
+        reviewer_type="human",
+        reviewer_name=reviewer,
+        note=str(note or "").strip(),
+        target_occurrence_id=str(target_occurrence_id or "").strip(),
+    )
+    with tempfile.TemporaryDirectory(prefix="reuse-decision-") as temporary:
+        decisions_path = Path(temporary) / "decisions.jsonl"
+        decisions_path.write_text(
+            json.dumps(decision.to_dict(), ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            return batch_mod.run_reuse_decisions_import(
+                source,
+                str(decisions_path),
+                output_dir=str(output_dir or "").strip() or None,
+            )
+        except SystemExit as exc:
+            raise EngineSnapshotActionError(str(exc)) from exc
+
+
+def export_reuse_results_to_manifest(
+    reuse_path: str,
+    manifest_path: str,
+) -> dict[str, Any]:
+    """Forward an explicit manifest export to the existing P4 Batch service.
+
+    The Batch service writes results and manifest bookkeeping only; normal
+    ``check -> apply`` remains the only game-file write path.
+    """
+    source = str(reuse_path or "").strip()
+    target_manifest = str(manifest_path or "").strip()
+    if not source:
+        raise EngineSnapshotActionError("复用候选包路径不能为空。")
+    if not target_manifest:
+        raise EngineSnapshotActionError("请显式选择目标 Batch manifest。")
+
+    import gemini_translate_batch as batch_mod
+
+    try:
+        return batch_mod.run_reuse_results_export(source, target_manifest)
+    except SystemExit as exc:
+        raise EngineSnapshotActionError(str(exc)) from exc

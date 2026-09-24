@@ -381,8 +381,9 @@ def project_analysis_record_status_label(status: str) -> str:
     return PROJECT_ANALYSIS_RECORD_STATUS_LABELS.get(str(status or ""), "未知")
 
 
-# Read-only engine / project-snapshot / reuse-candidate copy (#424 P6).
-# The GUI calls the existing P3/P4 APIs; it must not re-derive matching.
+# Engine / project-snapshot / reuse-candidate copy (#424 P6, #512).
+# The GUI calls existing P3/P4 services; it must not re-derive matching,
+# candidate decisions, or Batch result export semantics.
 ENGINE_SNAPSHOT_COPY = {
     "section_title": "引擎与快照",
     "open_dialog": "引擎与快照…",
@@ -391,11 +392,12 @@ ENGINE_SNAPSHOT_COPY = {
         "版本差异与跨版本复用候选；不会修改游戏文件。"
     ),
     "reuse_entry": "复用候选…",
-    "reuse_entry_tip": "只读查看已有 reuse_report.json 的候选、歧义与证据；不执行决策或写回。",
-    "dialog_title": "引擎与快照（只读）",
+    "reuse_entry_tip": "查看复用候选并提交人工 accept / reject；可导出到 Batch 结果，仍须经 check → apply 写回。",
+    "dialog_title": "引擎与快照 / 复用候选",
     "dialog_intro": (
         "展示当前 adapter 能力边界、logs/project_snapshots 下的项目快照，"
         "并调用现有 reconciliation / reuse API 展示版本差异与复用候选。"
+        "候选审校、决策导入和 Batch 结果导出均复用现有核心服务；不会直接修改游戏文件。"
     ),
     "tab_overview": "引擎与能力",
     "tab_diff": "版本对比",
@@ -436,6 +438,12 @@ ENGINE_SNAPSHOT_COPY = {
     "reuse_load": "加载复用候选",
     "reuse_running": "正在读取复用候选包…",
     "reuse_summary": "候选摘要",
+    "reuse_scope_note": "本页只支持复用候选 accept / reject；override_translation、split_lineage、merge_lineage 请使用 CLI。本决定与 #427 普通条目审校及 quality acknowledgement 独立。",
+    "reuse_display_limited": "候选按每页最多 {count} 条分页；决定与导出由核心服务读取完整候选包。",
+    "reuse_previous_page": "上一页",
+    "reuse_next_page": "下一页",
+    "reuse_page_summary": "当前显示第 {start}–{end} 条，共 {total} 条。",
+    "reuse_page_label": "第 {start}–{end} 条 / 共 {total} 条",
     "reuse_columns": (
         "候选",
         "类别",
@@ -445,11 +453,41 @@ ENGINE_SNAPSHOT_COPY = {
         "目标 occurrence",
         "证据",
     ),
+    "reuse_detail": "选中候选的完整译文、证据、决定与审计记录",
+    "reuse_manifest": "目标 Batch manifest",
+    "reuse_manifest_placeholder": "请选择目标翻译模式 manifest.json",
+    "reuse_manifest_choose": "选择 manifest…",
+    "reuse_manifest_filter": "Batch manifest (manifest.json);;JSON 文件 (*.json)",
+    "reuse_reviewer": "人类审阅者",
+    "reuse_reviewer_placeholder": "请填写真实审阅者姓名",
+    "reuse_reviewer_required": "请填写真实的人类审阅者姓名；不会代填 Agent 或虚构身份。",
+    "reuse_note": "备注（可选）",
+    "reuse_note_placeholder": "记录审校理由或上下文",
+    "reuse_ambiguous_target": "歧义目标 occurrence",
+    "reuse_target_placeholder": "请显式选择一个合法目标 occurrence…",
+    "reuse_select_candidate": "请先选择一条候选。",
+    "reuse_ambiguous_target_required": "接受歧义候选前必须显式选择一个合法目标 occurrence。",
+    "reuse_accept": "接受此候选",
+    "reuse_reject": "拒绝此候选",
+    "reuse_cancel_decision": "取消本次填写",
+    "reuse_export": "导出到 Batch 结果",
+    "reuse_decision_running": "正在通过共用复用导入服务生成新候选包…",
+    "reuse_decision_saved": "已生成新候选包（状态：{status}）：\n{output}\n原输入包保留不变。",
+    "reuse_decision_cancelled": "已清除未提交的审阅者、备注、目标选择和候选选择；没有提交决定。",
+    "reuse_candidate_changed": "已切换候选；上一条尚未提交的审阅者、备注和目标选择已清空。",
+    "reuse_wait_to_close": "已提交的后台操作仍在运行；请等状态更新后再关闭窗口。取消填写只适用于尚未提交的审校。",
+    "reuse_export_running": "正在通过 export-reuse-results 核心合同导出…",
+    "reuse_export_saved": "已导出 {reused} 条复用结果：\n结果：{result}\nManifest：{manifest}",
+    "reuse_check_required": "下一步请对该 manifest 运行 check；只有 writeback_gate=allow 后才能按既有流程 apply。此 GUI 导出没有修改游戏文件。",
+    "reuse_failed": "操作失败；候选 freshness、目标竞争、reference-only 和覆盖错误遵循 CLI 核心服务。",
+    "reuse_package_changed": "候选包路径已更改；旧候选和未提交编辑已清除，请重新加载。",
+    "reuse_manifest_changed": "目标 manifest 已更改；未提交审阅编辑已清除。",
+    "reuse_stale_result_ignored": "项目、候选包或目标 manifest 已切换；已忽略迟到的旧上下文结果，请重新加载或重试。",
     "reuse_open_review": "打开审核表",
     "reuse_review_missing": "未找到 reuse_review.md。",
     "close": "关闭",
     "loading": "正在读取…",
-    "error_title": "引擎与快照读取失败",
+    "error_title": "引擎 / 复用操作失败",
     "disposition_labels": {
         "matched": "已匹配",
         "ambiguous": "base 歧义",
