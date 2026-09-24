@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QEvent, QModelIndex, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QModelIndex, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QHelpEvent, QPainter
 from PySide6.QtWidgets import (
     QPushButton,
@@ -19,6 +19,8 @@ from .split_status_table_helpers import (
     SPLIT_ACTION_BUTTON_HEIGHT,
     SPLIT_ACTION_BUTTON_LABEL,
     SPLIT_ACTION_BUTTON_MIN_WIDTH,
+    SPLIT_ACTION_CELL_MARGIN_H,
+    SPLIT_ACTION_CELL_MARGIN_V,
     split_action_button_rect,
 )
 
@@ -58,6 +60,21 @@ class SplitStatusActionDelegate(QStyledItemDelegate):
             return False
         self.select_requested.emit(payload["manifest_path"])
         return True
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802
+        hint = super().sizeHint(option, index)
+        if read_split_action_payload(index) is None:
+            return hint
+        return QSize(
+            max(
+                hint.width(),
+                SPLIT_ACTION_BUTTON_MIN_WIDTH + 2 * SPLIT_ACTION_CELL_MARGIN_H,
+            ),
+            max(
+                hint.height(),
+                SPLIT_ACTION_BUTTON_HEIGHT + 2 * SPLIT_ACTION_CELL_MARGIN_V,
+            ),
+        )
 
     def paint(
         self,

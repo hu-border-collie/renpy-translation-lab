@@ -102,13 +102,15 @@ class GuiGamesRegistrySourceUrlTests(unittest.TestCase):
             )
 
             progress_index = indexes["progress"]
-            panel._table.setColumnWidth(progress_index, 190)
+            # Font metrics can make the readable minimum wider than 190 px.
+            requested_width = panel._header_min_width(progress_index) + 12
+            panel._table.setColumnWidth(progress_index, requested_width)
             panel._persist_table_column_widths()
             panel._set_table_column_visible("progress", False)
             data = registry.load_registry(workspace / registry.REGISTRY_FILENAME)
             self.assertEqual(
                 data["preferences"]["table_column_widths"]["progress"],
-                190,
+                requested_width,
             )
 
             panel._set_table_column_visible("name", False)

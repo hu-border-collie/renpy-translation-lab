@@ -16,7 +16,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
@@ -239,6 +239,28 @@ class ProfilesSettingsPage(QObject):
         self.hint_label.setObjectName("config_hint_label")
         layout.addWidget(self.hint_label)
 
+        self.notice_group, notice_layout = settings_group("")
+        self.notice_group.setObjectName("profiles_notice_group")
+
+        self.legacy_fields_toggle = QPushButton()
+        self.legacy_fields_toggle.setObjectName("secondary_btn")
+        self.legacy_fields_toggle.setCheckable(True)
+        self.legacy_fields_toggle.toggled.connect(self._toggle_legacy_fields)
+        details_row = QHBoxLayout()
+        details_row.addWidget(self.legacy_fields_toggle)
+        details_row.addStretch(1)
+        notice_layout.addLayout(details_row)
+        self.legacy_fields_label = QLabel()
+        self.legacy_fields_label.setObjectName("settings_description_label")
+        self.legacy_fields_label.setWordWrap(True)
+        self.legacy_fields_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        notice_layout.addWidget(self.legacy_fields_label)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(10)
+
         self.create_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["create_button"])
         self.create_btn.setObjectName("profiles_create_btn")
         self.create_btn.clicked.connect(self._on_create_section)
@@ -246,8 +268,11 @@ class ProfilesSettingsPage(QObject):
         self.remove_btn.setObjectName("profiles_remove_btn")
         self.remove_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["remove_tooltip"])
         self.remove_btn.clicked.connect(self._on_remove_section)
-        layout.addWidget(self.create_btn)
-        layout.addWidget(self.remove_btn)
+        action_row.addWidget(self.create_btn)
+        action_row.addWidget(self.remove_btn)
+        action_row.addStretch(1)
+        notice_layout.addLayout(action_row)
+        layout.addWidget(self.notice_group)
 
         self.profiles_group, profiles_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["profiles_group"]
@@ -282,7 +307,7 @@ class ProfilesSettingsPage(QObject):
         profiles_buttons.addStretch(1)
         profiles_layout.addLayout(profiles_buttons)
         self.profile_editor_group, self._profile_form = settings_group(
-            MODEL_PROFILES_PAGE_COPY["providers_group"] + " · Profile"
+            MODEL_PROFILES_PAGE_COPY["profile_editor_group"]
         )
         self._build_profile_editor(self._profile_form)
         layout.addWidget(self.profiles_group)
@@ -305,7 +330,7 @@ class ProfilesSettingsPage(QObject):
         provider_buttons.addStretch(1)
         providers_layout.addLayout(provider_buttons)
         self.provider_editor_group, self._provider_form = settings_group(
-            MODEL_PROFILES_PAGE_COPY["providers_group"] + " · Provider"
+            MODEL_PROFILES_PAGE_COPY["provider_editor_group"]
         )
         self._build_provider_editor(self._provider_form)
         layout.addWidget(self.providers_group)
@@ -340,6 +365,7 @@ class ProfilesSettingsPage(QObject):
         self.diagnostics_label.setWordWrap(True)
         diagnostics_layout.addWidget(self.diagnostics_label)
         layout.addWidget(self.diagnostics_group)
+        layout.addStretch(1)
 
         return page, body
 
@@ -554,18 +580,16 @@ class ProfilesSettingsPage(QObject):
         self._refresh_defaults()
         self._refresh_routes()
         self._refresh_enabled()
-        if self._invalid_raw is not None:
+        if self._remove_requested:
+            self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["remove_pending"])
+        elif self._invalid_raw is not None:
             self.hint_label.setText(
                 MODEL_PROFILES_PAGE_COPY["invalid_hint"].format(
                     reason=_invalid_raw_reason(self._invalid_raw)
                 )
             )
         elif self._section is None and self._legacy_fields:
-            self.hint_label.setText(
-                MODEL_PROFILES_PAGE_COPY["legacy_hint"].format(
-                    fields="、".join(self._legacy_fields)
-                )
-            )
+            self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["legacy_hint"])
         elif self._section is None:
             self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["hint"])
         else:
@@ -580,8 +604,59 @@ class ProfilesSettingsPage(QObject):
                 )
             else:
                 self.hint_label.setText(MODEL_PROFILES_PAGE_COPY["hint"])
+        self._refresh_presentation()
         self._populate_profile_editor()
         self._populate_provider_editor()
+
+    def _toggle_legacy_fields(self, expanded: bool) -> None:
+        self.legacy_fields_toggle.setText(
+            MODEL_PROFILES_PAGE_COPY[
+                "legacy_fields_hide" if expanded else "legacy_fields_show"
+            ].format(count=len(self._legacy_fields))
+        )
+        self.legacy_fields_label.setVisible(
+            expanded and not self.legacy_fields_toggle.isHidden()
+        )
+
+    def _refresh_presentation(self) -> None:
+        """Show only the controls relevant to the current routing state."""
+        has_section = self._section is not None
+        legacy = (
+            not has_section
+            and self._invalid_raw is None
+            and not self._remove_requested
+            and bool(self._legacy_fields)
+        )
+        if self._remove_requested:
+            title = MODEL_PROFILES_PAGE_COPY["remove_pending_title"]
+        elif self._invalid_raw is not None:
+            title = MODEL_PROFILES_PAGE_COPY["invalid_title"]
+        elif legacy:
+            title = MODEL_PROFILES_PAGE_COPY["legacy_title"]
+        elif has_section:
+            title = MODEL_PROFILES_PAGE_COPY["ready_title"]
+        else:
+            title = MODEL_PROFILES_PAGE_COPY["empty_title"]
+        self.notice_group.setTitle(title)
+
+        self.legacy_fields_label.setText("、".join(self._legacy_fields))
+        self.legacy_fields_toggle.setChecked(False)
+        self.legacy_fields_toggle.setVisible(legacy)
+        self._toggle_legacy_fields(False)
+        self.create_btn.setVisible(not has_section)
+        self.remove_btn.setVisible(
+            has_section or self._invalid_raw is not None
+        )
+        for group in (
+            self.profiles_group,
+            self.profile_editor_group,
+            self.providers_group,
+            self.provider_editor_group,
+            self.defaults_group,
+            self.routes_group,
+            self.diagnostics_group,
+        ):
+            group.setVisible(has_section)
 
     def _refresh_enabled(self) -> None:
         editable = self._section is not None and not self._task_running

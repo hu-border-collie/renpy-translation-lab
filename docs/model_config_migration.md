@@ -45,7 +45,7 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 
 ## 创建与迁移的边界（#457）
 
-「设置 → 模型与 Provider」的「创建 Model Routing 配置」不是迁移的替代入口：
+「设置 → 模型与供应商」的「创建模型路由配置」不是迁移的替代入口：
 
 - 仅当配置**没有**旧 `sync.*` / `batch.*` 字段时，页面才允许空白创建；生成最小
   Gemini Provider + `Gemini Main` profile，暂定执行方式为 `gemini_batch`（与迁移默认、
@@ -115,7 +115,7 @@ read-then-unlink 竞态；锁文件释放后保留，不应手动删除。latest
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
 四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。P3 由 #202 的页面合同
-承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。迁移完成后可在「设置 → 模型与 Provider」统一维护 providers / profiles / 默认值与阶段路由；该页直接编辑 `model_routing` 并保留未知字段。
+承载首次迁移预览/确认、dirty/save 和模型设置，禁止在加载设置页时隐式迁移。迁移完成后可在「设置 → 模型与供应商」统一维护 providers / profiles / 默认值与阶段路由；该页直接编辑 `model_routing` 并保留未知字段。
 
 参见 [配置合同](plans/issue-348-model-routing-config-contract.md)、
 [架构概览](architecture.md)、[代码路径](code_paths.md)。
