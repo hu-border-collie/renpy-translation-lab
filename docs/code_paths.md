@@ -31,7 +31,7 @@
   - `_on_save_config()`：保存入口（ensure pages / flush LiteLLM / coordinator.save 或 widget collect）。
   - `_persist_collected_settings()`：调用 Qt-free apply 后执行两文件写盘与回滚。
 
-## 模型与 Provider
+## 模型与供应商
 
 - `litellm_provider_config.py`
   - 自定义 Provider ID、URL、环境变量、catalog 与 keyring 约定。
@@ -173,7 +173,7 @@
   `tests.test_gui_retry_workflow`、`tests.test_gemini_translate_batch_cli_contract`、
   `tests.test_batch_golden_corpus`。
 
-## 设置 · 模型与 Provider（#348 P3）
+## 设置 · 模型与供应商（#348 P3）
 
 - `gui_qt/settings/profiles_page.py`（`ProfilesSettingsPage`）持有单一配置键
   `model_routing`；增删改查通过 Qt-free 的 `model_profiles_editor.py` 完成，保存经

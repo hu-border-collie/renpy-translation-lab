@@ -78,7 +78,7 @@ python gemini_translate_batch.py final-review-status <REVIEW_MANIFEST> --output 
 python gemini_translate_batch.py final-review-export <REVIEW_MANIFEST> --output json
 ```
 
-CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI 在「设置 → 模型与 Provider」
+CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI 在「设置 → 模型与供应商」
 选择后会把同一个 `--profile` 传给 `sync-start` / `build`。已有 run 始终使用冻结路由，
 `sync-resume` / `sync-derive` 不接受 `--profile`。
 

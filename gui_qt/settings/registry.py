@@ -96,7 +96,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
     ),
     SettingsPageSpec(
         "profiles",
-        "模型与 Provider",
+        "模型与供应商",
         "_create_profiles_settings_page",
         config_page=True,
         config_keys=frozenset({"model_routing"}),

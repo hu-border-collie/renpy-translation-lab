@@ -238,6 +238,31 @@ class TranslationTargetAppTests(unittest.TestCase):
             "legacy-batch",
         )
 
+    def test_translation_selector_and_task_controls_are_not_clipped(self) -> None:
+        # The legacy-config hint in the reported screen is long enough to
+        # expose a stack cap based only on the task buttons.
+        self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
+        self.window.show()
+        for mode, page in (
+            (WorkMode.BATCH_TRANSLATION, self.window.batch_translation_page),
+            (WorkMode.SYNC_TRANSLATION, self.window.sync_translation_page),
+        ):
+            with self.subTest(mode=mode.value):
+                self.window._set_work_mode(
+                    mode,
+                    refresh_manifest_writeback=False,
+                )
+                page.set_project_ready(True)
+                self.window._workbench_coordinator.resize(
+                    self.window._workbench_nav_item
+                )
+                for _ in range(4):
+                    self._app.processEvents()
+                stack = self.window._workbench_coordinator._stack
+                self.assertGreaterEqual(
+                    stack.maximumHeight(), page.minimumSizeHint().height()
+                )
+
     def test_strategy_selection_switches_execution_page(self) -> None:
         self.window._set_work_mode(
             WorkMode.BATCH_TRANSLATION,

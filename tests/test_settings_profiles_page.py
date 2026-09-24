@@ -12,7 +12,7 @@ from gui_qt.user_copy import MODEL_PROFILES_PAGE_COPY
 from model_routing_migration import preview_migration
 
 try:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QGroupBox
 
     from gui_qt.app import MainWindow
     from gui_qt.settings.page_contract import SettingsPageActions
@@ -57,10 +57,14 @@ class ProfilesPageTests(unittest.TestCase):
 
     def test_page_contract_and_empty_collect(self) -> None:
         self.assertEqual(self.page.page_key, "profiles")
+        self.assertEqual(self.page.nav_label, "模型与供应商")
         self.assertEqual(self.page.config_keys, frozenset({"model_routing"}))
         self.assertEqual(self.page.collect(), {})
         self.assertEqual(self.page.validate(), [])
         self.assertFalse(self.page.profiles_list.isEnabled())
+        self.assertTrue(self.page.profiles_group.isHidden())
+        self.assertIsInstance(self.page.notice_group, QGroupBox)
+        self.assertEqual(self.page.hint_label.objectName(), "config_hint_label")
 
     def test_load_and_collect_round_trip(self) -> None:
         section = migrated_section()
@@ -71,6 +75,12 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertGreater(self.page.profiles_list.count(), 0)
         self.assertGreater(self.page.providers_list.count(), 0)
         self.assertTrue(self.page.profiles_add_btn.isEnabled())
+        self.assertFalse(self.page.profiles_group.isHidden())
+        self.assertEqual(self.page.profiles_group.title(), "模型方案")
+        self.page.widget.resize(1200, 800)
+        self.page.widget.show()
+        self._app.processEvents()
+        self.assertEqual(self.page.notice_group.width(), self.page.profiles_group.width())
 
     def test_create_section_stores_a_valid_gemini_batch_default(self) -> None:
         from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
@@ -105,16 +115,33 @@ class ProfilesPageTests(unittest.TestCase):
         self.page.load({})
 
         self.assertFalse(self.page.create_btn.isEnabled())
-        hint = self.page.hint_label.text()
-        self.assertIn("sync.model", hint)
-        self.assertIn("batch.model", hint)
-        self.assertIn("诊断与运行日志", hint)
-        self.assertIn("model_config_migration.py", hint)
+        self.assertTrue(self.page.remove_btn.isHidden())
+        self.assertTrue(self.page.profiles_group.isHidden())
+        self.assertEqual(self.page.notice_group.title(), "需先迁移旧模型配置")
+        self.assertIn("诊断与运行日志", self.page.hint_label.text())
+        self.assertIn("model_config_migration.py", self.page.hint_label.text())
+        self.assertTrue(self.page.legacy_fields_label.isHidden())
+        self.assertIn("2 项", self.page.legacy_fields_toggle.text())
+        self.page.legacy_fields_toggle.click()
+        self.assertFalse(self.page.legacy_fields_label.isHidden())
+        self.assertIn("sync.model", self.page.legacy_fields_label.text())
+        self.assertIn("batch.model", self.page.legacy_fields_label.text())
+        self.page._refresh_all()
+        self.assertTrue(self.page.legacy_fields_toggle.isChecked())
+        self.assertFalse(self.page.legacy_fields_label.isHidden())
+        self.page.load({})
+        self.assertTrue(self.page.legacy_fields_toggle.isChecked())
+        self.assertFalse(self.page.legacy_fields_label.isHidden())
         self.assertEqual(self.page.collect(), {})
 
         # The read-only detection result is never part of the saved config.
         self.page.load({"model_routing": migrated_section()})
+        self.assertFalse(self.page.legacy_fields_toggle.isChecked())
+        self.assertTrue(self.page.legacy_fields_label.isHidden())
         self.assertEqual(set(self.page.collect()), {"model_routing"})
+        self.page.load({})
+        self.assertFalse(self.page.legacy_fields_toggle.isChecked())
+        self.assertTrue(self.page.legacy_fields_label.isHidden())
 
     def test_invalid_raw_model_routing_is_not_treated_as_empty(self) -> None:
         for raw in ("broken", ["broken"], 7, False):
@@ -123,6 +150,8 @@ class ProfilesPageTests(unittest.TestCase):
 
                 self.assertFalse(self.page.create_btn.isEnabled())
                 self.assertTrue(self.page.remove_btn.isEnabled())
+                self.assertFalse(self.page.remove_btn.isHidden())
+                self.assertTrue(self.page.profiles_group.isHidden())
                 self.assertEqual(self.page.collect(), {"model_routing": raw})
                 issues = self.page.validate()
                 self.assertEqual(len(issues), 1)
@@ -137,6 +166,7 @@ class ProfilesPageTests(unittest.TestCase):
 
         self.assertEqual(self.page.collect(), {"model_routing": None})
         self.assertEqual(self.page.validate(), [])
+        self.assertEqual(self.page.notice_group.title(), "等待保存移除操作")
         self.assertIn("不会修复", self.messages[-1])
 
         self.page.reset()
@@ -686,7 +716,8 @@ class ProfilesAppIntegrationTests(unittest.TestCase):
         )
 
         self.assertFalse(page.create_btn.isEnabled())
-        self.assertIn("sync.model", page.hint_label.text())
+        self.assertIn("sync.model", page.legacy_fields_label.text())
+        self.assertTrue(page.profiles_group.isHidden())
         self.assertEqual(page.collect(), {})
 
     def test_probe_action_runs_cli_and_renders_report(self) -> None:

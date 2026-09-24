@@ -119,7 +119,7 @@ python gemini_translate_batch.py profiles-list-models --profile <PROFILE_ID> --o
 配置不存在时返回 `MODEL_ROUTING_NOT_CONFIGURED`。`profiles-list-models` 只服务
 `adapter=openai_compatible` 的 profile：只读请求 Provider models 端点，目录失败或未收录
 不影响手动模型 ID；错误使用 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 稳定机器码。
-这些命令与 GUI「设置 → 模型与 Provider」共用 `model_profiles_editor` 核心语义。
+这些命令与 GUI「设置 → 模型与供应商」共用 `model_profiles_editor` 核心语义。
 
 注意：
 

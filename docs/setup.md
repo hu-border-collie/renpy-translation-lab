@@ -161,7 +161,7 @@ python gemini_translate_batch.py doctor
 
 ## 运行模式
 
-运行模式：同步执行与 Gemini Batch 都是一等入口，可在「模型与 Provider」或 CLI `--profile` / ExecutionStrategy 中选择；旧配置（无 `model_routing`）保持原有默认行为不变。同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds/context_before/context_after/macro_setting_file` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
+运行模式：同步执行与 Gemini Batch 都是一等入口，可在「模型与供应商」或 CLI `--profile` / ExecutionStrategy 中选择；旧配置（无 `model_routing`）保持原有默认行为不变。同步模式可显式选择 Gemini 原生调用或可选 LiteLLM 后端。同步模式的 `backend/model/chunk_size/max_source_chars/max_output_tokens/timeout_seconds/context_before/context_after/macro_setting_file` 和可选 RAG 滚动记忆都通过 `translator_config.json` 的 `sync` 配置读取。`timeout_seconds` 默认 120，允许 5–600 秒，表示单次模型请求上限而非整次任务总时限，并统一用于同步翻译、项目分析、关键词、订正、修补和 A/B 对比。LiteLLM 未安装或未启用时，不影响 Gemini Batch、doctor 或 GUI 启动。
 
 `context_before`（默认 30）与 `context_after`（默认 10）是同步初译的局部前后文预算，与 Batch 默认对齐；上下文取当前文件的对白顺序，包含已译邻句。逐句独立的 translate 块不会被当成场景边界；多行翻译块或显式路线/场景标记仍会截断。同一请求里夹在待译句中间的已译邻句会进入 `CONTEXT BETWEEN`。`macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时会把项目风格设定注入同步提示词；文件内容变化会反映到 manifest 指纹，旧预览将无法写回。
 
@@ -259,7 +259,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 - Provider 连接字段：`base_url`（必填）、`models_url`（可选）、`credential_ref`（`none` / `env` / `keyring`）与 `extra_headers`（仅非敏感请求头；凭据必须走 `credential_ref`）。
 - ModelProfile `params` 只接受白名单：`temperature`、`max_output_tokens`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed`、`stop`、`timeout`。
 - 结构化输出模式：`strict_json_schema` / `json_object` / `prompt_only_json`；未声明时直连 adapter 保守使用 `prompt_only_json`，Provider 返回“不支持 response_format”时按 `unsupported_capability` 失败，不会静默降级后宣称成功。
-- GUI「设置 → 模型与 Provider」提供内置供应商预设（OpenAI、OpenRouter、DeepSeek、xAI、Ollama、自定义）、额外请求头与结构化输出模式字段；预设只填充连接，不限制手填模型 ID。
+- GUI「设置 → 模型与供应商」提供内置供应商预设（OpenAI、OpenRouter、DeepSeek、xAI、Ollama、自定义）、额外请求头与结构化输出模式字段；预设只填充连接，不限制手填模型 ID。
 - Profile 编辑区提供「拉取模型列表」：只读请求 `models_url`（或 `base_url + /models`），选择后填入模型字段；目录失败、未收录或端点缺失时仍可手动输入模型 ID。CLI 等价命令为 `profiles-list-models --profile <ID> --output json`，失败返回稳定 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 机器码。
 - 连接诊断复用 `profiles-probe` / GUI「测试所选 Profile 能力」：探测请求按 profile 声明的结构化输出模式发送 strict JSON schema 兼容样例，并区分鉴权、基本生成、结构化输出、reasoning 与 usage。
 - 直连 adapter 与 Gemini Sync 都服务同步生成；显式把 `routes.final_review.strategy` 配为 `sync` 后，用 `final-review-run-sync` 逐 unit 审校（report-only，不写 `.rpy`）。未显式配置时不会跟随 `defaults.execution_strategy` 静默切换。Gemini Batch 仍要求 `gemini` adapter；旧配置迁移仍生成 `gemini_batch` 路由。
@@ -284,7 +284,7 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 }
 ```
 
-- 旧配置路径：GUI「设置 → 模型」仅从下拉列表选择，自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。项目写入 `model_routing` 后，模型与 Provider 在「设置 → 模型与 Provider」中统一新增 / 复制 / 编辑，凭据只保存引用；迁移说明见[模型配置迁移](model_config_migration.md)。
+- 旧配置路径：GUI「设置 → 模型」仅从下拉列表选择，自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。项目写入 `model_routing` 后，可在「设置 → 模型与供应商」中统一新增 / 复制 / 编辑模型与供应商，凭据只保存引用；迁移说明见[模型配置迁移](model_config_migration.md)。
 - Google 当前将 `gemini-3.5-flash-lite` 定位为高吞吐、低成本型号，将 `gemini-3.6-flash` / `gemini-3.5-flash` 定位为更强的 Flash 型号；具体选择仍须用 `probe` 或小 package 验证本项目的结构化翻译质量。
 - **采样参数兼容性：** Google 自 2026-07-21 起说明，新 Gemini 型号不再推荐或支持显式 `temperature` / `top_p` / `top_k`，未来型号可能因这些参数返回 400。Lab 会为 `gemini-3.6-flash`、`gemini-3.5-flash` 和 `gemini-3.5-flash-lite` 自动移除这些参数，同时保留旧型号与非 Gemini 模型的既有配置；切换型号后仍应先用小 package 验证结构化翻译质量。见 [Latest model guide](https://ai.google.dev/gemini-api/docs/latest-model) 与 [模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。

@@ -76,6 +76,10 @@ class WorkbenchPageCoordinator:
             height = preferred_height(self._stack.width())
         else:
             height = page.sizeHint().height()
+        # A page may have chrome outside its task-content height estimate
+        # (for example the translation target selector). Never cap the stack
+        # below the complete page's minimum layout height.
+        height = max(int(height), page.minimumSizeHint().height())
         self._stack.setMinimumHeight(0)
         self._stack.setMaximumHeight(max(int(height), 48))
         self._stack.setSizePolicy(

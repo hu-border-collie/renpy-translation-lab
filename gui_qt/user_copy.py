@@ -1480,23 +1480,30 @@ MODEL_CATALOG_SOURCE_LABELS = {
 
 MODEL_PROFILES_PAGE_COPY = {
     "hint": (
-        "统一的模型与 Provider 配置：一个 Provider 可被多个 ModelProfile 复用，"
-        "凭据只保存引用，不写入配置文件。保存前会用 schema-v1 合同校验。"
+        "在这里统一管理供应商连接、模型方案和任务阶段路由。"
+        "凭据只保存引用；保存前会校验配置。"
     ),
     "legacy_hint": (
-        "检测到旧模型配置（{fields}）：当前不能从空白创建 Model Routing，"
-        "否则会丢失旧 Sync / Batch 模型、Provider 与阶段路由。"
-        "请先在「诊断与运行日志」的任务命令参考运行 "
-        "model_config_migration.py preview / migrate / rollback；"
-        "迁移前运行行为不会改变，迁移会保留原有模型与执行策略。"
+        "这个项目仍使用旧模型配置。请先在「诊断与运行日志」的任务命令参考中，"
+        "按 model_config_migration.py 的 preview / migrate 步骤预览并迁移；"
+        "需要撤销时可使用 rollback。迁移前运行行为不变，已有模型与执行策略会保留。"
     ),
+    "legacy_title": "需先迁移旧模型配置",
+    "legacy_fields_show": "查看检测到的旧字段（{count} 项）",
+    "legacy_fields_hide": "收起旧字段",
+    "invalid_title": "模型路由配置无效",
+    "empty_title": "尚未创建模型路由配置",
+    "ready_title": "模型路由配置",
+    "remove_pending_title": "等待保存移除操作",
     "invalid_hint": (
         "model_routing 配置无效（{reason}），已禁用编辑与创建。"
-        "请修正配置文件，或点击「移除 Model Routing 配置」并在保存后回退旧配置；"
+        "请修正配置文件，或点击「移除模型路由配置」并在保存后回退旧配置；"
         "移除不会修复或迁移旧配置本身。"
     ),
-    "profiles_group": "Model Profiles",
-    "providers_group": "Provider 连接",
+    "profiles_group": "模型方案",
+    "profile_editor_group": "模型方案详情",
+    "providers_group": "供应商连接",
+    "provider_editor_group": "供应商连接详情",
     "defaults_group": "默认主模型与执行方式",
     "routes_group": "任务阶段路由",
     "capabilities_group": "能力覆盖（高级）",
@@ -1505,19 +1512,19 @@ MODEL_PROFILES_PAGE_COPY = {
         "仅在确认 Provider 实际能力后使用。"
     ),
     "diagnostics_group": "诊断",
-    "create_button": "创建 Model Routing 配置",
+    "create_button": "创建模型路由配置",
     "create_tooltip": (
-        "创建一个最小的 Model Routing 配置"
-        "（Gemini Provider + Gemini Main，暂定执行方式为 Gemini Batch）。"
+        "创建一个最小的模型路由配置"
+        "（Google Gemini 供应商连接 + Gemini Main 模型方案，暂定执行方式为 Gemini Batch）。"
     ),
     "create_blocked_tooltip": (
         "检测到旧模型配置：请先按页面说明完成迁移；"
-        "空白创建会丢失旧模型、Provider 与阶段路由。"
+        "空白创建会丢失旧模型、供应商连接与阶段路由。"
     ),
     "create_invalid_tooltip": (
         "model_routing 当前无效：请先修正或移除，不能从空白创建覆盖。"
     ),
-    "remove_button": "移除 Model Routing 配置",
+    "remove_button": "移除模型路由配置",
     "remove_tooltip": (
         "保存后删除 model_routing，运行时回退到旧配置；可用「重新加载」撤销；"
         "不会修复或迁移旧配置本身。"
@@ -1530,8 +1537,8 @@ MODEL_PROFILES_PAGE_COPY = {
     "copy_profile": "复制",
     "delete_profile": "删除",
     "diagnose": "诊断",
-    "add_provider": "新增 Provider",
-    "delete_provider": "删除 Provider",
+    "add_provider": "新增供应商",
+    "delete_provider": "删除供应商",
     "strategy_labels": {
         "sync": "同步",
         "gemini_batch": "Gemini Batch",
@@ -1540,8 +1547,8 @@ MODEL_PROFILES_PAGE_COPY = {
     "strategy_placeholder": "请选择执行方式",
     "profile_placeholder": "请选择主模型",
     "embedding_none_option": "（不绑定）",
-    "new_provider_label": "新 Provider",
-    "new_profile_label": "新 ModelProfile",
+    "new_provider_label": "新供应商",
+    "new_profile_label": "新模型方案",
     "create_provider_label": "Google Gemini",
     "create_profile_label": "Gemini Main",
     "models_placeholder": "逗号分隔；留空只使用主模型",
@@ -1555,11 +1562,11 @@ MODEL_PROFILES_PAGE_COPY = {
         "能力探测：{profile}（{adapter}）状态 {status}，请求数 {requests}"
     ),
     "probe_capability_line": "- {name}：{status}{detail}",
-    "profile_label": "标签 / profile id",
-    "provider_label": "Provider",
+    "profile_label": "方案名称 / ID",
+    "provider_label": "供应商连接",
     "model_label": "模型",
     "models_label": "轮换模型",
-    "embedding_label": "Embedding Profile",
+    "embedding_label": "嵌入模型方案",
     "override_label": "覆盖",
     "inherit_value": "跟随适配器",
     "force_on": "强制支持",
@@ -1587,14 +1594,14 @@ MODEL_PROFILES_PAGE_COPY = {
         "project_analysis": "项目分析",
         "final_review": "最终审校",
     },
-    "route_profile": "Profile",
+    "route_profile": "模型方案",
     "route_strategy": "执行方式",
     "route_inherited": "跟随默认",
     "provider_fields": {
         "label": "标签",
         "adapter": "适配器",
         "preset": "供应商预设",
-        "upstream": "上游 Provider",
+        "upstream": "上游供应商",
         "base_url": "API Base",
         "models_url": "模型目录 URL",
         "credential_kind": "凭据引用",
