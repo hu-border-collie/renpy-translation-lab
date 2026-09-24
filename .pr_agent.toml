@@ -19,6 +19,9 @@ api_base = "https://opencode.ai/zen/go/v1"
 # OpenCode Go model ID via PR-Agent's OpenAI-compatible LiteLLM route.
 model = "openai/deepseek-v4.1-flash"
 fallback_models = ["openai/deepseek-v4.1-flash"]
+# DeepSeek V4.1 Flash has a 1M-token context window; PR-Agent does not have this
+# OpenCode model ID in its bundled token-limit registry.
+custom_model_max_tokens = 1000000
 
 # Keep review-only mode least-privileged: no contents:write needed.
 restricted_mode = true

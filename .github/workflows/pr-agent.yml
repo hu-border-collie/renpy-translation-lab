@@ -54,6 +54,8 @@ jobs:
           # still route DeepSeek V4.1 Flash through OpenCode Go before merge.
           config.model: "openai/deepseek-v4.1-flash"
           config.fallback_models: '["openai/deepseek-v4.1-flash"]'
+          # PR-Agent's bundled model registry does not know this OpenCode model ID.
+          config.custom_model_max_tokens: "1000000"
           config.response_language: "zh-CN"
           config.restricted_mode: "true"
           config.repo_context_files: '["AGENTS.md"]'

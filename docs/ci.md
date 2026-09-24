@@ -21,6 +21,7 @@
 `.github/workflows/pr-agent.yml` 在 pull request 的 opened / reopened / ready_for_review / synchronize 事件上运行 PR-Agent，并允许仓库 OWNER / MEMBER / COLLABORATOR 在开放 PR 评论区用 `/review` 手动触发。外部用户评论、Bot 评论、普通 issue 评论和已关闭 PR 不会触发，以免评论注入或消耗供应商额度。
 
 - 使用 OpenCode Go 作为 API 供应商，并运行 DeepSeek V4.1 Flash；LiteLLM 通过 OpenAI-compatible Chat Completions endpoint `https://opencode.ai/zen/go/v1` 调用。需要仓库 Actions secret `OPENCODE_GO_API_KEY`。
+- PR-Agent 当前内置 token 表不识别该 OpenCode 模型 ID，因此显式设置 `config.custom_model_max_tokens=1000000`，对应 DeepSeek V4.1 Flash 的 1M context window。
 - 请求带有专用 `User-Agent` 和按 workflow run 稳定的 `x-opencode-session`，符合 [OpenCode Go 的客户端要求](https://opencode.ai/v2/docs/console/go)。模型列表、端点和数据保留说明可能变化，维护者应以该文档当前内容为准。
 - action 固定到不可变 commit，启用 restricted mode，并从默认分支读取 `AGENTS.md` 作为仓库上下文。
 - `GITHUB_TOKEN` 权限为 `contents: read`、`issues: write`、`pull-requests: write`，用于读取变更并写入持久化审查评论；不授予 contents write。
