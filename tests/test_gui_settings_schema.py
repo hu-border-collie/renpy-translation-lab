@@ -12,6 +12,46 @@ from gui_qt.settings_schema import (
 
 
 class GuiSettingsSchemaTests(unittest.TestCase):
+    def test_quality_policy_json_round_trip_uses_runtime_reader(self):
+        import json
+        import translation_quality as quality
+
+        config = {
+            'game_root': 'C:/Game/work',
+            'batch': {
+                'quality_gate': {
+                    'rules': {'suspicious_english_residue': 'warning'},
+                    'allowed_latin_tokens': ['RenPy'],
+                    'language_allowed_latin_tokens': ['Alice'],
+                    'typography_exempt_latin_tokens': ['HP'],
+                    'unrelated_key': {'keep': True},
+                },
+                'unrelated_batch': {'keep': True},
+            },
+        }
+        values = read_advanced_settings(config)
+        self.assertEqual(values['batch_quality_gate'], config['batch']['quality_gate'])
+        edited = dict(values['batch_quality_gate'])
+        edited['typography_exempt_latin_tokens'] = ['Alice']
+        values['batch_quality_gate'] = json.dumps(edited, ensure_ascii=False)
+        saved = apply_advanced_settings(config, values)
+        reloaded = read_advanced_settings(saved)['batch_quality_gate']
+        self.assertEqual(reloaded, edited)
+        self.assertEqual(saved['batch']['unrelated_batch'], {'keep': True})
+        policy = quality.load_policy_from_config(saved)
+        self.assertEqual(policy['language_allowed_latin_tokens'], ['Alice'])
+        self.assertEqual(policy['typography_exempt_latin_tokens'], ['Alice'])
+
+    def test_missing_quality_policy_gui_default_does_not_materialize_new_fields(self):
+        config = {'game_root': 'C:/Game/work'}
+        values = read_advanced_settings(config)
+        default = values['batch_quality_gate']
+        self.assertNotIn('language_allowed_latin_tokens', default)
+        self.assertNotIn('typography_exempt_latin_tokens', default)
+        saved = apply_advanced_settings(config, values)
+        self.assertNotIn('language_allowed_latin_tokens', saved['batch']['quality_gate'])
+        self.assertNotIn('typography_exempt_latin_tokens', saved['batch']['quality_gate'])
+
     def test_user_visible_setting_titles_use_chinese_copy(self):
         expected_labels = {
             "sync_chunk_size": "同步分块条数",

@@ -503,6 +503,8 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 
 `writeback_gate=allow` 只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。界面明确区分「可写回」与「可交付」：`quality_gate` 会输出机械质量报警；写回后仍须按报警处理，并对错译、术语、语气与上下文进行人工/LLM 通读。
 
+高级设置的「质量检查策略（JSON）」编辑 `batch.quality_gate`。`language_allowed_latin_tokens` 只豁免英文残留、英文后缀和说话人标签；`typography_exempt_latin_tokens` 只豁免中英文间距。旧 `allowed_latin_tokens` 继续覆盖这两种作用域。保存后重新 `check`；规则映射、合并语义及 Alice 配置例见 [Batch 工作流与安全检查](batch_workflows.md)。
+
 - **可写回（无质量报警）**：允许进入写回确认，并调用 `apply`。
 - **可写回，有质量报警**：仍允许写回；结果区显示报警数量，用户可按规则、文件和严重程度筛选，并在报警对话框中选择「确认所选 / 确认全部」把已复核的 warning 标记为已确认；「导出 HTML 报告」会生成可离线搜索、筛选和打印的单文件质量体检快照。已确认状态写入 manifest，不在 `quality_findings.jsonl` 中修改；HTML 导出也不会修改 manifest 或译文。blocker 不能被确认绕过；译文变化或重新 check 后，旧确认自动失效。
 - **需处理**：禁用写回。展开 **问题处理**（默认折叠；需处理时自动展开或角标）。其中可：查看问题清单、生成/查看补译包、**继续补译**、**同步修补**、**重新检查**、查看写回失败报告、补救命令（高级回退）。

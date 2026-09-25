@@ -63,6 +63,24 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         )
         self.assertEqual(set(collected), set(self.page.config_keys))
 
+    def test_quality_policy_json_can_be_edited_and_collected(self) -> None:
+        import json
+
+        self.page.load({'batch_quality_gate': {
+            'allowed_latin_tokens': ['Legacy'],
+            'language_allowed_latin_tokens': ['Alice'],
+            'typography_exempt_latin_tokens': [],
+        }})
+        widget = self.page.field_widgets['batch_quality_gate']
+        value = json.loads(self.page.collect()['batch_quality_gate'])
+        self.assertEqual(value['language_allowed_latin_tokens'], ['Alice'])
+        value['typography_exempt_latin_tokens'] = ['Alice']
+        widget.setPlainText(json.dumps(value, ensure_ascii=False))
+        self.assertEqual(
+            json.loads(self.page.collect()['batch_quality_gate']),
+            value,
+        )
+
     def test_reset_restores_last_loaded_baseline(self) -> None:
         self.page.load({"sync_chunk_size": 42})
         self.page.field_widgets["sync_chunk_size"].setValue(7)

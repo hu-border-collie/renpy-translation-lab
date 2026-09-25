@@ -216,6 +216,8 @@
         "known_garbled_phrase": "warning"
       },
       "allowed_latin_tokens": [],
+      "language_allowed_latin_tokens": [],
+      "typography_exempt_latin_tokens": [],
       "garbled_phrases": []
     },
     "pricing": {

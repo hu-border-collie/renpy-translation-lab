@@ -128,13 +128,23 @@ Discovery schema 与核心结果 envelope 当前都使用 `schema_version=1`，�
 - 机器 envelope 会在 `result.apply` 中区分 `mode=export-only` 的 `status=exported / no-op`，以及 `mode=apply-export` 的 `status=applied_and_exported / no-op`；并给出 `export_root`、`record_path`、`exported_files`、`applied_files`、`actual_applied_files`、`applied_lines`、`recovery_state`、`pending_steps`、`latest_cursor` 与 `state_advancement_status`。失败或待恢复使用稳定的 `EXPORT_ONLY_*` / `APPLY_EXPORT_*` 错误码（含 `APPLY_EXPORT_OUTPUT_CHANGED`、`APPLY_EXPORT_STATE_PENDING`、`APPLY_EXPORT_RECOVERY_REQUIRED`），错误详情包含 `journal_path`、`record_path`、`export_root`、`pending_steps` 与 `recovery_state`。
 - 当 `rag.enabled=true` 时，`split` 更接近“静态快照拆包”，不是动态波次式 RAG 工作流；后续包的回灌结果不会自动回流到已经 split 完的旧包。
 
-`translator_config.example.json` 的 `batch.quality_gate` 控制机械质量检查：`rules` 可把每条规则设为 `warning` / `blocker` / `off`，`allowed_latin_tokens` 是拉丁词白名单，`garbled_phrases` 是已知错乱词黑名单。质量规则配置进入 `check_fingerprint`；修改配置后必须重新 `check`，旧检查会变 stale。每条 finding 记录稳定 `reason_code`、severity / disposition、item ID、文件与行号、原文/译文和证据，GUI 与 CLI 都只把 `disposition=blocker` 计入写回阻断。
+`translator_config.example.json` 的 `batch.quality_gate` 控制机械质量检查：`rules` 可把每条规则设为 `warning` / `blocker` / `off`，`garbled_phrases` 是已知错乱词黑名单。拉丁词有三个可选列表，作用如下：
+
+| 配置字段 | 豁免的规则 |
+| --- | --- |
+| `language_allowed_latin_tokens` | 英文残留 `suspicious_english_residue`、英文后缀 `english_suffix_adjacent`、说话人标签 `speaker_label_untranslated` |
+| `typography_exempt_latin_tokens` | 中英文间距 `cjk_latin_spacing` |
+| 旧 `allowed_latin_tokens` | 上述全部四条规则，保留内建默认词表与旧项目的全局语义 |
+
+每条规则取旧列表与本作用域列表的并集，没有覆盖优先级。匹配不区分大小写；新列表去首尾空白并按大小写无关去重，只接受字符串元素。新字段缺失时保留缺失，显式空列表或非法类型视为空增量；旧字段仍按既有规则处理：非列表视为空增量，列表元素转为非空文本、按原样精确去重，再与内建默认词合并，空列表不移除默认词。旧 manifest 的冻结策略不会因缺少新字段而补空列表，旧摘要保持一致；GUI 读取缺失策略时也不会自动保存空新字段。新任务显式配置的新字段会进入 manifest 冻结策略、策略摘要和 `check_fingerprint`；修改后必须重新 `check`，旧检查会变 stale。每条 finding 记录稳定 `reason_code`、severity / disposition、item ID、文件与行号、原文/译文和证据，GUI 与 CLI 都只把 `disposition=blocker` 计入写回阻断。
+
+例如原文 `My name is Alice.`、译文 `我叫Alice。`，显式将 `suspicious_english_residue` 设为 `warning`：只在 `language_allowed_latin_tokens` 加 `Alice`，仍报告中英文间距；只在 `typography_exempt_latin_tokens` 加 `Alice`，仍报告英文残留。GUI 高级设置的「质量检查策略（JSON）」编辑同一 `batch.quality_gate` 对象。
 
 真实项目校准后，`suspicious_english_residue` 与 `english_suffix_adjacent` 因专名误报
 较高而默认 `off`，需要时可按项目显式设为 `warning` / `blocker`；
 `cjk_latin_spacing` 等其余首版规则继续默认 `warning`。不要仅为压低英文专名噪声
 就把称谓或专名加入全局 `allowed_latin_tokens`，因为该白名单也会屏蔽相同 token 的
-间距与词缀检查。聚合证据见
+间距与词缀检查；按需求选用上述独立作用域。聚合证据见
 [真实项目机械质量校准基线](plans/quality_calibration_baseline.md)。
 
 ### 提交前估算与异常恢复

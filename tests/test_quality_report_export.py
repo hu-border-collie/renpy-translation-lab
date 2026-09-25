@@ -3,6 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import translation_quality as quality
+
 from quality_report_export import (
     DEFAULT_REPORT_FILENAME,
     QualityReportExportError,
@@ -49,6 +51,21 @@ FINDINGS = [
 
 
 class QualityReportExportTests(unittest.TestCase):
+    def test_report_shows_frozen_scoped_policy_without_rewriting_legacy(self):
+        scoped = quality.normalize_policy({
+            'language_allowed_latin_tokens': ['Alice<script>'],
+            'typography_exempt_latin_tokens': ['Bob'],
+        })
+        document = render_quality_report_html([], quality_policy=scoped)
+        self.assertIn('检查时冻结的质量策略', document)
+        self.assertIn('language_allowed_latin_tokens', document)
+        self.assertIn('typography_exempt_latin_tokens', document)
+        self.assertIn(quality.policy_digest(scoped), document)
+        self.assertIn('Alice&lt;script&gt;', document)
+        self.assertNotIn('Alice<script>', document)
+        legacy = render_quality_report_html([], quality_policy=quality.normalize_policy(None))
+        self.assertNotIn('language_allowed_latin_tokens', legacy)
+
     def test_render_is_self_contained_filterable_and_escapes_finding_content(self):
         document = render_quality_report_html(
             FINDINGS,
@@ -82,6 +99,9 @@ class QualityReportExportTests(unittest.TestCase):
                 "_package_dir": str(package),
                 "last_quality_findings_path": "quality_findings.jsonl",
                 "quality_acknowledged_finding_ids": ["f-warning"],
+                "quality_policy": quality.normalize_policy({
+                    "language_allowed_latin_tokens": ["Alice"],
+                }),
             }
 
             result = export_quality_report(
@@ -96,6 +116,10 @@ class QualityReportExportTests(unittest.TestCase):
             self.assertEqual(result["warning_count"], 1)
             self.assertEqual(result["blocker_count"], 1)
             self.assertEqual(result["acknowledged_count"], 1)
+            self.assertIn(
+                'language_allowed_latin_tokens',
+                output_path.read_text(encoding='utf-8'),
+            )
 
     def test_invalid_jsonl_reports_the_source_line(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

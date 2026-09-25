@@ -265,6 +265,11 @@ DEFAULT_POLICY: dict[str, Any] = {
     'garbled_phrases': [],
 }
 
+# Optional keys stay absent when normalizing a legacy policy. Their absence is
+# part of the persisted policy/digest contract for existing manifests.
+LANGUAGE_ALLOWED_TOKENS = 'language_allowed_latin_tokens'
+TYPOGRAPHY_EXEMPT_TOKENS = 'typography_exempt_latin_tokens'
+
 
 def _as_bool(value: Any, default: bool) -> bool:
     if value is None:
@@ -288,6 +293,24 @@ def _as_text_list(values: Any) -> list[str]:
         text = _as_text(value)
         if text and text not in result:
             result.append(text)
+    return result
+
+
+def _as_scoped_token_list(values: Any) -> list[str]:
+    """Normalize new scoped token lists without changing legacy list coercion."""
+
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        token = value.strip()
+        folded = token.casefold()
+        if token and folded not in seen:
+            result.append(token)
+            seen.add(folded)
     return result
 
 
@@ -334,6 +357,9 @@ def normalize_policy(configured: Any) -> dict[str, Any]:
     # built-in conservative allowlist so obvious acronyms do not become noise.
 
     policy['garbled_phrases'] = _as_text_list(configured.get('garbled_phrases'))
+    for key in (LANGUAGE_ALLOWED_TOKENS, TYPOGRAPHY_EXEMPT_TOKENS):
+        if key in configured:
+            policy[key] = _as_scoped_token_list(configured[key])
     return policy
 
 
@@ -348,6 +374,9 @@ def policy_digest(policy: Mapping[str, Any] | None) -> str:
         'allowed_latin_tokens': payload.get('allowed_latin_tokens'),
         'garbled_phrases': payload.get('garbled_phrases'),
     }
+    for key in (LANGUAGE_ALLOWED_TOKENS, TYPOGRAPHY_EXEMPT_TOKENS):
+        if policy is not None and key in policy:
+            payload[key] = policy[key]
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 
@@ -416,6 +445,8 @@ def disposition_for(policy: Mapping[str, Any], reason_code: str) -> str:
 
 
 def allowed_latin_tokens(policy: Mapping[str, Any]) -> set[str]:
+    """Return legacy tokens, which retain their original global scope."""
+
     tokens = policy.get('allowed_latin_tokens')
     if not isinstance(tokens, list):
         return set()
@@ -423,6 +454,19 @@ def allowed_latin_tokens(policy: Mapping[str, Any]) -> set[str]:
         text.casefold()
         for raw in tokens
         if (text := _as_text(raw))
+    }
+
+
+def scoped_latin_tokens(policy: Mapping[str, Any], scope: str) -> set[str]:
+    """Union legacy tokens with one scope's additions for rule evaluation."""
+
+    key = {
+        'language': LANGUAGE_ALLOWED_TOKENS,
+        'typography': TYPOGRAPHY_EXEMPT_TOKENS,
+    }[scope]
+    tokens = policy.get(key)
+    return allowed_latin_tokens(policy) | {
+        token.casefold() for token in _as_scoped_token_list(tokens)
     }
 
 
@@ -554,7 +598,7 @@ def check_english_suffix_adjacent(
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     translation = _mask_markup(str(subject.get('translation') or ''))
-    allowed = allowed_latin_tokens(policy)
+    allowed = scoped_latin_tokens(policy, 'language')
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
         token = match.group(0)
@@ -576,7 +620,7 @@ def check_cjk_latin_spacing(
     policy: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     translation = _mask_markup(str(subject.get('translation') or ''))
-    allowed = allowed_latin_tokens(policy)
+    allowed = scoped_latin_tokens(policy, 'typography')
     evidence: list[dict[str, Any]] = []
     for match in _LATIN_TOKEN_RE.finditer(translation):
         token = match.group(0)
@@ -634,7 +678,7 @@ def check_suspicious_english_residue(
     translation = str(subject.get('translation') or '')
     if not re.search(_CJK_CLASS, translation):
         return []
-    allowed = allowed_latin_tokens(policy)
+    allowed = scoped_latin_tokens(policy, 'language')
     cleaned = _mask_markup(translation)
     evidence: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
@@ -769,7 +813,7 @@ def check_speaker_label_untranslated(
         # Whole translation is already covered by other quality/structural
         # rules; avoid duplicate speaker-specific noise.
         return []
-    allowed = allowed_latin_tokens(policy)
+    allowed = scoped_latin_tokens(policy, 'language')
     normalized_speaker = ' '.join(speaker_name.split())
     for hint in SPEAKER_HINT_SUFFIXES:
         if not normalized_speaker.endswith(hint):
