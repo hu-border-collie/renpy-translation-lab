@@ -364,19 +364,27 @@ def normalize_policy(configured: Any) -> dict[str, Any]:
 
 
 def policy_digest(policy: Mapping[str, Any] | None) -> str:
-    """Return a stable digest for the effective quality policy."""
+    """Digest scoped policies canonically while preserving legacy digests."""
 
-    payload = dict(policy or normalize_policy(None))
+    scoped_keys = (LANGUAGE_ALLOWED_TOKENS, TYPOGRAPHY_EXEMPT_TOKENS)
+    # Historical policies were hashed as supplied. Keep their stored digests
+    # intact; a policy using either new key is normalized before hashing so
+    # equivalent spellings and duplicate scoped tokens share one digest.
+    source = (
+        normalize_policy(policy)
+        if policy is not None and any(key in policy for key in scoped_keys)
+        else dict(policy or normalize_policy(None))
+    )
     payload = {
-        'schema_version': payload.get('schema_version'),
-        'enabled': payload.get('enabled'),
-        'rules': payload.get('rules'),
-        'allowed_latin_tokens': payload.get('allowed_latin_tokens'),
-        'garbled_phrases': payload.get('garbled_phrases'),
+        'schema_version': source.get('schema_version'),
+        'enabled': source.get('enabled'),
+        'rules': source.get('rules'),
+        'allowed_latin_tokens': source.get('allowed_latin_tokens'),
+        'garbled_phrases': source.get('garbled_phrases'),
     }
-    for key in (LANGUAGE_ALLOWED_TOKENS, TYPOGRAPHY_EXEMPT_TOKENS):
-        if policy is not None and key in policy:
-            payload[key] = policy[key]
+    for key in scoped_keys:
+        if key in source:
+            payload[key] = source[key]
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     return hashlib.sha256(serialized.encode('utf-8')).hexdigest()
 

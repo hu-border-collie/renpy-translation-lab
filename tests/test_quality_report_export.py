@@ -1,3 +1,4 @@
+import html
 import json
 import tempfile
 import unittest
@@ -65,6 +66,12 @@ class QualityReportExportTests(unittest.TestCase):
         self.assertNotIn('Alice<script>', document)
         legacy = render_quality_report_html([], quality_policy=quality.normalize_policy(None))
         self.assertNotIn('language_allowed_latin_tokens', legacy)
+        partial_legacy = {'allowed_latin_tokens': ['Alice']}
+        partial_document = render_quality_report_html([], quality_policy=partial_legacy)
+        raw_json = html.escape(json.dumps(partial_legacy, ensure_ascii=False, indent=2))
+        self.assertIn(f'<pre>{raw_json}</pre>', partial_document)
+        effective = quality.effective_policy({'quality_policy': partial_legacy})
+        self.assertIn(f'生效策略摘要：<code>{quality.policy_digest(effective)}</code>', partial_document)
 
     def test_render_is_self_contained_filterable_and_escapes_finding_content(self):
         document = render_quality_report_html(

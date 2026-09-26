@@ -264,11 +264,12 @@ def render_quality_report_html(
         cards = '<p class="empty result-empty">报告中没有质量报警。</p>'
     policy_section = ''
     if isinstance(quality_policy, Mapping):
-        frozen = translation_quality.normalize_policy(quality_policy)
+        frozen = dict(quality_policy)
+        effective = translation_quality.effective_policy({'quality_policy': frozen})
         policy_json = json.dumps(frozen, ensure_ascii=False, indent=2)
         policy_section = (
             '<details class="panel policy"><summary>检查时冻结的质量策略</summary>'
-            f'<p>策略摘要：<code>{_escape(translation_quality.policy_digest(frozen))}</code></p>'
+            f'<p>生效策略摘要：<code>{_escape(translation_quality.policy_digest(effective))}</code></p>'
             f'<pre>{_escape(policy_json)}</pre></details>'
         )
 

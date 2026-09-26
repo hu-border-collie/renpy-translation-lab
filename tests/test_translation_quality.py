@@ -80,6 +80,24 @@ class QualityPolicyTests(unittest.TestCase):
         legacy_values = quality.normalize_policy({'allowed_latin_tokens': [7, 'Alice', 'Alice', 'alice']})
         self.assertEqual(legacy_values['allowed_latin_tokens'][-3:], ['7', 'Alice', 'alice'])
 
+    def test_scoped_policy_digest_uses_effective_values_without_changing_legacy_hashes(self):
+        raw = {
+            quality.LANGUAGE_ALLOWED_TOKENS: [' Alice ', 'alice'],
+            quality.TYPOGRAPHY_EXEMPT_TOKENS: None,
+        }
+        canonical = quality.normalize_policy(raw)
+        self.assertEqual(quality.policy_digest(raw), quality.policy_digest(canonical))
+        self.assertEqual(
+            quality.policy_digest(quality.normalize_policy({
+                quality.LANGUAGE_ALLOWED_TOKENS: ['Alice'],
+            })),
+            '082e3ed2fdc8c105b64cb8346fd387d40973d08fa8cf0919ae73bbbd07373f87',
+        )
+        self.assertEqual(
+            quality.policy_digest({'allowed_latin_tokens': ['Alice']}),
+            '14e14e1bad7c41e32ee356f83d3c09b7a1671b3fddeea585a7821c154ad605c2',
+        )
+
     def test_normalize_policy_defaults_high_noise_language_rules_to_off(self):
         policy = quality.normalize_policy(None)
 
