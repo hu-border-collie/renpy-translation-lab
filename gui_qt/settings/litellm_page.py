@@ -123,26 +123,6 @@ LITELLM_WIDGET_ATTRS: tuple[str, ...] = (
     "litellm_connection_status_label",
 )
 
-LITELLM_FORWARDED_ATTRS: frozenset[str] = frozenset(
-    {
-        "_litellm_provider_catalog_worker",
-        "_litellm_catalog_worker",
-        "_litellm_version_worker",
-        "_litellm_module_warmup_worker",
-        "_litellm_connection_worker",
-        "_litellm_latest_version",
-        "_litellm_latest_compatible_version",
-        "_litellm_latest_requires_python",
-        "_updating_litellm_provider",
-        "_applied_litellm_provider",
-        "_pending_litellm_model_selection",
-        "_litellm_saved_key_status",
-        "_custom_litellm_providers",
-        "_custom_litellm_providers_load_error",
-        "_custom_litellm_providers_modified",
-        "_litellm_cache",
-    }
-)
 
 _FIELD_WIDGETS = {
     "sync_backend": "sync_backend_combo",
