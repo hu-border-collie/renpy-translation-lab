@@ -37,6 +37,12 @@
      `sync-start` / `sync-resume` / `sync-status` / `sync-cancel` / `sync-derive`，
      写回经 `check <RUN>` → `apply <RUN>`；GUI 不读取运行数据库，也不复制任务状态机。
      统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。
+   - `sync_request.py` 持有共享请求执行、响应提取与重试。`SyncRunService` 直接调用它，
+     不再为执行请求导入 CLI；`gemini_translate_batch.run_sync_request` 只装配依赖并单向转发。
+     `SyncRequestRuntime` 是短期依赖快照：timeout/custom providers 来自已应用的
+     `translator_runtime`，凭据访问/轮换复用同一 runtime；CLI 可显式注入 SDK client factory。
+     模型仍只取 frozen ModelRoutingPlan。durable 固定 `retry_attempts=1`、
+     `allow_credential_rotation=False`，重试由外层执行器记录为新的 attempt。
    - Gemini Batch 继续使用 Batch 生命周期，但与 Sync 消费相同 TranslationPlan 合同。
 5. **检查与写回**
    - 模型结果先规范化并检查，再生成绑定 preview，最后由公共 apply 安全层写回。

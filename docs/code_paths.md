@@ -208,6 +208,15 @@
   `CliRunner` → `gemini_translate_batch.py --output json --non-interactive` →
   `run_durable_sync_command()` → `sync_run_service.SyncRunService` →
   `durable_sync_executor.DurableSyncExecutor` → `sync_run_store.SyncRunStore`（SQLite/WAL）。
+- Provider 请求链（#528）：`build_production_backend_adapter()` →
+  `sync_request.run_sync_request()` → `model_profile.build_sync_backend()` → 现有 Gemini / LiteLLM /
+  OpenAI-compatible adapter。入口通过 `SyncRequestRuntime` 传入 timeout、custom providers、
+  SDK client factory 与凭据轮换回调；未显式传入时由 `runtime_dependencies()` 读取现有 runtime。
+  `gemini_translate_batch.run_sync_request()` 仍供非 durable CLI 调用者使用，但只作装配/薄转发。
+  响应/usage helper 同样从共享模块导入，不再由共享层回读 CLI。
+- 依赖边界回归：`tests.test_sync_request` 在新解释器中禁止导入两个 CLI 入口，执行共享请求与
+  durable adapter；并验证 Provider/model/usage、超时、重试预算、固定 key 与单次调用语义。
+  这些离线检查不替代 #344 / #431 的真实 Provider 验收。
 - GUI 只渲染公开 snapshot（进度、`next_action`、usage、制品路径）；不读数据库、不自行重试，
   也不改写 freshness / 写回判定。停止本机 worker 不会取消 run；取消是单独的 `sync-cancel`。
 - GUI 写回：`check <RUN>` 在 `writeback_gate=allow` 时生成绑定预览，用户确认后

@@ -519,7 +519,7 @@ class ProductionBackendAdapterTests(unittest.TestCase):
                 'usage_metadata': {'total_tokens': 1},
             }
             with mock.patch(
-                'gemini_translate_batch.run_sync_request',
+                'sync_request.run_sync_request',
                 return_value=response,
             ) as generate:
                 snapshot = service.start(Context.plan_build)
