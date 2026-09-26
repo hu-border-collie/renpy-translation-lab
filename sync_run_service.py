@@ -777,13 +777,21 @@ def build_production_backend_adapter(
     route,
     item_resolver: Callable[[Mapping[str, Any], Sequence[str]], Sequence[Mapping]],
     *,
+    request_runtime=None,
     translation_validator: Callable[[Mapping, str], tuple[bool, str]] | None = None,
 ) -> ProductionSyncBackendAdapter:
-    """Bind the current shipped routing/backend stack to one-call attempts."""
-    import gemini_translate_batch
+    """Bind shared request execution to one-call durable attempts.
+
+    ``request_runtime`` optionally supplies already-assembled runtime settings
+    and credential callbacks. The default reads the existing runtime service,
+    never the CLI entry module.
+    """
+    import sync_request
+
+    request_runtime = request_runtime or sync_request.runtime_dependencies()
 
     def generate_once(request: Mapping[str, Any], timeout_seconds: float):
-        return gemini_translate_batch.run_sync_request(
+        return sync_request.run_sync_request(
             {
                 'contents': request.get('user_prompt') or '',
                 'system_instruction': request.get('system_instruction') or '',
@@ -795,6 +803,7 @@ def build_production_backend_adapter(
             },
             route,
             plan=routing_plan,
+            runtime=request_runtime,
             # A durable attempt must correspond to exactly one Provider
             # invocation. Hidden same-attempt key rotation would make crash
             # recovery and outcome_unknown billing semantics unauditable.
@@ -814,6 +823,7 @@ def build_production_sync_run_service(
     root_dir: str | Path,
     execution_context,
     *,
+    request_runtime=None,
     game_root: str | Path | None = None,
     pricing_config: Mapping[str, Any] | None = None,
     reservation_factory: ReservationFactory | None = None,
@@ -878,6 +888,7 @@ def build_production_sync_run_service(
             execution_context.route,
             execution_context.item_resolver,
             translation_validator=execution_context.validate_translation,
+            request_runtime=request_runtime,
         )
 
     def derived_builder_factory(_store: SyncRunStore):
