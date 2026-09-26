@@ -8,6 +8,43 @@ import translation_quality
 
 
 class WritebackGateContractTests(unittest.TestCase):
+    def test_scoped_alice_warning_and_blocker_follow_apply_gate(self):
+        item = {
+            'item_id': 'alice', 'file_rel_path': 'script.rpy', 'line_number': 1,
+            'source': 'My name is Alice.', 'translation': '我叫Alice。',
+        }
+        for disposition, decision in (('warning', 'allow'), ('blocker', 'deny')):
+            with self.subTest(disposition=disposition):
+                policy = translation_quality.normalize_policy({
+                    'rules': {'suspicious_english_residue': disposition},
+                    'typography_exempt_latin_tokens': ['Alice'],
+                })
+                findings = translation_quality.check_subject(item, policy=policy)
+                self.assertEqual(
+                    {finding['reason_code'] for finding in findings},
+                    {translation_quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE},
+                )
+                manifest = {'settings': {}, 'quality_acknowledged_finding_ids': []}
+                with mock.patch.object(batch, 'build_check_fingerprint', return_value={
+                    'fingerprint_sha256': 'alice-fingerprint',
+                }):
+                    summary = batch.attach_check_contract(
+                        manifest,
+                        {'reason_counts': {}, 'valid_items': 1, 'failure_items': 0},
+                        findings,
+                    )
+                    manifest['last_check_summary'] = summary
+                    self.assertEqual(summary['writeback_gate']['decision'], decision)
+                    if decision == 'allow':
+                        batch.require_safe_check_for_apply(manifest)
+                    else:
+                        with mock.patch.object(
+                            batch, 'fail_apply_preflight', side_effect=RuntimeError('blocked')
+                        ) as rejected:
+                            with self.assertRaisesRegex(RuntimeError, 'blocked'):
+                                batch.require_safe_check_for_apply(manifest)
+                        self.assertEqual(rejected.call_args.args[1], 'unsafe_check_status')
+
     def test_safety_safe_with_quality_warnings_still_allows_apply(self):
         safety = {
             'level': batch.CHECK_SAFETY_SAFE,
@@ -193,6 +230,28 @@ class WritebackGateContractTests(unittest.TestCase):
 
 
 class CheckFingerprintPolicyTests(unittest.TestCase):
+    def test_scoped_token_change_changes_check_fingerprint(self):
+        manifest = {
+            '_manifest_path': '/tmp/pkg/manifest.json',
+            '_package_dir': '/tmp/pkg',
+            'settings': {}, 'files': {}, 'chunks': [],
+            'base_dir': '/tmp', 'tl_dir': '/tmp/tl',
+        }
+        old_policy = batch.BATCH_QUALITY_POLICY
+        try:
+            with mock.patch.object(batch, 'resolve_manifest_result_path', return_value='/tmp/pkg/results.jsonl'), \
+                 mock.patch.object(batch, 'manifest_project_identity', return_value={'base_dir': '/tmp'}), \
+                 mock.patch.object(batch, 'file_content_fingerprint', return_value={'sha256': 'r'}):
+                batch.BATCH_QUALITY_POLICY = translation_quality.normalize_policy(None)
+                before = batch.check_fingerprint_id(batch.build_check_fingerprint(manifest))
+                batch.BATCH_QUALITY_POLICY = translation_quality.normalize_policy({
+                    'language_allowed_latin_tokens': ['Alice'],
+                })
+                after = batch.check_fingerprint_id(batch.build_check_fingerprint(manifest))
+            self.assertNotEqual(before, after)
+        finally:
+            batch.BATCH_QUALITY_POLICY = old_policy
+
     def test_quality_policy_change_changes_check_fingerprint(self):
         manifest = {
             '_manifest_path': '/tmp/pkg/manifest.json',

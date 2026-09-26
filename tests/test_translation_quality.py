@@ -25,6 +25,79 @@ def subject(**overrides):
 
 
 class QualityPolicyTests(unittest.TestCase):
+    def test_legacy_policy_snapshot_and_digest_stay_byte_compatible(self):
+        # Captured with the pre-#513 implementation, not computed as a new baseline.
+        self.assertEqual(
+            quality.policy_digest(quality.normalize_policy(None)),
+            '298ef7bbec8d7f66582b589f05a0d6b08a857cf6839637fd173441f251873e80',
+        )
+        legacy = {
+            'rules': {'suspicious_english_residue': 'warning'},
+            'allowed_latin_tokens': ['Alice'],
+        }
+        frozen = quality.normalize_policy(legacy)
+        self.assertNotIn(quality.LANGUAGE_ALLOWED_TOKENS, frozen)
+        self.assertNotIn(quality.TYPOGRAPHY_EXEMPT_TOKENS, frozen)
+        self.assertEqual(
+            quality.policy_digest(frozen),
+            'd4b92dc79cf7467178baf623ad4a1556e45284dfe75a6eb806574f73cb10d2e7',
+        )
+        self.assertEqual(quality.effective_policy({'quality_policy': frozen}), frozen)
+        self.assertEqual(
+            quality.manifest_quality_policy_fields({'quality_policy': frozen}),
+            {'quality_policy': frozen},
+        )
+        alice = subject(source='My name is Alice.', translation='我叫Alice。', speaker_name='')
+        self.assertEqual(quality.check_subject(alice, policy=frozen), [])
+
+    def test_scoped_lists_normalize_and_freeze_independently(self):
+        configured = {
+            'allowed_latin_tokens': ['Alice', 'Alice'],
+            quality.LANGUAGE_ALLOWED_TOKENS: [' Alice ', 'alice', 'Bob', 42, None],
+            quality.TYPOGRAPHY_EXEMPT_TOKENS: ['BOB', 'bob', '', {}],
+        }
+        policy = quality.normalize_policy(configured)
+        self.assertEqual(policy[quality.LANGUAGE_ALLOWED_TOKENS], ['Alice', 'Bob'])
+        self.assertEqual(policy[quality.TYPOGRAPHY_EXEMPT_TOKENS], ['BOB'])
+        self.assertEqual(policy['allowed_latin_tokens'][-1], 'Alice')
+        frozen = quality.manifest_quality_policy_fields(runtime_policy=policy)['quality_policy']
+        self.assertEqual(frozen, policy)
+        self.assertNotEqual(quality.policy_digest(frozen), quality.policy_digest(
+            quality.normalize_policy({'allowed_latin_tokens': ['Alice']})
+        ))
+        self.assertNotEqual(quality.policy_digest(frozen), quality.policy_digest(
+            quality.normalize_policy({**configured, quality.TYPOGRAPHY_EXEMPT_TOKENS: []})
+        ))
+        for raw in (None, 'Bob', 7, {'name': 'Bob'}, [None, 7, False]):
+            with self.subTest(raw=raw):
+                invalid = quality.normalize_policy({quality.LANGUAGE_ALLOWED_TOKENS: raw})
+                self.assertEqual(invalid[quality.LANGUAGE_ALLOWED_TOKENS], [])
+        self.assertNotIn(quality.LANGUAGE_ALLOWED_TOKENS, quality.normalize_policy({}))
+        self.assertEqual(
+            quality.normalize_policy({'allowed_latin_tokens': 'Alice'})['allowed_latin_tokens'],
+            list(quality.DEFAULT_ALLOWED_LATIN_TOKENS),
+        )
+        legacy_values = quality.normalize_policy({'allowed_latin_tokens': [7, 'Alice', 'Alice', 'alice']})
+        self.assertEqual(legacy_values['allowed_latin_tokens'][-3:], ['7', 'Alice', 'alice'])
+
+    def test_scoped_policy_digest_uses_effective_values_without_changing_legacy_hashes(self):
+        raw = {
+            quality.LANGUAGE_ALLOWED_TOKENS: [' Alice ', 'alice'],
+            quality.TYPOGRAPHY_EXEMPT_TOKENS: None,
+        }
+        canonical = quality.normalize_policy(raw)
+        self.assertEqual(quality.policy_digest(raw), quality.policy_digest(canonical))
+        self.assertEqual(
+            quality.policy_digest(quality.normalize_policy({
+                quality.LANGUAGE_ALLOWED_TOKENS: ['Alice'],
+            })),
+            '082e3ed2fdc8c105b64cb8346fd387d40973d08fa8cf0919ae73bbbd07373f87',
+        )
+        self.assertEqual(
+            quality.policy_digest({'allowed_latin_tokens': ['Alice']}),
+            '14e14e1bad7c41e32ee356f83d3c09b7a1671b3fddeea585a7821c154ad605c2',
+        )
+
     def test_normalize_policy_defaults_high_noise_language_rules_to_off(self):
         policy = quality.normalize_policy(None)
 
@@ -96,6 +169,64 @@ class QualityPolicyTests(unittest.TestCase):
 
 
 class QualityRuleTests(unittest.TestCase):
+    def test_alice_scopes_split_language_and_typography(self):
+        alice = subject(source='My name is Alice.', translation='我叫Alice。', speaker_name='')
+        base = {'rules': {'suspicious_english_residue': 'warning'}}
+        language = quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE
+        typography = quality.REASON_CJK_LATIN_SPACING
+        cases = (
+            ({}, {language, typography}),
+            ({'allowed_latin_tokens': ['Alice']}, set()),
+            ({quality.LANGUAGE_ALLOWED_TOKENS: ['Alice']}, {typography}),
+            ({quality.TYPOGRAPHY_EXEMPT_TOKENS: ['Alice']}, {language}),
+            ({quality.LANGUAGE_ALLOWED_TOKENS: ['ALICE'],
+              quality.TYPOGRAPHY_EXEMPT_TOKENS: ['alice']}, set()),
+        )
+        for additions, expected in cases:
+            with self.subTest(additions=additions):
+                policy = quality.normalize_policy({**base, **additions})
+                codes = {finding['reason_code'] for finding in quality.check_subject(alice, policy=policy)}
+                self.assertEqual(codes, expected)
+
+    def test_builtin_legacy_tokens_still_exempt_both_scopes(self):
+        item = subject(source='HP', translation='当前HP为100', speaker_name='')
+        policy = quality.normalize_policy({
+            'rules': {'suspicious_english_residue': 'warning'},
+            quality.LANGUAGE_ALLOWED_TOKENS: [],
+            quality.TYPOGRAPHY_EXEMPT_TOKENS: [],
+        })
+        codes = {finding['reason_code'] for finding in quality.check_subject(item, policy=policy)}
+        self.assertNotIn(quality.REASON_SUSPICIOUS_ENGLISH_RESIDUE, codes)
+        self.assertNotIn(quality.REASON_CJK_LATIN_SPACING, codes)
+
+    def test_scoped_lists_cover_suffix_and_speaker_without_cross_suppression(self):
+        suffix = subject(source='ping', translation='迷踪步ping', speaker_name='')
+        speaker = subject(source='Hello', translation='你好。', speaker_name='City Guard')
+        base = {'rules': {'english_suffix_adjacent': 'warning'}}
+        for candidate, key in (
+            (suffix, 'ping'),
+            (speaker, 'Guard'),
+        ):
+            with self.subTest(key=key):
+                baseline = {f['reason_code'] for f in quality.check_subject(
+                    candidate, policy=quality.normalize_policy(base)
+                )}
+                target = (quality.REASON_ENGLISH_SUFFIX_ADJACENT if key == 'ping'
+                          else quality.REASON_SPEAKER_LABEL_UNTRANSLATED)
+                self.assertIn(target, baseline)
+                language = {f['reason_code'] for f in quality.check_subject(
+                    candidate, policy=quality.normalize_policy({
+                        **base, quality.LANGUAGE_ALLOWED_TOKENS: [key],
+                    })
+                )}
+                typography = {f['reason_code'] for f in quality.check_subject(
+                    candidate, policy=quality.normalize_policy({
+                        **base, quality.TYPOGRAPHY_EXEMPT_TOKENS: [key],
+                    })
+                )}
+                self.assertNotIn(target, language)
+                self.assertIn(target, typography)
+
     def test_wait_tag_inside_cjk_is_reported(self):
         findings = quality.check_subject(
             subject(translation='你{w=0.5}好'),

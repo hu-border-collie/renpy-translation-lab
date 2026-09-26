@@ -41,6 +41,13 @@ QUALITY_GATE_LABELS = {
 }
 
 QUALITY_DELIVERY_NOTICE = "可写回 ≠ 可交付：写回门禁只证明结构安全，质量报警处理完前不建议交付。"
+QUALITY_POLICY_SETTING_COPY = (
+    "检查阶段的确定性质量规则。规则 disposition 可设为 warning / blocker / off。"
+    "language_allowed_latin_tokens 仅豁免英文残留、英文后缀和说话人标签；"
+    "typography_exempt_latin_tokens 仅豁免中英文间距；"
+    "旧 allowed_latin_tokens 仍同时豁免两类规则。"
+    "garbled_phrases 是错乱词黑名单；修改后需重新运行 check。"
+)
 QUALITY_REPORT_EXPORT_LABEL = "导出 HTML 报告"
 QUALITY_REPORT_EXPORT_TITLE = "导出质量体检报告"
 QUALITY_REPORT_EXPORT_SUCCESS = "质量体检报告已导出。"

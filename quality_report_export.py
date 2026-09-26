@@ -237,6 +237,7 @@ def render_quality_report_html(
     acknowledged_finding_ids: set[str] | None = None,
     title: str = "译文质量体检报告",
     source_name: str = "quality_findings.jsonl",
+    quality_policy: Mapping[str, Any] | None = None,
 ) -> str:
     """Render a portable HTML report; all finding content is HTML-escaped."""
 
@@ -261,6 +262,16 @@ def render_quality_report_html(
     cards = "".join(_finding_card(item, acknowledged) for item in findings)
     if not cards:
         cards = '<p class="empty result-empty">报告中没有质量报警。</p>'
+    policy_section = ''
+    if isinstance(quality_policy, Mapping):
+        frozen = dict(quality_policy)
+        effective = translation_quality.effective_policy({'quality_policy': frozen})
+        policy_json = json.dumps(frozen, ensure_ascii=False, indent=2)
+        policy_section = (
+            '<details class="panel policy"><summary>检查时冻结的质量策略</summary>'
+            f'<p>生效策略摘要：<code>{_escape(translation_quality.policy_digest(effective))}</code></p>'
+            f'<pre>{_escape(policy_json)}</pre></details>'
+        )
 
     return f'''<!doctype html>
 <html lang="zh-CN">
@@ -278,6 +289,7 @@ def render_quality_report_html(
     .summaries{{display:grid;grid-template-columns:1fr 1fr;gap:36px;margin-bottom:28px;animation:arrive .45s .12s ease-out both}} .panel{{padding-top:18px;border-top:1px solid var(--line)}} h2{{font-size:18px;margin:0 0 14px}} .bar-row{{display:grid;grid-template-columns:minmax(110px,1fr) minmax(80px,1.6fr) 36px;gap:10px;align-items:center;margin:9px 0}} .bar-row>span{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}} .bar-track{{height:7px;background:#292e40;border-radius:20px;overflow:hidden}} .bar-track i{{display:block;height:100%;background:var(--accent);transform-origin:left;animation:grow .5s .18s ease-out both}}
     .controls{{position:sticky;top:10px;z-index:3;padding:14px;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:10px;margin:18px 0;border:1px solid var(--line);border-radius:12px;background:rgba(22,25,36,.96);backdrop-filter:blur(10px)}} input,select{{width:100%;color:var(--ink);background:#0f121b;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font:inherit;transition:border-color .16s ease}} input:focus,select:focus{{border-color:var(--accent);outline:2px solid transparent}} .count{{color:var(--muted);margin:10px 2px}}
     .findings{{border-bottom:1px solid var(--line)}} .finding{{padding:20px 2px;border-top:1px solid var(--line);animation:arrive .32s ease-out both}} .finding[hidden]{{display:none}} .finding-head{{display:grid;grid-template-columns:auto auto auto 1fr;gap:8px;align-items:center}} .finding h3{{font-size:17px;margin:0}} .finding code{{grid-column:4;color:var(--muted);font-size:12px}} .severity,.disposition,.state{{border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:12px;white-space:nowrap}} .severity-high{{color:var(--danger)}} .severity-medium{{color:var(--warn)}} .state-acknowledged{{color:var(--ok)}} .state-open{{color:var(--warn)}} .location{{color:var(--muted);margin:10px 0}} dl{{margin:0}} .detail{{display:grid;grid-template-columns:50px 1fr;gap:10px;border-top:1px solid #272c3d;padding:9px 0}} dt{{color:var(--muted)}} dd{{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}} .empty{{color:var(--muted)}} .result-empty[hidden]{{display:none}}
+    .policy{{margin-bottom:28px}} .policy summary{{cursor:pointer;font-weight:700}} .policy pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;background:#161924;padding:12px;border:1px solid var(--line)}}
     @keyframes arrive{{from{{opacity:0;transform:translateY(8px)}}to{{opacity:1;transform:none}}}} @keyframes grow{{from{{transform:scaleX(0)}}to{{transform:scaleX(1)}}}}
     @media(max-width:760px){{header{{grid-template-columns:1fr}}.metrics{{grid-template-columns:1fr 1fr}}.summaries{{grid-template-columns:1fr}}.controls{{grid-template-columns:1fr 1fr;position:static}}.finding-head{{grid-template-columns:auto auto auto}}.finding h3,.finding code{{grid-column:1/-1}}}}
     @media(prefers-reduced-motion:reduce){{*{{animation:none!important;transition:none!important}}}} @media print{{body{{background:white;color:#111}}main{{width:100%;padding:0}}.controls{{display:none}}.metric,.panel,.finding{{background:white;border-color:#ccc;break-inside:avoid}}.source,.location,.finding code,.metric span{{color:#555}}}}
@@ -288,6 +300,7 @@ def render_quality_report_html(
   <header><div><div class="eyebrow">Ren'Py Translation Lab</div><h1>{_escape(title)}</h1><p class="source">来源：{_escape(source_name)} · 报告 schema v{REPORT_SCHEMA_VERSION}</p></div><div class="safety-note">可写回不等于可交付。此报告汇总机械质量报警与最终审校 finding，不会修改译文或写回状态。</div></header>
   <section class="metrics" aria-label="质量概览"><div class="metric"><strong>{len(findings)}</strong><span>全部报警</span></div><div class="metric"><strong>{warning_count}</strong><span>warning</span></div><div class="metric"><strong>{blocker_count}</strong><span>blocker</span></div><div class="metric"><strong>{acknowledged_count}</strong><span>已确认</span></div></section>
   <section class="summaries"><div class="panel"><h2>按规则</h2>{_summary_rows(reason_counts, labeler=reason_label)}</div><div class="panel"><h2>按文件</h2>{_summary_rows(file_counts)}</div></section>
+  {policy_section}
   <section class="controls" aria-label="筛选报警"><input id="search" type="search" placeholder="搜索文件、原文、译文、证据……"><select id="reason"><option value="">全部规则</option>{reason_options}</select><select id="severity"><option value="">全部严重程度</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option><option value="info">提示</option></select><select id="state"><option value="">全部状态</option><option value="open">待处理</option><option value="acknowledged">已确认</option></select></section>
   <p class="count" id="count">显示 {len(findings)} / {len(findings)} 条</p>
   <section class="findings" id="findings">{cards}</section>
@@ -378,6 +391,11 @@ def export_quality_report(
         acknowledged_finding_ids=acknowledged,
         title=title,
         source_name=os.path.basename(source_path),
+        quality_policy=(
+            manifest.get('quality_policy')
+            if isinstance(manifest.get('quality_policy'), Mapping)
+            else None
+        ),
     )
     try:
         os.makedirs(os.path.dirname(resolved_output) or os.curdir, exist_ok=True)

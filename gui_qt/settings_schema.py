@@ -30,6 +30,7 @@ from sync_model_backend import (
     MIN_SYNC_TIMEOUT_SECONDS,
 )
 from .user_copy import (
+    QUALITY_POLICY_SETTING_COPY,
     SYNC_CONTEXT_AFTER_COPY,
     SYNC_CONTEXT_BEFORE_COPY,
     SYNC_MACRO_SETTING_FILE_COPY,
@@ -320,9 +321,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "batch_quality_gate",
         ("batch", "quality_gate"),
         "质量检查策略（JSON）",
-        "检查阶段的确定性质量规则。可把规则 disposition 设为 warning / blocker / off，"
-        "并配置 allowed_latin_tokens 白名单与 garbled_phrases 错乱词黑名单；"
-        "修改后需重新运行 check。",
+        QUALITY_POLICY_SETTING_COPY,
         "json",
         {
             "enabled": True,
