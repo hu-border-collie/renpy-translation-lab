@@ -340,13 +340,11 @@ from .settings.leave_guard import settings_leave_guard_prompt
 from .settings.save_apply import SettingsSaveExtras, apply_collected_settings
 from .settings.page_contract import SettingsPageActions
 from .settings.litellm_page import (
-    LITELLM_FORWARDED_ATTRS,
     LiteLLMPageHost,
     LiteLLMSettingsPage,
     RETIRED_LITELLM_WARMUP_WORKERS as _RETIRED_LITELLM_WARMUP_WORKERS,
 )
 from .settings.models_page import (
-    MODELS_FORWARDED_ATTRS,
     ModelsSettingsPage,
     batch_thinking_value_for_load,
     batch_thinking_value_for_model_change,
@@ -593,9 +591,6 @@ class MainWindow(QMainWindow):
         self._runner_terminal_generation = 0
         self._loading_config_to_ui = False
         self._loading_theme_to_ui = False
-        self._updating_batch_thinking_combo = False
-        self._batch_thinking_config_has_key = False
-        self._batch_thinking_user_changed = False
         self._active_command = ""
         self._doctor_output_lines: list[str] = []
         self._workflow = None
@@ -688,23 +683,8 @@ class MainWindow(QMainWindow):
         self._last_main_tab_index = 0
         self._handling_config_tab_leave = False
         self._task_running = False
-        self._litellm_provider_catalog_worker: LiteLLMProviderCatalogWorker | None = None
-        self._litellm_catalog_worker: LiteLLMModelCatalogWorker | None = None
-        self._litellm_version_worker: LiteLLMVersionWorker | None = None
-        self._litellm_module_warmup_worker: LiteLLMModuleWarmupWorker | None = None
-        self._litellm_latest_version = ""
-        self._litellm_latest_compatible_version = ""
-        self._litellm_latest_requires_python = ""
-        self._litellm_connection_worker: LiteLLMConnectionTestWorker | None = None
         self._font_install_worker: FontInstallWorker | None = None
         self._sdk_install_worker = None
-        self._updating_litellm_provider = False
-        self._applied_litellm_provider = ""
-        self._pending_litellm_model_selection: tuple[str, str] | None = None
-        self._litellm_saved_key_status: dict[str, str] = {}
-        self._custom_litellm_providers: dict[str, CustomLiteLLMProvider] = {}
-        self._custom_litellm_providers_load_error = ""
-        self._custom_litellm_providers_modified = False
         # _games_registry_panel is intentionally NOT set here so attribute access
         # triggers __getattr__ lazy materialization of 设置 · 项目列表.
         self._litellm_install: OptionalFeatureInstallController | None = None
@@ -719,7 +699,6 @@ class MainWindow(QMainWindow):
         self._configure_shutdown_coordinator()
         self._optional_feature_last_failed: set[str] = set()
         self._settings_pages_built: set[str] = set()
-        self._settings_models_signals_wired = False
         self._settings_lazy_resolving = False
 
         central = QWidget()
@@ -1604,7 +1583,6 @@ class MainWindow(QMainWindow):
             if enabled:
                 flags |= Qt.ItemFlag.ItemIsEnabled
             item.setFlags(flags)
-
 
     def _work_mode_has_writeback_surface(self, mode: WorkMode | None = None) -> bool:
         """Return whether the active workflow owns a meaningful writeback page."""
@@ -3344,8 +3322,6 @@ class MainWindow(QMainWindow):
         adapter = coordinator.ensure_page(key)
         if adapter is None:
             return
-        if key == "models" and self._models_page() is None:
-            self._wire_settings_models_signals()
         if key == "workspace":
             # Inherit current task gate if panel was built after a run started.
             panel = self.__dict__.get("_games_registry_panel")
@@ -3378,7 +3354,7 @@ class MainWindow(QMainWindow):
             return
         preserve: dict[str, object] | None = None
         loading = getattr(self, "_loading_config_to_ui", False)
-        thinking_changed = bool(getattr(self, "_batch_thinking_user_changed", False))
+        thinking_changed = bool(getattr(self._models_page(), "_batch_thinking_user_changed", False))
         if not loading:
             loaded_pages = built.intersection(
                 self._settings_coordinator.loaded_keys()
@@ -3401,24 +3377,9 @@ class MainWindow(QMainWindow):
                     # Disk reload in _load_config_to_ui clears this flag. Keep
                     # the user's explicit thinking choice so first save can
                     # write an empty thinking_level.
-                    self._batch_thinking_user_changed = True
+                    self._models_page()._batch_thinking_user_changed = True
             if "api_status_label" in self.__dict__:
                 self._refresh_api_status()
-
-    def _wire_settings_models_signals(self) -> None:
-        if self._models_page() is not None:
-            return
-        if getattr(self, "_settings_models_signals_wired", False):
-            return
-        if not hasattr(self, "batch_model_combo") or not hasattr(
-            self, "batch_thinking_combo"
-        ):
-            return
-        self.batch_model_combo.currentTextChanged.connect(self._on_batch_model_changed)
-        self.batch_thinking_combo.currentIndexChanged.connect(
-            self._on_batch_thinking_changed
-        )
-        self._settings_models_signals_wired = True
 
     def _ensure_relation_analyzer_install_controller(self) -> OptionalFeatureInstallController:
         controller = getattr(self, "_relation_analyzer_install", None)
@@ -3528,7 +3489,6 @@ class MainWindow(QMainWindow):
             "使用说明",
             "请参阅 docs/relation_analysis.md 与 relation_analyzer/README.md。",
         )
-
 
     def _litellm_page(self):
         return self.__dict__.get("_litellm_settings_page")
@@ -3758,9 +3718,6 @@ class MainWindow(QMainWindow):
             existing.attach_widget_aliases(self)
             return existing
         page = ModelsSettingsPage(self)
-        for name in MODELS_FORWARDED_ATTRS:
-            if name in self.__dict__:
-                setattr(page, name, self.__dict__.pop(name))
         self.__dict__["_models_settings_page"] = page
         page.attach_widget_aliases(self)
         bodies = getattr(self, "_settings_page_bodies", None)
@@ -3795,7 +3752,7 @@ class MainWindow(QMainWindow):
 
     def _create_litellm_settings_page(self):
         """Build the migrated LiteLLM Settings page and alias its widgets."""
-        from .settings.litellm_page import LiteLLMSettingsPage, LITELLM_FORWARDED_ATTRS
+        from .settings.litellm_page import LiteLLMSettingsPage
 
         page = LiteLLMSettingsPage(
             self,
@@ -3803,9 +3760,6 @@ class MainWindow(QMainWindow):
             host=self._build_litellm_page_host(),
             start_warmup=False,
         )
-        for name in LITELLM_FORWARDED_ATTRS:
-            if name in self.__dict__:
-                setattr(page, name, self.__dict__.pop(name))
         self.__dict__["_litellm_settings_page"] = page
         page.attach_widget_aliases(self)
         bodies = getattr(self, "_settings_page_bodies", None)
@@ -4032,7 +3986,6 @@ class MainWindow(QMainWindow):
             return None
         return getattr(page, method_name)(*args, **kwargs)
 
-
     def _selected_sync_backend(self, *args, **kwargs):
         page = self._litellm_page()
         if page is not None:
@@ -4052,38 +4005,11 @@ class MainWindow(QMainWindow):
     def _current_litellm_provider(self, *args, **kwargs):
         return self._delegate_litellm_page("_current_litellm_provider", *args, **kwargs)
 
-    def _ensure_litellm_provider_item(self, *args, **kwargs):
-        return self._delegate_litellm_page("_ensure_litellm_provider_item", *args, **kwargs)
-
-    def _populate_litellm_providers(self, *args, **kwargs):
-        return self._delegate_litellm_page("_populate_litellm_providers", *args, **kwargs)
-
-    def _litellm_snapshot_status(self, *args, **kwargs):
-        return self._delegate_litellm_page("_litellm_snapshot_status", *args, **kwargs)
-
     def _refresh_litellm_catalog_status(self, *args, **kwargs):
         return self._delegate_litellm_page("_refresh_litellm_catalog_status", *args, **kwargs)
 
-    def _save_litellm_cache(self, *args, **kwargs):
-        return self._delegate_litellm_page("_save_litellm_cache", *args, **kwargs)
-
-    def _schedule_litellm_model_selection_save(self, *args, **kwargs):
-        return self._delegate_litellm_page("_schedule_litellm_model_selection_save", *args, **kwargs)
-
-    def _cancel_litellm_model_selection_save(self, *args, **kwargs):
-        return self._delegate_litellm_page("_cancel_litellm_model_selection_save", *args, **kwargs)
-
     def _flush_litellm_model_selection_save(self, *args, **kwargs):
         return self._delegate_litellm_page("_flush_litellm_model_selection_save", *args, **kwargs)
-
-    def _restore_litellm_cached_selection(self, *args, **kwargs):
-        return self._delegate_litellm_page("_restore_litellm_cached_selection", *args, **kwargs)
-
-    def _restore_configured_litellm_model(self, *args, **kwargs):
-        return self._delegate_litellm_page("_restore_configured_litellm_model", *args, **kwargs)
-
-    def _set_litellm_models(self, *args, **kwargs):
-        return self._delegate_litellm_page("_set_litellm_models", *args, **kwargs)
 
     def _litellm_saved_key_message(self, *args, **kwargs):
         return self._delegate_litellm_page("_litellm_saved_key_message", *args, **kwargs)
@@ -4094,301 +4020,38 @@ class MainWindow(QMainWindow):
     def _reserved_custom_provider_ids(self, *args, **kwargs):
         return self._delegate_litellm_page("_reserved_custom_provider_ids", *args, **kwargs)
 
-    def _refresh_custom_provider_table(self, *args, **kwargs):
-        return self._delegate_litellm_page("_refresh_custom_provider_table", *args, **kwargs)
-
-    def _refresh_custom_provider_actions(self, *args, **kwargs):
-        return self._delegate_litellm_page("_refresh_custom_provider_actions", *args, **kwargs)
-
     def _selected_custom_provider(self, *args, **kwargs):
         return self._delegate_litellm_page("_selected_custom_provider", *args, **kwargs)
 
     def _after_custom_providers_changed(self, *args, **kwargs):
         return self._delegate_litellm_page("_after_custom_providers_changed", *args, **kwargs)
 
-    def _cached_litellm_provider_values(self, *args, **kwargs):
-        return self._delegate_litellm_page("_cached_litellm_provider_values", *args, **kwargs)
-
-    def _on_add_custom_litellm_provider(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_add_custom_litellm_provider", *args, **kwargs)
-
-    def _on_edit_custom_litellm_provider(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_edit_custom_litellm_provider", *args, **kwargs)
-
-    def _on_delete_custom_litellm_provider(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_delete_custom_litellm_provider", *args, **kwargs)
-
     def _refresh_litellm_credential_status(self, *args, **kwargs):
         return self._delegate_litellm_page("_refresh_litellm_credential_status", *args, **kwargs)
 
-    def _on_litellm_model_changed(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_model_changed", *args, **kwargs)
-
-    def _on_clear_litellm_provider(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_clear_litellm_provider", *args, **kwargs)
-
-    def _on_litellm_provider_changed(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_provider_changed", *args, **kwargs)
-
-    def _refresh_litellm_version_label(self, *args, **kwargs):
+    def _refresh_litellm_version_label(self):
         page = self._litellm_page()
         if page is not None:
-            return page._refresh_litellm_version_label()
-        label = self._settings_widget("litellm_version_label")
-        if label is None:
-            return None
-        installed = installed_litellm_version()
-        latest = str(getattr(self, "_litellm_latest_version", "") or "")
-        compatible = str(
-            getattr(self, "_litellm_latest_compatible_version", "") or ""
-        )
-        requires_python = str(
-            getattr(self, "_litellm_latest_requires_python", "") or ""
-        )
-        python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
-        if not installed:
-            label.setText("尚未安装；可检查 PyPI 最新稳定版。")
-        elif not latest:
-            label.setText(f"本机 {installed}；尚未检查 PyPI。")
-        elif compatible and version_key(compatible) < version_key(latest):
-            requirement = f"（要求 Python {requires_python}）" if requires_python else ""
-            state = (
-                f"建议更新到 {compatible}。"
-                if version_key(installed) < version_key(compatible)
-                else "已是当前 Python 可用最新版。"
-            )
-            label.setText(
-                f"本机 {installed}；PyPI 最新稳定版 {latest}{requirement}不支持当前 "
-                f"Python {python_version}；\n兼容最新版 {compatible}，{state}"
-            )
-        elif compatible and version_key(installed) < version_key(compatible):
-            label.setText(f"本机 {installed}；最新兼容稳定版 {compatible}，建议更新。")
-        elif compatible:
-            label.setText(f"本机 {installed}；已是最新兼容稳定版。")
-        elif version_key(installed) < version_key(latest):
-            label.setText(f"本机 {installed}；最新稳定版 {latest}，建议更新。")
-        else:
-            label.setText(f"本机 {installed}；已是最新稳定版。")
-        return None
-
-    def _request_cancel_litellm_worker(self, *args, **kwargs):
-        return self._delegate_litellm_page("_request_cancel_litellm_worker", *args, **kwargs)
+            page._refresh_litellm_version_label()
 
     def _start_litellm_module_warmup(self, *args, **kwargs):
         return self._delegate_litellm_page("_start_litellm_module_warmup", *args, **kwargs)
 
-    def _on_litellm_module_warmed(self, *args, **kwargs):
-        page = self._litellm_page()
-        if page is None:
-            return None
-        page._on_litellm_module_warmed(*args, **kwargs)
-        if getattr(self, "_shutdown_requested", False):
-            return None
-        if getattr(page, "_custom_litellm_providers_modified", False):
-            return None
-        self._after_custom_providers_changed()
-        return None
 
     def _detach_litellm_module_warmup(self, *args, **kwargs):
         return self._delegate_litellm_page("_detach_litellm_module_warmup", *args, **kwargs)
 
-    def _on_litellm_network_progress(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_network_progress", *args, **kwargs)
-
     def _on_check_litellm_version(self, *args, **kwargs):
         return self._delegate_litellm_page("_on_check_litellm_version", *args, **kwargs)
-
-    def _on_litellm_version_checked(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_version_checked", *args, **kwargs)
-
-    def _on_refresh_litellm_providers(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_refresh_litellm_providers", *args, **kwargs)
-
-    def _on_litellm_providers_loaded(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_providers_loaded", *args, **kwargs)
 
     def _on_refresh_litellm_models(self, *args, **kwargs):
         return self._delegate_litellm_page("_on_refresh_litellm_models", *args, **kwargs)
 
-    def _on_litellm_models_loaded(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_litellm_models_loaded", *args, **kwargs)
-
-    def _on_test_litellm_connection(self, *args, **kwargs):
-        return self._delegate_litellm_page("_on_test_litellm_connection", *args, **kwargs)
-
-    def _litellm_connection_operation_identity(self, *args, **kwargs):
-        return self._delegate_litellm_page("_litellm_connection_operation_identity", *args, **kwargs)
-
-    def _on_litellm_connection_tested(self, *args, **kwargs):
-        page = self._litellm_page()
-        if page is None:
-            return None
-        kwargs.setdefault('sender', self.sender())
-        return page._on_litellm_connection_tested(*args, **kwargs)
 
     def _on_sync_backend_changed(self, _index: int = -1) -> None:
         page = self._litellm_page()
         if page is not None:
             page._on_sync_backend_changed(_index)
-            return
-        self._on_sync_backend_changed_without_page(_index)
-
-    def _on_sync_backend_changed_without_page(self, _index: int) -> None:
-        """LiteLLM widget gating for tests that stub MainWindow without a page."""
-        backend = self._selected_sync_backend()
-        hint = self._settings_widget("sync_backend_hint")
-        if hint is None:
-            return
-        install_btn = self._settings_widget("install_litellm_btn")
-        install_progress = self._settings_widget("litellm_install_progress")
-        installing = self._litellm_install_running()
-        installed_version = installed_litellm_version()
-        installed = bool(installed_version) and importlib.util.find_spec("litellm") is not None
-        if backend == "litellm":
-            keyring_installed = importlib.util.find_spec("keyring") is not None
-            state = "正在后台安装" if installing else ("已安装" if installed else "尚未安装")
-            credential_state = "可用" if keyring_installed else "尚未安装"
-            hint.setText(
-                "同步替代模式；不使用 Gemini API Key，也没有远程 Batch 恢复。"
-                f"LiteLLM：{state}；安全凭据支持：{credential_state}。"
-            )
-            if install_btn is not None:
-                latest = str(getattr(self, "_litellm_latest_version", "") or "")
-                compatible = str(
-                    getattr(self, "_litellm_latest_compatible_version", "") or ""
-                )
-                target = compatible if latest else ""
-                up_to_date = bool(
-                    installed
-                    and target
-                    and version_key(installed_version) >= version_key(target)
-                )
-                compatibility_limited = bool(
-                    latest and compatible and version_key(compatible) < version_key(latest)
-                )
-                no_compatible_release = bool(latest and not compatible)
-                install_btn.setVisible(True)
-                install_btn.setEnabled(
-                    not installing
-                    and not no_compatible_release
-                    and not (up_to_date and keyring_installed)
-                )
-                if installing:
-                    install_btn.setText("正在更新…" if installed else "正在安装…")
-                elif not installed:
-                    install_btn.setText("安装 LiteLLM")
-                elif no_compatible_release:
-                    install_btn.setText("当前 Python 无兼容版本")
-                elif up_to_date and keyring_installed:
-                    install_btn.setText(
-                        "当前 Python 可用最新版"
-                        if compatibility_limited
-                        else "已是最新版"
-                    )
-                else:
-                    install_btn.setText("更新 LiteLLM")
-        else:
-            hint.setText(
-                "推荐路径仍为 Gemini；同步配置位于「模型」与「密钥」页，批量离线翻译仍使用 Gemini Batch。"
-            )
-            if install_btn is not None:
-                install_btn.setVisible(False)
-        if install_progress is not None:
-            install_progress.setVisible(installing)
-            if installing:
-                install_progress.setRange(0, 0)
-                install_progress.setFormat(
-                    "正在后台更新 LiteLLM…" if installed else "正在后台安装 LiteLLM…"
-                )
-
-        model_combo = self._settings_widget("litellm_model_combo")
-        litellm_active = backend == "litellm" and not installing
-        provider = self._current_litellm_provider()
-        model = self._litellm_model_text()
-        provider_combo = self._settings_widget("litellm_provider_combo")
-        if provider_combo is not None:
-            provider_combo.setEnabled(litellm_active)
-        provider_worker = getattr(self, "_litellm_provider_catalog_worker", None)
-        provider_button = self._settings_widget("litellm_refresh_providers_btn")
-        if provider_button is not None:
-            provider_button.setEnabled(litellm_active)
-            if provider_worker is not None:
-                provider_button.setText(
-                    "正在取消…"
-                    if getattr(provider_worker, "is_cancelled", lambda: False)()
-                    else "停止加载"
-                )
-            else:
-                provider_button.setText("联网加载供应商")
-        clear_provider = self._settings_widget("litellm_clear_provider_btn")
-        if clear_provider is not None:
-            clear_provider.setEnabled(litellm_active and bool(provider))
-        if model_combo is not None:
-            set_enabled = getattr(model_combo, "setEnabled", None)
-            if callable(set_enabled):
-                set_enabled(litellm_active and bool(provider))
-        model_worker = getattr(self, "_litellm_catalog_worker", None)
-        model_button = self._settings_widget("litellm_refresh_models_btn")
-        if model_button is not None:
-            model_button.setEnabled(litellm_active and bool(provider))
-            if model_worker is not None:
-                model_button.setText(
-                    "正在取消…"
-                    if getattr(model_worker, "is_cancelled", lambda: False)()
-                    else "停止加载"
-                )
-            else:
-                model_button.setText("联网加载模型")
-        self._apply_gemini_sync_model_gating(backend)
-        credential_enabled = litellm_active and bool(provider) and provider != "ollama"
-        manage_keys_btn = self._settings_widget("litellm_manage_keys_btn")
-        if manage_keys_btn is not None:
-            manage_keys_btn.setEnabled(credential_enabled)
-            manage_keys_btn.setToolTip(
-                ""
-                if credential_enabled
-                else (
-                    "该 Provider 不需要 API Key"
-                    if provider == "ollama"
-                    else "请先选择 Provider"
-                )
-            )
-        connection_worker = getattr(self, "_litellm_connection_worker", None)
-        test_button = self._settings_widget("litellm_test_connection_btn")
-        if test_button is not None:
-            test_button.setEnabled(
-                litellm_active
-                and bool(provider)
-                and (bool(model) or connection_worker is not None)
-            )
-            if connection_worker is not None:
-                test_button.setText(
-                    "正在取消…"
-                    if getattr(connection_worker, "is_cancelled", lambda: False)()
-                    else "停止测试"
-                )
-            else:
-                test_button.setText("测试连接")
-        version_worker = getattr(self, "_litellm_version_worker", None)
-        version_button = self._settings_widget("litellm_check_version_btn")
-        if version_button is not None:
-            version_button.setEnabled(not installing or version_worker is not None)
-            if version_worker is not None:
-                version_button.setText(
-                    "正在取消…"
-                    if getattr(version_worker, "is_cancelled", lambda: False)()
-                    else "停止检查"
-                )
-            else:
-                version_button.setText("检查更新")
-        if hasattr(self, "translate_btn") and not getattr(
-            self, "_loading_config_to_ui", False
-        ):
-            self._set_task_running(bool(getattr(self, "_task_running", False)))
-        refresh_credentials = getattr(self, "_refresh_litellm_credential_status", None)
-        if callable(refresh_credentials):
-            refresh_credentials()
-        self._refresh_litellm_install_action_gating()
 
     def _on_browse_renpy_sdk_dir(self, line_edit: QLineEdit) -> None:
         current = line_edit.text().strip()
@@ -4639,7 +4302,7 @@ class MainWindow(QMainWindow):
         # fully owned by the settings page; it must not gate window shutdown
         # with a confirmation dialog.  Retired workers are already detached
         # and only kept alive until their import finishes.
-        warmup_worker = getattr(self, "_litellm_module_warmup_worker", None)
+        warmup_worker = getattr(self._litellm_page(), "_litellm_module_warmup_worker", None)
         retired_workers = _RETIRED_LITELLM_WARMUP_WORKERS
         active: list[QThread] = []
         for thread in threads:
@@ -7326,6 +6989,22 @@ class MainWindow(QMainWindow):
     def _current_work_mode(self) -> WorkMode:
         return normalize_work_mode(self._work_mode)
 
+    def _litellm_provider_registry(self):
+        """Use page edits when loaded, otherwise the saved provider configuration."""
+        page = self._litellm_page()
+        if page is not None:
+            return page._custom_litellm_providers
+        config = self.state.load_translator_config()
+        sync = config.get("sync") or {}
+        try:
+            return custom_provider_registry(
+                sync.get("custom_litellm_providers") or [], allow_import=False
+            )
+        except (TypeError, ValueError):
+            # The LiteLLM page reports invalid provider config and blocks save.
+            # Merely opening the keys page must remain possible for recovery.
+            return {}
+
     def _litellm_keys_page_provider(self) -> str:
         combo = self._settings_widget("litellm_keys_provider_combo")
         if combo is None:
@@ -7356,7 +7035,7 @@ class MainWindow(QMainWindow):
             litellm_selected = ""
         providers = credential_provider_candidates(
             cached_providers,
-            (previous, litellm_selected, *self._custom_litellm_providers),
+            (previous, litellm_selected, *self._litellm_provider_registry()),
             include_ollama=False,
         )
         choose = resolve_provider_id(previous) or resolve_provider_id(litellm_selected)
@@ -7364,14 +7043,14 @@ class MainWindow(QMainWindow):
         combo.clear()
         for provider in providers:
             combo.addItem(
-                provider_display_label(provider, self._custom_litellm_providers),
+                provider_display_label(provider, self._litellm_provider_registry()),
                 provider,
             )
         if choose:
             index = combo.findData(choose)
             if index < 0:
                 combo.addItem(
-                    provider_display_label(choose, self._custom_litellm_providers),
+                    provider_display_label(choose, self._litellm_provider_registry()),
                     choose,
                 )
                 index = combo.findData(choose)
@@ -7416,7 +7095,7 @@ class MainWindow(QMainWindow):
         except ProviderCredentialStoreError as exc:
             message_box_warning(self, "无法读取密钥", str(exc))
             return False
-        label = provider_display_label(provider, self._custom_litellm_providers)
+        label = provider_display_label(provider, self._litellm_provider_registry())
         dialog = ApiKeyDialog(
             self,
             keys=list(store.keys),
@@ -7442,7 +7121,9 @@ class MainWindow(QMainWindow):
         except (ValueError, ProviderCredentialStoreError) as exc:
             message_box_warning(self, "无法保存密钥", str(exc))
             return False
-        self._litellm_saved_key_status.pop(provider, None)
+        page = self._litellm_page()
+        if page is not None:
+            page._litellm_saved_key_status.pop(provider, None)
         self._refresh_litellm_credential_status()
         self._refresh_litellm_keys_page_status()
         self._refresh_litellm_catalog_status()
@@ -10048,7 +9729,6 @@ class MainWindow(QMainWindow):
     def _format_advanced_setting_text(self, field: SettingField, value: object) -> str:
         return format_setting_text(field, value)
 
-
     def _refresh_font_install_status(self) -> None:
         label = getattr(self, "font_install_status_label", None)
         button = getattr(self, "download_fonts_btn", None)
@@ -10656,7 +10336,6 @@ class MainWindow(QMainWindow):
         if widget is getattr(self, "_diagnostics_tab", None):
             self._refresh_diagnostics_context()
 
-
     def _on_reload_config(self) -> None:
         self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
@@ -10700,9 +10379,8 @@ class MainWindow(QMainWindow):
             advanced_defaults["game_root"] = str(current_game_root)
         self._load_advanced_settings_to_ui(advanced_defaults)
         self._clear_advanced_setting_errors()
-        self._batch_thinking_user_changed = True
+        self._models_page()._batch_thinking_user_changed = True
         self._show_settings_status("已恢复推荐值，保存后生效。")
-
 
     def _on_manage_api_keys(self):
         env_count, env_source = self.state.get_api_key_status()
@@ -14497,19 +14175,6 @@ class MainWindow(QMainWindow):
         page = self._models_page()
         if page is not None:
             page._set_batch_thinking_value(value)
-            return
-        idx = self.batch_thinking_combo.findData(value)
-        self._updating_batch_thinking_combo = True
-        try:
-            if idx >= 0:
-                self.batch_thinking_combo.setCurrentIndex(idx)
-            elif value:
-                self.batch_thinking_combo.addItem(f"{value} (自定义)", value)
-                self.batch_thinking_combo.setCurrentIndex(self.batch_thinking_combo.count() - 1)
-            else:
-                self.batch_thinking_combo.setCurrentIndex(0)
-        finally:
-            self._updating_batch_thinking_combo = False
 
     def _load_theme_to_ui(self, config: dict[str, Any], *, apply: bool = True) -> None:
         theme = read_gui_theme_from_config(config)
@@ -14681,7 +14346,8 @@ class MainWindow(QMainWindow):
             need_models = want is None or "models" in want
             need_litellm = want is None or "litellm" in want
             if need_models or need_litellm:
-                self._batch_thinking_config_has_key = "thinking_level" in batch_config
+                if self._models_page() is not None:
+                    self._models_page()._batch_thinking_config_has_key = "thinking_level" in batch_config
                 sync_backend = self._config_string(
                     sync_config.get("backend", "gemini")
                 ).lower()
@@ -14877,7 +14543,8 @@ class MainWindow(QMainWindow):
                     game_root = self.state.get_game_root()
                     root_label.setText(str(game_root) if game_root else "（未选择）")
         finally:
-            self._batch_thinking_user_changed = False
+            if self._models_page() is not None:
+                self._models_page()._batch_thinking_user_changed = False
             self._loading_config_to_ui = False
         if (
             self._settings_widget("rag_enabled_cb") is not None
@@ -14914,32 +14581,11 @@ class MainWindow(QMainWindow):
         page = self._models_page()
         if page is not None:
             page._on_batch_model_changed(text)
-            return
-        is_thinking_supported = self._supports_batch_thinking(text)
-        thinking_combo = self._settings_widget("batch_thinking_combo")
-        if thinking_combo is None:
-            return
-        thinking_combo.setEnabled(is_thinking_supported)
-        if not is_thinking_supported:
-            self._set_batch_thinking_value("")
-            return
-
-        default_value = self._batch_thinking_value_for_model_change(
-            text,
-            thinking_combo.currentData(),
-            self._batch_thinking_config_has_key,
-            self._batch_thinking_user_changed,
-        )
-        if default_value is not None and not self._loading_config_to_ui:
-            self._set_batch_thinking_value(default_value)
 
     def _on_batch_thinking_changed(self, _index: int):
         page = self._models_page()
         if page is not None:
             page._on_batch_thinking_changed(_index)
-            return
-        if not self._loading_config_to_ui and not self._updating_batch_thinking_combo:
-            self._batch_thinking_user_changed = True
 
     def _widget_settings_collect(self) -> dict[str, object]:
         """Collect save values from host widget aliases (helper-test path)."""
@@ -15003,11 +14649,9 @@ class MainWindow(QMainWindow):
             root = getter()
             if root is not None:
                 game_root = str(root)
-        thinking_changed = bool(getattr(self, "_batch_thinking_user_changed", False))
-        if models_page is not None:
-            thinking_changed = bool(
-                getattr(models_page, "_batch_thinking_user_changed", thinking_changed)
-            )
+        thinking_changed = bool(
+            getattr(models_page, "_batch_thinking_user_changed", False)
+        )
         return SettingsSaveExtras(
             game_root=game_root,
             custom_providers_modified=bool(
@@ -15151,33 +14795,6 @@ class MainWindow(QMainWindow):
                 pass
 
         return self._switch_game_root(value.strip())
-
-
-def _bind_settings_forward_properties() -> None:
-    """Forward migrated page attributes onto MainWindow for tests and glue."""
-
-    mapping: tuple[tuple[str, str], ...] = tuple(
-        [(name, "_litellm_settings_page") for name in LITELLM_FORWARDED_ATTRS]
-        + [(name, "_models_settings_page") for name in MODELS_FORWARDED_ATTRS]
-    )
-    for name, page_attr in mapping:
-        def getter(self, _name=name, _page_attr=page_attr):
-            page = self.__dict__.get(_page_attr)
-            if page is not None:
-                return getattr(page, _name)
-            return self.__dict__.get(_name)
-
-        def setter(self, value, _name=name, _page_attr=page_attr):
-            page = self.__dict__.get(_page_attr)
-            if page is not None:
-                setattr(page, _name, value)
-            else:
-                self.__dict__[_name] = value
-
-        setattr(MainWindow, name, property(getter, setter))
-
-
-_bind_settings_forward_properties()
 
 
 def run_app(argv: list[str] | None = None) -> int:

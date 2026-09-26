@@ -95,6 +95,10 @@
 - `gui_qt/settings/page_chrome.py`：迁移页共用 chrome。
 - `gui_qt/settings/models_page.py`：Phase D 迁出的「模型」`SettingsPage`；无局部 worker，目录
   extras 由宿主注入，保存仍走 `MainWindow._on_save_config`。
+- #528：LiteLLM / Models 内部状态不再转发到 `MainWindow`；目录/版本/连接事件由页面直接处理。
+  `_settings_save_extras()` 读取页面修改标志，`_owned_background_threads()` 读取页面 warmup worker；
+  `_litellm_provider_registry()` 为密钥页提供已加载页面编辑值或未加载时的保存配置。
+  宿主剩余控件别名、安装/保存/关闭薄委托的实际用途见[架构说明](architecture.md#528-settings-内部兼容清理)。
 - `gui_qt/settings/field_widgets.py`：基础 SettingField 控件工厂。
 - `gui_qt/settings/project_page.py`：Phase D 迁出的「项目」`SettingsPage`；SDK 浏览/查找/下载
   仍由宿主对话框与 `SdkInstallWorker` 执行。

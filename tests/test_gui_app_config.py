@@ -6,6 +6,7 @@ from pathlib import Path
 
 try:
     from gui_qt.app import MainWindow
+    from gui_qt.settings import models_page
 except ImportError as exc:
     # Skip when PySide6 is missing or Qt system libraries are unavailable (e.g. headless CI).
     MainWindow = None  # type: ignore[assignment]
@@ -306,7 +307,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(models, ["gemini-primary", "gemini-fallback"])
 
     def test_missing_batch_thinking_uses_cli_default_for_supported_model(self):
-        thinking_level = self.window._batch_thinking_value_for_load(
+        thinking_level = models_page.batch_thinking_value_for_load(
             {},
             "gemini-3.5-flash",
         )
@@ -314,7 +315,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(thinking_level, "minimal")
 
     def test_explicit_empty_batch_thinking_overrides_supported_model_default(self):
-        thinking_level = self.window._batch_thinking_value_for_load(
+        thinking_level = models_page.batch_thinking_value_for_load(
             {"thinking_level": ""},
             "gemini-3.5-flash",
         )
@@ -322,7 +323,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(thinking_level, "")
 
     def test_empty_batch_thinking_is_saved_after_user_change_for_supported_model(self):
-        should_save = self.window._should_save_batch_thinking_level(
+        should_save = models_page.should_save_batch_thinking_level(
             {},
             "gemini-3.5-flash",
             "",
@@ -332,7 +333,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertTrue(should_save)
 
     def test_empty_batch_thinking_is_not_saved_for_implicit_supported_model_switch(self):
-        should_save = self.window._should_save_batch_thinking_level(
+        should_save = models_page.should_save_batch_thinking_level(
             {},
             "gemini-3.5-flash",
             "",
@@ -342,7 +343,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(should_save)
 
     def test_empty_batch_thinking_is_not_added_for_unsupported_model(self):
-        should_save = self.window._should_save_batch_thinking_level(
+        should_save = models_page.should_save_batch_thinking_level(
             {},
             "gemini-2.5-flash",
             "",
@@ -352,7 +353,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(should_save)
 
     def test_supported_model_switch_defaults_empty_implicit_selection_to_minimal(self):
-        thinking_level = self.window._batch_thinking_value_for_model_change(
+        thinking_level = models_page.batch_thinking_value_for_model_change(
             "gemini-3.5-flash",
             "",
             False,
@@ -362,7 +363,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(thinking_level, "minimal")
 
     def test_supported_model_switch_preserves_explicit_empty_selection(self):
-        thinking_level = self.window._batch_thinking_value_for_model_change(
+        thinking_level = models_page.batch_thinking_value_for_model_change(
             "gemini-3.5-flash",
             "",
             False,
@@ -603,7 +604,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
         self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
         self.window.batch_thinking_combo = FakeCombo(data="minimal")
-        self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
         self.window._refresh_project_label = lambda: None
@@ -716,7 +716,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.sync_embedding_combo = FakeCombo("gemini-embedding-001")
         self.window.batch_embedding_combo = FakeCombo("gemini-embedding-001")
         self.window.batch_thinking_combo = FakeCombo(data="minimal")
-        self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
         self.window._refresh_project_label = lambda: None
@@ -824,7 +823,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         }
         self.window._advanced_setting_error_labels = {}
         self.window._settings_nav_rows = {}
-        self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: FakeStatusBar()
@@ -944,7 +942,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         }
         self.window._settings_nav_rows = {"workspace": 0, "project": 1, "advanced": 6}
         self.window.settings_nav = nav
-        self.window._batch_thinking_user_changed = False
         self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: status_bar
@@ -1766,13 +1763,14 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.sync_inject_published_brief_cb = FakeCheckBox()
         self.window.bootstrap_on_build_cb = FakeCheckBox()
         self.window.context_storage_game_cb = FakeCheckBox()
-        self.window.sync_model_combo = FakeCombo()
-        self.window.batch_model_combo = FakeCombo()
-        self.window.sync_embedding_combo = FakeCombo()
-        self.window.batch_embedding_combo = FakeCombo()
-        self.window.batch_thinking_combo = FakeCombo()
-        for text, data in (("（不启用）", ""), ("最小", "minimal")):
-            self.window.batch_thinking_combo.addItem(text, data)
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        page = models_page.ModelsSettingsPage()
+        self.window._models_settings_page = page
+        page.attach_widget_aliases(self.window)
+        self.addCleanup(page.deleteLater)
+        self.addCleanup(page.widget.deleteLater)
+        self._app = app
         self.window.theme_combo = FakeCombo()
         for text, data in (("跟随系统", "system"), ("浅色", "light"), ("深色", "dark")):
             self.window.theme_combo.addItem(text, data)
@@ -2630,8 +2628,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window.state = FakeState()
         self.window._loading_config_to_ui = False
-        self.window._batch_thinking_user_changed = False
-        self.window._updating_batch_thinking_combo = False
         self.window.rag_enabled_cb = FakeCheckBox()
         self.window.source_index_enabled_cb = FakeCheckBox()
         self.window.sync_source_index_enabled_cb = FakeCheckBox()
@@ -2701,8 +2697,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window.state = FakeState()
         self.window._loading_config_to_ui = False
-        self.window._batch_thinking_user_changed = False
-        self.window._updating_batch_thinking_combo = False
         self.window.rag_enabled_cb = FakeCheckBox()
         self.window.source_index_enabled_cb = FakeCheckBox()
         self.window.sync_source_index_enabled_cb = FakeCheckBox()
