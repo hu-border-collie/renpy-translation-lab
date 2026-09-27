@@ -39,10 +39,13 @@
      统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。
    - `sync_request.py` 持有共享请求执行、响应提取与重试。`SyncRunService` 直接调用它，
      不再为执行请求导入 CLI；`gemini_translate_batch.run_sync_request` 只装配依赖并单向转发。
-     `SyncRequestRuntime` 是短期依赖快照：timeout/custom providers 来自已应用的
-     `translator_runtime`，凭据访问/轮换复用同一 runtime；CLI 可显式注入 SDK client factory。
-     模型仍只取 frozen ModelRoutingPlan。durable 固定 `retry_attempts=1`、
-     `allow_credential_rotation=False`，重试由外层执行器记录为新的 attempt。
+     `SyncRequestRuntime` 是当前进程内的短期依赖：生产 service 创建时绑定 timeout、
+     深复制 custom providers，并把 Gemini key 列表、当前选择及 SDK client factory 绑定到任务；
+     key 只在内存回调内，不进入 plan、数据库或可见 repr。模型与地址仍来自 frozen
+     ModelRoutingPlan。durable 固定 `retry_attempts=1`、`allow_credential_rotation=False`，
+     包括关闭 LiteLLM adapter 内部的限流换 key；重试由外层执行器记录为新 attempt。
+     跨进程 resume 重新装配当前凭据并执行原有 freshness、credential_ref 与路由检查；
+     env/keyring 等外部凭据源仍按引用在请求时解析。非 durable CLI 保留进程级轮换。
    - Gemini Batch 继续使用 Batch 生命周期，但与 Sync 消费相同 TranslationPlan 合同。
 5. **检查与写回**
    - 模型结果先规范化并检查，再生成绑定 preview，最后由公共 apply 安全层写回。

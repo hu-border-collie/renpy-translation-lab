@@ -1,7 +1,7 @@
 # 维护复杂度治理路线
 
-> 状态：2026-09-27；第一轮已完成，第二轮已登记、尚未实施，后续仅为候选。
-> 核验基线：[`main@d779312`](https://github.com/hu-border-collie/renpy-translation-lab/commit/d77931213138dbeb18943835fa63ddeec522357a)。
+> 状态：2026-09-27；第一轮已完成，第二轮本地实现与验证完成、待独立审查，后续仅为候选。
+> 第二轮实现基线：[`main@585d608`](https://github.com/hu-border-collie/renpy-translation-lab/commit/585d60829736b4686ed977303c92c87639cba157)。
 > 本文管理方向、优先顺序和停止条件；实现事实见[架构概览](../architecture.md)与[调用链索引](../code_paths.md)。
 
 ## 目标与工作方式
@@ -25,12 +25,14 @@
 
 ## 下一轮：耐久同步请求依赖隔离
 
-执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，状态为待实施。
+执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，状态为本地实现与验证完成、待独立审查；尚未推送或更新 issue。
 
-当前 `sync_request.runtime_dependencies()` 复制部分配置，但客户端工厂与凭据预算/轮换回调
-仍读取 `translator_runtime` 的可变状态。`build_production_sync_run_service()` 未显式获得
-依赖时，由后续 adapter 构造补齐；durable CLI 注入的 `create_batch_client` 也需追踪其实际读取。
-这是静态耦合证据，尚未证明实际发生了串项目故障。
+原有 `sync_request.runtime_dependencies()` 复制部分配置，但客户端工厂与凭据预算/轮换回调
+仍读取 `translator_runtime` 的可变状态。已用生产 adapter + fake transport 重现 A 创建后
+加载 B，A 请求选用 B 的 Gemini key；这是离线行为复现，不代表已发生真实生产事故。
+本轮把默认 service 装配提前至创建时，并使 durable CLI 显式装配捕获自己的 key 选择。
+custom providers 深复制；LiteLLM 内部同 attempt 限流换 key 已关闭。没有新增持久配置，
+密钥不进入 plan、数据库或可见 repr。跨进程 resume 重新装配，外部 env/keyring 保留按引用解析。
 
 本轮只处理 durable Provider 请求链：在生产 service 创建时绑定所需配置与凭据选择，
 显式传入和默认装配路径都不因随后加载另一项目而改变已绑定任务。复用现有配置和请求对象，

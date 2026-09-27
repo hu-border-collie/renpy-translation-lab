@@ -788,7 +788,8 @@ def build_production_backend_adapter(
     """
     import sync_request
 
-    request_runtime = request_runtime or sync_request.runtime_dependencies()
+    if request_runtime is None:
+        request_runtime = sync_request.runtime_dependencies()
 
     def generate_once(request: Mapping[str, Any], timeout_seconds: float):
         return sync_request.run_sync_request(
@@ -833,8 +834,13 @@ def build_production_sync_run_service(
     Freshness is recomputed from the same #346 plan and root request payloads
     that a new run would freeze.  Derived request rows are deliberately not
     compared to the root plan: they are deterministic descendants whose
-    payload hashes are already guarded by :class:`SyncRunStore`.
+    payload hashes are already guarded by :class:`SyncRunStore`. Request
+    dependencies are assembled here, before a later start/resume dispatch.
     """
+    import sync_request
+
+    if request_runtime is None:
+        request_runtime = sync_request.runtime_dependencies()
     current_plan, current_requests = _plan_build_payload(
         execution_context.plan_build
     )
