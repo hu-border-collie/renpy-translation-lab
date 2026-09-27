@@ -3,9 +3,10 @@
 import tempfile
 import unittest
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
@@ -156,8 +157,10 @@ class DurableRequestIsolationTests(unittest.TestCase):
                                  'finish_reason': 'stop'}],
                     'usage': {'total_tokens': 3}}
 
+        fake_litellm = ModuleType('litellm')
+        fake_litellm.completion = completion
         with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch('litellm.completion', side_effect=completion):
+                mock.patch.dict(sys.modules, {'litellm': fake_litellm}):
             with mock.patch.object(runtime, 'CUSTOM_LITELLM_PROVIDERS',
                                    {'customa': provider_a}):
                 plan_a = model_profile.resolve_routing_plan(
@@ -277,8 +280,10 @@ class DurableRequestIsolationTests(unittest.TestCase):
             calls.append(kwargs['api_key'])
             raise RateLimitError('limited')
 
+        fake_litellm = ModuleType('litellm')
+        fake_litellm.completion = completion
         with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch('litellm.completion', side_effect=completion), \
+                mock.patch.dict(sys.modules, {'litellm': fake_litellm}), \
                 mock.patch('litellm_provider_config.load_provider_api_key',
                            return_value='first-secret'), \
                 mock.patch('litellm_provider_config.load_provider_key_store',
