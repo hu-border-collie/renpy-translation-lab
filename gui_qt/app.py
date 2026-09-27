@@ -6995,7 +6995,7 @@ class MainWindow(QMainWindow):
         if page is not None:
             return page._custom_litellm_providers
         config = self.state.load_translator_config()
-        sync = config.get("sync") or {}
+        sync = self._config_section(config, "sync")
         try:
             return custom_provider_registry(
                 sync.get("custom_litellm_providers") or [], allow_import=False

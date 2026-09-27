@@ -77,6 +77,29 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.assertEqual(self.window._litellm_provider_registry(), {})
         self.assertIsNone(self.window._litellm_page())
 
+    def test_non_object_sync_config_does_not_block_keys_page(self) -> None:
+        for sync in ("invalid", ["invalid"], 1, True, None, "", [], False):
+            with self.subTest(sync=sync):
+                window = MainWindow()
+                config = {"sync": sync}
+                try:
+                    with (
+                        mock.patch.object(
+                            window.state, "load_translator_config", return_value=config
+                        ),
+                        mock.patch.object(window.state, "save_translator_config") as save,
+                    ):
+                        window._ensure_settings_page("api_keys")
+                        self.assertIsNotNone(window._api_keys_page())
+                        self.assertGreater(window.litellm_keys_provider_combo.count(), 0)
+                        self.assertIsNone(window._litellm_page())
+                        self.assertIs(config["sync"], sync)
+                        save.assert_not_called()
+                finally:
+                    gui_test_support.close_main_window(window)
+                    window.deleteLater()
+                    _process(self._app, 2)
+
     def test_litellm_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.litellm_page import LiteLLMSettingsPage
 
