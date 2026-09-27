@@ -62,22 +62,23 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             Path(self._temp_dir.name) / f"{self._testMethodName}.json"
         )
         self.window._litellm_cache = self.cache
-        self.window._populate_litellm_providers((), selected="")
-        self.window._set_litellm_models("", ())
-        self.window._litellm_saved_key_status.clear()
-        self.window._custom_litellm_providers = {}
-        self.window._custom_litellm_providers_load_error = ""
-        self.window._custom_litellm_providers_modified = False
-        self.window._litellm_connection_worker = None
-        self.window._litellm_catalog_worker = None
-        self.window._litellm_provider_catalog_worker = None
-        self.window._litellm_version_worker = None
+        self.window._litellm_page()._litellm_cache = self.cache
+        self.window._litellm_page()._populate_litellm_providers((), selected="")
+        self.window._litellm_page()._set_litellm_models("", ())
+        self.window._litellm_page()._litellm_saved_key_status.clear()
+        self.window._litellm_page()._custom_litellm_providers = {}
+        self.window._litellm_page()._custom_litellm_providers_load_error = ""
+        self.window._litellm_page()._custom_litellm_providers_modified = False
+        self.window._litellm_page()._litellm_connection_worker = None
+        self.window._litellm_page()._litellm_catalog_worker = None
+        self.window._litellm_page()._litellm_provider_catalog_worker = None
+        self.window._litellm_page()._litellm_version_worker = None
         self.window._refresh_litellm_catalog_status()
         self.window._on_sync_backend_changed(-1)
 
     @classmethod
     def _load_provider_choices(cls):
-        cls.window._populate_litellm_providers(
+        cls.window._litellm_page()._populate_litellm_providers(
             ("anthropic", "openai"),
             selected="openai",
         )
@@ -131,7 +132,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertFalse(actions["combo_popup_action"].icon().isNull())
 
     def test_common_providers_are_listed_before_dynamic_providers(self):
-        self.window._populate_litellm_providers(
+        self.window._litellm_page()._populate_litellm_providers(
             ("zzz_custom", "deepseek", "openrouter", "anthropic", "openai", "aaa_custom"),
         )
         values = tuple(
@@ -191,7 +192,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ["ollama/llama3", "ollama/mistral"],
             source="ollama",
         )
-        self.window._populate_litellm_providers(
+        self.window._litellm_page()._populate_litellm_providers(
             ("openai", "ollama"),
             selected="",
         )
@@ -219,7 +220,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertTrue(self.window.litellm_test_connection_btn.isEnabled())
 
     def test_display_label_free_text_resolves_to_provider_id(self):
-        self.window._populate_litellm_providers(("openai", "ollama"), selected="")
+        self.window._litellm_page()._populate_litellm_providers(("openai", "ollama"), selected="")
         self.window.litellm_provider_combo.setCurrentIndex(-1)
         self.window.litellm_provider_combo.setEditText("Ollama（本地）")
         self.assertEqual(self.window._litellm_provider_combo_value(), "ollama")
@@ -244,7 +245,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self._load_provider_choices()
         self.window.litellm_model_combo.setEditText("gpt-custom")
 
-        self.window._on_litellm_provider_changed()
+        self.window._litellm_page()._on_litellm_provider_changed()
 
         self.assertEqual(self.window.litellm_model_combo.currentText(), "gpt-custom")
 
@@ -254,7 +255,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.window.litellm_provider_combo.findData("openai")
         )
         with mock.patch("gui_qt.app.store_provider_key_store") as store_keys:
-            self.window._on_clear_litellm_provider()
+            self.window._litellm_page()._on_clear_litellm_provider()
 
         self.assertEqual(self.window._current_litellm_provider(), "")
         self.assertEqual(self.window.litellm_model_combo.currentText(), "")
@@ -266,9 +267,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         openai_index = self.window.litellm_provider_combo.findData("openai")
         self.window.litellm_provider_combo.setCurrentIndex(openai_index)
         self.window.litellm_model_combo.setEditText("gpt-custom")
-        self.window._litellm_catalog_worker = None
+        self.window._litellm_page()._litellm_catalog_worker = None
 
-        self.window._on_litellm_models_loaded(
+        self.window._litellm_page()._on_litellm_models_loaded(
             "openai",
             ("openai/gpt-current",),
             None,
@@ -288,10 +289,10 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.litellm_provider_combo.setCurrentIndex(
             self.window.litellm_provider_combo.findData("openai")
         )
-        self.window._litellm_catalog_worker = None
+        self.window._litellm_page()._litellm_catalog_worker = None
 
         with mock.patch("gui_qt.app.message_box_warning"):
-            self.window._on_litellm_models_loaded(
+            self.window._litellm_page()._on_litellm_models_loaded(
                 "openai",
                 (),
                 "offline",
@@ -311,7 +312,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.cache.select_provider("anthropic")
         self.cache.select_model("anthropic", "anthropic/cached-model")
 
-        self.window._restore_configured_litellm_model("openai/configured-model")
+        self.window._litellm_page()._restore_configured_litellm_model("openai/configured-model")
 
         self.assertEqual(self.window._current_litellm_provider(), "openai")
         self.assertEqual(
@@ -378,7 +379,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(store_keys.call_args.kwargs.get("active_index"), 1)
 
     def test_missing_key_prompts_before_model_catalog_load(self):
-        self.window._populate_litellm_providers(("deepseek",), selected="deepseek")
+        self.window._litellm_page()._populate_litellm_providers(("deepseek",), selected="deepseek")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -407,7 +408,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             worker.start.assert_called_once()
 
     def test_missing_key_shows_catalog_tip_for_official_providers(self):
-        self.window._populate_litellm_providers(("deepseek",), selected="deepseek")
+        self.window._litellm_page()._populate_litellm_providers(("deepseek",), selected="deepseek")
         self.assertEqual(self.window._litellm_provider_combo_value(), "deepseek")
         with mock.patch("gui_qt.app.load_provider_api_key", return_value=""):
             self.window._refresh_litellm_catalog_status()
@@ -487,13 +488,13 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         litellm_index = self.window.sync_backend_combo.findData("litellm")
         self.window.sync_backend_combo.setCurrentIndex(gemini_index)
         try:
-            self.window._litellm_connection_worker = None
-            self.window._on_litellm_connection_tested(True, "连接成功")
+            self.window._litellm_page()._litellm_connection_worker = None
+            self.window._litellm_page()._on_litellm_connection_tested(True, "连接成功")
             self.assertFalse(self.window.litellm_test_connection_btn.isEnabled())
 
-            self.window._litellm_catalog_worker = None
+            self.window._litellm_page()._litellm_catalog_worker = None
             with mock.patch("gui_qt.app.message_box_warning"):
-                self.window._on_litellm_models_loaded(
+                self.window._litellm_page()._on_litellm_models_loaded(
                     "openai",
                     (),
                     "catalog failed",
@@ -508,8 +509,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self._load_provider_choices()
         self.window.litellm_model_combo.setEditText("openai/gpt-current")
         self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
-        self.window._litellm_connection_worker = None
-        self.window._on_litellm_connection_tested(
+        self.window._litellm_page()._litellm_connection_worker = None
+        self.window._litellm_page()._on_litellm_connection_tested(
             True,
             "连接成功。",
             "stale-provider-model",
@@ -524,10 +525,10 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self._load_provider_choices()
         self.window.litellm_model_combo.setEditText("openai/gpt-current")
         self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
-        self.window._litellm_connection_worker = None
-        identity = self.window._litellm_connection_operation_identity()
+        self.window._litellm_page()._litellm_connection_worker = None
+        identity = self.window._litellm_page()._litellm_connection_operation_identity()
         self.assertTrue(identity)
-        self.window._on_litellm_connection_tested(True, "连接成功。", identity)
+        self.window._litellm_page()._on_litellm_connection_tested(True, "连接成功。", identity)
         self.assertEqual(
             self.window.litellm_connection_status_label.text(),
             "连接成功。",
@@ -536,22 +537,22 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
     def test_connection_test_ignores_retired_worker(self):
         current = mock.Mock()
         retired = mock.Mock()
-        self.window._litellm_connection_worker = current
+        self.window._litellm_page()._litellm_connection_worker = current
         self.window.litellm_connection_status_label.setText("正在后台发起最小请求…")
         try:
-            with mock.patch.object(self.window, "sender", return_value=retired):
-                self.window._on_litellm_connection_tested(
+            with mock.patch.object(self.window._litellm_page(), "sender", return_value=retired):
+                self.window._litellm_page()._on_litellm_connection_tested(
                     True,
                     "旧测试成功。",
                     "retired-identity",
                 )
-            self.assertIs(self.window._litellm_connection_worker, current)
+            self.assertIs(self.window._litellm_page()._litellm_connection_worker, current)
             self.assertEqual(
                 self.window.litellm_connection_status_label.text(),
                 "正在后台发起最小请求…",
             )
         finally:
-            self.window._litellm_connection_worker = None
+            self.window._litellm_page()._litellm_connection_worker = None
 
     def test_models_page_is_gemini_only(self):
         # Materialize the lazy models settings page before inspecting widgets.
@@ -604,12 +605,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.load_provider_key_store"),
             mock.patch("gui_qt.app.message_box_warning") as warning,
         ):
-            self.window._on_add_custom_litellm_provider()
+            self.window._litellm_page()._on_add_custom_litellm_provider()
 
         dialog_cls.assert_called_once()
         warning.assert_not_called()
-        self.assertIn("opencode-go", self.window._custom_litellm_providers)
-        provider = self.window._custom_litellm_providers["opencode-go"]
+        self.assertIn("opencode-go", self.window._litellm_page()._custom_litellm_providers)
+        provider = self.window._litellm_page()._custom_litellm_providers["opencode-go"]
         self.assertEqual(provider.label, "OpenCode Go")
         self.assertEqual(provider.base_url, "https://opencode.ai/zen/go/v1")
         self.assertEqual(provider.api_key_env, "OPENCODE_GO_API_KEY")
@@ -628,7 +629,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
     def test_edit_custom_provider_updates_fields_and_keeps_id(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = {
+        self.window._litellm_page()._custom_litellm_providers = {
             "opencode-go": custom_provider_registry(
                 [
                     {
@@ -639,7 +640,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 ]
             )["opencode-go"],
         }
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         self.window.custom_provider_table.selectRow(0)
         dialog = mock.Mock()
         from PySide6.QtWidgets import QDialog
@@ -655,9 +656,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             "gui_qt.app.CustomLiteLLMProviderDialog",
             return_value=dialog,
         ) as dialog_cls, mock.patch("gui_qt.app.load_provider_api_key", return_value=""), mock.patch("gui_qt.app.load_provider_key_store"):
-            self.window._on_edit_custom_litellm_provider()
+            self.window._litellm_page()._on_edit_custom_litellm_provider()
 
-        provider = self.window._custom_litellm_providers["opencode-go"]
+        provider = self.window._litellm_page()._custom_litellm_providers["opencode-go"]
         self.assertEqual(provider.base_url, "https://new.example.com/v1")
         self.assertEqual(provider.label, "OpenCode Go 新端点")
         self.assertEqual(provider.id, "opencode-go")
@@ -676,7 +677,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         from gui_qt.custom_provider_dialog import CustomLiteLLMProviderDialog
 
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = {
+        self.window._litellm_page()._custom_litellm_providers = {
             "opencode-go": custom_provider_registry(
                 [
                     {
@@ -687,7 +688,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 ]
             )["opencode-go"],
         }
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         self.window.custom_provider_table.selectRow(0)
 
         real_dialog = CustomLiteLLMProviderDialog(
@@ -725,7 +726,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ["opencode-go/gpt-4o-mini"],
             source="opencode-go",
         )
-        self.window._custom_litellm_providers = {
+        self.window._litellm_page()._custom_litellm_providers = {
             "opencode-go": custom_provider_registry(
                 [
                     {
@@ -735,23 +736,23 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 ]
             )["opencode-go"],
         }
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         self.window.custom_provider_table.selectRow(0)
         with (
             mock.patch("gui_qt.app.message_box_question", return_value="no"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_delete_custom_litellm_provider()
-        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+            self.window._litellm_page()._on_delete_custom_litellm_provider()
+        self.assertIn("opencode-go", self.window._litellm_page()._custom_litellm_providers)
 
         with (
             mock.patch("gui_qt.app.message_box_question", return_value="yes"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_delete_custom_litellm_provider()
-        self.assertEqual(self.window._custom_litellm_providers, {})
+            self.window._litellm_page()._on_delete_custom_litellm_provider()
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
         self.assertEqual(self.window.custom_provider_table.rowCount(), 0)
         self.assertEqual(self.cache.models("opencode-go").values, ())
 
@@ -786,7 +787,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 self.window._ensure_settings_page("litellm")
             self.window._load_config_to_ui(pages={"litellm"})
 
-        self.assertIn("opencode-go", self.window._custom_litellm_providers)
+        self.assertIn("opencode-go", self.window._litellm_page()._custom_litellm_providers)
         self.assertEqual(self.window.custom_provider_table.rowCount(), 1)
         index = self.window.litellm_provider_combo.findData("opencode-go")
         self.assertGreaterEqual(index, 0)
@@ -824,7 +825,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
     def test_custom_provider_model_catalog_worker_receives_registry(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -832,7 +833,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window._litellm_page()._populate_litellm_providers((), selected="opencode-go")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -853,14 +854,14 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertEqual(worker_cls.call_args.args[0], "opencode-go")
         self.assertEqual(
             worker_cls.call_args.kwargs.get("custom_providers"),
-            self.window._custom_litellm_providers,
+            self.window._litellm_page()._custom_litellm_providers,
         )
         worker.start.assert_called_once()
-        self.window._litellm_catalog_worker = None
+        self.window._litellm_page()._litellm_catalog_worker = None
 
     def test_custom_provider_connection_test_requires_key(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -868,7 +869,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window._litellm_page()._populate_litellm_providers((), selected="opencode-go")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -884,7 +885,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ) as worker_cls,
             mock.patch("gui_qt.app.message_box_information") as information,
         ):
-            self.window._on_test_litellm_connection()
+            self.window._litellm_page()._on_test_litellm_connection()
 
         worker_cls.assert_not_called()
         information.assert_called_once()
@@ -892,7 +893,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
 
     def test_custom_provider_connection_test_uses_api_key_env(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -901,7 +902,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window._litellm_page()._populate_litellm_providers((), selected="opencode-go")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -925,18 +926,18 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ):
                 worker = mock.Mock()
                 worker_cls.return_value = worker
-                self.window._on_test_litellm_connection()
+                self.window._litellm_page()._on_test_litellm_connection()
 
             information.assert_not_called()
             worker_cls.assert_called_once()
             self.assertEqual(worker_cls.call_args.args[1], "env-custom-key")
             worker.start.assert_called_once()
         finally:
-            self.window._litellm_connection_worker = None
+            self.window._litellm_page()._litellm_connection_worker = None
 
     def test_custom_provider_model_catalog_uses_api_key_env(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -945,7 +946,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window._litellm_page()._populate_litellm_providers((), selected="opencode-go")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -973,11 +974,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.assertEqual(worker_cls.call_args.kwargs.get("api_key"), "env-custom-key")
             worker.start.assert_called_once()
         finally:
-            self.window._litellm_catalog_worker = None
+            self.window._litellm_page()._litellm_catalog_worker = None
 
     def test_keyless_custom_provider_catalog_skips_key_gate(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "local-vllm",
@@ -986,7 +987,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="local-vllm")
+        self.window._litellm_page()._populate_litellm_providers((), selected="local-vllm")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
@@ -1009,11 +1010,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.assertEqual(worker_cls.call_args.kwargs.get("api_key"), "")
             worker.start.assert_called_once()
         finally:
-            self.window._litellm_catalog_worker = None
+            self.window._litellm_page()._litellm_catalog_worker = None
 
     def test_delete_current_provider_clears_selection(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -1021,12 +1022,12 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._populate_litellm_providers((), selected="opencode-go")
+        self.window._litellm_page()._populate_litellm_providers((), selected="opencode-go")
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("litellm")
         )
         self.window.litellm_model_combo.setEditText("opencode-go/gpt-4o-mini")
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         self.window.custom_provider_table.selectRow(0)
         with (
             mock.patch(
@@ -1036,16 +1037,16 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_delete_custom_litellm_provider()
+            self.window._litellm_page()._on_delete_custom_litellm_provider()
 
         self.assertIn("当前正在使用", question.call_args.args[2])
-        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
         self.assertEqual(self.window._current_litellm_provider(), "")
         self.assertEqual(self.window.litellm_model_combo.currentText(), "")
 
     def test_refresh_custom_provider_table_restores_selection(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -1057,7 +1058,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 },
             ]
         )
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         rows = self.window.custom_provider_table.rowCount()
         self.assertEqual(rows, 2)
         target = None
@@ -1068,7 +1069,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.assertIsNotNone(target)
         self.window.custom_provider_table.selectRow(target)
 
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
 
         selected = self.window._selected_custom_provider()
         self.assertEqual(selected, "opencode-go")
@@ -1096,7 +1097,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 self.window._ensure_settings_page("litellm")
             self.window._load_config_to_ui(pages={"litellm"})
 
-        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
         append_log.assert_called_once()
         self.assertIn("custom_litellm_providers", append_log.call_args.args[0])
         status_text = self.window.custom_provider_status_label.text()
@@ -1130,8 +1131,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         ):
             self.window._load_config_to_ui(pages={"litellm"})
 
-        self.assertEqual(self.window._custom_litellm_providers, {})
-        self.assertTrue(self.window._custom_litellm_providers_load_error)
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_load_error)
 
         with (
             mock.patch.object(
@@ -1188,9 +1189,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         ):
             self.window._load_config_to_ui(pages={"litellm"})
 
-        self.assertEqual(self.window._custom_litellm_providers, {})
-        self.assertTrue(self.window._custom_litellm_providers_load_error)
-        self.assertFalse(self.window._custom_litellm_providers_modified)
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_load_error)
+        self.assertFalse(self.window._litellm_page()._custom_litellm_providers_modified)
 
         with (
             mock.patch.object(
@@ -1238,8 +1239,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(self.window._custom_litellm_providers, {})
-        self.assertTrue(self.window._custom_litellm_providers_load_error)
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_load_error)
         append_log.assert_called_once()
         self.assertIn("快照", append_log.call_args.args[0])
 
@@ -1249,7 +1250,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window.sync_backend_combo.setCurrentIndex(
             self.window.sync_backend_combo.findData("gemini")
         )
-        self.window._custom_litellm_providers = custom_provider_registry(
+        self.window._litellm_page()._custom_litellm_providers = custom_provider_registry(
             [
                 {
                     "id": "opencode-go",
@@ -1257,7 +1258,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             ]
         )
-        self.window._refresh_custom_provider_table()
+        self.window._litellm_page()._refresh_custom_provider_table()
         self.window.custom_provider_table.selectRow(0)
         with (
             mock.patch(
@@ -1267,9 +1268,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_delete_custom_litellm_provider()
-        self.assertEqual(self.window._custom_litellm_providers, {})
-        self.assertTrue(self.window._custom_litellm_providers_modified)
+            self.window._litellm_page()._on_delete_custom_litellm_provider()
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_modified)
 
         config = {
             "sync": {
@@ -1342,7 +1343,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             ),
         ):
             self.window._load_config_to_ui(pages={"litellm"})
-        self.assertTrue(self.window._custom_litellm_providers_load_error)
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_load_error)
 
         # Simulate the user adding a new provider after the failed load.
         from PySide6.QtWidgets import QDialog
@@ -1361,9 +1362,9 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_add_custom_litellm_provider()
-        self.assertIn("new-one", self.window._custom_litellm_providers)
-        self.assertTrue(self.window._custom_litellm_providers_modified)
+            self.window._litellm_page()._on_add_custom_litellm_provider()
+        self.assertIn("new-one", self.window._litellm_page()._custom_litellm_providers)
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_modified)
         with (
             mock.patch.object(
                 self.window.state,
@@ -1406,8 +1407,8 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 }
             )
 
-        self.assertIn("opencode-go", self.window._custom_litellm_providers)
-        self.assertFalse(self.window._custom_litellm_providers_load_error)
+        self.assertIn("opencode-go", self.window._litellm_page()._custom_litellm_providers)
+        self.assertFalse(self.window._litellm_page()._custom_litellm_providers_load_error)
         append_log.assert_not_called()
 
     def test_detach_litellm_warmup_keeps_running_worker_alive(self):
@@ -1415,11 +1416,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._ensure_settings_page("litellm")
         worker = mock.Mock()
         worker.isRunning.return_value = True
-        self.window._litellm_module_warmup_worker = worker
+        self.window._litellm_page()._litellm_module_warmup_worker = worker
 
         self.window._detach_litellm_module_warmup()
 
-        self.assertIsNone(self.window._litellm_module_warmup_worker)
+        self.assertIsNone(self.window._litellm_page()._litellm_module_warmup_worker)
         self.assertIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
         worker.setParent.assert_called_once_with(None)
         worker.deleteLater.assert_not_called()
@@ -1428,11 +1429,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._ensure_settings_page("litellm")
         worker = mock.Mock()
         worker.isRunning.return_value = False
-        self.window._litellm_module_warmup_worker = worker
+        self.window._litellm_page()._litellm_module_warmup_worker = worker
 
         self.window._detach_litellm_module_warmup()
 
-        self.assertIsNone(self.window._litellm_module_warmup_worker)
+        self.assertIsNone(self.window._litellm_page()._litellm_module_warmup_worker)
         worker.deleteLater.assert_called_once_with()
         self.assertNotIn(worker, _RETIRED_LITELLM_WARMUP_WORKERS)
 
@@ -1451,30 +1452,30 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 "_load_config_to_ui",
             ) as reload_page,
             mock.patch.object(
-                self.window,
+                self.window._litellm_page(),
                 "_after_custom_providers_changed",
             ) as refresh,
         ):
-            self.window._on_litellm_module_warmed(None)
+            self.window._litellm_page()._on_litellm_module_warmed(None)
 
         reload_page.assert_not_called()
         refresh.assert_called_once_with()
-        self.assertFalse(self.window._custom_litellm_providers_load_error)
+        self.assertFalse(self.window._litellm_page()._custom_litellm_providers_load_error)
 
     def test_module_warmup_skips_refresh_when_providers_edited(self):
         self.window._ensure_settings_page("litellm")
-        self.window._custom_litellm_providers_modified = True
+        self.window._litellm_page()._custom_litellm_providers_modified = True
         with (
             mock.patch.object(
                 self.window.state,
                 "load_translator_config",
             ) as load,
             mock.patch.object(
-                self.window,
+                self.window._litellm_page(),
                 "_after_custom_providers_changed",
             ) as refresh,
         ):
-            self.window._on_litellm_module_warmed(None)
+            self.window._litellm_page()._on_litellm_module_warmed(None)
 
         load.assert_not_called()
         refresh.assert_not_called()
@@ -1497,15 +1498,15 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 return_value=config,
             ),
             mock.patch.object(
-                self.window,
+                self.window._litellm_page(),
                 "_after_custom_providers_changed",
             ),
             mock.patch.object(self.window, "_append_log"),
         ):
-            self.window._on_litellm_module_warmed(None)
+            self.window._litellm_page()._on_litellm_module_warmed(None)
 
-        self.assertTrue(self.window._custom_litellm_providers_load_error)
-        self.assertEqual(self.window._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_load_error)
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
 
     def test_module_warmup_cleans_retired_workers(self):
         self.window._ensure_settings_page("litellm")
@@ -1520,11 +1521,11 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
                 return_value=config,
             ),
             mock.patch.object(
-                self.window,
+                self.window._litellm_page(),
                 "_after_custom_providers_changed",
             ),
         ):
-            self.window._on_litellm_module_warmed(None)
+            self.window._litellm_page()._on_litellm_module_warmed(None)
 
         self.assertNotIn(retired, _RETIRED_LITELLM_WARMUP_WORKERS)
         retired.deleteLater.assert_called_once_with()
@@ -1534,7 +1535,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         self.window._ensure_settings_page("litellm")
         worker = mock.Mock()
         worker.isRunning.return_value = True
-        self.window._litellm_module_warmup_worker = worker
+        self.window._litellm_page()._litellm_module_warmup_worker = worker
         with mock.patch.object(
             self.window,
             "findChildren",
@@ -1543,7 +1544,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             self.assertEqual(self.window._owned_background_threads(), ())
 
         # A retired (detached, still importing) worker is excluded as well.
-        self.window._litellm_module_warmup_worker = None
+        self.window._litellm_page()._litellm_module_warmup_worker = None
         _RETIRED_LITELLM_WARMUP_WORKERS.add(worker)
         with mock.patch.object(
             self.window,

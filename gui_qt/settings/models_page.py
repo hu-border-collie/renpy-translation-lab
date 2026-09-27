@@ -38,13 +38,6 @@ MODELS_WIDGET_ATTRS: tuple[str, ...] = (
     "batch_thinking_combo",
 )
 
-MODELS_FORWARDED_ATTRS: frozenset[str] = frozenset(
-    {
-        "_batch_thinking_config_has_key",
-        "_batch_thinking_user_changed",
-        "_updating_batch_thinking_combo",
-    }
-)
 
 _FIELD_WIDGETS = {
     "sync_model": "sync_model_combo",

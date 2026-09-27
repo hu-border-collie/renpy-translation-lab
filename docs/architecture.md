@@ -114,6 +114,25 @@ Phase B 已消除的 as-is 缺口：
 完整页面清单、字段/即时持久化所有权与测试入口见
 [#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
 
+### #528 Settings 内部兼容清理
+
+LiteLLM 的 worker、版本、供应商编辑状态与 Models 的 thinking 状态只由页面持有。
+主窗口不再通过动态 property 转发这些内部属性，也不再保存构造前的平行副本；
+安装提示、版本提示、模型 thinking 切换均使用页面实现。页面未加载时的刷新回调为空操作，
+不会触发 lazy materialize。测试直接检查页面状态，安装控件测试使用真实独立页面。
+
+保留的宿主接口及调用者：
+
+- 控件别名与 `_settings_widget`：现有 `_load_config_to_ui`、快照恢复、推荐值与宿主布局仍使用；
+  `_settings_widget` 只读取已构造控件，普通属性仍由 registry 按需创建页面。
+- LiteLLM 薄委托：配置快照/保存、安装完成刷新、凭据管理和关闭流程使用；
+  无生产调用者的目录/连接/版本事件转发已删除，信号直接连接页面方法。
+- `_litellm_cache`：主窗口注入同一个缓存实例给 LiteLLM 页，密钥页也读取其供应商目录；
+  worker/编辑状态不在宿主复制。密钥页通过 `_litellm_provider_registry` 读取已加载页的编辑值，
+  未加载时读取保存的配置（禁止同步导入 LiteLLM）。
+- Models 薄委托与 save extras：配置恢复/推荐值及首次保存使用，thinking 修改标志取自页面；
+  未构造页面不再运行旧控件算法。其他页面的宿主 load/save 生命周期不在本轮重写。
+
 ### target（#202 Phase B 最小接线、Phase C LiteLLM 页与 Phase D 十页已落地；保存收口仍属 D）
 
 已落地目录：

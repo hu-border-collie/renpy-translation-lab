@@ -50,6 +50,56 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             warnings.simplefilter("ignore", DeprecationWarning)
             QApplication.setActiveWindow(self.window)
 
+    def test_unloaded_page_callbacks_preserve_lazy_lifecycle(self) -> None:
+        self.assertIsNone(self.window._litellm_page())
+        self.assertIsNone(self.window._models_page())
+        self.window._on_sync_backend_changed()
+        self.window._refresh_litellm_version_label()
+        self.window._set_batch_thinking_value("minimal")
+        self.assertIsNone(self.window._litellm_page())
+        self.assertIsNone(self.window._models_page())
+
+    def test_provider_registry_uses_saved_config_then_page_edits(self) -> None:
+        provider = {"id": "example-vendor", "base_url": "https://example.com/v1"}
+        config = {"sync": {"custom_litellm_providers": [provider]}, "batch": {}}
+        with mock.patch.object(self.window.state, "load_translator_config", return_value=config):
+            self.assertIn("example-vendor", self.window._litellm_provider_registry())
+            self.assertIsNone(self.window._litellm_page())
+            self.window._ensure_settings_page("litellm")
+            self.window._litellm_page().load({"custom_litellm_providers": []}, restore=True)
+            self.assertEqual(self.window._litellm_provider_registry(), {})
+        self.assertNotIn("_custom_litellm_providers", self.window.__dict__)
+        self.assertNotIn("_litellm_latest_version", self.window.__dict__)
+
+    def test_invalid_saved_providers_do_not_break_unloaded_keys_page(self) -> None:
+        config = {"sync": {"custom_litellm_providers": [{"id": "bad", "base_url": "invalid"}]}}
+        with mock.patch.object(self.window.state, "load_translator_config", return_value=config):
+            self.assertEqual(self.window._litellm_provider_registry(), {})
+        self.assertIsNone(self.window._litellm_page())
+
+    def test_non_object_sync_config_does_not_block_keys_page(self) -> None:
+        for sync in ("invalid", ["invalid"], 1, True, None, "", [], False):
+            with self.subTest(sync=sync):
+                window = MainWindow()
+                config = {"sync": sync}
+                try:
+                    with (
+                        mock.patch.object(
+                            window.state, "load_translator_config", return_value=config
+                        ),
+                        mock.patch.object(window.state, "save_translator_config") as save,
+                    ):
+                        window._ensure_settings_page("api_keys")
+                        self.assertIsNotNone(window._api_keys_page())
+                        self.assertGreater(window.litellm_keys_provider_combo.count(), 0)
+                        self.assertIsNone(window._litellm_page())
+                        self.assertIs(config["sync"], sync)
+                        save.assert_not_called()
+                finally:
+                    gui_test_support.close_main_window(window)
+                    window.deleteLater()
+                    _process(self._app, 2)
+
     def test_litellm_page_is_migrated_settings_page(self) -> None:
         from gui_qt.settings.litellm_page import LiteLLMSettingsPage
 
@@ -527,9 +577,9 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
         ):
-            self.window._on_delete_custom_litellm_provider()
-        self.assertEqual(self.window._custom_litellm_providers, {})
-        self.assertTrue(self.window._custom_litellm_providers_modified)
+            self.window._litellm_page()._on_delete_custom_litellm_provider()
+        self.assertEqual(self.window._litellm_page()._custom_litellm_providers, {})
+        self.assertTrue(self.window._litellm_page()._custom_litellm_providers_modified)
 
         with (
             mock.patch.object(
@@ -569,7 +619,7 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             self.window._ensure_settings_page("models")
         empty_index = self.window.batch_thinking_combo.findData("")
         self.window.batch_thinking_combo.setCurrentIndex(empty_index)
-        self.assertTrue(self.window._batch_thinking_user_changed)
+        self.assertTrue(self.window._models_page()._batch_thinking_user_changed)
         self.assertEqual(
             set(self.window._settings_pages_built).intersection(
                 self.window._settings_registry.config_page_keys()
