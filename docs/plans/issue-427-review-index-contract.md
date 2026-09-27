@@ -1,6 +1,7 @@
 # #427 普通译文逐条审校索引与订正页合同（S1 核心 / CLI）
 
-> **状态**：S1 只读索引 + 人工决定日志 + CLI 已实现；S2 GUI 订正页待做。
+> **状态（2026-09-27）**：S1 核心 / CLI 由 PR #515、#517 合并；S2 GUI 订正页与 revision proposal 衔接由 PR #523 合并。#427 仍 OPEN，issue 要求的真实大语料、实际操作和游戏验收尚待统一实测。
+> 本文继续冻结 review index / decision 合同；当前 GUI 操作见 [GUI 工作台](../gui_workbench.md)。
 > **关联**：#427、#318、#320、#321、#348、#362、#363。
 > **非目标**：不新增 SQLite / 第二翻译库；不重做质量或复用算法；不绕过
 > `preview-revisions` / `apply-revisions`；不把 `ignored` 当作质量确认或复用接受；

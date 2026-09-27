@@ -4,7 +4,7 @@
 
 同步执行与 Gemini Batch 都是一等翻译入口，通过 ModelProfile / ExecutionStrategy 选择（见 [模型配置迁移](model_config_migration.md) 与 [Provider / 执行策略 Smoke Matrix](provider_smoke_matrix.md)）。同步路径支持完整项目翻译的耐久执行（逐 chunk 持久化、恢复、取消与派生），也适合小范围即时翻译、补译和局部验证；它与 Batch 共用 TranslationPlan、上下文装配与检查 / 写回合同。
 
-同步命令默认只生成可审查预览，只有显式传入该次预览的 manifest / run 才会写回项目。需要远程排队、成本折扣和可恢复下载时使用 [Batch 工作流](batch_workflows.md)；GUI 用户可直接阅读 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
+同步命令默认只生成可审查预览，只有显式传入该次预览的 manifest / run 才会写回项目。需要远程排队、成本折扣和可恢复下载时使用 [Batch 工作流](batch_workflows.md)；GUI 用户可直接阅读 [GUI 工作台 · 同步翻译](gui_workbench.md#同步执行耐久)。
 
 ## 前置条件
 
@@ -136,7 +136,7 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 
 启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源、成本 / coverage / 已有质量摘要与风险。文本模式在 counts 后打印这三行摘要；`--output json` 仍只输出 envelope。未知价格不显示为 0，stale / 缺失质量报告不显示为通过。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配。GUI 的「开始」会先跑该命令并展示同一 payload 的确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。
 
-GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程并自动用只读 `sync-status --latest` 定位该运行。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步翻译](gui_workbench.md#同步翻译)。
+GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程并自动用只读 `sync-status --latest` 定位该运行。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步翻译](gui_workbench.md#同步执行耐久)。
 
 ### 1. 生成预览
 

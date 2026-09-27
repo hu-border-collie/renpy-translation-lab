@@ -1,6 +1,6 @@
 # #431 S3：最终审校 Sync 执行合同（final_review 解绑 gemini_batch）
 
-> **状态**：S3 实现完成（PR 待合并）；S3.0 合同、S3.1 core/CLI 与 S3.2 GUI 分流均已落地。
+> **状态（2026-09-27）**：S3 已由 PR #506 合并；final_review Sync 分流已交付，Batch 默认路径保持不变。尚余 #431 / #344 的真实 Provider smoke，不是该切片待开发。
 > S1/S2 见
 > [issue-431-openai-compatible-contract.md](issue-431-openai-compatible-contract.md) 与
 > [issue-431-openai-compatible-s2-contract.md](issue-431-openai-compatible-s2-contract.md)。

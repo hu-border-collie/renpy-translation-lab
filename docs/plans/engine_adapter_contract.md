@@ -1,14 +1,7 @@
 # Engine Adapter P0：Ren'Py 当前调用链与合同设计
 
-> 状态：#265 / #285 的 P0 设计基线；#265 P1 已按本文合同实现只读
-> `RenPyAdapter`、coverage/review 产物，并迁移 sync 与普通 Batch translation
-> build 的扫描入口；#265 P2 已实现 Ren'Py relocation、validation、声明式
-> writeback plan 及 sync/Batch/revision 的公共 plan 消费；#330 实现 P3 的
-> source-only ProjectSnapshot / GameVersion JSON/JSONL 与只读
-> reconciliation/freshness；#354 / PR #358 实现 P4 译文复用候选与人工确认。
-> 已在私有 Ren'Py 项目副本上完成 P1–P4 门禁实测；P5 TyranoScript V600+
-> 验证 adapter 已交付。P6 产品化接入尚未交付。
-> 当前实现说明见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。
+> **当前状态（2026-09-27）**：本文是 #265 / #285 的 P0 设计基线；#265 P0–P6 已全部交付并于 2026-09-13 关闭，P6 产品化与 GUI 收口见 #424。
+> 本文保留 adapter、coverage、版本快照、复用和写回技术合同；当前实现与用户边界见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)。第三 Adapter #272 已暂缓，真实大型项目 coverage 频率归因仍由 #470 跟踪。
 
 ## 1. 范围与硬性边界
 
@@ -775,7 +768,7 @@ AND review.review_input_digest == live review_input_digest
 AND unresolved_findings == 0
 ```
 
-## 8. 分阶段接入边界
+## 8. 分阶段接入边界（历史计划；#265 P0–P6 已完成）
 
 | 路径 | P1 首阶段 | 后续边界 |
 |---|---|---|

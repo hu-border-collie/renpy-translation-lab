@@ -66,23 +66,24 @@
 - [项目沿革](project_history.md)
 - [story_graph.example.json](story_graph.example.json) · [story_graph.schema.json](story_graph.schema.json)
 
-### 规划中（非用户手册）
+### 规划、合同与研究（非用户手册）
 
-进行中的设计与路线图在 [plans/](plans/README.md)。落地后应写入现行手册，旧稿迁至 [archive/](archive/README.md)。
+完整的计划目录、当前状态、合并证据与剩余 issue 见[规划与设计索引](plans/README.md)（核对至 2026-09-27 main）。有日期的研究仍保留原基线；索引中的当前状态说明不会改写其历史结论。
 
-- [七类规划方向重新评估（2026-09-19）](plans/plan_reassessment_2026-09-19.md)：代码与离线验证证据、实施取舍及触发条件；复用决策 GUI 与质量白名单拆分进入 #512 / #513，其余继续关联已有任务。
-- [Agent 翻译工具包：方向评估与最小验证提案](plans/agent_translation_toolkit.md)：由宿主 Agent 决策和翻译，项目提供工作包、成果接收与安全写回；#508 已提供最小实验 CLI，串并行真实章节对照及整体产品化仍待验证。
-- [#202 Phase A：Settings 页面契约与现状基线](plans/issue-202-settings-page-contract.md)：冻结 page adapter/coordinator 合同，记录 10 页字段/即时持久化所有权与 as-is 缺口；Phase B 最小接线已合并（PR #434）；Phase C LiteLLM 垂直迁移已落地独立 `SettingsPage`；Phase D 已将 10 个 Settings 页迁出为独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；legacy adapter 与旧 builder 已删除；两文件写盘仍在 `MainWindow`。
-- [#348 P0–P2：Model Routing 配置、迁移合同与生产读取](plans/issue-348-model-routing-config-contract.md)：冻结版本化 `model_routing` schema 与迁移事务；P1 离线能力与 P2 兼容入口生产读取已落地，P3 统一设置页待推进。
-- [#347 → #348 耐久 Sync 产品化交接](plans/issue-347-to-348-handoff.md)：冻结服务/snapshot/CLI/制品接缝与验收边界。
-- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](plans/engine_adapter_contract.md)：调用链审计、adapter/coverage schema 与阶段接入基线。
-- [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](plans/visual_novel_localization_matrix.md) · [多引擎生态与工具源码研究](plans/multi_engine_localization_ecosystem_research.md) · [GitHub 本地化项目研究](plans/github_localization_projects_research.md)
-- [Translator++ 多引擎接入评估](plans/translatorpp_integration_assessment.md)：外部 parser / `.trans` / MCP 能力、当前 issue 影响、公共合同缺口与最小实验；尚未实现 bridge，不改变 #272 暂缓状态。
-- [#364 真实项目质量规则校准执行手册](plans/issue-364-calibration-runbook.md) · [校准基线](plans/quality_calibration_baseline.md)
-- [#426 Ren'Py coverage block 归因报告](plans/renpy_coverage_block_attribution.md)：只读脚本与原创 fixture 的 unknown / unsupported / parse_error 归因、漏扫检查和后续拆单草案；#460–#464 五条 follow-up 与跨行 writeback（#471）已全部实现；真实大型项目频率归因见 #470。
-- [#487 Ren'Py 字体字形覆盖只读 spike](plans/renpy_font_coverage_spike.md)：静态字体引用解析、字体 cmap 覆盖、`checked / missing / unavailable / unknown` 报告、可再分发 Noto 子集 fixture 与 doctor / preflight 接入建议；不启动游戏、不替换字体。
-- [#427 普通译文逐条审校索引与订正页合同](plans/issue-427-review-index-contract.md)：可重建的普通译文 review index、独立人工决定日志与 `needs_recheck` 绑定语义，以及 `review-index-*` / `review-decisions-*` CLI；GUI 订正页与 revision proposal 属 S2。
-
+- 本轮工程已分别由 PR #522（#521）、#515 / #517 / #523（#427 S1/S2）、#524（#512）和 #527（#513）合并。#427 仍等待真实语料、操作与游戏验收；#512 / #513 的 issue 验收清单尚未回填，OPEN 不表示实现缺失。
+- 统一真实项目 / Provider 验收仍跟踪 #518、#508、#344、#431、#470；工程合并、CI 或合成 fixture 均不能替代这些证据。操作与记录入口分别见[外部初译工作包](external_translation_work.md)、[Provider Smoke Matrix](provider_smoke_matrix.md)及计划索引。
+- #509 Translator++ 往返、#520 OpenRouter Batch、#272 第三引擎与 #147 Story Graph 不属于本轮；#509 / #520 先做实验，再决定是否创建生产接入任务。
+- [维护复杂度治理路线](plans/maintainability_roadmap.md)：#528 已由 PR #529 / #530 完成并关闭；#531 已登记但尚未实施，属于独立维护队列，不是 #510 或本轮功能的前置条件。
+- [#202 Settings 页面合同](plans/issue-202-settings-page-contract.md)：Phase A–D 已完成，issue 已关闭；当前界面见[GUI 工作台](gui_workbench.md)。
+- [#348 Model Routing 合同](plans/issue-348-model-routing-config-contract.md)：P0–P3 已完成，issue 已关闭；当前迁移见[模型配置迁移](model_config_migration.md)，真实 smoke 归 #344 / #431。
+- [#422 apply/export 事务合同](plans/issue-422-p2-apply-export-contract.md)：PR #473 已交付；安全和恢复合同仍有效，用户用法见[Agent 快速开始](quickstart_agent.md)与[Batch 工作流](batch_workflows.md)。
+- [Engine Adapter 合同](plans/engine_adapter_contract.md)：#265 P0–P6 已完成并关闭；当前用法和边界见[Engine Adapter 手册](engine_adapter.md)。#272 的生产立项仍暂缓。
+- [#364 质量校准手册与基线](plans/issue-364-calibration-runbook.md)：真实项目校准已完成并关闭；保留历史结论和复现步骤。当前白名单字段语义见[Batch 工作流](batch_workflows.md)。
+- [#426 coverage 归因报告](plans/renpy_coverage_block_attribution.md)：合成归因与 #460–#464、#471 修复已完成；真实大型样本仍归 #470。
+- [#487 字体覆盖只读 spike](plans/renpy_font_coverage_spike.md)：PR #511 已交付并关闭；字体生产接入仍待评估，没有纳入本轮。
+- [#427 普通译文审校合同](plans/issue-427-review-index-contract.md)：S1/S2 工程已合并；真实验收仍归 #427，当前 GUI 说明见[GUI 工作台](gui_workbench.md)。
+- [#431 OpenAI-compatible 与 final_review Sync 合同](plans/issue-431-openai-compatible-contract.md)：S1–S3 及 smoke 准备已合并；解绑 final_review 已完成，真实 Provider 验收仍归 #431 / #344。
+- [Translator++ 接入评估](plans/translatorpp_integration_assessment.md)：尚无 bridge 或真实往返证据；按 #509 先实验、后决定是否实施。
 
 ### 历史参考（已归档）
 

@@ -5,6 +5,7 @@
 > **研究对象**：[renpy-translation-lab](https://github.com/hu-border-collie/renpy-translation-lab) 及 GitHub 上定位相近的视觉小说 / 游戏本地化工具。
 > **证据边界**：本轮阅读了公开仓库的 README、目录、关键源码和部分测试；没有把所有外部项目完整安装并运行，因此动态兼容性不能由本文单独确认。2026-09-06 另对十个对等公开仓库做了源码抽查复核（浅克隆 / 定向读文件，非全量跑通），结论见 §7；仍不能单独证明动态兼容性。
 > **本地状态**：研究原稿对照 `main@5ea0ddd`。2026-09-06 复核时远端默认分支 tip 为 `main@64f04bb`（已含合入的 [#417](https://github.com/hu-border-collie/renpy-translation-lab/pull/417) speaker-label 分类修复与 [#421](https://github.com/hu-border-collie/renpy-translation-lab/pull/421) coverage reason-code allowlist）。实现或刷新本文时以当前默认分支 tip 为准，不要再以 `5ea0ddd` 为基线；speaker-label follow-up 已完成，勿再记为待办。
+> **当前状态入口（2026-09-27）**：本文仍是 2026-09-06 的源码研究快照；#265 P0–P6 后续已完成并关闭，#272 第三 Adapter 立项已暂缓。当前引擎路线见[多引擎生态研究](multi_engine_localization_ecosystem_research.md)和[能力矩阵](visual_novel_localization_matrix.md)，Translator++ 当前实验门槛见[单独评估](translatorpp_integration_assessment.md)及[计划状态索引](README.md)。
 
 ## 1. 摘要结论
 

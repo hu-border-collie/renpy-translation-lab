@@ -1,9 +1,7 @@
 # #364 真实项目质量规则校准执行手册
 
-> **状态：已完成（2026-08-23）。** A1（离线回归语料）、A3（校准报告工具）
-> 和真实项目 B 线均已完成；A2 根据三项目标注把两条高噪声语言规则默认设为
-> `off`。聚合基线和风险见 [真实项目机械质量校准基线](quality_calibration_baseline.md)。
-> 以 issue #364 正文、当前 checkout 和 `scripts/quality_calibration_report.py --help` 为准。
+> **状态：历史校准已完成（2026-08-23），#364 于 2026-08-23 关闭。** A1（离线回归语料）、A3（校准报告工具）和真实项目 B 线均已完成；A2 根据三项目标注把两条高噪声语言规则默认设为 `off`。聚合基线和风险见 [真实项目机械质量校准基线](quality_calibration_baseline.md)。
+> 本文保留可复现的操作步骤；下面的 A2 决策记录属于旧的全局白名单合同。新校准应按 [Batch 工作流](../batch_workflows.md) 的语言允许词 / 排版豁免词作用域分别判断，不能据此重写 #364 历史结论。
 
 文档地图：[规划与设计草案](README.md) · [项目文档](../README.md) ·
 [Batch 工作流与安全检查](../batch_workflows.md)
@@ -61,7 +59,7 @@ python scripts/quality_calibration_report.py /path/to/quality_findings.jsonl \
    | `quality.language.english_suffix_adjacent` | 真实正例 | `skill.rpy:7 … → 迷踪步ping` | 保持 warning |
 
 4. 把标注结论拆成两类动作：
-   - 误报且确定属于合法专名/缩写/混排 → A2 加 `allowed_latin_tokens`；
+   - 本次校准记录（2026-08）使用当时的 `allowed_latin_tokens` 全局语义；后续校准应按 finding 意图使用 `language_allowed_latin_tokens` 或 `typography_exempt_latin_tokens`，旧字段仍兼容且继续影响两类规则；
    - 整条规则误报高、确定性低 → A2 把默认 disposition 改为 `off`，作为项目 opt-in；
    - 漏报的新规则需求 → 记录回 issue #313，不在此 issue 扩展规则集。
 5. 落 A2 diff 并同步 `translator_config.example.json`、文档和测试。

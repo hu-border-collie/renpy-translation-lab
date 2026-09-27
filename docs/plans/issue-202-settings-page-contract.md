@@ -1,10 +1,7 @@
 # #202 Phase A：Settings 页面契约与现状基线
 
-> 状态：Phase A 文档已合并（PR #433，merge `773014b`）；Phase B 已合并（PR #434，
-> merge `3db29ab`）。Phase C 已将 LiteLLM 页迁到独立 `SettingsPage`（PR #436）。
-> Phase D 已将 10 个 Settings 页迁到独立 `SettingsPage`；dirty 基线、离开保护文案与 collect→persist
-> 已由 coordinator 持有；collected 值 apply 在 Qt-free `save_apply.py`；legacy adapter 与旧 builder 已删除。
-> 两文件写盘仍在 `MainWindow`。Epic 在全量回归与人工烟测完成前保持打开。
+> **当前状态（2026-09-27）**：#202 Phase A–D 均已交付，issue 于 2026-09-10 关闭。Phase B–D 的页面迁移、coordinator、dirty/离开保护、Qt-free apply 与审查修复已合并（PR #434、#436–#448、#450、#451）；关闭记录确认全量回归和维护者人工 GUI 烟测完成。
+> `MainWindow` 继续拥有两文件持久化事务与 Qt 对话框是宿主边界，不是未完成阶段。当前界面见 [GUI 工作台](../gui_workbench.md)。
 > 本文既是 Phase B 接入合同，也是实现索引；as-is 与 target 的差异逐项标注。
 >
 > 核验基线：Phase A 于 `main@2b93e43`；Phase B 基于 `main@773014b`，合并于 `main@3db29ab`。
@@ -239,10 +236,9 @@ Coordinator → 页面（只通过上述方法）：
 - 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
   `tests.test_settings_coordinator`（纯 Python）与 `tests.test_gui_settings_coordinator`（GUI 集成）。
 
-仍未落地（Phase D 收口）：
+按合同由宿主持有（不是未交付项）：
 
-- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；
-  旧 builder / legacy adapter 已删除；两文件写盘与 Qt 对话框仍在 `MainWindow`。
+- 页面通过 coordinator 收集和校验值，再由宿主执行两文件持久化与 Qt 对话框；Phase D 已完成并由 #202 关闭记录验收。
 
 Phase C 已落地：
 
@@ -257,7 +253,7 @@ Phase C 已落地：
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
 - 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
-Phase D（进行中，十页已迁出；apply 已抽到 `save_apply.py`，写盘仍待完全收口）：
+Phase D（已完成；以下保留分批迁移记录，宿主持久化边界见上）：
 
 - `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
 - `gui_qt/settings/field_widgets.py`：bool/int/float/str/text/list/json 字段控件工厂。

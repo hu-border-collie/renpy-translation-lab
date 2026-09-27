@@ -1,12 +1,7 @@
 # #348 P0：Model Routing 配置与迁移合同
 
-> 状态：P0/P1 已实现；P2 已接入兼容入口的生产读取、冻结路由和 Settings 保存校验。
-> P3 已完成：GUI 耐久 Sync 生命周期（start/resume/status/cancel/derive 与
-> `check <RUN>` → `apply <RUN>`）、统一翻译入口（单一导航项 + ModelProfile/
-> ExecutionStrategy 选择器）、`sync-start --profile` / `build --profile`，以及
-> Settings「模型与 Provider」页（providers / profiles / 默认值与阶段路由编辑）。
-> CLI 旧命令别名/弃用映射与四类真实 smoke matrix 仍待完成。
-> P2 支持边界及旧命令限制见 [P1 操作与限制](../model_config_migration.md)。
+> **当前状态（2026-09-27）**：#348 的 P0–P3 工程已交付，issue 于 2026-09-11 关闭；P3 由 PR #456 合并。新项目 / 新用户默认值由 #457 单独评估并于 2026-09-16 按维持现状关闭（PR #491），不是本单待办。
+> 四类真实 Provider smoke 现归 #344 / #431 统一验收，不是 #348 尚未实现的阶段。当前迁移操作见 [模型配置迁移](../model_config_migration.md)。
 
 本文冻结 #348 第一阶段的长期配置形状、兼容优先级、迁移输入和 #202/#348
 所有权边界。可执行验证器位于 `model_routing_config.py`；schema-v1 示例与四类旧配置
@@ -200,8 +195,8 @@ P1 migrator 必须满足：
   CLI 为显式 stage-only 开发入口；GUI 提供诊断命令模板，新 Settings 表单留在 P3。
 - **P2（生产接线，已实现）**：生产 resolver 和服务消费迁移所得 schema-v1；旧入口保留兼容说明。
   使用限制见迁移文档；新任务读取新配置，已有任务优先使用冻结路由。
-- **P3（接近完成）**：GUI 耐久 Sync 生命周期已接入 #347 服务与公开 snapshot；单一「翻译」入口通过 `model_routing_reader.profile_strategy_choices()` 选择 ModelProfile/ExecutionStrategy，并把 `--profile` 传给 `sync-start` / `build`；Settings「模型与 Provider」页通过 `model_profiles_editor` 编辑 providers/profiles/默认值与阶段路由，保存沿用 #202 coordinator 与 schema 校验。CLI 旧命令别名与真实 smoke matrix 仍待完成。
-- **P4**：迁移/回滚文档、诊断导出、四类真实 smoke 与 #344 收口。
+- **P3（已交付，PR #456）**：GUI 耐久 Sync 生命周期已接入 #347 服务与公开 snapshot；单一「翻译」入口通过 `model_routing_reader.profile_strategy_choices()` 选择 ModelProfile/ExecutionStrategy，并把 `--profile` 传给 `sync-start` / `build`；Settings「模型与 Provider」页编辑 providers/profiles/默认值与阶段路由，保存沿用 #202 coordinator 与 schema 校验。
+- **P4（原始规划标签，非 #348 剩余阶段）**：迁移/回滚文档与诊断已有现行入口；默认值决策已拆至并完成 #457。真实 Provider smoke 与 Epic 收口由 #344 / #431 跟踪。
 
 ## P0 非目标（历史阶段边界，生产激活现已进入 P2）
 
