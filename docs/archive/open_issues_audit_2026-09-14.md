@@ -5,7 +5,7 @@
 > Issue 的最新状态以 GitHub 正文、当前 checkout、现行文档和 CLI `--help` 为准。
 > 上一份快照：[开放 Issues 审计（2026-09-12）](open_issues_audit_2026-09-12.md)。
 
-文档地图：[历史文档归档](README.md) · [规划与设计草案](../plans/README.md) · [项目文档](../README.md)
+文档地图：[历史文档归档](README.md) · [规划、合同与研究索引](../plans/README.md) · [项目文档](../README.md)
 
 ## 范围与方法
 
