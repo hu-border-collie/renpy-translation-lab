@@ -4,6 +4,7 @@
 > **核对日期与基线**：2026-09-16；本仓库 `main@f5cec70`、GitHub issue 正文及最新状态评论、Translator++ 官方文档与发行说明。
 > **关联**：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[多引擎能力矩阵](visual_novel_localization_matrix.md)、[生态研究](multi_engine_localization_ecosystem_research.md)。
 > **排期边界**：本文补充外部工具路线，不解除 #272 的暂缓决定，不把其他引擎标为已支持，也不扩大 [Agent 工具包提案 PR #499](https://github.com/hu-border-collie/renpy-translation-lab/pull/499) 的首轮 Ren'Py 实验范围。
+> **当前状态对照（2026-09-27；保留下方 9 月 16 日快照）**：#457 已于 9 月 16 日关闭并维持原默认值；#488 已于 9 月 17 日关闭；字体 spike #487 由 PR #511 交付并于 9 月 20 日关闭。#427 S1/S2 后续由 PR #515 / #517 / #523 合并；#431 S1–S3 由 PR #504–#506 合并，真实 smoke 仍待 #431 / #344。Translator++ 往返仍由 #509 决定是否继续，未创建生产 bridge。全量当前映射见[计划状态索引](README.md)。
 
 ## 1. 结论与帮助范围
 

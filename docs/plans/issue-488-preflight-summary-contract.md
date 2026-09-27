@@ -1,9 +1,9 @@
 # #488 翻译预检最小增量字段合同
 
-> **状态**：S1（payload）、S2/S3（CLI/GUI 展示与现行文档）与 S1.5（durable Sync quality 来源）均已实现。
+> **状态（2026-09-27）**：S1（payload）、S1.5（durable Sync quality 来源）、S2/S3（CLI/GUI 展示与现行文档）均已交付，#488 已关闭。完成事实以 issue #488 的收口记录为准。
 > 本文件冻结 #488 的“当前字段 + 最小新增字段 + 数据来源 + freshness / unknown 合同”；
 > 实现与界面以代码和现行手册为准。
-> **基线**：`main@1ddd0be`；S1 合入 `main@9ef609b`，S2/S3 合入 `main@e83ccf1`，S1.5 合入当前开发分支。研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
+> **阶段基线**：`main@1ddd0be`；S1 合入 `main@9ef609b`，S2/S3 合入 `main@e83ccf1`。S1.5 后续已合入并随 issue 收口；不再把“当前开发分支”当作交付状态。研究来源：`docs/plans/github_localization_projects_research.md` §6.1.5、§8。
 > **关联**：#488、#348、#424、#457、#364。
 
 ## 1. 范围

@@ -1,6 +1,9 @@
 # #422 P2：`apply --export-dir` 写回 + 导出双写事务合同
 
-状态：第二轮复审修复后的冻结修订稿（Refs #422）。
+> **状态（2026-09-27）**：#422 的 P1 / P2 apply/export 已交付并关闭；P2 双写与 GUI 导出执行由 PR #473 合并。本文保留当前事务、安全回执和恢复合同，用户操作见 [Agent / CLI 快速开始](../quickstart_agent.md)与[Batch 工作流](../batch_workflows.md)。
+> Windows 等平台的窄 TOCTOU 窗口和旧、新 writer 混跑限制仍按本文记录，不因 issue 关闭而宣称已消除。
+
+Refs #422。第二轮复审修复后的冻结修订稿。
 范围：Ren'Py Batch translation manifest 的 `apply --export-dir <PATH>`；P1 `--export-only` 行为不变。
 非目标：累计发布补丁、历史文件合并/删除、rpa/rpyc 编译、引擎封包、安装器、durable Sync / revision 写回。
 

@@ -1,6 +1,7 @@
 # #431 S2：直连 adapter 的目录发现、诊断与迁移矩阵合同
 
-> **状态**：S2 实现完成（PR 待合并）；验收结论在合并后回填到 #431。
+> **状态（2026-09-27）**：S2 已由 PR #505 合并；S3 / smoke 准备由 PR #506 / #507 合并。#431 / #344 的真实 Provider 验收仍待完成。
+> 本文保留以 S1 基线为前提的阶段合同；当前行为以代码与 [Provider Smoke Matrix](../provider_smoke_matrix.md) 为准。
 > S1 直连生成合同见
 > [issue-431-openai-compatible-contract.md](issue-431-openai-compatible-contract.md)。
 > **基线**：`main@dbbe18a`（PR #504 合并点）。
