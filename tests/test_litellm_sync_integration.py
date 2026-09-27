@@ -6,6 +6,7 @@ from unittest import mock
 
 import gemini_translate_batch as batch_mod
 import model_profile as mp
+import sync_request
 from litellm_sync_backend import LiteLLMBackendError
 
 
@@ -120,7 +121,7 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
             ),
             mock.patch.object(batch_mod.legacy, "rotate_api_key") as rotate,
             mock.patch.object(
-                batch_mod,
+                sync_request,
                 "sync_recovery_decision",
                 return_value=type("Decision", (), {
                     "retry_same_request": True,
