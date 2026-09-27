@@ -15,7 +15,9 @@ import translator_runtime as runtime
 from litellm_provider_config import CustomLiteLLMProvider, ProviderApiKeyStore
 from litellm_sync_backend import LiteLLMBackendError
 from openai_compatible_sync_backend import HTTPResponse
+from sync_run_contracts import build_run_id
 from sync_run_service import build_production_sync_run_service
+from sync_run_store import SyncRunStore
 from tests.test_sync_run_service import plan_build
 
 
@@ -24,7 +26,9 @@ class DurableRequestIsolationTests(unittest.TestCase):
         return SimpleNamespace(
             plan_build=plan_build(), routing_plan=plan,
             route=plan.routes['translation'],
-            item_resolver=lambda _request, _ids: [],
+            item_resolver=lambda _request, ids: [
+                {'id': item_id, 'text': 'hello'} for item_id in ids
+            ],
             validate_translation=lambda _item, _text: (True, 'OK'),
             context_resolver=lambda _request: {},
             validate_reused_translation=lambda _item_id, _payload: True,
@@ -91,6 +95,54 @@ class DurableRequestIsolationTests(unittest.TestCase):
             ('a-secret', 'gemini-a-explicit', 41000),
         ])
 
+    def test_start_freezes_bound_timeout_in_policy_and_actual_request(self):
+        calls = []
+
+        class Client:
+            def __init__(self, api_key):
+                self.api_key = api_key
+                self.models = SimpleNamespace(generate_content=self.generate_content)
+
+            def generate_content(self, **kwargs):
+                calls.append((self.api_key, kwargs['model'],
+                              kwargs['config']['http_options']['timeout']))
+                return {
+                    'candidates': [{'content': {'parts': [{
+                        'text': '{"translations":[{"id":"item-1","translation":"一"}]}'
+                    }]}, 'finishReason': 'STOP'}],
+                    'usageMetadata': {'totalTokenCount': 2},
+                }
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(runtime, 'get_genai_module',
+                                  return_value=SimpleNamespace(Client=Client)):
+            with mock.patch.object(runtime, 'API_KEYS', ['a-secret']), \
+                    mock.patch.object(runtime, 'CURRENT_KEY_INDEX', 0), \
+                    mock.patch.object(runtime, 'SYNC_TIMEOUT_SECONDS', 41):
+                service_a = self._service(Path(tmp) / 'a', model='gemini-a')
+            with mock.patch.object(runtime, 'API_KEYS', ['b-secret']), \
+                    mock.patch.object(runtime, 'CURRENT_KEY_INDEX', 0), \
+                    mock.patch.object(runtime, 'SYNC_TIMEOUT_SECONDS', 62):
+                service_b = self._service(Path(tmp) / 'b', model='gemini-b')
+                snapshots = [service.start(plan_build()) for service in
+                             (service_a, service_b, service_a)]
+                service_a.start(plan_build(), policy={'attempt_timeout_seconds': 23})
+                derived = service_a.derive(snapshots[0]['run_id'], plan_build())
+                stored_policy = json.loads(SyncRunStore(
+                    Path(tmp) / 'a', snapshots[0]['run_id'],
+                ).get_run()['policy_json'])
+                derived_policy = json.loads(SyncRunStore(
+                    Path(tmp) / 'a', derived['run_id'],
+                ).get_run()['policy_json'])
+        self.assertEqual(calls, [
+            ('a-secret', 'gemini-a', 41000),
+            ('b-secret', 'gemini-b', 62000),
+            ('a-secret', 'gemini-a', 41000),
+            ('a-secret', 'gemini-a', 23000),
+        ])
+        self.assertEqual(stored_policy['attempt_timeout_seconds'], 41)
+        self.assertEqual(derived_policy['attempt_timeout_seconds'], 41)
+
     def test_litellm_services_keep_custom_endpoint_and_use_one_provider_call(self):
         calls = []
         provider_a = CustomLiteLLMProvider(
@@ -130,6 +182,43 @@ class DurableRequestIsolationTests(unittest.TestCase):
             ('https://b.test/v1', 'openai/b', 62),
             ('https://a.test/v1', 'openai/a', 41),
         ])
+
+    def test_resume_rebinds_current_key_but_uses_stored_timeout(self):
+        calls = []
+
+        class Client:
+            def __init__(self, api_key):
+                self.api_key = api_key
+                self.models = SimpleNamespace(generate_content=self.generate_content)
+
+            def generate_content(self, **kwargs):
+                calls.append((self.api_key,
+                              kwargs['config']['http_options']['timeout']))
+                return {
+                    'candidates': [{'content': {'parts': [{
+                        'text': '{"translations":[{"id":"item-1","translation":"一"}]}'
+                    }]}, 'finishReason': 'STOP'}],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(runtime, 'get_genai_module',
+                                  return_value=SimpleNamespace(Client=Client)):
+            root = Path(tmp) / 'runs'
+            with mock.patch.object(runtime, 'API_KEYS', ['old-secret']), \
+                    mock.patch.object(runtime, 'SYNC_TIMEOUT_SECONDS', 41):
+                original = self._service(root, model='gemini-resume')
+                payload = plan_build()
+                store, _created = SyncRunStore.bootstrap(
+                    root, build_run_id(), plan=payload['plan'],
+                    requests=payload['requests'],
+                    executor_policy=original.default_policy.to_dict(),
+                )
+                original._ensure_run_artifacts(store)
+            with mock.patch.object(runtime, 'API_KEYS', ['renewed-secret']), \
+                    mock.patch.object(runtime, 'SYNC_TIMEOUT_SECONDS', 62):
+                resumed_service = self._service(root, model='gemini-resume')
+                resumed_service.resume(store.run_id)
+        self.assertEqual(calls, [('renewed-secret', 41000)])
 
     def test_durable_cli_assembly_binds_batch_factory_key_before_project_switch(self):
         calls = []

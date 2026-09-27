@@ -42,7 +42,8 @@
      `SyncRequestRuntime` 是当前进程内的短期依赖：生产 service 创建时绑定 timeout、
      深复制 custom providers，并把 Gemini key 列表、当前选择及 SDK client factory 绑定到任务；
      key 只在内存回调内，不进入 plan、数据库或可见 repr。模型与地址仍来自 frozen
-     ModelRoutingPlan。durable 固定 `retry_attempts=1`、`allow_credential_rotation=False`，
+     ModelRoutingPlan。新 run 的默认 attempt timeout 取创建时绑定值并写入冻结的 executor policy；
+     显式 policy 优先，resume 使用 run 已存储的 policy。durable 固定 `retry_attempts=1`、`allow_credential_rotation=False`，
      包括关闭 LiteLLM adapter 内部的限流换 key；重试由外层执行器记录为新 attempt。
      跨进程 resume 重新装配当前凭据并执行原有 freshness、credential_ref 与路由检查；
      env/keyring 等外部凭据源仍按引用在请求时解析。非 durable CLI 保留进程级轮换。

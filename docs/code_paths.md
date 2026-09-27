@@ -214,13 +214,16 @@
   OpenAI-compatible adapter。durable 入口绑定 timeout、深复制 custom providers、Gemini key
   选择与 SDK client factory；默认和显式 service 路径都在创建时完成。模型、地址、
   credential_ref 来自 frozen ModelRoutingPlan；env/keyring 值依原合同在请求时读取。
+  `sync-start` / `sync-derive` 的默认 attempt timeout 从绑定值进入冻结的 executor policy；
+  显式 policy 优先，`sync-resume` 沿用 store 中的 policy。
   `gemini_translate_batch.run_sync_request()` 仍供非 durable CLI 调用者使用，保留原轮换行为，
   只作装配/薄转发。durable 禁止共享执行层与 LiteLLM adapter 的同 attempt 隐藏重试。
   响应/usage helper 同样从共享模块导入，不再由共享层回读 CLI。
 - 依赖边界回归：`tests.test_sync_request` 在新解释器中禁止导入两个 CLI 入口，执行共享请求与
   durable adapter；并验证 Provider/model/usage、超时、重试预算、固定 key 与单次调用语义。
   `tests.test_durable_request_isolation` 通过生产 adapter 与 fake transport 验证 A/B/A
-  创建顺序、默认/显式绑定、Gemini key、LiteLLM/直连模型地址和内部限流换 key 边界。
+  创建顺序、真实 start/resume 的超时与凭据边界、默认/显式绑定、Gemini key、
+  LiteLLM/直连模型地址和内部限流换 key 边界。
   这些离线检查不替代 #344 / #431 的真实 Provider 验收。
 - GUI 只渲染公开 snapshot（进度、`next_action`、usage、制品路径）；不读数据库、不自行重试，
   也不改写 freshness / 写回判定。停止本机 worker 不会取消 run；取消是单独的 `sync-cancel`。

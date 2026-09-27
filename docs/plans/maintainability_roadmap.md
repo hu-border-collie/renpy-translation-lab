@@ -1,6 +1,6 @@
 # 维护复杂度治理路线
 
-> 状态：2026-09-27；第一轮已完成，第二轮本地实现与验证完成、待独立审查，后续仅为候选。
+> 状态：2026-09-27；第一轮已完成，第二轮本地实现与独立审查完成，后续仅为候选。
 > 第二轮实现基线：[`main@585d608`](https://github.com/hu-border-collie/renpy-translation-lab/commit/585d60829736b4686ed977303c92c87639cba157)。
 > 本文管理方向、优先顺序和停止条件；实现事实见[架构概览](../architecture.md)与[调用链索引](../code_paths.md)。
 
@@ -25,7 +25,7 @@
 
 ## 下一轮：耐久同步请求依赖隔离
 
-执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，状态为本地实现与验证完成、待独立审查；尚未推送或更新 issue。
+执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，状态为本地实现与独立审查完成；尚未推送或更新 issue。
 
 原有 `sync_request.runtime_dependencies()` 复制部分配置，但客户端工厂与凭据预算/轮换回调
 仍读取 `translator_runtime` 的可变状态。已用生产 adapter + fake transport 重现 A 创建后
@@ -33,6 +33,9 @@
 本轮把默认 service 装配提前至创建时，并使 durable CLI 显式装配捕获自己的 key 选择。
 custom providers 深复制；LiteLLM 内部同 attempt 限流换 key 已关闭。没有新增持久配置，
 密钥不进入 plan、数据库或可见 repr。跨进程 resume 重新装配，外部 env/keyring 保留按引用解析。
+独立审查发现默认 durable policy 的 120 秒覆盖已绑定 timeout；已改为新 run 从 service 绑定值
+生成默认 policy，并以真实 start→fake transport 及 derive policy 持久值验证。显式 policy
+仍优先，resume 沿用存储的 policy。
 
 本轮只处理 durable Provider 请求链：在生产 service 创建时绑定所需配置与凭据选择，
 显式传入和默认装配路径都不因随后加载另一项目而改变已绑定任务。复用现有配置和请求对象，
