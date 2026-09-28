@@ -201,6 +201,7 @@ class LiteLLMSyncBackend:
         custom_providers: Optional[Mapping[str, CustomLiteLLMProvider]] = None,
         sleep: Callable[[float], None] = time.sleep,
         credential_ref: Optional[Mapping[str, str]] = None,
+        allow_credential_rotation: bool = True,
     ) -> None:
         self._completion = completion
         self._async_completion = async_completion
@@ -210,6 +211,7 @@ class LiteLLMSyncBackend:
         )
         self._sleep = sleep
         self._credential_ref = dict(credential_ref or {})
+        self._allow_credential_rotation = allow_credential_rotation
 
     def _resolve_completion(self) -> Callable[..., Any]:
         if self._completion is not None:
@@ -470,6 +472,8 @@ class LiteLLMSyncBackend:
         provider = provider_from_model(request.model)
         custom = self._custom_providers.get(provider)
         credentials = self._resolve_credentials(provider, custom)
+        if not self._allow_credential_rotation:
+            credentials = credentials[:1]
         kwargs = self._build_request_kwargs(
             request,
             credentials=credentials,

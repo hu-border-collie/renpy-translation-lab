@@ -66,8 +66,12 @@ class LiteLLMSyncIntegrationTests(unittest.TestCase):
         built_profile = backend_builder.call_args.args[0]
         self.assertEqual(built_profile.model, explicit_model)
         self.assertEqual(
-            backend_builder.call_args.kwargs["custom_providers"],
-            custom_providers,
+            set(backend_builder.call_args.kwargs["custom_providers"]),
+            set(custom_providers),
+        )
+        self.assertIsNot(
+            backend_builder.call_args.kwargs["custom_providers"]["opencode-go"],
+            custom_providers["opencode-go"],
         )
         request = fake_backend.generate.call_args.args[0]
         self.assertEqual(request.model, explicit_model)

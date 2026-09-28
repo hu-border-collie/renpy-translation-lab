@@ -1545,6 +1545,7 @@ def build_sync_backend(
     profile: ModelProfile,
     *,
     custom_providers: Mapping[str, CustomLiteLLMProvider] | None = None,
+    allow_credential_rotation: bool = True,
     diagnostic_api_key: str | None = None,
     client: Any = None,
     serialize_response: Callable[..., Any] | None = None,
@@ -1597,6 +1598,7 @@ def build_sync_backend(
             api_key=str(diagnostic_api_key or "").strip() or None,
             custom_providers=connections,
             credential_ref=profile.credential_ref.to_manifest_dict(),
+            allow_credential_rotation=allow_credential_rotation,
         )
     if profile.adapter == ADAPTER_OPENAI_COMPATIBLE:
         from openai_compatible_sync_backend import OpenAICompatibleSyncBackend

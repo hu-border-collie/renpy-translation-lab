@@ -5,7 +5,8 @@ values, not a second configuration store; defaults read translator_runtime.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 import time
 
@@ -24,21 +25,23 @@ from sync_model_backend import (
 class SyncRequestRuntime:
     """Explicit per-run configuration and credential access for sync requests.
 
-    Credential callbacks use the existing runtime key store and rotation policy.
-    No credentials or routing state are persisted in this object.
+    Durable bindings own an in-memory credential selection. Credential values
+    are excluded from repr and are never persisted with the routing plan.
     """
 
     timeout_seconds: float
     custom_providers: Mapping[str, Any]
-    create_client: Callable[..., Any]
-    credential_attempts: Callable[[], int]
-    rotate_credentials: Callable[[], bool]
+    create_client: Callable[..., Any] = field(repr=False)
+    credential_attempts: Callable[[], int] = field(repr=False)
+    rotate_credentials: Callable[[], bool] = field(repr=False)
 
 
-def create_runtime_client(*, api_key_index=None):
+def create_runtime_client(*, api_key_index=None, api_key=None):
     """Build a Gemini SDK client using the existing runtime credential store."""
     import translator_runtime as runtime
 
+    if api_key is not None:
+        return runtime.create_genai_client(api_key=api_key)
     if api_key_index is None:
         return runtime.create_genai_client()
     try:
@@ -51,18 +54,58 @@ def create_runtime_client(*, api_key_index=None):
     return runtime.create_genai_client(api_key=keys[index])
 
 
-def runtime_dependencies(*, timeout_seconds=None, create_client=None) -> SyncRequestRuntime:
-    """Read applied runtime settings once; optionally bind an entry's SDK factory."""
+def runtime_dependencies(
+    *, timeout_seconds=None, create_client=None, bind_credentials=True,
+) -> SyncRequestRuntime:
+    """Bind request settings and, by default, in-memory Gemini key selection.
+
+    ``bind_credentials=False`` retains the legacy CLI's process-wide rotation
+    behavior. Durable services use the default so another project load cannot
+    change the selected key; external env/keyring references retain their own
+    execution-time resolution contract.
+    """
     import translator_runtime as runtime
+
+    config = runtime.snapshot_runtime_config()
+    client_factory = create_client or create_runtime_client
+    if bind_credentials:
+        keys = tuple(config.api_keys)
+        current_index = config.current_key_index
+        rotation_enabled = config.api_key_rotation_enabled
+
+        def bound_client(*, api_key_index=None):
+            index = current_index if api_key_index is None else api_key_index
+            try:
+                index = int(index)
+            except (TypeError, ValueError):
+                raise SystemExit(f'Invalid API key index: {index}') from None
+            if not 0 <= index < len(keys):
+                raise SystemExit(f'Invalid API key index: {index}')
+            return client_factory(api_key=keys[index])
+
+        def credential_attempts():
+            return len(keys) if rotation_enabled and len(keys) > 1 else 1
+
+        def rotate_credentials():
+            nonlocal current_index
+            if not rotation_enabled or len(keys) <= 1:
+                return False
+            current_index = (current_index + 1) % len(keys)
+            return True
+
+    else:
+        bound_client = client_factory
+        credential_attempts = runtime.api_key_rotation_attempts
+        rotate_credentials = runtime.rotate_api_key
 
     return SyncRequestRuntime(
         timeout_seconds=normalize_sync_timeout_seconds(
-            runtime.SYNC_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+            config.sync_timeout_seconds if timeout_seconds is None else timeout_seconds
         ),
-        custom_providers=dict(runtime.CUSTOM_LITELLM_PROVIDERS),
-        create_client=create_client or create_runtime_client,
-        credential_attempts=runtime.api_key_rotation_attempts,
-        rotate_credentials=runtime.rotate_api_key,
+        custom_providers=copy.deepcopy(config.custom_litellm_providers),
+        create_client=bound_client,
+        credential_attempts=credential_attempts,
+        rotate_credentials=rotate_credentials,
     )
 
 
@@ -222,7 +265,9 @@ def run_sync_request(
         raise TypeError(
             'run_sync_request requires the frozen ModelRoutingPlan from run start.'
         )
-    runtime = runtime if runtime is not None else runtime_dependencies()
+    runtime = runtime if runtime is not None else runtime_dependencies(
+        bind_credentials=False,
+    )
     profile = model_profile.profile_for_route(plan, route)
     effective_model = profile.model
     config = dict(request_payload.get('generation_config') or {})
@@ -246,6 +291,7 @@ def run_sync_request(
         backend_kwargs = {}
         if profile.adapter == model_profile.ADAPTER_LITELLM:
             backend_kwargs['custom_providers'] = runtime.custom_providers
+            backend_kwargs['allow_credential_rotation'] = allow_credential_rotation
         # openai_compatible profiles carry base_url / credential_ref /
         # extra_headers on the frozen ModelProfile; the LiteLLM custom-provider
         # registry is deliberately not part of that contract.

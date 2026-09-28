@@ -140,7 +140,11 @@ def find_latest_run(root_dir: str | Path) -> str:
 
 
 class SyncRunService:
-    """GUI/CLI-neutral facade; all methods return JSON-safe snapshots."""
+    """GUI/CLI-neutral facade; all methods return JSON-safe snapshots.
+
+    ``default_policy`` applies only when starting or deriving a new run.
+    Resume always reads the policy frozen in the run store.
+    """
 
     def __init__(
         self,
@@ -155,6 +159,7 @@ class SyncRunService:
         reuse_validator: ReuseValidator | None = None,
         run_artifact_provider: RunArtifactProvider | None = None,
         run_artifact_kinds: Sequence[str] = (),
+        default_policy: ExecutorPolicy | None = None,
     ):
         self.root_dir = Path(root_dir)
         self.backend_factory = backend_factory
@@ -168,6 +173,7 @@ class SyncRunService:
         self.run_artifact_kinds = tuple(
             str(kind).strip() for kind in run_artifact_kinds if str(kind).strip()
         )
+        self.default_policy = default_policy
 
     def start(
         self,
@@ -181,8 +187,10 @@ class SyncRunService:
         plan, requests = _plan_build_payload(plan_build)
         if not requests:
             raise ValueError('durable Sync start has no pending translation requests')
+        selected_policy = self.default_policy if policy is None else policy
         frozen_policy = (
-            policy if isinstance(policy, ExecutorPolicy) else ExecutorPolicy.from_mapping(policy)
+            selected_policy if isinstance(selected_policy, ExecutorPolicy)
+            else ExecutorPolicy.from_mapping(selected_policy)
         )
         self._preflight_cost_reservations(requests, frozen_policy)
         normalized_token = normalize_client_token(client_token)
@@ -335,8 +343,10 @@ class SyncRunService:
                 },
             )
 
+        selected_policy = self.default_policy if policy is None else policy
         frozen_policy = (
-            policy if isinstance(policy, ExecutorPolicy) else ExecutorPolicy.from_mapping(policy)
+            selected_policy if isinstance(selected_policy, ExecutorPolicy)
+            else ExecutorPolicy.from_mapping(selected_policy)
         )
         self._preflight_cost_reservations(requests, frozen_policy)
         derived_run_id = build_run_id()
@@ -788,7 +798,8 @@ def build_production_backend_adapter(
     """
     import sync_request
 
-    request_runtime = request_runtime or sync_request.runtime_dependencies()
+    if request_runtime is None:
+        request_runtime = sync_request.runtime_dependencies()
 
     def generate_once(request: Mapping[str, Any], timeout_seconds: float):
         return sync_request.run_sync_request(
@@ -833,8 +844,13 @@ def build_production_sync_run_service(
     Freshness is recomputed from the same #346 plan and root request payloads
     that a new run would freeze.  Derived request rows are deliberately not
     compared to the root plan: they are deterministic descendants whose
-    payload hashes are already guarded by :class:`SyncRunStore`.
+    payload hashes are already guarded by :class:`SyncRunStore`. Request
+    dependencies are assembled here, before a later start/resume dispatch.
     """
+    import sync_request
+
+    if request_runtime is None:
+        request_runtime = sync_request.runtime_dependencies()
     current_plan, current_requests = _plan_build_payload(
         execution_context.plan_build
     )
@@ -919,4 +935,7 @@ def build_production_sync_run_service(
         reuse_validator=execution_context.validate_reused_translation,
         run_artifact_provider=run_artifact_provider,
         run_artifact_kinds=('targets_json',),
+        default_policy=ExecutorPolicy.from_mapping({
+            'attempt_timeout_seconds': request_runtime.timeout_seconds,
+        }),
     )

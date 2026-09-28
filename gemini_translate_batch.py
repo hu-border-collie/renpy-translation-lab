@@ -1110,15 +1110,17 @@ def normalize_api_key_index(value):
     return None
 
 
-def create_batch_client(api_key_index=None):
+def create_batch_client(api_key_index=None, *, api_key=None):
+    """Create a Gemini client; an explicit in-memory key bypasses CLI globals."""
     ensure_batch_sdk()
-    if api_key_index is None:
-        api_key = legacy.get_current_api_key()
-    else:
-        index = normalize_api_key_index(api_key_index)
-        if index is None:
-            raise SystemExit(f'Invalid API key index: {api_key_index}')
-        api_key = legacy.API_KEYS[index]
+    if api_key is None:
+        if api_key_index is None:
+            api_key = legacy.get_current_api_key()
+        else:
+            index = normalize_api_key_index(api_key_index)
+            if index is None:
+                raise SystemExit(f'Invalid API key index: {api_key_index}')
+            api_key = legacy.API_KEYS[index]
     return genai.Client(api_key=api_key)
 
 
@@ -17390,6 +17392,7 @@ def run_sync_request(
         runtime=sync_request.runtime_dependencies(
             timeout_seconds=SYNC_TIMEOUT_SECONDS,
             create_client=create_batch_client,
+            bind_credentials=False,
         ),
     )
 
