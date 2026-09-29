@@ -355,6 +355,40 @@ class TranslationRecordBindingTests(unittest.TestCase):
         }
         return TranslationRecord.create(**{**fields, **changes}).to_dict()
 
+    def test_record_target_whitespace_survives_package_and_review_binding(self):
+        from engine_adapters.reuse import load_translation_records
+
+        for target in (" 前导", "尾随 ", " 两侧 ", "\t缩进\t", "\n换行\n"):
+            with self.subTest(target=repr(target)), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                script = (
+                    "translate schinese spacing:\n"
+                    '    # m "Hello"\n'
+                    f"    m {json.dumps(target, ensure_ascii=False)}\n"
+                )
+                corpus, records_path = production_record_fixture(root, script_text=script)
+                loaded = load_translation_records(root / "records")
+                self.assertEqual(len(loaded.records), 1)
+                self.assertEqual(loaded.records[0].translation_text, target)
+                self.assertEqual(ri.load_jsonl(records_path)[0]["translation_text"], target)
+                ri.build_review_index(
+                    corpus, translation_records_path=records_path, output_dir=root / "index"
+                )
+                manifest, entries = ri.load_review_index(root / "index")
+                self.assertEqual(manifest["diagnostics"], [])
+                self.assertEqual(entries[0]["current_translation"], target)
+                self.assertEqual(entries[0]["translation_record"]["translation_text"], target)
+
+                changed = self.recreate_record(
+                    loaded.records[0].to_dict(), translation_text=target.strip()
+                )
+                self.assertNotEqual(changed["translation_text"], target)
+                bundle = ri.load_corpus_bundle(corpus)
+                _entries, diagnostics = ri.build_index_entries(
+                    bundle["rows"], bundle["manifest"], records=[changed]
+                )
+                self.assertEqual([item["reason"] for item in diagnostics], ["target_mismatch"])
+
     def test_double_string_say_records_attach_to_both_literal_spans(self):
         script = (
             "translate schinese test_one:\n"

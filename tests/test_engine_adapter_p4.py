@@ -11,6 +11,38 @@ import engine_adapters.reuse as reuse
 
 
 class TestEngineAdapterP4(unittest.TestCase):
+    def test_translation_record_text_preservation_and_legacy_digest(self):
+        fields = {
+            "version_id": "v1",
+            "snapshot_digest": "snap",
+            "occurrence_id": "occ1:abc",
+            "unit_id": "unit",
+            "source_text": "Hello",
+            "target_language": "schinese",
+            "origin": "imported",
+        }
+        ordinary = reuse.TranslationRecord.create(**fields, translation_text="你好")
+        self.assertEqual(
+            ordinary.record_digest,
+            "4bb4d1f8ade769b3a6575e76990cc859b73cceae55f776f74b0ce0d00da517ef",
+        )
+        self.assertEqual(reuse.TranslationRecord.from_dict(ordinary.to_dict()), ordinary)
+        whitespace_revision = reuse.derive_revision_history(
+            ordinary, new_translation=" 你好", new_origin="imported"
+        )
+        self.assertEqual(len(whitespace_revision), 1)
+        self.assertEqual(whitespace_revision[0]["translation_text"], "你好")
+        for target in (" 前导", "尾随 ", " 两侧 ", "\t缩进\t", "\n换行\n"):
+            with self.subTest(target=repr(target)):
+                record = reuse.TranslationRecord.create(**fields, translation_text=target)
+                self.assertEqual(record.translation_text, target)
+                self.assertEqual(reuse.TranslationRecord.from_dict(record.to_dict()), record)
+        for target in ("", "  ", "\t\n"):
+            with self.subTest(invalid=repr(target)), self.assertRaisesRegex(
+                reuse_versioning.VersioningArtifactError, "record.translation_text must not be empty"
+            ):
+                reuse.TranslationRecord.create(**fields, translation_text=target)
+
     def _occurrence(self, version, spec, project_fingerprint):
         key = spec["key"]
         source = spec["source"]

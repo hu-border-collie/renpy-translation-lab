@@ -270,6 +270,9 @@ python gemini_translate_batch.py export-reuse-results <decided-reuse-report> <ta
 - `build-translation-records` 只接受 translation 模式且已下载完成的 Batch 包；
   每个 unit 的译文经过现有响应合同校验后，连同来源（默认 `model_initial`）、
   provenance 和快照 occurrence 绑定写入 `translation_records.jsonl`。
+  记录保留非空译文的原始首尾空白（包括制表符和换行），供审校索引与当前译文
+  精确匹配；空串和纯空白译文仍会被拒绝。旧记录中的空白若已在构造时丢失，
+  不能从记录推断恢复，需从可信的原始译文输入重新生成记录包及其下游索引。
   可选 `--previous-records <PATH>` 指向同一快照的上一份记录产物：译文发生
   变化的 unit 会确定性追加记录级 revision history（旧译文、旧来源、旧记录
   ID），重新冻结的历史可累积且不引入时间戳等非确定性输入；跨版本或跨快照

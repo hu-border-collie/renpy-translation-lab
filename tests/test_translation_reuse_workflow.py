@@ -62,6 +62,31 @@ class TranslationReuseWorkflowTests(unittest.TestCase):
         )
         return manifest_path
 
+    def test_cli_records_runner_keeps_validated_target_whitespace(self):
+        from engine_adapters.reuse import load_translation_records
+
+        snapshot = self.fixture._snapshot("1.0", [{"key": "stable", "source": "Stable line"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot_path = self.fixture.versioning.export_project_snapshot(
+                snapshot, root / "snapshot"
+            ).snapshot_path
+            manifest_path = self._write_manifest(
+                root / "batch",
+                version="1.0",
+                items=[{"id": "unit-1.0-stable", "source": "Stable line"}],
+                with_results=True,
+            )
+            results_path = root / "batch" / "results.jsonl"
+            row = json.loads(results_path.read_text(encoding="utf-8"))
+            row["normalized_response"]["items"][0]["translation"] = " 前后\t"
+            results_path.write_text(json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8")
+            result = batch.run_translation_records_export(
+                snapshot_path, str(manifest_path), output_dir=str(root / "records")
+            )
+            loaded = load_translation_records(result["paths"]["manifest"])
+            self.assertEqual(loaded.records[0].translation_text, " 前后\t")
+
     def test_full_reuse_workflow_feeds_check_apply_channel(self):
         base = self.fixture._snapshot(
             "1.0",
