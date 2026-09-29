@@ -1,7 +1,8 @@
 # 维护复杂度治理路线
 
-> 状态：2026-09-27；第一轮已完成，第二轮本地实现与独立审查完成，后续仅为候选。
+> 状态：2026-09-29；第一、二轮工程均已合并并完成关闭，后续仅为候选。
 > 第二轮实现基线：[`main@585d608`](https://github.com/hu-border-collie/renpy-translation-lab/commit/585d60829736b4686ed977303c92c87639cba157)。
+> 第二轮交付：[PR #534](https://github.com/hu-border-collie/renpy-translation-lab/pull/534)，合并提交 [`e792a03`](https://github.com/hu-border-collie/renpy-translation-lab/commit/e792a03366c3606e3cd92b7eade6444b0a8e81f9)。
 > 本文管理方向、优先顺序和停止条件；实现事实见[架构概览](../architecture.md)与[调用链索引](../code_paths.md)。
 
 ## 目标与工作方式
@@ -23,9 +24,9 @@
 
 两份 PR 已合并；验收及 CI 证据见 #528 完成记录。该轮解决的是这两个切口，未完成整个 runtime 的状态隔离或主窗口生命周期治理。
 
-## 下一轮：耐久同步请求依赖隔离
+## 已完成：第二轮耐久同步请求依赖隔离
 
-执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，状态为本地实现与独立审查完成；尚未推送或更新 issue。
+执行单：[#531](https://github.com/hu-border-collie/renpy-translation-lab/issues/531)，已于 2026-09-29 按 completed 关闭；PR #534 于 2026-09-28 合并。最新 Tests 工作流全部通过，固定提交独立审查发现的默认 timeout 缺口已修复并复验。完成证据见 issue 与 PR；真实 Provider / 项目验收仍归 #344 / #431。
 
 原有 `sync_request.runtime_dependencies()` 复制部分配置，但客户端工厂与凭据预算/轮换回调
 仍读取 `translator_runtime` 的可变状态。已用生产 adapter + fake transport 重现 A 创建后
@@ -49,7 +50,7 @@ custom providers 深复制；LiteLLM 内部同 attempt 限流换 key 已关闭�
 本轮结束条件：#531 的依赖清点、实际调用隔离、行为回归和文档更新完成。
 不要求全部全局变量清零，不宣称整个进程已支持并发多项目；非 durable 入口及轮换行为保留现状。
 
-## 候选后续：完成第二轮后再选
+## 候选后续：按实际收益另行选择
 
 | 候选 | 启动依据 | 首个切片的约束 |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # 规划、合同与研究索引
 
-本目录收纳尚未进入现行用户手册的计划、仍需稳定查阅的技术合同、研究快照和操作记录。状态总览核对至 2026-09-27 的 main@3cbd597；研究文档自己的日期和代码基线仍是其证据范围，不因本索引更新而自动刷新。
+本目录收纳尚未进入现行用户手册的计划、仍需稳定查阅的技术合同、研究快照和操作记录。状态总览核对至 2026-09-27 的 main@3cbd597；#531 维护第二轮状态于 2026-09-29 按 main@e792a03 和 issue 关闭记录单独更新。研究文档自己的日期和代码基线仍是其证据范围，不因本索引更新而自动刷新。
 
 以当前代码和现行手册判断用户行为。GitHub issue 的 OPEN 状态不代表没有工程交付；PR 合并或自动化通过也不等于真实 Provider、项目或游戏验收。只归档纯历史过程稿；仍被现行手册、测试、未完实验或后续决策引用的合同和证据留在此目录。
 
@@ -16,13 +16,13 @@
 | #470 coverage 真实样本 | 合成归因及 #460–#464、#471 修复已完成，见[归因报告](renpy_coverage_block_attribution.md)与只读脚本。 | #470 仍 OPEN；等待授权真实大型项目副本，未获得样本时记录证据缺口。 |
 | 本轮之外：#509 / #520 | 两者都是决定是否继续开发的实验任务，没有生产接入交付。 | 暂不进入本轮；先完成 Translator++ 工程往返或 OpenRouter Batch fixture / 真实可用性与费用实验，再由结论决定是否另立生产任务。 |
 | 本轮之外：#272 / #147 | #272 的第三 Adapter 立项已暂缓；#147 是低优先级 Story Graph 试点。 | 不进入本轮，不把研究建议写成实施承诺；分别保留在原 issue 的触发条件与优先级下。 |
-| 维护减负路线 | #528 已按 completed 关闭，PR [#529](https://github.com/hu-border-collie/renpy-translation-lab/pull/529) / [#530](https://github.com/hu-border-collie/renpy-translation-lab/pull/530) 合并；[路线图](maintainability_roadmap.md)由文档 PR [#532](https://github.com/hu-border-collie/renpy-translation-lab/pull/532) 建立。 | #531 仍 OPEN、尚未实施；与 #510 文档收尾及上述功能队列互不构成前置条件。候选生命周期、其余 CLI 依赖和全局状态治理未承诺。 |
+| 维护减负路线 | #528、#531 均按 completed 关闭；第一轮 PR [#529](https://github.com/hu-border-collie/renpy-translation-lab/pull/529) / [#530](https://github.com/hu-border-collie/renpy-translation-lab/pull/530)，第二轮 PR [#534](https://github.com/hu-border-collie/renpy-translation-lab/pull/534) 均已合并；范围与证据见[路线图](maintainability_roadmap.md)。 | 真实 Provider / 恢复验收仍归 #344 / #431；候选生命周期、其余 CLI 依赖和全局状态治理未承诺，不成为既有任务的关闭前置条件。 |
 
 ## 计划、合同与研究目录
 
 | 文档 | 当前用途与状态 | 当前入口或剩余跟踪 |
 | --- | --- | --- |
-| [维护复杂度治理路线](maintainability_roadmap.md) | #528 第一轮完成；#531 第二轮已登记，尚未实施。 | 实现状态按 #531 更新；其余内容仅为候选。 |
+| [维护复杂度治理路线](maintainability_roadmap.md) | #528 第一轮与 #531 第二轮工程均已合并并关闭。 | 真实 Provider / 项目验收仍归 #344 / #431；其余维护方向仅为候选。 |
 | [七类规划方向重新评估（2026-09-19）](plan_reassessment_2026-09-19.md) | 评估报告由 PR [#514](https://github.com/hu-border-collie/renpy-translation-lab/pull/514) 合并；它是日期快照，不代替本索引的全量状态映射。#512/#513 后由 PR #524/#527 合并，#487 spike 由 PR #511 合并。 | 真实章节、Provider、coverage 实验仍分别跟踪 #508、#344/#431、#470；生产字体接入待评估。 |
 | [Agent 翻译工具包提案](agent_translation_toolkit.md) | #508 的可复用工作包与实验 CLI 由 PR #516 交付；整体产品收益未由 fixture 证明。 | #508 真实章节对照仍待做；现行操作见[外部初译工作包](../external_translation_work.md)。 |
 | [Engine Adapter P0 合同](engine_adapter_contract.md) | #265 P0–P6 已交付并关闭；本文保留技术设计与安全合同。 | 现行实现见[Engine Adapter 手册](../engine_adapter.md)；第三引擎 #272 暂缓，真实 coverage 样本见 #470。 |
