@@ -213,6 +213,31 @@ class GuiEngineSnapshotDialogTests(unittest.TestCase):
             self.dialog.close_btn.mapTo(self.dialog, self.dialog.close_btn.rect().center()),
         ))
 
+    def test_reuse_actions_can_be_scrolled_into_view_in_narrow_dialog(self) -> None:
+        self.dialog.tabs.setCurrentIndex(2)
+        self.dialog.resize(400, 640)
+        self.dialog.show()
+        QTest.qWait(50)
+        self.assertLessEqual(self.dialog.width(), 400)
+        scroll = self.dialog.findChild(QScrollArea, "engine_snapshot_reuse_scroll")
+        self.assertIsNotNone(scroll)
+        self.assertGreater(scroll.horizontalScrollBar().maximum(), 0)
+        self.assertTrue(scroll.horizontalScrollBar().isVisible())
+        for button in self.dialog._reuse_buttons:
+            with self.subTest(button=button.objectName()):
+                scroll.ensureWidgetVisible(button)
+                self._app.processEvents()
+                self.assertTrue(scroll.viewport().rect().contains(
+                    button.mapTo(scroll.viewport(), button.rect().topLeft()),
+                ))
+                self.assertTrue(scroll.viewport().rect().contains(
+                    button.mapTo(scroll.viewport(), button.rect().bottomRight()),
+                ))
+
+        self.dialog.resize(960, 640)
+        self._app.processEvents()
+        self.assertFalse(scroll.horizontalScrollBar().isVisible())
+
     def test_overview_populates_capabilities_snapshots_and_diff_choices(self) -> None:
         self.dialog._on_overview_loaded(
             EngineSnapshotTaskResult(ok=True, payload=_overview_payload())

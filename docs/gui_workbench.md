@@ -105,7 +105,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 关键词和订正使用短标签「批量 / 同步」切换子模式；上下文库直接显示记忆库、原文索引和项目分析状态。每个任务页持有自己的控件与状态，不再依赖共享结果区模拟换页。
 
-复用候选页支持页面滚动，小窗口仍可访问完整详情、审阅者填写、决定和 Batch 导出按钮。
+复用候选页支持页面滚动，小窗口仍可访问完整详情、审阅者填写、决定和 Batch 导出按钮；窗口过窄时会按需显示横向滚动条，可滚动访问右侧控件。
 
 上下文库底部提供两个入口：**引擎与快照…** 展示当前 engine / adapter 能力、`logs/project_snapshots/` 快照列表，并可用两版快照生成版本 diff（disposition、匹配依据、置信度、base/target locator、候选与证据）；**复用候选…** 打开同一对话框的复用页，读取已有 `reuse_report.json`，展示候选类别、状态、歧义目标、译文来源、完整旧译文、证据与审计记录，并可打开 `reuse_review.md`。用户可对选中的单条候选提交 `accept` / `reject`，填写真实人类审阅者身份与可选备注；接受歧义候选必须显式选择一个合法 target occurrence。GUI 通过既有导入服务生成新候选包并保留原包。首次只支持 accept / reject；`override_translation`、`split_lineage`、`merge_lineage` 继续使用 CLI。
 
