@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tests import gui_test_support
@@ -87,6 +88,39 @@ class GuiReviewWorkspaceTests(unittest.TestCase):
             panel._current_context = lambda: "project-b"
             panel._loaded((20, "project-a"), manifest, entries)
             self.assertEqual(panel.table.rowCount(), 0)
+
+    def test_failed_draft_save_does_not_export_previous_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            corpus = _write_corpus(root)
+            manifest, entries = review_workspace.open_workspace(
+                str(corpus), expected_game_root=str(root / "game")
+            )
+            panel = self._new_panel()
+            panel._generation = 1
+            panel._current_context = lambda: "current"
+            panel._loaded((1, "current"), manifest, entries)
+            panel.table.selectRow(0)
+            panel.proposed.setPlainText("旧的已保存建议")
+            panel.reason.setText("已保存")
+            self.assertTrue(panel.save_current_draft())
+            panel.proposed.setPlainText("最新尚未保存的建议")
+            panel.reason.setText("最新修改")
+            paths = []
+            panel.proposal_ready.connect(lambda *args: paths.append(args))
+            with mock.patch.object(
+                review_workspace, "save_draft", side_effect=OSError("read-only draft")
+            ):
+                panel.export_btn.click()
+            self.assertEqual(paths, [])
+            self.assertFalse(
+                (Path(panel.index_path).parent / review_workspace.PROPOSALS_NAME).exists()
+            )
+            self.assertEqual(panel.proposed.toPlainText(), "最新尚未保存的建议")
+            self.assertTrue(panel._dirty)
+            self.assertIn("read-only draft", panel.message.text())
+            panel.export_btn.click()
+            self.assertEqual(len(paths), 1)
 
     def test_pending_edit_flushes_when_task_resets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

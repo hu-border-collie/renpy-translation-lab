@@ -8225,6 +8225,7 @@ class MainWindow(QMainWindow):
                     selected, game_root, tl_dir,
                     lambda: self._current_review_workspace_identity(),
                 )
+                self._workbench_coordinator.resize(WorkbenchNavItem.REVISION)
             return
         if action == "export_revision_corpus":
             self._on_export_revision_corpus()

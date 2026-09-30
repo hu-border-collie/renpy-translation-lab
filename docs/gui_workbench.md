@@ -105,6 +105,8 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 关键词和订正使用短标签「批量 / 同步」切换子模式；上下文库直接显示记忆库、原文索引和项目分析状态。每个任务页持有自己的控件与状态，不再依赖共享结果区模拟换页。
 
+复用候选页支持页面滚动，小窗口仍可访问完整详情、审阅者填写、决定和 Batch 导出按钮；窗口过窄时会按需显示横向滚动条，可滚动访问右侧控件。
+
 上下文库底部提供两个入口：**引擎与快照…** 展示当前 engine / adapter 能力、`logs/project_snapshots/` 快照列表，并可用两版快照生成版本 diff（disposition、匹配依据、置信度、base/target locator、候选与证据）；**复用候选…** 打开同一对话框的复用页，读取已有 `reuse_report.json`，展示候选类别、状态、歧义目标、译文来源、完整旧译文、证据与审计记录，并可打开 `reuse_review.md`。用户可对选中的单条候选提交 `accept` / `reject`，填写真实人类审阅者身份与可选备注；接受歧义候选必须显式选择一个合法 target occurrence。GUI 通过既有导入服务生成新候选包并保留原包。首次只支持 accept / reject；`override_translation`、`split_lineage`、`merge_lineage` 继续使用 CLI。
 
 选定目标 translation `manifest.json` 后，可通过既有 `export-reuse-results` 核心服务导出 Batch 结果并更新 manifest 簿记。GUI 不直接修改游戏文件；导出后必须对该 manifest 执行 `check`，并且只有当前 manifest/results 对应的最近一次 `writeback_gate.decision=allow` 才能 `apply`。候选每页最多展示 500 条，摘要最多 160 字符；可翻页审阅，详情显示完整文本，而决定与导出始终由共用服务读取完整权威包。切换候选、候选包或 manifest，或取消未提交填写时，未提交的审阅者、备注和目标选择都会清空；已提交的后台操作不会被关闭窗口回滚。迟到的 worker 结果若不匹配当前项目、候选包和 manifest 上下文则会忽略。#427 普通条目审校状态、quality acknowledgement 与复用决定互不授权。
@@ -336,6 +338,8 @@ Markdown、`revision_corpus_manifest.json` 路径和 manifest 中的生成时间
 
 **普通译文逐条审校（批量模式）**
 
+打开工作区后页面高度随审校控件展开；筛选控件分行排列，小窗口可通过页面滚动条访问筛选、详情和草稿操作。
+
 点击「逐条审校」，选择当前项目的 `revision_corpus_manifest.json`；若已用 CLI 附着
 quality findings 或 translation records，也可选择 `review_index_manifest.json`。界面在后台构建
 `review_index/` 派生索引，显示普通译文和有 finding 的条目；索引可重建，人工决定保存
@@ -349,6 +353,9 @@ quality findings 或 translation records，也可选择 `review_index_manifest.j
 后可独立标记忽略、已处理或重新打开；旧决定在 source、target、context 或关联证据
 变化后显示为 `needs_recheck`。旧草稿在证据变化后不得生成提案。`ignored` 只表示审校
 决定，不是 quality acknowledgement 或复用候选接受。
+
+生成提案前会先保存当前编辑；若草稿保存失败，保留编辑并显示失败原因，停止生成提案。
+修复保存问题后可重试，避免把旧草稿当作最新编辑送入导入校验。
 
 从当前页选中完整草稿后，GUI 生成 #321 格式的 `review_proposals.jsonl`，并立即进入
 现有「导入润色提案」的 staged selection 校验；仍需明确选择有效候选生成订正预览，

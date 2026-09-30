@@ -1269,7 +1269,12 @@ QTableWidget#split_status_table QHeaderView::section {
     font-weight: 700;
 }
 
-QTableWidget#games_registry_table {
+QTableWidget#games_registry_table,
+QTableWidget#revision_selection_table,
+QTableWidget#engine_snapshot_table,
+QTableWidget#engine_snapshot_diff_table,
+QTableWidget#engine_snapshot_reuse_table,
+QTableWidget#review_entries_table {
     border: 1px solid ${border_table};
     border-radius: 8px;
     background: ${bg_table};
@@ -1279,21 +1284,41 @@ QTableWidget#games_registry_table {
     outline: none;
 }
 
-QTableWidget#games_registry_table::item {
+QTableWidget#games_registry_table::item,
+QTableWidget#revision_selection_table::item,
+QTableWidget#engine_snapshot_table::item,
+QTableWidget#engine_snapshot_diff_table::item,
+QTableWidget#engine_snapshot_reuse_table::item,
+QTableWidget#review_entries_table::item {
     padding: 6px 8px;
     outline: none;
 }
 
-QTableWidget#games_registry_table::item:hover {
+QTableWidget#games_registry_table::item:hover,
+QTableWidget#revision_selection_table::item:hover,
+QTableWidget#engine_snapshot_table::item:hover,
+QTableWidget#engine_snapshot_diff_table::item:hover,
+QTableWidget#engine_snapshot_reuse_table::item:hover,
+QTableWidget#review_entries_table::item:hover {
     background-color: ${bg_table_hover};
 }
 
-QTableWidget#games_registry_table::item:selected {
+QTableWidget#games_registry_table::item:selected,
+QTableWidget#revision_selection_table::item:selected,
+QTableWidget#engine_snapshot_table::item:selected,
+QTableWidget#engine_snapshot_diff_table::item:selected,
+QTableWidget#engine_snapshot_reuse_table::item:selected,
+QTableWidget#review_entries_table::item:selected {
     background-color: ${bg_table_selected};
     color: ${fg_table_selected};
 }
 
-QTableWidget#games_registry_table QHeaderView::section {
+QTableWidget#games_registry_table QHeaderView::section,
+QTableWidget#revision_selection_table QHeaderView::section,
+QTableWidget#engine_snapshot_table QHeaderView::section,
+QTableWidget#engine_snapshot_diff_table QHeaderView::section,
+QTableWidget#engine_snapshot_reuse_table QHeaderView::section,
+QTableWidget#review_entries_table QHeaderView::section {
     background-color: ${bg_table_header};
     color: ${fg_table_header};
     border: none;
@@ -1410,4 +1435,17 @@ QScrollBar::sub-page:vertical,
 QScrollBar::add-page:horizontal,
 QScrollBar::sub-page:horizontal {
     background: none;
+}
+
+/* Snapshot/reuse tabs retain the selected app theme on native Windows. */
+QWidget#engine_snapshot_overview_content,
+QWidget#engine_snapshot_diff_content,
+QWidget#engine_snapshot_reuse_content,
+QScrollArea#engine_snapshot_reuse_scroll {
+    background-color: ${bg_surface};
+}
+
+QTabWidget#engine_snapshot_tabs::pane {
+    background-color: ${bg_surface};
+    border: 1px solid ${border_default};
 }

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QLabel,
+    QLayout,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -232,6 +233,12 @@ class RevisionPage(QFrame):
         self.status_section = self.task_layout.add_status_section(
             TASK_PROJECT_GATE_COPY["status_section_title"]
         )
+        # Long manifest paths must wrap within the page instead of imposing
+        # their word width on the review controls in a narrow shell.
+        self.status_section.facts_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred,
+        )
+        self.task_layout.root.setSizeConstraint(QLayout.SizeConstraint.SetDefaultConstraint)
         self.page_stack.addWidget(self.content_page)
         self.page_stack.setCurrentWidget(self.empty_state)
 

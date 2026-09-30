@@ -77,7 +77,7 @@ class ReviewWorkspaceWidget(QWidget):
         self.message.setObjectName("review_workspace_message")
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
-        filters = QHBoxLayout()
+        filters = QGridLayout()
         self.file_filter = QLineEdit()
         self.file_filter.setObjectName("review_file_filter")
         self.file_filter.setPlaceholderText(COPY["file_filter"])
@@ -95,9 +95,9 @@ class ReviewWorkspaceWidget(QWidget):
         self.speaker_filter.setPlaceholderText(COPY["speaker_filter"])
         self.query_filter = QLineEdit()
         self.query_filter.setPlaceholderText(COPY["query_filter"])
-        for widget in (self.file_filter, self.lifecycle_filter, self.findings_filter,
-                       self.severity_filter, self.speaker_filter, self.query_filter):
-            filters.addWidget(widget)
+        for index, widget in enumerate((self.file_filter, self.lifecycle_filter, self.findings_filter,
+                                        self.severity_filter, self.speaker_filter, self.query_filter)):
+            filters.addWidget(widget, index // 3, index % 3)
         layout.addLayout(filters)
         for combo in (self.lifecycle_filter, self.findings_filter, self.severity_filter):
             combo.currentIndexChanged.connect(self._filter_changed)
@@ -396,7 +396,8 @@ class ReviewWorkspaceWidget(QWidget):
             self.message.setText(f"{COPY['decision_error']} {exc}")
 
     def _export_selected(self) -> None:
-        self._save_if_dirty()
+        if not self._save_if_dirty():
+            return
         selected = sorted({item.row() for item in self.table.selectedItems()})
         if not selected:
             self.message.setText(COPY["selection_required"])

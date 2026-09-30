@@ -10,7 +10,8 @@ import gemini_translate_batch as batch
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QScrollArea
+    from PySide6.QtTest import QTest
 
     from gui_qt.app import MainWindow
     from gui_qt.check_report import WritebackSummary
@@ -83,6 +84,57 @@ class GuiTaskPageTests(unittest.TestCase):
 
     def test_mainwindow_does_not_load_developer_game_root(self) -> None:
         self.assertIsNone(self.window.state.get_game_root())
+
+    def test_open_review_workspace_expands_scrollable_page_without_navigation(self) -> None:
+        from gui_qt.theme_helpers import load_theme_stylesheet
+
+        previous_stylesheet = self._app.styleSheet()
+        self.addCleanup(self._app.setStyleSheet, previous_stylesheet)
+        self._app.setStyleSheet(load_theme_stylesheet(
+            Path(__file__).resolve().parents[1] / "gui_qt/resources", "light",
+        ))
+        self.window.resize(960, 640)
+        self.window._doctor_check_completed = True
+        self.window._set_doctor_summary(DoctorSummary(
+            status="ready", heading="项目检查通过", message="可以审校。",
+            facts=[], findings=[], mode="existing_tl_only",
+        ))
+        self.window._set_work_mode(WorkMode.REVISION, refresh_manifest_writeback=False)
+        self.window.show()
+        QTest.qWait(50)
+        page = self.window.revision_page
+        stack_height_before = self.window.workbench_stack.maximumHeight()
+        # Artifact loading has separate real-service coverage. This regression
+        # checks the host's geometry as soon as the workspace becomes visible.
+        with mock.patch("gui_qt.app.QFileDialog.getOpenFileName", return_value=("review.json", "")), \
+             mock.patch.object(page.review_workspace, "load"), \
+             mock.patch.object(self.window, "_snapshot_runtime_config_for_job", return_value=SimpleNamespace(tl_dir="")):
+            self.window._on_final_review_page_action("open_review_workspace")
+        page.status_section.set_status(
+            "ready", "可以写回订正", "订正预览已经生成。",
+            ["任务记录：" + "C:\\workspace\\" + "long_manifest_path_" * 30 + "manifest.json"],
+        )
+        QTest.qWait(50)
+        self.assertFalse(page.review_workspace.isHidden())
+        self.assertLessEqual(page.content_page.width(), page.width())
+        self.assertGreater(page.minimumSizeHint().height(), stack_height_before)
+        self.assertGreaterEqual(
+            self.window.workbench_stack.maximumHeight(), page.minimumSizeHint().height(),
+        )
+        scroll = self.window.findChild(QScrollArea, "workbench_content_scroll")
+        self.assertIsNotNone(scroll)
+        self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+        self.assertEqual(scroll.horizontalScrollBar().maximum(), 0)
+        scroll.ensureWidgetVisible(page.review_workspace.export_btn)
+        self._app.processEvents()
+        self.assertTrue(scroll.viewport().rect().contains(
+            page.review_workspace.export_btn.mapTo(
+                scroll.viewport(), page.review_workspace.export_btn.rect().center(),
+            ),
+        ))
+        self.assertLessEqual(page.review_workspace.query_filter.mapTo(
+            scroll.viewport(), page.review_workspace.query_filter.rect().topRight(),
+        ).x(), scroll.viewport().rect().right())
 
     def test_sync_page_shows_warning_and_start_label(self) -> None:
         self.window._set_work_mode(

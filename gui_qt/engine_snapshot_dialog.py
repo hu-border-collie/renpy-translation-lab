@@ -13,13 +13,16 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QLayout,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -101,6 +104,7 @@ class EngineSnapshotDialog(QDialog):
 
     def _build_overview_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("engine_snapshot_overview_content")
         layout = QVBoxLayout(tab)
         self.engine_summary_label = QLabel("")
         self.engine_summary_label.setWordWrap(True)
@@ -132,6 +136,7 @@ class EngineSnapshotDialog(QDialog):
 
     def _build_diff_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("engine_snapshot_diff_content")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.diff_base_combo = self._make_path_combo("engine_snapshot_diff_base_combo")
@@ -169,7 +174,9 @@ class EngineSnapshotDialog(QDialog):
 
     def _build_reuse_tab(self) -> QWidget:
         tab = QWidget()
+        tab.setObjectName("engine_snapshot_reuse_content")
         layout = QVBoxLayout(tab)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         row = QHBoxLayout()
         row.addWidget(QLabel(ENGINE_SNAPSHOT_COPY["reuse_path"]))
         self.reuse_path_edit = QLineEdit("")
@@ -226,6 +233,7 @@ class EngineSnapshotDialog(QDialog):
         layout.addWidget(self.reuse_scope_note)
         self.reuse_table = self._make_table(ENGINE_SNAPSHOT_COPY["reuse_columns"])
         self.reuse_table.setObjectName("engine_snapshot_reuse_table")
+        self.reuse_table.setMinimumHeight(170)
         self.reuse_table.itemSelectionChanged.connect(self._on_reuse_selection_changed)
         layout.addWidget(self.reuse_table, 1)
         page_row = QHBoxLayout()
@@ -324,7 +332,14 @@ class EngineSnapshotDialog(QDialog):
             self.reuse_export_btn,
             self.reuse_open_review_btn,
         )
-        return tab
+        scroll = QScrollArea()
+        scroll.setObjectName("engine_snapshot_reuse_scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(tab)
+        return scroll
 
     @staticmethod
     def _make_table(columns: tuple[str, ...]) -> QTableWidget:
