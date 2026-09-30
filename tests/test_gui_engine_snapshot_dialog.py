@@ -7,7 +7,8 @@ from unittest import mock
 
 try:
     from PySide6.QtCore import QObject, Signal
-    from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+    from PySide6.QtWidgets import QApplication, QMessageBox, QScrollArea, QWidget
+    from PySide6.QtTest import QTest
 
     from gui_qt.app import MainWindow
     from gui_qt.engine_snapshot_dialog import EngineSnapshotDialog
@@ -191,6 +192,26 @@ class GuiEngineSnapshotDialogTests(unittest.TestCase):
         self.dialog.close()
         self.dialog.deleteLater()
         self._worker_patch.stop()
+
+    def test_reuse_actions_remain_reachable_in_short_dialog(self) -> None:
+        self.dialog.tabs.setCurrentIndex(2)
+        self.dialog.resize(960, 640)
+        self.dialog.show()
+        QTest.qWait(50)
+        self.assertLessEqual(self.dialog.height(), 640)
+        scroll = self.dialog.findChild(QScrollArea, "engine_snapshot_reuse_scroll")
+        self.assertIsNotNone(scroll)
+        self.assertGreater(scroll.verticalScrollBar().maximum(), 0)
+        scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum())
+        self._app.processEvents()
+        for button in (self.dialog.reuse_accept_btn, self.dialog.reuse_export_btn,
+                       self.dialog.reuse_open_review_btn):
+            self.assertTrue(scroll.viewport().rect().contains(
+                button.mapTo(scroll.viewport(), button.rect().center()),
+            ))
+        self.assertTrue(self.dialog.rect().contains(
+            self.dialog.close_btn.mapTo(self.dialog, self.dialog.close_btn.rect().center()),
+        ))
 
     def test_overview_populates_capabilities_snapshots_and_diff_choices(self) -> None:
         self.dialog._on_overview_loaded(
