@@ -181,6 +181,8 @@ class TranslationRecord:
         revision_history: Sequence[Mapping[str, Any]] = (),
         record_id: str = "",
     ) -> TranslationRecord:
+        """Validate record identity while preserving every character of a nonblank target."""
+
         normalized_version = _required_text(version_id, field_name="record.version_id")
         normalized_snapshot = _required_text(
             snapshot_digest,
@@ -191,10 +193,9 @@ class TranslationRecord:
             field_name="record.occurrence_id",
         )
         normalized_unit = _required_text(unit_id, field_name="record.unit_id")
-        normalized_translation = _required_text(
-            translation_text,
-            field_name="record.translation_text",
-        )
+        validated_translation = str(translation_text or "")
+        if not validated_translation.strip():
+            raise VersioningArtifactError("record.translation_text must not be empty.")
         normalized_origin = _required_text(origin, field_name="record.origin")
         if normalized_origin not in RECORD_ORIGINS:
             raise VersioningArtifactError(
@@ -228,7 +229,7 @@ class TranslationRecord:
             occurrence_id=normalized_occurrence,
             unit_id=normalized_unit,
             source_text=str(source_text or ""),
-            translation_text=normalized_translation,
+            translation_text=validated_translation,
             target_language=str(target_language or ""),
             origin=normalized_origin,
             provenance=_mapping(provenance or {}, field_name="record.provenance"),
@@ -432,9 +433,7 @@ def derive_revision_history(
     """
 
     history = [dict(item) for item in previous_record.revision_history]
-    text_changed = _normalize_text(previous_record.translation_text) != (
-        _normalize_text(new_translation)
-    )
+    text_changed = previous_record.translation_text != str(new_translation or "")
     origin_changed = _normalize_text(previous_record.origin) != _normalize_text(
         new_origin
     )
