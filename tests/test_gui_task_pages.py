@@ -683,6 +683,7 @@ class GuiTaskPageTests(unittest.TestCase):
         resumes: list[bool] = []
         stops: list[bool] = []
         merges: list[bool] = []
+        picks: list[bool] = []
         selected: list[WorkMode] = []
         page.set_action_callbacks(
             WorkbenchPageActions(
@@ -690,6 +691,7 @@ class GuiTaskPageTests(unittest.TestCase):
                 resume=lambda: resumes.append(True),
                 stop=lambda: stops.append(True),
                 writeback=lambda: merges.append(True),
+                open_candidates=lambda: picks.append(True),
                 select_mode=selected.append,
             )
         )
@@ -701,10 +703,13 @@ class GuiTaskPageTests(unittest.TestCase):
             resume_label="继续提取",
             merge_enabled=True,
             merge_message="关键词候选已就绪。",
+            open_enabled=True,
         )
         page.start_btn.click()
         page.resume_btn.click()
         page.merge_btn.click()
+        # #539: the standalone open entry reports through its own callback.
+        page.open_candidates_btn.click()
         page.set_task_running(True)
         page.stop_btn.click()
         page.set_task_running(False)
@@ -715,6 +720,7 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertEqual(starts, [True])
         self.assertEqual(resumes, [True])
         self.assertEqual(merges, [True])
+        self.assertEqual(picks, [True])
         self.assertEqual(stops, [True])
         self.assertEqual(selected, [WorkMode.SYNC_KEYWORD_EXTRACTION])
 

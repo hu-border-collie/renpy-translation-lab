@@ -24,6 +24,7 @@ class WorkbenchPageActions:
     cancel: Callable[[], None] | None = None
     derive: Callable[[], None] | None = None
     writeback: Callable[[], None] | None = None
+    open_candidates: Callable[[], None] | None = None
     prebuild: Callable[[str], None] | None = None
     open_settings: Callable[[], None] | None = None
     select_mode: Callable[[WorkMode], None] | None = None

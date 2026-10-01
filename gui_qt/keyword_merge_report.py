@@ -3,11 +3,20 @@ from __future__ import annotations
 
 import os
 import re
+from dataclasses import dataclass
 
 import keyword_glossary_merge as merge_mod
 
+from .path_utils import canonical_abs_path
+from .user_copy import KEYWORD_CANDIDATE_COPY
+
 _MANIFEST_MODE_KEYWORD = "keyword_extraction"
 _SYNC_KEYWORD_JSONL_RE = re.compile(r"^JSONL:\s*(.+?)\s*$", re.MULTILINE)
+_CANDIDATE_SOURCE_COPY = {
+    "external": KEYWORD_CANDIDATE_COPY["source_external"],
+    "extraction": KEYWORD_CANDIDATE_COPY["source_extraction"],
+    "sync": KEYWORD_CANDIDATE_COPY["source_sync"],
+}
 
 
 def _sibling_keyword_candidates_jsonl(manifest_path: str) -> str:
@@ -92,12 +101,105 @@ def keyword_merge_ready(
             manifest,
         )
     if not resolved_candidates:
-        return False, "没有可合并的关键词候选 JSONL；请先完成关键词提取或选择候选文件。"
+        return False, (
+            "没有可合并的关键词候选；请先完成关键词提取，"
+            f"或用「{KEYWORD_CANDIDATE_COPY['open_action']}」加载已有候选。"
+        )
     if not os.path.isfile(resolved_candidates):
         return False, f"候选文件不存在：{resolved_candidates}"
     if not glossary_path.strip():
-        return False, "未配置 glossary 路径，请在设置页保存项目术语表路径。"
+        return False, "未配置术语表目标，请在设置页保存项目术语表路径。"
     return True, ""
+
+
+@dataclass(frozen=True)
+class KeywordCandidateSelection:
+    """One keyword candidate file loaded for human review (#539).
+
+    ``game_root`` and ``glossary_path`` freeze the project identity captured when
+    the file was opened. Comparing them against the live context lets the GUI
+    drop a stale review instead of merging into another project's terms.
+    """
+
+    candidates_path: str
+    game_root: str
+    glossary_path: str
+    macro_path: str
+    candidate_total: int
+    mergeable_total: int
+    source: str = "external"
+
+
+def format_keyword_candidate_selection(selection: KeywordCandidateSelection) -> str:
+    """Render candidate source, counts and the current project glossary target."""
+    source = _CANDIDATE_SOURCE_COPY.get(
+        selection.source,
+        _CANDIDATE_SOURCE_COPY["external"],
+    )
+    glossary = selection.glossary_path or "未配置（合并前请在设置页保存项目术语表路径）"
+    return "\n".join(
+        (
+            f"候选来源：{source}（{KEYWORD_CANDIDATE_COPY['format_name']}）",
+            f"候选文件：{selection.candidates_path}",
+            f"候选条数：{selection.candidate_total} 条（可审核 {selection.mergeable_total} 条）",
+            f"术语表目标：{glossary}",
+            KEYWORD_CANDIDATE_COPY["info_hint"],
+        )
+    )
+
+
+def keyword_candidate_open_ready(
+    *,
+    running: bool,
+    game_root: str,
+    project_ready: bool,
+) -> tuple[bool, str]:
+    """Return whether the standalone 打开候选文件 entry may ask for a file (#539).
+
+    The second item is user copy explaining the restriction and is empty while
+    the entry is usable.
+    """
+    if running:
+        return False, KEYWORD_CANDIDATE_COPY["open_running"]
+    if not str(game_root or "").strip():
+        return False, KEYWORD_CANDIDATE_COPY["open_no_project"]
+    if not project_ready:
+        return False, KEYWORD_CANDIDATE_COPY["open_project_not_ready"]
+    return True, ""
+
+
+def _same_asset_path(left: str, right: str) -> bool:
+    try:
+        return (
+            canonical_abs_path(left).casefold()
+            == canonical_abs_path(right).casefold()
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def keyword_review_context_stale_reason(
+    *,
+    candidates_path: str,
+    glossary_path: str,
+    game_root: str,
+    current_game_root: str,
+    current_glossary_path: str,
+) -> str:
+    """Return why an open review no longer matches the live context (#539).
+
+    Empty means the dialog may still write. A non-empty result is shown to the
+    user and the write is refused, so a project switch, a replaced candidate file
+    or a glossary retarget can never be applied to a review that was opened
+    against the previous target.
+    """
+    if not _same_asset_path(game_root, current_game_root):
+        return KEYWORD_CANDIDATE_COPY["stale_project"]
+    if not candidates_path or not os.path.isfile(candidates_path):
+        return KEYWORD_CANDIDATE_COPY["stale_candidates"]
+    if not _same_asset_path(glossary_path, current_glossary_path):
+        return KEYWORD_CANDIDATE_COPY["stale_glossary"]
+    return ""
 
 
 def load_keyword_merge_context(
@@ -121,9 +223,11 @@ def load_keyword_merge_context(
     macro_text = merge_mod.load_macro_setting_text(macro_path)
     try:
         candidates = merge_mod.load_keyword_candidates_jsonl(candidates_path)
+        glossary = merge_mod.load_glossary_file(glossary_path)
     except SystemExit as exc:
+        # Both loaders signal malformed input with SystemExit (CLI contract);
+        # GUI callers must see a catchable ValueError instead of exiting.
         raise ValueError(str(exc)) from exc
-    glossary = merge_mod.load_glossary_file(glossary_path)
     rows = merge_mod.build_candidate_merge_rows(
         candidates,
         glossary,

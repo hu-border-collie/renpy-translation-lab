@@ -1,9 +1,11 @@
 """Persistent keywords/terminology page for the workbench stack (#176 P3)."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QLabel,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -12,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..empty_state import EmptyStateWidget
-from ..user_copy import TASK_PROJECT_GATE_COPY
+from ..user_copy import KEYWORD_CANDIDATE_COPY, TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession
 from .page_contract import WorkbenchPageActions
@@ -70,7 +72,7 @@ class KeywordsPage(QFrame):
         )
 
         self.actions = self.task_layout.add_section(
-            "提取任务",
+            "关键词任务",
             role="keywords",
         )
         self.start_btn = QPushButton("提取关键词")
@@ -91,17 +93,38 @@ class KeywordsPage(QFrame):
         self.stop_btn.clicked.connect(self._trigger_stop)
         self.actions.add_action(self.stop_btn, min_width=80)
 
-        self.merge_btn = QPushButton("合并到 glossary")
+        # #539: an explicitly named entry that works without any extraction
+        # result, so an existing external candidate JSONL stays reachable.
+        self.open_candidates_btn = QPushButton(KEYWORD_CANDIDATE_COPY["open_action"])
+        self.open_candidates_btn.setObjectName("keywords_open_candidates_btn")
+        self.open_candidates_btn.setEnabled(False)
+        self.open_candidates_btn.setToolTip(KEYWORD_CANDIDATE_COPY["open_tooltip"])
+        self.open_candidates_btn.clicked.connect(self._trigger_open_candidates)
+        self.actions.add_action(self.open_candidates_btn, min_width=124)
+
+        self.merge_btn = QPushButton(KEYWORD_CANDIDATE_COPY["merge_action"])
         self.merge_btn.setObjectName("keywords_merge_btn")
         self.merge_btn.setEnabled(False)
-        self.merge_btn.setToolTip("提取完成后，审核候选并写入 glossary.json；不会修改 .rpy 脚本。")
+        self.merge_btn.setToolTip(KEYWORD_CANDIDATE_COPY["merge_tooltip"])
         self.merge_btn.clicked.connect(self._trigger_merge)
-        self.actions.add_action(self.merge_btn, min_width=130)
+        self.actions.add_action(self.merge_btn, min_width=160)
         self.actions.finish_setup()
 
         self.result_hint = self.task_layout.add_result_hint(
-            "提取完成后，可在此合并审核通过的术语候选。"
+            "提取完成后，可在此审核并合并术语候选。"
         )
+
+        # Candidate context loaded from the standalone entry: source, file,
+        # counts and the current project glossary target (#539). Hidden until a
+        # candidate file is actually loaded so the idle page stays compact.
+        self.candidate_info_label = QLabel("")
+        self.candidate_info_label.setObjectName("keywords_candidate_info")
+        self.candidate_info_label.setWordWrap(True)
+        self.candidate_info_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.candidate_info_label.setVisible(False)
+        self.task_layout.root.addWidget(self.candidate_info_label)
 
         self.status_section = self.task_layout.add_status_section(
             TASK_PROJECT_GATE_COPY["status_section_title"]
@@ -198,6 +221,7 @@ class KeywordsPage(QFrame):
         if running:
             self.start_btn.setEnabled(False)
             self.resume_btn.setEnabled(False)
+            self.open_candidates_btn.setEnabled(False)
             self.merge_btn.setEnabled(False)
 
     def set_controls(
@@ -209,13 +233,29 @@ class KeywordsPage(QFrame):
         resume_label: str,
         merge_enabled: bool,
         merge_message: str,
+        open_enabled: bool = True,
+        open_message: str = "",
     ) -> None:
         self.start_btn.setEnabled(start_enabled and not self._running)
         self.resume_btn.setVisible(resume_visible)
         self.resume_btn.setText(resume_label)
         self.resume_btn.setEnabled(resume_enabled and not self._running)
+        # The 打开候选文件 entry stays available without extraction results; the
+        # coordinator only disables it while running or before project prep and
+        # explains the reason through this tooltip (#539).
+        self.open_candidates_btn.setEnabled(open_enabled and not self._running)
+        self.open_candidates_btn.setToolTip(
+            open_message or KEYWORD_CANDIDATE_COPY["open_tooltip"]
+        )
         self.merge_btn.setEnabled(merge_enabled and not self._running)
         self.result_hint.setText(merge_message)
+        self.task_layout.reflow()
+        self.updateGeometry()
+
+    def set_candidate_context(self, text: str) -> None:
+        """Show the loaded candidate source, counts and glossary target (#539)."""
+        self.candidate_info_label.setText(text)
+        self.candidate_info_label.setVisible(bool(text))
         self.task_layout.reflow()
         self.updateGeometry()
 
@@ -223,6 +263,7 @@ class KeywordsPage(QFrame):
         self.set_task_running(False)
         self.status_section.set_status("", "", "", [])
         self.status_section.set_progress(None)
+        self.set_candidate_context("")
         self.set_controls(
             start_enabled=False,
             resume_enabled=False,
@@ -230,6 +271,8 @@ class KeywordsPage(QFrame):
             resume_label="继续提取",
             merge_enabled=False,
             merge_message="项目已切换；请先完成环境检查并重新提取关键词。",
+            open_enabled=False,
+            open_message="项目已切换；请先完成环境检查，再打开候选文件。",
         )
 
     def _trigger_mode_change(self) -> None:
@@ -248,6 +291,14 @@ class KeywordsPage(QFrame):
     def _trigger_stop(self) -> None:
         if self._running and self._actions.stop is not None:
             self._actions.stop()
+
+    def _trigger_open_candidates(self) -> None:
+        if (
+            not self._running
+            and self.open_candidates_btn.isEnabled()
+            and self._actions.open_candidates is not None
+        ):
+            self._actions.open_candidates()
 
     def _trigger_merge(self) -> None:
         if not self._running and self.merge_btn.isEnabled() and self._actions.writeback is not None:

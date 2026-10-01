@@ -7,11 +7,16 @@ import keyword_glossary_merge as merge_mod
 from project_asset_paths import canonical_abs_path
 
 from gui_qt.keyword_merge_report import (
+    KeywordCandidateSelection,
+    format_keyword_candidate_selection,
+    keyword_candidate_open_ready,
     keyword_merge_candidates_path_from_manifest,
     keyword_merge_ready,
+    keyword_review_context_stale_reason,
     load_keyword_merge_context,
     summarize_keyword_merge_result,
 )
+from gui_qt.user_copy import KEYWORD_CANDIDATE_COPY
 
 
 class GuiKeywordMergeReportTests(unittest.TestCase):
@@ -164,6 +169,128 @@ class GuiKeywordMergeReportTests(unittest.TestCase):
         payload = summarize_keyword_merge_result(summary)
         self.assertEqual(payload["status"], "ready")
         self.assertIn("预览", payload["heading"])
+
+    def test_load_keyword_merge_context_reports_corrupt_glossary(self):
+        """Malformed glossary is a catchable ValueError, not a process exit."""
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            glossary_path = os.path.join(tmp, "glossary.json")
+            with open(glossary_path, "w", encoding="utf-8") as handle:
+                handle.write("{not json}\n")
+            with self.assertRaises(ValueError):
+                load_keyword_merge_context(
+                    candidates_path=jsonl_path,
+                    config={"glossary_file": glossary_path},
+                    game_root=tmp,
+                    tool_root=tmp,
+                )
+
+    def test_keyword_candidate_open_ready_reports_each_restriction(self):
+        ready, message = keyword_candidate_open_ready(
+            running=False,
+            game_root="C:/Games/Demo/work",
+            project_ready=True,
+        )
+        self.assertTrue(ready)
+        self.assertEqual(message, "")
+
+        cases = (
+            (True, "C:/Games/Demo/work", True, KEYWORD_CANDIDATE_COPY["open_running"]),
+            (False, "", True, KEYWORD_CANDIDATE_COPY["open_no_project"]),
+            (False, "C:/Games/Demo/work", False, KEYWORD_CANDIDATE_COPY["open_project_not_ready"]),
+        )
+        for running, game_root, project_ready, expected in cases:
+            with self.subTest(message=expected):
+                ready, message = keyword_candidate_open_ready(
+                    running=running,
+                    game_root=game_root,
+                    project_ready=project_ready,
+                )
+                self.assertFalse(ready)
+                self.assertEqual(message, expected)
+
+    def test_format_keyword_candidate_selection_reports_context(self):
+        selection = KeywordCandidateSelection(
+            candidates_path="C:/tmp/keyword_candidates.jsonl",
+            game_root="C:/Games/Demo/work",
+            glossary_path="C:/Games/Demo/work/glossary.json",
+            macro_path="",
+            candidate_total=12,
+            mergeable_total=9,
+            source="external",
+        )
+        text = format_keyword_candidate_selection(selection)
+        self.assertIn(KEYWORD_CANDIDATE_COPY["source_external"], text)
+        self.assertIn(KEYWORD_CANDIDATE_COPY["format_name"], text)
+        self.assertIn("C:/tmp/keyword_candidates.jsonl", text)
+        self.assertIn("12 条（可审核 9 条）", text)
+        self.assertIn("C:/Games/Demo/work/glossary.json", text)
+        self.assertIn(KEYWORD_CANDIDATE_COPY["info_hint"], text)
+
+    def test_format_keyword_candidate_selection_marks_missing_target(self):
+        for source in ("extraction", "sync", "unknown-source"):
+            with self.subTest(source=source):
+                selection = KeywordCandidateSelection(
+                    candidates_path="C:/tmp/keyword_candidates.jsonl",
+                    game_root="C:/Games/Demo/work",
+                    glossary_path="",
+                    macro_path="",
+                    candidate_total=1,
+                    mergeable_total=1,
+                    source=source,
+                )
+                text = format_keyword_candidate_selection(selection)
+                self.assertIn("术语表目标：未配置", text)
+
+    def test_keyword_review_context_stale_reason_matches_live_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            self.assertEqual(
+                keyword_review_context_stale_reason(
+                    candidates_path=jsonl_path,
+                    glossary_path=os.path.join(tmp, "glossary.json"),
+                    game_root=tmp,
+                    current_game_root=tmp,
+                    current_glossary_path=os.path.join(tmp, "glossary.json"),
+                ),
+                "",
+            )
+
+    def test_keyword_review_context_stale_reason_detects_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl_path = os.path.join(tmp, "keyword_candidates.jsonl")
+            self._write_jsonl(jsonl_path, [{"source": "A", "suggested_target": "甲"}])
+            glossary_path = os.path.join(tmp, "glossary.json")
+            other_root = os.path.join(tmp, "other")
+            os.makedirs(other_root)
+
+            cases = (
+                (other_root, glossary_path, KEYWORD_CANDIDATE_COPY["stale_project"]),
+                (tmp, os.path.join(other_root, "glossary.json"), KEYWORD_CANDIDATE_COPY["stale_glossary"]),
+            )
+            for current_root, current_glossary, expected in cases:
+                with self.subTest(expected=expected):
+                    reason = keyword_review_context_stale_reason(
+                        candidates_path=jsonl_path,
+                        glossary_path=glossary_path,
+                        game_root=tmp,
+                        current_game_root=current_root,
+                        current_glossary_path=current_glossary,
+                    )
+                    self.assertEqual(reason, expected)
+
+            self.assertEqual(
+                keyword_review_context_stale_reason(
+                    candidates_path=os.path.join(tmp, "missing.jsonl"),
+                    glossary_path=glossary_path,
+                    game_root=tmp,
+                    current_game_root=tmp,
+                    current_glossary_path=glossary_path,
+                ),
+                KEYWORD_CANDIDATE_COPY["stale_candidates"],
+            )
 
 
 if __name__ == "__main__":
