@@ -568,7 +568,7 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 - 同步翻译、关键词提取（批量/同步）与 glossary 合并、订正与写回订正、翻译 A/B 对比。
 
-仓库 CI：`unittest`（含 GUI 依赖）、`cli-without-gui`（排除 `test_gui_*`）、`gui`（offscreen）。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/gui_test_support.py`。
+仓库 CI：Linux 的 `unittest` 运行含 GUI 依赖的 CLI/core 套件，`gui` 单独运行 offscreen GUI 套件；Windows 的 `unittest` 分进程运行两套测试。`cli-without-gui` 验证没有 GUI / 分析器依赖时的 CLI/core 行为。GUI 套件包含 `test_gui_*.py` 与历史命名的 Qt 设置页测试 `test_settings_*_page.py`；纯设置协议、注册表、协调器和保存逻辑仍属 CLI/core 套件。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/gui_test_support.py`。
 
 **烟测**：GUI **批量翻译**主路径曾在数千待译行的私有项目副本上跑通。兼容 Provider 的同步翻译也在隔离的最小 Ren'Py 项目副本上完成过小规模真实调用烟测，确认系统凭据读取、JSON 返回以及占位符和 Ren'Py 标签保留正常。该记录只验证小规模同步链路，不等于批量吞吐、成本或完整项目 QA。关键词 / 订正 / A/B 仍只有单元测试，建议在副本上小范围试跑。
 

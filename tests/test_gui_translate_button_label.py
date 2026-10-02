@@ -1,5 +1,7 @@
 import unittest
 
+from tests import gui_test_support
+
 try:
     from PySide6.QtWidgets import QApplication
 
@@ -17,115 +19,41 @@ else:
     IMPORT_ERROR = None
 
 
-@unittest.skipIf(MainWindow is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
+class GuiTranslateButtonRuleTests(unittest.TestCase):
+    def test_label_and_template_action_follow_mode_and_readiness(self):
+        # These rules only read two fields; no widgets or QApplication needed.
+        window = MainWindow.__new__(MainWindow)
+        cases = (
+            (WorkMode.BATCH_TRANSLATION, "can_generate_template", "生成翻译模板", True),
+            (WorkMode.BATCH_TRANSLATION, "existing_tl_only", "开始翻译", False),
+            (WorkMode.KEYWORD_EXTRACTION, "can_generate_template", "提取关键词", False),
+        )
+        for mode, doctor_mode, label, generate_template in cases:
+            with self.subTest(mode=mode, doctor_mode=doctor_mode):
+                window._work_mode = mode
+                window._doctor_summary_mode = doctor_mode
+                self.assertEqual(window._translate_button_label(), label)
+                self.assertEqual(window._should_generate_template_only(), generate_template)
+
+
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
 class GuiTranslateButtonLabelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._app = QApplication.instance() or QApplication([])
-    def test_batch_mode_shows_generate_template_when_doctor_mode_requires_it(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_summary_mode = "can_generate_template"
 
-        self.assertEqual(window._translate_button_label(), "生成翻译模板")
-        self.assertTrue(window._should_generate_template_only())
+    def setUp(self):
+        self.window = MainWindow()
 
-    def test_batch_mode_shows_start_translation_when_template_exists(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_summary_mode = "existing_tl_only"
+    def tearDown(self):
+        gui_test_support.close_main_window(self.window)
+        self.window.deleteLater()
+        self._app.processEvents()
 
-        self.assertEqual(window._translate_button_label(), "开始翻译")
-        self.assertFalse(window._should_generate_template_only())
-
-    def test_keyword_mode_keeps_extract_label_even_when_template_missing(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.KEYWORD_EXTRACTION
-        window._doctor_summary_mode = "can_generate_template"
-
-        self.assertEqual(window._translate_button_label(), "提取关键词")
-        self.assertFalse(window._should_generate_template_only())
-
-    def test_set_doctor_summary_updates_button_label(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="warning",
-                heading="检查完成，但有需要处理的事项",
-                message="Ren'Py 模板生成环境可用；翻译模板尚未生成。",
-                facts=[],
-                findings=[],
-                mode="can_generate_template",
-            )
-        )
-
-        self.assertEqual(window.translate_btn.text(), "生成翻译模板")
-
-    def test_batch_translation_button_disabled_without_doctor_check(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = False
-
-        self.assertFalse(window.translate_btn.isEnabled())
-
-    def test_batch_translation_button_enabled_after_doctor_check(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="ready",
-                heading="项目检查通过",
-                message="work 目录已就绪，可以开始翻译流程。",
-                facts=[],
-                findings=[],
-                mode="existing_tl_only",
-            )
-        )
-
-        self.assertTrue(window.translate_btn.isEnabled())
-
-    def test_batch_translation_button_disabled_when_doctor_blocked(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="blocked",
-                heading="项目检查失败",
-                message="环境检查没有正常完成，请查看诊断日志。",
-                facts=[],
-                findings=[],
-                mode="existing_tl_only",
-            )
-        )
-
-        self.assertEqual(window.translate_btn.text(), "开始翻译")
-        self.assertFalse(window.translate_btn.isEnabled())
-
-    def test_batch_translation_button_enabled_with_warning_status(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="warning",
-                heading="检查完成，但有需要处理的事项",
-                message="记忆库尚未建立，建议先预建记忆库再开始翻译。",
-                facts=[],
-                findings=[],
-                mode="existing_tl_only",
-            )
-        )
-
-        self.assertTrue(window.translate_btn.isEnabled())
-
-    def test_button_keeps_generate_template_after_unknown_cli_status(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
+    def test_doctor_summary_updates_button_label_and_enabled_state(self):
+        self.window._work_mode = WorkMode.BATCH_TRANSLATION
+        self.window._doctor_check_completed = True
         unknown_output = """
 Template generation summary:
 - status: pending
@@ -135,55 +63,80 @@ Template generation summary:
 - language: schinese
 - message:
 """
-        summary = summarize_template_generation_output(unknown_output, exit_code=0)
-        window._set_doctor_summary(template_generation_to_doctor_summary(summary))
-
-        self.assertEqual(window.translate_btn.text(), "生成翻译模板")
-        self.assertTrue(window.translate_btn.isEnabled())
-
-    def test_button_keeps_generate_template_after_generation_failure(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="blocked",
-                heading="翻译模板生成失败",
-                message="翻译模板生成没有正常完成，请查看诊断日志。",
-                facts=[],
-                findings=[],
-                mode="can_generate_template",
-            )
+        unknown_summary = template_generation_to_doctor_summary(
+            summarize_template_generation_output(unknown_output, exit_code=0)
         )
-
-        self.assertEqual(window.translate_btn.text(), "生成翻译模板")
-        self.assertTrue(window.translate_btn.isEnabled())
-
-    def test_button_switches_to_start_translation_after_template_generated(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.BATCH_TRANSLATION
-        window._doctor_check_completed = True
-        window._set_doctor_summary(
-            DoctorSummary(
-                status="ready",
-                heading="翻译模板已生成",
-                message="翻译模板已就绪，可以开始翻译流程。",
-                facts=["翻译文件：12 个"],
-                findings=[],
-                mode="existing_tl_only",
-            )
+        cases = (
+            (
+                "template_missing",
+                DoctorSummary(
+                    status="warning", heading="检查完成", message="模板尚未生成。",
+                    facts=[], findings=[], mode="can_generate_template",
+                ),
+                "生成翻译模板", True,
+            ),
+            (
+                "ready",
+                DoctorSummary(
+                    status="ready", heading="项目检查通过", message="可以开始翻译。",
+                    facts=[], findings=[], mode="existing_tl_only",
+                ),
+                "开始翻译", True,
+            ),
+            (
+                "blocked",
+                DoctorSummary(
+                    status="blocked", heading="项目检查失败", message="环境检查失败。",
+                    facts=[], findings=[], mode="existing_tl_only",
+                ),
+                "开始翻译", False,
+            ),
+            (
+                "warning",
+                DoctorSummary(
+                    status="warning", heading="检查完成", message="记忆库尚未建立。",
+                    facts=[], findings=[], mode="existing_tl_only",
+                ),
+                "开始翻译", True,
+            ),
+            ("unknown_cli_status", unknown_summary, "生成翻译模板", True),
+            (
+                "template_generation_failed",
+                DoctorSummary(
+                    status="blocked", heading="翻译模板生成失败", message="模板生成失败。",
+                    facts=[], findings=[], mode="can_generate_template",
+                ),
+                "生成翻译模板", True,
+            ),
+            (
+                "template_generated",
+                DoctorSummary(
+                    status="ready", heading="翻译模板已生成", message="可以开始翻译。",
+                    facts=["翻译文件：12 个"], findings=[], mode="existing_tl_only",
+                ),
+                "开始翻译", True,
+            ),
         )
+        # Exercise real summary-to-button updates on one idle window, including
+        # blocked -> warning and template generation -> translation transitions.
+        for name, summary, label, enabled in cases:
+            with self.subTest(case=name):
+                self.window._set_doctor_summary(summary)
+                self.assertEqual(self.window.translate_btn.text(), label)
+                self.assertEqual(self.window.translate_btn.isEnabled(), enabled)
 
-        self.assertEqual(window.translate_btn.text(), "开始翻译")
-        self.assertTrue(window.translate_btn.isEnabled())
+    def test_batch_translation_button_disabled_without_doctor_check(self):
+        self.window._work_mode = WorkMode.BATCH_TRANSLATION
+        self.window._doctor_check_completed = False
+
+        self.assertFalse(self.window.translate_btn.isEnabled())
 
     def test_keyword_mode_does_not_require_doctor_check(self):
-        window = MainWindow()
-        window._work_mode = WorkMode.KEYWORD_EXTRACTION
-        window._doctor_check_completed = False
-        window._apply_work_mode_ui()
+        self.window._work_mode = WorkMode.KEYWORD_EXTRACTION
+        self.window._doctor_check_completed = False
+        self.window._apply_work_mode_ui()
 
-        self.assertTrue(window.translate_btn.isEnabled())
+        self.assertTrue(self.window.translate_btn.isEnabled())
 
 
 if __name__ == "__main__":

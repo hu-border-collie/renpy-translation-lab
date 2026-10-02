@@ -9,12 +9,21 @@
 | `dependency-locks` | Linux | 离线校验 `manifest.json`、输入摘要、锁摘要与生成器元数据 | **blocking** |
 | `quality` | Linux | lint / type-check / dependency audit（见下文） | **blocking** |
 | `litellm-lock-install` | Linux / Windows | 分别安装 `py311-linux-litellm.txt` / `py311-windows-litellm.txt` | **blocking** |
-| `unittest` | Linux / Windows | 安装 `py311-gui.txt` 并运行完整 unittest | **blocking** |
+| `unittest` | Linux / Windows | 安装 `py311-gui.txt`，运行 CLI/core 套件；Windows 另运行受保护的 GUI 套件 | **blocking** |
 | `cli-without-gui` | Linux | 安装 `py311-cli.txt`，确认没有 PySide6 / 分析器包，并运行 CLI 测试 | **blocking** |
 | `relation-analyzer` | Linux | 安装 `py311-relation-analyzer.txt` + `py311-cli.txt`，运行分析器与 RPA 测试 | **blocking** |
-| `gui` | Linux | 安装 `py311-gui.txt` 并运行 offscreen GUI 测试 | **blocking** |
+| `gui` | Linux | 安装 `py311-gui.txt` 并运行受保护的 offscreen GUI 套件 | **blocking** |
 
 所有产品依赖安装均使用 `pip --require-hashes`。这些检查不访问供应商 API，也不下载 Ren'Py SDK，必须保持确定、快速并作为合并门禁。
+
+CLI/core 与 GUI 套件共同覆盖全部 `test_*.py` 用例，且两套之间不重复：
+
+- `python -B tests/run_cli_tests.py -q`：CLI/core，以及不依赖 Qt 控件的设置协议、注册表、协调器和保存逻辑。
+- `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。
+
+Linux 的 GUI 用例只在 `gui` job 运行一次，Windows 在 `unittest` job 中分进程运行两套测试。`cli-without-gui` 仍运行完整 CLI/core 套件，以验证缺少 GUI 和分析器依赖时的行为；这是不同安装环境的兼容性检查。
+
+本地修改先运行受影响的模块。纯文案、颜色、间距等低影响改动按已有覆盖验证；新增用例应对应独立失败场景，已有场景优先扩充现有测试。规则判断优先使用轻量夹具，真实窗口测试用于验证控件接线、状态交互和布局。不要为了减少测试数量删掉写回闸门、源快照、解析身份或恢复流程的独有回归覆盖。
 
 ## PR-Agent 自动审查（非测试门禁）
 

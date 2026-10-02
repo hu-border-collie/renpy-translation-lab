@@ -1,9 +1,14 @@
-"""Discover unittest modules for CLI-only CI (excludes ``test_gui_*``)."""
+"""Discover CLI/core unittest modules, excluding GUI and settings-widget tests."""
 from __future__ import annotations
 
 import unittest
 
-from test_runner_common import ensure_tests_on_path, parse_runner_args, run_discovered_suite
+from test_runner_common import (
+    ensure_tests_on_path,
+    is_gui_test_module,
+    parse_runner_args,
+    run_discovered_suite,
+)
 
 
 def build_suite() -> unittest.TestSuite:
@@ -11,7 +16,7 @@ def build_suite() -> unittest.TestSuite:
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     for path in sorted(directory.glob("test_*.py")):
-        if path.name.startswith("test_gui_"):
+        if is_gui_test_module(path):
             continue
         suite.addTests(loader.loadTestsFromName(path.stem))
     return suite
