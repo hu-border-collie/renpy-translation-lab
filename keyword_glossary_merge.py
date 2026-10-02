@@ -200,24 +200,49 @@ def dump_glossary_file(glossary_path: str, data: dict) -> None:
                 pass
 
 
-def load_keyword_candidates_jsonl(candidates_path: str) -> list[dict]:
-    if not candidates_path or not os.path.isfile(candidates_path):
-        raise SystemExit(f'Keyword candidates JSONL not found: {candidates_path}')
+def load_keyword_candidates_jsonl(
+    candidates_path: str,
+    *,
+    text: str | None = None,
+) -> list[dict]:
+    """Load keyword candidate records from a JSONL file.
 
+    ``text`` accepts already-read file content and is parsed with exactly the
+    same rules as the file path. GUI callers use it to parse the very bytes they
+    fingerprinted for review freshness (#539), so the parsed content and the
+    content version can never come from two different file states.
+    """
+    if text is None:
+        if not candidates_path or not os.path.isfile(candidates_path):
+            raise SystemExit(f'Keyword candidates JSONL not found: {candidates_path}')
+        with open(candidates_path, 'r', encoding='utf-8-sig') as handle:
+            return _parse_keyword_candidate_lines(handle, candidates_path)
+    # Mirror universal-newline translation of text-mode reads without splitting
+    # on the extra Unicode boundaries str.splitlines() would introduce.
+    normalized = text.replace('\r\n', '\n').replace('\r', '\n')
+    return _parse_keyword_candidate_lines(
+        normalized.split('\n'),
+        candidates_path,
+    )
+
+
+def _parse_keyword_candidate_lines(
+    lines: Iterable[str],
+    candidates_path: str,
+) -> list[dict]:
     candidates = []
-    with open(candidates_path, 'r', encoding='utf-8-sig') as handle:
-        for line_number, raw_line in enumerate(handle, 1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(
-                    f'Invalid JSON on line {line_number} of {candidates_path}: {exc}'
-                ) from exc
-            if isinstance(row, dict):
-                candidates.append(row)
+    for line_number, raw_line in enumerate(lines, 1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SystemExit(
+                f'Invalid JSON on line {line_number} of {candidates_path}: {exc}'
+            ) from exc
+        if isinstance(row, dict):
+            candidates.append(row)
     return candidates
 
 

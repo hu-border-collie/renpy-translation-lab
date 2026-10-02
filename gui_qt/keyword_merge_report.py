@@ -1,6 +1,7 @@
 """GUI helpers for keyword candidate merge into glossary.json."""
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -113,6 +114,62 @@ def keyword_merge_ready(
 
 
 @dataclass(frozen=True)
+class KeywordCandidateSnapshot:
+    """Candidate JSONL content as read for one review (#539).
+
+    ``text`` and ``fingerprint`` always describe the same read: the fingerprint
+    covers exactly the bytes handed to the shared parser, so a review can never
+    display one file version while validating another.
+    """
+
+    text: str
+    fingerprint: str
+
+
+def _read_candidate_bytes(candidates_path: str) -> bytes:
+    with open(candidates_path, "rb") as handle:
+        return handle.read()
+
+
+def keyword_candidate_content_fingerprint(candidates_path: str) -> str:
+    """Return the sha256 of the candidate file bytes; empty when unreadable.
+
+    Used to compare the content a review parsed against the file on disk right
+    before a merge writes. Deliberately a content hash, not mtime or size.
+    """
+    path = str(candidates_path or "").strip()
+    if not path:
+        return ""
+    try:
+        return hashlib.sha256(_read_candidate_bytes(path)).hexdigest()
+    except OSError:
+        return ""
+
+
+def read_keyword_candidate_snapshot(candidates_path: str) -> KeywordCandidateSnapshot:
+    """Read candidate JSONL bytes once and fingerprint that same read.
+
+    Raises ``ValueError`` for unreadable, non-UTF-8 input so GUI callers can
+    report it without parsing a second, possibly different file state.
+    """
+    path = str(candidates_path or "").strip()
+    if not path:
+        raise ValueError("候选文件路径为空。")
+    try:
+        raw = _read_candidate_bytes(path)
+    except OSError as exc:
+        raise ValueError(f"无法读取候选文件：{path}（{exc}）") from exc
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"候选文件不是 UTF-8 文本：{path}（{exc}）") from exc
+    return KeywordCandidateSnapshot(
+        text=text,
+        fingerprint=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+@dataclass(frozen=True)
 class KeywordCandidateSelection:
     """One keyword candidate file loaded for human review (#539).
 
@@ -178,27 +235,48 @@ def _same_asset_path(left: str, right: str) -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class KeywordReviewContext:
+    """Frozen identity and content version of one open candidate review (#539).
+
+    Built while the review actually reads and displays candidate content, then
+    compared against the live context right before a merge writes anything.
+    """
+
+    candidates_path: str
+    fingerprint: str
+    game_root: str
+    glossary_path: str
+    generation: int = 0
+
+
 def keyword_review_context_stale_reason(
-    *,
-    candidates_path: str,
-    glossary_path: str,
-    game_root: str,
-    current_game_root: str,
-    current_glossary_path: str,
+    review: KeywordReviewContext,
+    current: KeywordReviewContext,
 ) -> str:
     """Return why an open review no longer matches the live context (#539).
 
-    Empty means the dialog may still write. A non-empty result is shown to the
-    user and the write is refused, so a project switch, a replaced candidate file
-    or a glossary retarget can never be applied to a review that was opened
-    against the previous target.
+    Empty means the dialog may still write. Any other value is shown to the user
+    and the write is refused, so a project switch, a candidate switch, replaced
+    or removed candidate content, or a glossary retarget can never be applied to
+    a review that was opened against the previous target.
     """
-    if not _same_asset_path(game_root, current_game_root):
+    if not _same_asset_path(review.game_root, current.game_root):
         return KEYWORD_CANDIDATE_COPY["stale_project"]
-    if not candidates_path or not os.path.isfile(candidates_path):
+    if not review.candidates_path or not os.path.isfile(review.candidates_path):
         return KEYWORD_CANDIDATE_COPY["stale_candidates"]
-    if not _same_asset_path(glossary_path, current_glossary_path):
+    if not _same_asset_path(review.glossary_path, current.glossary_path):
         return KEYWORD_CANDIDATE_COPY["stale_glossary"]
+    if not _same_asset_path(review.candidates_path, current.candidates_path):
+        return KEYWORD_CANDIDATE_COPY["stale_selection"]
+    if int(review.generation) != int(current.generation):
+        return KEYWORD_CANDIDATE_COPY["stale_selection"]
+    if (
+        not review.fingerprint
+        or not current.fingerprint
+        or review.fingerprint != current.fingerprint
+    ):
+        return KEYWORD_CANDIDATE_COPY["stale_candidates"]
     return ""
 
 
@@ -209,7 +287,14 @@ def load_keyword_merge_context(
     game_root: str,
     tool_root: str,
     min_confidence: float = 0.0,
+    candidates_text: str | None = None,
 ) -> tuple[list[merge_mod.CandidateMergeRow], list[dict], str, str]:
+    """Resolve glossary/macro targets and build review rows for one candidate file.
+
+    ``candidates_text`` lets a caller supply content it already read and
+    fingerprinted (#539) so the parsed rows always match the frozen review
+    version instead of a possibly newer file state.
+    """
     glossary_path = merge_mod.resolve_glossary_path_from_config(
         config,
         game_root=game_root,
@@ -222,7 +307,10 @@ def load_keyword_merge_context(
     )
     macro_text = merge_mod.load_macro_setting_text(macro_path)
     try:
-        candidates = merge_mod.load_keyword_candidates_jsonl(candidates_path)
+        candidates = merge_mod.load_keyword_candidates_jsonl(
+            candidates_path,
+            text=candidates_text,
+        )
         glossary = merge_mod.load_glossary_file(glossary_path)
     except SystemExit as exc:
         # Both loaders signal malformed input with SystemExit (CLI contract);

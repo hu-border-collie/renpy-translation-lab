@@ -554,6 +554,233 @@ class GuiKeywordCandidateEntryTests(unittest.TestCase):
         self.assertEqual(self._backups(), [])
         self.assertFalse((other_root / "glossary.json").exists())
 
+    # --- review content freshness (#539 follow-up) ------------------------
+
+    def test_replaced_candidate_content_invalidates_open_review(self) -> None:
+        """Editing the candidate file under an open review must refuse the write."""
+        self._open_candidate()
+        created: list = []
+
+        def replace_file() -> None:
+            _write_jsonl(
+                self.candidates_path,
+                [
+                    {
+                        "source": "Moon Harbor",
+                        "suggested_target": "月港",
+                        "category": "place",
+                        "confidence": 0.95,
+                    }
+                ],
+            )
+
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(
+                created=created,
+                checked_rows=(0,),
+                mutate=replace_file,
+            ),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_warning",
+        ) as warning:
+            self.page.merge_btn.click()
+
+        warning.assert_called_once()
+        self.assertEqual(
+            warning.call_args.args[2],
+            KEYWORD_CANDIDATE_COPY["stale_candidates"],
+        )
+        self.assertEqual(self._read_glossary(), _EMPTY_GLOSSARY)
+        self.assertEqual(self._backups(), [])
+
+        # Reloading after the change reviews the new content and merges it.
+        self._open_candidate()
+        created.clear()
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(created=created, checked_rows=(0,)),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ):
+            self.page.merge_btn.click()
+
+        self.assertEqual(
+            self._read_glossary()["normalize_map"],
+            {"Moon Harbor": "月港"},
+        )
+        self.assertEqual(len(self._backups()), 1)
+
+    def test_candidate_switch_invalidates_open_review(self) -> None:
+        """A review opened for file A must not write after the current pick is B."""
+        self._open_candidate()
+        second = self.root / "replacement.jsonl"
+        _write_jsonl(
+            second,
+            [
+                {
+                    "source": "Moon Harbor",
+                    "suggested_target": "月港",
+                    "category": "place",
+                    "confidence": 0.95,
+                }
+            ],
+        )
+        created: list = []
+
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(
+                created=created,
+                checked_rows=(0,),
+                mutate=lambda: self._open_candidate(second),
+            ),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_warning",
+        ) as warning:
+            self.page.merge_btn.click()
+
+        warning.assert_called_once()
+        self.assertEqual(
+            warning.call_args.args[2],
+            KEYWORD_CANDIDATE_COPY["stale_selection"],
+        )
+        self.assertEqual(self._read_glossary(), _EMPTY_GLOSSARY)
+        self.assertEqual(self._backups(), [])
+        self.assertEqual(
+            self.window._resolve_keyword_merge_candidates_path(),
+            str(second),
+        )
+
+        # A fresh review of the current candidate merges normally.
+        created.clear()
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(created=created, checked_rows=(0,)),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ):
+            self.page.merge_btn.click()
+
+        self.assertEqual(
+            self._read_glossary()["normalize_map"],
+            {"Moon Harbor": "月港"},
+        )
+
+    def test_removed_candidate_file_invalidates_open_review(self) -> None:
+        self._open_candidate()
+        created: list = []
+
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(
+                created=created,
+                checked_rows=(0,),
+                mutate=lambda: self.candidates_path.unlink(),
+            ),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_warning",
+        ) as warning:
+            self.page.merge_btn.click()
+
+        warning.assert_called_once()
+        self.assertEqual(
+            warning.call_args.args[2],
+            KEYWORD_CANDIDATE_COPY["stale_candidates"],
+        )
+        self.assertEqual(self._read_glossary(), _EMPTY_GLOSSARY)
+        self.assertEqual(self._backups(), [])
+
+    def test_glossary_retarget_invalidates_open_review(self) -> None:
+        self._open_candidate()
+        original_glossary = str(self.window._resolve_keyword_merge_glossary_path())
+        other_glossary = str(self.root / "other_glossary.json")
+        target = {"path": original_glossary}
+        resolver = mock.patch.object(
+            self.window,
+            "_resolve_keyword_merge_glossary_path",
+            side_effect=lambda: target["path"],
+        )
+        resolver.start()
+        self.addCleanup(resolver.stop)
+
+        created: list = []
+
+        def retarget() -> None:
+            target["path"] = other_glossary
+
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(
+                created=created,
+                checked_rows=(0,),
+                mutate=retarget,
+            ),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_warning",
+        ) as warning:
+            self.page.merge_btn.click()
+
+        warning.assert_called_once()
+        self.assertEqual(
+            warning.call_args.args[2],
+            KEYWORD_CANDIDATE_COPY["stale_glossary"],
+        )
+        self.assertEqual(self._read_glossary(), _EMPTY_GLOSSARY)
+        self.assertEqual(self._backups(), [])
+        self.assertFalse(Path(other_glossary).exists())
+
+    def test_unchanged_review_context_still_merges(self) -> None:
+        """Positive control: the new checks must not block a fresh review."""
+        self._open_candidate()
+        created: list = []
+
+        with mock.patch(
+            "gui_qt.app.KeywordMergeDialog",
+            _scripted_review_dialog(created=created, checked_rows=(0,)),
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_question",
+            return_value="yes",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_information",
+        ), mock.patch(
+            "gui_qt.keyword_merge_dialog.message_box_warning",
+        ) as warning:
+            self.page.merge_btn.click()
+
+        warning.assert_not_called()
+        self.assertEqual(
+            self._read_glossary()["normalize_map"],
+            {"Magic Academy": "魔法学院"},
+        )
+        self.assertEqual(len(self._backups()), 1)
+
     # --- running / project gate limits -----------------------------------
 
     def test_running_task_blocks_open_entry_with_reason(self) -> None:

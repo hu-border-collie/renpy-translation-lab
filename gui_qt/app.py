@@ -177,13 +177,16 @@ from .ab_experiment_report import (
 from .keyword_merge_dialog import KeywordMergeDialog
 from .keyword_merge_report import (
     KeywordCandidateSelection,
+    KeywordReviewContext,
     format_keyword_candidate_selection,
+    keyword_candidate_content_fingerprint,
     keyword_candidate_open_ready,
     keyword_merge_candidates_path_from_manifest,
     keyword_merge_candidates_path_from_sync_output,
     keyword_merge_ready,
     keyword_review_context_stale_reason,
     load_keyword_merge_context,
+    read_keyword_candidate_snapshot,
     summarize_keyword_merge_result,
 )
 from .keyword_report import summarize_keyword_result_from_manifest
@@ -652,6 +655,10 @@ class MainWindow(QMainWindow):
         # 关键词 / 术语 page, bound to the project + glossary target it was
         # opened against. Never reused after a project switch.
         self._keyword_candidate_selection: KeywordCandidateSelection | None = None
+        # Bumped whenever the current review target changes (open a file, adopt
+        # an extraction result, switch project) so an already-open review can be
+        # refused even when it resolves to the same path again.
+        self._keyword_candidate_generation = 0
         self._revision_corpus_export_result: RevisionCorpusExportResult | None = None
         self._revision_proposal_stage_result: dict[str, object] | None = None
         self._split_output_lines: list[str] = []
@@ -6635,9 +6642,10 @@ class MainWindow(QMainWindow):
         """Return the opened candidate file while it still matches this project.
 
         #539: a file opened through 打开候选文件 is bound to the ``game_root`` and
-        the glossary target captured at that moment. A project switch or a
-        glossary retarget drops the stale context instead of letting the page
-        keep merging a review into the previous target.
+        the glossary target captured at that moment. A project switch, a glossary
+        retarget or a removed candidate file drops the stale context (and bumps
+        the candidate generation) instead of letting the page keep merging a
+        review into the previous target.
         """
         selection = getattr(self, "_keyword_candidate_selection", None)
         if selection is None:
@@ -6645,19 +6653,26 @@ class MainWindow(QMainWindow):
         state = getattr(self, "state", None)
         game_root = str(state.get_game_root() or "") if state is not None else ""
         if not game_root or not os.path.isfile(selection.candidates_path):
-            self._keyword_candidate_selection = None
+            self._drop_keyword_candidate_selection()
             return None
         if not self._same_project_path(game_root, selection.game_root):
-            self._keyword_candidate_selection = None
+            self._drop_keyword_candidate_selection()
             return None
         try:
             glossary_now = self._resolve_keyword_merge_glossary_path()
         except Exception:
             glossary_now = ""
         if not self._same_project_path(glossary_now, selection.glossary_path):
-            self._keyword_candidate_selection = None
+            self._drop_keyword_candidate_selection()
             return None
         return selection
+
+    def _drop_keyword_candidate_selection(self) -> None:
+        """Forget the current candidate selection and invalidate open reviews."""
+        self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
 
     def _keyword_candidate_open_state(
         self,
@@ -6762,6 +6777,9 @@ class MainWindow(QMainWindow):
         if selection is None:
             return
         self._keyword_candidate_selection = selection
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
         self._sync_keywords_page_controls()
         self._update_keyword_merge_btn_enabled()
         self.statusBar().showMessage(
@@ -6774,33 +6792,41 @@ class MainWindow(QMainWindow):
         """Adopt an extraction-produced candidate file as the current target.
 
         A fresh batch/sync extraction result supersedes an earlier manual pick
-        from 打开候选文件 (#539).
+        from 打开候选文件 (#539) and invalidates any review opened before it.
         """
         if not candidates_path:
             return
         self._keyword_merge_candidates_path = candidates_path
         self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
 
-    def _keyword_review_stale_reason(
-        self,
-        *,
-        candidates_path: str,
-        glossary_path: str,
-        game_root: str,
-    ) -> str:
-        """Explain why an open review no longer matches the live context (#539)."""
+    def _keyword_review_stale_reason(self, review: KeywordReviewContext) -> str:
+        """Explain why an open review no longer matches the live context (#539).
+
+        Re-reads the live project, candidate identity, candidate content version
+        and glossary target; a non-empty result means the dialog must not write.
+        """
         state = getattr(self, "state", None)
         current_game_root = str(state.get_game_root() or "") if state is not None else ""
         try:
             current_glossary = self._resolve_keyword_merge_glossary_path()
         except Exception:
             current_glossary = ""
+        current_candidates_path = self._resolve_keyword_merge_candidates_path()
+        current = KeywordReviewContext(
+            candidates_path=current_candidates_path,
+            fingerprint=keyword_candidate_content_fingerprint(
+                current_candidates_path
+            ),
+            game_root=current_game_root,
+            glossary_path=current_glossary,
+            generation=int(getattr(self, "_keyword_candidate_generation", 0)),
+        )
         return keyword_review_context_stale_reason(
-            candidates_path=candidates_path,
-            glossary_path=glossary_path,
-            game_root=game_root,
-            current_game_root=current_game_root,
-            current_glossary_path=current_glossary,
+            review,
+            current,
         )
 
     def _update_keyword_merge_btn_enabled(self, *, running: bool | None = None) -> None:
@@ -6856,12 +6882,20 @@ class MainWindow(QMainWindow):
                 message,
             )
             return
+        # #539: freeze the candidate identity plus the exact content version this
+        # review read; the dialog refuses a late write once anything moves on.
+        try:
+            snapshot = read_keyword_candidate_snapshot(candidates_path)
+        except ValueError as exc:
+            message_box_warning(self, KEYWORD_CANDIDATE_COPY["invalid_title"], str(exc))
+            return
         try:
             rows, candidates, resolved_glossary_path, _macro_path = load_keyword_merge_context(
                 candidates_path=candidates_path,
                 config=self.state.load_translator_config(),
                 game_root=str(self.state.get_game_root() or ""),
                 tool_root=str(self.state.get_tool_root()),
+                candidates_text=snapshot.text,
             )
         except ValueError as exc:
             message_box_warning(self, KEYWORD_CANDIDATE_COPY["invalid_title"], str(exc))
@@ -6874,9 +6908,13 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # #539: freeze the project + glossary target this review was opened
-        # against; the dialog refuses a late write once either changes.
-        reviewed_game_root = str(self.state.get_game_root() or "")
+        review_context = KeywordReviewContext(
+            candidates_path=candidates_path,
+            fingerprint=snapshot.fingerprint,
+            game_root=str(self.state.get_game_root() or ""),
+            glossary_path=resolved_glossary_path,
+            generation=int(getattr(self, "_keyword_candidate_generation", 0)),
+        )
         dialog = KeywordMergeDialog(
             self,
             rows=rows,
@@ -6885,9 +6923,7 @@ class MainWindow(QMainWindow):
             candidates=candidates,
             pre_write_check=partial(
                 self._keyword_review_stale_reason,
-                candidates_path=candidates_path,
-                glossary_path=resolved_glossary_path,
-                game_root=reviewed_game_root,
+                review_context,
             ),
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -9667,6 +9703,9 @@ class MainWindow(QMainWindow):
         self._keyword_merge_candidates_path = ""
         # The opened candidate file belongs to the previous project (#539).
         self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
         sessions = getattr(self, "_mode_sessions", None)
         if not isinstance(sessions, dict):
             try:

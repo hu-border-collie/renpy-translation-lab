@@ -206,7 +206,8 @@ KEYWORD_CANDIDATE_COPY = {
     ),
     "stale_title": "审核上下文已过期",
     "stale_project": "项目已切换，本次审核上下文已过期；请重新打开候选文件。",
-    "stale_candidates": "候选文件已不存在或已被替换；请重新打开候选文件。",
+    "stale_selection": "当前候选已切换，本次审核上下文已过期；请重新打开候选文件。",
+    "stale_candidates": "候选文件已不存在或内容已被替换；请重新打开候选文件。",
     "stale_glossary": "术语表目标已变化，本次审核上下文已过期；请重新打开候选文件。",
 }
 
