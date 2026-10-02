@@ -116,15 +116,14 @@ jobs:
         if: runner.os == 'Linux'
         uses: ./.github/actions/install-qt-linux-deps
 
-      - name: Run tests (Linux)
-        if: runner.os == 'Linux'
+      - name: Run CLI/core tests with GUI dependencies
+        run: python -B tests/run_cli_tests.py -q
+
+      - name: Run GUI tests (Windows)
+        if: runner.os == 'Windows'
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest discover -s tests -p "test_*.py" -q
-
-      - name: Run tests (Windows)
-        if: runner.os == 'Windows'
-        run: python -m unittest discover -s tests -p "test_*.py" -q
+        run: python -B tests/run_gui_tests.py -q
 
   cli-without-gui:
     runs-on: ubuntu-latest
@@ -179,7 +178,7 @@ jobs:
           PY
 
       - name: Run CLI-only tests
-        run: python tests/run_cli_tests.py -q
+        run: python -B tests/run_cli_tests.py -q
 
       - name: Smoke test batch CLI entry
         run: python gemini_translate_batch.py --help
@@ -261,4 +260,4 @@ jobs:
       - name: Run GUI tests
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python tests/run_gui_tests.py -q
+        run: python -B tests/run_gui_tests.py -q

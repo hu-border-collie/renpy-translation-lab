@@ -43,19 +43,32 @@ class TestDiscoveryRunners(unittest.TestCase):
         self.assertNotEqual(isolated, repo_root() / "translator_config.json")
         self.assertEqual(isolated.read_text(encoding="utf-8").strip(), "{}")
 
-    def test_cli_suite_excludes_gui_modules(self):
-        names = {case.id() for case in _iter_cases(build_cli_suite())}
-        self.assertTrue(names)
-        self.assertFalse(
-            any(module.startswith("test_gui_") for module in _module_names(names))
-        )
+    def test_cli_and_gui_suites_cover_every_case_exactly_once(self):
+        cli_ids = [case.id() for case in _iter_cases(build_cli_suite())]
+        gui_ids = [case.id() for case in _iter_cases(build_gui_suite())]
+        full_suite = unittest.TestLoader().discover(str(_TESTS_DIR), pattern="test_*.py")
+        full_ids = [case.id() for case in _iter_cases(full_suite)]
 
-    def test_gui_suite_only_includes_gui_modules(self):
-        names = {case.id() for case in _iter_cases(build_gui_suite())}
-        self.assertTrue(names)
-        self.assertTrue(
-            all(module.startswith("test_gui_") for module in _module_names(names))
-        )
+        self.assertTrue(cli_ids)
+        self.assertTrue(gui_ids)
+        self.assertFalse(any("_FailedTest" in test_id for test_id in full_ids))
+        self.assertEqual(len(cli_ids + gui_ids), len(set(cli_ids + gui_ids)))
+        self.assertEqual(set(cli_ids) | set(gui_ids), set(full_ids))
+
+        # Widget pages use Qt; their contracts and persistence helpers do not.
+        gui_modules = _module_names(set(gui_ids))
+        cli_modules = _module_names(set(cli_ids))
+        self.assertIn("test_gui_translation_workflow", gui_modules)
+        self.assertIn("test_settings_models_page", gui_modules)
+        self.assertIn("test_settings_workspace_page", gui_modules)
+        for module in (
+            "test_settings_page_contract",
+            "test_settings_registry",
+            "test_settings_coordinator",
+            "test_settings_save_apply",
+        ):
+            with self.subTest(module=module):
+                self.assertIn(module, cli_modules)
 
     def test_gui_runner_fails_when_modal_guard_rejects_a_dialog(self):
         guard = mock.Mock(rejected_dialogs=("QMessageBox title='unexpected'",))

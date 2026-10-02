@@ -14,7 +14,7 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 | 核心逻辑 | 实现在可复用模块或 CLI 脚本中 | 调用同一套 Python API，或通过 `QProcess` 执行同一 CLI 子命令与参数 |
 | 用户可见行为 | 命令、参数、输出、错误语义 | 工作台摘要、「诊断与工具」、设置项、失败提示与 CLI 一致 |
 | 配置 | `translator_config.json` 等 | 设置页可读写同一配置键；workflow 构造 CLI 参数时不得漏传 |
-| 测试 | `tests/test_*.py` | `tests/test_gui_*.py` 覆盖对应 GUI 包装层 |
+| 测试 | CLI/core 用例（含纯设置合约） | `tests/test_gui_*.py` 与 `tests/test_settings_*_page.py` 覆盖对应 GUI 包装层和 Qt 设置页 |
 
 ### 推荐实现顺序
 

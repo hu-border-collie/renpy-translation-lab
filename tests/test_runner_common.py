@@ -15,6 +15,15 @@ def tests_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parent
 
 
+def is_gui_test_module(path: pathlib.Path) -> bool:
+    """Route widget tests to the guarded GUI runner, including settings pages.
+
+    The ``test_settings_*_page.py`` family predates the GUI filename prefix.
+    Pure settings contracts/coordinators remain in the CLI suite.
+    """
+    return path.match("test_gui_*.py") or path.match("test_settings_*_page.py")
+
+
 def ensure_tests_on_path() -> tuple[pathlib.Path, pathlib.Path]:
     root = repo_root()
     directory = tests_dir()
