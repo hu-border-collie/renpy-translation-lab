@@ -1,17 +1,41 @@
 """Shared Settings page chrome for migrated pages (#202 Phase D)."""
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
+
+from ..user_copy import SETTINGS_MODEL_ENTRY_COPY
+
+
+def add_model_navigation(
+    layout: QVBoxLayout, navigate: Callable[[str], None], *, page_key: str,
+) -> dict[str, QPushButton]:
+    """Link model pages through their injected coordinator navigation callback."""
+    row = QHBoxLayout()
+    buttons = {}
+    for key in ("profiles", "models", "litellm"):
+        if key == page_key:
+            continue
+        button = QPushButton(SETTINGS_MODEL_ENTRY_COPY[key])
+        button.setObjectName("secondary_btn")
+        button.clicked.connect(lambda _checked=False, target=key: navigate(target))
+        row.addWidget(button)
+        buttons[key] = button
+    row.addStretch(1)
+    layout.addLayout(row)
+    return buttons
 
 
 def style_themed_surface(widget: QWidget) -> None:

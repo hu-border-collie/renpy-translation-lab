@@ -37,7 +37,7 @@ from model_profile import ADAPTER_OPENAI_COMPATIBLE
 from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
-from .page_chrome import build_settings_scroll_page, settings_group
+from .page_chrome import add_model_navigation, build_settings_scroll_page, settings_group
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS
 
@@ -137,6 +137,12 @@ class ProfilesSettingsPage(QObject):
     # -- #202 page contract ---------------------------------------------
 
     def load(self, snapshot: Mapping[str, object], *, restore: bool = False) -> None:
+        """Load disk values, or restore edits without replacing the baseline.
+
+        A collected snapshot with an explicit ``model_routing=None`` is a
+        pending removal. Preserve that intent during lazy page materialization;
+        an ordinary disk load of a missing/null section remains an empty state.
+        """
         raw = snapshot.get("model_routing") if isinstance(snapshot, Mapping) else None
         if raw is None:
             # Missing key and explicit ``null`` both mean "no section"; this is
@@ -153,7 +159,9 @@ class ProfilesSettingsPage(QObject):
             invalid_raw = copy.deepcopy(raw)
         self._section = copy.deepcopy(section)
         self._invalid_raw = invalid_raw
-        self._remove_requested = False
+        self._remove_requested = (
+            restore and raw is None and "model_routing" in snapshot
+        )
         if not restore:
             self._baseline = copy.deepcopy(self._section)
             self._baseline_invalid_raw = copy.deepcopy(self._invalid_raw)
@@ -273,6 +281,11 @@ class ProfilesSettingsPage(QObject):
         action_row.addStretch(1)
         notice_layout.addLayout(action_row)
         layout.addWidget(self.notice_group)
+        self.model_navigation_buttons = add_model_navigation(
+            notice_layout,
+            lambda key: self._actions.navigate and self._actions.navigate(key),
+            page_key=self.page_key,
+        )
 
         self.profiles_group, profiles_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["profiles_group"]
@@ -349,7 +362,11 @@ class ProfilesSettingsPage(QObject):
         defaults_layout.addWidget(self.default_profile_combo)
         defaults_layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["default_strategy_label"]))
         defaults_layout.addWidget(self.default_strategy_combo)
-        layout.addWidget(self.defaults_group)
+        self.readiness_label = QLabel()
+        self.readiness_label.setObjectName("profiles_readiness_label")
+        self.readiness_label.setWordWrap(True)
+        defaults_layout.addWidget(self.readiness_label)
+        layout.insertWidget(1, self.defaults_group)
 
         self.routes_group, routes_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["routes_group"]
@@ -634,10 +651,17 @@ class ProfilesSettingsPage(QObject):
         elif legacy:
             title = MODEL_PROFILES_PAGE_COPY["legacy_title"]
         elif has_section:
-            title = MODEL_PROFILES_PAGE_COPY["ready_title"]
+            title = MODEL_PROFILES_PAGE_COPY["management_title"]
         else:
             title = MODEL_PROFILES_PAGE_COPY["empty_title"]
         self.notice_group.setTitle(title)
+        # Keep invalid-raw removal and legacy guidance at the top. For an
+        # editable section, configuration removal is a low-frequency action.
+        layout = self.body.layout()
+        target_index = layout.count() - 2 if has_section else 2
+        if layout.indexOf(self.notice_group) != target_index:
+            layout.removeWidget(self.notice_group)
+            layout.insertWidget(target_index, self.notice_group)
 
         self.legacy_fields_label.setText("、".join(self._legacy_fields))
         self.legacy_fields_toggle.setVisible(legacy)
@@ -799,7 +823,10 @@ class ProfilesSettingsPage(QObject):
             for profile in view["profiles"]:
                 if profile["purpose"] == "embedding":
                     continue
-                self.default_profile_combo.addItem(profile["label"], profile["id"])
+                self.default_profile_combo.addItem(
+                    f"{profile['label']}（{profile['model'] or '未设置模型'}）",
+                    profile["id"],
+                )
             stored_primary = str(defaults.get("primary_profile_id") or "")
             self._set_combo_data(self.default_profile_combo, stored_primary)
             default_profile_id = str(self.default_profile_combo.currentData() or "")
@@ -1025,6 +1052,11 @@ class ProfilesSettingsPage(QObject):
                 widgets["strategy"].setEnabled(editable)
         finally:
             self._loading = False
+        issues = editor.section_issues(self._section)
+        self.readiness_label.setText(
+            MODEL_PROFILES_PAGE_COPY["readiness_invalid"].format(count=len(issues))
+            if issues else MODEL_PROFILES_PAGE_COPY["readiness_valid"]
+        )
 
     # -- user actions ----------------------------------------------------
 

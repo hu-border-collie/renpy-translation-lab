@@ -720,6 +720,22 @@ def coverage_review_policy_label(policy: str) -> str:
 SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
     "项目列表操作即时保存，不受设置保存按钮影响。"
 )
+
+SETTINGS_MODEL_ENTRY_COPY = {
+    "all_categories": "全部分类（{count}）",
+    "category_tooltip": "展开全部设置分类；切换分类会保留未保存的编辑。",
+    "profiles": "打开统一模型编辑器",
+    "models": "旧 Gemini 模型设置",
+    "litellm": "旧 LiteLLM 设置",
+    "legacy_models_hint": (
+        "此处只配置旧 Gemini 同步/批量模型。自定义模型 ID 可在「高级 → 模型目录」添加；"
+        "新模型配置请使用「模型与供应商」统一编辑器。"
+    ),
+    "litellm_hint": (
+        "此页维护旧 LiteLLM 后端配置与工具。新任务使用 model_routing 时，"
+        "请在「模型与供应商」统一编辑器调整供应商、默认主模型和执行方式。"
+    ),
+}
 SETTINGS_WORKSPACE_UNSAVED_CHANGES = (
     "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。"
 )
@@ -1317,7 +1333,7 @@ STRUCTURE_PROTECTION_COPY = {
 
 
 MODEL_ROUTING_RUNTIME_COPY = {
-    "settings_hint": "若配置包含 model_routing，新任务使用其中的模型与阶段路由；已有任务优先使用冻结路由，后续设置修改不会改写它们。本页及 LiteLLM 页的旧模型字段仅供回滚兼容。请在配置文件中编辑新配置。",
+    "settings_hint": "若配置包含 model_routing，新任务使用其中的模型与阶段路由；已有任务优先使用冻结路由，后续设置修改不会改写它们。本页及 LiteLLM 页的旧模型字段仅供回滚兼容。请通过下方入口打开「模型与供应商」统一编辑器。",
     "invalid_title": "模型路由配置无效",
     "invalid_message": "model_routing 校验失败，未保存配置。请修正新配置或按迁移文档回滚；运行时不会退回旧模型。",
 }
@@ -1555,6 +1571,9 @@ MODEL_PROFILES_PAGE_COPY = {
     "invalid_title": "模型路由配置无效",
     "empty_title": "尚未创建模型路由配置",
     "ready_title": "模型路由配置",
+    "management_title": "配置管理与旧设置",
+    "readiness_valid": "配置校验通过；凭据与实际连接尚未验证。阶段路由可覆盖以下默认值。",
+    "readiness_invalid": "配置有 {count} 项校验问题，保存会被阻止；请检查模型、供应商和阶段路由。",
     "remove_pending_title": "等待保存移除操作",
     "invalid_hint": (
         "model_routing 配置无效（{reason}），已禁用编辑与创建。"

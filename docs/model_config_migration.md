@@ -118,6 +118,10 @@ P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，�
 `model_config_migration.py preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
 迁移完成后，P3 的「设置 → 模型与供应商」页面可统一维护 providers / profiles / 默认值与阶段路由；
 该页按 #202 的页面合同编辑 `model_routing`、跟踪未保存修改并保留未知字段。
+页首可调整默认主模型与执行方式，并查看配置校验摘要；摘要不代表凭据或实际连接已经验证。
+旧「模型」和「LiteLLM」页可直接跳转至统一编辑器，跳转不会保存、重建表单或执行迁移。
+有效配置的整段移除操作位于页尾「配置管理与旧设置」；无效 raw 配置仍在页首提供明确移除路径。
+移除只标记待保存操作，重新加载可撤销，保存后才删除 `model_routing` 并回退旧配置。
 
 参见 [配置合同](plans/issue-348-model-routing-config-contract.md)、
 [架构概览](architecture.md)、[代码路径](code_paths.md)。
