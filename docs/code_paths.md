@@ -244,16 +244,24 @@
   `_copy_keyword_reports_to_game_parent()` 与 `keyword_merge_candidates_path_from_manifest()` 记录候选路径。
 - 同步提取：`gui_qt/sync_keyword_workflow.py` 的 `SyncKeywordWorkflow` →
   `gemini_translate_batch.py sync-keywords` → `keyword_merge_candidates_path_from_sync_output()`。
-- 人工合并：工作台 Keywords 页写回按钮 → `_on_open_keyword_merge()` →
-  `gui_qt/keyword_merge_report.py` 的 `keyword_merge_ready()` / `load_keyword_merge_context()` →
+- 人工合并：工作台 Keywords 页「打开候选文件」→ `_on_open_keyword_candidates()`（`_load_keyword_candidate_selection()`
+  经 `load_keyword_merge_context()` 解析候选、术语表目标，记入按项目绑定的
+  `KeywordCandidateSelection`），再由「审核并合并到术语表」→ `_on_open_keyword_merge()` →
+  `gui_qt/keyword_merge_report.py` 的 `keyword_merge_ready()` / `read_keyword_candidate_snapshot()`
+  （一次读取同时产出解析文本与内容指纹，避免解析旧内容再对新文件计时）/
+  `load_keyword_merge_context(candidates_text=…)` →
   `gui_qt/keyword_merge_dialog.py` 的 `KeywordMergeDialog`（先 `preview_selected_merge_actions()`，
-  再 `merge_selected_candidates()`）→ `keyword_glossary_merge.py` 写 `glossary.json`（写入前备份）。
+  再 `merge_selected_candidates()`；写入前用 `KeywordReviewContext` +
+  `keyword_review_context_stale_reason()` 复核项目、当前候选选择代次、
+  `keyword_candidate_content_fingerprint()` 内容版本与术语表目标）→
+  `keyword_glossary_merge.py` 写 `glossary.json`（写入前备份）。
   CLI 等价入口为 `merge-keywords-to-glossary`，命令模板由
   `keyword_glossary_merge.build_merge_keywords_cli_command()` 生成。
 - 历史证据：`keyword_history.py` 只读匹配已有 old/new 译文，产出 consistent/conflict/ambiguous
   等证据状态，不直接改 glossary 或脚本。
 - 测试：`tests.test_gui_keyword_workflow`、`tests.test_gui_sync_keyword_workflow`、
   `tests.test_gui_keyword_merge_dialog`、`tests.test_gui_keyword_merge_report`、
+  `tests.test_gui_keyword_candidate_entry`（#539 打开/审核入口端到端）、
   `tests.test_keyword_glossary_merge`、`tests.test_keyword_history`、
   `tests.test_keyword_history_corpus`。
 

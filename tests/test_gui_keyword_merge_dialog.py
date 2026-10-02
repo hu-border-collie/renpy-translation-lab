@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import keyword_glossary_merge as merge_mod
 import keyword_history
@@ -163,6 +164,52 @@ class GuiKeywordMergeDialogTests(unittest.TestCase):
             self.assertTrue(summary.wrote_glossary)
             data = json.loads(glossary_path.read_text(encoding="utf-8"))
             self.assertEqual(data["normalize_map"]["Light"], "光")
+
+    def test_pre_write_check_refuses_stale_review(self) -> None:
+        """A confirmed review still refuses to write an expired context (#539)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            glossary_path = root / "glossary.json"
+            glossary_path.write_text(
+                json.dumps({"preserve_terms": [], "normalize_map": {}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            candidates = [
+                {
+                    "source": "Void Gate",
+                    "suggested_target": "虚空门",
+                    "category": "place",
+                    "confidence": 0.9,
+                }
+            ]
+            rows = merge_mod.build_candidate_merge_rows(candidates, {"normalize_map": {}})
+            dialog = KeywordMergeDialog(
+                None,
+                rows=rows,
+                candidates_path=str(root / "keyword_candidates.jsonl"),
+                glossary_path=str(glossary_path),
+                candidates=candidates,
+                pre_write_check=lambda: "项目已切换",
+            )
+            try:
+                dialog.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+                with mock.patch(
+                    "gui_qt.keyword_merge_dialog.message_box_question",
+                    return_value="yes",
+                ), mock.patch(
+                    "gui_qt.keyword_merge_dialog.message_box_warning",
+                ) as warning:
+                    dialog._on_write()
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                self._app.processEvents()
+
+            warning.assert_called_once()
+            self.assertEqual(warning.call_args.args[2], "项目已切换")
+            self.assertIsNone(dialog.result)
+            data = json.loads(glossary_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["normalize_map"], {})
 
 
 if __name__ == "__main__":

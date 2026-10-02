@@ -1,6 +1,7 @@
 """Dialog for reviewing and merging keyword candidates into glossary.json."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import keyword_glossary_merge as merge_mod
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .keyword_merge_report import format_merge_preview_text
+from .user_copy import KEYWORD_CANDIDATE_COPY
 from .widget_helpers import message_box_information, message_box_question, message_box_warning
 
 
@@ -42,9 +44,10 @@ class KeywordMergeDialog(QDialog):
         glossary_path: str,
         candidates: list[dict],
         min_confidence: float = 0.0,
+        pre_write_check: Callable[[], str] | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("合并关键词到 glossary")
+        self.setWindowTitle(KEYWORD_CANDIDATE_COPY["merge_dialog_title"])
         self.setModal(True)
         self.resize(960, 640)
         self._rows = rows
@@ -52,6 +55,10 @@ class KeywordMergeDialog(QDialog):
         self._candidates_path = candidates_path
         self._glossary_path = glossary_path
         self._min_confidence = min_confidence
+        # #539: the coordinator re-checks its project/glossary context right
+        # before the write, so a review opened against a previous target can
+        # never be applied after a project switch or a retarget.
+        self._pre_write_check = pre_write_check
         self._result: KeywordMergeDialogResult | None = None
 
         layout = QVBoxLayout(self)
@@ -59,14 +66,17 @@ class KeywordMergeDialog(QDialog):
         layout.setSpacing(10)
 
         hint = QLabel(
-            "请勾选要写入 glossary 的候选。默认不勾选疑似 Ren'Py 启动器/UI 噪音项，"
+            "请勾选要写入术语表的候选，确认前可用「预览写入」查看结果；"
+            "预览和取消都不会修改 glossary.json。"
+            "默认不勾选疑似 Ren'Py 启动器/UI 噪音项、"
             "历史译法冲突、保留不译或无证据的条目；与 macro_setting 或现有 glossary 冲突的条目会以红色提示。"
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         paths = QLabel(
-            f"候选文件：{candidates_path}\n术语表：{glossary_path}"
+            f"候选文件（{KEYWORD_CANDIDATE_COPY['format_name']}）：{candidates_path}\n"
+            f"术语表目标：{glossary_path}"
         )
         paths.setWordWrap(True)
         paths.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -121,7 +131,7 @@ class KeywordMergeDialog(QDialog):
 
         buttons = QDialogButtonBox()
         preview_btn = buttons.addButton("预览写入", QDialogButtonBox.ButtonRole.ActionRole)
-        write_btn = buttons.addButton("写入 glossary", QDialogButtonBox.ButtonRole.AcceptRole)
+        write_btn = buttons.addButton("确认合并到术语表", QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_btn = buttons.addButton("取消", QDialogButtonBox.ButtonRole.RejectRole)
         if preview_btn is not None:
             preview_btn.clicked.connect(self._on_preview)
@@ -279,18 +289,29 @@ class KeywordMergeDialog(QDialog):
             return
         confirm = message_box_question(
             self,
-            "确认写入 glossary",
+            "确认合并到术语表",
             (
                 f"将把 {counts.get('accept', 0)} 条新增、"
-                f"{counts.get('overwrite', 0)} 条覆盖写入：\n{self._glossary_path}\n\n"
-                "写入前会自动备份 glossary。是否继续？"
+                f"{counts.get('overwrite', 0)} 条覆盖写入术语表：\n{self._glossary_path}\n\n"
+                "写入前会自动备份 glossary.json。是否继续？"
             ),
-            yes_text="写入",
+            yes_text="合并",
             no_text="取消",
             default="yes",
         )
         if confirm != "yes":
             return
+        if self._pre_write_check is not None:
+            stale_reason = self._pre_write_check()
+            if stale_reason:
+                # The review was opened against another project / glossary
+                # target; refuse the write instead of applying a late result.
+                message_box_warning(
+                    self,
+                    KEYWORD_CANDIDATE_COPY["stale_title"],
+                    stale_reason,
+                )
+                return
         summary = self._run_merge(dry_run=False)
         self._result = KeywordMergeDialogResult(summary=summary, dry_run=False)
         self.accept()

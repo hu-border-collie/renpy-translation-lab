@@ -753,6 +753,45 @@ class KeywordGlossaryMergeTests(unittest.TestCase):
             data = json.loads(glossary_path.read_text(encoding='utf-8'))
             self.assertEqual(data['normalize_map']['Legacy Term'], '旧术语')
 
+    def test_load_keyword_candidates_jsonl_accepts_pre_read_text(self):
+        """#539: GUI review parses the exact bytes it fingerprinted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            candidates_path = Path(tmp) / 'keyword_candidates.jsonl'
+            payload = (
+                '{"source": "Void Gate", "suggested_target": "虚空门"}\r\n'
+                '\r\n'
+                '{"source": "Crystal Key", "suggested_target": "水晶钥匙"}\r'
+                '[1, 2]\n'
+            )
+            candidates_path.write_bytes(b'\xef\xbb\xbf' + payload.encode('utf-8'))
+            text = candidates_path.read_bytes().decode('utf-8-sig')
+
+            self.assertEqual(
+                merge_mod.load_keyword_candidates_jsonl(
+                    str(candidates_path),
+                    text=text,
+                ),
+                merge_mod.load_keyword_candidates_jsonl(str(candidates_path)),
+            )
+            self.assertEqual(
+                [row['source'] for row in merge_mod.load_keyword_candidates_jsonl(
+                    str(candidates_path),
+                    text=text,
+                )],
+                ['Void Gate', 'Crystal Key'],
+            )
+
+    def test_load_keyword_candidates_jsonl_text_reports_line_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            candidates_path = str(Path(tmp) / 'keyword_candidates.jsonl')
+            with self.assertRaises(SystemExit) as ctx:
+                merge_mod.load_keyword_candidates_jsonl(
+                    candidates_path,
+                    text='{"source": "A"}\n{broken}\n',
+                )
+            self.assertIn('line 2', str(ctx.exception))
+            self.assertIn(candidates_path, str(ctx.exception))
+
 
 if __name__ == '__main__':
     unittest.main()

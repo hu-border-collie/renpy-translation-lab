@@ -163,12 +163,54 @@ TASK_PROJECT_GATE_COPY = {
         "默认先生成差异预览，确认后才写回。"
     ),
     "keywords_body": (
-        "选择项目并运行环境检查后，才能提取关键词。"
+        "选择项目并运行环境检查后，才能提取关键词，或打开已有的候选文件审核。"
         "任务只生成候选报告，不修改游戏脚本；报告会附上历史首次译法与保留不译的人工作提示，审核后可合并到 glossary.json。"
     ),
     "revision_body": (
         "选择项目并运行环境检查后，才能生成订正预览；确认预览后才可写回。"
     ),
+}
+
+# Standalone keyword candidate entry (#539). The primary action is named after
+# the user's goal (审核并合并到术语表); the on-disk format name (JSONL) stays in
+# file information, tooltips and the file picker instead of the button label.
+KEYWORD_CANDIDATE_COPY = {
+    "open_action": "打开候选文件",
+    "open_tooltip": (
+        "打开已有的关键词候选 JSONL（外部生成或此前导出的报告），"
+        "查看来源、条数与术语表目标后再审核合并；打开和预览都不会写入术语表。"
+    ),
+    "open_dialog_title": "选择关键词候选 JSONL 文件",
+    "open_dialog_filter": "关键词候选 JSONL (*.jsonl);;所有文件 (*)",
+    "open_running": "关键词任务正在运行；请先停止或等待完成，再打开候选文件。",
+    "open_no_project": "请先在「项目与环境」选择项目并完成环境检查，再打开候选文件。",
+    "open_project_not_ready": (
+        "项目尚未通过环境检查；请先在「项目与环境」完成检查，再打开候选文件。"
+    ),
+    "unavailable_title": "暂时无法打开候选文件",
+    "invalid_title": "无法读取候选",
+    "empty_title": "没有可审核的候选",
+    "empty_body": "候选文件中没有可审核的术语条目；未修改术语表。",
+    "source_external": "外部候选文件",
+    "source_extraction": "批量提取结果",
+    "source_sync": "同步提取结果",
+    "format_name": "关键词候选 JSONL",
+    "info_hint": "打开与预览只做读取和审核；只有明确勾选并确认后才会写入术语表。",
+    "merge_action": "审核并合并到术语表",
+    "merge_tooltip": (
+        "审核并勾选关键词候选，确认后写入当前项目的 glossary.json；不会修改 .rpy 脚本。"
+    ),
+    "merge_dialog_title": "审核并合并到术语表",
+    "merge_unavailable_title": "无法合并关键词",
+    "merge_no_candidates": (
+        "没有已解析的关键词候选；请先完成关键词提取，"
+        "或用「打开候选文件」加载已有候选后再审核合并。"
+    ),
+    "stale_title": "审核上下文已过期",
+    "stale_project": "项目已切换，本次审核上下文已过期；请重新打开候选文件。",
+    "stale_selection": "当前候选已切换，本次审核上下文已过期；请重新打开候选文件。",
+    "stale_candidates": "候选文件已不存在或内容已被替换；请重新打开候选文件。",
+    "stale_glossary": "术语表目标已变化，本次审核上下文已过期；请重新打开候选文件。",
 }
 
 REVISION_PROPOSAL_COPY = {

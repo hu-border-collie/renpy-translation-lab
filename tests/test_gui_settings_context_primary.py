@@ -188,6 +188,9 @@ class GuiContextPrimaryUiTests(unittest.TestCase):
         self.assertIn("刷新上下文", texts)
         self.assertIn("清空日志", texts)
         self.assertNotIn("合并到 glossary", texts)
+        # #539: the glossary merge action stays a workbench-only entry.
+        self.assertNotIn("审核并合并到术语表", texts)
+        self.assertNotIn("打开候选文件", texts)
         self.assertNotIn("试跑样本请求", texts)
         self.assertNotIn("拆分翻译包", texts)
         # Hidden attribute retained for enable helpers.

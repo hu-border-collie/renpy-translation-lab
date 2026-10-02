@@ -18,6 +18,7 @@ import time
 import re
 import json
 from collections.abc import Mapping
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -175,10 +176,17 @@ from .ab_experiment_report import (
 )
 from .keyword_merge_dialog import KeywordMergeDialog
 from .keyword_merge_report import (
+    KeywordCandidateSelection,
+    KeywordReviewContext,
+    format_keyword_candidate_selection,
+    keyword_candidate_content_fingerprint,
+    keyword_candidate_open_ready,
     keyword_merge_candidates_path_from_manifest,
     keyword_merge_candidates_path_from_sync_output,
     keyword_merge_ready,
+    keyword_review_context_stale_reason,
     load_keyword_merge_context,
+    read_keyword_candidate_snapshot,
     summarize_keyword_merge_result,
 )
 from .keyword_report import summarize_keyword_result_from_manifest
@@ -399,6 +407,7 @@ from .user_copy import (
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
     PROJECT_ANALYSIS_COPY,
     COVERAGE_REVIEW_COPY,
+    KEYWORD_CANDIDATE_COPY,
     format_final_review_failure_reasons,
     format_job_fact,
     format_job_state_fact,
@@ -642,6 +651,14 @@ class MainWindow(QMainWindow):
         self._compare_variants_names = ""
         self._compare_variants_temp_file = ""
         self._keyword_merge_candidates_path = ""
+        # #539: candidate file the user opened explicitly through the
+        # 关键词 / 术语 page, bound to the project + glossary target it was
+        # opened against. Never reused after a project switch.
+        self._keyword_candidate_selection: KeywordCandidateSelection | None = None
+        # Bumped whenever the current review target changes (open a file, adopt
+        # an extraction result, switch project) so an already-open review can be
+        # refused even when it resolves to the same path again.
+        self._keyword_candidate_generation = 0
         self._revision_corpus_export_result: RevisionCorpusExportResult | None = None
         self._revision_proposal_stage_result: dict[str, object] | None = None
         self._split_output_lines: list[str] = []
@@ -1984,6 +2001,7 @@ class MainWindow(QMainWindow):
                         resume=self._on_resume_translation,
                         stop=self._on_kill,
                         writeback=self._on_open_keyword_merge,
+                        open_candidates=self._on_open_keyword_candidates,
                         select_mode=self._on_keywords_page_mode_selected,
                         action=self._on_task_page_gate_action,
                     )
@@ -2468,10 +2486,12 @@ class MainWindow(QMainWindow):
         self.apply_revision_btn.setEnabled(False)
         self.apply_revision_btn.setVisible(False)
         self.writeback_primary_bar.add_widget(self.apply_revision_btn, min_width=96)
-        self.keyword_merge_writeback_btn = QPushButton("合并到 glossary")
+        self.keyword_merge_writeback_btn = QPushButton(
+            KEYWORD_CANDIDATE_COPY["merge_action"]
+        )
         self.keyword_merge_writeback_btn.setObjectName("secondary_btn")
         self.keyword_merge_writeback_btn.setToolTip(
-            "勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。"
+            KEYWORD_CANDIDATE_COPY["merge_tooltip"]
         )
         self.keyword_merge_writeback_btn.clicked.connect(self._on_open_keyword_merge)
         self.keyword_merge_writeback_btn.setEnabled(False)
@@ -4631,7 +4651,7 @@ class MainWindow(QMainWindow):
 
         # P2b: glossary merge primary entry is workbench · 关键词; keep attribute for
         # enable helpers but do not place a diagnostics toolbar button.
-        self.keyword_merge_btn = QPushButton("合并到 glossary")
+        self.keyword_merge_btn = QPushButton(KEYWORD_CANDIDATE_COPY["merge_action"])
         self.keyword_merge_btn.setObjectName("secondary_btn")
         self.keyword_merge_btn.setVisible(False)
         self.keyword_merge_btn.setEnabled(False)
@@ -6565,6 +6585,12 @@ class MainWindow(QMainWindow):
         manifest_path: str = "",
         manifest: dict[str, object] | None = None,
     ) -> str:
+        if not manifest_path and manifest is None:
+            # #539: an explicitly opened candidate file is the user's current
+            # review target; manifest-driven callers keep their own manifest.
+            selection = self._current_keyword_candidate_selection()
+            if selection is not None:
+                return selection.candidates_path
         cached_candidates = self._validated_cached_keyword_merge_candidates_path()
         if cached_candidates:
             return cached_candidates
@@ -6603,6 +6629,208 @@ class MainWindow(QMainWindow):
             keyword_manifest,
         )
 
+    @staticmethod
+    def _same_project_path(left: str, right: str) -> bool:
+        """Case-insensitive canonical path comparison for project identity."""
+        try:
+            return (
+                canonical_abs_path(left).casefold()
+                == canonical_abs_path(right).casefold()
+            )
+        except (OSError, ValueError):
+            return False
+
+    def _current_keyword_candidate_selection(self) -> KeywordCandidateSelection | None:
+        """Return the opened candidate file while it still matches this project.
+
+        #539: a file opened through 打开候选文件 is bound to the ``game_root`` and
+        the glossary target captured at that moment. A project switch, a glossary
+        retarget or a removed candidate file drops the stale context (and bumps
+        the candidate generation) instead of letting the page keep merging a
+        review into the previous target.
+        """
+        selection = getattr(self, "_keyword_candidate_selection", None)
+        if selection is None:
+            return None
+        state = getattr(self, "state", None)
+        game_root = str(state.get_game_root() or "") if state is not None else ""
+        if not game_root or not os.path.isfile(selection.candidates_path):
+            self._drop_keyword_candidate_selection()
+            return None
+        if not self._same_project_path(game_root, selection.game_root):
+            self._drop_keyword_candidate_selection()
+            return None
+        try:
+            glossary_now = self._resolve_keyword_merge_glossary_path()
+        except Exception:
+            glossary_now = ""
+        if not self._same_project_path(glossary_now, selection.glossary_path):
+            self._drop_keyword_candidate_selection()
+            return None
+        return selection
+
+    def _drop_keyword_candidate_selection(self) -> None:
+        """Forget the current candidate selection and invalidate open reviews."""
+        self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
+
+    def _keyword_candidate_open_state(
+        self,
+        *,
+        running: bool | None = None,
+    ) -> tuple[bool, str]:
+        """Return (enabled, reason) for the standalone 打开候选文件 entry (#539)."""
+        if running is None:
+            running = self._task_page_running_chrome()
+        state = getattr(self, "state", None)
+        game_root = str(state.get_game_root() or "") if state is not None else ""
+        return keyword_candidate_open_ready(
+            running=running,
+            game_root=game_root,
+            project_ready=self._doctor_allows_translate_action(),
+        )
+
+    def _keyword_candidate_info_text(self) -> str:
+        """Render the loaded candidate context; empty when nothing is opened."""
+        selection = self._current_keyword_candidate_selection()
+        if selection is None:
+            return ""
+        return format_keyword_candidate_selection(selection)
+
+    def _keyword_candidate_default_dir(self) -> str:
+        state = getattr(self, "state", None)
+        if state is None:
+            return ""
+        return str(state.get_game_root() or state.get_tool_root() or "")
+
+    def _choose_keyword_candidates_file(self) -> str:
+        """Ask for one keyword candidate JSONL; an empty result means cancel."""
+        picked, _filter = QFileDialog.getOpenFileName(
+            self,
+            KEYWORD_CANDIDATE_COPY["open_dialog_title"],
+            self._keyword_candidate_default_dir(),
+            KEYWORD_CANDIDATE_COPY["open_dialog_filter"],
+        )
+        return str(picked or "").strip()
+
+    def _load_keyword_candidate_selection(
+        self,
+        candidates_path: str,
+        *,
+        source: str = "external",
+    ) -> KeywordCandidateSelection | None:
+        """Parse one candidate JSONL through the shared merge service (#539).
+
+        Returns ``None`` after explaining why for unreadable, invalid or empty
+        files, so an unusable file can never enable the merge action.
+        """
+        state = getattr(self, "state", None)
+        if state is None:
+            return None
+        game_root = str(state.get_game_root() or "")
+        try:
+            rows, candidates, glossary_path, macro_path = load_keyword_merge_context(
+                candidates_path=candidates_path,
+                config=state.load_translator_config(),
+                game_root=game_root,
+                tool_root=str(state.get_tool_root()),
+            )
+        except ValueError as exc:
+            message_box_warning(self, KEYWORD_CANDIDATE_COPY["invalid_title"], str(exc))
+            return None
+        if not rows:
+            message_box_information(
+                self,
+                KEYWORD_CANDIDATE_COPY["empty_title"],
+                KEYWORD_CANDIDATE_COPY["empty_body"],
+            )
+            return None
+        return KeywordCandidateSelection(
+            candidates_path=candidates_path,
+            game_root=game_root,
+            glossary_path=glossary_path,
+            macro_path=macro_path,
+            candidate_total=len(candidates),
+            mergeable_total=len(rows),
+            source=source,
+        )
+
+    def _on_open_keyword_candidates(self) -> None:
+        """Open an existing keyword candidate file for review (#539).
+
+        Independent from extraction: it only resolves and displays the candidate
+        context (source, counts, glossary target) and never writes the glossary.
+        """
+        ready, reason = self._keyword_candidate_open_state()
+        if not ready:
+            message_box_information(
+                self,
+                KEYWORD_CANDIDATE_COPY["unavailable_title"],
+                reason,
+            )
+            return
+        picked = self._choose_keyword_candidates_file()
+        if not picked:
+            # Cancelling a file dialog keeps the already loaded candidate.
+            return
+        selection = self._load_keyword_candidate_selection(picked)
+        if selection is None:
+            return
+        self._keyword_candidate_selection = selection
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
+        self._sync_keywords_page_controls()
+        self._update_keyword_merge_btn_enabled()
+        self.statusBar().showMessage(
+            f"{KEYWORD_CANDIDATE_COPY['open_action']}：{picked}"
+            f"（可审核 {selection.mergeable_total} 条）",
+            8000,
+        )
+
+    def _remember_keyword_merge_candidates(self, candidates_path: str) -> None:
+        """Adopt an extraction-produced candidate file as the current target.
+
+        A fresh batch/sync extraction result supersedes an earlier manual pick
+        from 打开候选文件 (#539) and invalidates any review opened before it.
+        """
+        if not candidates_path:
+            return
+        self._keyword_merge_candidates_path = candidates_path
+        self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
+
+    def _keyword_review_stale_reason(self, review: KeywordReviewContext) -> str:
+        """Explain why an open review no longer matches the live context (#539).
+
+        Re-reads the live project, candidate identity, candidate content version
+        and glossary target; a non-empty result means the dialog must not write.
+        """
+        state = getattr(self, "state", None)
+        current_game_root = str(state.get_game_root() or "") if state is not None else ""
+        try:
+            current_glossary = self._resolve_keyword_merge_glossary_path()
+        except Exception:
+            current_glossary = ""
+        current_candidates_path = self._resolve_keyword_merge_candidates_path()
+        current = KeywordReviewContext(
+            candidates_path=current_candidates_path,
+            fingerprint=keyword_candidate_content_fingerprint(
+                current_candidates_path
+            ),
+            game_root=current_game_root,
+            glossary_path=current_glossary,
+            generation=int(getattr(self, "_keyword_candidate_generation", 0)),
+        )
+        return keyword_review_context_stale_reason(
+            review,
+            current,
+        )
+
     def _update_keyword_merge_btn_enabled(self, *, running: bool | None = None) -> None:
         if not hasattr(self, "keyword_merge_btn"):
             return
@@ -6618,34 +6846,50 @@ class MainWindow(QMainWindow):
         primary_hint = "主入口在工作台「关键词 / 术语」结果区。"
         if ready:
             self.keyword_merge_btn.setToolTip(
-                f"{primary_hint} 勾选审核关键词候选并写入 glossary.json；不会修改 .rpy 脚本。",
+                f"{primary_hint} {KEYWORD_CANDIDATE_COPY['merge_tooltip']}",
             )
         elif message:
             self.keyword_merge_btn.setToolTip(
-                f"{primary_hint} {message} 也可点击后手动选择候选 JSONL 文件。",
+                f"{primary_hint} {message} 也可在该页先用「{KEYWORD_CANDIDATE_COPY['open_action']}」加载已有候选。",
             )
         else:
             self.keyword_merge_btn.setToolTip(
-                f"{primary_hint} 勾选审核关键词候选并写入 glossary.json；也可手动选择候选 JSONL。",
+                f"{primary_hint} {KEYWORD_CANDIDATE_COPY['merge_tooltip']}",
             )
 
     def _on_open_keyword_merge(self) -> None:
+        """Review the resolved candidates and merge only what the user checks.
+
+        File picking belongs to the standalone 打开候选文件 entry (#539): this
+        callback only continues once a candidate file is resolved from that
+        entry or from an extraction result.
+        """
         candidates_path = self._resolve_keyword_merge_candidates_path()
         if not candidates_path:
-            picked, _filter = QFileDialog.getOpenFileName(
+            message_box_information(
                 self,
-                "选择关键词候选 JSONL",
-                str(self.state.get_game_root() or self.state.get_tool_root()),
-                "JSON Lines (*.jsonl);;All Files (*)",
+                KEYWORD_CANDIDATE_COPY["merge_unavailable_title"],
+                KEYWORD_CANDIDATE_COPY["merge_no_candidates"],
             )
-            candidates_path = picked.strip()
+            return
         glossary_path = self._resolve_keyword_merge_glossary_path()
         ready, message = keyword_merge_ready(
             candidates_path=candidates_path,
             glossary_path=glossary_path,
         )
         if not ready:
-            message_box_information(self, "无法合并关键词", message)
+            message_box_information(
+                self,
+                KEYWORD_CANDIDATE_COPY["merge_unavailable_title"],
+                message,
+            )
+            return
+        # #539: freeze the candidate identity plus the exact content version this
+        # review read; the dialog refuses a late write once anything moves on.
+        try:
+            snapshot = read_keyword_candidate_snapshot(candidates_path)
+        except ValueError as exc:
+            message_box_warning(self, KEYWORD_CANDIDATE_COPY["invalid_title"], str(exc))
             return
         try:
             rows, candidates, resolved_glossary_path, _macro_path = load_keyword_merge_context(
@@ -6653,20 +6897,36 @@ class MainWindow(QMainWindow):
                 config=self.state.load_translator_config(),
                 game_root=str(self.state.get_game_root() or ""),
                 tool_root=str(self.state.get_tool_root()),
+                candidates_text=snapshot.text,
             )
         except ValueError as exc:
-            message_box_warning(self, "无法读取候选", str(exc))
+            message_box_warning(self, KEYWORD_CANDIDATE_COPY["invalid_title"], str(exc))
             return
         if not rows:
-            message_box_information(self, "没有可合并候选", "候选文件中没有可写入 glossary 的条目。")
+            message_box_information(
+                self,
+                KEYWORD_CANDIDATE_COPY["empty_title"],
+                KEYWORD_CANDIDATE_COPY["empty_body"],
+            )
             return
 
+        review_context = KeywordReviewContext(
+            candidates_path=candidates_path,
+            fingerprint=snapshot.fingerprint,
+            game_root=str(self.state.get_game_root() or ""),
+            glossary_path=resolved_glossary_path,
+            generation=int(getattr(self, "_keyword_candidate_generation", 0)),
+        )
         dialog = KeywordMergeDialog(
             self,
             rows=rows,
             candidates_path=candidates_path,
             glossary_path=resolved_glossary_path,
             candidates=candidates,
+            pre_write_check=partial(
+                self._keyword_review_stale_reason,
+                review_context,
+            ),
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -6698,6 +6958,7 @@ class MainWindow(QMainWindow):
             manifest_json_preview=base_context.manifest_json_preview,
         )
         self._set_diagnostics_context(merged_context)
+        self._sync_keywords_page_controls()
         self._update_keyword_merge_btn_enabled()
 
     def _update_compare_variants_btn_enabled(
@@ -7862,16 +8123,20 @@ class MainWindow(QMainWindow):
             glossary_path=glossary_path,
         )
         if merge_ready:
-            result_hint = "关键词候选已就绪；可审核并合并到 glossary.json。"
+            result_hint = "关键词候选已就绪；可审核并合并到术语表（glossary.json）。"
         elif merge_message:
             result_hint = f"关键词结果：{merge_message}"
         else:
-            result_hint = "提取完成后，可在此合并审核通过的术语候选。"
+            result_hint = "提取完成后，可在此审核并合并术语候选。"
+        # #539: the standalone open entry mirrors the coordinator's project gate
+        # and running lock, and the loaded candidate context stays visible.
+        open_ready, open_message = self._keyword_candidate_open_state(running=running)
         page.set_task_running(running)
         if hasattr(page, "stop_btn"):
             page.stop_btn.setText(
                 self._task_stop_button_label() if running else "停止"
             )
+        page.set_candidate_context(self._keyword_candidate_info_text())
         page.set_controls(
             start_enabled=self.translate_btn.isEnabled(),
             resume_enabled=self.resume_btn.isEnabled(),
@@ -7879,6 +8144,8 @@ class MainWindow(QMainWindow):
             resume_label=self.resume_btn.text(),
             merge_enabled=merge_ready,
             merge_message=result_hint,
+            open_enabled=open_ready,
+            open_message=open_message,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.KEYWORDS:
             self._refresh_active_workbench_page(work_mode_spec(mode))
@@ -9436,6 +9703,11 @@ class MainWindow(QMainWindow):
             )
         self._writeback_manifest_path = ""
         self._keyword_merge_candidates_path = ""
+        # The opened candidate file belongs to the previous project (#539).
+        self._keyword_candidate_selection = None
+        self._keyword_candidate_generation = int(
+            getattr(self, "_keyword_candidate_generation", 0)
+        ) + 1
         sessions = getattr(self, "_mode_sessions", None)
         if not isinstance(sessions, dict):
             try:
@@ -13921,13 +14193,13 @@ class MainWindow(QMainWindow):
                 exported_manifest,
             )
             if exported_candidates:
-                self._keyword_merge_candidates_path = exported_candidates
+                self._remember_keyword_merge_candidates(exported_candidates)
         sync_keyword_completed = step_key == "sync-keywords" and exit_code == 0
         if sync_keyword_completed:
             self._copy_sync_keyword_reports_to_game_parent(step_output)
             sync_candidates = keyword_merge_candidates_path_from_sync_output(step_output)
             if sync_candidates:
-                self._keyword_merge_candidates_path = sync_candidates
+                self._remember_keyword_merge_candidates(sync_candidates)
 
         if _workflow_output_updates_writeback(step_key, step_output):
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
