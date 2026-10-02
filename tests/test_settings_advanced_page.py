@@ -98,6 +98,67 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         issue = SettingsIssue("advanced", "sync_chunk_size", "invalid")
         self.assertTrue(self.page.focus_issue(issue))
 
+    def test_search_jump_and_clear_preserve_edits_and_focus(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        from gui_qt.settings.advanced_page import ADVANCED_FIELDS
+
+        self.page.widget.resize(700, 500)
+        self.page.widget.show()
+        self.page.field_widgets["sync_chunk_size"].setValue(73)
+        edited = self.page.collect()
+        field = next(f for f in ADVANCED_FIELDS if f.key == "sync_chunk_size")
+        for query in (field.label, field.key, ".".join(field.path).upper()):
+            self.page.search_edit.setText(query)
+            self._app.processEvents()
+            QTest.keyClick(self.page.search_edit, Qt.Key.Key_Return)
+            self._app.processEvents()
+            target = self.page.field_widgets[field.key]
+            self.assertTrue(target.isVisible())
+            self.assertTrue(target.hasFocus())
+            self.assertEqual(self.page.collect(), edited)
+        self.page.search_edit.setText("没有此设置-original-fixture")
+        self._app.processEvents()
+        self.assertFalse(self.page.next_match_btn.isEnabled())
+        self.assertIn("没有", self.page.search_status.text())
+        self.assertFalse(self.page.field_widgets[field.key].isVisible())
+        # Validation navigation must reveal a field hidden by search.
+        self.page.focus_issue(SettingsIssue("advanced", field.key, "invalid"))
+        self._app.processEvents()
+        self.assertTrue(self.page.field_widgets[field.key].isVisible())
+        self.page.search_edit.setText("不存在")
+        self.page.clear_search_btn.click()
+        self.page.category_combo.setCurrentIndex(self.page.category_combo.findText(field.category))
+        self._app.processEvents()
+        self.assertTrue(any(self.page.field_widgets[f.key].hasFocus() for f in ADVANCED_FIELDS if f.category == field.category))
+        self.assertEqual(self.page.collect(), edited)
+        self.page.search_edit.setText("   ")
+        self._app.processEvents()
+        self.assertTrue(all(w.isVisible() for w in self.page.field_widgets.values()))
+        # Return and Shift-free previous/next actions cycle independent matches.
+        self.page.search_edit.setText("chunk_size")
+        self.page.previous_match_btn.click()
+        self._app.processEvents()
+        previous = self._app.focusWidget()
+        self.page.next_match_btn.click()
+        self._app.processEvents()
+        self.assertIsNot(previous, self._app.focusWidget())
+        QTest.keyClick(self._app.focusWidget(), Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+        self._app.processEvents()
+        self.assertTrue(self.page.search_edit.hasFocus())
+        QTest.keyClick(self.page.search_edit, Qt.Key.Key_Escape)
+        self._app.processEvents()
+        self.assertEqual(self.page.search_edit.text(), "")
+        self.page.search_edit.setText("catalog_gemini_models")
+        self._app.processEvents()
+        QTest.keyClick(self.page.search_edit, Qt.Key.Key_Return)
+        self._app.processEvents()
+        catalog = self.page.field_widgets["catalog_gemini_models"]
+        self.assertTrue(catalog.isAncestorOf(self._app.focusWidget()))
+        self.assertEqual(self.page.collect(), edited)
+        self.page.reset()
+        self.assertNotEqual(self.page.collect()[field.key], 73)
+
     def test_set_task_running_disables_config_controls(self) -> None:
         widget = self.page.field_widgets["sync_chunk_size"]
         self.assertTrue(widget.isEnabled())

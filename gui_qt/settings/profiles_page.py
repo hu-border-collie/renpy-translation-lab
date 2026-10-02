@@ -20,6 +20,7 @@ from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,7 +38,10 @@ from model_profile import ADAPTER_OPENAI_COMPATIBLE
 from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
-from .page_chrome import add_model_navigation, build_settings_scroll_page, settings_group
+from .page_chrome import (
+    SettingsMasterDetail, add_model_navigation, build_settings_scroll_page,
+    limit_short_field, settings_group,
+)
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS
 
@@ -291,10 +295,11 @@ class ProfilesSettingsPage(QObject):
             MODEL_PROFILES_PAGE_COPY["profiles_group"]
         )
         self.profiles_list = QListWidget()
+        self.profiles_list.setMaximumHeight(240)
         self.profiles_list.setObjectName("profiles_list")
         self.profiles_list.currentRowChanged.connect(self._on_profile_row_changed)
         profiles_layout.addWidget(self.profiles_list)
-        profiles_buttons = QHBoxLayout()
+        profiles_buttons = QGridLayout()
         self.profiles_add_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["add_profile"])
         self.profiles_add_btn.clicked.connect(self._on_add_profile)
         self.profiles_copy_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["copy_profile"])
@@ -309,27 +314,27 @@ class ProfilesSettingsPage(QObject):
         self.profiles_probe_btn.setObjectName("profiles_probe_btn")
         self.profiles_probe_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["probe_tooltip"])
         self.profiles_probe_btn.clicked.connect(self._on_probe_profile)
-        for button in (
+        for index, button in enumerate((
             self.profiles_add_btn,
             self.profiles_copy_btn,
             self.profiles_delete_btn,
             self.profiles_diagnose_btn,
             self.profiles_probe_btn,
-        ):
-            profiles_buttons.addWidget(button)
-        profiles_buttons.addStretch(1)
+        )):
+            profiles_buttons.addWidget(button, index // 2, index % 2)
         profiles_layout.addLayout(profiles_buttons)
         self.profile_editor_group, self._profile_form = settings_group(
             MODEL_PROFILES_PAGE_COPY["profile_editor_group"]
         )
         self._build_profile_editor(self._profile_form)
-        layout.addWidget(self.profiles_group)
-        layout.addWidget(self.profile_editor_group)
+        self.profile_panels = SettingsMasterDetail(self.profiles_group, self.profile_editor_group)
+        layout.addWidget(self.profile_panels)
 
         self.providers_group, providers_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["providers_group"]
         )
         self.providers_list = QListWidget()
+        self.providers_list.setMaximumHeight(240)
         self.providers_list.setObjectName("providers_list")
         self.providers_list.currentRowChanged.connect(self._on_provider_row_changed)
         providers_layout.addWidget(self.providers_list)
@@ -346,16 +351,18 @@ class ProfilesSettingsPage(QObject):
             MODEL_PROFILES_PAGE_COPY["provider_editor_group"]
         )
         self._build_provider_editor(self._provider_form)
-        layout.addWidget(self.providers_group)
-        layout.addWidget(self.provider_editor_group)
+        self.provider_panels = SettingsMasterDetail(self.providers_group, self.provider_editor_group)
+        layout.addWidget(self.provider_panels)
 
         self.defaults_group, defaults_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["defaults_group"]
         )
         self.default_profile_combo = NoWheelComboBox()
+        limit_short_field(self.default_profile_combo)
         self.default_profile_combo.setObjectName("profiles_default_profile_combo")
         self.default_profile_combo.currentIndexChanged.connect(self._on_defaults_changed)
         self.default_strategy_combo = NoWheelComboBox()
+        limit_short_field(self.default_strategy_combo)
         self.default_strategy_combo.setObjectName("profiles_default_strategy_combo")
         self.default_strategy_combo.currentIndexChanged.connect(self._on_defaults_changed)
         defaults_layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["default_profile_label"]))
@@ -388,12 +395,14 @@ class ProfilesSettingsPage(QObject):
 
     def _build_profile_editor(self, layout: QVBoxLayout) -> None:
         self.profile_label_edit = QLineEdit()
+        limit_short_field(self.profile_label_edit)
         self.profile_label_edit.setObjectName("profiles_profile_label_edit")
         self.profile_label_edit.editingFinished.connect(self._on_profile_fields_changed)
         layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["profile_label"]))
         layout.addWidget(self.profile_label_edit)
 
         self.profile_provider_combo = NoWheelComboBox()
+        limit_short_field(self.profile_provider_combo)
         self.profile_provider_combo.setObjectName("profiles_profile_provider_combo")
         self.profile_provider_combo.currentIndexChanged.connect(
             self._on_profile_fields_changed
@@ -451,6 +460,16 @@ class ProfilesSettingsPage(QObject):
         layout.addWidget(self.profile_embedding_combo)
 
         capabilities = QGroupBox(MODEL_PROFILES_PAGE_COPY["capabilities_group"])
+        self.capabilities_toggle = QPushButton(MODEL_PROFILES_PAGE_COPY["capabilities_show"])
+        self.capabilities_toggle.setCheckable(True)
+        self.capabilities_toggle.setObjectName("secondary_btn")
+        self.capabilities_toggle.toggled.connect(capabilities.setVisible)
+        self.capabilities_toggle.toggled.connect(
+            lambda expanded: self.capabilities_toggle.setText(MODEL_PROFILES_PAGE_COPY[
+                "capabilities_hide" if expanded else "capabilities_show"
+            ])
+        )
+        layout.addWidget(self.capabilities_toggle)
         capabilities_layout = QVBoxLayout(capabilities)
         for key, label in _CAPABILITY_LABELS.items():
             row = QHBoxLayout()
@@ -489,6 +508,7 @@ class ProfilesSettingsPage(QObject):
             row = QHBoxLayout()
             row.addWidget(QLabel(label))
             edit = QLineEdit()
+            limit_short_field(edit, numeric=True)
             edit.setObjectName(f"profiles_{key}")
             edit.setPlaceholderText("留空跟随适配器")
             edit.editingFinished.connect(self._on_profile_capabilities_changed)
@@ -498,11 +518,13 @@ class ProfilesSettingsPage(QObject):
         risk = QLabel(MODEL_PROFILES_PAGE_COPY["capability_risk"])
         risk.setWordWrap(True)
         risk.setObjectName("config_hint_label")
-        capabilities_layout.addWidget(risk)
+        layout.addWidget(risk)
         layout.addWidget(capabilities)
+        capabilities.hide()
 
     def _build_provider_editor(self, layout: QVBoxLayout) -> None:
         self.provider_preset_combo = NoWheelComboBox()
+        limit_short_field(self.provider_preset_combo)
         self.provider_preset_combo.setObjectName("profiles_provider_preset_combo")
         self.provider_preset_combo.addItem(
             MODEL_PROFILES_PAGE_COPY["preset_placeholder"], ""
@@ -529,6 +551,8 @@ class ProfilesSettingsPage(QObject):
         )
         for attr, key, _cls in fields:
             edit = QLineEdit()
+            if key in {"label", "upstream", "credential_name", "credential_env"}:
+                limit_short_field(edit)
             edit.setObjectName(f"profiles_{attr}")
             edit.editingFinished.connect(self._on_provider_fields_changed)
             setattr(self, attr, edit)
@@ -536,6 +560,7 @@ class ProfilesSettingsPage(QObject):
             layout.addWidget(edit)
 
         self.provider_adapter_combo = NoWheelComboBox()
+        limit_short_field(self.provider_adapter_combo)
         self.provider_adapter_combo.setObjectName("profiles_provider_adapter_combo")
         for adapter in editor.ADAPTERS:
             self.provider_adapter_combo.addItem(adapter, adapter)
@@ -546,6 +571,7 @@ class ProfilesSettingsPage(QObject):
         layout.addWidget(self.provider_adapter_combo)
 
         self.provider_credential_kind_combo = NoWheelComboBox()
+        limit_short_field(self.provider_credential_kind_combo)
         self.provider_credential_kind_combo.setObjectName(
             "profiles_provider_credential_kind_combo"
         )
@@ -674,6 +700,8 @@ class ProfilesSettingsPage(QObject):
             has_section or self._invalid_raw is not None
         )
         for group in (
+            self.profile_panels,
+            self.provider_panels,
             self.profiles_group,
             self.profile_editor_group,
             self.providers_group,

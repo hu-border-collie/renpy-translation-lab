@@ -1,4 +1,4 @@
-"""Behavior and small-window contracts for issue #540 phase A."""
+"""Behavior and window-size contracts for issue #540 phases A and B."""
 from __future__ import annotations
 
 import copy
@@ -84,7 +84,7 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(page.widget.verticalScrollBar().value(), 0)
         for control in (page.default_profile_combo, page.default_strategy_combo):
             self.assert_in_viewport(control, page.widget.viewport())
-        self.assertLess(page.defaults_group.y(), page.profiles_group.y())
+        self.assertLess(page.defaults_group.y(), page.profiles_group.mapTo(page.body, QPoint(0, 0)).y())
         self.assertLess(page.defaults_group.y(), page.notice_group.y())
         self.assert_in_viewport(page.readiness_label, page.widget.viewport())
         self.assertIn("未验证", page.readiness_label.text())
@@ -173,6 +173,36 @@ class SettingsEntryTests(unittest.TestCase):
             self.assertEqual(self.window.settings_category_combo.currentData(), "profiles")
         self.save_mock.assert_not_called()
 
+    def test_model_list_detail_reflow_keeps_selection_and_unfinished_text(self) -> None:
+        page = self.window._profiles_page()
+        page.profiles_list.setCurrentRow(1)
+        selected = page.profiles_list.currentItem().data(Qt.ItemDataRole.UserRole)
+        page.profile_model_edit.setText("original-long-model-id/" * 12)
+        page.provider_base_url_edit.setText("https://offline.example/" + "long-path/" * 12)
+        page.capabilities_toggle.click()
+        for size in ((1920, 1080), (960, 640), (1280, 800), (1920, 1080)):
+            self.window.resize(*size)
+            self.process()
+            list_pos = page.profiles_group.mapTo(page.body, QPoint(0, 0))
+            detail_pos = page.profile_editor_group.mapTo(page.body, QPoint(0, 0))
+            if size[0] == 1920:
+                self.assertGreater(detail_pos.x(), list_pos.x() + page.profiles_group.width())
+                self.assertEqual(detail_pos.y(), list_pos.y())
+                self.assertLess(page.profile_label_edit.width(), page.profile_model_edit.width())
+            elif size[0] == 960:
+                self.assertGreater(detail_pos.y(), list_pos.y())
+            self.assertEqual(page.profiles_list.currentItem().data(Qt.ItemDataRole.UserRole), selected)
+            self.assertEqual(page.profile_model_edit.text(), "original-long-model-id/" * 12)
+            self.assertEqual(page.provider_base_url_edit.text(), "https://offline.example/" + "long-path/" * 12)
+            self.assertTrue(page.capabilities_toggle.isChecked())
+            page.widget.ensureWidgetVisible(page.profile_model_edit)
+            self.process()
+            self.assert_in_viewport(page.profile_model_edit, page.widget.viewport())
+            page.widget.ensureWidgetVisible(page.provider_base_url_edit)
+            self.process()
+            self.assert_in_viewport(page.provider_base_url_edit, page.widget.viewport())
+        self.save_mock.assert_not_called()
+
     def test_load_states_remain_distinct_and_legacy_expansion_survives_navigation_reload(self) -> None:
         page = self.window._profiles_page()
         for config in ({}, {"model_routing": []}, {"model_routing": {}}, example_config()):
@@ -224,20 +254,29 @@ class SettingsEntryTests(unittest.TestCase):
                 page.default_profile_combo.setCurrentIndex(page.default_profile_combo.findData(alternate))
                 page.default_strategy_combo.setCurrentIndex(page.default_strategy_combo.findData("sync"))
                 expected = page.collect()["model_routing"]
+                self.window._focus_settings_section("advanced")
+                advanced = self.window._settings_coordinator.page("advanced")
+                advanced.field_widgets["sync_chunk_size"].setValue(73)
+                advanced.search_edit.setText("没有匹配-original-fixture")
+                self.window._focus_settings_section("profiles")
+                self.save_mock.assert_not_called()
                 self.assertTrue(self.window._on_save_config())
                 self.assertEqual(self.save_mock.call_count, 1)
                 saved = json.loads(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(saved["model_routing"], expected)
+                self.assertEqual(saved["sync"]["chunk_size"], 73)
                 self.assertTrue((game_root / "project_context_settings.json").exists())
                 self.assertEqual(self.window.settings_category_combo.currentData(), "profiles")
                 self.assertEqual(page._selected_profile_id, alternate)
                 self.assertEqual(page._selected_provider_id, provider_id)
                 self.assertFalse(self.window._config_tab_has_unsaved_changes())
                 page.default_strategy_combo.setCurrentIndex(page.default_strategy_combo.findData("gemini_batch"))
+                advanced.field_widgets["sync_chunk_size"].setValue(19)
                 self.assertTrue(self.window._config_tab_has_unsaved_changes())
                 self.window._on_reload_config()
                 self.assertIs(self.window._profiles_page(), page)
                 self.assertEqual(page.collect()["model_routing"], expected)
+                self.assertEqual(advanced.collect()["sync_chunk_size"], 73)
                 self.assertEqual(page.default_strategy_combo.currentData(), "sync")
                 self.assertEqual(page._selected_profile_id, alternate)
                 self.assertEqual(page._selected_provider_id, provider_id)

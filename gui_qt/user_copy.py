@@ -1555,6 +1555,20 @@ MODEL_CATALOG_SOURCE_LABELS = {
     "provider_models_endpoint": "供应商模型列表",
 }
 
+ADVANCED_SETTINGS_NAV_COPY = {
+    "hint": "高级设置影响请求、上下文和本地路径；无效字段会阻止保存。",
+    "search": "搜索中文标签或配置键（Ctrl+F）",
+    "search_label": "查找设置",
+    "category": "跳转类别",
+    "all_categories": "选择类别…",
+    "clear": "清除搜索",
+    "previous": "上一项",
+    "next": "下一项",
+    "matches": "匹配 {count} 项；按 Enter 定位，Tab 可进入字段。",
+    "empty": "共 {count} 项设置；可搜索或跳转类别。",
+    "no_matches": "没有匹配的设置；请修改关键词或清除搜索。",
+}
+
 MODEL_PROFILES_PAGE_COPY = {
     "hint": (
         "在这里统一管理供应商连接、模型方案和任务阶段路由。"
@@ -1587,6 +1601,8 @@ MODEL_PROFILES_PAGE_COPY = {
     "defaults_group": "默认主模型与执行方式",
     "routes_group": "任务阶段路由",
     "capabilities_group": "能力覆盖（高级）",
+    "capabilities_show": "展开能力覆盖与上下文预算",
+    "capabilities_hide": "收起能力覆盖与上下文预算",
     "capability_risk": (
         "覆盖值会直接改变运行时能力判定，可能让不受支持的组合通过预检；"
         "仅在确认 Provider 实际能力后使用。"

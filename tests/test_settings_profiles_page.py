@@ -80,7 +80,8 @@ class ProfilesPageTests(unittest.TestCase):
         self.page.widget.resize(1200, 800)
         self.page.widget.show()
         self._app.processEvents()
-        self.assertEqual(self.page.notice_group.width(), self.page.profiles_group.width())
+        self.assertLessEqual(self.page.profiles_group.width(), self.page.notice_group.width())
+        self.assertEqual(self.page.profile_panels.width(), self.page.notice_group.width())
 
     def test_create_section_stores_a_valid_gemini_batch_default(self) -> None:
         from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL

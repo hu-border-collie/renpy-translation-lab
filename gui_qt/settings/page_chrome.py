@@ -6,6 +6,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFormLayout,
+    QGridLayout,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -17,6 +18,41 @@ from PySide6.QtWidgets import (
 )
 
 from ..user_copy import SETTINGS_MODEL_ENTRY_COPY
+
+
+class SettingsMasterDetail(QWidget):
+    """Reflow existing list/detail widgets without rebuilding their edit state."""
+
+    def __init__(self, master: QWidget, detail: QWidget) -> None:
+        super().__init__()
+        self._master, self._detail = master, detail
+        self._wide: bool | None = None
+        self._grid = QGridLayout(self)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(14)
+        self._reflow(False)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        # Account for translated button labels and larger fonts in both panes.
+        threshold = max(1000, self.fontMetrics().horizontalAdvance("宽") * 65)
+        self._reflow(self.width() >= threshold)
+
+    def _reflow(self, wide: bool) -> None:
+        if wide == self._wide:
+            return
+        self._wide = wide
+        self._grid.removeWidget(self._master)
+        self._grid.removeWidget(self._detail)
+        self._grid.addWidget(self._master, 0, 0, Qt.AlignmentFlag.AlignTop)
+        self._grid.addWidget(self._detail, 0 if wide else 1, 1 if wide else 0)
+        self._grid.setColumnStretch(0, 2 if wide else 1)
+        self._grid.setColumnStretch(1, 3 if wide else 0)
+
+
+def limit_short_field(widget: QWidget, *, numeric: bool = False) -> None:
+    """Bound short inputs while allowing model IDs, paths and tables to expand."""
+    widget.setMaximumWidth(240 if numeric else 420)
 
 
 def add_model_navigation(
