@@ -197,6 +197,8 @@
 - #540 A 的 GUI 分类入口：`gui_qt/app.py` 的 `settings_category_combo` 与原分类栏
   同步，仍复用 Settings coordinator 的页面实例；`gui_qt/settings/page_chrome.py`
   的 `add_model_navigation()` 通过页面 action 回调连接统一编辑器和旧模型页。
+  `gui_qt/settings/category_selector.py` 按当前字体与 Qt 样式计算分类选择器的内容宽度，
+  避免 Windows 原生 size hint 偏小及字体变化后的文字裁切。
   行为与布局回归：`tests.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
   默认值、配置状态区分、保存/重载与选择保留）。
 

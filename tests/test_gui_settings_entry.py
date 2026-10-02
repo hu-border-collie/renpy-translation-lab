@@ -124,6 +124,34 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(selector.currentData(), "models")
         self.save_mock.assert_not_called()
 
+    def test_category_selector_reflows_after_font_and_theme_changes_and_keeps_selection(self) -> None:
+        from tests.test_gui_control_layout_audit import _combo_natural_width
+
+        selector = self.window.settings_category_combo
+        original_font = selector.font()
+        selected_key = selector.currentData()
+        page = self.window._profiles_page()
+        original_config = page.collect()
+        for extra_pixels in (4, 12, 0):
+            font = selector.font()
+            font.setPixelSize(original_font.pixelSize() + extra_pixels)
+            selector.setFont(font)
+            self.process()
+            self.assertGreaterEqual(selector.width() + 1, _combo_natural_width(selector))
+            self.assert_in_viewport(selector, self.window._config_tab)
+            self.assertEqual(selector.currentData(), selected_key)
+            self.assertIs(self.window._profiles_page(), page)
+            self.assertEqual(page.collect(), original_config)
+        for theme in ("dark", "light"):
+            apply_theme(self.app, Path(__file__).parents[1] / "gui_qt/resources", theme)
+            self.process()
+            self.assertGreaterEqual(selector.width() + 1, _combo_natural_width(selector))
+            self.assert_in_viewport(selector, self.window._config_tab)
+            self.assertEqual(selector.currentData(), selected_key)
+            self.assertIs(self.window._profiles_page(), page)
+            self.assertEqual(page.collect(), original_config)
+        self.save_mock.assert_not_called()
+
     def test_model_links_resize_and_refresh_preserve_unsaved_edits_and_selection(self) -> None:
         page = self.window._profiles_page()
         alternate = editor.profile_ids(self.config["model_routing"])[1]

@@ -347,6 +347,7 @@ from .settings.coordinator import SettingsCoordinator
 from .settings.leave_guard import settings_leave_guard_prompt
 from .settings.save_apply import SettingsSaveExtras, apply_collected_settings
 from .settings.page_contract import SettingsPageActions
+from .settings.category_selector import SettingsCategoryComboBox
 from .settings.litellm_page import (
     LiteLLMPageHost,
     LiteLLMSettingsPage,
@@ -3136,8 +3137,11 @@ class MainWindow(QMainWindow):
         category_row = QHBoxLayout()
         category_row.setSpacing(8)
         category_row.addWidget(self.settings_nav, 1)
-        self.settings_category_combo = NoWheelComboBox()
+        self.settings_category_combo = SettingsCategoryComboBox()
         self.settings_category_combo.setObjectName("settings_category_combo")
+        self.settings_category_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
         self.settings_category_combo.setAccessibleName(
             SETTINGS_MODEL_ENTRY_COPY["all_categories"].format(
                 count=len(_SETTINGS_PAGE_SPECS)
@@ -3147,8 +3151,14 @@ class MainWindow(QMainWindow):
             SETTINGS_MODEL_ENTRY_COPY["category_tooltip"]
         )
         self.settings_category_combo.setMaxVisibleItems(len(_SETTINGS_PAGE_SPECS))
-        category_row.addWidget(QLabel(self.settings_category_combo.accessibleName()))
-        category_row.addWidget(self.settings_category_combo)
+        category_picker = QWidget()
+        self._style_themed_surface(category_picker)
+        picker_layout = QVBoxLayout(category_picker)
+        picker_layout.setContentsMargins(0, 0, 0, 0)
+        picker_layout.setSpacing(0)
+        picker_layout.addWidget(QLabel(self.settings_category_combo.accessibleName()))
+        picker_layout.addWidget(self.settings_category_combo)
+        category_row.addWidget(category_picker)
         outer_layout.addLayout(category_row)
 
         right_panel = QWidget()
@@ -3174,6 +3184,7 @@ class MainWindow(QMainWindow):
             placeholder.setObjectName(f"settings_{key}_placeholder")
             self._style_themed_surface(placeholder)
             self.settings_stack.addWidget(placeholder)
+        self.settings_category_combo.refresh_minimum_width()
         self._settings_coordinator = SettingsCoordinator(
             self._settings_registry,
             builder=self._build_settings_page_adapter,
