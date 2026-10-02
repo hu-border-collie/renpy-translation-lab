@@ -94,6 +94,143 @@ class ExternalWorkTests(unittest.TestCase):
         self.assertNotIn('Traceback', diagnostics.getvalue())
         return code, json.loads(output.getvalue())
 
+    def test_native_scope_keeps_omitted_empty_targets_visible_after_apply(self):
+        self.rpy.write_text('translate schinese scope:\n'
+                            '    # e "Wait..."\n    e ""\n'
+                            '    # e "Then..."\n    e ""\n'
+                            '    # e "..."\n    e ""\n', encoding='utf-8')
+        exported = work.export_work(output_dir=self.root / 'scope')
+        package = json.loads(Path(exported['work_path']).read_text(encoding='utf-8'))
+        target = exported['manifest_path']
+        self.assertEqual(len(package['items']), 2)
+        self.assertEqual(exported['native_scope']['total_targets'], 3)
+        self.assertEqual(exported['native_scope']['omitted_empty_count'], 1)
+        submission = work.submission_template(package, submission_id='short-sentences', producer={'type': 'agent', 'name': 'fixture'})
+        submission['items'] = [dict(occurrence_id=row['occurrence_id'], snapshot_digest=row['snapshot_digest'],
+                                    expected_candidate_digest='', translation=text, reason='原创短句', review={'status': 'unreviewed'})
+                               for row, text in zip(package['items'], ['等等……', '然后……'])]
+        work.submit_work(target, submission)
+        self.assertEqual(batch.check_results(target)['last_check_summary']['writeback_gate']['decision'], 'allow')
+        work.preview_work(target)
+        work.apply_work(target)
+        status = work.status_work(target)
+        self.assertEqual(status['completeness'], 'complete')
+        self.assertEqual(status['writeback'], 'applied')
+        self.assertEqual(status['native_scope']['unresolved_empty_count'], 1)
+
+    def test_explicit_native_effect_completion_uses_existing_gate_and_span_validation(self):
+        sources = ['Wait...', '{i}then...{/i}', 'Aaargh...', 'Hmm.', 'KTRM?', '...',
+                   'music.ogg', 'hero_name', '{w}', '[name]']
+        original = 'translate schinese scope:\n' + ''.join(f'    # e "{text}"\n    e ""\n' for text in sources)
+        self.rpy.write_text(original, encoding='utf-8')
+        jobs = batch.collect_pending_file_jobs()
+        self.assertEqual([task['text'] for job in jobs for task in job['tasks']], sources[:2])
+        counts = batch.collect_pending_file_jobs(include_occurrences=False, include_task_payloads=False)
+        self.assertEqual(sum(job['task_count'] for job in counts), 2)
+        counts = batch.collect_pending_file_jobs(include_occurrences=False, include_task_payloads=False, include_preserved=True)
+        self.assertEqual(sum(job['task_count'] for job in counts), 6)
+        code, exported = self.work_cli('work-export', '--include-preserved', '--output-dir', self.root / 'preserved')
+        self.assertEqual(code, 0)
+        exported = exported['result']
+        package = json.loads(Path(exported['work_path']).read_text(encoding='utf-8'))
+        self.assertEqual([row['source'] for row in package['items']], sources[:6])
+        self.assertEqual(exported['native_scope']['total_targets'], 10)
+        self.assertEqual(exported['native_scope']['omitted_empty_count'], 4)
+        target = exported['manifest_path']
+        submission = work.submission_template(package, submission_id='explicit', producer={'type': 'agent', 'name': 'fixture'})
+        translations = ['等等……', '{i}然后……{/i}', '呃啊……', '嗯。', '缩略语？', '...']
+        submission['items'] = [dict(occurrence_id=row['occurrence_id'], snapshot_digest=row['snapshot_digest'],
+                                    expected_candidate_digest='', translation=text, reason='显式翻译或原样保留', review={'status': 'unreviewed'})
+                               for row, text in zip(package['items'], translations)]
+        work.submit_work(target, submission)
+        self.assert_refused('WORK_PREVIEW_REQUIRED', work.apply_work, target)
+        self.assertEqual(batch.check_results(target)['last_check_summary']['writeback_gate']['decision'], 'allow')
+        work.preview_work(target)
+        work.apply_work(target)
+        status = work.status_work(target)
+        self.assertEqual(status['native_scope']['unresolved_empty_count'], 4)
+        lines = self.rpy.read_text(encoding='utf-8').splitlines()
+        expected = original.splitlines()
+        for index, text in enumerate(translations):
+            expected[2 + index * 2] = f'    e "{text}"'
+        self.assertEqual(lines, expected)
+        self.rpy.write_text(self.rpy.read_text(encoding='utf-8').replace('等等……', '第三方更改'), encoding='utf-8')
+        stale = work.status_work(target)
+        self.assertEqual(stale['status'], 'stale')
+        self.assertEqual(stale['native_scope']['status'], 'unknown')
+        self.assertIsNone(stale['native_scope']['unresolved_empty_count'])
+
+    def test_old_new_symbol_completion_preserves_lookup_key(self):
+        original = 'translate schinese strings:\n    old "..."\n    new ""\n'
+        self.rpy.write_text(original, encoding='utf-8')
+        exported = work.export_work(output_dir=self.root / 'symbol-strings', include_preserved=True)
+        package = json.loads(Path(exported['work_path']).read_text(encoding='utf-8'))
+        self.assertEqual(len(package['items']), 1)
+        submission = work.submission_template(package, submission_id='symbol', producer={'type': 'agent', 'name': 'fixture'})
+        row = package['items'][0]
+        submission['items'] = [dict(occurrence_id=row['occurrence_id'], snapshot_digest=row['snapshot_digest'],
+                                    expected_candidate_digest='', translation='...', reason='原样保留停顿', review={'status': 'unreviewed'})]
+        target = exported['manifest_path']
+        work.submit_work(target, submission)
+        self.assertEqual(batch.check_results(target)['last_check_summary']['writeback_gate']['decision'], 'allow')
+        work.preview_work(target)
+        work.apply_work(target)
+        self.assertEqual(self.rpy.read_text(encoding='utf-8'), original.replace('new ""', 'new "..."'))
+        self.assertEqual(work.status_work(target)['native_scope']['status'], 'filled')
+
+    def test_native_scope_retracts_filled_when_preexisting_target_becomes_stale(self):
+        self.rpy.write_text('translate schinese scope:\n'
+                            '    # e "Wait for the lantern."\n'
+                            '    e "Wait for the lantern."\n', encoding='utf-8')
+        exported = work.export_work(output_dir=self.root / 'nonempty-scope')
+        self.assertEqual(exported['native_scope']['status'], 'filled')
+        self.rpy.write_text(self.rpy.read_text(encoding='utf-8').replace(
+            '    e "Wait for the lantern."', '    e ""'), encoding='utf-8')
+        stale = work.status_work(exported['manifest_path'])
+        self.assertEqual(stale['status'], 'stale')
+        self.assertEqual(stale['native_scope']['status'], 'unknown')
+        self.assertIsNone(stale['native_scope']['unresolved_empty_count'])
+
+    def test_native_scope_is_documented_in_command_help(self):
+        for command in ('work-export', 'work-status'):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as caught:
+                batch.build_arg_parser().parse_args([command, '--help'])
+            self.assertEqual(caught.exception.code, 0)
+            self.assertIn('native_scope', output.getvalue())
+
+    def test_native_scope_subset_separates_translated_excluded_and_non_scope(self):
+        self.rpy.write_text('translate schinese scope:\n'
+                            '    # e "Wait..."\n    e ""\n'
+                            '    # e "Then..."\n    e ""\n'
+                            '    # e "..."\n    e ""\n'
+                            '    # e "Already done."\n    e "已经完成。"\n'
+                            '    # e "music.ogg"\n    e ""\n'
+                            '    voice "outside.ogg"\n', encoding='utf-8')
+        first = work.export_work(output_dir=self.root / 'full-scope')
+        package = json.loads(Path(first['work_path']).read_text(encoding='utf-8'))
+        subset = work.export_work(output_dir=self.root / 'subset-scope',
+                                  occurrence_ids=[package['items'][0]['occurrence_id']])
+        native = subset['native_scope']
+        self.assertEqual(native['total_targets'], 5)
+        self.assertEqual(native['exported_targets'], 1)
+        self.assertEqual(native['unresolved_empty_count'], 4)
+        self.assertEqual(native['omitted_empty_count'], 3)
+
+    def test_explicit_preserved_effect_cannot_remove_tags_or_fields(self):
+        self.rpy.write_text('translate schinese scope:\n'
+                            '    # e "{i}Hmm [name].{/i}"\n    e ""\n', encoding='utf-8')
+        exported = work.export_work(output_dir=self.root / 'tagged-effect', include_preserved=True)
+        package = json.loads(Path(exported['work_path']).read_text(encoding='utf-8'))
+        row = package['items'][0]
+        submission = work.submission_template(package, submission_id='broken-effect',
+                                              producer={'type': 'agent', 'name': 'fixture'})
+        submission['items'] = [dict(occurrence_id=row['occurrence_id'], snapshot_digest=row['snapshot_digest'],
+                                    expected_candidate_digest='', translation='嗯。', reason='结构破坏回归',
+                                    review={'status': 'unreviewed'})]
+        self.assert_refused('WORK_STRUCTURE_BLOCKED', work.submit_work, exported['manifest_path'], submission)
+        self.assertEqual(work.status_work(exported['manifest_path'])['received_count'], 0)
+
     def test_invalid_export_inputs_have_machine_diagnostics(self):
         invalid_utf8 = self.root / 'invalid.txt'
         invalid_utf8.write_bytes(b'\xff')

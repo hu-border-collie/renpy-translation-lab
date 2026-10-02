@@ -319,6 +319,7 @@ VOWEL_RE = re.compile(r"[aeiou]", re.IGNORECASE)
 REPEATED_CHAR_RE = re.compile(r"(.)\\1{2,}")
 STUTTER_PATTERN = re.compile(r"\b\w-\w", re.IGNORECASE)
 MULTI_DOT_PATTERN = re.compile(r"(\.{2,}|…{2,})")
+SHORT_EFFECT_TOKEN_RE = re.compile(r"^(?:a+r+g+h*|g+r+|h+m+|h+n+g+h*|u+g+h+|m+m+|p+s+t+|s+h+h+)$", re.IGNORECASE)
 # Matches sequences like "A B C" or "A. B. C." (single-letter tokens only)
 LETTER_SEQUENCE_RE = re.compile(r"^(?:[A-Za-z]\.?)(?:\s+[A-Za-z]\.?)+$")
 FILE_NAME_SIMPLE_RE = re.compile(r"^[\w.-]+\.\w+$", re.IGNORECASE)
@@ -4061,6 +4062,7 @@ def is_name_like(text):
 
 
 def is_short_effect(text):
+    """Recognize short vocal effects; punctuation alone cannot classify a word."""
     if not text:
         return False
     cleaned = RENPY_TAG_RE.sub("", text)
@@ -4077,14 +4079,11 @@ def is_short_effect(text):
     if not tokens:
         return True
 
-    # Stutters and dotted filler like "V.... S-s-ercap" (only if very short)
-    if STUTTER_PATTERN.search(cleaned) or MULTI_DOT_PATTERN.search(cleaned):
-        if len(tokens) <= 1 and len(cleaned) <= EFFECT_MAX_LENGTH:
-            return True
-
     # Short single-word effects like "Grrrr" or "Hngh"
     if len(tokens) == 1:
         token = tokens[0]
+        if SHORT_EFFECT_TOKEN_RE.fullmatch(token):
+            return True
         if token.lower() in PRESERVE_TERMS_LOWER:
             return True
         if REPEATED_CHAR_RE.search(token):
@@ -7123,11 +7122,15 @@ def is_say_speaker_label_string_span(line, start_col, end_col):
 
 
 def _is_translation_target_text(text_val):
+    """Classify visible catalog text while keeping decorated asset guards."""
     if not text_val or contains_chinese(text_val) or len(text_val) <= 1:
         return False
     if is_non_translatable(text_val):
         return False
-    if (" " not in text_val) and ("/" in text_val or "\\" in text_val):
+    visible_text = RENPY_TAG_RE.sub('', text_val)
+    if is_non_translatable(visible_text):
+        return False
+    if (" " not in visible_text) and ("/" in visible_text or "\\" in visible_text):
         return False
     return (
         " " in text_val
@@ -7142,21 +7145,44 @@ def is_blank_dialogue_text(text):
     return not str(text or "").strip()
 
 
-def empty_target_source_for_pending(source_marker, live_text):
+def empty_target_source_for_pending(source_marker, live_text, *, include_preserved=False):
     """Return translatable source text when the live catalog string is blank.
 
     Empty ``e ""`` / ``new ""`` slots are not finished translations. When a
     comment or ``old`` marker still carries translatable source evidence, that
     source is collected as the pending TARGET. Blank originals and missing
-    markers return ``None`` so they are not treated as pending work.
+    markers return ``None`` so they are not treated as pending work. Explicit
+    external catalog completion may include preserved effects/symbols; this
+    does not make them eligible for ordinary model translation.
     """
     if source_marker is None or is_blank_dialogue_text(source_marker):
         return None
     if not is_blank_dialogue_text(live_text):
         return None
-    if not _is_translation_target_text(source_marker):
+    if not _is_translation_target_text(source_marker) and not (
+        include_preserved and is_preservable_native_effect(source_marker)
+    ):
         return None
     return source_marker
+
+
+def is_preservable_native_effect(text):
+    """Allow explicit handling of native effects, excluding assets and syntax.
+
+    Only a paired native catalog source may use this allowance. Blank sources,
+    tag/field-only values, numbers, asset paths and identifier labels stay out.
+    A caller must still validate the target span and use the writeback gate.
+    """
+    stripped = str(text or '').strip()
+    cleaned = RENPY_FIELD_RE.sub('', RENPY_TAG_RE.sub('', stripped)).strip()
+    if not cleaned or contains_chinese(cleaned):
+        return False
+    if (FILE_NAME_PATTERN.match(stripped) or FILE_NAME_SIMPLE_RE.match(stripped)
+            or RENPY_IDENTIFIER_LABEL_RE.match(stripped) or ROMAN_NUMERAL_LABEL_RE.match(stripped)
+            or ('%' in stripped and STRFTIME_FORMAT_RE.match(stripped))
+            or '/' in cleaned or '\\' in cleaned or any(ch.isdigit() for ch in cleaned)):
+        return False
+    return is_short_effect(stripped)
 
 
 def _ensure_identity_block_occurrence(block_occurrences, block_name, current_occurrence):

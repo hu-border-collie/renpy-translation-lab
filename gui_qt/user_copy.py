@@ -22,11 +22,13 @@ EXTERNAL_WORK_COPY = {
     'work-export': '外部初译：导出工作包（实验）',
     'work-read': '外部初译：读取材料',
     'work-submit': '外部初译：接收成果',
-    'work-status': '外部初译：剩余条目与恢复状态',
+    'work-status': '外部初译：包内剩余、原生范围与恢复状态',
     'check': '外部初译：结构与质量检查',
     'work-preview': '外部初译：生成绑定预览',
     'work-apply': '外部初译：写回或恢复',
 }
+
+EXTERNAL_WORK_PRESERVED_COPY = '外部初译：含原生音效/符号空槽（须显式提交译文或原文）'
 
 CHECK_STATUS_LABELS = {
     "ready": "可写回（无质量报警）",

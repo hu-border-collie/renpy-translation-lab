@@ -56,7 +56,7 @@ from .coverage import (
 from .writeback import source_snapshot_fingerprint
 
 
-ADAPTER_VERSION = "1.1.9"
+ADAPTER_VERSION = "1.1.10"
 LOCATOR_SCHEMA_VERSION = 1
 # Same-file + same-source alone scores 125. Content-evidence matches must also
 # clear this floor so bare unique-string hits without structural signals fail closed.
@@ -1069,6 +1069,7 @@ class RenPyAdapter:
         pending_from_empty = legacy.empty_target_source_for_pending(
             marker_source,
             live_catalog_text,
+            include_preserved=True,
         )
 
         if legacy_item is not None:
@@ -1097,6 +1098,9 @@ class RenPyAdapter:
                 "source_for_id": pending_from_empty,
                 "file_rel_path": document.file_rel_path,
                 "file_path": document.file_path,
+                "live_catalog_text": live_catalog_text,
+                "current_translation": live_catalog_text,
+                "native_preserved": legacy.is_non_translatable(pending_from_empty),
             }
         elif identity is not None and legacy.is_blank_dialogue_text(live_catalog_text):
             # An empty catalog slot is not a finished translation.
@@ -1195,6 +1199,9 @@ class RenPyAdapter:
             if "renpy.catalog.translation_present" not in reasons:
                 reasons.append("renpy.catalog.translation_present")
             reasons.append("renpy.speaker_label_sibling_translated")
+
+        if pending_from_empty is not None and legacy.is_non_translatable(pending_from_empty):
+            reasons.append("renpy.preserved_native_effect")
 
         source_marker_kind = "direct_source"
         source_text = str(text_value) if isinstance(text_value, str) else ""
@@ -1317,6 +1324,7 @@ class RenPyAdapter:
         if marker is not None:
             evidence["source_marker_line"] = marker_line_number
             evidence["source_text"] = _bounded_excerpt(source_text)
+            evidence["catalog_target_empty"] = legacy.is_blank_dialogue_text(live_catalog_text)
         if source_marker_missing:
             evidence["source_marker_missing"] = True
         if identity_fallback:

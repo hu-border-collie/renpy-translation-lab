@@ -40,6 +40,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         text = '\n'.join(item.command for item in commands)
         self.assertIn('work-preview', text)
         self.assertIn('work-submit', text)
+        self.assertIn('work-export --include-preserved', text)
         self.assertIn('check work/manifest.json', text)
         self.assertLess(text.index('check work/manifest.json'), text.index('work-preview'))
         self.assertLess(text.index('work-preview'), text.index('work-apply'))

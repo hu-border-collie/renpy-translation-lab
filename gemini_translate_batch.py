@@ -3395,12 +3395,15 @@ def collect_pending_file_jobs(
     include_complete_files=False,
     include_occurrences=True,
     include_task_payloads=True,
+    include_preserved=False,
 ):
     """Collect per-file pending translation tasks.
 
     By default only files with at least one pending task are returned (batch build).
     Pass ``include_complete_files=True`` for doctor progress so fully-translated
     files still contribute to ``translated_count``.
+    ``include_preserved`` is for explicit external handling of paired, blank
+    native effect/symbol slots. Ordinary Provider builds retain their filter.
 
     Progress-only callers (environment check) should pass
     ``include_occurrences=False`` and usually ``include_task_payloads=False``:
@@ -3436,7 +3439,10 @@ def collect_pending_file_jobs(
             pending = [
                 dict(task)
                 for task in adapter_snapshot.pending_tasks_by_file.get(rel_path, ())
-                if not legacy.is_non_translatable(task['text'])
+                if not legacy.is_non_translatable(task['text']) or (
+                    include_preserved and task.get('native_preserved')
+                    and legacy.is_blank_dialogue_text(task.get('live_catalog_text'))
+                )
             ]
             task_count = len(pending)
         else:
@@ -3446,7 +3452,9 @@ def collect_pending_file_jobs(
                 if candidate.classification == "translatable"
                 and candidate.legacy_item is not None
                 and str(candidate.locator.locator.get("file_rel_path") or "") == rel_path
-                and not legacy.is_non_translatable(candidate.legacy_item["text"])
+                and (not legacy.is_non_translatable(candidate.legacy_item["text"]) or (
+                    include_preserved and candidate.legacy_item.get('native_preserved')
+                ))
             )
             pending = []
         progress = adapter_snapshot.progress_by_file.get(rel_path, {})
