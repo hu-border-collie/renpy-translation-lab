@@ -16,9 +16,9 @@ from gemini_model_catalog import (
     BUILTIN_GEMINI_TRANSLATION_MODELS,
 )
 
-from ..user_copy import MODEL_ROUTING_RUNTIME_COPY
+from ..user_copy import MODEL_ROUTING_RUNTIME_COPY, SETTINGS_MODEL_ENTRY_COPY
 from ..widget_helpers import NoWheelComboBox
-from .page_chrome import build_settings_scroll_page, settings_form
+from .page_chrome import add_model_navigation, build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS
 
@@ -319,6 +319,10 @@ class ModelsSettingsPage(QObject):
         routing_hint = QLabel(MODEL_ROUTING_RUNTIME_COPY["settings_hint"])
         routing_hint.setWordWrap(True)
         layout.addWidget(routing_hint)
+        self.model_navigation_buttons = add_model_navigation(
+            layout, lambda key: self._actions.navigate and self._actions.navigate(key),
+            page_key=self.page_key,
+        )
 
         sync_box = QGroupBox("Gemini 同步翻译")
         sync_layout = settings_form(sync_box)
@@ -330,11 +334,7 @@ class ModelsSettingsPage(QObject):
         self.sync_embedding_combo.setEditable(False)
         self.sync_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         sync_layout.addRow("RAG 向量模型：", self.sync_embedding_combo)
-        sync_hint = QLabel(
-            "此处只配置 Gemini 同步/批量所用模型，从下拉列表选择（不可手输）。"
-            "若要增加自定义模型 ID，请到「设置 → 高级 → 模型目录」。"
-            "LiteLLM 已移至左侧独立页面。"
-        )
+        sync_hint = QLabel(SETTINGS_MODEL_ENTRY_COPY["legacy_models_hint"])
         sync_hint.setWordWrap(True)
         sync_hint.setObjectName("config_hint_label")
         sync_layout.addRow(sync_hint)

@@ -75,6 +75,7 @@ from ..user_copy import (
     CUSTOM_LITELLM_PROVIDER_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
+    SETTINGS_MODEL_ENTRY_COPY,
 )
 from ..widget_helpers import (
     NoWheelComboBox,
@@ -84,6 +85,7 @@ from ..widget_helpers import (
     message_box_warning,
 )
 from .page_contract import SettingsIssue, SettingsPageActions
+from .page_chrome import add_model_navigation
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS
 
 LITELLM_PAGE_KEY = "litellm"
@@ -707,6 +709,13 @@ class LiteLLMSettingsPage(QObject):
 
     def _build_widgets(self) -> tuple[QScrollArea, QWidget]:
         page, body, layout = self._build_scroll_page("settings_litellm")
+        hint = QLabel(SETTINGS_MODEL_ENTRY_COPY["litellm_hint"])
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.model_navigation_buttons = add_model_navigation(
+            layout, lambda key: self._actions.navigate and self._actions.navigate(key),
+            page_key=self.page_key,
+        )
 
         backend_box = QGroupBox("LiteLLM 同步替代后端")
         backend_layout = self._settings_form(backend_box)

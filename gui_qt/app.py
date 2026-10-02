@@ -347,6 +347,7 @@ from .settings.coordinator import SettingsCoordinator
 from .settings.leave_guard import settings_leave_guard_prompt
 from .settings.save_apply import SettingsSaveExtras, apply_collected_settings
 from .settings.page_contract import SettingsPageActions
+from .settings.category_selector import SettingsCategoryComboBox
 from .settings.litellm_page import (
     LiteLLMPageHost,
     LiteLLMSettingsPage,
@@ -406,6 +407,7 @@ from .user_copy import (
     REVISION_PROPOSAL_COPY,
     SETTINGS_WORKSPACE_IMMEDIATE_SAVE,
     SETTINGS_WORKSPACE_UNSAVED_CHANGES,
+    SETTINGS_MODEL_ENTRY_COPY,
     PROJECT_ANALYSIS_COPY,
     COVERAGE_REVIEW_COPY,
     KEYWORD_CANDIDATE_COPY,
@@ -3132,7 +3134,32 @@ class MainWindow(QMainWindow):
         self.settings_nav.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        outer_layout.addWidget(self.settings_nav)
+        category_row = QHBoxLayout()
+        category_row.setSpacing(8)
+        category_row.addWidget(self.settings_nav, 1)
+        self.settings_category_combo = SettingsCategoryComboBox()
+        self.settings_category_combo.setObjectName("settings_category_combo")
+        self.settings_category_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.settings_category_combo.setAccessibleName(
+            SETTINGS_MODEL_ENTRY_COPY["all_categories"].format(
+                count=len(_SETTINGS_PAGE_SPECS)
+            )
+        )
+        self.settings_category_combo.setToolTip(
+            SETTINGS_MODEL_ENTRY_COPY["category_tooltip"]
+        )
+        self.settings_category_combo.setMaxVisibleItems(len(_SETTINGS_PAGE_SPECS))
+        category_picker = QWidget()
+        self._style_themed_surface(category_picker)
+        picker_layout = QVBoxLayout(category_picker)
+        picker_layout.setContentsMargins(0, 0, 0, 0)
+        picker_layout.setSpacing(0)
+        picker_layout.addWidget(QLabel(self.settings_category_combo.accessibleName()))
+        picker_layout.addWidget(self.settings_category_combo)
+        category_row.addWidget(category_picker)
+        outer_layout.addLayout(category_row)
 
         right_panel = QWidget()
         right_panel.setObjectName("settings_right_panel")
@@ -3152,10 +3179,12 @@ class MainWindow(QMainWindow):
         for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
             self._settings_nav_rows[key] = index
             self.settings_nav.addItem(label)
+            self.settings_category_combo.addItem(label, key)
             placeholder = QWidget()
             placeholder.setObjectName(f"settings_{key}_placeholder")
             self._style_themed_surface(placeholder)
             self.settings_stack.addWidget(placeholder)
+        self.settings_category_combo.refresh_minimum_width()
         self._settings_coordinator = SettingsCoordinator(
             self._settings_registry,
             builder=self._build_settings_page_adapter,
@@ -3171,6 +3200,9 @@ class MainWindow(QMainWindow):
             persist=self._persist_collected_settings,
         )
         self.settings_nav.currentRowChanged.connect(self._on_settings_nav_row_changed)
+        self.settings_category_combo.currentIndexChanged.connect(
+            self.settings_nav.setCurrentRow
+        )
 
         action_bar = QFrame()
         action_bar.setObjectName("settings_action_bar")
@@ -3296,6 +3328,13 @@ class MainWindow(QMainWindow):
         stack = getattr(self, "settings_stack", None)
         if stack is not None:
             stack.setCurrentIndex(index)
+        selector = getattr(self, "settings_category_combo", None)
+        if selector is not None and selector.currentIndex() != index:
+            previous = selector.blockSignals(True)
+            try:
+                selector.setCurrentIndex(index)
+            finally:
+                selector.blockSignals(previous)
         nav = getattr(self, "settings_nav", None)
         if nav is not None and nav.currentRow() != index:
             previous = nav.blockSignals(True)
@@ -10535,6 +10574,12 @@ class MainWindow(QMainWindow):
                     storage_cb.setChecked(
                         snapshot["context_storage_location"] == "game"
                     )
+
+            profiles_page = self._profiles_page()
+            if profiles_page is not None and "model_routing" in snapshot:
+                profiles_page.load(
+                    {"model_routing": snapshot["model_routing"]}, restore=True
+                )
 
             backend_combo = self._settings_widget("sync_backend_combo")
             if backend_combo is not None and "sync_backend" in snapshot:
