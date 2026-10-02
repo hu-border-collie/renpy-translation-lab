@@ -4934,8 +4934,12 @@ class MainWindow(QMainWindow):
         """Apply one visibility transition while preserving a user's split choice.
 
         Automatic transitions choose a compact idle split or a larger active-log
-        split once. A manual resize or visibility choice then outranks future
-        automatic task, error, clear, and navigation updates for this window.
+        split once. A manual resize, or hiding the panel by hand, then outranks
+        later *automatic* updates (task start, clear back to the empty state) for
+        this window, while explicit log requests (header button, error, page
+        tools) still re-show the panel with the user's own ratio. Showing the
+        panel by hand only changes visibility, so the running balance stays
+        available for the next task start.
         """
         panel = getattr(self, "diagnostics_log_panel", None)
         if panel is None:
@@ -4968,7 +4972,10 @@ class MainWindow(QMainWindow):
             button.setAccessibleName(label)
         self._update_diagnostics_log_content_state()
 
-        if user_initiated:
+        if user_initiated and not visible:
+            # Hiding the panel is a layout decision and must survive automatic
+            # reveals. Showing it is only a visibility choice: the running/idle
+            # balance stays available for the next task start.
             self._diagnostics_splitter_user_adjusted = True
         if visible and not was_visible:
             if was_user_adjusted:
@@ -5056,20 +5063,23 @@ class MainWindow(QMainWindow):
         )
 
     def _expand_diagnostics_log(self, *, switch_tab: bool = True) -> None:
-        """Reveal logs for an explicit log action without overriding a manual split."""
+        """Reveal logs for an explicit log request, keeping a manual split ratio."""
         if switch_tab and self._diagnostics_tab is not None:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
         if not getattr(self, "_diagnostics_log_panel_visible", False):
-            if not self._diagnostics_splitter_user_adjusted:
-                self._set_diagnostics_log_panel_visible(
-                    True,
-                    active_task=True,
-                    animate=True,
-                )
+            self._set_diagnostics_log_panel_visible(
+                True,
+                active_task=True,
+                animate=True,
+            )
         self._scroll_log_views_to_end()
 
     def _reveal_log_for_active_context(self) -> None:
-        """On runner errors, reveal the only remaining full log surface."""
+        """On runner errors, re-open the log even after the user hid it.
+
+        The status bar tells the user to inspect the log, so an error re-shows
+        the panel with the user's own ratio instead of leaving it collapsed.
+        """
         self._expand_diagnostics_log(switch_tab=True)
 
     def _focus_log_tab(self) -> None:
@@ -13280,7 +13290,16 @@ class MainWindow(QMainWindow):
         was_running = bool(getattr(self, "_task_running", False))
         self._task_running = running
         if running and not was_running and not self._diagnostics_splitter_user_adjusted:
-            self._set_diagnostics_log_panel_visible(True, active_task=True)
+            if self._diagnostics_log_panel_visible:
+                # The panel is already on screen (the user peeked at an empty
+                # log, or the previous task left it open): still give a starting
+                # task the running balance once.
+                self._set_diagnostics_splitter_context_ratio(
+                    _DIAGNOSTICS_RUNNING_CONTEXT_RATIO,
+                    animate=True,
+                )
+            else:
+                self._set_diagnostics_log_panel_visible(True, active_task=True)
         # Update the stop action before recomputing resume availability. The
         # availability check treats an enabled stop action as an active task;
         # leaving the old running state here would keep resume/status disabled

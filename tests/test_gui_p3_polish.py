@@ -360,21 +360,39 @@ class GuiP3PolishTests(unittest.TestCase):
         self.assertTrue(self.window.sync_translation_page.status_section.isHidden())
         self.assertTrue(self.window.workbench_status_card.isHidden())
 
-    def test_restore_diagnostics_splitter_idle(self) -> None:
+    def test_restore_diagnostics_splitter_idle_collapses_empty_log(self) -> None:
         self.window.resize(1280, 900)
         self.window.show()
         self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
         for _ in range(6):
             self._app.processEvents()
-        self.window.diagnostics_splitter.setSizes([200, 400])
+
+        # An automatic reveal of an empty log collapses again on restore.
+        self.window._set_diagnostics_log_panel_visible(True, active_task=True)
         for _ in range(4):
             self._app.processEvents()
-        before = self.window.diagnostics_splitter.sizes()
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
         self.window._restore_diagnostics_splitter_idle()
-        after = self.window.diagnostics_splitter.sizes()
-        self.assertEqual(len(after), 2)
-        # Idle should prefer a larger context share than a 200/400 running layout.
-        self.assertGreaterEqual(after[0], before[0])
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+
+        # A user-chosen layout (explicit hide via the toolbar toggle) is kept.
+        toggle = self.window.diagnostics_log_toggle_btn
+        toggle.click()  # show
+        for _ in range(4):
+            self._app.processEvents()
+        toggle.click()  # hide -> latches the user's layout choice
+        for _ in range(4):
+            self._app.processEvents()
+        toggle.click()  # show again
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertTrue(self.window._diagnostics_splitter_user_adjusted)
+        self.window._restore_diagnostics_splitter_idle()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
 
 
 if __name__ == "__main__":

@@ -363,7 +363,7 @@ class GuiLogFocusTests(unittest.TestCase):
         self.assertFalse(self.window.diagnostics_log_empty_label.isVisible())
         self.window._set_task_running(False)
 
-    def test_explicit_log_collapse_precedes_automatic_task_and_error_reveal(self) -> None:
+    def test_explicit_collapse_survives_task_start_but_error_reopens_log(self) -> None:
         self.window.show()
         self.window._on_header_log_clicked()
         toggle = self.window.diagnostics_log_toggle_btn
@@ -377,6 +377,9 @@ class GuiLogFocusTests(unittest.TestCase):
         self.assertTrue(self.window.diagnostics_log_panel.isHidden())
         self.assertEqual(toggle.text(), "显示运行日志")
         self.assertTrue(self.window._diagnostics_splitter_user_adjusted)
+        hidden_ratio = self.window._diagnostics_splitter_manual_context_ratio
+        self.assertIsNotNone(hidden_ratio)
+        assert hidden_ratio is not None
 
         self.window.runner.run = MagicMock(return_value=True)  # type: ignore[method-assign]
         self.window._start_cli_command(
@@ -384,15 +387,126 @@ class GuiLogFocusTests(unittest.TestCase):
             Path("fixture_cli.py"),
             ["--no-provider"],
         )
+        # A task start is automatic: an explicit collapse still wins.
         self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+
+        # The status bar points at the log, so an error re-opens it with the
+        # ratio the user had when they hid the panel.
         self.window.runner.error.emit("fixture: error after explicit collapse")
         self.window._flush_pending_log_lines()
-        self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+        anim = getattr(self.window, "_splitter_anim", None)
+        if anim is not None:
+            anim.setCurrentTime(anim.duration())
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
         self.assertIs(
             self.window.tab_widget.currentWidget(),
             self.window._diagnostics_tab,
         )
+        self.assertIn(
+            "fixture: error after explicit collapse",
+            self.window.log_view.toPlainText(),
+        )
+        sizes = self.window.diagnostics_splitter.sizes()
+        total = max(sum(sizes), 1)
+        self.assertAlmostEqual(sizes[0] / total, hidden_ratio, delta=0.06)
         self.window._set_task_running(False)
+
+    def test_show_click_keeps_running_balance_for_the_next_task(self) -> None:
+        self.window.resize(1280, 900)
+        self.window.show()
+        self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
+        for _ in range(6):
+            self._app.processEvents()
+
+        # Peeking at the empty log is a visibility choice, not a split choice.
+        self.window.diagnostics_log_toggle_btn.click()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
+        self.assertFalse(self.window._diagnostics_splitter_user_adjusted)
+        idle_log_size = self.window.diagnostics_splitter.sizes()[1]
+
+        self.window.runner.run = MagicMock(return_value=True)  # type: ignore[method-assign]
+        self.assertTrue(
+            self.window._start_cli_command(
+                "original_fixture",
+                Path("fixture_cli.py"),
+                ["--no-provider"],
+            )
+        )
+        anim = getattr(self.window, "_splitter_anim", None)
+        if anim is not None:
+            anim.setCurrentTime(anim.duration())
+        for _ in range(4):
+            self._app.processEvents()
+
+        sizes = self.window.diagnostics_splitter.sizes()
+        total = max(sum(sizes), 1)
+        self.assertLessEqual(sizes[0], int(total * 0.32) + 8)
+        self.assertGreater(sizes[1], idle_log_size)
+        self.window._set_task_running(False)
+
+    def test_clear_after_show_click_returns_to_empty_state(self) -> None:
+        self.window.resize(1280, 900)
+        self.window.show()
+        self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
+        for _ in range(6):
+            self._app.processEvents()
+        self.window.diagnostics_log_toggle_btn.click()
+        for _ in range(4):
+            self._app.processEvents()
+
+        self.window.runner.line_ready.emit("fixture: output before clear")
+        self.window._flush_pending_log_lines()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
+
+        self.window._on_clear_log()
+        for _ in range(6):
+            self._app.processEvents()
+        self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+        self.assertTrue(self.window.diagnostics_log_empty_label.isHidden())
+        self.assertEqual(
+            self.window.diagnostics_log_toggle_btn.text(),
+            "显示运行日志",
+        )
+
+    def test_header_log_click_reopens_a_hidden_log_with_content(self) -> None:
+        self.window.show()
+        self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
+        for _ in range(4):
+            self._app.processEvents()
+        self.window.diagnostics_log_toggle_btn.click()
+        for _ in range(4):
+            self._app.processEvents()
+        self.window.runner.line_ready.emit("fixture: retained output")
+        self.window._flush_pending_log_lines()
+        for _ in range(4):
+            self._app.processEvents()
+        self.window.diagnostics_log_toggle_btn.click()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+
+        self.window.tab_widget.setCurrentWidget(self.window._workbench_tab)
+        self.window._on_header_log_clicked()
+        anim = getattr(self.window, "_splitter_anim", None)
+        if anim is not None:
+            anim.setCurrentTime(anim.duration())
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertIs(
+            self.window.tab_widget.currentWidget(),
+            self.window._diagnostics_tab,
+        )
+        self.assertFalse(self.window.diagnostics_log_panel.isHidden())
+        self.assertIn(
+            "fixture: retained output",
+            self.window.log_view.toPlainText(),
+        )
 
     def test_runner_error_reveals_original_fixture_output(self) -> None:
         workbench = self.window._workbench_tab
