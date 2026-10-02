@@ -205,6 +205,14 @@ QLabel#summary_body_label {
     line-height: 1.5;
 }
 
+/* Doctor summary content is an explicit app-themed surface inside a transparent
+   scroll viewport; do not let the native system palette supply its background. */
+QWidget#doctor_summary_content {
+    background-color: ${bg_surface};
+    border: none;
+    color: ${fg_primary};
+}
+
 /* Doctor summary disclosure — flat link, never “selected button” chrome. */
 QToolButton#doctor_details_toggle {
     background: transparent;
@@ -1269,7 +1277,49 @@ QTableWidget#split_status_table QHeaderView::section {
     font-weight: 700;
 }
 
+/* Model profile choices use the same table palette while keeping a visible
+   keyboard-focus border and readable disabled items. */
+QListWidget#profiles_list {
+    background-color: ${bg_table};
+    border: 1px solid ${border_table};
+    border-radius: 8px;
+    color: ${fg_table};
+    outline: none;
+    padding: 4px;
+    selection-background-color: ${bg_table_selected_solid};
+    selection-color: ${fg_table_selected_solid};
+}
+
+QListWidget#profiles_list:focus {
+    border-color: ${accent_primary};
+}
+
+QListWidget#profiles_list:disabled {
+    background-color: ${bg_disabled};
+    color: ${fg_disabled};
+}
+
+QListWidget#profiles_list::item {
+    color: ${fg_table};
+    padding: 5px 8px;
+}
+
+QListWidget#profiles_list::item:selected {
+    background-color: ${bg_table_selected_solid};
+    color: ${fg_table_selected_solid};
+}
+
+QListWidget#profiles_list::item:disabled {
+    color: ${fg_disabled};
+}
+
+QListWidget#profiles_list::item:selected:disabled {
+    background-color: ${bg_disabled};
+    color: ${fg_disabled};
+}
+
 QTableWidget#games_registry_table,
+QTableWidget#custom_provider_table,
 QTableWidget#revision_selection_table,
 QTableWidget#engine_snapshot_table,
 QTableWidget#engine_snapshot_diff_table,
@@ -1285,6 +1335,7 @@ QTableWidget#review_entries_table {
 }
 
 QTableWidget#games_registry_table::item,
+QTableWidget#custom_provider_table::item,
 QTableWidget#revision_selection_table::item,
 QTableWidget#engine_snapshot_table::item,
 QTableWidget#engine_snapshot_diff_table::item,
@@ -1295,6 +1346,7 @@ QTableWidget#review_entries_table::item {
 }
 
 QTableWidget#games_registry_table::item:hover,
+QTableWidget#custom_provider_table::item:hover,
 QTableWidget#revision_selection_table::item:hover,
 QTableWidget#engine_snapshot_table::item:hover,
 QTableWidget#engine_snapshot_diff_table::item:hover,
@@ -1313,7 +1365,13 @@ QTableWidget#review_entries_table::item:selected {
     color: ${fg_table_selected};
 }
 
+QTableWidget#custom_provider_table::item:selected {
+    background-color: ${bg_table_selected_solid};
+    color: ${fg_table_selected_solid};
+}
+
 QTableWidget#games_registry_table QHeaderView::section,
+QTableWidget#custom_provider_table QHeaderView::section,
 QTableWidget#revision_selection_table QHeaderView::section,
 QTableWidget#engine_snapshot_table QHeaderView::section,
 QTableWidget#engine_snapshot_diff_table QHeaderView::section,
@@ -1327,6 +1385,26 @@ QTableWidget#review_entries_table QHeaderView::section {
     padding: 6px 8px;
     font-size: 11px;
     font-weight: 700;
+}
+
+QTableWidget#custom_provider_table:focus {
+    border-color: ${accent_primary};
+}
+
+QTableWidget#custom_provider_table:disabled {
+    background-color: ${bg_disabled};
+    color: ${fg_disabled};
+}
+
+QTableWidget#custom_provider_table::item:disabled,
+QTableWidget#custom_provider_table::item:selected:disabled {
+    background-color: ${bg_disabled};
+    color: ${fg_disabled};
+}
+
+QTableWidget#custom_provider_table QHeaderView::section:disabled {
+    background-color: ${bg_disabled};
+    color: ${fg_disabled};
 }
 
 QFrame#workflow_separator {
