@@ -249,7 +249,8 @@ class GuiKeywordCandidateEntryTests(unittest.TestCase):
         self.assertIn(KEYWORD_CANDIDATE_COPY["format_name"], info)
         self.assertIn(str(self.candidates_path), info)
         self.assertIn("3 条（可审核 3 条）", info)
-        self.assertIn(str(self.glossary_path), info)
+        # The asset resolver expands Windows short paths before display.
+        self.assertIn(str(self.glossary_path.resolve()), info)
         self.assertEqual(
             self.window._resolve_keyword_merge_candidates_path(),
             str(self.candidates_path),
