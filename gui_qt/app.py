@@ -394,6 +394,7 @@ from .widget_helpers import (
 )
 from .user_copy import (
     DURABLE_SYNC_RUN_COPY,
+    DIAGNOSTICS_LOG_COPY,
     TRANSLATION_PREFLIGHT_COPY,
     TRANSLATION_TARGET_COPY,
     LITELLM_CACHE_COPY,
@@ -502,9 +503,8 @@ _RESOLVED_STAGE_EXECUTION_BY_WORK_MODE = {
     WorkMode.FINAL_REVIEW: model_profile.ExecutionStrategy.GEMINI_BATCH,
 }
 
-# Diagnostics splitter: idle favors task context; running tasks expand the log.
-_DIAGNOSTICS_IDLE_CONTEXT_PX = 420
-_DIAGNOSTICS_IDLE_LOG_PX = 180
+# Diagnostics splitter: empty logs collapse; visible logs favor active output.
+_DIAGNOSTICS_IDLE_CONTEXT_RATIO = 0.72
 _DIAGNOSTICS_RUNNING_CONTEXT_RATIO = 0.32
 
 # Dedicated status-page indices; task sessions update these values off-surface.
@@ -568,6 +568,13 @@ class MainWindow(QMainWindow):
         self.state = project_state or ProjectState()
         self._litellm_cache = litellm_catalog_cache or LiteLLMCatalogCache()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
+        self._diagnostics_log_panel_visible = False
+        self._diagnostics_log_content_present = False
+        self._pending_log_content_present = False
+        self._diagnostics_log_document_update = False
+        self._diagnostics_splitter_user_adjusted = False
+        self._diagnostics_splitter_programmatic = False
+        self._diagnostics_splitter_manual_context_ratio: float | None = None
         self._context_library_status_cache: ContextLibraryStatusResult | None = None
         self._context_library_status_cache_at = 0.0
         self._context_library_status_job: ContextLibraryStatusJob | None = None
@@ -1190,8 +1197,11 @@ class MainWindow(QMainWindow):
         return header
 
     def _on_header_log_clicked(self) -> None:
-        """Open diagnostics and restore the checked state on repeated clicks."""
-        self._expand_diagnostics_log(switch_tab=True)
+        """Open diagnostics without giving an empty log the page's height."""
+        if self._diagnostics_tab is not None:
+            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+        if self._diagnostics_log_has_content() or self._task_running:
+            self._expand_diagnostics_log(switch_tab=False)
         # When diagnostics is already current, QTabWidget emits no change signal;
         # mirror the semantic route explicitly so a checkable button cannot drift.
         self._sync_shell_nav_selection()
@@ -4662,6 +4672,26 @@ class MainWindow(QMainWindow):
         self.clear_log_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.clear_log_btn.clicked.connect(self._on_clear_log)
         diagnostics_action_panel.add_widget(self.clear_log_btn, min_width=108)
+
+        self.diagnostics_log_toggle_btn = QPushButton(
+            DIAGNOSTICS_LOG_COPY["show_action"]
+        )
+        self.diagnostics_log_toggle_btn.setObjectName("secondary_btn")
+        self.diagnostics_log_toggle_btn.setCheckable(True)
+        self.diagnostics_log_toggle_btn.setAccessibleName(
+            DIAGNOSTICS_LOG_COPY["show_action"]
+        )
+        self.diagnostics_log_toggle_btn.setToolTip(
+            DIAGNOSTICS_LOG_COPY["toggle_hint"]
+        )
+        self.diagnostics_log_toggle_btn.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.diagnostics_log_toggle_btn.clicked.connect(
+            self._on_diagnostics_log_toggle_clicked
+        )
+        diagnostics_action_panel.add_widget(
+            self.diagnostics_log_toggle_btn,
+            min_width=132,
+        )
         diagnostics_action_panel.finish_setup()
         layout.addWidget(diagnostics_action_panel)
 
@@ -4780,13 +4810,26 @@ class MainWindow(QMainWindow):
 
         log_panel = QWidget()
         log_panel.setObjectName("diagnostics_log_panel")
+        self.diagnostics_log_panel = log_panel
         log_panel_layout = QVBoxLayout(log_panel)
         log_panel_layout.setContentsMargins(0, 4, 0, 0)
         log_panel_layout.setSpacing(6)
-        log_title = QLabel("原始命令输出")
+        log_title = QLabel(DIAGNOSTICS_LOG_COPY["section_label"])
         log_title.setObjectName("diagnostics_section_label")
         log_panel_layout.addWidget(log_title)
+        self.diagnostics_log_empty_label = QLabel(
+            DIAGNOSTICS_LOG_COPY["empty_state"]
+        )
+        self.diagnostics_log_empty_label.setWordWrap(True)
+        self.diagnostics_log_empty_label.setAccessibleName(
+            DIAGNOSTICS_LOG_COPY["empty_accessible_name"]
+        )
+        self.diagnostics_log_empty_label.setObjectName("config_hint_label")
+        log_panel_layout.addWidget(self.diagnostics_log_empty_label)
         self.log_view = QTextEdit()
+        self.log_view.document().contentsChanged.connect(
+            self._on_diagnostics_log_document_changed
+        )
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
@@ -4800,10 +4843,14 @@ class MainWindow(QMainWindow):
 
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([_DIAGNOSTICS_IDLE_CONTEXT_PX, _DIAGNOSTICS_IDLE_LOG_PX])
+        splitter.splitterMoved.connect(self._on_diagnostics_splitter_moved)
+        log_panel.hide()
+        self.diagnostics_log_empty_label.hide()
+        self.log_view.hide()
 
         layout.addWidget(splitter, 1)
         self.tab_widget.addTab(tab, "诊断与工具")
+        self._update_diagnostics_log_content_state()
 
     def _scroll_log_views_to_end(self) -> None:
         view = getattr(self, "log_view", None)
@@ -4830,39 +4877,209 @@ class MainWindow(QMainWindow):
         """Compatibility hook: logs now live only on the diagnostics page."""
         self._scroll_log_views_to_end()
 
-    def _expand_diagnostics_log(self, *, switch_tab: bool = True) -> None:
-        """Enlarge the diagnostics-page log splitter; optionally switch to that tab.
+    def _diagnostics_log_has_content(self) -> bool:
+        """Return the cached non-whitespace state of rendered and queued output."""
+        return bool(
+            getattr(self, "_diagnostics_log_content_present", False)
+            or getattr(self, "_pending_log_content_present", False)
+        )
 
-        Used by diagnostics toolbar tools (probe / split / A/B) and 「在诊断中打开」.
+    def _on_diagnostics_log_document_changed(self) -> None:
+        """Refresh cached content state after external document edits.
+
+        Normal runner output and clear operations update the cache directly and
+        suppress this callback. The scan here supports bulk document changes
+        such as ``setPlainText`` without putting a full-document read on the
+        per-line output path.
         """
-        if switch_tab and self._diagnostics_tab is not None:
-            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
-        if not hasattr(self, "diagnostics_splitter"):
+        if getattr(self, "_diagnostics_log_document_update", False):
             return
-        total = max(sum(self.diagnostics_splitter.sizes()), 1)
-        target_context_size = int(total * _DIAGNOSTICS_RUNNING_CONTEXT_RATIO)
-        start_context_size = self.diagnostics_splitter.sizes()[0]
+        view = getattr(self, "log_view", None)
+        get_text = getattr(view, "toPlainText", None)
+        self._diagnostics_log_content_present = bool(
+            callable(get_text) and get_text().strip()
+        )
+        self._update_diagnostics_log_content_state()
 
-        if hasattr(self, "_splitter_anim") and self._splitter_anim.state() == self._splitter_anim.State.Running:
-            self._splitter_anim.stop()
+    def _update_diagnostics_log_content_state(self) -> None:
+        """Show the empty hint or log editor without changing splitter sizes."""
+        if not hasattr(self, "log_view"):
+            return
+        has_content = self._diagnostics_log_has_content()
+        set_visible = getattr(self.log_view, "setVisible", None)
+        is_hidden = getattr(self.log_view, "isHidden", None)
+        if callable(set_visible) and (
+            not callable(is_hidden) or bool(is_hidden()) == has_content
+        ):
+            set_visible(has_content)
+        empty_label = getattr(self, "diagnostics_log_empty_label", None)
+        if empty_label is not None:
+            should_show_empty = (
+                not has_content and self._diagnostics_log_panel_visible
+            )
+            label_is_hidden = getattr(empty_label, "isHidden", None)
+            if not callable(label_is_hidden) or bool(label_is_hidden()) != (
+                not should_show_empty
+            ):
+                empty_label.setVisible(should_show_empty)
 
-        from PySide6.QtCore import QVariantAnimation, QEasingCurve
+    def _set_diagnostics_log_panel_visible(
+        self,
+        visible: bool,
+        *,
+        active_task: bool = False,
+        user_initiated: bool = False,
+        animate: bool = False,
+    ) -> None:
+        """Apply one visibility transition while preserving a user's split choice.
+
+        Automatic transitions choose a compact idle split or a larger active-log
+        split once. A manual resize, or hiding the panel by hand, then outranks
+        later *automatic* updates (task start, clear back to the empty state) for
+        this window, while explicit log requests (header button, error, page
+        tools) still re-show the panel with the user's own ratio. Showing the
+        panel by hand only changes visibility, so the running balance stays
+        available for the next task start.
+        """
+        panel = getattr(self, "diagnostics_log_panel", None)
+        if panel is None:
+            return
+
+        visible = bool(visible)
+        was_visible = self._diagnostics_log_panel_visible
+        was_user_adjusted = self._diagnostics_splitter_user_adjusted
+        if user_initiated:
+            current_anim = getattr(self, "_splitter_anim", None)
+            if current_anim is not None and current_anim.state() == current_anim.State.Running:
+                current_anim.stop()
+        if user_initiated and was_visible:
+            sizes = self.diagnostics_splitter.sizes()
+            total = sum(sizes)
+            if total > 0:
+                self._diagnostics_splitter_manual_context_ratio = sizes[0] / total
+
+        panel.setVisible(visible)
+        self._diagnostics_log_panel_visible = visible
+        button = getattr(self, "diagnostics_log_toggle_btn", None)
+        if button is not None:
+            label = (
+                DIAGNOSTICS_LOG_COPY["hide_action"]
+                if visible
+                else DIAGNOSTICS_LOG_COPY["show_action"]
+            )
+            button.setChecked(visible)
+            button.setText(label)
+            button.setAccessibleName(label)
+        self._update_diagnostics_log_content_state()
+
+        if user_initiated and not visible:
+            # Hiding the panel is a layout decision and must survive automatic
+            # reveals. Showing it is only a visibility choice: the running/idle
+            # balance stays available for the next task start.
+            self._diagnostics_splitter_user_adjusted = True
+        if visible and not was_visible:
+            if was_user_adjusted:
+                ratio = self._diagnostics_splitter_manual_context_ratio
+            else:
+                ratio = (
+                    _DIAGNOSTICS_RUNNING_CONTEXT_RATIO
+                    if active_task
+                    else _DIAGNOSTICS_IDLE_CONTEXT_RATIO
+                )
+            self._set_diagnostics_splitter_context_ratio(
+                ratio if ratio is not None else _DIAGNOSTICS_IDLE_CONTEXT_RATIO,
+                animate=animate,
+            )
+
+    def _set_diagnostics_splitter_context_ratio(
+        self,
+        ratio: float,
+        *,
+        animate: bool = False,
+    ) -> None:
+        """Set context/log balance for an automatic transition, not on resize."""
+        splitter = getattr(self, "diagnostics_splitter", None)
+        if splitter is None:
+            return
+        sizes = splitter.sizes()
+        total = max(
+            sum(sizes),
+            splitter.height() - splitter.handleWidth(),
+            1,
+        )
+        target_context_size = int(total * max(0.0, min(1.0, ratio)))
+        start_context_size = sizes[0] if sizes else total
+        if abs(start_context_size - target_context_size) < 2:
+            return
+
+        current_anim = getattr(self, "_splitter_anim", None)
+        if current_anim is not None and current_anim.state() == current_anim.State.Running:
+            current_anim.stop()
+
+        def update_sizes(value: int | float) -> None:
+            context_size = int(value)
+            previous = self._diagnostics_splitter_programmatic
+            self._diagnostics_splitter_programmatic = True
+            try:
+                splitter.setSizes([context_size, total - context_size])
+            finally:
+                self._diagnostics_splitter_programmatic = previous
+
+        if not animate:
+            update_sizes(target_context_size)
+            return
+
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+
         anim = QVariantAnimation(self)
         anim.setDuration(300)
         anim.setStartValue(start_context_size)
         anim.setEndValue(target_context_size)
         anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-
-        def update_sizes(val):
-            self.diagnostics_splitter.setSizes([int(val), total - int(val)])
-
         anim.valueChanged.connect(update_sizes)
         anim.start()
         self._splitter_anim = anim
+
+    def _on_diagnostics_splitter_moved(self, _position: int, _index: int) -> None:
+        """Treat a handle move as a per-window preference over automatic sizing."""
+        if self._diagnostics_splitter_programmatic or not self._diagnostics_log_panel_visible:
+            return
+        current_anim = getattr(self, "_splitter_anim", None)
+        if current_anim is not None and current_anim.state() == current_anim.State.Running:
+            current_anim.stop()
+        sizes = self.diagnostics_splitter.sizes()
+        total = sum(sizes)
+        if total <= 0:
+            return
+        self._diagnostics_splitter_user_adjusted = True
+        self._diagnostics_splitter_manual_context_ratio = sizes[0] / total
+
+    def _on_diagnostics_log_toggle_clicked(self, checked: bool) -> None:
+        """Let the user reveal or collapse the log panel explicitly."""
+        self._set_diagnostics_log_panel_visible(
+            checked,
+            active_task=self._task_running,
+            user_initiated=True,
+        )
+
+    def _expand_diagnostics_log(self, *, switch_tab: bool = True) -> None:
+        """Reveal logs for an explicit log request, keeping a manual split ratio."""
+        if switch_tab and self._diagnostics_tab is not None:
+            self.tab_widget.setCurrentWidget(self._diagnostics_tab)
+        if not getattr(self, "_diagnostics_log_panel_visible", False):
+            self._set_diagnostics_log_panel_visible(
+                True,
+                active_task=True,
+                animate=True,
+            )
         self._scroll_log_views_to_end()
 
     def _reveal_log_for_active_context(self) -> None:
-        """On runner errors, reveal the only remaining full log surface."""
+        """On runner errors, re-open the log even after the user hid it.
+
+        The status bar tells the user to inspect the log, so an error re-shows
+        the panel with the user's own ratio instead of leaving it collapsed.
+        """
         self._expand_diagnostics_log(switch_tab=True)
 
     def _focus_log_tab(self) -> None:
@@ -7233,6 +7450,12 @@ class MainWindow(QMainWindow):
                 command_edit = QLineEdit(command.command)
                 command_edit.setReadOnly(True)
                 command_edit.setObjectName("diagnostics_command_edit")
+                command_edit.setToolTip(
+                    DIAGNOSTICS_LOG_COPY["command_field_hint"]
+                )
+                command_edit.setAccessibleDescription(
+                    DIAGNOSTICS_LOG_COPY["command_field_hint"]
+                )
                 row_layout.addWidget(command_edit, 1)
                 copy_btn = QPushButton("复制")
                 copy_btn.setObjectName("secondary_btn")
@@ -7951,20 +8174,13 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, lambda: _scroll_ancestors(empty))
 
     def _restore_diagnostics_splitter_idle(self) -> None:
-        """Return diagnostics splitter toward idle context:log balance (P3 / #166)."""
+        """Collapse an empty automatic log after completion; keep user sizing."""
         if not hasattr(self, "diagnostics_splitter"):
             return
-        if hasattr(self, "_splitter_anim") and self._splitter_anim.state() == self._splitter_anim.State.Running:
-            self._splitter_anim.stop()
-        total = max(sum(self.diagnostics_splitter.sizes()), 1)
-        # Prefer fixed idle pixels when total is large enough; else 70/30 split.
-        if total >= (_DIAGNOSTICS_IDLE_CONTEXT_PX + _DIAGNOSTICS_IDLE_LOG_PX):
-            context = _DIAGNOSTICS_IDLE_CONTEXT_PX
-            log = total - context
-        else:
-            context = int(total * 0.70)
-            log = max(1, total - context)
-        self.diagnostics_splitter.setSizes([context, log])
+        if self._diagnostics_splitter_user_adjusted or self._task_running:
+            return
+        if not self._diagnostics_log_has_content():
+            self._set_diagnostics_log_panel_visible(False)
 
     def _should_generate_template_only(self) -> bool:
         spec = work_mode_spec(self._current_work_mode())
@@ -12952,11 +13168,20 @@ class MainWindow(QMainWindow):
         pending = getattr(self, "_pending_log_lines", None)
         if pending is not None:
             pending.clear()
+        self._pending_log_content_present = False
+        self._diagnostics_log_content_present = False
         timer = getattr(self, "_log_flush_timer", None)
         if timer is not None and timer.isActive():
             timer.stop()
         if hasattr(self, "log_view"):
-            self.log_view.clear()
+            self._diagnostics_log_document_update = True
+            try:
+                self.log_view.clear()
+            finally:
+                self._diagnostics_log_document_update = False
+            self._update_diagnostics_log_content_state()
+        if not getattr(self, "_task_running", False):
+            self._restore_diagnostics_splitter_idle()
 
     def _append_log(self, text: str) -> None:
         line = text.rstrip("\n")
@@ -12966,21 +13191,60 @@ class MainWindow(QMainWindow):
         timer = getattr(self, "_log_flush_timer", None)
         if pending is None or timer is None:
             if hasattr(self, "log_view"):
-                self.log_view.append(line)
-                self._scroll_log_views_to_end()
+                had_content = self._diagnostics_log_has_content()
+                scrollbar = self.log_view.verticalScrollBar()
+                previous_value = scrollbar.value()
+                was_at_end = previous_value >= max(scrollbar.maximum() - 1, 0)
+                self._diagnostics_log_document_update = True
+                try:
+                    self.log_view.append(line)
+                finally:
+                    self._diagnostics_log_document_update = False
+                if line.strip():
+                    self._diagnostics_log_content_present = True
+                if was_at_end:
+                    self._scroll_log_views_to_end()
+                else:
+                    scrollbar.setValue(min(previous_value, scrollbar.maximum()))
+                if had_content != self._diagnostics_log_has_content():
+                    self._update_diagnostics_log_content_state()
             return
+        had_content = self._diagnostics_log_has_content()
         pending.append(line)
+        if line.strip():
+            self._pending_log_content_present = True
+        if had_content != self._diagnostics_log_has_content():
+            self._update_diagnostics_log_content_state()
         if not timer.isActive():
             timer.start()
 
     def _flush_pending_log_lines(self) -> None:
-        if not self._pending_log_lines or not hasattr(self, "log_view"):
+        pending = getattr(self, "_pending_log_lines", [])
+        if not pending or not hasattr(self, "log_view"):
             self._pending_log_lines = []
+            self._pending_log_content_present = False
+            self._update_diagnostics_log_content_state()
             return
-        lines = self._pending_log_lines
+        had_content = self._diagnostics_log_has_content()
+        lines = pending
         self._pending_log_lines = []
-        self.log_view.append("\n".join(lines))
-        self._scroll_log_views_to_end()
+        if self._pending_log_content_present:
+            self._diagnostics_log_content_present = True
+        self._pending_log_content_present = False
+        scrollbar = self.log_view.verticalScrollBar()
+        previous_value = scrollbar.value()
+        was_at_end = previous_value >= max(scrollbar.maximum() - 1, 0)
+        self._diagnostics_log_document_update = True
+        try:
+            self.log_view.append("\n".join(lines))
+        finally:
+            self._diagnostics_log_document_update = False
+        if was_at_end:
+            self._scroll_log_views_to_end()
+        else:
+            scrollbar.setValue(min(previous_value, scrollbar.maximum()))
+        if had_content != self._diagnostics_log_has_content():
+            self._update_diagnostics_log_content_state()
 
     def _start_cli_command(
         self,
@@ -13025,6 +13289,17 @@ class MainWindow(QMainWindow):
     def _set_task_running(self, running: bool):
         was_running = bool(getattr(self, "_task_running", False))
         self._task_running = running
+        if running and not was_running and not self._diagnostics_splitter_user_adjusted:
+            if self._diagnostics_log_panel_visible:
+                # The panel is already on screen (the user peeked at an empty
+                # log, or the previous task left it open): still give a starting
+                # task the running balance once.
+                self._set_diagnostics_splitter_context_ratio(
+                    _DIAGNOSTICS_RUNNING_CONTEXT_RATIO,
+                    animate=True,
+                )
+            else:
+                self._set_diagnostics_log_panel_visible(True, active_task=True)
         # Update the stop action before recomputing resume availability. The
         # availability check treats an enabled stop action as an active task;
         # leaving the old running state here would keep resume/status disabled

@@ -94,13 +94,17 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
             for button in panel.findChildren(QPushButton)
             if not button.isHidden()
         }
-        self.assertEqual(texts, {"刷新上下文", "翻译 A/B 对比", "清空日志"})
+        self.assertEqual(
+            texts,
+            {"刷新上下文", "翻译 A/B 对比", "清空日志", "显示运行日志"},
+        )
 
     def test_diagnostics_toolbar_and_tabs_accept_keyboard_focus(self) -> None:
         for button in (
             self.window.refresh_diagnostics_btn,
             self.window.compare_variants_btn,
             self.window.clear_log_btn,
+            self.window.diagnostics_log_toggle_btn,
         ):
             self.assertEqual(button.focusPolicy(), Qt.FocusPolicy.StrongFocus)
         self.assertEqual(
