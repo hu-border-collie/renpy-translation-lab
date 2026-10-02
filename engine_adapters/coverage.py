@@ -63,6 +63,7 @@ CANDIDATE_REASON_CODES = frozenset(
         "renpy.catalog.translation_present_without_marker",
         "renpy.speaker_label_sibling_translated",
         "renpy.empty_target",
+        "renpy.preserved_native_effect",
         "renpy.empty_source",
         "renpy.character_display_definition",
         "renpy.keyword_argument",

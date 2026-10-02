@@ -775,6 +775,43 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         self.assertTrue(runtime.is_non_translatable('CharacterA_name'))
         self.assertFalse(runtime.is_non_translatable('I'))
 
+    def test_ellipsis_and_stretched_words_are_not_effect_evidence(self):
+        for text in ('Wait...', 'then...', 'Unless…', '...trouble.', 'Well...',
+                     'Yeah...', '{i}Now...{/i}', '[name] Wait...', 'Noooo!', 'W-wait...'):
+            with self.subTest(text=text):
+                self.assertFalse(runtime.is_short_effect(text))
+                self.assertFalse(runtime.is_non_translatable(text))
+        for text in ('...', '……', 'Aaargh...', 'Grrrr!', 'Hngh', 'Hmm.', 'KTRM?'):
+            with self.subTest(text=text):
+                self.assertTrue(runtime.is_short_effect(text))
+                self.assertTrue(runtime.is_non_translatable(text))
+                self.assertIsNone(runtime.empty_target_source_for_pending(text, ''))
+                self.assertEqual(runtime.empty_target_source_for_pending(text, '', include_preserved=True), text)
+        for text in ('', '{w}', '[name]', 'music.ogg', 'hero_name', '123', '%H:%M', '+III'):
+            with self.subTest(text=text):
+                self.assertFalse(runtime.is_preservable_native_effect(text))
+
+    def test_short_sentence_empty_targets_share_scanner_identity(self):
+        lines = ['translate schinese probe:\n']
+        for text in ('Wait...', 'Then...', 'A normal sentence.'):
+            lines.extend([f'    # e "{text}"\n', '    e ""\n'])
+        tasks = runtime.collect_tasks(lines)
+        mapping = runtime.scan_all_translation_units(lines, 'probe.rpy')
+        self.assertEqual([task['text'] for task in tasks], ['Wait...', 'Then...', 'A normal sentence.'])
+        self.assertEqual(len(mapping), 3)
+        self.assertEqual([task['line'] for task in tasks], [value[0] for value in mapping.values()])
+
+    def test_closing_tag_fix_keeps_asset_and_identifier_guards(self):
+        excluded = ('{i}music.ogg{/i}', '{i}hero_name{/i}', '{i}+III{/i}', '{i}%H:%M{/i}')
+        for text in excluded:
+            with self.subTest(text=text):
+                self.assertFalse(runtime._is_translation_target_text(text))
+                self.assertIsNone(runtime.empty_target_source_for_pending(text, '', include_preserved=True))
+        lines = ['translate schinese guarded:\n']
+        for text in (*excluded, '{i}Wait...{/i}'):
+            lines.extend([f'    # e "{text}"\n', '    e ""\n'])
+        self.assertEqual([task['text'] for task in runtime.collect_tasks(lines)], ['{i}Wait...{/i}'])
+
     def test_translation_templates_skip_keyword_argument_strings(self):
         lines = [
             'translate schinese sample_block:\n',

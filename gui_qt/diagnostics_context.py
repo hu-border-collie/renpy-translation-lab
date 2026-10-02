@@ -23,6 +23,7 @@ from .batch_workflow_support import (
 )
 from .user_copy import (
     EXTERNAL_WORK_COPY,
+    EXTERNAL_WORK_PRESERVED_COPY,
     MODEL_CONFIG_MIGRATION_COPY,
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
@@ -269,7 +270,10 @@ def build_cli_commands(
             command=format_cli_command(python_exe, batch_script_path,
                                        [name, *([] if name == 'work-export' else [manifest_path]),
                                         *(['<SUBMISSION.json>'] if name == 'work-submit' else [])]),
-        ) for name, label in EXTERNAL_WORK_COPY.items()]
+        ) for name, label in EXTERNAL_WORK_COPY.items()] + [DiagnosticsCommand(
+            label=EXTERNAL_WORK_PRESERVED_COPY,
+            command=format_cli_command(python_exe, batch_script_path, ['work-export', '--include-preserved']),
+        )]
     if not manifest_path:
         commands = []
         preflight = _translate_preflight_command(python_exe, batch_script_path)
@@ -283,6 +287,10 @@ def build_cli_commands(
         commands.append(DiagnosticsCommand(
             label=EXTERNAL_WORK_COPY['work-export'],
             command=format_cli_command(python_exe, batch_script_path, ['work-export']),
+        ))
+        commands.append(DiagnosticsCommand(
+            label=EXTERNAL_WORK_PRESERVED_COPY,
+            command=format_cli_command(python_exe, batch_script_path, ['work-export', '--include-preserved']),
         ))
         return commands
 

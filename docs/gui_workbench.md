@@ -556,6 +556,10 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 ## 结构保护
 
+外部初译实验包的「诊断与运行日志」命令参考含 `work-export --include-preserved`，用于
+显式处理原生音效/符号空槽；它与 CLI 共用提取和写回逻辑。`work-status` 的 `native_scope`
+单独报告原生范围遗漏，包内成果完整不等于整章交付。合同见[外部初译工作包](external_translation_work.md)。
+
 新建翻译请求默认保护引擎结构 token，恢复后再校验；CLI 与 GUI 使用相同实现和诊断。旧请求不补造映射，结构失败不能绕过写回门禁。规则、制品追溯与兼容边界见[结构 token 保护说明](structure_protection.md)。
 
 

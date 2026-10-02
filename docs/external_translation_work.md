@@ -11,6 +11,8 @@ Provider 请求或成功记录。真实章节质量、字体和游戏运行仍�
 在项目配置已指向隔离副本、原生 TL 模板已经准备好的前提下，从仓库根目录运行。
 模型路由或 API Key 不是这些命令的前置条件；无需启用 prepare、RAG、原文索引或项目分析。
 导出遵循当前 `include_files` / `include_prefixes` 和待译识别规则。
+带省略号的普通短句按普通文本提取；省略号本身不是音效证据。
+闭合标签不会被当作路径分隔符；移除标签后的资产名、标识符及格式串仍沿用排除规则。
 
 ```powershell
 python gemini_translate_batch.py work-export --output-dir outputs/chapter-work --output json --non-interactive
@@ -32,6 +34,33 @@ python gemini_translate_batch.py work-apply outputs/chapter-work/manifest.json -
 `--non-interactive` 与严格退出码。除了导出，target 均为必填，不读取 latest 回退。
 工作包不推进 latest 指针；继续操作时使用导出返回的确切路径。`--output-dir` 必须为新目录，
 且不能位于 TL 源目录内；省略时写到当前项目的 Batch 制品目录。
+
+### 原生范围对账与保留项
+
+`work-export` 与 `work-status` 的 `result.native_scope` 使用同一次 Adapter inventory
+中的已配对原生目标槽作为分母，独立于包内成果数量。`total_targets` 是 discovery 文件范围
+内的槽数，`exported_targets` 是本包实际导出的槽数；`omitted_empty_targets` 带 candidate
+ID、定位、分类和 reason codes，列出尚空且未进入本包的项。显式选择少量 occurrence 时，
+原生范围仍覆盖 discovery，不能把选中子集称为整章。没有此清单的旧包报告 `status=unknown`。
+
+`completeness=complete` 只表示包内成果齐全。`unresolved_empty_count` 在写回前包含所有
+原生空槽；只有写回回执和当前文件复核均通过时才扣除本包已写回槽。它不把收到候选、排除
+某项或空字符串当成交付；`status=filled` 也只证明原生槽非空，不证明语义或全游戏范围合格。
+当前文件或绑定无法复核时，`status=unknown`、`unresolved_empty_count=null`，不沿用已填满
+结论；其余范围计数及遗漏列表仍表示导出时的冻结 inventory，不是失效后的实时扫描结果。
+
+默认仍不向模型翻译流程发送真正音效、无元音缩略文本或纯符号。需要补齐已准备的原生模板时，
+显式导出这些**有源配对的空槽**，逐项选择翻译、符号本地化或原样保留：
+
+```powershell
+python gemini_translate_batch.py work-export --include-preserved --output-dir outputs/native-completion --output json
+```
+
+该选项不加入资产路径、标识符、数字、空源、仅标签或仅插值字段。被排除的原生空槽仍在对账
+结果中显示。原样保留也须把原文作为非空 `translation` 显式 `work-submit`，注明理由，再走
+`check → work-preview → work-apply`；不直接填文件，不修改旧包绑定，不伪造 Provider 回执。
+`renpy.preserved_native_effect` 是共享 inventory 的目录补齐理由，不改变普通 Batch / Sync
+的模型过滤。此能力沿用实验 CLI 例外，GUI「诊断与运行日志」提供同一命令参考。
 
 `work-read` 用 `--offset` 和 `--limit` 分页（上限 1000）；`--remaining` 只读取尚未收到成果的
 条目。邻接上下文每侧最多两条，`context_truncated` 标明未附全文；需要更广上下文时可读取

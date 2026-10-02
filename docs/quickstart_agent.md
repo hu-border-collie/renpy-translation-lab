@@ -10,6 +10,9 @@ CLI 是自动化操作的事实来源。必要时可以使用 GUI 做可视验�
 `work-export → work-read → work-submit → check → work-preview → work-apply`。
 该路径不调用项目翻译、Embedding 或项目分析模型，支持部分成果、订正、冲突与恢复；
 限已准备好的 Ren'Py 原生 TL 目录。它是高级脚本入口，真实章节质量对照尚待验证。
+导出与状态中的 `native_scope` 另行报告原生范围空槽；包内 `complete` 不能代替章节完成。
+有源配对的音效/符号空槽可用 `work-export --include-preserved` 导出，再显式提交译文或原文，
+经同一门禁写回。资产、标识符及仅标签/字段不会因此进入包。
 
 ## 操作原则
 

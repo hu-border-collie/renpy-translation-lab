@@ -344,11 +344,54 @@ def _require_no_conflicts(manifest):
         _fail('WORK_UNRESOLVED_CONFLICT', '竞争提交尚未处置；用当前候选版本和新提交 ID 显式订正。', conflicts=unresolved)
 
 
-def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), reference_works=()):
-    """Freeze pending native-catalog occurrences without building a model plan."""
+def _native_scope(snapshot, exported):
+    """Reconcile paired native target slots against this package's fixed scope.
+
+    Inventory candidates, not exported task counts, define the discovery
+    denominator. Unsupported or excluded empty slots remain unresolved.
+    This is a frozen inventory view, not a second translation store.
+    """
+    rows = []
+    for candidate in snapshot.inventory.candidates:
+        if candidate.catalog_link is None or 'catalog_target_empty' not in candidate.evidence:
+            continue
+        identity = candidate.evidence.get('identity_v2', '')
+        occurrence = exported.get(identity)
+        rows.append({
+            'candidate_id': candidate.candidate_id, 'identity_v2': identity,
+            'locator': candidate.locator.to_dict(), 'classification': candidate.classification,
+            'reason_codes': list(candidate.reason_codes),
+            'target_empty': candidate.evidence['catalog_target_empty'],
+            'occurrence_id': occurrence.occurrence_id if occurrence else '',
+        })
+    return {'basis': 'paired_native_targets_in_discovery', 'items': rows}
+
+
+def _native_scope_status(package, *, applied=False, current=True):
+    """Report frozen native scope; stale inputs cannot prove live completeness."""
+    native = package.get('native_scope')
+    if native is None:
+        return {'status': 'unknown', 'basis': 'legacy_package_without_native_inventory'}
+    rows = native['items']
+    unresolved = [row for row in rows if row['target_empty'] and not (applied and row['occurrence_id'])]
+    omitted = [row for row in rows if row['target_empty'] and not row['occurrence_id']]
+    return {'basis': native['basis'], 'status': ('unresolved' if unresolved else 'filled') if current else 'unknown',
+            'total_targets': len(rows), 'exported_targets': sum(bool(row['occurrence_id']) for row in rows),
+            'unresolved_empty_count': len(unresolved) if current else None, 'omitted_empty_count': len(omitted),
+            'omitted_empty_targets': omitted}
+
+
+def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), reference_works=(), include_preserved=False):
+    """Freeze pending native-catalog occurrences without building a model plan.
+
+    ``include_preserved`` admits paired, blank native effect/symbol slots for
+    explicit candidate submission; it does not enable Provider translation.
+    The inventory-based native scope also records empty slots omitted from
+    this package, including those outside an explicit occurrence selection.
+    """
     batch = _batch()
     batch.legacy.require_supported_generation_target()
-    jobs = batch.collect_pending_file_jobs()
+    jobs = batch.collect_pending_file_jobs(include_preserved=include_preserved)
     snapshot = jobs.adapter_snapshot
     pending_ids = {task["id"] for job in jobs for task in job["tasks"]}
     occurrences = [item for item in snapshot.occurrences if item.unit.id in pending_ids]
@@ -418,6 +461,8 @@ def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), refer
         "file_digests": {item.file_rel_path: item.sha256 for item in snapshot.project.source_documents},
         "items": items, "references": references, "reference_digest": digest(references),
         "coverage": snapshot.report.to_dict(),
+        "include_preserved": include_preserved,
+        "native_scope": _native_scope(snapshot, by_unit),
     }
     manifest = {
         "version": 2, "manifest_version": 2, "core_schema_version": 2,
@@ -462,7 +507,8 @@ def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), refer
     _save(manifest)
     _fresh(manifest)
     return {"status": "exported", "manifest_path": manifest["_manifest_path"],
-            "work_path": str(root / "work.json"), "package_digest": digest(package), "item_count": len(items)}
+            "work_path": str(root / "work.json"), "package_digest": digest(package), "item_count": len(items),
+            "native_scope": _native_scope_status(package)}
 
 
 def submission_template(work, *, submission_id, producer):
@@ -625,6 +671,8 @@ def status_work(target, *, include_items=False, offset=0, limit=100, remaining=F
                   "writeback": writeback, "diagnostics": diagnostics, "model": "unknown", "usage": "unknown",
                   "conflicts": conflicts,
                   "receipts": list(state["receipts"].values())}
+        result['native_scope'] = _native_scope_status(
+            state['package'], applied=writeback == 'applied' and not diagnostics, current=not diagnostics)
         if include_items:
             selected = [row for row in scope if not remaining or row["occurrence_id"] in pending]
             result.update(items=[{**row, "candidate": candidates.get(row["occurrence_id"])}
@@ -745,20 +793,22 @@ def apply_work(target):
 
 def add_cli(subparsers, add_output):
     """Register the advanced script-only commands on the existing CLI parser."""
-    export = subparsers.add_parser("work-export", help="Experimental: export a Ren'Py external translation work package (no model calls).")
+    export = subparsers.add_parser("work-export", help="Experimental: export a Ren'Py external translation work package (no model calls).",
+                                  description="Export pending occurrences and independent native_scope accounting for paired native targets; no model calls.")
     export.add_argument("--output-dir", default=None, help="New artifact directory; must not exist or be inside TL_DIR.")
+    export.add_argument("--include-preserved", action="store_true", help="Include blank paired native effect/symbol slots for explicit translation or unchanged-source submission; no model calls.")
     export.add_argument("--occurrence-id", action="append", default=[], help="Select an occurrence from work-read; repeat for a fixed scope.")
     export.add_argument("--reference-file", action="append", default=[], help="Freeze a UTF-8 reference file; changes make the work stale.")
     export.add_argument("--reference-work", action="append", default=[], help="Reference reviewed candidate versions in another work manifest.")
     add_output(export)
     for name, help_text in (
         ("work-submit", "Atomically receive partial external candidates or explicit candidate revisions."),
-        ("work-status", "Inspect remaining occurrences, staleness and recoverable writeback facts."),
+        ("work-status", "Inspect remaining occurrences, independent native_scope accounting, staleness and recoverable writeback facts."),
         ("work-read", "Read frozen material and received candidates with pagination."),
         ("work-preview", "Create the existing bound preview after check=allow."),
         ("work-apply", "Apply or recover the bound preview; requires latest check=allow."),
     ):
-        parser = subparsers.add_parser(name, help="Experimental: " + help_text)
+        parser = subparsers.add_parser(name, help="Experimental: " + help_text, description=help_text)
         parser.add_argument("target", help="Explicit external work manifest.json or package directory.")
         if name == "work-submit":
             parser.add_argument("submission", help="External submission JSON file; never a Provider response.")
@@ -772,7 +822,7 @@ def add_cli(subparsers, add_output):
 def run_cli(args):
     """Dispatch after local-only runtime configuration has loaded."""
     if args.command == "work-export":
-        return export_work(output_dir=args.output_dir, occurrence_ids=args.occurrence_id,
+        return export_work(output_dir=args.output_dir, occurrence_ids=args.occurrence_id, include_preserved=args.include_preserved,
                            reference_files=args.reference_file, reference_works=args.reference_work)
     if args.command == "work-submit":
         return submit_work(args.target, _json(args.submission))
