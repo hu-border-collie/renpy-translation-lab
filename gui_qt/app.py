@@ -2190,6 +2190,8 @@ class MainWindow(QMainWindow):
         doctor_viewport.setObjectName("doctor_summary_viewport")
         self._style_themed_surface(doctor_viewport)
         doctor_content = QWidget()
+        doctor_content.setObjectName("doctor_summary_content")
+        self._style_themed_surface(doctor_content)
         doctor_content_layout = QVBoxLayout(doctor_content)
         doctor_content_layout.setContentsMargins(0, 0, 0, 0)
         doctor_content_layout.setSpacing(6)
