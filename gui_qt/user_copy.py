@@ -54,6 +54,16 @@ QUALITY_REPORT_EXPORT_LABEL = "导出 HTML 报告"
 QUALITY_REPORT_EXPORT_TITLE = "导出质量体检报告"
 QUALITY_REPORT_EXPORT_SUCCESS = "质量体检报告已导出。"
 
+DIAGNOSTICS_LOG_COPY = {
+    "show_action": "显示运行日志",
+    "hide_action": "隐藏运行日志",
+    "section_label": "原始命令输出",
+    "empty_state": "当前没有运行日志。任务输出出现后会显示在这里。",
+    "empty_accessible_name": "运行日志为空",
+    "toggle_hint": "显示或收起原始命令输出。",
+    "command_field_hint": "可用方向键横向查看完整命令；点击右侧按钮复制全部内容。",
+}
+
 DOCTOR_MODE_LABELS = {
     "can_generate_template": "可生成翻译模板",
     "existing_tl_only": "已有翻译模板",
