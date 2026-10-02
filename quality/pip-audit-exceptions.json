@@ -3,105 +3,6 @@
   "policy": "Each exception must name the vulnerability id, package, reason, and a review date. Remove entries when the pin is upgraded or the advisory is withdrawn. New findings without an exception fail the blocking audit gate. Prefer a dedicated dependency-upgrade PR over long-lived ignores.",
   "exceptions": [
     {
-      "id": "PYSEC-2026-237",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Upgrade with litellm profile in a dedicated dependency PR.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2104",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.0"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2105",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.0"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2106",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.0"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2107",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2108",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2109",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2110",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2111",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2112",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
-      "id": "PYSEC-2026-2113",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.1"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as PYSEC-2026-237.",
-      "review_by": "2026-08-20"
-    },
-    {
       "id": "PYSEC-2026-2132",
       "package": "click",
       "fix_versions": [
@@ -126,33 +27,6 @@
         "50.0.0"
       ],
       "reason": "Transitive cryptography pin currently locked at 49.0.0 across CLI/GUI/LiteLLM profiles. Upgrade requires regenerating hashed locks in a dedicated dependency PR; not introduced by PR-Agent enablement.",
-      "review_by": "2026-08-25"
-    },
-    {
-      "id": "GHSA-mq44-7p77-q5h7",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.2"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only (aiohttp==3.13.5). Upgrade with litellm profile in a dedicated dependency PR.",
-      "review_by": "2026-08-25"
-    },
-    {
-      "id": "GHSA-mfx4-hv73-q22v",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.2"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as GHSA-mq44-7p77-q5h7.",
-      "review_by": "2026-08-25"
-    },
-    {
-      "id": "GHSA-cq5v-8q36-5273",
-      "package": "aiohttp",
-      "fix_versions": [
-        "3.14.3"
-      ],
-      "reason": "Transitive via optional LiteLLM lock only. Same upgrade track as GHSA-mq44-7p77-q5h7.",
       "review_by": "2026-08-25"
     }
   ]
