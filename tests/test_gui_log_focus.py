@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import unittest
+from unittest import mock
 from unittest.mock import MagicMock
 
 try:
@@ -294,6 +295,73 @@ class GuiLogFocusTests(unittest.TestCase):
         self.window._on_clear_log()
         self.assertEqual(self.window.log_view.toPlainText(), "")
         self.assertTrue(self.window.diagnostics_log_panel.isHidden())
+
+    def test_runner_output_does_not_rescan_history_per_line(self) -> None:
+        self.window.resize(1280, 900)
+        self.window.show()
+        for _ in range(4):
+            self._app.processEvents()
+        history = "\n".join(
+            f"original fixture history {index}: {'x' * 96}"
+            for index in range(100)
+        )
+        self.window.log_view.setPlainText(history)
+        self.assertTrue(self.window._diagnostics_log_has_content())
+        self.window.tab_widget.setCurrentWidget(self.window._workbench_tab)
+        self.window.runner.run = MagicMock(return_value=True)  # type: ignore[method-assign]
+        self.assertTrue(
+            self.window._start_cli_command(
+                "original_fixture",
+                Path("fixture_cli.py"),
+                ["--no-provider"],
+            )
+        )
+        self.window._on_header_log_clicked()
+
+        with mock.patch.object(
+            self.window.log_view,
+            "toPlainText",
+            wraps=self.window.log_view.toPlainText,
+        ) as read_document:
+            for index in range(300):
+                self.window.runner.line_ready.emit(
+                    f"fixture: queued output {index}"
+                )
+            self.assertEqual(read_document.call_count, 0)
+            self.assertEqual(len(self.window._pending_log_lines), 300)
+
+            self.window._flush_pending_log_lines()
+            self.assertEqual(read_document.call_count, 0)
+
+        text = self.window.log_view.toPlainText()
+        self.assertIn("original fixture history 99:", text)
+        self.assertTrue(text.endswith("fixture: queued output 299"))
+        self.assertTrue(self.window._diagnostics_log_has_content())
+        self.assertTrue(self.window.log_view.isVisible())
+        self.assertFalse(self.window.diagnostics_log_empty_label.isVisible())
+
+        self.window._clear_log_view()
+        self.assertFalse(self.window._diagnostics_log_has_content())
+        self.assertTrue(self.window.log_view.isHidden())
+        self.assertTrue(self.window.diagnostics_log_empty_label.isVisible())
+
+        self.window.runner.line_ready.emit("   \n")
+        self.assertFalse(self.window._diagnostics_log_has_content())
+        self.window._flush_pending_log_lines()
+        self.assertFalse(self.window._diagnostics_log_has_content())
+        self.assertTrue(self.window.log_view.isHidden())
+        self.assertTrue(self.window.diagnostics_log_empty_label.isVisible())
+
+        self.window.runner.line_ready.emit("fixture: output after clear")
+        self.assertTrue(self.window._diagnostics_log_has_content())
+        self.assertFalse(self.window.log_view.isHidden())
+        self.window._flush_pending_log_lines()
+        self.assertEqual(
+            self.window.log_view.toPlainText(),
+            "   \nfixture: output after clear",
+        )
+        self.assertFalse(self.window.diagnostics_log_empty_label.isVisible())
+        self.window._set_task_running(False)
 
     def test_explicit_log_collapse_precedes_automatic_task_and_error_reveal(self) -> None:
         self.window.show()

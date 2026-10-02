@@ -569,6 +569,9 @@ class MainWindow(QMainWindow):
         self._litellm_cache = litellm_catalog_cache or LiteLLMCatalogCache()
         self._diagnostics_context_fingerprint: tuple[object, ...] | None = None
         self._diagnostics_log_panel_visible = False
+        self._diagnostics_log_content_present = False
+        self._pending_log_content_present = False
+        self._diagnostics_log_document_update = False
         self._diagnostics_splitter_user_adjusted = False
         self._diagnostics_splitter_programmatic = False
         self._diagnostics_splitter_manual_context_ratio: float | None = None
@@ -4824,6 +4827,9 @@ class MainWindow(QMainWindow):
         self.diagnostics_log_empty_label.setObjectName("config_hint_label")
         log_panel_layout.addWidget(self.diagnostics_log_empty_label)
         self.log_view = QTextEdit()
+        self.log_view.document().contentsChanged.connect(
+            self._on_diagnostics_log_document_changed
+        )
         self.log_view.setReadOnly(True)
         self.log_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.log_view.setObjectName("log_view")
@@ -4872,15 +4878,28 @@ class MainWindow(QMainWindow):
         self._scroll_log_views_to_end()
 
     def _diagnostics_log_has_content(self) -> bool:
-        """Check both rendered and buffered output before changing empty state."""
+        """Return the cached non-whitespace state of rendered and queued output."""
+        return bool(
+            getattr(self, "_diagnostics_log_content_present", False)
+            or getattr(self, "_pending_log_content_present", False)
+        )
+
+    def _on_diagnostics_log_document_changed(self) -> None:
+        """Refresh cached content state after external document edits.
+
+        Normal runner output and clear operations update the cache directly and
+        suppress this callback. The scan here supports bulk document changes
+        such as ``setPlainText`` without putting a full-document read on the
+        per-line output path.
+        """
+        if getattr(self, "_diagnostics_log_document_update", False):
+            return
         view = getattr(self, "log_view", None)
         get_text = getattr(view, "toPlainText", None)
-        if callable(get_text) and get_text().strip():
-            return True
-        return any(
-            str(line).strip()
-            for line in getattr(self, "_pending_log_lines", ())
+        self._diagnostics_log_content_present = bool(
+            callable(get_text) and get_text().strip()
         )
+        self._update_diagnostics_log_content_state()
 
     def _update_diagnostics_log_content_state(self) -> None:
         """Show the empty hint or log editor without changing splitter sizes."""
@@ -4888,13 +4907,21 @@ class MainWindow(QMainWindow):
             return
         has_content = self._diagnostics_log_has_content()
         set_visible = getattr(self.log_view, "setVisible", None)
-        if callable(set_visible):
+        is_hidden = getattr(self.log_view, "isHidden", None)
+        if callable(set_visible) and (
+            not callable(is_hidden) or bool(is_hidden()) == has_content
+        ):
             set_visible(has_content)
         empty_label = getattr(self, "diagnostics_log_empty_label", None)
         if empty_label is not None:
-            empty_label.setVisible(
+            should_show_empty = (
                 not has_content and self._diagnostics_log_panel_visible
             )
+            label_is_hidden = getattr(empty_label, "isHidden", None)
+            if not callable(label_is_hidden) or bool(label_is_hidden()) != (
+                not should_show_empty
+            ):
+                empty_label.setVisible(should_show_empty)
 
     def _set_diagnostics_log_panel_visible(
         self,
@@ -13131,11 +13158,17 @@ class MainWindow(QMainWindow):
         pending = getattr(self, "_pending_log_lines", None)
         if pending is not None:
             pending.clear()
+        self._pending_log_content_present = False
+        self._diagnostics_log_content_present = False
         timer = getattr(self, "_log_flush_timer", None)
         if timer is not None and timer.isActive():
             timer.stop()
         if hasattr(self, "log_view"):
-            self.log_view.clear()
+            self._diagnostics_log_document_update = True
+            try:
+                self.log_view.clear()
+            finally:
+                self._diagnostics_log_document_update = False
             self._update_diagnostics_log_content_state()
         if not getattr(self, "_task_running", False):
             self._restore_diagnostics_splitter_idle()
@@ -13148,37 +13181,60 @@ class MainWindow(QMainWindow):
         timer = getattr(self, "_log_flush_timer", None)
         if pending is None or timer is None:
             if hasattr(self, "log_view"):
+                had_content = self._diagnostics_log_has_content()
                 scrollbar = self.log_view.verticalScrollBar()
                 previous_value = scrollbar.value()
                 was_at_end = previous_value >= max(scrollbar.maximum() - 1, 0)
-                self.log_view.append(line)
+                self._diagnostics_log_document_update = True
+                try:
+                    self.log_view.append(line)
+                finally:
+                    self._diagnostics_log_document_update = False
+                if line.strip():
+                    self._diagnostics_log_content_present = True
                 if was_at_end:
                     self._scroll_log_views_to_end()
                 else:
                     scrollbar.setValue(min(previous_value, scrollbar.maximum()))
-                self._update_diagnostics_log_content_state()
+                if had_content != self._diagnostics_log_has_content():
+                    self._update_diagnostics_log_content_state()
             return
+        had_content = self._diagnostics_log_has_content()
         pending.append(line)
-        self._update_diagnostics_log_content_state()
+        if line.strip():
+            self._pending_log_content_present = True
+        if had_content != self._diagnostics_log_has_content():
+            self._update_diagnostics_log_content_state()
         if not timer.isActive():
             timer.start()
 
     def _flush_pending_log_lines(self) -> None:
-        if not self._pending_log_lines or not hasattr(self, "log_view"):
+        pending = getattr(self, "_pending_log_lines", [])
+        if not pending or not hasattr(self, "log_view"):
             self._pending_log_lines = []
+            self._pending_log_content_present = False
             self._update_diagnostics_log_content_state()
             return
-        lines = self._pending_log_lines
+        had_content = self._diagnostics_log_has_content()
+        lines = pending
         self._pending_log_lines = []
+        if self._pending_log_content_present:
+            self._diagnostics_log_content_present = True
+        self._pending_log_content_present = False
         scrollbar = self.log_view.verticalScrollBar()
         previous_value = scrollbar.value()
         was_at_end = previous_value >= max(scrollbar.maximum() - 1, 0)
-        self.log_view.append("\n".join(lines))
+        self._diagnostics_log_document_update = True
+        try:
+            self.log_view.append("\n".join(lines))
+        finally:
+            self._diagnostics_log_document_update = False
         if was_at_end:
             self._scroll_log_views_to_end()
         else:
             scrollbar.setValue(min(previous_value, scrollbar.maximum()))
-        self._update_diagnostics_log_content_state()
+        if had_content != self._diagnostics_log_has_content():
+            self._update_diagnostics_log_content_state()
 
     def _start_cli_command(
         self,
