@@ -12,9 +12,9 @@ from tests import gui_test_support
 import model_profiles_editor as editor
 
 try:
-    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QWidget
 except ImportError as exc:
     MainWindow = None
     IMPORT_ERROR = exc
@@ -43,6 +43,10 @@ class SettingsEntryTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self) -> None:
+        # processEvents() alone leaves DeferredDelete events pending when no
+        # Qt exec() loop runs. Drain closed windows before a global QSS change
+        # can repolish hundreds of stale trees from preceding test modules.
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         stylesheet = self.app.styleSheet()
         self.addCleanup(self.app.setStyleSheet, stylesheet)
         apply_theme(self.app, Path(__file__).parents[1] / "gui_qt/resources", "light")
@@ -65,6 +69,7 @@ class SettingsEntryTests(unittest.TestCase):
     def tearDown(self) -> None:
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
         self.process()
 
     def process(self) -> None:
@@ -78,6 +83,26 @@ class SettingsEntryTests(unittest.TestCase):
             viewport.rect().contains(top_left + QPoint(widget.width() - 1, widget.height() - 1)),
             widget.objectName(),
         )
+
+    def test_theme_setup_does_not_restyle_closed_pending_windows(self) -> None:
+        restyled = []
+
+        class ClosingWindow(QWidget):
+            def event(self, event):
+                if event.type() == QEvent.Type.StyleChange:
+                    restyled.append(True)
+                return super().event(event)
+
+        previous = ClosingWindow()
+        previous.close()
+        previous.deleteLater()
+        other = SettingsEntryTests("test_defaults_are_editable_at_top_before_provider_details")
+        try:
+            other.setUp()
+            self.assertEqual(restyled, [])
+        finally:
+            other.tearDown()
+            other.doCleanups()
 
     def test_defaults_are_editable_at_top_before_provider_details(self) -> None:
         page = self.window._profiles_page()
