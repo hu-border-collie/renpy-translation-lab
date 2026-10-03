@@ -1559,6 +1559,7 @@ ADVANCED_SETTINGS_NAV_COPY = {
     "hint": "高级设置影响请求、上下文和本地路径；无效字段会阻止保存。",
     "search": "搜索中文标签或配置键（Ctrl+F）",
     "search_label": "查找设置",
+    "search_help": "按 Enter 定位设置；搜索框获得焦点时，按 Esc 清除搜索。",
     "category": "跳转类别",
     "all_categories": "选择类别…",
     "clear": "清除搜索",

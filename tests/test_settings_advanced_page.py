@@ -159,6 +159,34 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         self.page.reset()
         self.assertNotEqual(self.page.collect()[field.key], 73)
 
+    def test_escape_clears_search_only_while_search_has_focus(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        self.page.widget.resize(700, 500)
+        self.page.widget.show()
+        self.page.widget.activateWindow()
+        target = self.page.field_widgets["sync_chunk_size"]
+        target.setValue(73)
+        edited = self.page.collect()
+        self.page.search_edit.setText("sync_chunk_size")
+        target.setFocus()
+        self._app.processEvents()
+        self.assertTrue(target.hasFocus())
+
+        QTest.keyClick(target, Qt.Key.Key_Escape)
+        self._app.processEvents()
+        self.assertEqual(self.page.search_edit.text(), "sync_chunk_size")
+        self.assertEqual(self.page.collect(), edited)
+
+        self.page.search_edit.setFocus()
+        self._app.processEvents()
+        self.assertTrue(self.page.search_edit.hasFocus())
+        QTest.keyClick(self.page.search_edit, Qt.Key.Key_Escape)
+        self._app.processEvents()
+        self.assertEqual(self.page.search_edit.text(), "")
+        self.assertEqual(self.page.collect(), edited)
+
     def test_set_task_running_disables_config_controls(self) -> None:
         widget = self.page.field_widgets["sync_chunk_size"]
         self.assertTrue(widget.isEnabled())

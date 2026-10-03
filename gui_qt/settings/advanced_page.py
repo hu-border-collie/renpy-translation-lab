@@ -360,6 +360,7 @@ class AdvancedSettingsPage(QObject):
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(COPY["search"])
         self.search_edit.setAccessibleName(COPY["search_label"])
+        self.search_edit.setToolTip(COPY["search_help"])
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._filter_fields)
         self.search_edit.returnPressed.connect(self._focus_match)
@@ -386,6 +387,7 @@ class AdvancedSettingsPage(QObject):
         shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         shortcut.activated.connect(self._focus_search)
         clear = QShortcut(QKeySequence("Escape"), self.search_edit)
+        clear.setContext(Qt.ShortcutContext.WidgetShortcut)
         clear.activated.connect(self.search_edit.clear)
 
         for group_title, fields in grouped_advanced_fields(
