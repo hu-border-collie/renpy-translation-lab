@@ -201,6 +201,10 @@
   避免 Windows 原生 size hint 偏小及字体变化后的文字裁切。
   行为与布局回归：`tests.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
   默认值、配置状态区分、保存/重载与选择保留）。
+- #540 B 的长表单：`advanced_page.py` 按标签 / 配置键 / 路径过滤现有行并聚焦命中项，
+  不改变 collect / baseline；`page_chrome.SettingsMasterDetail` 仅重排现有模型和供应商
+  列表 / 详情控件。`tests.test_settings_advanced_page` 覆盖键盘搜索、类别跳转、清除、
+  无匹配及编辑保留；`tests.test_gui_settings_entry` 覆盖响应式布局与共同保存回归。
 
 ## 同步翻译
 

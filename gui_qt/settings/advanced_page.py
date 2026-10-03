@@ -8,11 +8,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QGroupBox,
     QLabel,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
     QListWidget,
     QScrollArea,
     QVBoxLayout,
@@ -27,6 +31,8 @@ from ..settings_schema import (
     SettingField,
     grouped_advanced_fields,
 )
+from ..user_copy import ADVANCED_SETTINGS_NAV_COPY as COPY
+from ..widget_helpers import NoWheelComboBox
 from .field_widgets import (
     apply_setting_value_to_widget,
     create_basic_setting_widget,
@@ -42,7 +48,7 @@ from .gemini_catalog_widgets import (
     set_gemini_catalog_list_values,
     set_gemini_model_checklist_values,
 )
-from .page_chrome import build_settings_scroll_page, settings_form
+from .page_chrome import build_settings_scroll_page, limit_short_field, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import ADVANCED_CONFIG_KEYS, SETTINGS_PAGE_SPEC_OBJECTS
 
@@ -87,7 +93,12 @@ class AdvancedSettingsPage(QObject):
         self._baseline: dict[str, object] = {}
         self.field_widgets: dict[str, QWidget] = {}
         self.error_labels: dict[str, QLabel] = {}
+        self._groups: dict[str, QGroupBox] = {}
+        self._field_rows: dict[str, tuple[object, object]] = {}
+        self._matches: list[str] = []
+        self._match_index = -1
         self.widget, self.body = self._build_widgets()
+        self._filter_fields()
         self._sync_rotation_enabled()
         self._baseline = dict(self.collect())
 
@@ -145,6 +156,8 @@ class AdvancedSettingsPage(QObject):
     def focus_issue(self, issue: SettingsIssue) -> bool:
         widget = self.field_widgets.get(issue.field_key)
         if widget is not None and hasattr(widget, "setFocus"):
+            self.search_edit.clear()
+            self.widget.ensureWidgetVisible(widget)
             widget.setFocus()
             return True
         return False
@@ -176,6 +189,8 @@ class AdvancedSettingsPage(QObject):
                 on_status=self._show_status,
             )
         widget = create_basic_setting_widget(field)
+        if field.kind in {"int", "float"}:
+            limit_short_field(widget, numeric=True)
         if field.key == "model_rotation_enabled" and isinstance(widget, QCheckBox):
             widget.toggled.connect(self._on_model_rotation_enabled_toggled)
         return widget
@@ -283,17 +298,97 @@ class AdvancedSettingsPage(QObject):
             self.error_labels[field.key] = error
             section_layout.addWidget(error)
             outer.addWidget(section)
+            self._field_rows[field.key] = (section, None)
         return group
+
+    def _filter_fields(self) -> None:
+        """Hide rows only; collection and the coordinator baseline stay intact."""
+        query = self.search_edit.text().strip().casefold()
+        self._matches = []
+        for field in ADVANCED_FIELDS:
+            searchable = " ".join((field.label, field.key, ".".join(field.path))).casefold()
+            visible = not query or query in searchable
+            owner, row = self._field_rows[field.key]
+            if row is None:
+                owner.setVisible(visible)
+            else:
+                owner.setRowVisible(row, visible)
+            if visible:
+                self._matches.append(field.key)
+        for category, group in self._groups.items():
+            group.setVisible(any(f.category == category and f.key in self._matches for f in ADVANCED_FIELDS))
+        self._match_index = -1
+        for button in (self.next_match_btn, self.previous_match_btn):
+            button.setEnabled(bool(self._matches))
+        message = COPY["matches" if query else "empty"] if self._matches else COPY["no_matches"]
+        self.search_status.setText(message.format(count=len(self._matches)))
+
+    def _focus_match(self, direction: int = 1) -> None:
+        if not self._matches:
+            return
+        self._match_index = (
+            (0 if direction > 0 else len(self._matches) - 1)
+            if self._match_index < 0 else (self._match_index + direction) % len(self._matches)
+        )
+        widget = self.field_widgets[self._matches[self._match_index]]
+        self.widget.ensureWidgetVisible(widget)
+        widget.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        if widget.focusPolicy() == Qt.FocusPolicy.NoFocus:
+            widget.focusNextChild()
+
+    def _jump_category(self, index: int) -> None:
+        category = self.category_combo.itemData(index)
+        if not category:
+            return
+        self.search_edit.clear()
+        key = next(f.key for f in ADVANCED_FIELDS if f.category == category)
+        self._match_index = (self._matches.index(key) - 1) % len(self._matches)
+        self._focus_match()
+        self.category_combo.setCurrentIndex(0)
+
+    def _focus_search(self) -> None:
+        self.widget.ensureWidgetVisible(self.search_edit)
+        self.search_edit.setFocus()
+        self.search_edit.selectAll()
 
     def _build_widgets(self) -> tuple[QScrollArea, QWidget]:
         page, body, layout = build_settings_scroll_page("settings_advanced")
-        hint = QLabel(
-            "高级设置会直接影响请求大小、上下文注入和本地上下文路径。"
-            "无效字段会在本页标出，并阻止保存。"
-        )
+        hint = QLabel(COPY["hint"])
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")
         layout.addWidget(hint)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText(COPY["search"])
+        self.search_edit.setAccessibleName(COPY["search_label"])
+        self.search_edit.setToolTip(COPY["search_help"])
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._filter_fields)
+        self.search_edit.returnPressed.connect(self._focus_match)
+        layout.addWidget(self.search_edit)
+        navigation = QHBoxLayout()
+        self.category_combo = NoWheelComboBox()
+        self.category_combo.setAccessibleName(COPY["category"])
+        self.category_combo.addItem(COPY["all_categories"], "")
+        self.category_combo.currentIndexChanged.connect(self._jump_category)
+        navigation.addWidget(self.category_combo, 1)
+        self.previous_match_btn = QPushButton(COPY["previous"])
+        self.previous_match_btn.clicked.connect(lambda: self._focus_match(-1))
+        self.next_match_btn = QPushButton(COPY["next"])
+        self.next_match_btn.clicked.connect(lambda: self._focus_match(1))
+        self.clear_search_btn = QPushButton(COPY["clear"])
+        self.clear_search_btn.clicked.connect(self.search_edit.clear)
+        for button in (self.previous_match_btn, self.next_match_btn, self.clear_search_btn):
+            navigation.addWidget(button)
+        layout.addLayout(navigation)
+        self.search_status = QLabel()
+        self.search_status.setWordWrap(True)
+        layout.addWidget(self.search_status)
+        shortcut = QShortcut(QKeySequence.StandardKey.Find, page)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self._focus_search)
+        clear = QShortcut(QKeySequence("Escape"), self.search_edit)
+        clear.setContext(Qt.ShortcutContext.WidgetShortcut)
+        clear.activated.connect(self.search_edit.clear)
 
         for group_title, fields in grouped_advanced_fields(
             include_context_primary=False,
@@ -302,7 +397,10 @@ class AdvancedSettingsPage(QObject):
             if not owned or group_title in _SKIPPED_CATEGORIES:
                 continue
             if group_title == "模型目录":
-                layout.addWidget(self._build_model_catalog_group(owned))
+                group = self._build_model_catalog_group(owned)
+                self._groups[group_title] = group
+                self.category_combo.addItem(group_title, group_title)
+                layout.addWidget(group)
                 continue
             group = QGroupBox(group_title)
             form = settings_form(group)
@@ -315,9 +413,13 @@ class AdvancedSettingsPage(QObject):
                     f"{field.label}：",
                     setting_field_row(field, widget, error),
                 )
+                self._field_rows[field.key] = (form, form.rowCount() - 1)
+                form.itemAt(form.rowCount() - 1, form.ItemRole.LabelRole).widget().setBuddy(widget)
             if form.rowCount() == 0:
                 group.deleteLater()
                 continue
             layout.addWidget(group)
+            self._groups[group_title] = group
+            self.category_combo.addItem(group_title, group_title)
         layout.addStretch(1)
         return page, body
