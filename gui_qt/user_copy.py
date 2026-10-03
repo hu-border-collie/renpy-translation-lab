@@ -878,7 +878,7 @@ DOCTOR_RECOMMENDATION_CODE_TRANSLATIONS: dict[str, str] = {
     doctor_rec.BOOTSTRAP_WORK: "建议：点击「准备工作目录」",
     doctor_rec.GENERATE_TEMPLATE: "建议：点击「生成翻译模板」",
     doctor_rec.INSTALL_SDK_GENERATE_TEMPLATE: "建议：配置 Ren'Py SDK 后点击「开始翻译」",
-    doctor_rec.ENABLE_PREPARE: "建议：在「设置 · 高级」启用 prepare 后，再点「开始翻译」生成模板",
+    doctor_rec.ENABLE_PREPARE: "建议：在「设置 · 项目」启用 prepare 后，再点「开始翻译」生成模板",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX: "建议：先到左侧「上下文库」运行「预建原文索引」",
     doctor_rec.BOOTSTRAP_SOURCE_INDEX_INCOMPLETE: "建议：继续在「上下文库」运行「预建原文索引」补全索引",
     doctor_rec.BUILD_PROJECT_ANALYSIS: "建议：到「上下文库」开始项目分析并生成待审查摘要",
@@ -1341,6 +1341,33 @@ MODEL_ROUTING_RUNTIME_COPY = {
 
 # Unified translation entry copy (#348 P3): choose a ModelProfile first, then
 # the ExecutionStrategy that profile supports.
+READINESS_COPY = {
+    "counts": "待译：{pending} 条 · 待译文件：{pending_files} 个 · 翻译文件：{files} 个",
+    "unknown": "未知",
+    "empty": "未选择项目；请先到「项目与环境」选择项目。",
+    "idle": "环境检查未完成；请先运行环境检查。",
+    "running": "环境检查中；当前没有有效结论。",
+    "stale": "检查结果已过期；请针对当前项目与设置重新检查。",
+    "failed": "环境检查失败；请展开完整详情查看错误后重试。",
+    "ready": "项目检查通过；启动时仍需当前任务预检。",
+    "warning": "项目检查完成，有注意事项；启动时仍需当前任务预检。",
+    "blocked": "项目检查有阻塞项；请先处理环境检查中的事项。",
+    "preflight_idle": "当前任务：启动预检未运行。",
+    "preflight_running": "当前任务：正在启动预检；尚无有效结论。",
+    "preflight_ready": "当前任务：启动预检通过。",
+    "preflight_warning": "当前任务：启动预检完成，有注意事项。",
+    "preflight_blocked": "当前任务：启动预检阻断。",
+    "preflight_failed": "当前任务：启动预检失败，请查看运行日志。",
+    "preflight_stale": "当前任务：预检结果已过期，请重新启动预检。",
+    "writeback": "启动预检不代表可写回；写回仍需当前结果通过 check。",
+    "busy": "当前已有任务运行；请等待结束或停止后再启动。",
+    "unsupported": "当前模型不支持所选执行方式；请选择支持的执行方式。",
+    "required": "需要处理：",
+    "attention": "注意事项：",
+    "details": "完整检查详情与次要建议",
+    "settings": {"api_keys": "设置 · 密钥", "project": "设置 · 项目", "context": "设置 · 上下文", "profiles": "设置 · 模型与供应商"},
+}
+
 TRANSLATION_TARGET_COPY = {
     "section_title": "模型与执行方式",
     "profile_label": "主模型",

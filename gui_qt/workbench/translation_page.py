@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..user_copy import TRANSLATION_TARGET_COPY
+from ..user_copy import READINESS_COPY, TRANSLATION_TARGET_COPY
 from ..widget_helpers import NoWheelComboBox
 
 _STRATEGY_ORDER = ("sync", "gemini_batch")
@@ -71,9 +71,19 @@ class TranslationTargetSection(QFrame):
         self.hint_label.setWordWrap(True)
         layout.addWidget(self.hint_label)
 
+        self.readiness_label = QLabel(READINESS_COPY["idle"])
+        self.readiness_label.setObjectName("translation_readiness_label")
+        self.readiness_label.setWordWrap(True)
+        layout.addWidget(self.readiness_label)
+
         self.set_enabled(False)
 
     # -- external API ---------------------------------------------------
+
+    def set_readiness_summary(self, text: str, *, details: str = "") -> None:
+        """Show host-bound evidence without changing selector/action enablement."""
+        self.readiness_label.setText(text)
+        self.readiness_label.setToolTip(details)
 
     def set_select_callback(self, callback: Callable[[str, str], None] | None) -> None:
         self._on_select = callback

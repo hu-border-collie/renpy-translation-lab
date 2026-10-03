@@ -5,6 +5,8 @@
 > 本文是 **doctor 派生字段与决策漏斗的开发对照表**。用户可见建议文案与 GUI 入口名称见 [doctor_recommendations.md](doctor_recommendations.md) 与 [gui_workbench.md](gui_workbench.md)。
 > 布局就绪后，上下文相关**必需准备与可选建议可并列输出**（见 `collect_doctor_recommendations`）。
 
+GUI 摘要另有呈现生命周期：未检查、检查中、失败、过期均不表示有效就绪；只在已有结果与当前项目 / 已保存设置匹配时显示计数与结论。任务预检还绑定模型、执行方式和任务代次；旧回调不得覆盖新状态。这些是显示证据的有效期，不新增矩阵决策维度或写回授权。
+
 ---
 
 ## 1. 维度一：文件与目录结构状态 (Layout Status)

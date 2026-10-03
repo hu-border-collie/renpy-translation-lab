@@ -81,6 +81,9 @@
 - `gui_qt/*_workflow.py`：GUI 动作到 CLI/服务调用的包装。
 - `gui_qt/diagnostics_context.py`：CLI 命令参考与诊断入口。
 - `gui_qt/user_copy.py`：共享用户文案；新增产品能力须同步。
+- `gui_qt/readiness_display.py`：doctor / preflight 结果的纯呈现投影（不扫描、不判断业务门禁）；
+  `app.py` 的 `_readiness_project_identity` / `_readiness_task_identity` / `_sync_readiness_display`
+  绑定已保存设置与操作代次，`workbench/translation_page.py` 显示两个翻译页的摘要。
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
 - `gui_qt/settings/registry.py`：`SettingsPageSpec` / `SettingsPageRegistry` / `build_default_registry`；
   10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。

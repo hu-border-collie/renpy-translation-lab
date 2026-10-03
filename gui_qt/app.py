@@ -17,6 +17,7 @@ import sys
 import time
 import re
 import json
+import hashlib
 from collections.abc import Mapping
 from functools import partial
 from pathlib import Path
@@ -247,6 +248,8 @@ from .doctor_report import (
     summarize_doctor_report,
 )
 from .doctor_worker import DoctorWorker, DoctorWorkerResult
+from .readiness_display import doctor_overview, preflight_line
+from .user_copy import READINESS_COPY
 from .font_helpers import optional_fonts_installed, user_fonts_dir
 from .font_worker import FontInstallResult, FontInstallWorker
 
@@ -646,6 +649,14 @@ class MainWindow(QMainWindow):
         self._profile_models_profile_id = ""
         self._translate_preflight_output_lines: list[str] = []
         self._pending_translation_start: dict[str, object] | None = None
+        self._readiness_doctor_summary = idle_summary()
+        self._readiness_doctor_identity = None
+        self._readiness_doctor_report = None
+        self._readiness_doctor_error = ""
+        self._readiness_preflight_identity = None
+        self._readiness_preflight_status = "idle"
+        self._readiness_preflight_payload = None
+        self._readiness_task_generation = 0
         # Live durable-run progress (#348 P3 A2): a read-only status poller
         # runs beside the main worker and never touches the run state.
         self._durable_status_output_lines: list[str] = []
@@ -1051,6 +1062,13 @@ class MainWindow(QMainWindow):
         self._layout_sync_timer.start()
 
     def _sync_layout_sizes(self) -> None:
+        for section in (getattr(self, "_translation_target_sections", {}) or {}).values():
+            if section.isVisible():
+                for label in (section.hint_label, section.readiness_label):
+                    label.setMinimumHeight(max(0, label.heightForWidth(label.width())))
+        coordinator = getattr(self, "_workbench_coordinator", None)
+        if coordinator is not None:
+            coordinator.resize(workbench_nav_for_work_mode(self._current_work_mode()))
         self._reflow_button_bars()
         if not hasattr(self, "doctor_message_label") or not hasattr(self, "workbench_status_tabs"):
             return
@@ -2235,6 +2253,17 @@ class MainWindow(QMainWindow):
         self.doctor_facts_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.doctor_facts_label.setObjectName("doctor_facts_label")
         doctor_content_layout.addWidget(self.doctor_facts_label)
+        self.doctor_settings_row = QWidget()
+        doctor_settings_layout = QHBoxLayout(self.doctor_settings_row)
+        doctor_settings_layout.setContentsMargins(0, 0, 0, 0)
+        self._doctor_settings_buttons = {}
+        for key, label in READINESS_COPY["settings"].items():
+            button = QPushButton(label)
+            button.clicked.connect(lambda _checked=False, page=key: self._focus_settings_section(page))
+            doctor_settings_layout.addWidget(button)
+            self._doctor_settings_buttons[key] = button
+        doctor_settings_layout.addStretch(1)
+        doctor_content_layout.addWidget(self.doctor_settings_row)
         # Flat disclosure control (not checkable — checked QToolButtons pick up
         # selected-button chrome and change width when the label flips).
         self._doctor_details_expanded = False
@@ -2245,7 +2274,7 @@ class MainWindow(QMainWindow):
         self.doctor_details_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.doctor_details_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.doctor_details_toggle.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.doctor_details_toggle.setAccessibleName("更多详情")
+        self.doctor_details_toggle.setAccessibleName(READINESS_COPY["details"])
         self.doctor_details_toggle.installEventFilter(self)
         self._enter_activate_buttons.add(self.doctor_details_toggle)
         self.doctor_details_toggle.setSizePolicy(
@@ -2257,7 +2286,7 @@ class MainWindow(QMainWindow):
         # QFontMetrics.horizontalAdvance at cold start: the first resolve of
         # those decorative glyphs can cost hundreds of ms via font fallback.
         _toggle_fm = self.doctor_details_toggle.fontMetrics()
-        _label_w = _toggle_fm.horizontalAdvance("更多详情")
+        _label_w = _toggle_fm.horizontalAdvance(READINESS_COPY["details"])
         _marker_w = max(_toggle_fm.averageCharWidth() * 2, 16)
         self.doctor_details_toggle.setFixedWidth(max(_label_w + _marker_w + 8, 96))
         self.doctor_details_toggle.setVisible(False)
@@ -6658,7 +6687,7 @@ class MainWindow(QMainWindow):
         """Keep disclosure label width-stable; only the marker character changes."""
         # Same character width for ▸/▾ avoids horizontal drift when expanding.
         marker = "▾" if self._doctor_details_expanded else "▸"
-        self.doctor_details_toggle.setText(f"{marker} 更多详情")
+        self.doctor_details_toggle.setText(f"{marker} {READINESS_COPY['details']}")
 
     def _on_doctor_details_clicked(self) -> None:
         self._doctor_details_expanded = not self._doctor_details_expanded
@@ -7991,6 +8020,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "workbench_stack"):
             self.workbench_stack.show()
         previous = getattr(self, "_work_mode", None)
+        if previous != mode or reset_session:
+            self._invalidate_task_readiness()
         if not hasattr(self, "_mode_sessions"):
             self._mode_sessions = {}
 
@@ -8116,6 +8147,7 @@ class MainWindow(QMainWindow):
         resume_available: tuple[bool, str] | None = None,
     ) -> None:
         """Show/hide EmptyState widgets on prepare/execute pages (P3 / #166)."""
+        self._sync_readiness_display()
         doctor_done = bool(getattr(self, "_doctor_check_completed", False))
         running = bool(getattr(self, "_task_running", False)) or (
             hasattr(self, "kill_btn") and self.kill_btn.isEnabled()
@@ -8463,6 +8495,12 @@ class MainWindow(QMainWindow):
     def _mark_revision_corpus_doctor_report_stale(self) -> None:
         """Invalidate the cached translation count after a write-capable job."""
         self._revision_corpus_doctor_report_stale = True
+        self._readiness_doctor_summary = stale_summary()
+        self._readiness_doctor_report = None
+        self._readiness_doctor_identity = None
+        self._readiness_doctor_error = ""
+        self._invalidate_task_readiness()
+        self._sync_readiness_display()
 
     def _revision_corpus_export_preflight(self) -> tuple[bool, str]:
         """Return whether the read-only corpus export may be started."""
@@ -9093,6 +9131,8 @@ class MainWindow(QMainWindow):
 
     def _on_translation_target_selected(self, profile_id: str, strategy: str) -> None:
         """Apply an explicit profile/strategy choice from the unified page."""
+        if getattr(self, "_translation_target", {}) != {"profile_id": profile_id, "strategy": strategy}:
+            self._invalidate_task_readiness()
         self._translation_target = {
             "profile_id": str(profile_id or ""),
             "strategy": str(strategy or ""),
@@ -9117,6 +9157,7 @@ class MainWindow(QMainWindow):
                 ),
                 4000,
             )
+        self._sync_readiness_display()
 
     def _apply_work_mode_ui(
         self,
@@ -10876,6 +10917,7 @@ class MainWindow(QMainWindow):
         self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
         self._refresh_api_status()
+        self._sync_readiness_display()
         # Drop workspace dirty chrome after discard-via-reload (same as save).
         if "save_config_btn" in self.__dict__:
             self._sync_settings_action_bar_enabled(
@@ -11072,6 +11114,7 @@ class MainWindow(QMainWindow):
         # prior globals after the check (issue #216 phase 2).
         doctor_config = self._snapshot_runtime_config_for_job(persist_corrected_game_root=False)
         worker = DoctorWorker(config=doctor_config, parent=self)
+        worker._rtl_readiness_identity = self._readiness_project_identity()
         self._wire_doctor_worker_terminal(worker)
         worker.completed.connect(self._on_doctor_completed)
         self._doctor_worker = worker
@@ -11090,6 +11133,13 @@ class MainWindow(QMainWindow):
         if getattr(self, "_shutdown_requested", False):
             return
 
+        identity = getattr(worker, "_rtl_readiness_identity", None)
+        if identity is not None and identity != self._readiness_project_identity():
+            self._readiness_doctor_summary = stale_summary()
+            self._readiness_doctor_report = None
+            self._sync_readiness_display()
+            return
+
         log_text = result.log_text.strip()
         if log_text:
             self._doctor_output_lines = log_text.splitlines()
@@ -11102,6 +11152,9 @@ class MainWindow(QMainWindow):
 
         api_key_count, api_key_source = self.state.get_api_key_status()
         if result.ok and result.report is not None:
+            self._readiness_doctor_error = ""
+            self._readiness_doctor_report = result.report
+            self._readiness_doctor_identity = self._readiness_project_identity()
             self._last_doctor_report = result.report
             self._last_doctor_report_game_root = self.state.get_game_root() or ""
             self._revision_corpus_doctor_report_stale = False
@@ -11138,6 +11191,9 @@ class MainWindow(QMainWindow):
                 status_message = "项目检查完成。当前项目未在总表中登记。"
             self.statusBar().showMessage(status_message, 8000)
         else:
+            self._readiness_doctor_report = None
+            self._readiness_doctor_identity = self._readiness_project_identity()
+            self._readiness_doctor_error = result.error or log_text
             summary = summarize_doctor_output(
                 result.error or log_text,
                 exit_code=-1,
@@ -11571,11 +11627,16 @@ class MainWindow(QMainWindow):
         if profile_id:
             args.extend(["--profile", profile_id])
         args.extend(["--output", "json", "--non-interactive"])
+        self._invalidate_task_readiness()
         self._pending_translation_start = {
             "mode": spec.mode,
             "strategy": strategy,
             "profile_id": profile_id,
+            "readiness_identity": self._readiness_task_identity(),
         }
+        self._readiness_preflight_identity = self._readiness_task_identity()
+        self._readiness_preflight_status = "running"
+        self._readiness_preflight_payload = None
         self._translate_preflight_output_lines = []
         self._clear_log_view()
         self._show_workbench_log_drawer()
@@ -11588,6 +11649,8 @@ class MainWindow(QMainWindow):
             args,
         )
         if not started:
+            self._readiness_preflight_status = "failed"
+            self._sync_readiness_display()
             self._pending_translation_start = None
             message_box_information(
                 self,
@@ -11595,13 +11658,21 @@ class MainWindow(QMainWindow):
                 TRANSLATION_PREFLIGHT_COPY["start_failed_message"],
             )
 
-    def _start_translation_workflow_now(self) -> None:
+    def _start_translation_workflow_now(self, *, expected_identity: tuple | None = None) -> None:
         """Create and run the pending translation workflow after preflight."""
         pending = getattr(self, "_pending_translation_start", None)
+        if expected_identity is not None and (
+            not isinstance(pending, Mapping)
+            or pending.get("readiness_identity") != expected_identity
+        ):
+            return
         self._pending_translation_start = None
         self._durable_status_run_id = ""
         self._durable_status_identity_warning_shown = False
         if not isinstance(pending, Mapping):
+            return
+        if pending.get("readiness_identity") is not None and pending["readiness_identity"] != self._readiness_task_identity():
+            self._sync_readiness_display()
             return
         try:
             spec = work_mode_spec(pending.get("mode"))
@@ -13732,12 +13803,16 @@ class MainWindow(QMainWindow):
         *,
         resume_available: tuple[bool, str] | None = None,
     ) -> None:
+        self._readiness_doctor_summary = summary
+        if summary.status in {"idle", "running", "stale"}:
+            self._readiness_doctor_report = None
+            self._readiness_doctor_identity = None
+            self._readiness_doctor_error = ""
+            self._invalidate_task_readiness()
         self._doctor_summary_mode = summary.mode
         self._doctor_summary_status = summary.status
         self.doctor_status_label.set_status(summary.status, summary.heading)
-        self.doctor_message_label.setText(summary.message)
-        self.doctor_facts_label.setText("\n".join(summary.facts))
-        self._set_doctor_detail_facts(summary.detail_facts)
+        self._sync_readiness_display()
         self._sync_doctor_coverage_buttons()
         self._update_translate_button_label()
         spec = work_mode_spec(self._current_work_mode())
@@ -13759,6 +13834,89 @@ class MainWindow(QMainWindow):
         # _resume_task_available's manifest history walk.
         self._sync_workbench_empty_states(resume_available=resume_available)
         self._sync_layout_sizes()
+
+    def _readiness_project_identity(self) -> str | None:
+        """Bind presentation to saved project settings, never log their contents."""
+        from project_context_settings import load_project_context_settings
+
+        try:
+            root = str(self.state.get_game_root() or "")
+            config = self.state.load_translator_config()
+            flags = load_project_context_settings(root)
+            credentials = self.state.get_api_key_status()
+            encoded = json.dumps([root, config, flags, credentials], sort_keys=True, ensure_ascii=False).encode("utf-8")
+        except (OSError, ValueError, TypeError):
+            return None
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _readiness_task_identity(self, *, project_identity: str | None = None) -> tuple:
+        target = getattr(self, "_translation_target", {}) or {}
+        return (
+            project_identity or self._readiness_project_identity(),
+            self._current_work_mode(),
+            str(target.get("profile_id") or ""),
+            str(target.get("strategy") or ""),
+            getattr(self, "_readiness_task_generation", 0),
+        )
+
+    def _invalidate_task_readiness(self) -> None:
+        self._readiness_task_generation = getattr(self, "_readiness_task_generation", 0) + 1
+        if getattr(self, "_readiness_preflight_status", "idle") != "idle":
+            self._readiness_preflight_status = "stale"
+            self._readiness_preflight_payload = None
+
+    def _sync_readiness_display(self) -> None:
+        """Render two pages from owned evidence; never update execution gates."""
+        if not hasattr(self, "doctor_message_label"):
+            return
+        summary = getattr(self, "_readiness_doctor_summary", idle_summary())
+        report = getattr(self, "_readiness_doctor_report", None)
+        status = getattr(self, "_readiness_preflight_status", "idle")
+        bound = getattr(self, "_readiness_doctor_identity", None)
+        identity = self._readiness_project_identity() if bound is not None or status != "idle" else None
+        if bound is not None and (identity is None or identity != bound):
+            summary = stale_summary()
+            self._readiness_doctor_summary = summary
+            self._readiness_doctor_report = None
+            self._readiness_doctor_identity = None
+            self._readiness_doctor_error = ""
+            report = None
+            self._invalidate_task_readiness()
+        completed = bool(report is not None and getattr(self, "_doctor_check_completed", False))
+        key_count = self.state.get_api_key_status()[0] if completed else None
+        overview = doctor_overview(summary, report, completed=completed, api_key_count=key_count)
+        self.doctor_status_label.set_status(summary.status, summary.heading)
+        # Work/template preparation shares this surface, but is not doctor
+        # evidence. Keep its own result visible without claiming a fresh scan.
+        preparation_result = report is None and bool(summary.mode)
+        self.doctor_message_label.setText(summary.message if preparation_result else overview.message)
+        primary_facts = summary.facts if preparation_result else [overview.counts, *overview.attention]
+        self.doctor_facts_label.setText("\n".join(primary_facts))
+        details = list(overview.details)
+        if getattr(self, "_readiness_doctor_error", ""):
+            details.append(self._readiness_doctor_error)
+        self._set_doctor_detail_facts(details)
+        for key, button in getattr(self, "_doctor_settings_buttons", {}).items():
+            button.setVisible(key in overview.settings)
+            button.setEnabled(not getattr(self, "_task_running", False))
+        if hasattr(self, "doctor_settings_row"):
+            self.doctor_settings_row.setVisible(bool(overview.settings))
+        if status != "idle" and getattr(self, "_readiness_preflight_identity", None) != self._readiness_task_identity(project_identity=identity):
+            status = "stale"
+            self._readiness_preflight_status = status
+            self._readiness_preflight_payload = None
+        project_line = overview.message if self.state.get_game_root() else READINESS_COPY["empty"]
+        lines = [project_line]
+        if completed:
+            lines.append(overview.counts)
+        lines.append(preflight_line(status, getattr(self, "_readiness_preflight_payload", None)))
+        if not self._translation_target_is_runnable():
+            lines.append(READINESS_COPY["unsupported"])
+        elif getattr(self, "_task_running", False):
+            lines.append(READINESS_COPY["busy"])
+        lines.append(READINESS_COPY["writeback"])
+        for section in (getattr(self, "_translation_target_sections", {}) or {}).values():
+            section.set_readiness_summary("\n".join(lines), details="\n".join(overview.attention))
 
     def _on_runner_error(self, message: str):
         self._append_log(message)
@@ -13875,6 +14033,14 @@ class MainWindow(QMainWindow):
             return
 
         if self._active_command == "translate_preflight":
+            pending = getattr(self, "_pending_translation_start", None) or {}
+            requested_identity = pending.get("readiness_identity")
+            if requested_identity is not None and requested_identity != self._readiness_task_identity():
+                self._pending_translation_start = None
+                self._active_command = ""
+                self._set_task_running(False)
+                self._sync_readiness_display()
+                return
             output = "\n".join(self._translate_preflight_output_lines)
             try:
                 envelope = cli_contract.parse_result_envelope(output)
@@ -13886,6 +14052,14 @@ class MainWindow(QMainWindow):
                 envelope_status = str(envelope.get("status") or "")
                 raw_result = envelope.get("result")
                 payload = dict(raw_result) if isinstance(raw_result, Mapping) else {}
+            self._readiness_preflight_identity = self._readiness_task_identity()
+            self._readiness_preflight_status = (
+                "failed" if exit_code != 0
+                else "blocked" if envelope_status == "blocked" or payload.get("status") == "blocked"
+                else str(payload.get("status") or envelope_status or "failed") if payload
+                else "failed"
+            )
+            self._readiness_preflight_payload = payload or None
             self._active_command = ""
             self._set_task_running(False)
             if not payload:
@@ -13926,7 +14100,11 @@ class MainWindow(QMainWindow):
             # Defer the next QProcess start until the runner's finished
             # callback has returned; starting it re-entrantly inside that
             # signal is not safe for every runner implementation.
-            QTimer.singleShot(0, self._start_translation_workflow_now)
+            expected_identity = pending.get("readiness_identity")
+            QTimer.singleShot(
+                0,
+                lambda: self._start_translation_workflow_now(expected_identity=expected_identity),
+            )
             return
 
         if self._active_command == "profile_probe":
@@ -15317,6 +15495,7 @@ class MainWindow(QMainWindow):
                 self._game_root_str_for_flags() or "",
                 dict(result.project_context_flags),
             )
+            self._sync_readiness_display()
             self._append_log(
                 f"当前项目上下文开关已保存：{project_settings_path}"
             )
