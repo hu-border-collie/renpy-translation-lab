@@ -115,7 +115,8 @@ class GuiDiagnosticsAccessibilityTests(unittest.TestCase):
     def test_doctor_details_toggle_accepts_keyboard_focus(self) -> None:
         toggle = self.window.doctor_details_toggle
         self.assertEqual(toggle.focusPolicy(), Qt.FocusPolicy.StrongFocus)
-        self.assertEqual(toggle.accessibleName(), "更多详情")
+        from gui_qt.user_copy import READINESS_COPY
+        self.assertEqual(toggle.accessibleName(), READINESS_COPY["details"])
 
     def test_split_status_table_accepts_keyboard_focus(self) -> None:
         table = self.window.split_status_table
