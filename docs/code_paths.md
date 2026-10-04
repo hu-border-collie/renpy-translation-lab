@@ -302,12 +302,17 @@
   `RevisionProposalConfirmWorkflow` 与 `RevisionCorpusExportWorkflow`；
   写回按钮 `_on_apply_revision()` → `apply-revisions <manifest>`，摘要由
   `gui_qt/revision_writeback_report.py` / `gui_qt/revision_report.py` 生成。
+- 阶段呈现：`MainWindow._sync_revision_page_controls()` →
+  `RevisionPage.set_guidance_state()` → `gui_qt/revision_guidance.py`；仅投影 workflow、
+  服务摘要、候选会话和审校状态，不授权动作。取消导入与跳过可选配套语料由
+  `_choose_revision_corpus_manifest()` 区分；仍汇入同一提案导入路径。
 - 纯核心：`revision_corpus.py`（只读导出）、`revision_proposals.py`（导入校验）、
   `revision_selection.py`（选择/摘要绑定）、`final_review_revision.py`（审校联动）、
   `review_index.py`（#427 逐条审校索引、独立决定日志与 `needs_recheck` 绑定语义）。
 - CLI：`review-index-build` / `review-index-status` / `review-decisions-import` /
   `review-decisions-export`（只读写本地 index 包，不触碰写回授权）。
 - 测试：`tests.test_gui_revision_workflow`、`tests.test_gui_sync_revision_workflow`、
+  `tests.test_gui_revision_guidance`（原创离线 fixture、窗口接线与取消/停止/失效）、
   `tests.test_gui_revision_selection`、`tests.test_gui_revision_writeback_report`、
   `tests.test_gui_revision_report`、`tests.test_gui_revision_corpus`、
   `tests.test_revision_proposals`、`tests.test_revision_corpus`、`tests.test_review_index`、

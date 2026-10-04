@@ -729,12 +729,12 @@ def idle_writeback_summary_for_work_mode(mode) -> WritebackSummary:
             message = "关键词模式只生成报告，不会修改游戏脚本。"
         elif spec.mode == WorkMode.REVISION:
             message = (
-                "订正写回与普通翻译分开；请先在左侧「订正」生成预览，"
-                "再在结果区点击「写回订正」确认。"
+                "请在「订正」点击「生成订正预览」，或导入润色提案并明确选择候选生成预览；"
+                "阅读报告后点击「写回订正」确认。"
             )
         elif spec.mode == WorkMode.SYNC_REVISION:
             message = (
-                "同步订正默认只出预览报告；请先在左侧「订正」生成预览，再在结果区点击「写回订正」。"
+                "同步订正默认只出预览报告；请在「订正」点击「生成订正预览」，阅读报告后点击「写回订正」。"
             )
         elif spec.mode == WorkMode.FINAL_REVIEW:
             message = (

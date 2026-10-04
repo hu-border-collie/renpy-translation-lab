@@ -46,6 +46,7 @@ class ReviewWorkspaceWidget(QWidget):
     """Review one exported corpus; all displayed rows are from a bounded page."""
 
     proposal_ready = Signal(str, str)
+    review_state_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -196,6 +197,7 @@ class ReviewWorkspaceWidget(QWidget):
         self.details.clear()
         self._set_editor_enabled(False)
         self.message.setText(COPY["empty"])
+        self.review_state_changed.emit()
 
     def load(self, corpus_path: str, game_root: str, tl_dir: str, current_context: Callable[[], str]) -> None:
         self.reset()
@@ -225,9 +227,11 @@ class ReviewWorkspaceWidget(QWidget):
             self.message.setText(f"{COPY['draft_error']} {exc}")
             self.manifest = None
             self.entries = []
+            self.review_state_changed.emit()
             return
         self.page_number = 0
         self._render_page()
+        self.review_state_changed.emit()
 
     def _failed(self, token: object, message: str) -> None:
         if self._current_token(token):
