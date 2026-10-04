@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -344,6 +346,7 @@ class ReadinessSummaryTests(unittest.TestCase):
         cfg.log_dir = str(self.root.parent / "logs")
         cfg.model_routing_config = section
         with (
+            redirect_stdout(io.StringIO()),
             runtime.runtime_config_scope(cfg),
             mock.patch.object(
                 runtime,
