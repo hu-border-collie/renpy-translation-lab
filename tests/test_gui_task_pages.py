@@ -856,11 +856,9 @@ class GuiTaskPageTests(unittest.TestCase):
             ),
             mock.patch(
                 "gui_qt.app.QFileDialog.getOpenFileName",
-                side_effect=[
-                    (proposal_path, "JSON Lines (*.jsonl)"),
-                    (corpus_manifest_path, "JSON (*.json)"),
-                ],
+                return_value=(proposal_path, "JSON Lines (*.jsonl)"),
             ),
+            mock.patch.object(self.window, "_choose_revision_corpus_manifest", return_value=corpus_manifest_path),
             mock.patch.object(self.window, "_set_writeback_summary") as set_summary,
             mock.patch.object(self.window, "_clear_log_view") as clear_log,
             mock.patch.object(self.window, "_show_workbench_log_drawer") as show_log,

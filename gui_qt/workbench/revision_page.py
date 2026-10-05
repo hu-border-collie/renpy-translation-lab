@@ -17,10 +17,12 @@ from PySide6.QtWidgets import (
 
 from ..empty_state import EmptyStateWidget
 from ..revision_corpus_report import RevisionCorpusExportResult
+from ..revision_guidance import revision_guidance
 from ..user_copy import (
     REVIEW_WORKSPACE_COPY,
     REVISION_CORPUS_COPY,
     REVISION_PROPOSAL_COPY,
+    REVISION_GUIDANCE_COPY,
     TASK_PROJECT_GATE_COPY,
 )
 from ..work_modes import WorkMode, work_mode_submode_label
@@ -42,6 +44,8 @@ class RevisionPage(QFrame):
         self._actions = WorkbenchPageActions()
         self._running = False
         self._active_mode = WorkMode.REVISION
+        self._guidance_state: dict[str, object] = {}
+        self.guidance_workflow_status = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -77,9 +81,17 @@ class RevisionPage(QFrame):
             self.mode_combo,
         )
 
+        self.guidance_title = self.task_layout.add_result_hint("")
+        self.guidance_title.setObjectName("revision_guidance_title")
+        self.guidance_message = self.task_layout.add_result_hint("")
+        self.guidance_message.setObjectName("revision_guidance_message")
         self.actions = self.task_layout.add_section(
-            "订正任务",
+            REVISION_GUIDANCE_COPY["model_title"],
             role="revision",
+        )
+        self.external_actions = self.task_layout.add_section(
+            REVISION_GUIDANCE_COPY["external_title"], role="revision_external",
+            secondary=True,
         )
         self.start_btn = QPushButton("生成订正预览")
         self.start_btn.setObjectName("revision_start_btn")
@@ -92,20 +104,20 @@ class RevisionPage(QFrame):
         self.export_corpus_btn.setEnabled(False)
         self.export_corpus_btn.setToolTip(REVISION_CORPUS_COPY["tooltip"])
         self.export_corpus_btn.clicked.connect(self._trigger_export_corpus)
-        self.actions.add_action(self.export_corpus_btn, min_width=128)
+        self.external_actions.add_action(self.export_corpus_btn, min_width=128)
 
         self.import_proposals_btn = QPushButton(REVISION_PROPOSAL_COPY["action"])
         self.import_proposals_btn.setObjectName("revision_import_proposals_btn")
         self.import_proposals_btn.setEnabled(False)
         self.import_proposals_btn.setToolTip(REVISION_PROPOSAL_COPY["tooltip"])
         self.import_proposals_btn.clicked.connect(self._trigger_import_proposals)
-        self.actions.add_action(self.import_proposals_btn, min_width=128)
+        self.external_actions.add_action(self.import_proposals_btn, min_width=128)
 
         self.open_review_btn = QPushButton(REVIEW_WORKSPACE_COPY["open"])
         self.open_review_btn.setObjectName("revision_open_review_btn")
         self.open_review_btn.setToolTip(REVIEW_WORKSPACE_COPY["tooltip"])
         self.open_review_btn.clicked.connect(self._trigger_open_review)
-        self.actions.add_action(self.open_review_btn, min_width=128)
+        self.external_actions.add_action(self.open_review_btn, min_width=128)
 
         self.resume_btn = QPushButton("继续订正")
         self.resume_btn.setObjectName("revision_resume_btn")
@@ -133,10 +145,13 @@ class RevisionPage(QFrame):
         self.review_findings_btn.clicked.connect(self._trigger_review_findings)
         self.actions.add_action(self.review_findings_btn, min_width=160)
         self.actions.finish_setup()
+        self.external_actions.finish_setup()
 
         self.result_hint = self.task_layout.add_result_hint(
             "生成预览后，可在此确认订正结果并安全写回。"
         )
+        # Guidance owns the next step; detailed outcomes remain in task status.
+        self.result_hint.setVisible(False)
 
         self.corpus_result = QFrame(self.content_page)
         self.corpus_result.setObjectName("revision_corpus_result")
@@ -217,16 +232,21 @@ class RevisionPage(QFrame):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         proposal_layout.addWidget(self.proposal_result_session, 2, 0, 1, 2)
-        self.select_proposals_btn = QPushButton(REVISION_PROPOSAL_COPY["select_action"])
+        self.select_proposals_btn = QPushButton(
+            REVISION_PROPOSAL_COPY["select_action"], self.external_actions.action_bar,
+        )
         self.select_proposals_btn.setObjectName("revision_select_proposals_btn")
         self.select_proposals_btn.setEnabled(False)
+        self.select_proposals_btn.setVisible(False)
         self.select_proposals_btn.clicked.connect(self._trigger_select_proposals)
-        proposal_layout.addWidget(self.select_proposals_btn, 3, 0)
+        self.external_actions.add_action(self.select_proposals_btn, min_width=160)
+        self.external_actions.finish_setup()
         proposal_layout.setColumnStretch(1, 1)
         self.proposal_result.setVisible(False)
         self.task_layout.root.addWidget(self.proposal_result)
 
         self.review_workspace = ReviewWorkspaceWidget(self.content_page)
+        self.review_workspace.review_state_changed.connect(self._refresh_guidance)
         self.review_workspace.setVisible(False)
         self.task_layout.root.addWidget(self.review_workspace)
 
@@ -273,6 +293,7 @@ class RevisionPage(QFrame):
         facts: list[str] | None = None,
     ) -> None:
         """Render workflow progress inside the page (#298)."""
+        self.guidance_workflow_status = status
         self.status_section.set_status(status, heading, message, facts)
 
     def set_workflow_progress(self, state: object | None) -> None:
@@ -301,6 +322,7 @@ class RevisionPage(QFrame):
     ) -> None:
         """Render the structured corpus artifact result independently of writeback."""
         self._corpus_export_result = result
+        self._refresh_guidance()
         if result is None:
             self.corpus_result.setVisible(False)
             self.corpus_result_summary.setText("")
@@ -340,6 +362,8 @@ class RevisionPage(QFrame):
     def set_proposal_stage_result(self, result: dict[str, object] | None) -> None:
         """Render the structured staged-selection summary without parsing stdout."""
         self._proposal_stage_result = result
+        self._refresh_guidance()
+        self.select_proposals_btn.setVisible(result is not None)
         if result is None:
             self.proposal_result.setVisible(False)
             self.proposal_result_summary.setText("")
@@ -398,13 +422,18 @@ class RevisionPage(QFrame):
         if mode not in self.supported_modes:
             raise ValueError(f"Unsupported revision mode: {mode.value}")
         self._active_mode = mode
+        self.guidance_workflow_status = session.workflow_status
+        self._guidance_state = {}
         index = self.mode_combo.findData(mode.value)
         if index >= 0:
             blocked = self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(index)
             self.mode_combo.blockSignals(blocked)
         final_review = mode == WorkMode.FINAL_REVIEW
-        self.actions.title_label.setText("最终审校任务" if final_review else "订正任务")
+        # The final-review campaign counts/reasons are an existing detail surface.
+        self.result_hint.setVisible(final_review)
+        self.actions.title_label.setText("最终审校 / 预览 / 写回" if final_review else REVISION_GUIDANCE_COPY["model_title"])
+        self.external_actions.setVisible(mode == WorkMode.REVISION)
         self.start_btn.setText("开始最终审校" if final_review else "生成订正预览")
         self.writeback_btn.setText("写回所选订正" if final_review else "写回订正")
         self.review_findings_btn.setVisible(final_review)
@@ -427,6 +456,7 @@ class RevisionPage(QFrame):
             if mode == WorkMode.REVISION
             else None
         )
+        self._refresh_guidance()
 
     def set_task_running(self, running: bool) -> None:
         self._running = running
@@ -492,6 +522,8 @@ class RevisionPage(QFrame):
         self.updateGeometry()
 
     def reset_project(self) -> None:
+        self._guidance_state = {}
+        self.guidance_workflow_status = ""
         self.review_workspace.reset()
         self.review_workspace.setVisible(False)
         self.set_task_running(False)
@@ -510,6 +542,33 @@ class RevisionPage(QFrame):
             export_enabled=False,
             export_tooltip=REVISION_CORPUS_COPY["gate_no_project"],
         )
+        self._refresh_guidance()
+
+    def set_guidance_state(self, **state: object) -> None:
+        """Accept the coordinator's current presentation snapshot, not UI flags."""
+        self._guidance_state = dict(state)
+        self._refresh_guidance()
+
+    def _refresh_guidance(self) -> None:
+        state = self._guidance_state
+        corpus = self.corpus_export_result()
+        key, title, message = revision_guidance(
+            mode=self._active_mode, running=bool(state.get("running")),
+            stopped=bool(state.get("stopped")),
+            workflow_status=str(state.get("workflow_status") or ""),
+            writeback_status=str(state.get("writeback_status") or ""),
+            can_apply=bool(state.get("can_apply")),
+            has_preview=bool(state.get("has_preview")),
+            proposal=self.proposal_stage_result(),
+            reviewing=self.review_workspace.manifest is not None,
+            has_corpus=corpus is not None and corpus.item_count > 0,
+            resume_available=bool(state.get("resume_available")),
+            findings_available=bool(state.get("findings_available")),
+        )
+        self.guidance_title.setText(f"当前阶段：{title}")
+        self.guidance_title.setProperty("stage", key)
+        self.guidance_message.setText(f"下一步：{message}")
+        self.updateGeometry()
 
     def _trigger_mode_change(self) -> None:
         mode = WorkMode(str(self.mode_combo.currentData()))

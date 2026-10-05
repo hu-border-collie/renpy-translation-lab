@@ -8714,6 +8714,8 @@ class MainWindow(QMainWindow):
             page = getattr(self, "revision_page", None)
             if page is not None:
                 page.set_proposal_stage_result(None)
+            self._set_writeback_summary(idle_writeback_summary_for_work_mode(WorkMode.REVISION))
+            self._set_workflow_summary("stale", "候选会话已过期", REVISION_PROPOSAL_COPY["selection_stale"], [])
             return
 
         dialog = RevisionProposalSelectionDialog(stage, self)
@@ -8759,6 +8761,27 @@ class MainWindow(QMainWindow):
             latest_manifest=manifest_path,
             manifest=manifest,
         )
+
+    def _choose_revision_corpus_manifest(self, proposal_path: str) -> str | None:
+        """Distinguish skipping optional evidence from cancelling import."""
+        message = QMessageBox(self)
+        message.setWindowTitle(REVISION_PROPOSAL_COPY["corpus_choice_title"])
+        message.setText(REVISION_PROPOSAL_COPY["corpus_choice_body"])
+        choose = message.addButton(REVISION_PROPOSAL_COPY["corpus_choose"], QMessageBox.ButtonRole.ActionRole)
+        without = message.addButton(REVISION_PROPOSAL_COPY["corpus_without"], QMessageBox.ButtonRole.ActionRole)
+        cancel = message.addButton(REVISION_PROPOSAL_COPY["corpus_cancel"], QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(choose)
+        message.setEscapeButton(cancel)
+        message.exec()
+        if message.clickedButton() is without:
+            return ""
+        if message.clickedButton() is not choose:
+            return None
+        selected, _filter = QFileDialog.getOpenFileName(
+            self, REVISION_PROPOSAL_COPY["corpus_dialog_title"],
+            str(Path(proposal_path).parent), "JSON (*.json);;All files (*)",
+        )
+        return selected or None
 
     def _on_final_review_page_action(self, action: str) -> None:
         """Start manual finding selection only for a completed review campaign."""
@@ -8816,12 +8839,9 @@ class MainWindow(QMainWindow):
             if companion_manifest.is_file():
                 corpus_manifest_path = str(companion_manifest)
             else:
-                corpus_manifest_path, _filter = QFileDialog.getOpenFileName(
-                    self,
-                    REVISION_PROPOSAL_COPY["corpus_dialog_title"],
-                    str(Path(selected).parent),
-                    "JSON (*.json);;All files (*)",
-                )
+                corpus_manifest_path = self._choose_revision_corpus_manifest(selected)
+                if corpus_manifest_path is None:
+                    return
             self._import_review_workspace_proposals(selected, corpus_manifest_path)
             return
         if action == "select_revision_proposals":
@@ -8981,6 +9001,16 @@ class MainWindow(QMainWindow):
                 and int(proposal_stage_result.get("selectable_count") or 0) > 0
             ),
             result_message=result_message,
+        )
+        page.set_guidance_state(
+            running=running,
+            stopped=bool(getattr(self.runner, "stop_requested", False)),
+            workflow_status=page.guidance_workflow_status,
+            writeback_status=summary.status,
+            can_apply=summary.can_apply,
+            has_preview=bool(summary.manifest_path),
+            resume_available=self.resume_btn.isEnabled(),
+            findings_available=findings_enabled,
         )
         if workbench_nav_for_work_mode(mode) == WorkbenchNavItem.REVISION:
             self._refresh_active_workbench_page(work_mode_spec(mode))
@@ -12059,6 +12089,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("环境检查已取消。", 6000)
             return
         self.runner.kill()
+        self._sync_revision_page_controls()
 
     def _prompt_probe_options(self) -> dict[str, int | None] | None:
         dialog = QDialog(self)
@@ -13387,6 +13418,9 @@ class MainWindow(QMainWindow):
         self._set_task_running(True)
         started = self.runner.run(script_path, args)
         if started is not False:
+            # run() clears the previous process's stop flag; project that new
+            # owner after startup so a resumed task does not look stopped.
+            self._sync_revision_page_controls()
             # Some lightweight test runners predate the bool contract and
             # return None; only an explicit False means the start was rejected.
             return True
@@ -14628,16 +14662,30 @@ class MainWindow(QMainWindow):
             update = workflow.stale_update()
         else:
             update = workflow.complete_current_step(exit_code, step_output)
+        if (
+            self._uses_revision_writeback() and exit_code == -1
+            and self.runner.stop_requested and update.status == "failed"
+        ):
+            update = WorkflowUpdate(
+                status="stopped", heading="本机订正执行已停止",
+                message=update.message, facts=update.facts,
+                should_continue=False, timeline_step_key=update.timeline_step_key,
+            )
         if is_revision_corpus_export_workflow:
             self._revision_corpus_export_result = workflow.result
             page = getattr(self, "revision_page", None)
             if page is not None:
                 page.set_corpus_export_result(workflow.result)
         if is_revision_proposal_import_workflow:
-            self._revision_proposal_stage_result = workflow.stage_result
+            # A success envelope may arrive just before a stopped process exits.
+            # Only publish candidates from a completed current import operation.
+            self._revision_proposal_stage_result = (
+                None if update.status in {"failed", "stopped", "stale"}
+                else workflow.stage_result
+            )
             page = getattr(self, "revision_page", None)
             if page is not None:
-                page.set_proposal_stage_result(workflow.stage_result)
+                page.set_proposal_stage_result(self._revision_proposal_stage_result)
         if is_sync_translation_workflow:
             snapshot = getattr(workflow, "run_snapshot", None)
             run_is_terminal = False
@@ -14774,6 +14822,8 @@ class MainWindow(QMainWindow):
                 else "翻译任务失败，请查看诊断日志。"
             )
             self.statusBar().showMessage(message, 8000)
+        elif update.status == "stopped":
+            self.statusBar().showMessage(update.heading, 8000)
         elif update.status == "waiting":
             self.statusBar().showMessage("批量任务仍在处理，可稍后继续最新任务。", 8000)
         elif archive_completed:

@@ -124,6 +124,11 @@ class CliRunner(QObject):
         """
         return self._proc is not None
 
+    @property
+    def stop_requested(self) -> bool:
+        """Whether the current/latest local process was explicitly stopped."""
+        return self._stop_requested
+
     def is_running(self) -> bool:
         """Backward-compatible alias for :meth:`is_active`."""
         return self.is_active()
