@@ -2,3 +2,5 @@
 # Gemini Batch and the default GUI/CLI do not require this dependency.
 litellm==1.88.6
 keyring==25.7.0
+# Security floor for aiohttp's transitive dependency (GHSA-54p9-h82j-f925).
+multidict>=6.9.1
