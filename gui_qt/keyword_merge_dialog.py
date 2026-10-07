@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from .keyword_merge_report import format_merge_preview_text
+from .theme_tokens import tokens_for_theme
 from .user_copy import KEYWORD_CANDIDATE_COPY
 from .widget_helpers import message_box_information, message_box_question, message_box_warning
 
@@ -99,6 +100,7 @@ class KeywordMergeDialog(QDialog):
         layout.addLayout(selection_row)
 
         self.table = QTableWidget(0, 8)
+        self.table.setObjectName("keyword_merge_table")
         self.table.setHorizontalHeaderLabels(
             [
                 "写入",
@@ -193,6 +195,18 @@ class KeywordMergeDialog(QDialog):
                     item.setForeground(warn_color)
                 self.table.setItem(table_row, column, item)
         self.table.blockSignals(False)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        # The table's styled Base follows the explicit application theme,
+        # including when Windows uses the opposite native palette.
+        self.table.ensurePolished()
+        theme = "dark" if self.table.palette().base().color().lightness() < 128 else "light"
+        warning = QBrush(QColor(tokens_for_theme(theme)["badge_warning_fg"]))
+        for table_row, row in enumerate(self._rows):
+            if row.warnings:
+                for column in range(1, self.table.columnCount()):
+                    self.table.item(table_row, column).setForeground(warning)
 
     def _selected_indices(self) -> set[int]:
         selected: set[int] = set()

@@ -14,7 +14,7 @@ import model_profiles_editor as editor
 try:
     from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 except ImportError as exc:
     MainWindow = None
     IMPORT_ERROR = exc
@@ -119,6 +119,24 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(page.collect()["model_routing"]["defaults"], {
             "primary_profile_id": alternate, "execution_strategy": "sync",
         })
+        self.save_mock.assert_not_called()
+
+    def test_direct_model_entry_reveals_defaults_in_active_narrow_window(self) -> None:
+        self.window._focus_settings_section("models")
+        self.window.activateWindow()
+        self.window.setFocus()
+        self.process()
+        button = next(
+            button for button in self.window.findChildren(QPushButton)
+            if button.text() == "打开统一模型编辑器"
+        )
+        button.setFocus()
+        button.click()
+        self.process()
+        page = self.window._profiles_page()
+        self.assert_in_viewport(page.default_profile_combo, page.widget.viewport())
+        self.assert_in_viewport(page.default_strategy_combo, page.widget.viewport())
+        self.assertIsNot(self.app.focusWidget(), page.remove_btn)
         self.save_mock.assert_not_called()
 
     def test_all_categories_select_real_pages_and_sync_with_direct_navigation(self) -> None:

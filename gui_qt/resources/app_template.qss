@@ -1324,6 +1324,7 @@ QTableWidget#revision_selection_table,
 QTableWidget#engine_snapshot_table,
 QTableWidget#engine_snapshot_diff_table,
 QTableWidget#engine_snapshot_reuse_table,
+QTableWidget#keyword_merge_table,
 QTableWidget#review_entries_table {
     border: 1px solid ${border_table};
     border-radius: 8px;
@@ -1340,6 +1341,7 @@ QTableWidget#revision_selection_table::item,
 QTableWidget#engine_snapshot_table::item,
 QTableWidget#engine_snapshot_diff_table::item,
 QTableWidget#engine_snapshot_reuse_table::item,
+QTableWidget#keyword_merge_table::item,
 QTableWidget#review_entries_table::item {
     padding: 6px 8px;
     outline: none;
@@ -1351,6 +1353,7 @@ QTableWidget#revision_selection_table::item:hover,
 QTableWidget#engine_snapshot_table::item:hover,
 QTableWidget#engine_snapshot_diff_table::item:hover,
 QTableWidget#engine_snapshot_reuse_table::item:hover,
+QTableWidget#keyword_merge_table::item:hover,
 QTableWidget#review_entries_table::item:hover {
     background-color: ${bg_table_hover};
 }
@@ -1365,6 +1368,7 @@ QTableWidget#review_entries_table::item:selected {
     color: ${fg_table_selected};
 }
 
+QTableWidget#keyword_merge_table::item:selected,
 QTableWidget#custom_provider_table::item:selected {
     background-color: ${bg_table_selected_solid};
     color: ${fg_table_selected_solid};
@@ -1376,6 +1380,7 @@ QTableWidget#revision_selection_table QHeaderView::section,
 QTableWidget#engine_snapshot_table QHeaderView::section,
 QTableWidget#engine_snapshot_diff_table QHeaderView::section,
 QTableWidget#engine_snapshot_reuse_table QHeaderView::section,
+QTableWidget#keyword_merge_table QHeaderView::section,
 QTableWidget#review_entries_table QHeaderView::section {
     background-color: ${bg_table_header};
     color: ${fg_table_header};
@@ -1387,21 +1392,49 @@ QTableWidget#review_entries_table QHeaderView::section {
     font-weight: 700;
 }
 
+QTableWidget#keyword_merge_table:focus,
 QTableWidget#custom_provider_table:focus {
     border-color: ${accent_primary};
 }
 
+QTableWidget#revision_selection_table::indicator,
+QTableWidget#keyword_merge_table::indicator {
+    width: 14px;
+    height: 14px;
+    border: 1px solid ${fg_table_header};
+    border-radius: 3px;
+    background-color: ${bg_table};
+}
+
+QTableWidget#revision_selection_table::indicator:checked,
+QTableWidget#keyword_merge_table::indicator:checked {
+    border-color: ${accent_primary};
+    background-color: ${accent_primary};
+}
+
+QTableWidget#revision_selection_table QHeaderView,
+QTableWidget#revision_selection_table QTableCornerButton::section,
+QTableWidget#keyword_merge_table QHeaderView,
+QTableWidget#keyword_merge_table QTableCornerButton::section {
+    background-color: ${bg_table_header};
+    border: none;
+}
+
+QTableWidget#keyword_merge_table:disabled,
 QTableWidget#custom_provider_table:disabled {
     background-color: ${bg_disabled};
     color: ${fg_disabled};
 }
 
+QTableWidget#keyword_merge_table::item:disabled,
+QTableWidget#keyword_merge_table::item:selected:disabled,
 QTableWidget#custom_provider_table::item:disabled,
 QTableWidget#custom_provider_table::item:selected:disabled {
     background-color: ${bg_disabled};
     color: ${fg_disabled};
 }
 
+QTableWidget#keyword_merge_table QHeaderView::section:disabled,
 QTableWidget#custom_provider_table QHeaderView::section:disabled {
     background-color: ${bg_disabled};
     color: ${fg_disabled};
