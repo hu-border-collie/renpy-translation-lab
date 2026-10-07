@@ -750,8 +750,8 @@ SETTINGS_WORKSPACE_IMMEDIATE_SAVE = (
 )
 
 SETTINGS_MODEL_ENTRY_COPY = {
-    "all_categories": "全部分类（{count}）",
-    "category_tooltip": "展开全部设置分类；切换分类会保留未保存的编辑。",
+    "category_navigation": "设置分类",
+    "category_tooltip": "横向滚动查看全部设置分类；切换分类会保留未保存的编辑。",
     "profiles": "打开统一模型编辑器",
     "models": "旧 Gemini 模型设置",
     "litellm": "旧 LiteLLM 设置",

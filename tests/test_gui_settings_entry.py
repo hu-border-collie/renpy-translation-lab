@@ -84,6 +84,14 @@ class SettingsEntryTests(unittest.TestCase):
             widget.objectName(),
         )
 
+    def assert_category_visible(self, item) -> None:
+        nav = self.window.settings_nav
+        rect = nav.visualItemRect(item)
+        viewport = nav.viewport().rect()
+        self.assertTrue(viewport.contains(rect.center()))
+        self.assertGreaterEqual(rect.left(), viewport.left())
+        self.assertLessEqual(rect.right(), viewport.right())
+
     def test_theme_setup_does_not_restyle_closed_pending_windows(self) -> None:
         restyled = []
 
@@ -140,59 +148,81 @@ class SettingsEntryTests(unittest.TestCase):
         self.save_mock.assert_not_called()
 
     def test_all_categories_select_real_pages_and_sync_with_direct_navigation(self) -> None:
-        selector = self.window.settings_category_combo
-        self.assertEqual(selector.count(), 11)
-        self.assert_in_viewport(selector, self.window._config_tab)
-        selector.showPopup()
+        nav = self.window.settings_nav
+        self.assertEqual(nav.count(), 11)
+        self.assertFalse(nav.isWrapping())
+        self.assert_in_viewport(nav, self.window._config_tab)
+        self.assertTrue(nav.horizontalScrollBar().isVisible())
+        self.assertGreater(nav.horizontalScrollBar().maximum(), 0)
+        nav.setFocus()
+        QTest.keyClick(nav, Qt.Key.Key_End)
         self.process()
-        view = selector.view()
-        QTest.keyClick(view, Qt.Key.Key_End)
-        QTest.keyClick(view, Qt.Key.Key_Return)
+        self.assertEqual(nav.currentRow(), self.window._settings_nav_rows["advanced"])
+        self.assertEqual(self.window._settings_coordinator.active_key, "advanced")
+        self.assert_category_visible(nav.currentItem())
+        QTest.keyClick(nav, Qt.Key.Key_Left)
+        self.assertEqual(nav.currentRow(), self.window._settings_nav_rows["shortcuts"])
+        QTest.keyClick(nav, Qt.Key.Key_Right)
+        self.assertEqual(nav.currentRow(), self.window._settings_nav_rows["advanced"])
+        QTest.keyClick(nav, Qt.Key.Key_Home)
         self.process()
-        self.assertEqual(selector.currentData(), "advanced")
+        self.assertEqual(nav.currentRow(), 0)
+        self.assert_category_visible(nav.currentItem())
+        nav.horizontalScrollBar().setValue(nav.horizontalScrollBar().maximum())
+        self.process()
+        QTest.mouseClick(
+            nav.viewport(), Qt.MouseButton.LeftButton,
+            pos=nav.visualItemRect(nav.item(nav.count() - 1)).center(),
+        )
         self.assertEqual(self.window._settings_coordinator.active_key, "advanced")
         for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
-            selector.setCurrentIndex(index)
+            item = nav.item(index)
+            nav.scrollToItem(item)
             self.process()
-            self.assertEqual(selector.currentData(), key)
-            self.assertEqual(selector.currentText(), label)
-            self.assertEqual(self.window.settings_nav.currentRow(), index)
+            rect = nav.visualItemRect(item)
+            self.assert_category_visible(item)
+            QTest.mouseClick(nav.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+            self.process()
+            self.assertEqual(item.text(), label)
+            self.assertEqual(nav.currentRow(), index)
+            self.assertEqual(self.window._settings_coordinator.active_key, key)
             self.assertIs(
                 self.window.settings_stack.currentWidget(),
                 self.window._settings_coordinator.page(key).widget,
             )
         self.window._focus_settings_section("profiles")
-        self.assertEqual(selector.currentData(), "profiles")
-        self.window.settings_nav.setCurrentRow(self.window._settings_nav_rows["models"])
-        self.assertEqual(selector.currentData(), "models")
+        self.assertEqual(nav.currentRow(), self.window._settings_nav_rows["profiles"])
+        nav.setCurrentRow(self.window._settings_nav_rows["models"])
+        self.assertEqual(self.window._settings_coordinator.active_key, "models")
         self.save_mock.assert_not_called()
 
-    def test_category_selector_reflows_after_font_and_theme_changes_and_keeps_selection(self) -> None:
-        from tests.test_gui_control_layout_audit import _combo_natural_width
-
-        selector = self.window.settings_category_combo
-        original_font = selector.font()
-        selected_key = selector.currentData()
+    def test_category_scroll_navigation_preserves_page_and_edits_after_resize_and_theme_changes(self) -> None:
+        nav = self.window.settings_nav
         page = self.window._profiles_page()
-        original_config = page.collect()
-        for extra_pixels in (4, 12, 0):
-            font = selector.font()
-            font.setPixelSize(original_font.pixelSize() + extra_pixels)
-            selector.setFont(font)
-            self.process()
-            self.assertGreaterEqual(selector.width() + 1, _combo_natural_width(selector))
-            self.assert_in_viewport(selector, self.window._config_tab)
-            self.assertEqual(selector.currentData(), selected_key)
-            self.assertIs(self.window._profiles_page(), page)
-            self.assertEqual(page.collect(), original_config)
+        page.profile_label_edit.setText("分类切换前未保存")
+        page.profile_label_edit.editingFinished.emit()
+        edited = page.collect()
         for theme in ("dark", "light"):
             apply_theme(self.app, Path(__file__).parents[1] / "gui_qt/resources", theme)
-            self.process()
-            self.assertGreaterEqual(selector.width() + 1, _combo_natural_width(selector))
-            self.assert_in_viewport(selector, self.window._config_tab)
-            self.assertEqual(selector.currentData(), selected_key)
-            self.assertIs(self.window._profiles_page(), page)
-            self.assertEqual(page.collect(), original_config)
+            for size in ((960, 640), (1280, 800), (1920, 1080), (960, 640)):
+                self.window.resize(*size)
+                self.process()
+                self.assert_in_viewport(nav, self.window._config_tab)
+                self.assertEqual(nav.width(), self.window.settings_stack.width())
+                self.assertEqual(len({
+                    nav.visualItemRect(nav.item(index)).top()
+                    for index in range(nav.count())
+                }), 1)
+                nav.setFocus()
+                QTest.keyClick(nav, Qt.Key.Key_End)
+                self.process()
+                self.assertEqual(self.window._settings_coordinator.active_key, "advanced")
+                self.assert_category_visible(nav.currentItem())
+                self.window._focus_settings_section("profiles")
+                self.process()
+                self.assertEqual(nav.currentRow(), self.window._settings_nav_rows["profiles"])
+                self.assertIs(self.window._profiles_page(), page)
+                self.assertEqual(page.collect(), edited)
         self.save_mock.assert_not_called()
 
     def test_model_links_resize_and_refresh_preserve_unsaved_edits_and_selection(self) -> None:
@@ -206,14 +236,14 @@ class SettingsEntryTests(unittest.TestCase):
             self.window.resize(*size)
             self.window._focus_settings_section("models")
             self.window._models_page().model_navigation_buttons["litellm"].click()
-            self.assertEqual(self.window.settings_category_combo.currentData(), "litellm")
+            self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["litellm"])
             self.window._litellm_page().model_navigation_buttons["profiles"].click()
             self.assertIs(self.window._profiles_page(), page)
             page._refresh_all()
             self.process()
             self.assertEqual(page._selected_profile_id, alternate)
             self.assertEqual(page.collect(), edited)
-            self.assertEqual(self.window.settings_category_combo.currentData(), "profiles")
+            self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["profiles"])
         self.save_mock.assert_not_called()
 
     def test_model_list_detail_reflow_keeps_selection_and_unfinished_text(self) -> None:
@@ -309,7 +339,7 @@ class SettingsEntryTests(unittest.TestCase):
                 self.assertEqual(saved["model_routing"], expected)
                 self.assertEqual(saved["sync"]["chunk_size"], 73)
                 self.assertTrue((game_root / "project_context_settings.json").exists())
-                self.assertEqual(self.window.settings_category_combo.currentData(), "profiles")
+                self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["profiles"])
                 self.assertEqual(page._selected_profile_id, alternate)
                 self.assertEqual(page._selected_provider_id, provider_id)
                 self.assertFalse(self.window._config_tab_has_unsaved_changes())
@@ -323,7 +353,7 @@ class SettingsEntryTests(unittest.TestCase):
                 self.assertEqual(page.default_strategy_combo.currentData(), "sync")
                 self.assertEqual(page._selected_profile_id, alternate)
                 self.assertEqual(page._selected_provider_id, provider_id)
-                self.assertEqual(self.window.settings_category_combo.currentData(), "profiles")
+                self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["profiles"])
                 self.assertFalse(self.window._config_tab_has_unsaved_changes())
                 self.assertEqual(self.save_mock.call_count, 1)
 

@@ -197,11 +197,9 @@
 - 测试：`tests.test_model_profiles_editor`、`tests.test_settings_profiles_page`、
   `tests.test_settings_registry`、`tests.test_settings_save_apply`、
   `tests.test_openai_compatible_model_catalog`。
-- #540 A 的 GUI 分类入口：`gui_qt/app.py` 的 `settings_category_combo` 与原分类栏
-  同步，仍复用 Settings coordinator 的页面实例；`gui_qt/settings/page_chrome.py`
+- #540 A 的 GUI 分类入口：`gui_qt/app.py` 的 `settings_nav` 保留单行横向滚动，
+  与页面直接跳转同步，仍复用 Settings coordinator 的页面实例；`gui_qt/settings/page_chrome.py`
   的 `add_model_navigation()` 通过页面 action 回调连接统一编辑器和旧模型页。
-  `gui_qt/settings/category_selector.py` 按当前字体与 Qt 样式计算分类选择器的内容宽度，
-  避免 Windows 原生 size hint 偏小及字体变化后的文字裁切。
   行为与布局回归：`tests.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
   默认值、配置状态区分、保存/重载与选择保留）。
 - #540 B 的长表单：`advanced_page.py` 按标签 / 配置键 / 路径过滤现有行并聚焦命中项，

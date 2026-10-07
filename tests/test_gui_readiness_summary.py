@@ -406,7 +406,7 @@ class ReadinessSummaryTests(unittest.TestCase):
         page = self.window._context_page()
         page.rag_enabled_cb.setChecked(True)
         self.window._doctor_settings_buttons["project"].click()
-        self.assertEqual(self.window.settings_category_combo.currentData(), "project")
+        self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["project"])
         self.window._focus_settings_section("context")
         self.assertTrue(page.rag_enabled_cb.isChecked())
 
