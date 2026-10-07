@@ -151,6 +151,11 @@ class SettingsEntryTests(unittest.TestCase):
         nav = self.window.settings_nav
         self.assertEqual(nav.count(), 11)
         self.assertFalse(nav.isWrapping())
+        # Force overflow with room for each label, independent of platform fonts.
+        widest = max(nav.visualItemRect(nav.item(index)).width() for index in range(nav.count()))
+        margins = nav.contentsMargins()
+        nav.setFixedWidth(2 * widest + margins.left() + margins.right())
+        self.process()
         self.assert_in_viewport(nav, self.window._config_tab)
         self.assertTrue(nav.horizontalScrollBar().isVisible())
         self.assertGreater(nav.horizontalScrollBar().maximum(), 0)
