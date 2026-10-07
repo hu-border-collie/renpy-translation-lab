@@ -232,6 +232,29 @@ class ReadinessSummaryTests(unittest.TestCase):
         self.window._on_doctor_details_clicked()
         self.assertFalse(self.window.doctor_details_label.isHidden())
 
+    def test_failed_doctor_keeps_visible_summary_without_enabling_translation(self):
+        self.finish_doctor(error="Original offline scan failure")
+        self.assertFalse(self.window._doctor_check_completed)
+        self.assertFalse(self.window.translate_btn.isEnabled())
+        self.assertEqual(self.window.doctor_page_stack.currentIndex(), 0)
+        self.assertIn("Original offline scan failure", self.window.doctor_details_label.text())
+        self.assertIn("未知", self.window.doctor_facts_label.text())
+        self.provider.assert_not_called()
+
+    def test_late_doctor_keeps_stale_summary_visible_after_page_refresh(self):
+        worker = self.start_doctor()
+        self.window.state.config_path.write_text(
+            json.dumps(dict(self.config, batch={"model": "original-new-settings"})),
+            encoding="utf-8",
+        )
+        worker.finish(DoctorWorkerResult(True, report_fixture(), ""))
+        self.window._sync_workbench_empty_states()
+        self.assertFalse(self.window._doctor_check_completed)
+        self.assertEqual(self.window.doctor_page_stack.currentIndex(), 0)
+        self.assertIn("已过期", self.window.doctor_message_label.text())
+        self.assertNotIn("待译：2", self.window.doctor_facts_label.text())
+        self.provider.assert_not_called()
+
     def test_config_reload_invalidates_both_pages_and_revert_does_not_revive(self):
         self.finish_doctor(report_fixture())
         before = self.window.translate_btn.isEnabled()

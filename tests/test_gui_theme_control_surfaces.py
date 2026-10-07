@@ -37,7 +37,7 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
             0,
             msg=f"isolated Qt probe failed:\n{result.stdout}\n{result.stderr}",
         )
-        self.assertIn("Ran 2 tests", result.stderr)
+        self.assertIn("Ran 4 tests", result.stderr)
         self.assertIn("OK", result.stderr)
 
 

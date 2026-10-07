@@ -25,6 +25,8 @@ except ImportError as exc:
     IMPORT_ERROR = exc
 else:
     from gui_qt.app import MainWindow
+    from gui_qt.keyword_merge_dialog import KeywordMergeDialog
+    from gui_qt.revision_selection_dialog import RevisionProposalSelectionDialog
     from gui_qt.settings.litellm_page import LiteLLMSettingsPage
     from gui_qt.settings.profiles_page import ProfilesSettingsPage
     from gui_qt.theme_helpers import load_theme_stylesheet
@@ -114,6 +116,112 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
             gui_test_support.close_main_window(window)
             window.deleteLater()
             self._app.processEvents()
+
+    def test_keyword_review_uses_explicit_theme_with_opposite_native_palette(self) -> None:
+        import keyword_glossary_merge as merge
+
+        candidates = [{"source": "Moon Gate", "suggested_target": "月门", "confidence": 0.9}]
+        rows = merge.build_candidate_merge_rows(candidates, {"normalize_map": {}})
+        for theme, native_dark in (("light", True), ("dark", False)):
+            with self.subTest(theme=theme):
+                self._app.setPalette(self._system_palette(native_dark))
+                self._app.setStyleSheet(load_theme_stylesheet(
+                    Path(__file__).resolve().parents[1] / "gui_qt/resources", theme,
+                ))
+                dialog = KeywordMergeDialog(
+                    None, rows=rows, candidates=candidates,
+                    candidates_path="original-candidates.jsonl", glossary_path="original-glossary.json",
+                )
+                self._root = dialog
+                dialog.show()
+                self._app.processEvents()
+                tokens = tokens_for_theme(theme)
+                table = dialog.table
+                self.assertEqual(self._pixel(table, self._blank_table_point(table)), QColor(tokens["bg_table"]).name())
+                header = table.horizontalHeader()
+                self._assert_color_present(header, QColor(tokens["fg_table_header"]))
+                self.assertEqual(table.item(0, 1).foreground().color().name(), QColor(tokens["badge_warning_fg"]).name())
+                check_item = table.item(0, 0)
+                check_rect = table.visualItemRect(check_item).adjusted(1, 1, -1, -1)
+                unchecked = table.viewport().grab(check_rect).toImage()
+                border_color = QColor(tokens["fg_table_header"]).name()
+                self.assertTrue(any(
+                    unchecked.pixelColor(x, y).name() == border_color
+                    for x in range(unchecked.width()) for y in range(unchecked.height())
+                ), "The unchecked review indicator must be visible")
+                check_item.setCheckState(Qt.CheckState.Checked)
+                self._app.processEvents()
+                checked = table.viewport().grab(check_rect).toImage()
+                checked_color = QColor(tokens["accent_primary"]).name()
+                self.assertTrue(any(
+                    checked.pixelColor(x, y).name() == checked_color
+                    for x in range(checked.width()) for y in range(checked.height())
+                ), "The checked review indicator must differ from the unchecked box")
+                self.assertEqual(dialog._selected_indices(), {0})
+                check_item.setCheckState(Qt.CheckState.Unchecked)
+                table.setCurrentCell(0, 1)
+                table.selectRow(0)
+                table.setFocus()
+                self._app.processEvents()
+                self._assert_color_present(table, QColor(tokens["bg_table_selected_solid"]))
+                table.setEnabled(False)
+                self._app.processEvents()
+                self.assertEqual(self._pixel(table, self._blank_table_point(table)), QColor(tokens["bg_disabled"]).name())
+                table.setEnabled(True)
+                table.setRowCount(0)
+                self._app.processEvents()
+                self.assertEqual(self._pixel(table, self._blank_table_point(table)), QColor(tokens["bg_table"]).name())
+                dialog.close()
+                dialog.deleteLater()
+                self._root = None
+                self._app.processEvents()
+
+    def test_revision_selection_indicators_survive_opposite_native_palette(self) -> None:
+        import revision_corpus
+        import revision_selection
+
+        item = {"id": "original-lantern", "file_rel_path": "lantern.rpy",
+                "source": "Carry the lantern.", "current_translation": "带上灯。"}
+        row = {**item, "schema_version": 1, "occurrence_id": item["id"],
+               "identity_v2": item["id"], "proposed_translation": "带好提灯。",
+               "reason": "统一灯具用语", "selected": False, "disposition": "accepted",
+               "producer": {"type": "agent", "tool": "original-offline-fixture"},
+               "project_identity": {"tl_dir": "C:/original/tl"},
+               "snapshot_digest": revision_corpus.item_snapshot_digest(item["source"], item["current_translation"]),
+               "corpus_snapshot_digest": "a" * 64}
+        stage = revision_selection.build_staged_selection(
+            rows=[row], live_items={item["id"]: item}, live_snapshot_digest="a" * 64,
+            project_identity={"game_root": "C:/original", "tl_dir": "C:/original/tl"},
+            proposal_path="C:/original/proposals.jsonl", proposal_sha256="b" * 64,
+            operation_id="original-offline-review",
+        )
+        for theme, native_dark in (("light", True), ("dark", False)):
+            with self.subTest(theme=theme):
+                self._app.setPalette(self._system_palette(native_dark))
+                self._app.setStyleSheet(load_theme_stylesheet(
+                    Path(__file__).resolve().parents[1] / "gui_qt/resources", theme,
+                ))
+                dialog = RevisionProposalSelectionDialog(stage)
+                self._root = dialog
+                dialog.show()
+                self._app.processEvents()
+                self.assertFalse(dialog._ok_button.isEnabled())
+                item = dialog.table.item(0, 0)
+                rect = dialog.table.visualItemRect(item).adjusted(1, 1, -1, -1)
+                tokens = tokens_for_theme(theme)
+                for state, color in ((Qt.CheckState.Unchecked, "fg_table_header"), (Qt.CheckState.Checked, "accent_primary")):
+                    item.setCheckState(state)
+                    self._app.processEvents()
+                    rendered = dialog.table.viewport().grab(rect).toImage()
+                    self.assertTrue(any(
+                        rendered.pixelColor(x, y).name() == QColor(tokens[color]).name()
+                        for x in range(rendered.width()) for y in range(rendered.height())
+                    ), f"Review indicator is invisible: {theme}, {state}")
+                self.assertTrue(dialog._ok_button.isEnabled())
+                dialog.close()
+                dialog.deleteLater()
+                self._root = None
+                self._app.processEvents()
 
     def _system_palette(self, dark: bool) -> QPalette:
         palette = QPalette(self._app.palette())

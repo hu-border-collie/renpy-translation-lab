@@ -8183,7 +8183,13 @@ class MainWindow(QMainWindow):
                 )
 
         if hasattr(self, "doctor_empty_state"):
-            show_doctor_empty = not doctor_done and not running
+            summary = getattr(self, "_readiness_doctor_summary", None)
+            summary_status = getattr(summary, "status", "idle")
+            # Failed and stale evidence must remain visible even though neither
+            # completes the doctor gate; only an idle page uses the initial CTA.
+            show_doctor_empty = (
+                not doctor_done and not running and summary_status in {"", "idle"}
+            )
             stack = getattr(self, "doctor_page_stack", None)
             if stack is not None and hasattr(self, "doctor_empty_state"):
                 # Mutual exclusion via stack — no VBox dual-stretch overlap.
@@ -10124,6 +10130,13 @@ class MainWindow(QMainWindow):
             if stack is not None:
                 stack.setCurrentIndex(row)
         self._sync_shell_nav_selection()
+
+        if key == "profiles":
+            page = self._profiles_page()
+            if page.default_profile_combo.isEnabled():
+                # The first-created removal button now lives at the bottom.
+                # Direct navigation should reveal the defaults, not scroll to it.
+                page.default_profile_combo.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _on_go_to_workspace_for_project_switch(self) -> None:
         self._focus_settings_section("workspace")
