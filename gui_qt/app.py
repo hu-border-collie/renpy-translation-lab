@@ -15350,6 +15350,7 @@ class MainWindow(QMainWindow):
             self._settings_widget("rag_enabled_cb") is not None
             or self._settings_widget("batch_model_combo") is not None
             or self._settings_widget("sync_backend_combo") is not None
+            or self._profiles_page() is not None
             or self.__dict__.get("_advanced_setting_widgets")
         ):
             # Partial tab loads must not rewrite the whole baseline — that would
