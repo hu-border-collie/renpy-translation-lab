@@ -251,6 +251,23 @@ class SettingsEntryTests(unittest.TestCase):
             self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["profiles"])
         self.save_mock.assert_not_called()
 
+    def test_first_profile_edit_stays_dirty_when_other_settings_pages_load(self) -> None:
+        page = self.window._profiles_page()
+        self.assertFalse(self.window._config_tab_has_unsaved_changes())
+        page.profile_label_edit.setText("原创未保存名称")
+        page.profile_label_edit.editingFinished.emit()
+        edited = page.collect()
+        self.assertTrue(self.window._config_tab_has_unsaved_changes())
+        self.assertIsNotNone(self.window._settings_coordinator.leave_guard_prompt(
+            "close", current=self.window._current_config_ui_snapshot(),
+        ))
+        for key in ("models", "litellm", "context", "advanced", "profiles"):
+            self.window._focus_settings_section(key)
+            self.process()
+            self.assertTrue(self.window._config_tab_has_unsaved_changes(), key)
+            self.assertEqual(page.collect(), edited)
+        self.save_mock.assert_not_called()
+
     def test_model_list_detail_reflow_keeps_selection_and_unfinished_text(self) -> None:
         page = self.window._profiles_page()
         page.profiles_list.setCurrentRow(1)
