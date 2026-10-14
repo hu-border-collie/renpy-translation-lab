@@ -194,6 +194,26 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         self.assertEqual(reasons['result_empty_translation'], 1)
         self.assertEqual(reasons['response_missing_expected_id'], 4)
 
+    def test_large_translation_schema_retains_local_completeness_checks(self):
+        units = [{'id': f'item-{i}', 'text': 'Carry the lantern.'} for i in range(240)]
+        schema = translation_core.build_translation_schema(units)
+        array = schema['properties']['translations']
+        self.assertNotIn('minItems', array)
+        self.assertNotIn('maxItems', array)
+        self.assertEqual(array['items']['required'], ['id', 'translation'])
+        complete = [{'id': unit['id'], 'translation': '带上灯笼。'} for unit in units]
+        self.assertTrue(translation_core.validate_model_response(
+            {'translations': complete}, expected_units=units,
+        ).complete)
+        incomplete = translation_core.validate_model_response(
+            {'translations': complete[:-1] + [complete[0], {'id': 'outside', 'translation': '未知。'}]},
+            expected_units=units,
+        )
+        self.assertFalse(incomplete.complete)
+        self.assertEqual(incomplete.retry_ids, ['item-0', 'item-239'])
+        self.assertEqual(incomplete.reason_counts()['result_duplicate_id'], 1)
+        self.assertEqual(incomplete.reason_counts()['result_unknown_id'], 1)
+
     def test_translation_contract_reports_envelope_level_reasons(self):
         expected = [{'id': 'a', 'text': 'Hello'}]
         missing = translation_core.validate_model_response(
@@ -828,6 +848,21 @@ class TranslationCoreRegressionTests(unittest.TestCase):
                 self.assertEqual(unit.text, 'Hello')
                 self.assertEqual(action.expected_text, expected)
                 self.assertEqual(action.replacement, '你好')
+
+    def test_translation_item_roundtrip_preserves_native_writeback_preimage(self):
+        for live_text in ('', '旧译文'):
+            with self.subTest(live_text=live_text):
+                unit = translation_core.unit_from_translation_item({
+                    'id': 'script.rpy:scene:1:source', 'text': 'Hello there.',
+                    'line': 2, 'start': 6, 'end': 8, 'live_catalog_text': live_text,
+                }, file_rel_path='script.rpy')
+                item = translation_core.legacy_item_from_unit(unit)
+                rebuilt = translation_core.unit_from_manifest_item(item)
+                action = translation_core.translation_writeback_action(
+                    rebuilt, {'translation': '你好。'},
+                )
+                self.assertEqual(action.expected_text, live_text)
+                self.assertEqual(rebuilt.text, 'Hello there.')
 
     def test_manifest_item_dispatches_by_mode_with_chunk_defaults(self):
         revision_unit = translation_core.unit_from_manifest_item(

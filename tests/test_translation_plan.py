@@ -638,8 +638,9 @@ class PlanBuildTests(unittest.TestCase):
         request = build.requests[0]
         self.assertTrue(request.expected_ids)
         translations = request.response_schema['properties']['translations']
-        self.assertEqual(translations['minItems'], len(request.expected_ids))
-        self.assertEqual(translations['maxItems'], len(request.expected_ids))
+        self.assertNotIn('minItems', translations)
+        self.assertNotIn('maxItems', translations)
+        self.assertEqual(translations['items']['required'], ['id', 'translation'])
         self.assertEqual(request.plan_id, build.plan.plan_id)
 
     def test_plan_snapshot_redacts_credential_shaped_values(self):

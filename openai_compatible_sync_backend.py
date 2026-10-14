@@ -337,6 +337,8 @@ class OpenAICompatibleSyncBackend:
 
         The plan / caller config supplies task defaults; ModelProfile params are
         the model-level explicit override and therefore win on collision.
+        An explicit ``response_mime_type=text/plain`` is a task output contract,
+        so plain-text analysis does not inherit the profile's JSON response mode.
         """
 
         config = dict(request.config or {})
@@ -413,7 +415,15 @@ class OpenAICompatibleSyncBackend:
             )
         schema = config.get("response_json_schema")
         schema = dict(schema) if isinstance(schema, Mapping) else {}
-        if mode == "strict_json_schema":
+        plain_text = config.get("response_mime_type") == "text/plain"
+        if plain_text and schema:
+            raise SyncBackendError(
+                "unsupported_capability",
+                request_metadata={"provider": self.provider, "reason": "conflicting_response_contract"},
+            )
+        if plain_text:
+            ignored = [key for key in ignored if key != "response_mime_type"]
+        elif mode == "strict_json_schema":
             if not schema:
                 raise SyncBackendError(
                     "unsupported_capability",
@@ -434,7 +444,7 @@ class OpenAICompatibleSyncBackend:
             payload["response_format"] = {"type": "json_object"}
         metadata: dict[str, Any] = {
             "provider": self.provider,
-            "structured_output_mode": mode,
+            "structured_output_mode": "text" if plain_text else mode,
             "request_url": self._redacted_request_url(),
         }
         if ignored:

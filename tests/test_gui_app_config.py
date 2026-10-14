@@ -289,7 +289,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             "gemini-3.5-flash",
         )
 
-        self.assertEqual(thinking_level, "minimal")
+        self.assertEqual(thinking_level, "")
 
     def test_explicit_empty_batch_thinking_overrides_supported_model_default(self):
         thinking_level = models_page.batch_thinking_value_for_load(
@@ -329,7 +329,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.assertFalse(should_save)
 
-    def test_supported_model_switch_defaults_empty_implicit_selection_to_minimal(self):
+    def test_supported_model_switch_keeps_empty_implicit_provider_default(self):
         thinking_level = models_page.batch_thinking_value_for_model_change(
             "gemini-3.5-flash",
             "",
@@ -337,7 +337,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             False,
         )
 
-        self.assertEqual(thinking_level, "minimal")
+        self.assertEqual(thinking_level, "")
 
     def test_supported_model_switch_preserves_explicit_empty_selection(self):
         thinking_level = models_page.batch_thinking_value_for_model_change(
@@ -1767,11 +1767,11 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window._on_restore_recommended_config()
 
-        self.assertTrue(self.window.rag_enabled_cb.checked)
+        self.assertFalse(self.window.rag_enabled_cb.checked)
         self.assertFalse(self.window.source_index_enabled_cb.checked)
         self.assertEqual(self.window.sync_model_combo.currentText(), "gemini-3.1-flash-lite")
         self.assertEqual(self.window.batch_embedding_combo.currentText(), "gemini-embedding-001")
-        self.assertEqual(self.window.batch_thinking_combo.currentData(), "minimal")
+        self.assertEqual(self.window.batch_thinking_combo.currentData(), "")
         self.assertEqual(self.window.theme_combo.currentData(), "system")
         self.assertEqual(batch_chunk.saved, 60)
         self.assertEqual(context_dir.saved, "translation_context")

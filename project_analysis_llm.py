@@ -238,6 +238,7 @@ def _build_request(
     """Build one backend request with a normalized per-request timeout in seconds."""
     config: dict[str, Any] = {
         "system_instruction": system,
+        "response_mime_type": "text/plain",
         "max_output_tokens": max_output_tokens,
         "temperature": 0.2,
         "timeout": normalize_sync_timeout_seconds(timeout_seconds),

@@ -158,7 +158,7 @@ def extract_text_from_response_payload(response_payload):
 
 
 def extract_finish_reason(response_payload):
-    """Read the recorded Gemini candidate finish reason."""
+    """Read Gemini REST or SDK candidate finish reasons without changing payloads."""
     payload = response_payload if isinstance(response_payload, dict) else {}
     nested_response = payload.get('response')
     if isinstance(nested_response, dict):
@@ -167,18 +167,22 @@ def extract_finish_reason(response_payload):
     candidates = payload.get('candidates')
     if isinstance(candidates, list):
         for candidate in candidates:
-            if isinstance(candidate, dict) and candidate.get('finishReason'):
-                return str(candidate['finishReason'])
+            if isinstance(candidate, dict):
+                reason = candidate.get('finishReason') or candidate.get('finish_reason')
+                if reason:
+                    return str(reason)
     return ''
 
 
 def extract_usage_metadata(response_payload):
-    """Read provider usage without changing token field names."""
+    """Read REST or SDK usage envelopes while preserving token field names."""
     payload = response_payload if isinstance(response_payload, dict) else {}
     nested_response = payload.get('response')
     if isinstance(nested_response, dict):
         payload = nested_response
     usage = payload.get('usageMetadata')
+    if not isinstance(usage, dict):
+        usage = payload.get('usage_metadata')
     return usage if isinstance(usage, dict) else {}
 
 

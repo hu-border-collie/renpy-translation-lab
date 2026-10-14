@@ -441,6 +441,12 @@ def units_from_items(items, mode=MODE_TRANSLATION, file_rel_path='', file_path='
 
 
 def unit_to_translation_item(unit):
+    """Serialize a translation item without losing its native target preimage.
+
+    ``text`` remains the source shown to the model; ``live_catalog_text`` is
+    present only when the adapter supplied a distinct catalog writeback guard.
+    Keep an explicitly empty guard instead of falling back to the source text.
+    """
     item = {
         'id': unit.id,
         'text': unit.text,
@@ -456,6 +462,8 @@ def unit_to_translation_item(unit):
         item['speaker_name'] = unit.speaker_name
     if 'tyrano_literal_brackets' in unit.metadata:
         item['tyrano_literal_brackets'] = unit.metadata['tyrano_literal_brackets']
+    if 'live_catalog_text' in unit.metadata:
+        item['live_catalog_text'] = unit.metadata['live_catalog_text']
     return item
 
 
@@ -1056,7 +1064,12 @@ def build_keyword_user_prompt(units):
 
 
 def build_translation_schema(units):
-    units = units_from_items(units, MODE_TRANSLATION)
+    """Constrain response fields; requested-ID completeness is checked locally.
+
+    Array bounds tied to chunk size can exceed Gemini's structured-output
+    constraints independently of its context window. Leave those bounds out
+    and retain :func:`validate_model_response` as the completeness authority.
+    """
     return {
         'type': 'object',
         'required': ['translations'],
@@ -1064,8 +1077,6 @@ def build_translation_schema(units):
         'properties': {
             'translations': {
                 'type': 'array',
-                'minItems': len(units),
-                'maxItems': len(units),
                 'items': {
                     'type': 'object',
                     'required': ['id', 'translation'],

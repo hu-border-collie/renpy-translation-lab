@@ -24,15 +24,12 @@
           "max_output_tokens",
           "response_json_schema",
           "response_mime_type",
-          "temperature",
-          "thinking_config"
+          "temperature"
         ],
         "temperature": 0.2,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 12288,
         "response_mime_type": "application/json",
-        "thinking_config": {
-          "thinking_level": "MINIMAL"
-        },
+        "thinking_config": {},
         "response_json_schema": {
           "type": "object",
           "required": [
@@ -42,8 +39,6 @@
           "properties": {
             "translations": {
               "type": "array",
-              "minItems": 4,
-              "maxItems": 4,
               "items": {
                 "type": "object",
                 "required": [
@@ -87,15 +82,12 @@
           "max_output_tokens",
           "response_json_schema",
           "response_mime_type",
-          "temperature",
-          "thinking_config"
+          "temperature"
         ],
         "temperature": 0.2,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 12288,
         "response_mime_type": "application/json",
-        "thinking_config": {
-          "thinking_level": "MINIMAL"
-        },
+        "thinking_config": {},
         "response_json_schema": {
           "type": "object",
           "required": [
@@ -105,8 +97,6 @@
           "properties": {
             "translations": {
               "type": "array",
-              "minItems": 2,
-              "maxItems": 2,
               "items": {
                 "type": "object",
                 "required": [

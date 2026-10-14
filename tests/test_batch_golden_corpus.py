@@ -35,6 +35,91 @@ UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
 class BatchGoldenCorpusTests(unittest.TestCase):
+    def _prepare_native_empty_catalog_case(self, root):
+        tl_dir = root / 'game' / 'tl' / 'schinese'
+        tl_dir.mkdir(parents=True)
+        script = tl_dir / 'script.rpy'
+        script.write_text(
+            'translate schinese scene_1:\n'
+            '    # e "Carry the lantern."\n'
+            '    e ""\n\n'
+            'translate schinese strings:\n'
+            '    old "Open the brass gate."\n'
+            '    new ""\n', encoding='utf-8',
+        )
+        previous = self._patch_batch_environment(root, tl_dir)
+        self.addCleanup(self._restore_batch_environment, previous)
+        for name in ('SOURCE_INDEX_ENABLED', 'PROJECT_ANALYSIS_ENABLED'):
+            patcher = mock.patch.object(batch_mod, name, False)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        manifest_path = Path(batch_mod.create_batch_package(
+            display_name_override='native-empty-roundtrip', skip_prepare=True,
+        ))
+        manifest = self._load_manifest(manifest_path)
+        translations = {
+            'Carry the lantern.': '带上灯笼。',
+            'Open the brass gate.': '打开黄铜门。',
+        }
+        rows = [{
+            'key': chunk['key'],
+            'response': {'candidates': [{
+                'content': {'parts': [{'text': json.dumps({'translations': [
+                    {'id': item['id'], 'translation': translations[item['text']]}
+                    for item in chunk['items']
+                ]}, ensure_ascii=False)}]},
+                'finishReason': 'STOP',
+            }]},
+        } for chunk in manifest['chunks']]
+        (manifest_path.parent / 'results.jsonl').write_text(
+            ''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows),
+            encoding='utf-8',
+        )
+        return script, manifest_path
+
+    def test_native_empty_catalog_build_check_apply_roundtrip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            script, manifest_path = self._prepare_native_empty_catalog_case(Path(temporary))
+            original = script.read_bytes()
+            checked = batch_mod.check_results(str(manifest_path))
+            summary = checked['last_check_summary']
+            self.assertEqual(summary['writeback_gate']['decision'], 'allow')
+            self.assertEqual(summary['valid_items'], 2)
+            self.assertEqual(summary['quality_subject_items'], 2)
+            self.assertEqual(script.read_bytes(), original)
+            batch_mod.apply_results(str(manifest_path))
+            text = script.read_text(encoding='utf-8')
+            self.assertIn('    e "带上灯笼。"', text)
+            self.assertIn('    new "打开黄铜门。"', text)
+            self.assertIn('    # e "Carry the lantern."', text)
+            self.assertIn('    old "Open the brass gate."', text)
+
+    def test_native_empty_catalog_force_apply_rejects_late_target_edit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            script, manifest_path = self._prepare_native_empty_catalog_case(Path(temporary))
+            checked = batch_mod.check_results(str(manifest_path))
+            self.assertEqual(checked['last_check_summary']['writeback_gate']['decision'], 'allow')
+            script.write_text(
+                script.read_text(encoding='utf-8').replace('e ""', 'e "另一位编辑的译文。"'),
+                encoding='utf-8',
+            )
+            changed = script.read_bytes()
+            with self.assertRaises(SystemExit):
+                batch_mod.apply_results(str(manifest_path), force=True)
+            self.assertEqual(script.read_bytes(), changed)
+
+    def test_native_empty_catalog_check_rejects_changed_original(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            script, manifest_path = self._prepare_native_empty_catalog_case(Path(temporary))
+            script.write_text(
+                script.read_text(encoding='utf-8').replace('Open the brass gate.', 'Open the stone gate.'),
+                encoding='utf-8',
+            )
+            changed = script.read_bytes()
+            with self.assertRaises(SystemExit):
+                batch_mod.check_results(str(manifest_path))
+            self.assertEqual(script.read_bytes(), changed)
+
     def _copy_fixture_tl(self, root):
         tl_dir = root / 'game' / 'tl' / 'schinese'
         tl_dir.parent.mkdir(parents=True)

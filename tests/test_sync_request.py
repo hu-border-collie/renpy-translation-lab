@@ -13,6 +13,27 @@ from sync_run_service import build_production_backend_adapter
 
 
 class SyncRequestTests(unittest.TestCase):
+    def test_sdk_snake_case_usage_and_finish_reason_survive_serialization(self):
+        plan, route = self.plan()
+        payload = {
+            'candidates': [{'content': {'parts': [{'text': 'hello'}]}, 'finish_reason': 'STOP'}],
+            'usage_metadata': {
+                'prompt_token_count': 416, 'candidates_token_count': 98,
+                'total_token_count': 514, 'thoughts_token_count': None,
+            },
+        }
+        class SDKResponse:
+            parsed = None
+            def model_dump(self):
+                return payload
+        self.client.models.generate_content.return_value = SDKResponse()
+        result = sync_request.run_sync_request(
+            {'contents': 'source'}, route, plan, runtime=self.dependencies,
+        )
+        self.assertEqual(result['response_payload'], payload)
+        self.assertEqual(result['usage_metadata'], payload['usage_metadata'])
+        self.assertEqual(result['finish_reason'], 'STOP')
+
     def setUp(self):
         self.client = mock.Mock()
         self.dependencies = sync_request.SyncRequestRuntime(

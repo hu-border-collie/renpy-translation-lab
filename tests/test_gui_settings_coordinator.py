@@ -606,7 +606,7 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
         saved_payload = save_config.call_args.args[0]
         self.assertNotIn("custom_litellm_providers", saved_payload["sync"])
 
-    def test_first_save_keeps_explicit_disabled_thinking(self) -> None:
+    def test_first_save_keeps_explicit_provider_default_thinking(self) -> None:
         config = {
             "sync": {},
             "batch": {"model": "gemini-3.1-flash-lite"},
@@ -617,6 +617,9 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             return_value=config,
         ):
             self.window._ensure_settings_page("models")
+        self.window.batch_thinking_combo.setCurrentIndex(
+            self.window.batch_thinking_combo.findData("minimal")
+        )
         empty_index = self.window.batch_thinking_combo.findData("")
         self.window.batch_thinking_combo.setCurrentIndex(empty_index)
         self.assertTrue(self.window._models_page()._batch_thinking_user_changed)

@@ -328,9 +328,9 @@ BATCH_RETRY_TARGET_SIZE = 8
 BATCH_RETRY_TARGET_CHARS = 4000
 BATCH_CONTEXT_BEFORE = 30
 BATCH_CONTEXT_AFTER = 10
-BATCH_MAX_OUTPUT_TOKENS = 32768
+BATCH_MAX_OUTPUT_TOKENS = 12288
 BATCH_TEMPERATURE = 0.2
-BATCH_THINKING_LEVEL = 'minimal'
+BATCH_THINKING_LEVEL = ''
 BATCH_SAFETY_SETTINGS = []
 BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
 BATCH_SPLIT_RECOMMEND_CHUNKS = 400
@@ -4310,6 +4310,102 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
     )
     return request
 
+def _build_batch_plan_requests(
+    file_jobs,
+    routing_plan=None,
+    *,
+    source_identity=None,
+    retrieval_blocks_provider=None,
+    analysis_blocks_provider=None,
+):
+    """Construct Batch requests with the same policies for build and preflight.
+
+    Callers supply retrieval/analysis providers; all other Batch grouping,
+    context, glossary and generation policies come from this shared path.
+    """
+    translation_route = (
+        routing_plan.routes.get(model_profile.STAGE_TRANSLATION)
+        if routing_plan is not None else None
+    )
+    profile = (
+        routing_plan.profiles.get(translation_route.profile_id)
+        if translation_route is not None else None
+    )
+    return translation_plan.build_translation_plan(
+        file_jobs,
+        execution_strategy=model_profile.ExecutionStrategy.GEMINI_BATCH.value,
+        source_identity=(
+            source_identity if source_identity is not None
+            else _batch_plan_source_identity(file_jobs)
+        ),
+        config_snapshot=_batch_plan_config_snapshot(),
+        model_profile_snapshot=profile,
+        run_id='',
+        artifacts=None,
+        chunk_policy=translation_plan.ChunkPolicy(
+            max_items=BATCH_TARGET_SIZE,
+            max_chars=BATCH_TARGET_CHARS,
+        ),
+        context_policy=_batch_plan_context_policy(),
+        preserve_terms=legacy.PRESERVE_TERMS,
+        normalize_map=legacy.NORMALIZE_TRANSLATION_MAP,
+        non_translatable_exact=getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
+        macro_setting=BATCH_MACRO_SETTING,
+        retrieval_blocks_provider=retrieval_blocks_provider,
+        analysis_blocks_provider=analysis_blocks_provider,
+        generation_config=_batch_plan_generation_config(),
+    )
+
+
+def _build_batch_preflight_plan(file_jobs, routing_plan=None, *, source_identity=None):
+    """Build an offline Batch estimate without retrieval or embedding calls.
+
+    Disabled layers retain the build path's diagnostics and fingerprints.
+    Enabled layers are explicitly marked as skipped, so a retrieval-free
+    estimate cannot masquerade as the full build's quality-report identity.
+    """
+    def retrieval_provider(_chunk_input):
+        source_stats = {'enabled': bool(SOURCE_INDEX_ENABLED)}
+        if SOURCE_INDEX_ENABLED:
+            source_stats['reason'] = 'preflight_skipped'
+        diagnostics = {'source_index': source_stats}
+        skipped = [
+            name for name, enabled in (
+                ('rag', RAG_ENABLED), ('source_index', SOURCE_INDEX_ENABLED),
+                ('story_memory', STORY_MEMORY_ENABLED),
+            ) if enabled
+        ]
+        if skipped:
+            diagnostics['preflight_skipped'] = skipped
+        if SOURCE_INDEX_ENABLED or RAG_ENABLED:
+            diagnostics['embedding_provider'] = (
+                advanced_context.embedding_provider_diagnostics(
+                    current_batch_embedding_settings()
+                )
+            )
+        return {'text': '', 'diagnostics': diagnostics}
+
+    def analysis_provider(_chunk_input):
+        enabled = PROJECT_ANALYSIS_ENABLED and PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF
+        return {
+            'text': '',
+            'diagnostics': {
+                'published_project_analysis': advanced_context.analysis_skip_diagnostics({
+                    'injectable': False,
+                    'reason': 'preflight_skipped' if enabled else 'injection_disabled',
+                }),
+            },
+        }
+
+    return _build_batch_plan_requests(
+        file_jobs,
+        routing_plan,
+        source_identity=source_identity,
+        retrieval_blocks_provider=retrieval_provider,
+        analysis_blocks_provider=analysis_provider,
+    )
+
+
 def _build_batch_translation_plan(file_jobs, routing_plan=None):
     """Build the issue #346 P2 plan for Gemini Batch and its legacy chunks.
 
@@ -4428,37 +4524,11 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             },
         }
 
-    if routing_plan is None:
-        model_profile_snapshot = None
-    else:
-        translation_route = routing_plan.routes.get(model_profile.STAGE_TRANSLATION)
-        model_profile_snapshot = (
-            routing_plan.profiles.get(translation_route.profile_id)
-            if translation_route is not None
-            else None
-        )
-
-    batch_generation_config = _batch_plan_generation_config()
-    plan_build = translation_plan.build_translation_plan(
+    plan_build = _build_batch_plan_requests(
         file_jobs,
-        execution_strategy=model_profile.ExecutionStrategy.GEMINI_BATCH.value,
-        source_identity=_batch_plan_source_identity(file_jobs),
-        config_snapshot=_batch_plan_config_snapshot(),
-        model_profile_snapshot=model_profile_snapshot,
-        run_id='',
-        artifacts=None,
-        chunk_policy=translation_plan.ChunkPolicy(
-            max_items=BATCH_TARGET_SIZE,
-            max_chars=BATCH_TARGET_CHARS,
-        ),
-        context_policy=_batch_plan_context_policy(),
-        preserve_terms=legacy.PRESERVE_TERMS,
-        normalize_map=legacy.NORMALIZE_TRANSLATION_MAP,
-        non_translatable_exact=getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
-        macro_setting=BATCH_MACRO_SETTING,
+        routing_plan,
         retrieval_blocks_provider=retrieval_provider,
         analysis_blocks_provider=analysis_provider,
-        generation_config=batch_generation_config,
     )
 
     chunks = []
@@ -23504,13 +23574,22 @@ def _run_translate_preflight(args):
     if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value and (
         not isinstance(section, dict) or section.get('legacy_entrypoints')
     ):
-        # The scan/counts above come from the shared Sync plan, but Batch must
-        # display and validate the profile that ``build`` will actually use.
+        # Reuse discovery, but resolve the profile that Batch build uses.
         # A v1 section without legacy entrypoints cannot express a distinct
         # legacy Batch command route, so the default plan already applies.
         routing_plan = freeze_runtime_routing_plan(
             execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
         )
+    if strategy == model_profile.ExecutionStrategy.GEMINI_BATCH.value:
+        source_identity = plan.source_identity
+        if hasattr(source_identity, 'to_dict'):
+            source_identity = source_identity.to_dict()
+        plan_build = _build_batch_preflight_plan(
+            context.pending_jobs,
+            routing_plan,
+            source_identity=source_identity,
+        )
+        plan = plan_build.plan
     route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
     profile = model_profile.profile_for_route(routing_plan, route)
     requests = list(plan_build.requests or ())
@@ -23590,8 +23669,17 @@ def _run_translate_preflight(args):
                 batch_flags.get('project_analysis_inject_enabled')
             ),
             'story_memory': bool(batch_flags.get('story_memory_enabled')),
-            'local_context': {'before': 0, 'after': 0},
-            'macro_setting_file': '',
+            'local_context': {
+                'before': int(BATCH_CONTEXT_BEFORE or 0),
+                'after': int(BATCH_CONTEXT_AFTER or 0),
+            },
+            'macro_setting_file': (
+                str(legacy._resolve_path(
+                    legacy.BASE_DIR,
+                    (config.get('batch') or {}).get('macro_setting_file'),
+                ))
+                if (config.get('batch') or {}).get('macro_setting_file') else ''
+            ),
         }
     else:
         context_sources = {
@@ -23730,8 +23818,12 @@ def _run_translate_preflight(args):
             'chunks': len(list(plan.chunks or ())),
         },
         'chunk_policy': {
-            'max_items': int(getattr(legacy, 'MAX_ITEMS', 0) or 0),
-            'max_chars': int(getattr(legacy, 'MAX_CHARS', 0) or 0),
+            'max_items': int(
+                BATCH_TARGET_SIZE if strategy == 'gemini_batch' else legacy.MAX_ITEMS
+            ),
+            'max_chars': int(
+                BATCH_TARGET_CHARS if strategy == 'gemini_batch' else legacy.MAX_CHARS
+            ),
         },
         'source_snapshot': {
             'engine': str(identity_dict.get('engine') or ''),

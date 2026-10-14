@@ -22,6 +22,7 @@ from ..settings_schema import (
     SettingField,
     context_primary_setting_fields,
 )
+from ..user_copy import CONTEXT_DEFAULTS_COPY
 from .field_widgets import (
     apply_setting_value_to_widget,
     create_basic_setting_widget,
@@ -198,6 +199,7 @@ class ContextSettingsPage(QObject):
             "下列三项按【当前项目】保存（work/project_context_settings.json），"
             "切换游戏不会互相覆盖。启用后先保存设置，再到工作台「上下文库」页预建。"
             "记忆库用已有译文；原文索引只用模板原文；均不修改游戏脚本。"
+            + CONTEXT_DEFAULTS_COPY
         )
         context_hint.setWordWrap(True)
         context_hint.setObjectName("config_hint_label")

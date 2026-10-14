@@ -9,9 +9,9 @@
   "settings": {
     "keyword_chunk_size": 2,
     "keyword_max_candidates_per_chunk": 4,
-    "max_output_tokens": 32768,
+    "max_output_tokens": 12288,
     "temperature": 0.2,
-    "thinking_level": "minimal"
+    "thinking_level": ""
   },
   "keyword_settings": {
     "chunk_size": 2,

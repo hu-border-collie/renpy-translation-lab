@@ -16,7 +16,12 @@ from gemini_model_catalog import (
     BUILTIN_GEMINI_TRANSLATION_MODELS,
 )
 
-from ..user_copy import MODEL_ROUTING_RUNTIME_COPY, SETTINGS_MODEL_ENTRY_COPY
+from ..settings_schema import BASIC_RECOMMENDED_VALUES
+from ..user_copy import (
+    BATCH_THINKING_COPY,
+    MODEL_ROUTING_RUNTIME_COPY,
+    SETTINGS_MODEL_ENTRY_COPY,
+)
 from ..widget_helpers import NoWheelComboBox
 from .page_chrome import add_model_navigation, build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
@@ -60,9 +65,10 @@ def batch_thinking_value_for_load(
     batch_config: Mapping[str, Any],
     batch_model: Any,
 ) -> str:
+    """Preserve saved thinking levels; omitted levels use the provider default."""
     if "thinking_level" in batch_config:
         return config_string(batch_config.get("thinking_level", ""))
-    return "minimal" if supports_batch_thinking(batch_model) else ""
+    return str(BASIC_RECOMMENDED_VALUES["batch_thinking_level"])
 
 
 def batch_thinking_value_for_model_change(
@@ -77,7 +83,7 @@ def batch_thinking_value_for_model_change(
         and not config_has_key
         and not user_changed
     ):
-        return "minimal"
+        return str(BASIC_RECOMMENDED_VALUES["batch_thinking_level"])
     return None
 
 
@@ -351,7 +357,8 @@ class ModelsSettingsPage(QObject):
         self.batch_embedding_combo.addItems(list(BUILTIN_GEMINI_EMBEDDING_MODELS))
         batch_layout.addRow("RAG 向量模型：", self.batch_embedding_combo)
         self.batch_thinking_combo = NoWheelComboBox()
-        self.batch_thinking_combo.addItem("（不启用）", "")
+        self.batch_thinking_combo.addItem(BATCH_THINKING_COPY["default_label"], "")
+        self.batch_thinking_combo.setToolTip(BATCH_THINKING_COPY["description"])
         self.batch_thinking_combo.addItem("最小", "minimal")
         self.batch_thinking_combo.addItem("低", "low")
         self.batch_thinking_combo.addItem("中", "medium")

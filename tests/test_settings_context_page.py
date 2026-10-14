@@ -63,6 +63,13 @@ class ContextSettingsPageContractTests(unittest.TestCase):
         self.assertEqual(collected["batch_project_analysis_thinking_level"], "high")
         self.assertEqual(set(collected), set(self.page.config_keys))
 
+    def test_disabling_history_rag_preserves_enabled_source_index(self) -> None:
+        self.page.load({"rag_enabled": True, "source_index_enabled": True})
+        self.page.rag_enabled_cb.setChecked(False)
+        collected = self.page.collect()
+        self.assertFalse(collected["rag_enabled"])
+        self.assertTrue(collected["source_index_enabled"])
+
     def test_reset_restores_last_loaded_baseline(self) -> None:
         self.page.load({"rag_enabled": True, "context_storage_location": "tool"})
         self.page.rag_enabled_cb.setChecked(False)

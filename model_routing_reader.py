@@ -317,6 +317,8 @@ def resolve_runtime_plan(
 
     Explicit model overrides retain the selected connection and credential reference;
     changing provider requires selecting a profile instead of a model string.
+    Final review may explicitly use Sync; command-specific strategy checks must
+    not prevent unrelated stages from loading the same routing configuration.
     """
     strategy = routing.ExecutionStrategy(execution)
     section = apply_primary_profile_override(
@@ -328,10 +330,10 @@ def resolve_runtime_plan(
         {"model_routing": section},
         legacy_execution=strategy.value,
     )
-    # Existing entrypoints cannot execute arbitrary stage strategies yet.
-    for stage, expected in (("project_analysis", "sync"), ("final_review", "gemini_batch")):
-        if plan.routes[stage].strategy.value != expected:
-            raise routing.ModelRoutingConfigError("Unsupported legacy stage execution strategy")
+    # Project analysis still executes synchronously. Final review now supports
+    # both strategies; its Batch-only commands enforce their own stage contract.
+    if plan.routes["project_analysis"].strategy.value != "sync":
+        raise routing.ModelRoutingConfigError("Unsupported legacy stage execution strategy")
     generation_ids = {route.profile_id for route in plan.routes.values()}
     for profile in plan.profiles.values():
         if (

@@ -22,6 +22,40 @@ def migrated(name="gemini_batch"):
 
 
 class ProductionRoutingTests(TestCase):
+    def test_direct_sync_final_review_can_share_normal_translation_config(self):
+        from tests.test_openai_compatible_config import direct_section
+        section, _provider_id, profile_id = direct_section(credential_kind="none")
+        section["routes"]["final_review"] = {
+            "profile_id": profile_id, "strategy": "sync",
+        }
+        config = {"model_routing": section}
+        with runtime.runtime_config_scope(runtime.default_runtime_config()):
+            runtime.load_sync_translation_settings(config)
+            self.assertEqual(runtime.SYNC_BACKEND, "openai_compatible")
+            plan = batch.freeze_runtime_routing_plan(
+                execution="sync", required_stages={"translation"},
+            )
+            self.assertEqual(plan.routes["translation"].profile_id, profile_id)
+            self.assertEqual(plan.routes["final_review"].profile_id, profile_id)
+            self.assertEqual(plan.routes["final_review"].strategy.value, "sync")
+
+    def test_sync_final_review_does_not_block_other_stage_runtime_loading(self):
+        config = migrated()
+        section = config["model_routing"]
+        profile_id = section["legacy_entrypoints"]["sync_profile_id"]
+        section.setdefault("routes", {})["final_review"] = {
+            "profile_id": profile_id, "strategy": "sync",
+        }
+        with runtime.runtime_config_scope(runtime.default_runtime_config()):
+            runtime.load_sync_translation_settings(config)
+            view = runtime_settings_view(config)
+            self.assertEqual(view["sync"]["model"], section["profiles"][profile_id]["model"])
+            plan = batch.freeze_runtime_routing_plan(
+                execution="sync", required_stages={"translation"},
+            )
+            self.assertEqual(plan.routes["final_review"].strategy.value, "sync")
+            self.assertEqual(plan.routes["translation"].strategy.value, "sync")
+
     def test_legacy_poison_does_not_change_loaded_models_or_embedding(self):
         for name in ("gemini_batch", "gemini_sync", "litellm_builtin", "litellm_custom"):
             with self.subTest(name=name), runtime.runtime_config_scope(runtime.default_runtime_config()):
