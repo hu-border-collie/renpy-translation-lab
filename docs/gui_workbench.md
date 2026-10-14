@@ -175,6 +175,14 @@ doctor -> build -> submit -> status -> download -> check -> apply
   - **定位设置**：按中文标签、配置键（如 `sync_chunk_size`）或配置路径（如 `sync.chunk_size`）搜索，不区分大小写；空查询显示全部字段，无匹配时显示提示。Enter、上一项 / 下一项可滚动并聚焦命中字段；Ctrl+F 回到搜索框，搜索框获得焦点时按 Esc，或点击「清除搜索」，可恢复全部字段。焦点在其他字段时，Esc 不会清除搜索。「选择类别…」清除过滤并跳转到该类别首项。过滤只影响显示，隐藏字段的编辑仍保留；搜索、跳转和清除均不自动保存。校验错误定位会先清除过滤，显示对应字段。
 
 底部 **重新加载 / 恢复推荐值 / 保存设置**：
+
+当前新项目/推荐初译值为 Gemini 3.1 Flash-Lite Batch、60 条 / 18,000 原文字符、
+前 30 / 后 10、输出上限 12,288、temperature 0.2。「思考程度」默认显示
+「模型默认」：空值表示不发送档位，并非关闭模型内部思考；已有明确档位继续保留。
+历史译文 RAG 默认关闭，Macro 和词法词表保留；原文索引独立按需启用，关闭 RAG
+不会联动关闭它。剧情记忆/PA 自动注入默认关闭。加载已有配置保留已保存值，
+「恢复推荐值」会更改当前表单，仍须保存后生效；项目级开关只影响当前项目。
+
 - 全局项写入 `translator_config.json`；
 - 上述项目级上下文开关写入**当前项目**的 `project_context_settings.json`；
 - **工作区**总表与切换项目即时写 registry，不依赖「保存设置」。
@@ -312,6 +320,10 @@ GUI 不引入新的主配置系统。
 选择会通过 `--profile <PROFILE_ID>` 传给实际命令（Batch 用 `build --profile`，同步用 `sync-start --profile`）；执行方式选中 `sync` 时页面切换到同步执行页，选中 `gemini_batch` 时切换到 Batch 执行页。
 
 点击开始后会先执行 `translate-preflight`：只扫描项目与共享 TranslationPlan，不调用 Provider/embedding，并在确认框展示模型、执行方式、项目、待处理文件/条目/chunk、上下文来源、成本估算、本次扫描的 coverage 摘要、已有质量摘要与风险。成本 `unknown`、质量报告 `stale` / `not_available` 会显示明确原因，不会写成零成本或「质量通过」；预检结论不是 `check` / `apply` 授权。确认后才会进入真正的运行步骤。运行期间同步任务会旁路轮询 `sync-status --latest`，持续刷新请求/条目/unknown/usage 摘要而不读取运行数据库。各任务页还会显示该阶段实际 resolved profile（显式覆盖或继承默认）。项目仍是旧配置（没有 `model_routing`）时选择器禁用并显示迁移提示，原有默认行为保持不变；已有运行的冻结路由不会被后续选择改写。命令参考与机器合同见 [同步翻译工作流](sync_workflow.md#耐久-sync可恢复-cli)。
+
+预检中的分块、局部前后文、Macro 与输出预算跟随所选执行方式：Batch 使用
+`batch.*`，Sync 使用 `sync.*`。GUI 消费同一个 CLI 计划摘要；检索层启用但未在
+离线预检中执行时，成本估算的限制会随风险提示显示。
 
 ### Batch 执行
 
