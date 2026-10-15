@@ -344,6 +344,25 @@ USAGE_LEDGER_COPY = {
     "actual_cost": "Provider 报告成本",
 }
 
+BATCH_MAX_OUTPUT_TOKENS_COPY = {
+    "label": "批量输出 token 上限",
+    "description": (
+        "Batch 请求传给模型的 max_output_tokens，默认 12288。"
+        "这是生成上限，实际费用按返回用量计算；截断时应检查失败块并缩小补译范围。"
+    ),
+}
+
+BATCH_THINKING_COPY = {
+    "default_label": "（模型默认）",
+    "description": "留空表示不发送思考档，由模型使用默认行为；不等于关闭思考。已保存的明确档位会保留。",
+}
+
+CONTEXT_DEFAULTS_COPY = (
+    "新项目的历史译文 RAG 默认关闭，Macro 和词法词表仍会注入。"
+    "有可靠历史译文时可启用 RAG；跨场景需要原文参考时可启用原文索引。"
+    "原文索引为独立开关，关闭 RAG 不会关闭它。"
+)
+
 SYNC_TIMEOUT_COPY = {
     "label": "同步单请求超时",
     "description": (

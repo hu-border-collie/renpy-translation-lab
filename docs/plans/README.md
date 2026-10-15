@@ -4,7 +4,12 @@
 
 以当前代码和现行手册判断用户行为。GitHub issue 的 OPEN 状态不代表没有工程交付；PR 合并或自动化通过也不等于真实 Provider、项目或游戏验收。只归档纯历史过程稿；仍被现行手册、测试、未完实验或后续决策引用的合同和证据留在此目录。
 
-## 本轮开发与验证映射（2026-09-27）
+## 历史开发与验证映射（2026-09-27）
+
+以下 OPEN / 待执行描述只代表当日状态。2026-10-13 的相关实测补证与剩余验收见
+[Provider 验收补证](provider-acceptance-reassessment-2026-10-13.md)：Gemini Batch / Sync、
+DS 直连五阶段及中断恢复已有真实结果；#508 已做真实 A/B1 和章节交付。
+当前开放 issue 为 #147、#272、#344、#431、#508、#509、#520；其余旧表项不再据此标为开放。
 
 | 项目 | 已交付证据与当前状态 | 剩余跟踪 |
 | --- | --- | --- |
@@ -22,6 +27,8 @@
 
 | 文档 | 当前用途与状态 | 当前入口或剩余跟踪 |
 | --- | --- | --- |
+| [Provider 验收补证（2026-10-13）](provider-acceptance-reassessment-2026-10-13.md) | Gemini Sync、无 LiteLLM 的 DS CLI/GUI 五阶段、真实中断恢复与三处接线修复。 | 双连接、非 Gemini embedding、原生上下文 A/B 与 #508 独立验收仍缺；代码修复待 PR 合并。 |
+| [翻译模型、上下文与分块重新评估（2026-10-11）](translation_model_context_reassessment_2026-10-11.md) | 分块失败归因、上下文与 Gemini/DeepSeek 控制实验的日期快照；含 2026-10-12 JSON 字段/思考成本对照，私有制品不入库。 | 语义审校、覆盖率和总成本分别评价；不据结构通过率自动修改生产默认值。 |
 | [维护复杂度治理路线](maintainability_roadmap.md) | #528 第一轮与 #531 第二轮工程均已合并并关闭。 | 真实 Provider / 项目验收仍归 #344 / #431；其余维护方向仅为候选。 |
 | [七类规划方向重新评估（2026-09-19）](plan_reassessment_2026-09-19.md) | 评估报告由 PR [#514](https://github.com/hu-border-collie/renpy-translation-lab/pull/514) 合并；它是日期快照，不代替本索引的全量状态映射。#512/#513 后由 PR #524/#527 合并，#487 spike 由 PR #511 合并。 | 真实章节、Provider、coverage 实验仍分别跟踪 #508、#344/#431、#470；生产字体接入待评估。 |
 | [Agent 翻译工具包提案](agent_translation_toolkit.md) | #508 的可复用工作包与实验 CLI 由 PR #516 交付；整体产品收益未由 fixture 证明。 | #508 真实章节对照仍待做；现行操作见[外部初译工作包](../external_translation_work.md)。 |

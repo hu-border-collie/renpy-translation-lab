@@ -37,7 +37,7 @@ class ModelsThinkingHelperTests(unittest.TestCase):
     def test_missing_thinking_defaults_for_supported_model(self) -> None:
         self.assertEqual(
             batch_thinking_value_for_load({}, "gemini-3.1-flash-lite"),
-            "minimal",
+            "",
         )
 
     def test_explicit_empty_thinking_is_kept(self) -> None:
@@ -49,6 +49,16 @@ class ModelsThinkingHelperTests(unittest.TestCase):
             "",
         )
 
+    def test_saved_thinking_level_overrides_new_default(self) -> None:
+        for level in ("minimal", "low", "high"):
+            with self.subTest(level=level):
+                self.assertEqual(
+                    batch_thinking_value_for_load(
+                        {"thinking_level": level}, "gemini-3.1-flash-lite",
+                    ),
+                    level,
+                )
+
     def test_empty_thinking_saved_after_user_change(self) -> None:
         self.assertTrue(
             should_save_batch_thinking_level(
@@ -59,7 +69,7 @@ class ModelsThinkingHelperTests(unittest.TestCase):
             )
         )
 
-    def test_supported_model_switch_defaults_empty_to_minimal(self) -> None:
+    def test_supported_model_switch_keeps_implicit_provider_default(self) -> None:
         self.assertEqual(
             batch_thinking_value_for_model_change(
                 "gemini-3.1-flash-lite",
@@ -67,7 +77,7 @@ class ModelsThinkingHelperTests(unittest.TestCase):
                 False,
                 False,
             ),
-            "minimal",
+            "",
         )
 
     def test_supported_model_switch_preserves_user_empty(self) -> None:
@@ -93,6 +103,11 @@ class ModelsSettingsPageContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.page.widget.deleteLater()
         self._app.processEvents()
+
+    def test_empty_thinking_copy_describes_provider_default(self) -> None:
+        index = self.page.batch_thinking_combo.findData("")
+        self.assertEqual(self.page.batch_thinking_combo.itemText(index), "（模型默认）")
+        self.assertIn("不等于关闭思考", self.page.batch_thinking_combo.toolTip())
 
     def test_page_satisfies_settings_protocol(self) -> None:
         self.assertIsInstance(self.page, SettingsPage)

@@ -122,6 +122,9 @@ ModelProfile 是运行时唯一模型来源；模型目录只用于发现与辅�
   `frequency_penalty` / `presence_penalty` / `seed` / `stop` 按配置传递。
 - `timeout` 使用现有 `normalize_sync_timeout_seconds` 边界；HTTP 层以秒为单位。
 - `response_format` 按结构化输出模式生成；`prompt_only_json` 不发送 `response_format`。
+- 2026-10-13 实测补充：任务显式声明 `response_mime_type=text/plain` 时不发送
+  `response_format`，用于共用连接上的 Project Analysis 普通文本摘要；诊断模式记录为
+  `text`，没有新增 Profile 配置枚举。普通文本与非空 JSON schema 同时声明时调用前拒绝。
 - 认证：`Authorization: Bearer <resolved key>`；`credential_ref.kind=none` 时不发送。
   `diagnostic_api_key`（GUI / doctor 一次性探测）优先，不写入配置或 manifest。
 

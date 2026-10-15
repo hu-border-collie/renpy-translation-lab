@@ -33,6 +33,7 @@ UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
 class BatchRagRegressionTests(unittest.TestCase):
+    @mock.patch.object(batch_mod, 'BATCH_THINKING_LEVEL', 'minimal')
     def test_generation_configs_filter_sampling_by_effective_model(self):
         items = [{
             'id': 'script.rpy:1:0',

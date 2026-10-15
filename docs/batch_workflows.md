@@ -9,6 +9,22 @@
 `check` 和安全写回门禁。它保存版本化成果而不创建 Provider 请求；外部包没有 TranslationPlan，
 也不走旧包的兼容回退。真实章节 A/B1/B2/C 对照尚待授权样本和预算。
 
+## 新项目的初译默认值
+
+新项目默认使用 `gemini-3.1-flash-lite` Batch：每块最多 60 条、18,000 原文字符，
+前文 30 / 后文 10，输出上限 12,288，temperature 0.2，补译块 8 条 / 4,000 字符。
+`thinking_level` 默认空字符串，表示不发送思考档、沿用模型默认行为，并非关闭思考。
+输出上限不是实际收费 token 数；出现截断时先检查失败块并缩小补译范围。
+
+Macro 和词法词表继续参与上下文。历史译文 RAG 默认关闭；已有可靠译文时可启用。
+Source Index 是独立的原文检索开关，新项目按需启用，关闭 RAG 不会关闭已有原文
+索引设置。Story Memory、Project Analysis 和已发布简报自动注入默认关闭，有可靠
+制品时再启用。明确保存的全局配置及项目级上下文开关优先，不会因默认值更新而迁移。
+
+这些是[模型、上下文与分块实验](plans/translation_model_context_reassessment_2026-10-11.md)
+之后的初译起点，不是所有模型的最佳预设。Sync 默认输出上限仍为 24,576，避免将
+Batch 的经济上限套到其他 Provider 的思考输出；其余已保存的 Sync 设置保持有效。
+
 ## TranslationPlan 与请求诊断
 
 普通初译的 `build` 与 Sync 共用同一套 `TranslationPlan`、chunk、canonical
@@ -17,6 +33,15 @@ system/user prompt、response schema 与 ContextAssembler。manifest 的
 fingerprint 及每个请求的上下文预算、裁剪和舍弃诊断；`requests.jsonl` 只在外层增加
 Gemini Batch envelope。诊断页显示 plan 指纹、请求数与裁剪摘要，完整请求仍只在本地
 产物中查看，不回显凭据。
+
+初译 response schema 保留 `translations` 数组及 `id` / `translation` 字段与类型，
+不把分块条数写入远端 `minItems` / `maxItems`；这类数组长度约束可能在上下文仍充足时
+被 Gemini 拒绝。结果完整性由共享本地合同检查期望 ID、缺项、重复 ID、未知 ID 和空译文，
+Batch 与 Sync（包括 GUI 包装层）使用同一套检查。
+
+原生空模板的英文原文和目标栏原值是不同字段。新包会保留 Adapter 提供的
+`live_catalog_text`，包括空字符串，供 `check` 和写回前验证目标栏原值；源文件快照仍需匹配。
+历史包若已丢失该字段，应从可信源模板重新 build，不能根据当前空栏猜补旧 manifest。
 
 `submit` 在上传任何 JSONL 或创建云端任务前，会校验 plan fingerprint、manifest chunk、
 `requests.jsonl`、当前 source snapshot 与 adapter/version。任一绑定陈旧或被修改都会要求

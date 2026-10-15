@@ -183,16 +183,28 @@ CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI �
 - 离线自动化测试、假适配器测试和真实 Provider 结果是三类不同证据；未执行的组合保持
   「未执行」，不能用离线结果替代。
 
-## 待执行清单（2026-09-19 起）
+## 实测补证（2026-10-13）
+
+Gemini Batch 已于 2026-10-11 完成真实 build → submit → status → download → check；
+本轮又用原创 fixture 完成 Gemini Sync 和无 LiteLLM 环境的 DeepSeek `openai_compatible`
+初译、术语、订正、项目分析与最终审校。GUI 通过 offscreen 的真实 Qt CliRunner / QProcess
+运行同一五阶段；并验证成功入库后中断不重复派发、T3 前中断保留 outcome_unknown。
+详情、预算、失败及本地修复边界见[补证报告](plans/provider-acceptance-reassessment-2026-10-13.md)。
+
+实测基于 HEAD `7e2cbd8` 加有内容摘要的本地修复；2026-10-14 代码整理为提交 `a66426e`，
+内容与已测试 Python 一致，待 PR 合并；不替代固定发布提交上的完整矩阵。
+Google 官方兼容地址的第二连接返回地域不支持，不据此勾选双地址 / 凭据隔离。
+
+## 剩余实测清单（2026-10-13）
 
 | 组合 | 需要的证据 | 状态 |
 |---|---|---|
-| 直连 `openai_compatible` 预设（OpenAI / OpenRouter / DeepSeek / xAI / Ollama 中可获得的） | 目录、probe、小范围 `sync-start` → `check`；至少 1 个 provider | 未执行 |
+| 直连 `openai_compatible` 预设（OpenAI / OpenRouter / DeepSeek / xAI / Ollama 中可获得的） | 目录、probe、小范围 `sync-start` → `check`；至少 1 个 provider | DS 已通过，含隔离 apply；其他供应商未逐个验收 |
 | 同一 adapter 两个不同 Base URL + 连接间凭据不串用 | 两个 profile、不同 host/credential_ref，交叉探测与 sync | 未执行（离线合同测试仅覆盖解析与序列化） |
-| `final-review-run-sync`（至少直连 adapter 或 Gemini Sync） | build → dry-run → limit 1 真跑 → status/export，记录 unit 失败分类 | 未执行 |
-| Gemini Sync | 支持地区/Gemini 凭据下的 probe + 小范围 `sync-start` → `check` | 未执行（此前地区受限） |
-| Gemini Batch | 1 个小 manifest 的 build → submit → status → download → check | 未执行 |
-| Durable sync 中断恢复的真实计费语义 | 中断一次、resume、确认不重复已完成请求 | 未执行 |
+| `final-review-run-sync`（至少直连 adapter 或 Gemini Sync） | build → dry-run → limit 1 真跑 → status/export，记录 unit 失败分类 | DS 真实 1 unit 已完成，CLI / GUI 均通过；不代表全部 Provider |
+| Gemini Sync | 支持地区/Gemini 凭据下的 probe + 小范围 `sync-start` → `check` | 本轮初译 / check / 隔离 apply 通过；单独 probe 与 Gemini 中断 smoke 成功仍未补齐 |
+| Gemini Batch | 1 个小 manifest 的 build → submit → status → download → check | 10-11 真实流程已执行，含 allow / deny 结果；该轮未 apply |
+| Durable sync 中断恢复的真实计费语义 | 中断一次、resume、确认不重复已完成请求 | DS 两个边界已验证无重复派发，未知结果不重发；账单未核对 |
 
 ## 诊断摘要（可脱敏导出）
 

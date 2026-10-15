@@ -109,6 +109,32 @@ def make_backend(
 
 
 class RequestShapeTests(unittest.TestCase):
+    def test_plain_text_analysis_does_not_inherit_json_profile_format(self) -> None:
+        from project_analysis_llm import complete_analysis_text
+        for mode in ("json_object", "strict_json_schema"):
+            with self.subTest(mode=mode):
+                transport = RecordingTransport(json_response(chat_payload(content="A traveler crosses the bridge.")))
+                backend = make_backend(transport, structured_output_mode=mode)
+                text, _usage = complete_analysis_text(
+                    backend.generate, model="model-x", system="Summarize the scene.",
+                    user="A traveler crosses the bridge.",
+                )
+                self.assertEqual(text, "A traveler crosses the bridge.")
+                self.assertNotIn("response_format", transport.calls[0]["body"])
+
+    def test_plain_text_and_json_schema_conflict_fails_before_dispatch(self) -> None:
+        transport = RecordingTransport(json_response(chat_payload()))
+        backend = make_backend(transport, structured_output_mode="json_object")
+        with self.assertRaises(SyncBackendError) as captured:
+            backend.generate(SyncGenerationRequest(
+                model="model-x", contents="hello", config={
+                    "response_mime_type": "text/plain",
+                    "response_json_schema": {"type": "object"},
+                },
+            ))
+        self.assertEqual(captured.exception.category, "unsupported_capability")
+        self.assertEqual(transport.calls, [])
+
     def test_chat_completions_request_shape(self) -> None:
         transport = RecordingTransport(json_response(chat_payload()))
         backend = make_backend(transport, params={"temperature": 0.2, "max_output_tokens": 256})

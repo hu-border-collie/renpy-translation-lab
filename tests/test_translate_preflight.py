@@ -113,7 +113,15 @@ def fake_context(
             report=coverage_report_value,
             inventory=coverage_inventory,
         ),
-        pending_jobs=[{"file_rel_path": "a.rpy", "tasks": [{}]}],
+        pending_jobs=[{
+            "file_rel_path": "a.rpy",
+            "tasks": [
+                {"id": item_id, "text": "Sample source text.", "line": index + 1}
+                for index, item_id in enumerate(
+                    item_id for request in requests for item_id in request.expected_ids
+                )
+            ],
+        }],
     )
 
 
@@ -134,6 +142,11 @@ class PreflightCommandTests(unittest.TestCase):
             mock.patch.object(runtime, "SYNC_RAG_ENABLED", False),
             mock.patch.object(runtime, "SYNC_STORY_MEMORY_ENABLED", False),
             mock.patch.object(runtime, "SYNC_SOURCE_INDEX_ENABLED", False),
+            mock.patch.object(batch, "RAG_ENABLED", False),
+            mock.patch.object(batch, "SOURCE_INDEX_ENABLED", False),
+            mock.patch.object(batch, "STORY_MEMORY_ENABLED", False),
+            mock.patch.object(batch, "PROJECT_ANALYSIS_ENABLED", False),
+            mock.patch.object(batch, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", False),
             mock.patch.object(
                 runtime, "SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", False
             ),
@@ -168,6 +181,78 @@ class PreflightCommandTests(unittest.TestCase):
         self.assertEqual(payload["chunk_policy"], {"max_items": 60, "max_chars": 18000})
         self.assertEqual(payload["source_snapshot"]["file_count"], 1)
         self.assertEqual(payload["credential_available"], True)
+
+    def test_batch_preflight_regroups_targets_with_batch_context_and_budget(self) -> None:
+        context = fake_context(self.section)
+        context.pending_jobs = [{
+            "file_rel_path": "chapter.rpy",
+            "file_path": "C:/game/work/game/tl/schinese/chapter.rpy",
+            "tasks": [
+                {"id": f"line-{i}", "text": f"A sample line {i}.", "line": i + 1}
+                for i in range(95)
+            ],
+        }]
+        args = self.parser.parse_args([
+            "translate-preflight", "--strategy", "gemini_batch", "--output", "json",
+        ])
+        with (
+            mock.patch.object(runtime, "prepare_sync_translation_execution_context", return_value=context),
+            mock.patch("model_capability_probe.default_credential_loader", return_value="key"),
+            mock.patch.object(batch, "BATCH_TARGET_SIZE", 30),
+            mock.patch.object(batch, "BATCH_TARGET_CHARS", 9000),
+            mock.patch.object(batch, "BATCH_CONTEXT_BEFORE", 7),
+            mock.patch.object(batch, "BATCH_CONTEXT_AFTER", 3),
+            mock.patch.object(batch, "BATCH_MAX_OUTPUT_TOKENS", 4096),
+            mock.patch.object(batch, "BATCH_MACRO_SETTING", "Sample setting for translation."),
+            mock.patch.object(batch, "_read_translator_config_object", return_value={
+                "batch": {"macro_setting_file": "macro_setting.md"},
+            }),
+            mock.patch.object(batch, "retrieve_source_hits", side_effect=AssertionError("Embedding called")),
+            mock.patch.object(batch, "retrieve_history_hits", side_effect=AssertionError("Embedding called")),
+        ):
+            payload = batch.run_translate_preflight(args)
+
+        self.assertEqual(payload["counts"]["pending_items"], 95)
+        self.assertEqual(payload["counts"]["chunks"], 4)
+        self.assertEqual(payload["chunk_policy"], {"max_items": 30, "max_chars": 9000})
+        self.assertEqual(payload["context_sources"]["local_context"], {"before": 7, "after": 3})
+        self.assertTrue(payload["context_sources"]["macro_setting_file"].endswith("macro_setting.md"))
+        self.assertEqual(payload["cost"]["output_tokens_max"], 4 * 4096)
+
+    def test_batch_preflight_matches_build_identity_with_retrieval_disabled(self) -> None:
+        context = fake_context(self.section)
+        identity = context.plan_build.plan.source_identity.to_dict()
+        with mock.patch.object(batch, "_batch_plan_source_identity", return_value=identity):
+            actual = batch._build_batch_translation_plan(
+                context.pending_jobs, context.routing_plan,
+            )["plan_build"]
+        offline = batch._build_batch_preflight_plan(
+            context.pending_jobs, context.routing_plan, source_identity=identity,
+        )
+        self.assertEqual(offline.plan.plan_fingerprint, actual.plan.plan_fingerprint)
+        self.assertEqual(
+            [request.audit_payload() for request in offline.requests],
+            [request.audit_payload() for request in actual.requests],
+        )
+
+    def test_batch_preflight_skips_enabled_retrieval_without_provider_calls(self) -> None:
+        context = fake_context(self.section)
+        args = self.parser.parse_args(["translate-preflight", "--strategy", "gemini_batch"])
+        with (
+            mock.patch.object(runtime, "prepare_sync_translation_execution_context", return_value=context),
+            mock.patch("model_capability_probe.default_credential_loader", return_value="key"),
+            mock.patch.object(batch, "RAG_ENABLED", True),
+            mock.patch.object(batch, "SOURCE_INDEX_ENABLED", True),
+            mock.patch.object(batch, "STORY_MEMORY_ENABLED", True),
+            mock.patch.object(batch, "PROJECT_ANALYSIS_ENABLED", True),
+            mock.patch.object(batch, "PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF", True),
+            mock.patch.object(batch, "retrieve_source_hits", side_effect=AssertionError("Embedding called")),
+            mock.patch.object(batch, "retrieve_history_hits", side_effect=AssertionError("Embedding called")),
+            mock.patch.object(batch, "retrieve_batch_story_hits", side_effect=AssertionError("Story retrieval called")),
+            mock.patch.object(batch, "load_injectable_project_context_for_prompts", side_effect=AssertionError("Analysis called")),
+        ):
+            payload = batch.run_translate_preflight(args)
+        self.assertEqual(payload["counts"]["pending_items"], 3)
 
     def test_payload_includes_cost_coverage_and_quality_summaries(self) -> None:
         context = fake_context(
@@ -900,6 +985,11 @@ class PreflightCommandTests(unittest.TestCase):
             ),
             plan_fingerprint="plan-fingerprint-1",
         )
+        batch_fingerprint = batch._build_batch_preflight_plan(
+            context.pending_jobs,
+            context.routing_plan,
+            source_identity=context.plan_build.plan.source_identity.to_dict(),
+        ).plan.plan_fingerprint
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report_path = root / "quality_findings.jsonl"
@@ -914,7 +1004,7 @@ class PreflightCommandTests(unittest.TestCase):
                 "mode": batch.MANIFEST_MODE_TRANSLATION,
                 "base_dir": runtime.BASE_DIR,
                 "tl_dir": runtime.TL_DIR,
-                "translation_plan": {"plan_fingerprint": "plan-fingerprint-1"},
+                "translation_plan": {"plan_fingerprint": batch_fingerprint},
                 "last_quality_findings_path": str(report_path),
                 "last_check_at": "2026-09-15T00:00:00",
                 "last_check_summary": {"quality_findings_sha256": digest},

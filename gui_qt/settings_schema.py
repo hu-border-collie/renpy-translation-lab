@@ -30,6 +30,7 @@ from sync_model_backend import (
     MIN_SYNC_TIMEOUT_SECONDS,
 )
 from .user_copy import (
+    BATCH_MAX_OUTPUT_TOKENS_COPY,
     QUALITY_POLICY_SETTING_COPY,
     SYNC_CONTEXT_AFTER_COPY,
     SYNC_CONTEXT_BEFORE_COPY,
@@ -74,14 +75,14 @@ class SettingField:
 BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
     "theme": "system",
     "context_storage_location": "tool",
-    "rag_enabled": True,
+    "rag_enabled": False,
     "source_index_enabled": False,
     "bootstrap_on_build": True,
     "sync_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
     "batch_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
     "sync_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
     "batch_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
-    "batch_thinking_level": "minimal",
+    "batch_thinking_level": "",
 }
 
 # Core fields shown only on 设置 · 上下文. They must not also appear as
@@ -268,10 +269,10 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "batch_max_output_tokens",
         ("batch", "max_output_tokens"),
-        "批量输出 token 上限",
-        "Batch 请求传给模型的 max_output_tokens。",
+        BATCH_MAX_OUTPUT_TOKENS_COPY["label"],
+        BATCH_MAX_OUTPUT_TOKENS_COPY["description"],
         "int",
-        32768,
+        12288,
         "翻译吞吐",
         minimum=1,
     ),
