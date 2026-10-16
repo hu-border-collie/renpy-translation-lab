@@ -109,6 +109,37 @@ def make_backend(
 
 
 class RequestShapeTests(unittest.TestCase):
+    def test_keyword_json_object_prompt_exposes_numeric_confidence_contract(self) -> None:
+        import translation_core as core
+
+        units = [{"id": "kw-1", "text": "Cross Moonstone Bridge."}]
+        candidate = {
+            "source": "Moonstone Bridge", "suggested_target": "月石桥",
+            "category": "place", "confidence": 0.9, "evidence": "kw-1",
+            "source_item_ids": ["kw-1"],
+        }
+        payload = {"candidates": [candidate], "chunk_summary": "", "summary_evidence_item_ids": []}
+        transport = RecordingTransport(json_response(chat_payload(content=json.dumps(payload))))
+        backend = make_backend(transport, structured_output_mode="json_object")
+        result = backend.generate(SyncGenerationRequest(
+            model="model-x", contents=core.build_keyword_user_prompt(units),
+            config={"response_json_schema": core.build_keyword_schema()},
+        ))
+        body = transport.calls[0]["body"]
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+        prompt = body["messages"][0]["content"]
+        self.assertRegex(prompt, r"confidence.*JSON number.*0.*1")
+        valid = core.validate_model_response(
+            json.loads(result.response_text), mode=core.MODE_KEYWORD_EXTRACTION, expected_units=units,
+        )
+        self.assertTrue(valid.complete)
+        candidate["confidence"] = "high"
+        invalid = core.validate_model_response(
+            payload, mode=core.MODE_KEYWORD_EXTRACTION, expected_units=units,
+        )
+        self.assertFalse(invalid.complete)
+        self.assertIn("result_invalid_field_type", invalid.reason_counts())
+
     def test_plain_text_analysis_does_not_inherit_json_profile_format(self) -> None:
         from project_analysis_llm import complete_analysis_text
         for mode in ("json_object", "strict_json_schema"):

@@ -23989,7 +23989,8 @@ def dispatch_command(parser, args):
             )
         if command == 'final-review-run-sync':
             try:
-                legacy.load_config()
+                # The campaign's frozen profile owns credential validation.
+                legacy.load_config(require_api_key=False)
             except model_profile.ModelRoutingConfigError as exc:
                 raise model_profile.routing_resolution_error(
                     exc,
@@ -24048,10 +24049,11 @@ def dispatch_command(parser, args):
 
         def _load_settings_quiet():
             if not store_dir or command == 'project-analysis-generate':
-                # generate needs API keys from load_config() for run_sync_request.
+                # Load available Gemini keys without requiring an unrelated
+                # credential before the selected stage adapter is resolved.
                 if command == 'project-analysis-generate':
                     try:
-                        legacy.load_config()
+                        legacy.load_config(require_api_key=False)
                     except model_profile.ModelRoutingConfigError as exc:
                         raise model_profile.routing_resolution_error(
                             exc,
@@ -24472,7 +24474,11 @@ def dispatch_command(parser, args):
         except model_usage_ledger.UsageLedgerError as exc:
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
-    require_api_key = command not in OFFLINE_BATCH_COMMANDS
+    # Sync requests validate credentials at the selected provider boundary;
+    # an OpenAI-compatible/LiteLLM stage does not need a Gemini key.
+    require_api_key = command not in OFFLINE_BATCH_COMMANDS and command not in {
+        'sync-keywords', 'sync-revisions',
+    }
     if command == 'submit' and getattr(args, 'target', ''):
         # External work packages never reach Provider submission; refuse before
         # key loading so the diagnostic is about the contract, not credentials.

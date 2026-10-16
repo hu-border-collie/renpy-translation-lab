@@ -1058,6 +1058,7 @@ def build_keyword_user_prompt(units):
         f'{target_payload}\n\n'
         'Return a JSON object with candidates, chunk_summary, and summary_evidence_item_ids. '
         'Each candidate must include source, suggested_target, category, confidence, evidence, and source_item_ids; '
+        'confidence must be a JSON number between 0 and 1 (for example 0.9), never a text label. '
         'source_item_ids must contain at least one TARGET LINES id. A non-empty chunk_summary must cite at least one '
         'TARGET LINES id in summary_evidence_item_ids.'
     )

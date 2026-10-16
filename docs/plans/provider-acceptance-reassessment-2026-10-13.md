@@ -3,6 +3,11 @@
 本轮补充 #344 / #431 的真实连接、阶段路由和中断恢复证据，并对照 #508 已有章节交付。
 这不是全部开放 issue 已通过的声明；不关闭 issue，不把结构安全、模型质量和游戏运行混为一项。
 
+后续状态：本文修复已随 [PR #556](https://github.com/hu-border-collie/renpy-translation-lab/pull/556)
+于 2026-10-15 合并。双连接、完全不带 Gemini Key 的五阶段与 #508 独立复审见
+[10-15 续验记录](issue-431-508-acceptance-2026-10-15.md)；当日带有 Gemini Key 的环境未暴露
+后续确认的同步入口凭据前置检查缺陷。下文保留 10-13 的证据与当时发布状态。
+
 ## 样本、环境与基线
 
 - Windows、Python 3.14.0；独立 venv 的 `include-system-site-packages=false`，安装
