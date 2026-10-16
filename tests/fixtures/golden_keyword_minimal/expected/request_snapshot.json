@@ -16,7 +16,7 @@
         "chapter01/keywords.rpy:5:keyword:1"
       ],
       "system_instruction_sha256": "9f4020722b63940d1daea0b040cbecdb871c8a778382ae57a625501e9ff323c7",
-      "user_prompt_sha256": "ab4618f1b8f0dfbb92bc15792aab8ee1a9f9256e34fe464abd162b9b5e9bbf55",
+      "user_prompt_sha256": "0efd44ea349438376d31a5cd1bed0eb97e7aa603733d791cbe41cacdac0be6ec",
       "generation_config": {
         "keys": [
           "max_output_tokens",
@@ -106,7 +106,7 @@
         "chapter01/keywords.rpy:12:keyword:3"
       ],
       "system_instruction_sha256": "9f4020722b63940d1daea0b040cbecdb871c8a778382ae57a625501e9ff323c7",
-      "user_prompt_sha256": "8bd3c09c4a53077e2ead44a57f3e36c869cf9e2918db6f305a4e87bc6eaf2e7e",
+      "user_prompt_sha256": "8ec1764489cbc141f778b6765d9cac46424bcbd49d340764740ca4c7df6424a1",
       "generation_config": {
         "keys": [
           "max_output_tokens",

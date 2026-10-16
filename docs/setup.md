@@ -217,6 +217,10 @@ LiteLLM 没有内置的 OpenCode Go 等第三方 OpenAI 兼容端点。任何提
 
 不安装 LiteLLM 时，也可以在 `model_routing` 中使用 adapter `openai_compatible`，由标准库 HTTP 直接调用 Chat Completions：
 
+初译、术语、订正、项目分析和显式 Sync 最终审校使用所选连接的凭据，不要求额外配置
+Gemini Key。若阶段或冻结任务选择 Gemini，仍需对应 Gemini 凭据；Gemini Batch 的要求不变。
+JSON object 模式的术语提示也会明确置信度是 0–1 的数字，字符串标签仍按无效结果处理。
+
 ```json
 {
   "model_routing": {

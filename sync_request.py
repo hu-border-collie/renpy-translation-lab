@@ -37,12 +37,13 @@ class SyncRequestRuntime:
 
 
 def create_runtime_client(*, api_key_index=None, api_key=None):
-    """Build a Gemini SDK client using the existing runtime credential store."""
+    """Validate Gemini credentials at its request boundary and build a client."""
     import translator_runtime as runtime
 
     if api_key is not None:
         return runtime.create_genai_client(api_key=api_key)
     if api_key_index is None:
+        runtime._require_gemini_api_key()
         return runtime.create_genai_client()
     try:
         index = int(api_key_index)

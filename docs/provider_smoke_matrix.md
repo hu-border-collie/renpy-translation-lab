@@ -195,7 +195,17 @@ Gemini Batch 已于 2026-10-11 完成真实 build → submit → status → down
 内容与已测试 Python 一致，待 PR 合并；不替代固定发布提交上的完整矩阵。
 Google 官方兼容地址的第二连接返回地域不支持，不据此勾选双地址 / 凭据隔离。
 
-## 剩余实测清单（2026-10-13）
+## 续验（2026-10-15）
+
+DeepSeek 与 OpenRouter 两个地址的目录、probe、初译、含斜杠模型 ID 和实际出站凭据隔离
+已通过；另验证未内置自定义 Provider ID 的生成与隔离 apply。
+完全不设置 Gemini Key 的环境暴露并修复了术语、订正、项目分析和 Sync 最终审校的
+不相关凭据检查；术语 JSON object 提示补齐数值置信度合同。修复后生产 GUI workflow
+五阶段实测完成，仍属 offscreen Qt/QProcess 验证。本轮修复待合入 main。
+完整失败记录、费用、代码基线和 #508 独立审阅见
+[续验记录](plans/issue-431-508-acceptance-2026-10-15.md)。
+
+## 剩余实测清单（2026-10-13 历史快照）
 
 | 组合 | 需要的证据 | 状态 |
 |---|---|---|
