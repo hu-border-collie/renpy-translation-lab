@@ -349,7 +349,11 @@ class GeminiEmbeddingAdapter:
 
 
 class OpenAICompatibleEmbeddingAdapter:
-    """Adapter for LiteLLM or an OpenAI-compatible ``embeddings.create`` callable."""
+    """Adapter for LiteLLM or an OpenAI-compatible ``embeddings.create`` callable.
+
+    Requests float encoding explicitly because the core consumes numeric vectors;
+    SDK defaults must not send an unspecified or encoded representation.
+    """
 
     backend = "openai_compatible"
 
@@ -409,6 +413,7 @@ class OpenAICompatibleEmbeddingAdapter:
             "model": request.identity.model,
             "input": list(request.inputs),
             "dimensions": request.identity.output_dimension,
+            "encoding_format": "float",
             "timeout": request.timeout_seconds,
         }
         if self._transport_kind == "litellm":

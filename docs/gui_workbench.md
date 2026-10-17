@@ -344,6 +344,7 @@ build -> submit -> status -> download -> check
 - **停止与取消是两件事**：「停止」只结束本机进程，耐久运行不会被隐式取消，已提交的请求不会重发；「继续 / 查看最新任务」先查询最新运行的公开状态，未结束则 `sync-resume`，已结束则生成检查预览。
 - **显式取消**：只有「取消任务」会调用 `sync-cancel <RUN>` 请求执行器停止后续调度；已完成结果仍保留在运行记录中。
 - **未解决与未知结果**：`failed` / `completed_with_errors` 的运行不会自动继续；存在 `outcome_unknown` 时必须显式确认重复调用/计费风险，或排除 unknown 条目后派生新运行。中断恢复不能承诺所有情形都绝不重复计费。
+- **已知 Token**：使用 CLI 状态快照中的归一化用量，兼容 Gemini REST / SDK 和 OpenAI-compatible 计数；缺失用量不显示为零。详见[状态用量语义](sync_workflow.md#耐久-sync可恢复-cli)。
 - **派生新运行**：存在可复用结果时页面启用「派生新运行」，由 `sync-derive` 创建新 run；有 `outcome_unknown` 时默认选择「排除结果未知条目（不重复调用）」，只有显式选择并确认风险时才会重试 unknown。原运行记录不会被修改。
 - **配置来源**：模型与阶段路由来自 `model_routing`（迁移期旧 `sync.*` 字段仅供回滚兼容）；`timeout_seconds` 仍是单请求等待上限。
 
@@ -503,6 +504,11 @@ build-keywords -> submit -> status -> download -> export-keywords
 ## 批量上下文预建
 
 若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在设置页启用批量上下文并预建本地库。
+
+预建使用批量入口绑定的 embedding profile。选择 OpenAI-compatible / LiteLLM embedding 时，
+只需该连接的有效凭据；不会额外要求 Gemini Key。选择 Gemini embedding 时仍须提供
+Gemini Key。GUI 与 CLI 共用 `bootstrap-rag` / `bootstrap-source-index`，不会绕过 store
+的模型、Provider、维度及文档 / 查询任务身份校验。
 
 设置页「上下文」里的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 项目分析 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。高级分区可显式覆盖 store 路径；Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
 

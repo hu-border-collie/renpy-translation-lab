@@ -21,6 +21,7 @@ import sqlite3
 from typing import Any, Mapping, Sequence
 
 from atomic_io import AtomicFileLockTimeoutError, exclusive_file_lock, file_sha256
+from model_usage_ledger import normalize_usage_metadata
 import sync_run_contracts as contracts
 from sync_run_contracts import (
     AttemptStatus,
@@ -2921,7 +2922,12 @@ class SyncRunStore:
         }
 
     def build_snapshot(self) -> dict:
-        """Return the store-backed run snapshot defined in #347 section 11.2."""
+        """Return the store-backed run snapshot defined in #347 section 11.2.
+
+        Token totals use the ledger's provider-neutral normalization, including
+        Gemini SDK counters; missing usage stays unknown. Stored receipts are
+        read without modification.
+        """
         with self._conn() as conn:
             run = self._load_run_tx(conn, self.run_id)
             request_rows = conn.execute(
@@ -2987,12 +2993,8 @@ class SyncRunStore:
             for attempt in attempts:
                 usage = json.loads(attempt['usage_metadata_json'] or '{}')
                 reservation = json.loads(attempt['reservation_json'] or '{}')
-                tokens = usage.get('total_tokens', usage.get('totalTokenCount'))
-                try:
-                    parsed_tokens = int(tokens)
-                except (TypeError, ValueError):
-                    parsed_tokens = None
-                if parsed_tokens is not None and parsed_tokens >= 0:
+                parsed_tokens = normalize_usage_metadata(usage)['total_tokens']
+                if parsed_tokens is not None:
                     total_tokens += parsed_tokens
                     total_tokens_known += 1
                 estimated = self._numeric_cost(

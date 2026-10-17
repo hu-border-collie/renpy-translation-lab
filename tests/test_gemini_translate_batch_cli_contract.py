@@ -190,6 +190,37 @@ class BatchCliContractTests(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def test_sync_status_json_reports_stored_gemini_sdk_usage(self):
+        from sync_run_service import SyncRunService
+        from tests.test_sync_run_store import bootstrap_run
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store, _ = bootstrap_run(Path(tmp))
+            store.acquire_lease(owner_token='owner-1')
+            attempt_id = store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+            store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+            store.record_success(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+                accepted_items=['item-1', 'item-2'],
+                usage_metadata={'total_token_count': 515},
+            )
+            service = SyncRunService(tmp)
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(batch, '_durable_sync_store_only_service', return_value=service),
+                mock.patch.object(sys, 'argv', [
+                    'gemini_translate_batch.py', 'sync-status', store.run_id, '--output', 'json',
+                ]),
+                contextlib.redirect_stdout(stdout),
+            ):
+                code = batch.main()
+
+        envelope = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertTrue(envelope['ok'])
+        self.assertEqual(envelope['result']['progress']['usage']['total_tokens'], 515)
+
     def test_final_review_resume_and_ingest_use_frozen_route_model(self):
         from model_routing_migration import preview_migration
 

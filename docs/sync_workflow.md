@@ -86,6 +86,11 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
 - **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
+`bootstrap-rag` / `bootstrap-source-index` 按批量入口绑定的 embedding profile 校验预建凭据：
+OpenAI-compatible / LiteLLM 后端不额外要求 Gemini Key；Gemini 后端仍在进入预建前检查
+Gemini Key。OpenAI-compatible embedding 请求显式使用 `encoding_format=float`，让核心
+接收数值向量；这不放宽 store identity 校验，也不代表所有供应商都支持所选模型或维度。
+
 每次运行的上下文构造事实会写入 manifest 与预览制品：
 
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
@@ -120,6 +125,12 @@ python gemini_translate_batch.py sync-derive <RUN> --json
 `sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
 
 `sync-status` 快照包含只读 `frozen_profile`（`profile_id` / `label` / `adapter` / `provider` / `model` / `embedding_profile_id` / `execution_strategy` / `source`）：优先来自 run 启动时冻结的 plan 快照；旧 run 没有快照时回退到 attempt 记录的 provider/model；两者都没有时 `source=unknown` 且不显示假值。CLI 文本输出与 GUI 运行事实都会显示该 Provider/模型，失败或降级时不再只能看到错误分类。
+
+快照的 `progress.usage.total_tokens` 与[模型用量账本](model_usage_ledger.md)共用归一化逻辑，
+兼容 Gemini REST 的 `totalTokenCount`、SDK 的 `total_token_count` 和 OpenAI-compatible 的
+`total_tokens`；仅在组成计数足以确定总量时推导总量，并计入 Gemini 明确报告的思考 Token。
+缺失或无效计数保持 `null`，明确报告的零仍为零。GUI 使用同一公开快照展示已知 Token；
+读取状态不会改写原始 usage 回执或重新调用模型。
 
 终态只代表执行器不再调度，并不授权写回。耐久路径固定为：
 
@@ -193,6 +204,7 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 
 - **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及当前 Sync 已启用的 glossary、macro、RAG、Source Index 或 Published Project Analysis 上下文发送给 Gemini。Embedding 可显式选择 Gemini 或 OpenAI-compatible/LiteLLM 后端；没有 Gemini Key 时，只要配置了其它有效 Embedding backend，同步 RAG / Source Index 仍可工作。
 - **LiteLLM 同步**：本工具从本机调用 LiteLLM Python SDK，再按所选 Provider / API Base 访问供应商。本项目不提供自建 LiteLLM 代理；待译文本、提示词和必要上下文会发送到所选供应商。凭据保存在操作系统凭据管理器或环境变量中，不写入 `translator_config.json`。
+
 - **本地产物**：manifest、diff、模型结果摘要、用量账本与日志保存在本机；它们可能包含私有游戏文本，不应提交到公开仓库或发给无权访问者。
 
 免费与付费服务的数据使用、日志、训练和保留政策可能不同，也可能随供应商更新。处理敏感、保密或无权发送的游戏文本前，应先核对所用账号层级和供应商当前条款；Gemini 可参考 [Additional Terms](https://ai.google.dev/gemini-api/terms) 与 [Data Logging and Sharing](https://ai.google.dev/gemini-api/docs/logs-policy)，LiteLLM 则以实际 Provider 的政策为准。

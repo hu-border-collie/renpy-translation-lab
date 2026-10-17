@@ -62,6 +62,25 @@ class EmbeddingAdapterTests(unittest.TestCase):
             metadata={"purpose": "offline-test"},
         )
 
+    def test_openai_compatible_explicitly_requests_numeric_vectors(self):
+        for transport_kind in ('litellm', 'openai_client'):
+            with self.subTest(transport_kind=transport_kind):
+                def transport(**kwargs):
+                    if kwargs.get('encoding_format') != 'float':
+                        raise _StatusError(400, 'encoding_format must be float or base64')
+                    return {'data': [
+                        {'index': 0, 'embedding': [1.0, 0.0]},
+                        {'index': 1, 'embedding': [0.0, 1.0]},
+                    ]}
+
+                adapter = OpenAICompatibleEmbeddingAdapter(
+                    transport=transport, transport_kind=transport_kind,
+                    model='openai/text-embedding-3-small', output_dimension=2,
+                    provider='openrouter', endpoint='https://openrouter.ai/api/v1',
+                )
+                result = adapter.embed(self.request(adapter))
+                self.assertEqual(result.vectors, ((1.0, 0.0), (0.0, 1.0)))
+
     def test_gemini_maps_document_task_timeout_usage_and_batch(self):
         response = SimpleNamespace(
             embeddings=[

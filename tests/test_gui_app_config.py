@@ -411,6 +411,20 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             ],
         )
 
+    def test_non_gemini_embedding_prebuild_uses_shared_cli_without_gemini_env(self):
+        config = {'batch': {
+            'rag': {'enabled': True, 'embedding_backend': 'openai_compatible',
+                    'embedding_model': 'openrouter/qwen/qwen3-embedding-8b'},
+            'source_index': {'enabled': True},
+        }}
+        for operation, command in (('rag', 'bootstrap-rag'), ('source_index', 'bootstrap-source-index')):
+            with self.subTest(operation=operation), mock.patch.dict('os.environ', {}, clear=True):
+                runner = self._prepare_bootstrap_window(config)
+                self.window._start_bootstrap_task(operation)
+                self.assertEqual(runner.calls, [
+                    (Path('C:/tool/gemini_translate_batch.py'), [command, '--skip-prepare']),
+                ])
+
     def test_bootstrap_summary_syncs_timeline_for_terminal_states(self):
         from gui_qt.bootstrap_report import BootstrapSummary, running_bootstrap_summary
 

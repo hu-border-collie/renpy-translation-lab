@@ -754,6 +754,66 @@ class ProjectionAndIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(total, bucket_sum)
 
+    def test_snapshot_normalizes_provider_token_counters(self):
+        cases = (
+            ({'total_tokens': 515}, 515),
+            ({'totalTokenCount': 515}, 515),
+            ({'prompt_token_count': 417, 'candidates_token_count': 98,
+              'total_token_count': 515}, 515),
+            ({'prompt_token_count': 10, 'candidates_token_count': 4,
+              'thoughts_token_count': 6}, 20),
+            ({'total_token_count': 0}, 0),
+            ({}, None),
+            ({'prompt_token_count': 417}, None),
+            ({'total_token_count': None}, None),
+            ({'total_token_count': -1}, None),
+            ({'total_token_count': True}, None),
+        )
+        for index, (usage, expected) in enumerate(cases):
+            with self.subTest(usage=usage):
+                store, _ = bootstrap_run(self.root / str(index))
+                store.acquire_lease(owner_token='owner-1')
+                attempt_id = store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+                store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+                store.record_success(
+                    attempt_id=attempt_id,
+                    owner_token='owner-1',
+                    accepted_items=['item-1', 'item-2'],
+                    usage_metadata=usage,
+                )
+
+                snapshot = store.build_snapshot()
+
+                self.assertEqual(snapshot['progress']['usage']['total_tokens'], expected)
+
+    def test_snapshot_sums_known_usage_without_changing_receipts(self):
+        usages = ({'total_token_count': 515}, {'totalTokenCount': 514},
+                  {'total_tokens': 955}, {})
+        requests = [
+            make_request(request_id=f'req-{i}', expected_ids=[f'item-{i}'])
+            for i in range(len(usages))
+        ]
+        store, _ = bootstrap_run(self.root / 'mixed-usage', requests=requests)
+        store.acquire_lease(owner_token='owner-1')
+        for i, usage in enumerate(usages):
+            attempt_id = store.prepare_attempt(request_id=f'req-{i}', owner_token='owner-1')
+            store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+            store.record_success(
+                attempt_id=attempt_id,
+                owner_token='owner-1',
+                accepted_items=[f'item-{i}'],
+                usage_metadata=usage,
+            )
+        attempts = store.list_attempts()
+        outbox = store.pending_usage_outbox()
+
+        for _ in range(2):
+            usage = store.build_snapshot()['progress']['usage']
+            self.assertEqual(usage['total_tokens'], 1984)
+            self.assertEqual(usage['known_calls'], 3)
+        self.assertEqual(store.list_attempts(), attempts)
+        self.assertEqual(store.pending_usage_outbox(), outbox)
+
     def test_snapshot_exposes_frozen_profile_from_plan(self):
         plan = make_plan()
         plan['model_profile_snapshot'] = {
