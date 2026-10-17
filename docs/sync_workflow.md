@@ -86,6 +86,13 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
 - **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
+`bootstrap-rag` / `bootstrap-source-index` 在使用 `model_routing` 时按批量入口绑定的
+embedding profile 校验预建凭据；旧配置仍读取 `batch.rag.embedding_*`。OpenAI-compatible /
+LiteLLM 后端不额外要求 Gemini Key；Gemini 后端仍在进入预建前检查 Gemini Key。
+兼容接口默认请求 `encoding_format=float`。仅当 LiteLLM 在本地以 `UnsupportedParamsError`
+明确拒绝该参数时，去掉编码参数再调用一次；不移除维度、模型或连接信息，也不因服务端错误、
+鉴权失败或超时重试。返回结果仍须通过数值向量及 store identity 校验。
+
 每次运行的上下文构造事实会写入 manifest 与预览制品：
 
 - manifest 顶层 `prompt_context`：前后文设置、macro 文件与内容指纹、是否实际注入 macro、批次总数与截断批次数；
@@ -120,6 +127,12 @@ python gemini_translate_batch.py sync-derive <RUN> --json
 `sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
 
 `sync-status` 快照包含只读 `frozen_profile`（`profile_id` / `label` / `adapter` / `provider` / `model` / `embedding_profile_id` / `execution_strategy` / `source`）：优先来自 run 启动时冻结的 plan 快照；旧 run 没有快照时回退到 attempt 记录的 provider/model；两者都没有时 `source=unknown` 且不显示假值。CLI 文本输出与 GUI 运行事实都会显示该 Provider/模型，失败或降级时不再只能看到错误分类。
+
+快照的 `progress.usage.total_tokens` 与[模型用量账本](model_usage_ledger.md)共用归一化逻辑，
+兼容 Gemini REST 的 `totalTokenCount`、SDK 的 `total_token_count` 和 OpenAI-compatible 的
+`total_tokens`；仅在组成计数足以确定总量时推导总量，并计入 Gemini 明确报告的思考 Token。
+缺失或无效计数保持 `null`，明确报告的零仍为零。GUI 使用同一公开快照展示已知 Token；
+读取状态不会改写原始 usage 回执或重新调用模型。
 
 终态只代表执行器不再调度，并不授权写回。耐久路径固定为：
 

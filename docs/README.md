@@ -40,7 +40,7 @@
 ### 现行：配置与 GUI
 
 - [模型配置迁移（#348 P1/P2）](model_config_migration.md)：配置副本的预览、暂存、备份与回滚；P2 已接入兼容入口的生产读取。
-- [Provider / 执行策略 / 最终审校 Smoke Matrix（#348、#431）](provider_smoke_matrix.md)：Gemini Sync、LiteLLM 内置/自定义、直连 `openai_compatible`、Gemini Batch 与 `final_review` sync 的最短验证路径、调用预算、能力探测、记录模板与脱敏诊断导出。
+- [Provider / 执行策略 / 最终审校 Smoke Matrix（#344、#348、#431）](provider_smoke_matrix.md)：Gemini Sync、LiteLLM 内置/自定义、直连 `openai_compatible`、Gemini Batch 与 `final_review` sync 的最短验证路径、调用预算、能力探测、记录模板与脱敏诊断导出。
 - [安装与本地配置](setup.md)：`translator_config.json`、**按项目**的 `project_context_settings.json`、work 目录、SDK / TL 模板。
 - [GUI 工作台](gui_workbench.md)：当前 PySide6 界面（统一侧边导航、项目与环境、任务页、设置、诊断与运行日志、写回安全边界）。
 - [工作区项目总表](games_registry.md)：`games_registry.json` / `GAMES.md`、CLI 与 GUI 刷新边界。
@@ -71,18 +71,18 @@
 完整的计划目录、当前状态、合并证据与剩余 issue 见[规划、合同与研究索引](plans/README.md)（核对至 2026-09-27 main）。有日期的研究仍保留原基线；索引中的当前状态说明不会改写其历史结论。
 
 - 本轮工程已分别由 PR #522（#521）、#515 / #517 / #523（#427 S1/S2）、#524（#512）和 #527（#513）合并。#427 仍等待真实语料、操作与游戏验收；#512 / #513 的 issue 验收清单尚未回填，OPEN 不表示实现缺失。
-- 统一真实项目 / Provider 验收仍跟踪 #518、#508、#344、#431、#470；工程合并、CI 或合成 fixture 均不能替代这些证据。操作与记录入口分别见[外部初译工作包](external_translation_work.md)、[Provider Smoke Matrix](provider_smoke_matrix.md)及计划索引。
+- 统一真实项目 / Provider 验收仍跟踪 #518、#508、#344、#470；#431 已按首期范围完成并关闭，后续 Provider 验收由 #344 跟踪。工程合并、CI 或合成 fixture 均不能替代这些证据。操作与记录入口分别见[外部初译工作包](external_translation_work.md)、[Provider Smoke Matrix](provider_smoke_matrix.md)及计划索引。
 - #509 Translator++ 往返、#520 OpenRouter Batch、#272 第三引擎与 #147 Story Graph 不属于本轮；#509 / #520 先做实验，再决定是否创建生产接入任务。
 - [维护复杂度治理路线](plans/maintainability_roadmap.md)：#528 已由 PR #529 / #530 完成并关闭；#531 已登记但尚未实施，属于独立维护队列，不是 #510 或本轮功能的前置条件。
 - [#202 Settings 页面合同](plans/issue-202-settings-page-contract.md)：Phase A–D 已完成，issue 已关闭；当前界面见[GUI 工作台](gui_workbench.md)。
-- [#348 Model Routing 合同](plans/issue-348-model-routing-config-contract.md)：P0–P3 已完成，issue 已关闭；当前迁移见[模型配置迁移](model_config_migration.md)，真实 smoke 归 #344 / #431。
+- [#348 Model Routing 合同](plans/issue-348-model-routing-config-contract.md)：P0–P3 已完成，issue 已关闭；当前迁移见[模型配置迁移](model_config_migration.md)，后续真实 smoke 归 #344，#431 首期记录保留。
 - [#422 apply/export 事务合同](plans/issue-422-p2-apply-export-contract.md)：PR #473 已交付；安全和恢复合同仍有效，用户用法见[Agent 快速开始](quickstart_agent.md)与[Batch 工作流](batch_workflows.md)。
 - [Engine Adapter 合同](plans/engine_adapter_contract.md)：#265 P0–P6 已完成并关闭；当前用法和边界见[Engine Adapter 手册](engine_adapter.md)。#272 的生产立项仍暂缓。
 - [#364 质量校准手册与基线](plans/issue-364-calibration-runbook.md)：真实项目校准已完成并关闭；保留历史结论和复现步骤。当前白名单字段语义见[Batch 工作流](batch_workflows.md)。
 - [#426 coverage 归因报告](plans/renpy_coverage_block_attribution.md)：合成归因与 #460–#464、#471 修复已完成；真实大型样本仍归 #470。
 - [#487 字体覆盖只读 spike](plans/renpy_font_coverage_spike.md)：PR #511 已交付并关闭；字体生产接入仍待评估，没有纳入本轮。
 - [#427 普通译文审校合同](plans/issue-427-review-index-contract.md)：S1/S2 工程已合并；真实验收仍归 #427，当前 GUI 说明见[GUI 工作台](gui_workbench.md)。
-- [#431 OpenAI-compatible 与 final_review Sync 合同](plans/issue-431-openai-compatible-contract.md)：S1–S3 及 smoke 准备已合并；解绑 final_review 已完成，真实 Provider 验收仍归 #431 / #344。
+- [#431 OpenAI-compatible 与 final_review Sync 合同](plans/issue-431-openai-compatible-contract.md)：S1–S3 及首期真实验收已完成，issue 已关闭；保留历史合同，后续 Provider 验收归 #344。
 - [Translator++ 接入评估](plans/translatorpp_integration_assessment.md)：尚无 bridge 或真实往返证据；按 #509 先实验、后决定是否实施。
 
 ### 历史参考（已归档）

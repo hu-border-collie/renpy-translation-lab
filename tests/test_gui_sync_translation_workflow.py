@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 
 import cli_contract
 from gui_qt.sync_translation_workflow import (
@@ -504,6 +506,30 @@ class DurableSyncRecoveryTests(unittest.TestCase):
 
 
 class DurableSyncFactTests(unittest.TestCase):
+    def test_facts_show_stored_gemini_sdk_tokens_and_preserve_unknown(self) -> None:
+        from sync_run_service import SyncRunService
+        from tests.test_sync_run_store import bootstrap_run
+
+        for usage, expected in (({'total_token_count': 515}, 515), ({}, None)):
+            with self.subTest(usage=usage), tempfile.TemporaryDirectory() as tmp:
+                store, _ = bootstrap_run(Path(tmp))
+                store.acquire_lease(owner_token='owner-1')
+                attempt_id = store.prepare_attempt(request_id='req-1', owner_token='owner-1')
+                store.dispatch_attempt(attempt_id=attempt_id, owner_token='owner-1')
+                store.record_success(
+                    attempt_id=attempt_id,
+                    owner_token='owner-1',
+                    accepted_items=['item-1', 'item-2'],
+                    usage_metadata=usage,
+                )
+                payload = SyncRunService(tmp).status(store.run_id)
+
+            facts = durable_sync_facts(payload)
+            if expected is None:
+                self.assertFalse(any('已知 Token' in fact for fact in facts))
+            else:
+                self.assertIn('已知 Token：515', facts)
+
     def test_facts_show_progress_and_unknown_risk(self) -> None:
         payload = snapshot(
             requests={

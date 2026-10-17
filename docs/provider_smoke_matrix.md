@@ -1,4 +1,4 @@
-# Provider / 执行策略 / 最终审校 Smoke Matrix（#348、#431）
+# Provider / 执行策略 / 最终审校 Smoke Matrix（#344、#348、#431）
 
 文档地图：[docs/README.md](README.md)
 
@@ -11,6 +11,14 @@
 - [#431 S1 直连 OpenAI-compatible Sync 生成合同](plans/issue-431-openai-compatible-contract.md)
 - [#431 S2 目录发现、诊断与迁移矩阵合同](plans/issue-431-openai-compatible-s2-contract.md)
 - [#431 S3 最终审校 Sync 执行合同](plans/issue-431-final-review-sync-contract.md)
+
+2026-10-17 状态：#431 已按首期范围关闭；#344 在固定 `main@4612d8dd` 上的四类执行链路
+已补齐：LiteLLM 内置 / 自定义及 Gemini Sync / Batch 均完成检查与隔离写回。
+首次地区失败与恢复后的成功分别保留，见[固定版本报告](plans/issue-344-provider-matrix-2026-10-16.md)。
+[10-17 续验](plans/issue-344-context-acceptance-2026-10-17.md)补了两个真实中断边界的请求级费用、
+真实章节 fresh PA、Qwen3 embedding 预建 / 查询和两组各 128 条的原生上下文对照及隔离写回。
+语义收益未得到支持，默认开关保持不变。Token 摘要、bootstrap 凭据和向量编码修复已本地验证，
+随续验报告提交 PR 评审；不把自动化、单 Agent 复核或请求级费用读回扩大为人工游戏验收或月度账单核对。
 
 ## 前置条件
 
@@ -32,11 +40,11 @@
 
 | # | 组合 | Profile 示例 | 单次能力探测 | 端到端最小运行 | 离线自动化覆盖 |
 |---|------|--------------|--------------|----------------|----------------|
-| 1 | Gemini Sync | `adapter=gemini`，策略 `sync` | `profiles-probe --profile gemini-main --acknowledge-billable-request <TOKEN>` | `sync-start --profile gemini-main --json` → `check <RUN>` → `apply <RUN>` | `test_model_routing_runtime`、`test_gui_durable_sync_page`、`test_sync_run_service`、`test_translation_plan_p4` |
-| 2 | LiteLLM 内置 Provider | `adapter=litellm`，`provider=openai|anthropic|deepseek|...`，策略 `sync` | `profiles-probe` + `scripts/run_provider_contract_smoke.py --provider <name>` | `sync-start --profile litellm-main --json` → `check <RUN>` → `apply <RUN>` | `test_litellm_sync_backend`、`test_litellm_runtime_integration`、`test_model_routing_choices` |
+| 1 | Gemini Sync | `adapter=gemini`，策略 `sync` | `profiles-probe --profile gemini-main --acknowledge-billable-request <TOKEN>` | `sync-start --profile gemini-main --output json` → `check <RUN>` → `apply <RUN>` | `test_model_routing_runtime`、`test_gui_durable_sync_page`、`test_sync_run_service`、`test_translation_plan_p4` |
+| 2 | LiteLLM 内置 Provider | `adapter=litellm`，`provider=openai / anthropic / deepseek / ...`，策略 `sync` | `profiles-probe` + `scripts/run_provider_contract_smoke.py --provider <name>` | `sync-start --profile litellm-main --output json` → `check <RUN>` → `apply <RUN>` | `test_litellm_sync_backend`、`test_litellm_runtime_integration`、`test_model_routing_choices` |
 | 3 | LiteLLM 自定义兼容 Provider（legacy） | `adapter=litellm` + `base_url` / `models_url` / `api_key_env` | `profiles-probe`；另见 `scripts/run_durable_sync_provider_smoke.py --provider-class custom --custom-base-url ...` | 同 LiteLLM（先跑小范围 `sync-start`） | `test_model_routing_choices`、`test_litellm_sync_backend` 自定义 Provider 用例 |
-| 4 | **直连 `openai_compatible` 预设/自定义** | `adapter=openai_compatible`，`provider=openai|openrouter|deepseek|xai|ollama|<custom>`，策略 `sync` | `profiles-list-models --profile <ID> --output json` + `profiles-probe --profile <ID> --acknowledge-billable-request <TOKEN>` | `sync-start --profile <ID> --json` → `check <RUN>` → `apply <RUN>` | `test_openai_compatible_sync_backend`、`test_openai_compatible_config`、`test_openai_compatible_model_catalog`、`test_profile_cli`、`test_model_routing_runtime` |
-| 5 | Gemini Batch | `adapter=gemini`，策略 `gemini_batch` | 能力探测只报告声明能力（不会提交 Batch 任务） | `build --profile gemini-batch --json` → `submit <manifest>` → `status` → `download` → `check` → `apply` | `test_gui_workflow_factory`、`test_gui_translation_workflow`、`test_batch_golden_corpus`、`test_durable_sync_workflow`（check/apply 安全层） |
+| 4 | **直连 `openai_compatible` 预设/自定义** | `adapter=openai_compatible`，`provider=openai / openrouter / deepseek / xai / ollama / <custom>`，策略 `sync` | `profiles-list-models --profile <ID> --output json` + `profiles-probe --profile <ID> --acknowledge-billable-request <TOKEN>` | `sync-start --profile <ID> --output json` → `check <RUN>` → `apply <RUN>` | `test_openai_compatible_sync_backend`、`test_openai_compatible_config`、`test_openai_compatible_model_catalog`、`test_profile_cli`、`test_model_routing_runtime` |
+| 5 | Gemini Batch | `adapter=gemini`，策略 `gemini_batch` | 能力探测只报告声明能力（不会提交 Batch 任务） | `build --profile gemini-batch --output json` → `submit <manifest>` → `status` → `download` → `check` → `apply` | `test_gui_workflow_factory`、`test_gui_translation_workflow`、`test_batch_golden_corpus`、`test_durable_sync_workflow`（check/apply 安全层） |
 | 6 | **最终审校 Sync** | `routes.final_review.strategy=sync`，profile 可为 Gemini / LiteLLM / 直连 adapter | 复用所属 profile 的 `profiles-probe`（1 次计费请求） | `final-review-build` → `final-review-run-sync <manifest> --limit 1` → `final-review-status <manifest>` → `final-review-export <manifest>` | `test_final_review_sync`、`test_final_review_llm`、`test_model_capability_probe`、`test_gui_final_review_workflow` |
 
 ## 最短命令
@@ -45,11 +53,11 @@
 # 1) Gemini Sync
 python gemini_translate_batch.py profiles-probe --profile gemini-main `
   --acknowledge-billable-request I_ACKNOWLEDGE_ONE_BILLABLE_PROVIDER_REQUEST --output json
-python gemini_translate_batch.py sync-start --profile gemini-main --json --strict-exit-codes
+python gemini_translate_batch.py sync-start --profile gemini-main --output json --strict-exit-codes
 
 # 2) LiteLLM 内置 Provider
 python scripts/run_provider_contract_smoke.py --provider openai
-python gemini_translate_batch.py sync-start --profile litellm-openai --json --strict-exit-codes
+python gemini_translate_batch.py sync-start --profile litellm-openai --output json --strict-exit-codes
 
 # 3) LiteLLM 自定义兼容 Provider（legacy）
 python scripts/run_durable_sync_provider_smoke.py --provider-class custom `
@@ -60,15 +68,15 @@ python scripts/run_durable_sync_provider_smoke.py --provider-class custom `
 python gemini_translate_batch.py profiles-list-models --profile openai-main --output json
 python gemini_translate_batch.py profiles-probe --profile openai-main `
   --acknowledge-billable-request I_ACKNOWLEDGE_ONE_BILLABLE_PROVIDER_REQUEST --output json
-python gemini_translate_batch.py sync-start --profile openai-main --json --strict-exit-codes
+python gemini_translate_batch.py sync-start --profile openai-main --output json --strict-exit-codes
 
 # 5) Gemini Batch（小范围）
-python gemini_translate_batch.py build --profile gemini-batch --json
-python gemini_translate_batch.py submit <BUILD_MANIFEST> --json
-python gemini_translate_batch.py status <BUILD_MANIFEST> --json
-python gemini_translate_batch.py download <BUILD_MANIFEST> --json
-python gemini_translate_batch.py check <BUILD_MANIFEST> --json
-python gemini_translate_batch.py apply <BUILD_MANIFEST> --json
+python gemini_translate_batch.py build --profile gemini-batch --output json
+python gemini_translate_batch.py submit <BUILD_MANIFEST> --output json
+python gemini_translate_batch.py status <BUILD_MANIFEST> --output json
+python gemini_translate_batch.py download <BUILD_MANIFEST> --output json
+python gemini_translate_batch.py check <BUILD_MANIFEST> --output json
+python gemini_translate_batch.py apply <BUILD_MANIFEST> --output json
 
 # 6) 最终审校 Sync：先 dry-run 看范围，再限量真实执行
 python gemini_translate_batch.py final-review-build --output json
@@ -118,7 +126,7 @@ CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI �
 
 ## 可复制记录模板
 
-真实 smoke 结果请按下面的模板记录到 issue #431（执行策略证据也可同时挂到 #344），
+后续真实 smoke 结果请按下面的模板记录到 issue #344；#431 的首期验收已完成并关闭，
 字段全部脱敏。建议每次只跑一个组合，避免把调用预算和错误归因混在一起。
 
 ```markdown
@@ -230,11 +238,11 @@ python gemini_translate_batch.py doctor --output json --output-file doctor-diagn
 ## 记录约定
 
 - 真实 smoke 结果按「日期 / 组合 / profile id / 命令 / 状态 / 请求数 / 备注」记录到
-  issue #431（执行策略类同步挂到 #344）；不要在记录中粘贴密钥、请求正文、私有对白或完整
+  issue #344；#431 的既有记录保留。不要在记录中粘贴密钥、请求正文、私有对白或完整
   本机路径。
 - 未取得真实凭据的组合保持「未执行」状态，不能用离线测试结果冒充真实 smoke。
-- 完成后优先更新本页「待执行清单」与 #431 / #344 的验收证据；必要真实 smoke 全部记录后，
-  #431 才进入收口判断（是否移除 LiteLLM、是否扩展 Anthropic/Responses 另行决策）。
+- 完成后优先更新本页当前状态与 #344 的验收证据，再按 Epic 的剩余清单判断收口；
+  #431 保持已完成状态。是否移除 LiteLLM、是否扩展 Anthropic/Responses 另行决策。
 
 ## 执行策略差异（成本 / 延迟 / 可靠性 / 能力）
 

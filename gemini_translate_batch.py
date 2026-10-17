@@ -24474,10 +24474,11 @@ def dispatch_command(parser, args):
         except model_usage_ledger.UsageLedgerError as exc:
             raise SystemExit(f'Model usage ledger error: {exc}') from exc
 
-    # Sync requests validate credentials at the selected provider boundary;
+    # Sync and embedding requests validate the selected provider's credentials;
     # an OpenAI-compatible/LiteLLM stage does not need a Gemini key.
+    embedding_bootstrap = command in {'bootstrap-rag', 'bootstrap-source-index'}
     require_api_key = command not in OFFLINE_BATCH_COMMANDS and command not in {
-        'sync-keywords', 'sync-revisions',
+        'sync-keywords', 'sync-revisions', 'bootstrap-rag', 'bootstrap-source-index',
     }
     if command == 'submit' and getattr(args, 'target', ''):
         # External work packages never reach Provider submission; refuse before
@@ -24498,6 +24499,11 @@ def dispatch_command(parser, args):
         legacy.load_translator_settings()
         legacy.load_glossary()
         load_batch_settings()
+        if (
+            embedding_bootstrap
+            and current_batch_embedding_settings().backend == embedding_runtime.BACKEND_GEMINI
+        ):
+            legacy._require_gemini_api_key()
         print_banner()
 
         if command == 'translate-preflight':
