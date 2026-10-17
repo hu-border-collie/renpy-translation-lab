@@ -86,10 +86,12 @@ python scripts/run_provider_contract_smoke.py --provider deepseek
 - **项目风格设定**：`sync.macro_setting_file`（默认 `macro_setting.md`，相对当前 work）存在时，其文本会进入提示词的 `Setting` 段；文件不存在或未配置时保持向后兼容，提示词不含该段。
 - **词法术语命中**：`normalize_map`、`preserve_terms` 与 `non_translatable_exact` 的本地命中不再依赖 `sync.rag.enabled`。即使 RAG 关闭，当前批次实际命中的固定译法与保留/不可翻译规则也会进入提示词；命中不受 `sync.rag.top_k_terms` 截断，全部注入（该配额在 RAG 开启时仍限制 `LOCKED TERMS` 检索列表）。RAG 开启时检索命中照常附加。
 
-`bootstrap-rag` / `bootstrap-source-index` 按批量入口绑定的 embedding profile 校验预建凭据：
-OpenAI-compatible / LiteLLM 后端不额外要求 Gemini Key；Gemini 后端仍在进入预建前检查
-Gemini Key。OpenAI-compatible embedding 请求显式使用 `encoding_format=float`，让核心
-接收数值向量；这不放宽 store identity 校验，也不代表所有供应商都支持所选模型或维度。
+`bootstrap-rag` / `bootstrap-source-index` 在使用 `model_routing` 时按批量入口绑定的
+embedding profile 校验预建凭据；旧配置仍读取 `batch.rag.embedding_*`。OpenAI-compatible /
+LiteLLM 后端不额外要求 Gemini Key；Gemini 后端仍在进入预建前检查 Gemini Key。
+兼容接口默认请求 `encoding_format=float`。仅当 LiteLLM 在本地以 `UnsupportedParamsError`
+明确拒绝该参数时，去掉编码参数再调用一次；不移除维度、模型或连接信息，也不因服务端错误、
+鉴权失败或超时重试。返回结果仍须通过数值向量及 store identity 校验。
 
 每次运行的上下文构造事实会写入 manifest 与预览制品：
 
@@ -204,7 +206,6 @@ python gemini_translate.py --apply logs/sync_runs/<run>/manifest.json
 
 - **Gemini 同步**：本工具从本机通过 Google `google-genai` SDK 直接调用 Gemini API。本项目没有自建中转服务，也不会上传整个 `api_keys.json` 文件；但 API 调用必然会把认证信息发送到 Google，并把待译文本、提示词以及当前 Sync 已启用的 glossary、macro、RAG、Source Index 或 Published Project Analysis 上下文发送给 Gemini。Embedding 可显式选择 Gemini 或 OpenAI-compatible/LiteLLM 后端；没有 Gemini Key 时，只要配置了其它有效 Embedding backend，同步 RAG / Source Index 仍可工作。
 - **LiteLLM 同步**：本工具从本机调用 LiteLLM Python SDK，再按所选 Provider / API Base 访问供应商。本项目不提供自建 LiteLLM 代理；待译文本、提示词和必要上下文会发送到所选供应商。凭据保存在操作系统凭据管理器或环境变量中，不写入 `translator_config.json`。
-
 - **本地产物**：manifest、diff、模型结果摘要、用量账本与日志保存在本机；它们可能包含私有游戏文本，不应提交到公开仓库或发给无权访问者。
 
 免费与付费服务的数据使用、日志、训练和保留政策可能不同，也可能随供应商更新。处理敏感、保密或无权发送的游戏文本前，应先核对所用账号层级和供应商当前条款；Gemini 可参考 [Additional Terms](https://ai.google.dev/gemini-api/terms) 与 [Data Logging and Sharing](https://ai.google.dev/gemini-api/docs/logs-policy)，LiteLLM 则以实际 Provider 的政策为准。

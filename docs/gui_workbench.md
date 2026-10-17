@@ -505,10 +505,11 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 若项目已有一部分译文，或希望在 build 时检索相关剧情原文，可在设置页启用批量上下文并预建本地库。
 
-预建使用批量入口绑定的 embedding profile。选择 OpenAI-compatible / LiteLLM embedding 时，
-只需该连接的有效凭据；不会额外要求 Gemini Key。选择 Gemini embedding 时仍须提供
-Gemini Key。GUI 与 CLI 共用 `bootstrap-rag` / `bootstrap-source-index`，不会绕过 store
-的模型、Provider、维度及文档 / 查询任务身份校验。
+使用 `model_routing` 时，预建读取批量入口绑定的 embedding profile；旧配置仍读取
+`batch.rag.embedding_*`。选择 OpenAI-compatible / LiteLLM embedding 时，只需该连接的
+有效凭据；不会额外要求 Gemini Key。选择 Gemini embedding 时仍须提供 Gemini Key。
+GUI 与 CLI 共用 `bootstrap-rag` / `bootstrap-source-index`，不会绕过 store 的模型、
+Provider、维度及文档 / 查询任务身份校验。
 
 设置页「上下文」里的「上下文库保存到游戏目录」会把默认 RAG / 原文索引 / 项目分析 / 剧情图谱路径切到当前 `work` 同级的 `translation_context/`；关闭时仍使用工具项目内的 `logs/`。高级分区可显式覆盖 store 路径；Batch manifest、检查失败报告、补译包等运行记录仍保存在工具日志目录。
 

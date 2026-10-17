@@ -10,7 +10,7 @@ embedding 和扩大上下文 A/B。四类矩阵保持原日期与发布基线；
 
 ## 范围与可复现边界
 
-- 使用获用户明确授权的《Glory Hounds》`pocket1` 章节副本：529 条原文，预先固定 128 条
+- 使用获用户明确授权的匿名真实项目章节副本：529 条原文，预先固定 128 条
   待译目标、保留其余 401 条已审阅历史译文。不是完整游戏，也不是生产目录交付。
 - 目标为 8 组各 16 条，起点索引为 0、72、144、232、296、312、400、480；在生成前冻结，
   两组使用同一源快照、目标集合、32 项 / chunk、4 个 chunk、本地上下文前 5 / 后 3。
@@ -63,7 +63,8 @@ embedding 和扩大上下文 A/B。四类矩阵保持原日期与发布基线；
    Gemini 后端保留进入 store 前的 Key 检查，其他后端由所选连接校验凭据。GUI 继续调用
    同一 CLI，不新增第二套预建行为。
 2. OpenAI-compatible adapter 原来未指定编码；OpenRouter 拒绝 SDK 传来的不明确格式。
-   两种传输统一显式请求 `encoding_format=float`，保留数值向量验证和身份校验。
+   两种传输默认显式请求 `encoding_format=float`；PR 复审后补充 LiteLLM 本地明确拒绝该
+   参数时的一次兼容处理，只省略编码参数，保留维度、连接和数值向量 / 身份校验。
 
 实验配置也保留了两次无出站的前置修正：bootstrap 需要有效的 legacy Batch profile 绑定，
 但不会因此选择 Gemini 生成；LiteLLM 的 OpenAI 命名空间不支持本模型的 dimensions 参数，
@@ -71,13 +72,15 @@ embedding 和扩大上下文 A/B。四类矩阵保持原日期与发布基线；
 
 ## 真实章节 PA 的生成、审阅与发布
 
-先只构建结构所生成的摘要缺乏剧情事实，未作为生产内容验收。随后尝试原生同步关键词
+先只构建结构所生成的摘要缺乏剧情事实，未作为生产内容验收；该阶段已发生 3 次真实生成，
+费用与后续有内容的 PA 生成分开保留。随后尝试原生同步关键词
 摘要：5 个初始请求覆盖词法筛选后的 522 条，发生 10 次真实生成、9 次有响应，最后一次
 在父进程超时后结果未知。未获得可供导入的完整原生摘要文件，保留包和费用，不伪造其成功，
 不从截断输出猜测还原，也不自动重发未知请求。
 
 改由本次 Agent 阅读冻结的全部 529 条可信原文，编写 5 份有明确原始脚本坐标和来源证据的
-章节事实摘要，再走原生 `project-analysis-ingest-keywords` → build → generate → publish。
+章节事实摘要，再走原生 `project-analysis-ingest-keywords` → `project-analysis-build-structure`
+→ `project-analysis-generate` → `project-analysis-publish`。
 摘要审阅身份是实际 Agent，`human_review=false`；这是一份经 Agent 整理输入的 PA 验收，
 不代表关键词模型阶段已成功或人工审阅。
 
@@ -121,7 +124,7 @@ usage 和请求级回读，未知请求继续保守预留。价格表补齐未�
 字符；基础组的检索与 PA 均为空。未把一次成功的全局注入误写成全部局部节点均命中。
 
 两组均走正式 `check → apply`，没有 `--force`。先保存并审计基础组输出，再只把本次自建
-`common_v2` TL 从精确备份恢复到冻结输入，重新 check 后 apply 上下文组；不是恢复或修改
+隔离章节副本的 TL 从精确备份恢复到冻结输入，重新 check 后 apply 上下文组；不是恢复或修改
 原始游戏。独立校验两次各 128 个写入值与结果精确一致，401 个非目标译文、目标字面量外
 所有字节、原始源脚本和历史交付文件均未变。隔离输出保留，不作为新的游戏交付。
 
@@ -151,7 +154,7 @@ reasoning 波动、仅一次串行重复、单章 128 项、Agent 整理 PA 输�
 CLI 和 GUI 共用公开 snapshot；未知仍是 `null`，真实零仍是零，读取不改写历史 receipt。
 历史 Gemini run 的只读副本回放从 unknown 恢复为 515，原数据库未变、无新增计费调用。
 
-针对 adapter、runtime、bootstrap 凭据、上下文和 GUI 包装层的回归通过；最终工作源码在
+首次验收中，adapter、runtime、bootstrap 凭据、上下文和 GUI 包装层的回归通过；当时源码在
 独立的 708 文件 tracked 副本、仓库外临时目录执行完整 CLI / GUI：
 
 - CLI 套件运行 2677 项，4 项 skipped、其余通过；GUI offscreen 1554 项通过。
@@ -167,7 +170,8 @@ CLI 和 GUI 共用公开 snapshot；未知仍是 `null`，真实零仍是零，�
 ## 费用、限制与发布状态
 
 本轮实际计费 POST 共 55 次：28 次生成（27 次返回 usage、1 次超时后结果未知），
-27 次 embedding（25 次成功、2 次 HTTP 400 / 403 且 usage 未报告）。25 次成功 embedding
+27 次 embedding（25 次成功、2 次 HTTP 400 / 403 且 usage 未报告）。生成分项为恢复 4 次、
+早期结构 PA 3 次、有内容的 PA 3 次、关键词 10 次及 A/B 8 次。25 次成功 embedding
 为预建 16 次、PA 查询 1 次及 A/B 查询 8 次。全部目标认证与配置连接匹配，没有 Gemini
 调用。27 个不同的成功生成回执均与官方请求级费用元数据对应，没有重复 receipt ID。
 
@@ -190,3 +194,23 @@ CLI 和 GUI 共用公开 snapshot；未知仍是 `null`，真实零仍是零，�
 缺口已有可审阅结果；完成 PR 审查、远程 CI、合并和验收记录回填前，不将线上 Epic 标为
 已完成或关闭。
 #508 的剩余路线 / 游戏验收及 #147、#272、#509、#520 均未扩入本轮。
+
+## PR #558 复审修订
+
+复审后的兼容修复与以下离线验证不改变前文真实实验的冻结范围：
+
+- 仅在 LiteLLM 的 `UnsupportedParamsError` 明确指出 `encoding_format` 不受支持时，去掉
+  编码参数再调用一次；模型、端点、维度、认证和 identity 不变。服务端错误、鉴权失败、
+  超时或只涉及其他参数的错误不触发此处理；第二次失败直接保留原有错误分类，返回向量仍完整校验。
+- 新回归先在 `f818fdb` 上复现失败，再验证兼容处理；另用真实 LiteLLM 1.83.7 参数校验和
+  模拟 HTTP 证明 Ollama embedding 可到达传输层。OpenRouter 所需的 float 默认请求仍保留，
+  没有发起真实 Provider 请求。
+- GUI 回归改用合法的 legacy embedding 配置，实际加载设置并调用 CLI 分发，只替换最终
+  store 预建入口。新测试在原 main `4612d8d` 的 Gemini Key 前置检查处失败，在修复后通过。
+  Gemini 缺 Key 用例保留为已有行为的兼容守卫，不当作新缺陷的失败复现。
+- 当前报告使用匿名项目与隔离副本称呼；现行手册补充 legacy 配置回退，#431 首期关闭状态、
+  后续 #344 记录入口、GFM 表格和 PA 命令名称已同步。28 次生成的分项补齐，费用总数不变。
+- 最终 Python 文件与两份独立的 710 文件 tracked 验证副本一致；完整 CLI 2681 项（4 项
+  skipped、其余通过）、offscreen GUI 1554 项、针对性 296 项均通过。关键 lint、改动核心
+  文件 Ruff、11 文件 typecheck、83 份 Markdown / 511 个本地链接目标、11 组命令示例及
+  `git diff --check` 通过。依赖和原实验配置未改，没有新增 Provider 费用。

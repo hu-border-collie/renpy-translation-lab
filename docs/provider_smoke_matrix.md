@@ -41,9 +41,9 @@
 | # | 组合 | Profile 示例 | 单次能力探测 | 端到端最小运行 | 离线自动化覆盖 |
 |---|------|--------------|--------------|----------------|----------------|
 | 1 | Gemini Sync | `adapter=gemini`，策略 `sync` | `profiles-probe --profile gemini-main --acknowledge-billable-request <TOKEN>` | `sync-start --profile gemini-main --output json` → `check <RUN>` → `apply <RUN>` | `test_model_routing_runtime`、`test_gui_durable_sync_page`、`test_sync_run_service`、`test_translation_plan_p4` |
-| 2 | LiteLLM 内置 Provider | `adapter=litellm`，`provider=openai|anthropic|deepseek|...`，策略 `sync` | `profiles-probe` + `scripts/run_provider_contract_smoke.py --provider <name>` | `sync-start --profile litellm-main --output json` → `check <RUN>` → `apply <RUN>` | `test_litellm_sync_backend`、`test_litellm_runtime_integration`、`test_model_routing_choices` |
+| 2 | LiteLLM 内置 Provider | `adapter=litellm`，`provider=openai / anthropic / deepseek / ...`，策略 `sync` | `profiles-probe` + `scripts/run_provider_contract_smoke.py --provider <name>` | `sync-start --profile litellm-main --output json` → `check <RUN>` → `apply <RUN>` | `test_litellm_sync_backend`、`test_litellm_runtime_integration`、`test_model_routing_choices` |
 | 3 | LiteLLM 自定义兼容 Provider（legacy） | `adapter=litellm` + `base_url` / `models_url` / `api_key_env` | `profiles-probe`；另见 `scripts/run_durable_sync_provider_smoke.py --provider-class custom --custom-base-url ...` | 同 LiteLLM（先跑小范围 `sync-start`） | `test_model_routing_choices`、`test_litellm_sync_backend` 自定义 Provider 用例 |
-| 4 | **直连 `openai_compatible` 预设/自定义** | `adapter=openai_compatible`，`provider=openai|openrouter|deepseek|xai|ollama|<custom>`，策略 `sync` | `profiles-list-models --profile <ID> --output json` + `profiles-probe --profile <ID> --acknowledge-billable-request <TOKEN>` | `sync-start --profile <ID> --output json` → `check <RUN>` → `apply <RUN>` | `test_openai_compatible_sync_backend`、`test_openai_compatible_config`、`test_openai_compatible_model_catalog`、`test_profile_cli`、`test_model_routing_runtime` |
+| 4 | **直连 `openai_compatible` 预设/自定义** | `adapter=openai_compatible`，`provider=openai / openrouter / deepseek / xai / ollama / <custom>`，策略 `sync` | `profiles-list-models --profile <ID> --output json` + `profiles-probe --profile <ID> --acknowledge-billable-request <TOKEN>` | `sync-start --profile <ID> --output json` → `check <RUN>` → `apply <RUN>` | `test_openai_compatible_sync_backend`、`test_openai_compatible_config`、`test_openai_compatible_model_catalog`、`test_profile_cli`、`test_model_routing_runtime` |
 | 5 | Gemini Batch | `adapter=gemini`，策略 `gemini_batch` | 能力探测只报告声明能力（不会提交 Batch 任务） | `build --profile gemini-batch --output json` → `submit <manifest>` → `status` → `download` → `check` → `apply` | `test_gui_workflow_factory`、`test_gui_translation_workflow`、`test_batch_golden_corpus`、`test_durable_sync_workflow`（check/apply 安全层） |
 | 6 | **最终审校 Sync** | `routes.final_review.strategy=sync`，profile 可为 Gemini / LiteLLM / 直连 adapter | 复用所属 profile 的 `profiles-probe`（1 次计费请求） | `final-review-build` → `final-review-run-sync <manifest> --limit 1` → `final-review-status <manifest>` → `final-review-export <manifest>` | `test_final_review_sync`、`test_final_review_llm`、`test_model_capability_probe`、`test_gui_final_review_workflow` |
 
@@ -126,7 +126,7 @@ CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI �
 
 ## 可复制记录模板
 
-真实 smoke 结果请按下面的模板记录到 issue #431（执行策略证据也可同时挂到 #344），
+后续真实 smoke 结果请按下面的模板记录到 issue #344；#431 的首期验收已完成并关闭，
 字段全部脱敏。建议每次只跑一个组合，避免把调用预算和错误归因混在一起。
 
 ```markdown
@@ -238,11 +238,11 @@ python gemini_translate_batch.py doctor --output json --output-file doctor-diagn
 ## 记录约定
 
 - 真实 smoke 结果按「日期 / 组合 / profile id / 命令 / 状态 / 请求数 / 备注」记录到
-  issue #431（执行策略类同步挂到 #344）；不要在记录中粘贴密钥、请求正文、私有对白或完整
+  issue #344；#431 的既有记录保留。不要在记录中粘贴密钥、请求正文、私有对白或完整
   本机路径。
 - 未取得真实凭据的组合保持「未执行」状态，不能用离线测试结果冒充真实 smoke。
-- 完成后优先更新本页「待执行清单」与 #431 / #344 的验收证据；必要真实 smoke 全部记录后，
-  #431 才进入收口判断（是否移除 LiteLLM、是否扩展 Anthropic/Responses 另行决策）。
+- 完成后优先更新本页当前状态与 #344 的验收证据，再按 Epic 的剩余清单判断收口；
+  #431 保持已完成状态。是否移除 LiteLLM、是否扩展 Anthropic/Responses 另行决策。
 
 ## 执行策略差异（成本 / 延迟 / 可靠性 / 能力）
 

@@ -1,4 +1,8 @@
 import copy
+import contextlib
+import io
+import json
+import os
 import tempfile
 import unittest
 from unittest import mock
@@ -411,19 +415,68 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             ],
         )
 
-    def test_non_gemini_embedding_prebuild_uses_shared_cli_without_gemini_env(self):
-        config = {'batch': {
-            'rag': {'enabled': True, 'embedding_backend': 'openai_compatible',
-                    'embedding_model': 'openrouter/qwen/qwen3-embedding-8b'},
-            'source_index': {'enabled': True},
-        }}
-        for operation, command in (('rag', 'bootstrap-rag'), ('source_index', 'bootstrap-source-index')):
-            with self.subTest(operation=operation), mock.patch.dict('os.environ', {}, clear=True):
+    def test_non_gemini_embedding_prebuild_dispatches_with_real_config_without_gemini_key(self):
+        import gemini_translate_batch as batch
+        import translator_runtime as runtime
+
+        parser = batch.build_arg_parser()
+        for operation, command, entrypoint in (
+            ('rag', 'bootstrap-rag', 'bootstrap_rag_store'),
+            ('source_index', 'bootstrap-source-index', 'bootstrap_source_index'),
+        ):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / 'project/game/tl/schinese').mkdir(parents=True)
+                keys = root / 'api_keys.json'
+                keys.write_text('{"api_keys": []}', encoding='utf-8')
+                config = {
+                    'game_root': str(root / 'project'),
+                    'glossary_file': str(root / 'missing-glossary.json'),
+                    'prepare': {'enabled': False},
+                    'batch': {
+                        'rag': {
+                            'enabled': True, 'embedding_backend': 'openai_compatible',
+                            'embedding_provider': 'ollama', 'embedding_model': 'ollama/sample-embedding',
+                            'embedding_endpoint': 'http://localhost:11434', 'output_dimensionality': 2,
+                        },
+                        'source_index': {'enabled': True},
+                    },
+                }
+                config_path = root / 'translator_config.json'
+                config_path.write_text(json.dumps(config), encoding='utf-8')
+                original_config = config_path.read_bytes()
                 runner = self._prepare_bootstrap_window(config)
-                self.window._start_bootstrap_task(operation)
+
+                def run(script, args):
+                    runner.calls.append((script, args))
+                    return batch.dispatch_command(parser, parser.parse_args(args))
+
+                def reached(**_kwargs):
+                    self.assertEqual(runtime.API_KEYS, [])
+                    settings = batch.current_batch_embedding_settings()
+                    self.assertEqual(settings.backend, 'openai_compatible')
+                    self.assertEqual(settings.provider, 'ollama')
+                    self.assertEqual(settings.output_dimension, 2)
+                    return {}
+
+                runner.run = run
+                with (
+                    runtime.runtime_config_scope(runtime.default_runtime_config()),
+                    mock.patch.dict(vars(batch)),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch.object(runtime, 'CONFIG_FILE', str(keys)),
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(batch, 'initialize_batch_logging'),
+                    mock.patch.object(batch, 'print_banner'),
+                    mock.patch.object(batch, entrypoint, side_effect=reached) as bootstrap,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.window._start_bootstrap_task(operation)
+                    bootstrap.assert_called_once()
                 self.assertEqual(runner.calls, [
                     (Path('C:/tool/gemini_translate_batch.py'), [command, '--skip-prepare']),
                 ])
+                self.assertEqual(config_path.read_bytes(), original_config)
 
     def test_bootstrap_summary_syncs_timeline_for_terminal_states(self):
         from gui_qt.bootstrap_report import BootstrapSummary, running_bootstrap_summary

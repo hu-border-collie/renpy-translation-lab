@@ -132,6 +132,6 @@ OpenAI-compatible 计数字段。没有新增配置、命令、GUI 入口或文�
 
 现行命令与安全边界见 [Provider Smoke Matrix](../provider_smoke_matrix.md)。
 
-10-17 此后的真实章节 PA / 非 Gemini embedding / 扩大上下文 A/B 与新的恢复费用证据，
+10-17 的真实章节 PA / 非 Gemini embedding / 扩大上下文 A/B 与新的恢复费用续验，
 见[独立续验报告](issue-344-context-acceptance-2026-10-17.md)。该报告使用含本地修复的冻结副本，
 不改变本文 10-16 固定发布基线和上述历史待办的日期。

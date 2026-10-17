@@ -51,6 +51,7 @@ class SyncStageCredentialTests(unittest.TestCase):
                     batch.dispatch_command(parser, parser.parse_args([command, '--skip-prepare']))
 
     def test_gemini_embedding_bootstrap_requires_key_before_entering_store(self):
+        """Compatibility guard for the existing Gemini credential requirement."""
         parser = batch.build_arg_parser()
         for command, entrypoint in (
             ('bootstrap-rag', 'bootstrap_rag_store'),

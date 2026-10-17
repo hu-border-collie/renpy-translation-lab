@@ -1,6 +1,9 @@
 import json
+import importlib.util
+import io
 import math
 import os
+from contextlib import redirect_stderr, redirect_stdout
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +55,10 @@ class _GoogleAPIError(Exception):
         super().__init__(secret)
 
 
+class UnsupportedParamsError(_StatusError):
+    """Injected LiteLLM local-validation error; no optional SDK needed."""
+
+
 class EmbeddingAdapterTests(unittest.TestCase):
     @staticmethod
     def request(adapter, task=EmbeddingTaskType.DOCUMENT, inputs=("alpha", "beta")):
@@ -80,6 +87,108 @@ class EmbeddingAdapterTests(unittest.TestCase):
                 )
                 result = adapter.embed(self.request(adapter))
                 self.assertEqual(result.vectors, ((1.0, 0.0), (0.0, 1.0)))
+
+    def test_litellm_omits_only_rejected_encoding_once(self):
+        calls = []
+
+        def transport(**kwargs):
+            calls.append(kwargs)
+            if 'encoding_format' in kwargs:
+                raise UnsupportedParamsError(400, "Setting {'encoding_format': 'float'} is not supported")
+            return {'data': [{'index': 0, 'embedding': [1.0, 0.0]}]}
+
+        adapter = OpenAICompatibleEmbeddingAdapter(
+            transport=transport, model='ollama/sample-embedding', output_dimension=2,
+            provider='ollama', endpoint='http://localhost:11434',
+            api_key='fake-key', request_headers={'X-Test': 'unchanged'},
+        )
+        request = self.request(adapter, inputs=('original minimal fixture',))
+        with mock.patch.dict('sys.modules', {'litellm': SimpleNamespace(UnsupportedParamsError=UnsupportedParamsError)}):
+            result = adapter.embed(request)
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]['encoding_format'], 'float')
+        self.assertEqual(calls[1], {k: v for k, v in calls[0].items() if k != 'encoding_format'})
+        self.assertEqual(calls[1]['dimensions'], 2)
+        self.assertEqual(result.identity, request.identity)
+        self.assertEqual(result.request_fingerprint, request.fingerprint)
+        self.assertEqual(result.vectors, ((1.0, 0.0),))
+
+    def test_encoding_compatibility_does_not_retry_other_failures(self):
+        cases = (
+            ('litellm', UnsupportedParamsError(400, "Setting {'dimensions': 2} is not supported")),
+            ('openai_client', UnsupportedParamsError(400, "Setting {'encoding_format': 'float'} is not supported")),
+            ('litellm', _StatusError(400, "encoding_format rejected by server")),
+            ('litellm', _StatusError(401, "encoding_format authentication secret")),
+            ('litellm', TimeoutError('encoding_format timeout secret')),
+        )
+        for kind, error in cases:
+            with self.subTest(kind=kind, error=type(error).__name__):
+                transport = mock.Mock(side_effect=error)
+                adapter = OpenAICompatibleEmbeddingAdapter(
+                    transport=transport, transport_kind=kind, model='sample-embedding',
+                    output_dimension=2, provider='local', endpoint='http://localhost:11434',
+                )
+                with (
+                    mock.patch.dict('sys.modules', {'litellm': SimpleNamespace(UnsupportedParamsError=UnsupportedParamsError)}),
+                    self.assertRaises(EmbeddingBackendError) as raised,
+                ):
+                    adapter.embed(self.request(adapter))
+                self.assertEqual(transport.call_count, 1)
+                self.assertNotIn('secret', str(raised.exception))
+
+    def test_encoding_compatibility_is_bounded_and_keeps_vector_validation(self):
+        error = UnsupportedParamsError(400, "Setting {'encoding_format': 'float'} is not supported")
+        for second in (error, {'data': [{'index': 0, 'embedding': [1.0, 0.0, 0.0]}]}):
+            with self.subTest(second=type(second).__name__):
+                transport = mock.Mock(side_effect=[error, second])
+                adapter = OpenAICompatibleEmbeddingAdapter(
+                    transport=transport, model='sample-embedding', output_dimension=2,
+                    provider='local', endpoint='http://localhost:11434',
+                )
+                with (
+                    mock.patch.dict('sys.modules', {'litellm': SimpleNamespace(UnsupportedParamsError=UnsupportedParamsError)}),
+                    self.assertRaises(EmbeddingBackendError) as raised,
+                ):
+                    adapter.embed(self.request(adapter, inputs=('original minimal fixture',)))
+                self.assertEqual(transport.call_count, 2)
+                expected = (EmbeddingErrorCategory.INVALID_REQUEST if isinstance(second, Exception)
+                            else EmbeddingErrorCategory.INVALID_RESPONSE)
+                self.assertEqual(raised.exception.category, expected)
+
+    @unittest.skipUnless(importlib.util.find_spec('litellm'), 'optional LiteLLM SDK unavailable')
+    def test_real_litellm_ollama_validation_reaches_mock_http(self):
+        import httpx
+
+        calls = []
+
+        def send(_client, request, *_args, **_kwargs):
+            self.assertIn(request.url.host, {'localhost', '127.0.0.1'})
+            calls.append(request.url.path.lstrip('/'))
+            return httpx.Response(200, request=request, json={
+                'embedding': [1.0, 0.0], 'embeddings': [[1.0, 0.0]],
+                'model_info': {'sample.embedding_length': 2}, 'prompt_eval_count': 1,
+            })
+
+        async def async_send(client, request, *args, **kwargs):
+            return send(client, request, *args, **kwargs)
+
+        with (
+            mock.patch.dict(os.environ, {'LITELLM_LOCAL_MODEL_COST_MAP': 'True', 'LITELLM_TELEMETRY': 'False'}),
+            mock.patch.object(httpx.Client, 'send', send),
+            mock.patch.object(httpx.AsyncClient, 'send', async_send),
+            redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()),
+        ):
+            import litellm
+
+            adapter = OpenAICompatibleEmbeddingAdapter(
+                transport=litellm.embedding, model='ollama/sample-embedding', output_dimension=2,
+                provider='ollama', endpoint='http://localhost:11434',
+            )
+            result = adapter.embed(self.request(adapter, inputs=('original minimal fixture',)))
+
+        self.assertEqual(result.vectors, ((1.0, 0.0),))
+        self.assertEqual(sum(path in {'api/embed', 'api/embeddings'} for path in calls), 1, calls)
 
     def test_gemini_maps_document_task_timeout_usage_and_batch(self):
         response = SimpleNamespace(

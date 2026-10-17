@@ -351,8 +351,9 @@ class GeminiEmbeddingAdapter:
 class OpenAICompatibleEmbeddingAdapter:
     """Adapter for LiteLLM or an OpenAI-compatible ``embeddings.create`` callable.
 
-    Requests float encoding explicitly because the core consumes numeric vectors;
-    SDK defaults must not send an unspecified or encoded representation.
+    Requests float encoding explicitly because the core consumes numeric vectors.
+    A LiteLLM local validation error naming this optional parameter allows
+    one call without it; other failures and vector validation remain unchanged.
     """
 
     backend = "openai_compatible"
@@ -425,12 +426,38 @@ class OpenAICompatibleEmbeddingAdapter:
                 kwargs["extra_headers"] = dict(self._request_headers)
         return kwargs
 
+    def _call_transport(self, request: EmbeddingBatchRequest) -> object:
+        """Omit encoding only after LiteLLM's typed local parameter rejection.
+
+        Do not retry HTTP failures or drop dimensions/identity fields. Import the
+        optional SDK only when its validation exception is actually encountered;
+        its message is inspected locally and never included in public errors.
+        """
+        kwargs = self._transport_kwargs(request)
+        try:
+            return self._transport(**kwargs)
+        except Exception as exc:
+            if self._transport_kind != "litellm" or not any(
+                cls.__name__ == "UnsupportedParamsError" for cls in type(exc).__mro__
+            ):
+                raise
+            try:
+                from litellm import UnsupportedParamsError
+            except ImportError:
+                raise exc from None
+            if not isinstance(exc, UnsupportedParamsError) or not re.search(
+                r"['\"]encoding_format['\"]\s*:", str(getattr(exc, "message", exc))
+            ):
+                raise
+        kwargs.pop("encoding_format")
+        return self._transport(**kwargs)
+
     def embed(self, request: EmbeddingBatchRequest) -> EmbeddingBatchResult:
         expected = self.identity(request.identity.task_type)
         if request.identity != expected:
             raise EmbeddingBackendError(EmbeddingErrorCategory.INVALID_REQUEST)
         try:
-            response = self._transport(**self._transport_kwargs(request))
+            response = self._call_transport(request)
             data = _field(response, "data", ())
             if isinstance(data, (str, bytes)) or not isinstance(data, Sequence):
                 raise EmbeddingContractError("provider data must be a sequence")
