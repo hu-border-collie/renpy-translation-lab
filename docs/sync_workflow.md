@@ -145,6 +145,10 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 
 耐久执行器把一次 attempt 严格绑定为一次 Provider 调用，因此会显式关闭普通 Gemini Sync 在单次调用内部进行的 API Key 轮换，也不会在 adapter 内部隐藏 timeout 重试。鉴权或凭据配置失败会按该 attempt 的稳定分类落库；修正凭据后应使用 `sync-derive` 创建新 run，新 run 可复用旧 run 已成功且仍通过校验的结果。这个限制不影响普通非耐久 Sync 的既有 Key 轮换行为。
 
+LiteLLM adapter 显式关闭 LiteLLM 和底层 SDK 的自动重试；重试由共享请求服务或耐久执行器
+统一计次。传输断开后的 SDK 重发不能隐藏在同一次 attempt 内。某一请求达到次数上限后，
+执行器继续检查后续待处理请求，各项预算与写回门禁保持有效。
+
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
 启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源、成本 / coverage / 已有质量摘要与风险。文本模式在 counts 后打印这三行摘要；`--output json` 仍只输出 envelope。未知价格不显示为 0，stale / 缺失质量报告不显示为通过。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配。GUI 的「开始」会先跑该命令并展示同一 payload 的确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。

@@ -273,6 +273,11 @@ class DurableSyncExecutor:
                     if self.store.list_active_attempts():
                         recovered.extend(self._recover_active_attempts())
                         continue
+                    # Admission may terminalize only the selected request
+                    # when its attempt/root budget is exhausted. Later local
+                    # leaves still need their own admission before T8.
+                    if self.store.list_eligible_requests(limit=1):
+                        continue
                     future_deadline = self._next_backoff_deadline()
                     if future_deadline is not None:
                         if not wait_for_backoff:

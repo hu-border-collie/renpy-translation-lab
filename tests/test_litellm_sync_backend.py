@@ -60,6 +60,8 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         self.assertEqual(calls[0]["model"], "openai/gpt-test")
         self.assertEqual(calls[0]["messages"], [{"role": "user", "content": "Translate this"}])
         self.assertEqual(calls[0]["max_tokens"], 100)
+        self.assertEqual(calls[0]["num_retries"], 0)
+        self.assertEqual(calls[0]["max_retries"], 0)
         self.assertEqual(calls[0]["timeout"], 12)
         self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
         self.assertEqual(result.provider, "litellm")
@@ -98,12 +100,52 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["messages"], [{"role": "user", "content": "hello"}])
         self.assertEqual(calls[0]["timeout"], 7)
+        self.assertEqual(calls[0]["num_retries"], 0)
+        self.assertEqual(calls[0]["max_retries"], 0)
         self.assertEqual(calls[0]["temperature"], 0.3)
         self.assertEqual(calls[0]["max_tokens"], 42)
         self.assertEqual(calls[0]["response_format"]["type"], "json_schema")
         self.assertEqual(result.response_text, "OK")
         self.assertEqual(result.finish_reason, "stop")
         self.assertEqual(result.usage_metadata["total_tokens"], 3)
+
+    def test_real_sdk_transport_failure_sends_once_per_backend_call(self):
+        with mock.patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP": "True"}):
+            try:
+                import httpx
+                import litellm  # noqa: F401
+            except ImportError:
+                self.skipTest("litellm is not installed")
+
+        for use_async in (False, True):
+            with self.subTest(use_async=use_async):
+                captured = []
+
+                def fail_send(_client, request, *_args, **_kwargs):
+                    captured.append(request.url.path)
+                    raise httpx.RemoteProtocolError(
+                        "Original offline fixture: response connection lost",
+                        request=request,
+                    )
+
+                async def fail_async_send(*args, **kwargs):
+                    return fail_send(*args, **kwargs)
+
+                backend = LiteLLMSyncBackend(
+                    api_key="offline-original-fixture",
+                    allow_credential_rotation=False,
+                )
+                request = SyncGenerationRequest("openai/gpt-test", "Original fixture")
+                with (
+                    mock.patch.object(httpx.Client, "send", fail_send),
+                    mock.patch.object(httpx.AsyncClient, "send", fail_async_send),
+                    self.assertRaises(LiteLLMBackendError),
+                ):
+                    if use_async:
+                        asyncio.run(backend.generate_async(request))
+                    else:
+                        backend.generate(request)
+                self.assertEqual(captured, ["/v1/chat/completions"])
 
     def test_new_gemini_model_omits_sampling_but_keeps_other_config(self):
         calls = []
