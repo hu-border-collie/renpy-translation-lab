@@ -49,7 +49,7 @@
 
 - [Batch 工作流与安全检查](batch_workflows.md)：`build → apply`、订正、最终审校 campaign、关键词、identity v2、A/B、golden corpus。
 - [同步翻译工作流](sync_workflow.md)：同步 CLI 的 preview → 人工审查 → 显式 apply、配置、供应商与安全边界。
-- [外部初译工作包（实验 CLI）](external_translation_work.md)：无项目模型调用的材料导出、部分成果接收、候选订正、持久冲突与绑定预览写回；已有 B1/B2 章节对照和 C 混合恢复的完整交付，剩余游戏验收与完整同参数对照仍未完成。
+- [外部初译工作包（实验 CLI）](external_translation_work.md)：无项目模型调用的材料导出、部分成果接收、候选订正、持久冲突与绑定预览写回；已有 B1/B2 章节实验、C 混合恢复交付及原生运行证据，结论按有界实验范围报告。
 - [Engine Adapter、覆盖审计与安全写回](engine_adapter.md)：Ren'Py P1–P4 扫描、coverage、版本快照与复用，以及 TyranoScript P5 原生 catalog 写回边界。
 - [实际模型用量账本](model_usage_ledger.md)：按当前项目、任务、阶段、provider 与模型归集 Batch / 同步实际调用，并说明离线补录、成本和未知值语义。
 - [上下文系统](context_systems.md)：RAG、原文索引、Story Memory、store 路径与 benchmark。

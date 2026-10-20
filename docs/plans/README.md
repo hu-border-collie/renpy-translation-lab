@@ -26,14 +26,15 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 新 B1/B2 各 552 项候选、独立匿名审阅、明确订正与隔离写回；新 B2 完成原生整章执行。
 旧 A/B1 评分保持不变。C 经明确授权恢复，原参数 87 项与压缩版 390 项候选分别审阅，
 先交付 488 项，再经新的明确授权对旧未知 64 项各重试一次，单独审阅订正后完整交付
-混合路线 552 项。旧未知费用仍保留预留，剩余桌面验收未完成，#508 保持开放。
+混合路线 552 项并完成原生重放。旧未知费用仍保留预留；本轮按原清单提交收缩结论，
+桌面扩展检查不作为新增前置条件，#508 当前保持开放待收尾。
 
 | 项目 | 已交付证据与当前状态 | 剩余跟踪 |
 | --- | --- | --- |
 | #521 双字符串台词身份修复 | PR [#522](https://github.com/hu-border-collie/renpy-translation-lab/pull/522) 已合并；修复工程交付不等于真实项目样本验收。 | #521 仍 OPEN；真实项目回归按 issue 验收补齐。 |
 | #427 普通译文逐条审校 | S1 由 PR [#515](https://github.com/hu-border-collie/renpy-translation-lab/pull/515) / [#517](https://github.com/hu-border-collie/renpy-translation-lab/pull/517)，S2 GUI 与 revision proposal 衔接由 PR [#523](https://github.com/hu-border-collie/renpy-translation-lab/pull/523) 合并；合同见[计划](issue-427-review-index-contract.md)，操作见[GUI 工作台](../gui_workbench.md)。 | #427 仍 OPEN；真实大语料、实际操作与游戏验收按 issue 统一实测。issue 正文阶段说明和验收勾选尚未回填。 |
 | #512 复用审校 GUI / #513 质量白名单拆分 | PR [#524](https://github.com/hu-border-collie/renpy-translation-lab/pull/524) / [#527](https://github.com/hu-border-collie/renpy-translation-lab/pull/527) 已合并。GUI 合同见[引擎适配手册](../engine_adapter.md)；新字段与旧字段语义见[Batch 工作流](../batch_workflows.md)。 | 两个 issue 仍 OPEN，原验收清单未回填；状态应由 issue 维护者按 PR 证据复核，不能据 OPEN 判断功能未开发。 |
-| #518 with 从句 / #508 外部初译工作包 | #518 的工程修复 PR [#519](https://github.com/hu-border-collie/renpy-translation-lab/pull/519) 已合并；#508 工程工作包 PR [#516](https://github.com/hu-border-collie/renpy-translation-lab/pull/516) 已合并，现行入口见[外部初译工作包](../external_translation_work.md)。 | #518 需对原 issue 记录的真实样本回归；#508 已有 B1/B2 章节和 C 混合恢复交付，保留同参数对照限制与剩余桌面验收。两项仍 OPEN，不以合成 fixture 代替实测。 |
+| #518 with 从句 / #508 外部初译工作包 | #518 的工程修复 PR [#519](https://github.com/hu-border-collie/renpy-translation-lab/pull/519) 已合并；#508 工程工作包 PR [#516](https://github.com/hu-border-collie/renpy-translation-lab/pull/516) 已合并，现行入口见[外部初译工作包](../external_translation_work.md)。 | #518 需对原 issue 记录的真实样本回归；#508 已有 B1/B2 章节、C 混合恢复交付及运行证据，按原清单与收缩结论收尾。两项当前仍 OPEN，不以合成 fixture 代替实测。 |
 | #344 多 Provider 主路径 / #431 OpenAI-compatible | #431 的 S1–S3 与 smoke 准备 PR [#504](https://github.com/hu-border-collie/renpy-translation-lab/pull/504)–[#507](https://github.com/hu-border-collie/renpy-translation-lab/pull/507) 已合并；当前记录模板见[Provider Smoke Matrix](../provider_smoke_matrix.md)。 | #344、#431 仍 OPEN，待统一真实 Provider / 恢复验收及 #341 承接项；S3 的 final_review Sync 解绑已交付，不再是待开发项。 |
 | #470 coverage 真实样本 | 合成归因及 #460–#464、#471 修复已完成，见[归因报告](renpy_coverage_block_attribution.md)与只读脚本。 | #470 仍 OPEN；等待授权真实大型项目副本，未获得样本时记录证据缺口。 |
 | 本轮之外：#509 / #520 | 两者都是决定是否继续开发的实验任务，没有生产接入交付。 | 暂不进入本轮；先完成 Translator++ 工程往返或 OpenRouter Batch fixture / 真实可用性与费用实验，再由结论决定是否另立生产任务。 |
@@ -44,7 +45,7 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 
 | 文档 | 当前用途与状态 | 当前入口或剩余跟踪 |
 | --- | --- | --- |
-| [#508 串行 / 并行章节续验（2026-10-17～20）](issue-508-parallel-acceptance-2026-10-17.md) | 新 B1/B2 各 552 项及独立匿名审阅、订正交付；B2 原生执行 552/552。C 原参数、压缩版与另获授权的 64 项重试分别审阅，混合路线完整交付 552 项；锁定环境修复两处恢复故障。 | 旧未知费用保留预留；变体不能冒充同参数完整对照，原生自动执行不覆盖全部桌面验收，#508 保持开放。 |
+| [#508 串行 / 并行章节续验（2026-10-17～20）](issue-508-parallel-acceptance-2026-10-17.md) | 新 B1/B2 各 552 项及独立匿名审阅、订正交付；B2 原生执行 552/552。C 原参数、压缩版与另获授权的 64 项重试分别审阅，混合路线完整交付和原生重放 552 项；锁定环境修复两处恢复故障。 | 旧未知费用保留预留；变体限制架构因果和效率结论。Computer Use 与扩展桌面检查不是本轮收尾前置，#508 当前保持开放待收尾。 |
 | [#344 真实章节上下文与恢复验收（2026-10-17）](issue-344-context-acceptance-2026-10-17.md) | 两个真实中断边界与请求级费用、fresh published PA、Qwen3 embedding 预建 / 查询、128 对原生上下文及隔离写回均已记录；语义收益未获支持。 | Token 摘要、bootstrap 凭据与向量编码修复提交 PR 评审；合并及记录回填前 #344 保持开放，不改变默认开关。 |
 | [#344 固定版本 Provider 矩阵（2026-10-16）](issue-344-provider-matrix-2026-10-16.md) | 固定 main 的四类真实 CLI smoke、相同 prompt 指纹、检查与隔离写回全部完成；后续实验与修复见 10-17 报告。 | 保留首次失败及固定发布基线，区别于含本地修复的章节续验。 |
 | [#431 / #508 续验（2026-10-15）](issue-431-508-acceptance-2026-10-15.md) | 双连接/凭据隔离、无 Gemini Key 五阶段、独立 552 项复审与订正后引擎验证。 | 修复随 #557 合并，#431 已关闭；#508 仍缺 B2/C 和剩余视觉/交互，#344 外部验收保持未完成。 |
