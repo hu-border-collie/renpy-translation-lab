@@ -518,6 +518,11 @@ class LiteLLMSyncBackend:
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": _messages(request.contents, config),
+            # The shared request runner (or durable executor) owns retries.
+            # Disable both LiteLLM and its underlying SDK retry loops so a
+            # lost response cannot cause hidden duplicate billed requests.
+            "num_retries": 0,
+            "max_retries": 0,
         }
         resolved_credentials = (
             self._resolve_credentials(provider, custom)

@@ -376,6 +376,31 @@ class ExecutorTests(unittest.TestCase):
             store.get_request('req-2')['status'], RequestStatus.TERMINAL_FAILED.value
         )
 
+    def test_exhausted_request_does_not_finalize_before_later_pending_work(self):
+        policy = ExecutorPolicy.from_mapping({
+            'max_in_flight': 1,
+            'max_attempts_per_request': 1,
+            'max_attempts_per_root': 1,
+        })
+        store, _ = self.bootstrap(
+            policy=policy,
+            requests=[
+                make_request('req-1', ['item-1']),
+                make_request('req-2', ['item-2']),
+            ],
+        )
+        backend = ScriptedBackend({
+            'req-1': [ProviderFailure(
+                ErrorCategory.TRANSPORT, 'transport', retry_after_seconds=0,
+            )],
+        })
+        snapshot = self.executor(store, backend, policy).run(wait_for_backoff=True)
+        self.assertEqual(snapshot['run_status'], RunStatus.COMPLETED_WITH_ERRORS.value)
+        self.assertEqual([call[0] for call in backend.calls], ['req-1', 'req-2'])
+        self.assertEqual(store.get_request('req-1')['status'], 'terminal_failed')
+        self.assertEqual(snapshot['progress']['items']['accepted'], 1)
+        self.assertEqual(store.verify_integrity(), [])
+
     def test_cost_cap_requires_trustworthy_reservation(self):
         policy = ExecutorPolicy.from_mapping({'max_estimated_cost': 1.0})
         store, _ = self.bootstrap(policy=policy)
