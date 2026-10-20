@@ -2,5 +2,8 @@
 # Gemini Batch and the default GUI/CLI do not require this dependency.
 litellm==1.88.6
 keyring==25.7.0
+# Security floor for GHSA-5wr8-gcqf-gqf3, GHSA-2g87-pp6c-29x5,
+# and GHSA-494j-54xm-rwp3; regenerate all locks with the existing generator.
+aiohttp>=3.14.4
 # Security floor for aiohttp's transitive dependency (GHSA-54p9-h82j-f925).
 multidict>=6.9.1

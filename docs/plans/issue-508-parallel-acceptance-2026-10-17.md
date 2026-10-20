@@ -475,3 +475,15 @@ profile 运行 311 秒仍无结果后，仅核实并取消本轮父子进程；�
 相同；此前 schannel 查询失败只保留为历史失败。B1/B2 保持原冻结基线，C 恢复工具副本
 单独冻结 `8e0ec91` 加上述两处修复。本次发布范围为共享 Sync 修复、聚焦回归及汇总文档，
 不含私有制品；远端 CI、评审、合并和 issue 状态另行记录，不能用本地通过代替远端评审。
+
+10-20 首次发布 CI 的 Ruff 与 mypy 通过，但当前漏洞库对旧 LiteLLM 锁中的 aiohttp 3.14.3
+报告三条公告：[请求超时](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-5wr8-gcqf-gqf3)、
+[资源消耗](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-2g87-pp6c-29x5)、
+[共享 Cookie 的 Secure 属性](https://github.com/aio-libs/aiohttp/security/advisories/GHSA-494j-54xm-rwp3)。
+发布修复另用单独提交，在权威 `requirements-litellm.txt` 增加 `aiohttp>=3.14.4` 安全下限，
+用固定 uv 0.11.29 和既有生成器重建全部五份锁，不手改锁或增加豁免。仅两个 LiteLLM
+平台锁的包版本改变为 aiohttp 3.14.5 及其要求的 yarl 1.25.1；其他三个锁逐字节不变。
+五份锁的新一轮审计均退出 0。该发布环境更新与先前按旧冻结环境完成的付费实验分开，
+不重跑或覆盖候选、评分及运行证据。
+另建 Python 3.11 环境，以 `--require-hashes` 安装新 Windows LiteLLM 锁；依赖锁合同与
+两份 Sync 核心回归合计 **67 项通过**，包含同步/异步真实 SDK 的单次发送 fixture。
