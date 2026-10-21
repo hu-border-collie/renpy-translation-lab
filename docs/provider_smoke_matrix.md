@@ -12,6 +12,13 @@
 - [#431 S2 目录发现、诊断与迁移矩阵合同](plans/issue-431-openai-compatible-s2-contract.md)
 - [#431 S3 最终审校 Sync 执行合同](plans/issue-431-final-review-sync-contract.md)
 
+独立研究：[#520 OpenRouter Batch 有界验证（2026-10-20）](plans/issue-520-openrouter-batch-spike-2026-10-20.md)
+首轮决定暂缓生产接入；GPT/OpenAI 的实际提交被拒，未取得该路线的 Batch 成功回执。该研究不增加下表的生产
+策略或改变 #344 / #431 的既有验收，恢复边界见[研究合同 v1](plans/issue-520-openrouter-batch-contract-v1.md)。
+后续 [DeepSeek V4.1 Flash 续验](plans/issue-520-openrouter-batch-deepseek-2026-10-20.md)的同账号
+Sync 与 Batch 已真实完成；10-21 读回 Batch 2/2 请求、6/6 item 的精确关联及结构检查通过，
+最终仍暂缓生产接入，保留上游保留/清理和完整对照缺口。不能将首轮 GPT 路线拒绝推广为全局不可用。
+
 2026-10-17 状态：#431 已按首期范围关闭；#344 在固定 `main@4612d8dd` 上的四类执行链路
 已补齐：LiteLLM 内置 / 自定义及 Gemini Sync / Batch 均完成检查与隔离写回。
 首次地区失败与恢复后的成功分别保留，见[固定版本报告](plans/issue-344-provider-matrix-2026-10-16.md)。

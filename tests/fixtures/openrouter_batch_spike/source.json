@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "provenance": "Original public fixture written for issue #520, 2026-10-20. No game or earlier experiment material.",
+  "file_jobs": [
+    {
+      "file_rel_path": "harbor.rpy",
+      "file_path": "fixture/harbor.rpy",
+      "tasks": [
+        {"id": "harbor:1", "text": "Mira, the lantern is still warm.", "line": 1, "speaker_id": "oren", "block_name": "harbor"},
+        {"id": "harbor:2", "text": "Then [player_name] must have reached the pier before us.", "line": 2, "speaker_id": "mira", "block_name": "harbor"},
+        {"id": "harbor:3", "text": "Keep your voice down. The {i}quiet{/i} bell has not rung yet.", "line": 3, "speaker_id": "oren", "block_name": "harbor"}
+      ]
+    },
+    {
+      "file_rel_path": "observatory.rpy",
+      "file_path": "fixture/observatory.rpy",
+      "tasks": [
+        {"id": "observatory:1", "text": "Three clouds, two telescopes, and not a single star. Excellent planning.", "line": 1, "speaker_id": "mira", "block_name": "observatory"},
+        {"id": "observatory:2", "text": "You brought the map upside down again, didn't you?", "line": 2, "speaker_id": "oren", "block_name": "observatory"},
+        {"id": "observatory:3", "text": "Wait {w=0.5}—that light is moving against the wind.", "line": 3, "speaker_id": "mira", "block_name": "observatory"}
+      ]
+    }
+  ],
+  "review_rubric": [
+    "All six IDs translated into Simplified Chinese with no invented events or omissions.",
+    "Preserve [player_name], {i}, {/i}, and {w=0.5} exactly.",
+    "Maintain Mira and Oren as separate speakers; the map accusation is directed at the other speaker.",
+    "Keep the dry irony in Excellent planning and the contrast between a quiet bell and whispered dialogue.",
+    "Render the moving light as moving against the wind, not simply moving in the sky."
+  ]
+}
