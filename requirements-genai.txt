@@ -1,3 +1,6 @@
 # Shared Google GenAI SDK dependency.
 # Version ownership: this file.
 google-genai==1.57.0
+# Reject the compromised emSign trust root (PYSEC-2026-4320 / GHSA-6q48-6c7w-9gw2).
+# Keep this floor shared by core, LiteLLM, and direct semantic installs.
+certifi>=2026.10.19
