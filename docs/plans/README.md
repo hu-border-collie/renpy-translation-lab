@@ -43,8 +43,16 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 
 ## 计划、合同与研究目录
 
+2026-10-20 的 [#520 OpenRouter Batch 有界验证](issue-520-openrouter-batch-spike-2026-10-20.md)
+已完成首轮研究并决定暂缓生产接入；后续 [DeepSeek v2 续验](issue-520-openrouter-batch-deepseek-2026-10-20.md)
+已在 10-21 读回真实 Batch 2/2 请求、6/6 item 成功结果，Sync 同样成功；最终暂缓生产接入，
+费用/保留和完整同口径比较保留缺口。[合同 v1](issue-520-openrouter-batch-contract-v1.md)
+与原创离线 harness 保留。首轮 GPT 路线实际被拒，Gemini 对照完成但内容合同失败；
+这些负结果不改变下表各历史快照的原始验收状态。
+
 | 文档 | 当前用途与状态 | 当前入口或剩余跟踪 |
 | --- | --- | --- |
+| [#520 OpenRouter Batch 研究](issue-520-openrouter-batch-spike-2026-10-20.md) · [合同 v1](issue-520-openrouter-batch-contract-v1.md) | 首轮 2026-10-20 的目录/实际提交冲突、Sync TOS 拒绝、Gemini 对照和费用未知；后续 [DeepSeek 终态](issue-520-openrouter-batch-deepseek-2026-10-20.md)已真实完成 Batch/Sync、6/6 item 关联和费用比较。 | 最终暂缓生产接入；保留上游保留/清理和完整同口径比较缺口，研究 issue 按 not_planned 收口，不注册新执行策略。 |
 | [#508 串行 / 并行章节续验（2026-10-17～20）](issue-508-parallel-acceptance-2026-10-17.md) | 新 B1/B2 各 552 项及独立匿名审阅、订正交付；B2 原生执行 552/552。C 原参数、压缩版与另获授权的 64 项重试分别审阅，混合路线完整交付和原生重放 552 项；锁定环境修复两处恢复故障。 | 旧未知费用保留预留；变体限制架构因果和效率结论。Computer Use 与扩展桌面检查不是本轮收尾前置，#508 当前保持开放待收尾。 |
 | [#344 真实章节上下文与恢复验收（2026-10-17）](issue-344-context-acceptance-2026-10-17.md) | 两个真实中断边界与请求级费用、fresh published PA、Qwen3 embedding 预建 / 查询、128 对原生上下文及隔离写回均已记录；语义收益未获支持。 | Token 摘要、bootstrap 凭据与向量编码修复提交 PR 评审；合并及记录回填前 #344 保持开放，不改变默认开关。 |
 | [#344 固定版本 Provider 矩阵（2026-10-16）](issue-344-provider-matrix-2026-10-16.md) | 固定 main 的四类真实 CLI smoke、相同 prompt 指纹、检查与隔离写回全部完成；后续实验与修复见 10-17 报告。 | 保留首次失败及固定发布基线，区别于含本地修复的章节续验。 |
