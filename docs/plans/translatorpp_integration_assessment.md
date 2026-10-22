@@ -1,7 +1,8 @@
 # Translator++ 多引擎接入评估
 
-> **状态**：研究与接入设计，未实现 Translator++ bridge，未执行真实往返实验；不是安装或使用手册。
+> **状态**：研究与接入设计；原始研究快照后已补单版本真实往返，仍未实现 Translator++ bridge；不是安装或使用手册。
 > **核对日期与基线**：2026-09-16；本仓库 `main@f5cec70`、GitHub issue 正文及最新状态评论、Translator++ 官方文档与发行说明。
+> **#509 续验补记（2026-10-22）**：[本轮报告与原创数据](issue-509-translatorpp-roundtrip-2026-10-21.md)固定 MV 编辑器/core **1.5.1**、TPP **8.8.9**，实际由前端 parser 3.3 委派 RMMVJS **2.19**。已完成真实 `.trans` 保存与导出：限定译文精确命中19处；独立null保存/重开/导出补测通过，混合空值回退原文；无修改全资源导出改写插件注释/换行；staging恢复重试成功，源前插注释后丢失一处context译文。部分原生/HTML5运行及负例另列，限定spike证据已齐；决定保留TPP独立使用、bridge暂缓。下方9月版本表仍是历史快照，其余引擎未刷新。
 > **关联**：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[多引擎能力矩阵](visual_novel_localization_matrix.md)、[生态研究](multi_engine_localization_ecosystem_research.md)。
 > **排期边界**：本文补充外部工具路线，不解除 #272 的暂缓决定，不把其他引擎标为已支持，也不扩大 [Agent 工具包提案 PR #499](https://github.com/hu-border-collie/renpy-translation-lab/pull/499) 的首轮 Ren'Py 实验范围。
 > **当前状态对照（2026-09-27；保留下方 9 月 16 日快照）**：#457 已于 9 月 16 日关闭并维持原默认值；#488 已于 9 月 17 日关闭；字体 spike #487 由 PR #511 交付并于 9 月 20 日关闭。#427 S1/S2 后续由 PR #515 / #517 / #523 合并；#431 S1–S3 由 PR #504–#506 合并，真实 smoke 仍待 #431 / #344。Translator++ 往返仍由 #509 决定是否继续，未创建生产 bridge。全量当前映射见[计划状态索引](README.md)。
@@ -12,7 +13,7 @@
 
 推荐先验证 **一个固定版本的 RPG Maker 叙事工程，经 `.trans` 文件交换完成往返**。文件 bridge 通过后再评估 MCP 自动化。Naninovel 仍保留为原生 Adapter 首选；是否开发 bridge，应由实验中的净收益决定。
 
-目前不能给出“节省百分之多少开发量”或“几百行换来所有引擎支持”的可信估算。不同 parser 的支持窗口、上下文粒度与导出依赖差异很大，尚无本仓库实测数据。
+目前不能给出“节省百分之多少开发量”或“几百行换来所有引擎支持”的可信估算。不同 parser 的支持窗口、上下文粒度与导出依赖差异很大；#509 只取得单版本有限样本，尚无同口径净收益 A/B 数据。
 
 | 工作层 | 潜在帮助 | 仍需承担的工作 |
 | --- | --- | --- |
