@@ -81,6 +81,8 @@ Windows 对低完整性可执行文件的进程创建规则见 [Microsoft MIC �
 
 公开的[原创数据覆盖层](issue-509-materials/README.md)提供 [Map001.json](issue-509-materials/Map001.json)、[CommonEvents.json](issue-509-materials/CommonEvents.json)、[制作材料](issue-509-materials/storyboard.json)和[实际 occurrence 清单](issue-509-materials/occurrences.json)。复现需合法 MV 1.5.1 安装提供引擎/素材；不是可独立启动的完整游戏包。System、Actors、Items 和无插件设置的复现步骤在覆盖层说明中，不提交默认第三方数据库。
 
+两份游戏 JSON 使用精确路径的 Git `-text` 属性保留原件 CRLF，文件 hash 不受 checkout 换行设置影响。核对范围包括 Git blob 和 LF/CRLF 配置下的独立 checkout，不仅是 Windows 工作区中尚未经过 Git 规范化的文件。
+
 实际剧情为一个 17×13 地图、两个事件各两页、一个公共事件、三个选项和取消分支。变量 1 初置 7，actor 1 为 Mira，敲铃调用公共事件后显示 8；switch 1 和自开关 A 控制两组第二页。item 1 的原创 marker `UNSELECTED_RESOURCE_509_KEEP` 是整文件未选守卫。
 
 | 独立统计 | 实测值 | 不可混同的对象 |

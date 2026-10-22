@@ -14,6 +14,8 @@
 
 网格行数、parser context 和上述参数位置不能互换。102 与 402 的同名文本分别列明，不用去重行数当 occurrence；地图显示名、数据库、脚本和其他命令文本不在本清单的 coverage 范围。
 
+两份游戏 JSON 在 `.gitattributes` 中单独设置 `-text`，保留实测原件的 CRLF 字节；`occurrences.json` 中的文件 SHA-256 按这些原始字节计算。Git blob 及 LF/CRLF 两种 checkout 配置均须与原件同 hash，不以 JSON 内容相同代替字节核对。
+
 ## 从合法新工程复现
 
 1. 在 MV 1.5.1 中新建一个独立工程，确认其 `Game.rpgproject` 为 `RPGMV 1.5.1`、六个 `rpg_*.js` 与本轮冻结窗口一致。运行环境和素材由合法安装自行提供。
