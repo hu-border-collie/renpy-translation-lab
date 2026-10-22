@@ -1,0 +1,3 @@
+# Retain measured MV fixture CRLF bytes and their published SHA-256.
+Map001.json -text whitespace=cr-at-eol
+CommonEvents.json -text whitespace=cr-at-eol

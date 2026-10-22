@@ -6,6 +6,3 @@ relation_analyzer/requirements*.txt text eol=lf
 scripts/compile_dependency_locks.py text eol=lf
 # Golden fixtures hash multi-line text into fingerprints; keep checkouts byte-stable.
 tests/fixtures/translation_plan_minimal/** text eol=lf
-# These measured MV files retain their original CRLF bytes and published SHA-256.
-docs/plans/issue-509-materials/Map001.json -text whitespace=cr-at-eol
-docs/plans/issue-509-materials/CommonEvents.json -text whitespace=cr-at-eol
