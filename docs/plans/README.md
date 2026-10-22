@@ -43,6 +43,12 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 
 ## 计划、合同与研究目录
 
+2026-10-21～22 的 [#509 Translator++ 单版本实测](issue-509-translatorpp-roundtrip-2026-10-21.md)
+固定 MV 编辑器/core 1.5.1、TPP 8.8.9 / 实际 RMMVJS 2.19（新建入口3.3）。限定译文导出精确19处，
+25参数独立对账、部分原生/HTML5运行及staging恢复重试已有证据；无修改导出存在插件注释副作用，
+前插命令后丢失一处context译文。独立null保存/重开/导出补测已通过，限定spike证据已齐；
+决定保留独立工具使用、生产bridge暂缓，交付合并与issue关闭另行跟踪。
+
 2026-10-20 的 [#520 OpenRouter Batch 有界验证](issue-520-openrouter-batch-spike-2026-10-20.md)
 已完成首轮研究并决定暂缓生产接入；后续 [DeepSeek v2 续验](issue-520-openrouter-batch-deepseek-2026-10-20.md)
 已在 10-21 读回真实 Batch 2/2 请求、6/6 item 成功结果，Sync 同样成功；最终暂缓生产接入，
@@ -79,7 +85,7 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 | [质量规则校准基线](quality_calibration_baseline.md) | #364 的历史真实项目校准结果；形成于 #513 字段拆分前，原数据与结论保持原样。 | 当前语言允许与排版豁免字段见[Batch 工作流](../batch_workflows.md)。 |
 | [#426 coverage block 归因报告](renpy_coverage_block_attribution.md) | 合成归因与 #460–#464、#471 修复已完成；#426 已关闭。 | 真实大型项目频率归因仍由 #470 跟踪。 |
 | [#487 字体覆盖只读 spike](renpy_font_coverage_spike.md) | PR #511 已交付，#487 已关闭；不等于 doctor / GUI 生产接入。 | 字体生产接入仍待评估，未作为本轮承诺。 |
-| [Translator++ 接入评估](translatorpp_integration_assessment.md) | 2026-09-16 的外部格式与合同缺口快照；尚无 bridge 或真实往返证据。 | #509 先决定是否继续，完成前不安排生产接入。 |
+| [Translator++ 接入评估](translatorpp_integration_assessment.md) | 2026-09-16 研究快照，补充 #509 单版本真实导出及迁移缺口；尚无生产 bridge。 | 本轮决定保留独立使用、bridge暂缓；不提升引擎支持范围。 |
 | [视觉小说引擎能力矩阵](visual_novel_localization_matrix.md) | 2026-09-13 官方版本/语法核对，9 月 14 日记录 #272 暂缓决定。 | #272 保持原触发条件；不把候选引擎扩成承诺。 |
 
 本次未移动文件：保留项都仍提供当前合同、实验前置证据、决策理由或操作参考；没有仅为凑数量而归档。已归档的历史材料见[归档索引](../archive/README.md)。

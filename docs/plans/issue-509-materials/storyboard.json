@@ -1,0 +1,232 @@
+{
+  "status": "authoring-material-only; not an RPG Maker project or measured occurrence manifest",
+  "license": "MIT; original text and scenario only; no engine, runtime or third-party assets",
+  "title": "The Night Signal",
+  "engine_candidate": "MV Japanese Windows official trial; editor About and actual core 1.5.1 verified; TPP export pending",
+  "plugins": [],
+  "setup": {
+    "map": "One small passable map; two action-button events near player start",
+    "actor_1_name": "Mira",
+    "variable_1_initial": 7,
+    "switch_1": "Event 1 page 2 becomes active after Leave or cancel",
+    "event_2_self_switch_A": "Event 2 page 2 becomes active after page 1",
+    "common_event_1": "Called by the bell branch; increment variable 1 before its messages",
+    "actual_engine_locators": null
+  },
+  "blocks": [
+    {
+      "id": "gate.greeting",
+      "location": "event 1 page 1",
+      "kind": "message",
+      "source_lines": [
+        "The lamp is still on."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "门口的灯还亮着。"
+      ],
+      "context_case": "distinct translation for this occurrence"
+    },
+    {
+      "id": "gate.path",
+      "location": "event 1 page 1",
+      "kind": "message",
+      "source_lines": [
+        "Mira wrote: \"North gate\".",
+        "The path is C:\\\\Trial\\\\Gate."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "米拉写着：“北门”。",
+        "路径是 C:\\\\Trial\\\\Gate。"
+      ]
+    },
+    {
+      "id": "gate.variable",
+      "location": "event 1 page 1",
+      "kind": "message",
+      "source_lines": [
+        "Count: \\V[1]; guide: \\N[1]."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "数量：\\V[1]；向导：\\N[1]。"
+      ]
+    },
+    {
+      "id": "gate.controls",
+      "location": "event 1 page 1",
+      "kind": "message",
+      "source_lines": [
+        "\\C[2]Amber\\C[0] \\I[1] Wait\\. then\\| go."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "\\C[2]琥珀色\\C[0] \\I[1] 等待\\.然后\\|出发。"
+      ]
+    },
+    {
+      "id": "gate.menu",
+      "location": "event 1 page 1",
+      "kind": "choices",
+      "source_lines": [
+        "Look at the chart",
+        "Call the bell",
+        "Leave"
+      ],
+      "selected": true,
+      "translation_lines": [
+        "查看图表",
+        "敲响铃铛",
+        "离开"
+      ],
+      "cancel": "separate cancel branch",
+      "branch_label_mirrors": "Record every corresponding 402 label separately from the three 102 occurrences"
+    },
+    {
+      "id": "gate.chart",
+      "location": "event 1 page 1 / chart branch",
+      "kind": "message",
+      "source_lines": [
+        "The chart points north."
+      ],
+      "selected": true,
+      "column_probe": {
+        "first_translation_column": "左列候选",
+        "second_translation_column": "右列候选",
+        "effective_column": null
+      }
+    },
+    {
+      "id": "gate.bell",
+      "location": "event 1 page 1 / bell branch",
+      "kind": "message",
+      "source_lines": [
+        "I will ring once."
+      ],
+      "selected": true,
+      "column_probe": {
+        "first_translation_column": null,
+        "second_translation_column": null,
+        "observe_null_behavior": true
+      }
+    },
+    {
+      "id": "gate.leave",
+      "location": "event 1 page 1 / leave branch",
+      "kind": "message",
+      "source_lines": [
+        "The door stays unlocked."
+      ],
+      "selected": true,
+      "column_probe": {
+        "first_translation_column": "",
+        "second_translation_column": "",
+        "observe_empty_behavior": true
+      }
+    },
+    {
+      "id": "gate.cancel",
+      "location": "event 1 page 1 / cancel branch",
+      "kind": "message",
+      "source_lines": [
+        "We can decide later."
+      ],
+      "selected": true
+    },
+    {
+      "id": "gate.return",
+      "location": "event 1 page 2 / switch 1",
+      "kind": "message",
+      "source_lines": [
+        "The lamp is still on."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "值班室的灯还亮着。"
+      ],
+      "context_case": "same source, another page"
+    },
+    {
+      "id": "gate.four_lines",
+      "location": "event 1 page 2 / switch 1",
+      "kind": "message",
+      "source_lines": [
+        "First signal.",
+        "Second signal.",
+        "Third signal.",
+        "The watch is over."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "第一声信号。",
+        "第二声信号。",
+        "第三声信号。",
+        "值班结束。"
+      ]
+    },
+    {
+      "id": "drawer.greeting",
+      "location": "event 2 page 1",
+      "kind": "message",
+      "source_lines": [
+        "The lamp is still on."
+      ],
+      "selected": false,
+      "context_case": "unselected resource/event must remain source"
+    },
+    {
+      "id": "drawer.open",
+      "location": "event 2 page 1",
+      "kind": "message",
+      "source_lines": [
+        "Keep this drawer closed."
+      ],
+      "selected": false
+    },
+    {
+      "id": "drawer.closed",
+      "location": "event 2 page 2 / self switch A",
+      "kind": "message",
+      "source_lines": [
+        "The latch clicks twice."
+      ],
+      "selected": false
+    },
+    {
+      "id": "bell.greeting",
+      "location": "common event 1",
+      "kind": "message",
+      "source_lines": [
+        "The lamp is still on."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "钟楼的灯还亮着。"
+      ],
+      "context_case": "same source, another file"
+    },
+    {
+      "id": "bell.count",
+      "location": "common event 1",
+      "kind": "message",
+      "source_lines": [
+        "Bell total: \\V[1]."
+      ],
+      "selected": true,
+      "translation_lines": [
+        "铃声次数：\\V[1]。"
+      ]
+    }
+  ],
+  "scope_notes": [
+    "All positions above are authoring labels, not measured events/pages/list/parameters addresses.",
+    "Record actual 101 headers, 401 parameters, 102 choice entries and 402 mirror labels after saving in the admitted editor.",
+    "Event 2 is on the same map: test resource selection separately from occurrence/context overrides; do not assume UI selection can exclude an event.",
+    "Use a separate unselected database resource as a whole-file guard, with an original marker; freeze it before importing into Translator++.",
+    "Grid row count, parser contexts, unique source strings, message blocks, 401 lines and choice/mirror occurrences have different denominators.",
+    "Column probes specify UI inputs to construct, not observed serialized null/empty behavior. Read back actual saved values and exported text.",
+    "Unknown control codes belong in a separate negative copy; do not add them to the runnable baseline.",
+    "Literal backslashes in MV message text are doubled at the engine-text layer, in addition to JSON escaping; browser runtime v2 exposed the undoubled authoring mistake before TPP import."
+  ]
+}

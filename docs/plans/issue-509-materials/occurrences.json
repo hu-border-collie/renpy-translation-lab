@@ -1,0 +1,223 @@
+{
+  "status": "measured from constructed MV 1.5.1 source before Translator++ import; not an exported-game coverage result",
+  "source_core": "1.5.1",
+  "primary_occurrences": 22,
+  "branch_label_mirrors": 3,
+  "unique_source_strings": 19,
+  "occurrences": [
+    {
+      "file": "CommonEvents.json",
+      "pointer": "/1/list/2/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The lamp is still on."
+    },
+    {
+      "file": "CommonEvents.json",
+      "pointer": "/1/list/4/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Bell total: \\V[1]."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/2/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The lamp is still on."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/4/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Mira wrote: \"North gate\"."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/5/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The path is C:\\\\Trial\\\\Gate."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/7/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Count: \\V[1]; guide: \\N[1]."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/9/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "\\C[2]Amber\\C[0] \\I[1] Wait\\. then\\| go."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/10/parameters/0/0",
+      "kind": "choice",
+      "code": 102,
+      "indent": 0,
+      "source": "Look at the chart"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/10/parameters/0/1",
+      "kind": "choice",
+      "code": 102,
+      "indent": 0,
+      "source": "Call the bell"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/10/parameters/0/2",
+      "kind": "choice",
+      "code": 102,
+      "indent": 0,
+      "source": "Leave"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/11/parameters/1",
+      "kind": "choice_branch_mirror",
+      "code": 402,
+      "indent": 0,
+      "source": "Look at the chart"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/13/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 1,
+      "source": "The chart points north."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/15/parameters/1",
+      "kind": "choice_branch_mirror",
+      "code": 402,
+      "indent": 0,
+      "source": "Call the bell"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/17/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 1,
+      "source": "I will ring once."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/20/parameters/1",
+      "kind": "choice_branch_mirror",
+      "code": 402,
+      "indent": 0,
+      "source": "Leave"
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/22/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 1,
+      "source": "The door stays unlocked."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/0/list/27/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 1,
+      "source": "We can decide later."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/1/list/1/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The lamp is still on."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/1/list/3/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "First signal."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/1/list/4/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Second signal."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/1/list/5/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Third signal."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/1/pages/1/list/6/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The watch is over."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/2/pages/0/list/1/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The lamp is still on."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/2/pages/0/list/3/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "Keep this drawer closed."
+    },
+    {
+      "file": "Map001.json",
+      "pointer": "/events/2/pages/1/list/1/parameters/0",
+      "kind": "dialogue_line",
+      "code": 401,
+      "indent": 0,
+      "source": "The latch clicks twice."
+    }
+  ],
+  "files": {
+    "Map001.json": {
+      "sha256": "5dd860bbe3f88b34c8348bcc003e1f36ee58bc9866c442fd4405aea637627c66"
+    },
+    "CommonEvents.json": {
+      "sha256": "19d8a108fe88d95f8ca41b3b1cf374f52c7c6962db5abdd043addfe2a5d47f6d"
+    }
+  },
+  "unknown": [
+    "Translator++ grid rows and contexts",
+    "text outside admitted 401/102/402 scope",
+    "Translator++ export",
+    "native NW.js runtime"
+  ]
+}

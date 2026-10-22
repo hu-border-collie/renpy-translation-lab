@@ -5,6 +5,7 @@
 > **前置依赖**：#265 P5（TyranoScript V600+ 验证 Adapter）已于 2026-09-04 交付并关闭；P6（#424）Ren'Py 产品化、GUI、doctor、CLI 与双引擎离线 corpus 已交付并通过 CI，#265 已于 2026-09-13 关闭。后续推荐候选**可以**创建独立实现 Issue，但已于 2026-09-14 决定暂缓立项（见 §6.1 状态注）；真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
 > **核对日期**：2026-09-13（官方版本与语法）。P6 收口与立项暂缓状态更新于 2026-09-14（#272）；官方版本与语法以各引擎现行文档为准，刷新本表时同步更新日期。
 > **外部工具补充**：2026-09-16 增加 [Translator++ 接入评估](translatorpp_integration_assessment.md)及 §6.3 / §7.5；未全量刷新六引擎官方资料，不改变原生候选评级或暂缓状态。
+> **#509 续验补记（2026-10-22）**：[单版本往返报告](issue-509-translatorpp-roundtrip-2026-10-21.md)提供 MV 编辑器/core **1.5.1** 原创覆盖层及25参数清单。TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）限定译文导出精确19处，部分原生/HTML5运行有证据；独立null保存/重开/导出补测通过，混合空值回退原文；无修改导出存在插件注释副作用，前插命令后缺一处context译文，staging恢复重试成功。限定spike证据已齐，生产bridge暂缓，D12/已支持范围不提升；其他引擎未刷新。
 
 ---
 
@@ -403,7 +404,7 @@ flowchart TD
 
 2026-09-16 的[专项评估](translatorpp_integration_assessment.md)建议：保留 Naninovel 原生首选，另以**单版本 RPG Maker 叙事 fixture**作为外部 bridge 的首个实验候选。Translator++ 可提供部分引擎提取与导出，本项目继续管理结果身份、快照、完整性、冲突/stale、结构检查及安全写回。
 
-先验证 `.trans` 文件往返，后考虑已由官方公告的 MCP 自动化；当前没有 bridge 实现或真实往返结果。上游 Godot Parser / Unity binary translator 的 0.1 公告不能替代 Dialogic / Naninovel 专项验收；KAG 的方言风险继续后置。外部后端是否值得接入，应比较“Agent + Translator++”与“再加入本项目工具包”的实际收益，而非仅统计其支持引擎数量。
+先验证 `.trans` 文件往返，后考虑已由官方公告的 MCP 自动化；#509 现有单版本有限实测，暴露 context 迁移缺口并决定暂缓 bridge，尚无生产接入。上游 Godot Parser / Unity binary translator 的 0.1 公告不能替代 Dialogic / Naninovel 专项验收；KAG 的方言风险继续后置。外部后端是否值得接入，应比较“Agent + Translator++”与“再加入本项目工具包”的实际收益，而非仅统计其支持引擎数量。
 
 该路线不修改 §6.1 的暂缓条件，不自动创建第三 Adapter 实现单，也不扩大 Agent 工具包提案 PR #499 的首轮 Ren'Py 实验范围。
 

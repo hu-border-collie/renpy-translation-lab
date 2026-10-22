@@ -5,6 +5,7 @@
 > **研究对象**：跨引擎本地化抽象框架（VNTextPatch、Translator++、translate-toolkit / Weblate）以及候选目标引擎（Naninovel、Godot+Dialogic 2、RPG Maker MV/MZ、KiriKiri）的原生生态与工具链。
 > **前置约定**：#265 已于 2026-09-13 关闭；#272 的第三 Adapter 实质复核与实现立项按 2026-09-14 决定暂缓。本研究提供后续决策依据，不改变排期及既有 `check -> apply`、声明式 `WritebackPlan` 与 Fail-Closed 门禁。
 > **专项评估**：[Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)记录当前 issues、官方证据、公共合同缺口与最小实验；接入尚未实现。
+> **#509 续验补记（2026-10-22）**：[单版本往返报告](issue-509-translatorpp-roundtrip-2026-10-21.md)固定 TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）和 MV 编辑器/core **1.5.1**。已有实际GUI工程、限定19处译文导出、独立null保存/重开/导出、部分原生/HTML5运行及staging失败恢复；无修改全资源导出改写插件注释，源前插命令后缺一处context译文，畸形/缺失源文件被排除。限定spike证据已齐，决定保留独立工具使用、生产bridge暂缓。下方其他工具/引擎仍按原研究日期解释。
 
 ---
 
@@ -21,7 +22,7 @@
 3. **#272 对候选引擎的评估结论得到外部生态的强力验证**：
    * **Naninovel (Unity)**：官方原生内置了纯文本的 `Resources/Naninovel/Localization/{Locale}/` 目录与 CSV 交换机制。已生成的文档可离线处理；公共写回合同适配仍待验证，支持将其列为推荐第三引擎（评级 A+）；
    * **Godot + Dialogic 2**：生态中已有成熟的 CSV 翻译插件，但 Dialogic 2.0 目前处于 Alpha 20，API 频繁重构，过早立项必然背负巨大的接口废弃维护债务；
-   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（本地人工样本支持的研究候选，仓库合成夹具仍待建立）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
+   * **RPG Maker MV/MZ**：社区工具（如 RPGMLocalizer）对**全量 RPG** 工程普遍原位重写单体 `MapXXX.json`，极易损毁且原生无多语言目录——这一高危教训仍然成立。但在收敛为**纯叙事 / ADV（Narrative Mode）**、并以事件节点坐标做声明式写回时，本仓库矩阵已将其提权为 **B+ 实战原型先行候选**（研究候选；#509 后补 MV 1.5.1 原创覆盖层及限定 TPP 实测，仍非生产 Adapter）；二者并不矛盾：C- 描述的是未收敛的全量 RPG 风险，B+ 仅覆盖叙事模式 + Fail-Closed 写回。
 4. **对本项目的战略启示**：
    * 本项目已建立的 `ProjectSnapshot`、`ReconciliationReport`、`TranslationRecord` 与声明式 `WritebackPlan` 可作为接入基础；新增格式仍需要公共合同扩展、产品接线和独立验收；
    * Translator++ 的价值不只在数据网格交互，还在可复用的提取/导出与自动化接口。应比较“Agent + Translator++”和“再加入本项目工具包”的实际收益，同时保留 Naninovel 官方离线目录路线，避免重复建设已有能力。
