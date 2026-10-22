@@ -69,7 +69,7 @@ class MigrationPlanTests(unittest.TestCase):
         from gui_qt.diagnostics_context import build_cli_commands
         commands = build_cli_commands(python_exe="python", batch_script_path="/tool/gemini_translate_batch.py",
                                       manifest_path="/run/manifest.json", manifest={})
-        selected = [c for c in commands if "providers.model_config_migration" in c.command]
+        selected = [c for c in commands if "providers/model_config_migration.py" in c.command]
         self.assertEqual(len(selected), 3)
         self.assertTrue(any("--stage-only" in c.command for c in selected))
         self.assertTrue(all("<CONFIG_COPY>" in c.command and "--json" in c.command for c in selected))

@@ -221,7 +221,7 @@ def collect_existing_report_paths(
 
 
 def model_config_migration_commands(*, python_exe: str, script_path: str) -> list[DiagnosticsCommand]:
-    """Expose offline configuration tools without requiring a task manifest."""
+    """Locate the migration CLI beside the entrypoint, independent of terminal cwd."""
     if not script_path:
         return []
     return [
@@ -229,8 +229,8 @@ def model_config_migration_commands(*, python_exe: str, script_path: str) -> lis
             label=MODEL_CONFIG_MIGRATION_COPY[action],
             command=format_cli_command(
                 python_exe,
-                "-m",
-                ["providers.model_config_migration", action, "--config", "<CONFIG_COPY>", *extra, "--json"],
+                join_directory_file(parent_directory(script_path), "providers/model_config_migration.py"),
+                [action, "--config", "<CONFIG_COPY>", *extra, "--json"],
             ),
         )
         for action, extra in (

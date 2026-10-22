@@ -1,9 +1,13 @@
-"""Explicit offline migration CLI; installed v1 configurations are used by the runtime."""
+"""Offline configuration migration CLI, usable as a module or by script path."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+import sys
+
+if __name__ == "__main__" and not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from foundation.config_store import ConfigWriteLockError
 from providers.model_routing_migration_store import (

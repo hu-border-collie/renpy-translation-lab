@@ -470,12 +470,12 @@ source modified                   -> 只能作为 reference，不能自动写回
 
 当前仓库相关核心文件：
 
-- [translation_core.py](../../translation_core.py)
-- [translation_plan.py](../../translation_plan.py)
+- [translation_core.py](../../quality_review/translation_core.py)
+- [translation_plan.py](../../quality_review/translation_plan.py)
 - [engine_adapters/reuse.py](../../engine_adapters/reuse.py)
 - [engine_adapters/writeback.py](../../engine_adapters/writeback.py)
 - [engine_adapters/tyrano.py](../../engine_adapters/tyrano.py)
-- [translation_quality.py](../../translation_quality.py)
+- [translation_quality.py](../../quality_review/translation_quality.py)
 - [Batch 工作流与安全检查](../batch_workflows.md)
 - [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)
 

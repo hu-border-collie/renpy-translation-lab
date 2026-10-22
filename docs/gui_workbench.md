@@ -20,7 +20,8 @@
 界面用语尽量使用中文说明；「诊断与运行日志」中的「命令参考」仍保留可复制 CLI 子命令，供高级用户对照。
 
 空闲、Sync 和 Batch 的命令参考均包含 [模型配置迁移](model_config_migration.md) 的 preview、
-stage-only migrate 和 rollback 模板，均要求显式配置副本路径。当前 Settings 仍编辑旧
+stage-only migrate 和 rollback 模板，均要求显式配置副本路径。模板包含完整脚本路径，
+可在工具目录之外复制执行。当前 Settings 仍编辑旧
 配置字段，无需先加载 Batch 任务，也不会在打开页面时自动迁移。P2 已接入生产读取；
 统一 Model Profiles 表单属于 P3。
 

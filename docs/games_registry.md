@@ -36,10 +36,12 @@ RenPy_Workspace/              # 用户指定的工作区根
 │  ├─ original/
 │  └─ work/
 └─ renpy-translation-lab/     # 可选：工具放在工作区子目录
-   └─ games_registry.py
+   └─ execution/
+      └─ games_registry.py
 ```
 
 仓库内提供 `games_registry.example.json` 作为字段示例；**实际数据**应放在工作区根目录，不纳入本仓库版本控制。
+生成的 `GAMES.md` 中，重新生成命令须在工具根目录执行，并将 `<WORKSPACE_ROOT>` 替换为该总表所在目录。
 
 ## 数据模型要点
 

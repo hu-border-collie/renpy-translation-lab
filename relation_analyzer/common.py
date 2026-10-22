@@ -12,7 +12,7 @@ import time
 import tokenize
 from pathlib import Path
 
-from rpa_safety import (
+from foundation.rpa_safety import (
     DEFAULT_RPA_LIMITS,
     decode_and_validate_index,
     read_bounded_compressed_index,
@@ -266,7 +266,7 @@ def save_cached_embedding(cache_bucket, text, vector):
     temp_path.replace(cache_path)
 
 def _missing_analyzer_dependency_exit(package_name: str) -> SystemExit:
-    from optional_feature import (
+    from foundation.optional_feature import (
         missing_feature_cli_message,
         relation_analyzer_feature,
     )

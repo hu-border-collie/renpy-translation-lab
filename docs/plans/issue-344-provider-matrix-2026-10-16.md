@@ -67,7 +67,7 @@ USD 1.765823772，累计保守预留 **USD 1.826405123664**，仍低于原 USD 2
 实际账单未核对，不将未知用量改成零。
 
 本轮还观察到用量展示差异：成功 Sync 的 SQLite 与原始回执都完整保存 515 total tokens，
-但状态摘要显示 unknown。[状态汇总](../../sync_run_store.py)读取 `total_tokens` /
+但状态摘要显示 unknown。[状态汇总](../../execution/sync_run_store.py)读取 `total_tokens` /
 `totalTokenCount`，遗漏 SDK 的 `total_token_count`。底层数据没有丢失；本次未修改产品代码
 或历史 run，保留为后续修复项，不把四类执行链路通过扩大成所有展示行为已通过。
 

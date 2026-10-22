@@ -5,14 +5,14 @@ The registry file (``games_registry.json``) lives at the RenPy workspace root.
 
 Commands::
 
-    python games_registry.py --workspace path/to/workspace setup
-    python games_registry.py import-md
-    python games_registry.py discover
-    python games_registry.py ingest --source path/to/game_or.zip
-    python games_registry.py refresh --all
-    python games_registry.py refresh --project glory_hounds
-    python games_registry.py render-md
-    python games_registry.py record-batch --project glory_hounds --manifest path/to/manifest.json
+    python -m execution.games_registry --workspace path/to/workspace setup
+    python -m execution.games_registry import-md
+    python -m execution.games_registry discover
+    python -m execution.games_registry ingest --source path/to/game_or.zip
+    python -m execution.games_registry refresh --all
+    python -m execution.games_registry refresh --project glory_hounds
+    python -m execution.games_registry render-md
+    python -m execution.games_registry record-batch --project glory_hounds --manifest path/to/manifest.json
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ GAMES_MD_HEADER = """# 游戏状态总表
 {updated_line}
 
 > **请勿手改下方表格。** 真源是同目录的 `games_registry.json`（或 GUI「设置 → 工作区」）。  
-> 改完后执行：`python renpy-translation-lab/games_registry.py render-md` 重新生成本文件。  
+> 改完后在工具目录执行：`python -m execution.games_registry --workspace "<WORKSPACE_ROOT>" render-md` 重新生成本文件；`<WORKSPACE_ROOT>` 为本文件所在目录。
 > 若已误改本表，用 `import-md --merge` 拉回 JSON，再 `render-md`。
 
 本表只记录已经纳入整理结构的项目：
@@ -115,7 +115,7 @@ TL_COMMENT_SOURCE_RE = re.compile(r"^\s*#\s+")
 
 
 def tool_package_root() -> Path:
-    """Directory that contains games_registry.py (the tool / repo root)."""
+    """Return the tool / repository root above the execution package."""
     return Path(__file__).resolve().parents[1]
 
 

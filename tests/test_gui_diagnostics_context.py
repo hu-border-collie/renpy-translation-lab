@@ -1,5 +1,9 @@
 import json
 import os
+from pathlib import Path
+import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -14,6 +18,7 @@ from gui_qt.diagnostics_context import (
     idle_diagnostics_context,
     join_directory_file,
     manifest_for_preview,
+    model_config_migration_commands,
     quote_cli_arg,
     resolve_package_dir,
     sync_diagnostics_context,
@@ -578,7 +583,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(context.status, idle_diagnostics_context().status)
         command_labels = [command.label for command in context.commands]
         self.assertIn("查看项目模型用量", command_labels)
-        self.assertEqual(len([c for c in context.commands if "providers.model_config_migration" in c.command]), 3)
+        self.assertEqual(len([c for c in context.commands if "model_config_migration.py" in c.command]), 3)
 
     def test_build_diagnostics_context_idle_when_latest_path_suppressed(self):
         context = build_diagnostics_context(
@@ -603,7 +608,6 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("无法读取任务记录", context.heading)
 
     def test_migration_templates_are_available_without_a_batch_manifest(self):
-        import shlex
         from providers.model_config_migration import build_parser
         contexts = [
             idle_diagnostics_context(batch_script_path="/tool dir/gemini_translate_batch.py"),
@@ -613,16 +617,53 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         groups.append(build_cli_commands(python_exe="python", batch_script_path="/tool dir/gemini_translate_batch.py",
                                          manifest_path="", manifest={}))
         for commands in groups:
-            selected = [c for c in commands if "providers.model_config_migration" in c.command]
+            selected = [c for c in commands if "providers/model_config_migration.py" in c.command]
             self.assertEqual(len(selected), 3)
             for entry in selected:
                 parts = shlex.split(entry.command)
-                self.assertEqual(parts[1:3], ["-m", "providers.model_config_migration"])
-                args = build_parser().parse_args(parts[3:])
+                self.assertEqual(parts[1], "/tool dir/providers/model_config_migration.py")
+                args = build_parser().parse_args(parts[2:])
                 self.assertEqual(str(args.config), "<CONFIG_COPY>")
                 if args.action == "migrate":
                     self.assertTrue(args.stage_only)
                     self.assertEqual(args.expected_fingerprint, "<SOURCE_FINGERPRINT>")
+
+    def test_migration_templates_run_outside_tool_directory(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        commands = model_config_migration_commands(
+            python_exe=Path(sys.executable).as_posix(),
+            script_path=(repo_root / "gemini_translate_batch.py").as_posix(),
+        )
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        environment["PYTHONIOENCODING"] = "utf-8"
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            config_path = directory / "config copy.json"
+            original = (repo_root / "tests/fixtures/model_routing_legacy/gemini_batch.json").read_bytes()
+            config_path.write_bytes(original)
+            replacements = {"<CONFIG_COPY>": str(config_path)}
+            reports = []
+            for command in commands:
+                command_text = command.command
+                for placeholder, value in replacements.items():
+                    command_text = command_text.replace(placeholder, quote_cli_arg(value))
+                arguments = command_text if os.name == "nt" else shlex.split(command_text)
+                completed = subprocess.run(
+                    arguments, cwd=directory, env=environment,
+                    capture_output=True, text=True, encoding="utf-8", timeout=30,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+                report = json.loads(completed.stdout)
+                reports.append(report)
+                if len(reports) == 1:
+                    self.assertEqual(config_path.read_bytes(), original)
+                    replacements["<SOURCE_FINGERPRINT>"] = report["source_fingerprint"]
+                elif len(reports) == 2:
+                    self.assertIn("model_routing", json.loads(config_path.read_bytes()))
+                    replacements["<MIGRATION_REPORT>"] = report["report_path"]
+            self.assertEqual(len(reports), 3)
+            self.assertEqual(config_path.read_bytes(), original)
 
     def test_sync_diagnostics_context_shows_sync_command(self):
         context = sync_diagnostics_context(

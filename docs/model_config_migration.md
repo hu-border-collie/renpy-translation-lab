@@ -27,6 +27,7 @@ v1 结构示例见 [合同 fixture](../tests/fixtures/model_routing_config_v1.js
 ## 操作
 
 先手动准备配置副本，使用明确路径；工具不默认定位或自动迁移实际配置。
+以下模块命令在工具根目录运行。
 
 ```powershell
 python -m providers.model_config_migration preview --config <CONFIG_COPY> --json
@@ -35,7 +36,8 @@ python -m providers.model_config_migration rollback --config <CONFIG_COPY> --rep
 ```
 
 `SOURCE_FINGERPRINT` 必须来自刚才的 preview；`MIGRATION_REPORT` 来自 migrate 返回的
-`report_path`。GUI「诊断与运行日志」的任务命令参考也提供这三个模板。
+`report_path`。GUI「诊断与运行日志」的任务命令参考也提供这三个模板，使用迁移脚本的
+完整路径，可复制到其它工作目录执行；CLI 也支持 `python "<TOOL_ROOT>/providers/model_config_migration.py" --help`。
 
 文件迁移要求明确的 `batch.model`，不会读取外部游戏配置的 `batch_model`。纯内存
 API `preview_migration(config, game_config=...)` 可由后续服务传入已确认的项目默认值。
