@@ -7,7 +7,7 @@ from pathlib import Path
 
 import translator_runtime as runtime
 from relation_analyzer import common
-from rpa_safety import (
+from foundation.rpa_safety import (
     DEFAULT_RPA_LIMITS,
     RpaExtractionBudget,
     RpaResourceLimitError,

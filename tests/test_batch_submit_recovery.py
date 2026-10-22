@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import batch_submit_recovery
+from execution import batch_submit_recovery
 import gemini_translate_batch as batch_mod
 
 

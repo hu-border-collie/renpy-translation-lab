@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch
-import translation_core
+from quality_review import translation_core
 from engine_adapters.contracts import Occurrence, OpaqueLocator
 from engine_adapters.coverage import digest_json
 import engine_adapters.versioning as versioning

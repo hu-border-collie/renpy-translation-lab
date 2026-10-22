@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 
-import cli_contract
+from foundation import cli_contract
 
 from .batch_workflow_support import (
     build_recover_submit_cli_args,

@@ -9,9 +9,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import review_index as ri
-import revision_corpus
-import translation_quality
+from quality_review import review_index as ri
+from quality_review import revision_corpus
+from quality_review import translation_quality
 from tests.test_review_index import _write_corpus, _write_findings
 
 
@@ -412,7 +412,7 @@ class TranslationRecordBindingTests(unittest.TestCase):
                 self.assertEqual(entry["identity_v2"], entry["translation_record"]["unit_id"])
 
     def test_double_string_legacy_body_record_and_stale_evidence_are_rejected(self):
-        import translation_core
+        from quality_review import translation_core
 
         script = (
             "translate schinese test_one:\n"
@@ -459,7 +459,7 @@ class TranslationRecordBindingTests(unittest.TestCase):
         import ast
         import gemini_translate_batch as batch
         import translator_runtime as runtime
-        import translation_core
+        from quality_review import translation_core
         from engine_adapters import ProjectDiscoveryRequest, RenPyAdapter, build_translation_snapshot
 
         script = (

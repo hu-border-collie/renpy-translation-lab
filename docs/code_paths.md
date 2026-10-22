@@ -15,13 +15,13 @@
   - `ProjectState.load_translator_config()`：GUI 原始 JSON object 读取。
   - `ProjectState.save_translator_config()`：路径规范化后写回；保存者需传入已保留未知字段的对象。
   - `ProjectState.set_game_root()` / `set_workspace_root()`：项目/工作区切换的即时持久化入口。
-- `config_store.py`：`read_json_object()` / `write_json_object()`，共用写锁与原子替换；
+- `foundation/config_store.py`：`read_json_object()` / `write_json_object()`，共用写锁与原子替换；
   GUI 配置、`api_keys.json` 和 #348 离线迁移都经这里。
 - `gui_qt/settings_schema.py`
   - `SettingField` / `ADVANCED_SETTING_FIELDS`：高级字段定义。
   - `read_advanced_settings()` / `validate_advanced_settings()` / `apply_advanced_settings()`：
     高级字段读取、验证与合并。
-- `project_context_settings.py`
+- `foundation/project_context_settings.py`
   - `load_project_context_settings()` / `save_project_context_settings()`：当前项目
     `<work>/project_context_settings.json`。
   - `read_batch_context_flags()`：项目级覆盖优先、全局默认兜底。
@@ -33,43 +33,43 @@
 
 ## 模型与供应商
 
-- `litellm_provider_config.py`
+- `providers/litellm_provider_config.py`
   - 自定义 Provider ID、URL、环境变量、catalog 与 keyring 约定。
-- `model_profile.py`
+- `providers/model_profile.py`
   - `build_profile_registry()`：旧 `sync.*` / `batch.*` 到内部 profile slot 的只读适配。
   - `resolve_routing_plan()`：冻结 ModelRoutingPlan 和阶段路由。
   - `validate_routing_plan()`：能力、策略和凭据引用检查。
   - `build_sync_backend()`：从已解析 profile 构造实际 Sync adapter。
-- `model_routing_config.py`
+- `providers/model_routing_config.py`
   - `validate_model_routing_section()`：#348 schema-v1 纯验证器。
   - `LEGACY_FIELD_MAPPINGS` / `legacy_fields_present()`：P1 migrator 的冻结输入清单。
-- `model_routing_reader.py`
+- `providers/model_routing_reader.py`
   - `runtime_settings_view()` / `read_routing_plan()`：P2 生产兼容读取；新任务使用 v1，旧配置保持原读取，已有任务优先冻结路由。
-- `sync_model_backend.py` / `litellm_sync_backend.py`：Sync 请求适配与模型目录解析。
+- `providers/sync_model_backend.py` / `providers/litellm_sync_backend.py`：Sync 请求适配与模型目录解析。
 
 ## TranslationPlan 与任务执行
 
-- `translation_plan.py`：计划构造、序列化、fingerprint 和 source/context/model 快照。
+- `quality_review/translation_plan.py`：计划构造、序列化、fingerprint 和 source/context/model 快照。
 - `translator_runtime.py`：生产 Sync plan/build 与 backend 接线。
 - `gemini_translate_batch.py`：Batch build/submit/status/download/check/apply 与阶段请求入口。
-- `sync_run_service.py`：CLI `sync-start` 等命令使用的耐久 Sync start/resume/status/cancel/derive 服务。
+- `execution/sync_run_service.py`：CLI `sync-start` 等命令使用的耐久 Sync start/resume/status/cancel/derive 服务。
 - `gui_qt/sync_translation_workflow.py` → `gemini_translate_batch.py sync-*`：当前 GUI Sync
   入口；步骤状态机只消费 schema-v1 envelope，运行/恢复/取消均经 #347 服务。
-- `sync_run_contracts.py`：状态、退出码、错误码和合法转换。
-- `sync_run_store.py`：SQLite/WAL 持久层；产品 UI 不应直接读取。
+- `execution/sync_run_contracts.py`：状态、退出码、错误码和合法转换。
+- `execution/sync_run_store.py`：SQLite/WAL 持久层；产品 UI 不应直接读取。
 
 ## Engine adapter 与写回
 
 - `engine_adapters/`：项目发现、候选、coverage、occurrence、relocation、
   validation、声明式 writeback plan。
-- `translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
+- `quality_review/translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
 - Batch 与 durable Sync 的 check/preview/apply 测试是写回安全事实；新增入口必须复用，
   不得仅凭模型任务完成状态授权写回。
-- `batch_export.py`：P1 `export_only` 与 P2 `apply_and_export` 的导出路径/回执/事务核心；
+- `execution/batch_export.py`：P1 `export_only` 与 P2 `apply_and_export` 的导出路径/回执/事务核心；
   P2 把 workspace payload、export payload 与 `apply_export_record.json` 放进同一个
   `atomic_io.atomic_write_many_bytes` journal，receipt 的 pending 状态计划由
   `gemini_translate_batch.py` 幂等补记 progress/RAG/latest/manifest。
-- `atomic_io.py`：多文件 prepared/committed journal、strict target guard（事务外修改
+- `foundation/atomic_io.py`：多文件 prepared/committed journal、strict target guard（事务外修改
   fail closed）、expected preimage 与 post-commit validator；P1/P2 之外的 apply/revision
   也继续复用同一恢复内核。
 

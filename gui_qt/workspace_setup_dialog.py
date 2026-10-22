@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from games_registry import WorkspaceScene, plan_workspace_setup
-from renpy_sdk_install import (
+from execution.games_registry import WorkspaceScene, plan_workspace_setup
+from execution.renpy_sdk_install import (
     default_sdk_target,
     existing_valid_sdk,
     format_size_mib,
@@ -781,7 +781,7 @@ class WorkspaceSetupDialog(QDialog):
             # ``finished`` signal instead of fighting over status and buttons.
             return
         self._ok_button.setEnabled(True)
-        from renpy_sdk_install import SdkInstallResult
+        from execution.renpy_sdk_install import SdkInstallResult
 
         if not isinstance(result, SdkInstallResult):
             self._set_sdk_status("SDK 安装返回了未知结果。", error=True)

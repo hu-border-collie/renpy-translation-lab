@@ -8,10 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
-import model_usage_ledger
-import translation_plan
-from external_translation_work import is_work_manifest
-from keyword_glossary_merge import build_merge_keywords_cli_command
+from providers import model_usage_ledger
+from quality_review import translation_plan
+from execution.external_translation_work import is_work_manifest
+from quality_review.keyword_glossary_merge import build_merge_keywords_cli_command
 
 from .batch_workflow_support import (
     build_recover_submit_cli_args,
@@ -229,8 +229,8 @@ def model_config_migration_commands(*, python_exe: str, script_path: str) -> lis
             label=MODEL_CONFIG_MIGRATION_COPY[action],
             command=format_cli_command(
                 python_exe,
-                join_directory_file(parent_directory(script_path), "model_config_migration.py"),
-                [action, "--config", "<CONFIG_COPY>", *extra, "--json"],
+                "-m",
+                ["providers.model_config_migration", action, "--config", "<CONFIG_COPY>", *extra, "--json"],
             ),
         )
         for action, extra in (

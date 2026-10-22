@@ -11,11 +11,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import project_analysis as pa
-import project_analysis_generate as gen
-import project_analysis_routes as routes
-import prompt_context
-import translation_core
+from quality_review import project_analysis as pa
+from quality_review import project_analysis_generate as gen
+from quality_review import project_analysis_routes as routes
+from context_engine import prompt_context
+from quality_review import translation_core
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "project_analysis_routes_minimal"
 SCRIPT = FIXTURE_DIR / "script.rpy"

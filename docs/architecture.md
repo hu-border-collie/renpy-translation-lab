@@ -18,26 +18,26 @@
 2. **项目与配置**
    - `translator_runtime.py` 从代码默认值、`api_keys.json`、环境变量和
      `translator_config.json` 构造运行时快照。
-   - `gui_qt/project_state.py` 负责 GUI 项目路径，原始 JSON 读取/保存委托给共用 `config_store.py`。
+   - `gui_qt/project_state.py` 负责 GUI 项目路径，原始 JSON 读取/保存委托给共用 `foundation/config_store.py`。
    - `gui_qt/settings_schema.py` 描述高级设置字段；当前 Settings 总体 load/save/dirty
      编排仍位于 `gui_qt/app.py`。
    - 当前项目的 `project_context_settings.json` 保存 RAG / 原文索引 / 项目分析开关；
      全局默认值仍在 `translator_config.json`。
 3. **模型路由与请求计划**
-   - `model_profile.py` 把现有 `sync.*` / `batch.*` 只读解析为 provider-neutral
+   - `providers/model_profile.py` 把现有 `sync.*` / `batch.*` 只读解析为 provider-neutral
      ModelRoutingPlan。它的 `primary`/`batch` 等 ID 是兼容 slot，不是长期用户 ID。
-   - `translation_plan.py` 冻结 source snapshot、模型路由、上下文、prompt/schema 和预算。
-   - #348 的 schema-v1 合同位于 `model_routing_config.py`；P2 已在兼容入口接入生产读取。
-   - `model_routing_reader.py` / `model_routing_migration.py` 提供兼容读取和迁移候选，
-     `model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚。
+   - `quality_review/translation_plan.py` 冻结 source snapshot、模型路由、上下文、prompt/schema 和预算。
+   - #348 的 schema-v1 合同位于 `providers/model_routing_config.py`；P2 已在兼容入口接入生产读取。
+   - `providers/model_routing_reader.py` / `providers/model_routing_migration.py` 提供兼容读取和迁移候选，
+     `providers/model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚。
 4. **执行与耐久状态**
-   - CLI 耐久路径：`sync-start` → `sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
-     `sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
+   - CLI 耐久路径：`sync-start` → `execution/sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
+     `execution/sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
    - GUI Sync 页由 `gui_qt/sync_translation_workflow.py` 驱动 #347 的
      `sync-start` / `sync-resume` / `sync-status` / `sync-cancel` / `sync-derive`，
      写回经 `check <RUN>` → `apply <RUN>`；GUI 不读取运行数据库，也不复制任务状态机。
      统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。
-   - `sync_request.py` 持有共享请求执行、响应提取与重试。`SyncRunService` 直接调用它，
+   - `execution/sync_request.py` 持有共享请求执行、响应提取与重试。`SyncRunService` 直接调用它，
      不再为执行请求导入 CLI；`gemini_translate_batch.run_sync_request` 只装配依赖并单向转发。
      `SyncRequestRuntime` 是当前进程内的短期依赖：生产 service 创建时绑定 timeout、
      深复制 custom providers，并把 Gemini key 列表、当前选择及 SDK client factory 绑定到任务；

@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import batch_export
+from execution import batch_export
 
 EXPORT_ONLY_MODE = "export-only"
 APPLY_EXPORT_MODE = "apply-export"

@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
 from engine_adapters import coverage as engine_coverage
 

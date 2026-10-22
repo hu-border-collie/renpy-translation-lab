@@ -1,6 +1,6 @@
 import unittest
 
-from sync_model_backend import sync_error_category
+from providers.sync_model_backend import sync_error_category
 
 
 class LiteLLMErrorClassificationTests(unittest.TestCase):

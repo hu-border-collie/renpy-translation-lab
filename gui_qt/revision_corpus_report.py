@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import cli_contract
+from foundation import cli_contract
 
 from .translation_workflow import WorkflowUpdate
 from .user_copy import REVISION_CORPUS_COPY

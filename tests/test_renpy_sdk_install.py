@@ -9,7 +9,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-import renpy_sdk_install as sdk
+from execution import renpy_sdk_install as sdk
 
 
 def _make_sdk_zip(path: Path, *, root_name: str = "renpy-8.5.3-sdk", bad_member: str | None = None) -> str:

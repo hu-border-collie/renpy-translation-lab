@@ -13,7 +13,7 @@ import json
 import unittest
 from pathlib import Path
 
-import translation_quality as quality
+from quality_review import translation_quality as quality
 
 FIXTURE_PATH = (
     Path(__file__).parent

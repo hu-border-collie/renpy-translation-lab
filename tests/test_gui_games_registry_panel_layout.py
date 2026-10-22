@@ -39,7 +39,7 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         self.window.deleteLater()
 
     def test_registry_worker_is_owned_by_main_window_shutdown(self) -> None:
-        import games_registry as registry
+        from execution import games_registry as registry
 
         from gui_qt.games_registry_actions import RegistryActionResult
         from gui_qt.games_registry_worker import RegistryRefreshWorker
@@ -294,7 +294,7 @@ class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
         """Annotated statuses like 已完成（6.7 增量） must not collapse to 待确认."""
         from gui_qt.games_registry_panel import _set_status_combo_value
         from gui_qt.widget_helpers import NoWheelComboBox
-        from games_registry import TRANSLATION_STATUSES
+        from execution.games_registry import TRANSLATION_STATUSES
 
         combo = NoWheelComboBox()
         combo.addItems(sorted(TRANSLATION_STATUSES))

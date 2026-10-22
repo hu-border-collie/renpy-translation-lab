@@ -48,7 +48,7 @@ class GuiBootstrapReportTests(unittest.TestCase):
 
     def test_read_batch_context_flags_propagates_resolver_failures(self):
         with mock.patch(
-            "project_context_settings.resolve_batch_context_flags",
+            "foundation.project_context_settings.resolve_batch_context_flags",
             side_effect=PermissionError("denied"),
         ):
             with self.assertRaises(PermissionError):

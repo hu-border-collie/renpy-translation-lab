@@ -259,7 +259,7 @@ class TargetLanguageConfigTests(unittest.TestCase):
             _restore_runtime_path_settings(snapshot)
 
     def test_japanese_catalog_still_requires_chinese_model_output(self):
-        import translation_core
+        from quality_review import translation_core
         self.assertIn(
             'Simplified Chinese',
             translation_core.build_canonical_translation_system_instruction([]),

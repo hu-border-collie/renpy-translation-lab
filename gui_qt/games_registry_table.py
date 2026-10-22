@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from games_registry import (
+from execution.games_registry import (
     LAYOUT_STATUS_LABELS,
     PLAY_STATUSES,
     TRANSLATION_STATUSES,

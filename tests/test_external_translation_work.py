@@ -9,12 +9,12 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch
-import external_translation_work as work
-import sync_translation_preview
-import translation_quality
-import revision_corpus
-import atomic_io
-from cli_contract import MachineContractError, strict_exit_code, success_envelope
+from execution import external_translation_work as work
+from execution import sync_translation_preview
+from quality_review import translation_quality
+from quality_review import revision_corpus
+from foundation import atomic_io
+from foundation.cli_contract import MachineContractError, strict_exit_code, success_envelope
 
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'external_work' / 'chapter.rpy'

@@ -16,10 +16,10 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import prompt_context
-import rag_memory
-import story_memory
-import translation_core
+from context_engine import prompt_context
+from context_engine import rag_memory
+from context_engine import story_memory
+from quality_review import translation_core
 import translator_runtime as runtime
 
 
@@ -455,7 +455,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
                     ],
                 )
 
-                from model_routing_migration import preview_migration
+                from providers.model_routing_migration import preview_migration
 
                 routing_fixture = (
                     Path(__file__).parent
@@ -901,7 +901,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('chunk_summary', system_text)
 
     def test_create_keyword_package_uses_frozen_route_model(self):
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent
@@ -1293,7 +1293,7 @@ class BatchRepairRegressionTests(unittest.TestCase):
         self.assertIn('current_translation', target_text)
 
     def test_create_revision_package_uses_frozen_route_model(self):
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent

@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch
-import revision_corpus
+from quality_review import revision_corpus
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "golden_revision_minimal" / "tl"

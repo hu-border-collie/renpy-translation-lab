@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from games_registry import (
+from execution.games_registry import (
     find_project,
     load_registry,
     resolve_doctor_mode,

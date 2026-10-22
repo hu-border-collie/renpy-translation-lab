@@ -9,11 +9,11 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
-import atomic_io
+from foundation import atomic_io
 import gemini_translate_batch as batch
-import model_usage_ledger as usage
+from providers import model_usage_ledger as usage
 from gui_qt.diagnostics_context import build_diagnostics_context
-from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationResult
+from providers.sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationResult
 
 
 class ModelUsageLedgerTests(unittest.TestCase):
@@ -989,7 +989,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
     def test_sync_path_buffers_records_until_flush(self):
         import translator_runtime as runtime
-        from sync_model_backend import SyncGenerationResult, SYNC_EXECUTION_MODE
+        from providers.sync_model_backend import SyncGenerationResult, SYNC_EXECUTION_MODE
 
         with tempfile.TemporaryDirectory() as game_root:
             previous_base = runtime.BASE_DIR
@@ -1010,7 +1010,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
             fake_backend.generate.return_value = fake_result
             try:
                 with mock.patch(
-                    "litellm_sync_backend.LiteLLMSyncBackend",
+                    "providers.litellm_sync_backend.LiteLLMSyncBackend",
                     return_value=fake_backend,
                 ), mock.patch.object(
                     runtime, "get_current_model", return_value="provider/model"

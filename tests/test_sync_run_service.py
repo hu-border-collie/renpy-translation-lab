@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from durable_sync_executor import ProviderFailure, ProviderOutcome
-from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import (
+from execution.durable_sync_executor import ProviderFailure, ProviderOutcome
+from execution.sync_retry_policy import ExecutorPolicy
+from execution.sync_run_contracts import (
     ErrorCategory,
     ErrorCode,
     LineageKind,
@@ -18,13 +18,13 @@ from sync_run_contracts import (
     SyncRunError,
     build_run_id,
 )
-from sync_run_service import (
+from execution.sync_run_service import (
     ProductionSyncBackendAdapter,
     SyncRunService,
     build_production_sync_run_service,
     find_latest_run,
 )
-from sync_run_store import SyncRunStore
+from execution.sync_run_store import SyncRunStore
 
 
 def plan_build():
@@ -519,7 +519,7 @@ class ProductionBackendAdapterTests(unittest.TestCase):
                 'usage_metadata': {'total_tokens': 1},
             }
             with mock.patch(
-                'sync_request.run_sync_request',
+                'execution.sync_request.run_sync_request',
                 return_value=response,
             ) as generate:
                 snapshot = service.start(Context.plan_build)

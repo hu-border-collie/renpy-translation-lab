@@ -435,7 +435,7 @@ seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来
 
 ## RAG store 性能基准
 
-为了在大项目规模下评估本地 RAG Store（`JsonRagStore`）的性能极限并防止退化，项目中包含了一个离线性能基准脚本 [benchmark_rag_store.py](../benchmark_rag_store.py)。
+为了在大项目规模下评估本地 RAG Store（`JsonRagStore`）的性能极限并防止退化，项目中包含了一个离线性能基准脚本 [benchmark_rag_store.py](../context_engine/benchmark_rag_store.py)。
 
 ### 运行方式
 
@@ -443,10 +443,10 @@ seed 中的关系统一标记为 `candidate`，只包含共场景、对话往来
 
 ```bash
 # 运行默认规模测试（100, 1000, 10000 条记录）
-python benchmark_rag_store.py
+python -m context_engine.benchmark_rag_store
 
 # 快速 Smoke 测试或自定义参数
-python benchmark_rag_store.py --sizes 10,100 --queries 5 --dim 768
+python -m context_engine.benchmark_rag_store --sizes 10,100 --queries 5 --dim 768
 ```
 
 ### 测量指标说明
@@ -472,7 +472,7 @@ python benchmark_rag_store.py --sizes 10,100 --queries 5 --dim 768
 以下结果来自 2026-06-16 在本地 Windows 开发环境运行默认命令：
 
 ```bash
-python benchmark_rag_store.py
+python -m context_engine.benchmark_rag_store
 ```
 
 参数为 `--sizes 100,1000,10000 --queries 20 --dim 768 --seed 42`。这些数字不是测试断言，主要用于记录当前实现的大致量级；不同机器、磁盘和 Python 版本会有波动。

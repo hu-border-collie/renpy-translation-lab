@@ -6,10 +6,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import cli_contract
-import model_profiles_editor as editor
+from foundation import cli_contract
+from providers import model_profiles_editor as editor
 from gui_qt.user_copy import MODEL_PROFILES_PAGE_COPY
-from model_routing_migration import preview_migration
+from providers.model_routing_migration import preview_migration
 
 try:
     from PySide6.QtWidgets import QApplication, QGroupBox
@@ -84,7 +84,7 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertEqual(self.page.profile_panels.width(), self.page.notice_group.width())
 
     def test_create_section_stores_a_valid_gemini_batch_default(self) -> None:
-        from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+        from providers.gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
 
         self.page.load({})
         self.page.create_btn.click()
@@ -120,7 +120,7 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertTrue(self.page.profiles_group.isHidden())
         self.assertEqual(self.page.notice_group.title(), "需先迁移旧模型配置")
         self.assertIn("诊断与运行日志", self.page.hint_label.text())
-        self.assertIn("model_config_migration.py", self.page.hint_label.text())
+        self.assertIn("providers.model_config_migration", self.page.hint_label.text())
         self.assertTrue(self.page.legacy_fields_label.isHidden())
         self.assertIn("2 项", self.page.legacy_fields_toggle.text())
         self.page.legacy_fields_toggle.click()

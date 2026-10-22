@@ -10,15 +10,15 @@ from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
-import model_profile
-import sync_request
+from providers import model_profile
+from execution import sync_request
 import translator_runtime as runtime
-from litellm_provider_config import CustomLiteLLMProvider, ProviderApiKeyStore
-from litellm_sync_backend import LiteLLMBackendError
-from openai_compatible_sync_backend import HTTPResponse
-from sync_run_contracts import build_run_id
-from sync_run_service import build_production_sync_run_service
-from sync_run_store import SyncRunStore
+from providers.litellm_provider_config import CustomLiteLLMProvider, ProviderApiKeyStore
+from providers.litellm_sync_backend import LiteLLMBackendError
+from providers.openai_compatible_sync_backend import HTTPResponse
+from execution.sync_run_contracts import build_run_id
+from execution.sync_run_service import build_production_sync_run_service
+from execution.sync_run_store import SyncRunStore
 from tests.test_sync_run_service import plan_build
 
 
@@ -284,9 +284,9 @@ class DurableRequestIsolationTests(unittest.TestCase):
         fake_litellm.completion = completion
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.dict(sys.modules, {'litellm': fake_litellm}), \
-                mock.patch('litellm_provider_config.load_provider_api_key',
+                mock.patch('providers.litellm_provider_config.load_provider_api_key',
                            return_value='first-secret'), \
-                mock.patch('litellm_provider_config.load_provider_key_store',
+                mock.patch('providers.litellm_provider_config.load_provider_key_store',
                            return_value=store), \
                 mock.patch.object(runtime, 'CUSTOM_LITELLM_PROVIDERS',
                                   {'customa': provider}):
@@ -324,7 +324,7 @@ class DurableRequestIsolationTests(unittest.TestCase):
             return replace(plan, profiles={**plan.profiles, route.profile_id: profile})
 
         with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch('openai_compatible_sync_backend._default_transport',
+                mock.patch('providers.openai_compatible_sync_backend._default_transport',
                            side_effect=transport):
             service_a = self._service(Path(tmp) / 'a',
                                       plan=direct_plan('openai/a', 'https://a.test/v1'))

@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest import mock
 
-import cli_discovery
+from foundation import cli_discovery
 import gemini_translate_batch as batch
 
 

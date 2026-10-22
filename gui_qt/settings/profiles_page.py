@@ -32,10 +32,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import model_profiles_editor as editor
-import openai_compatible_provider_config as openai_compatible_presets
-from model_profile import ADAPTER_OPENAI_COMPATIBLE
-from openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
+from providers import model_profiles_editor as editor
+from providers import openai_compatible_provider_config as openai_compatible_presets
+from providers.model_profile import ADAPTER_OPENAI_COMPATIBLE
+from providers.openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
 from ..widget_helpers import NoWheelComboBox
 from .page_chrome import (
@@ -1097,7 +1097,7 @@ class ProfilesSettingsPage(QObject):
             # Defensive guard: the button is disabled in these states, and
             # blank creation must never overwrite or shadow existing config.
             return
-        from gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
+        from providers.gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
 
         try:
             section = editor.initial_section(

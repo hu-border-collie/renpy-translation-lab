@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import translation_core
+from quality_review import translation_core
 from engine_adapters.contracts import Occurrence, OpaqueLocator
 from engine_adapters.coverage import digest_json
 from engine_adapters.versioning import reconcile_project_snapshots

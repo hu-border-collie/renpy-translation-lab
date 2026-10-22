@@ -5,13 +5,13 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
-from embedding_backend import (
+from context_engine.embedding_backend import (
     EmbeddingBackendError,
     EmbeddingContractError,
     EmbeddingErrorCategory,
     EmbeddingTaskType,
 )
-from embedding_runtime import (
+from context_engine.embedding_runtime import (
     BACKEND_GEMINI,
     BACKEND_OPENAI_COMPATIBLE,
     EmbeddingRuntimeError,
@@ -24,7 +24,7 @@ from embedding_runtime import (
     public_error_diagnostics,
     semantic_task_type,
 )
-from rag_memory import EmbeddingStoreIdentityError, JsonRagStore, JsonSourceIndexStore
+from context_engine.rag_memory import EmbeddingStoreIdentityError, JsonRagStore, JsonSourceIndexStore
 
 
 class _GeminiModels:

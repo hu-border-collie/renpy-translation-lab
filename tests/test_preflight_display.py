@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-import preflight_display
+from quality_review import preflight_display
 
 
 def known_cost(**overrides):

@@ -21,8 +21,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-import atomic_io
-from atomic_io import (
+from foundation import atomic_io
+from foundation.atomic_io import (
     atomic_write,
     atomic_write_json,
     atomic_write_jsonl,
@@ -35,20 +35,20 @@ from atomic_io import (
     sha256_text,
     write_latest_manifest_locked,
 )
-from rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
-import advanced_context
-import embedding_runtime
-from embedding_backend import EmbeddingBackendError, EmbeddingContractError
-import batch_export
-import batch_cost_estimate
-import batch_non_chinese_rules
-import preflight_display
-import batch_submit_recovery
-import cli_contract
-import cli_discovery
-import external_translation_work
-import doctor_recommendations as doctor_rec
-import generation_target
+from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
+from context_engine import advanced_context
+from context_engine import embedding_runtime
+from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
+from execution import batch_export
+from providers import batch_cost_estimate
+from quality_review import batch_non_chinese_rules
+from quality_review import preflight_display
+from execution import batch_submit_recovery
+from foundation import cli_contract
+from foundation import cli_discovery
+from execution import external_translation_work
+from foundation import doctor_recommendations as doctor_rec
+from quality_review import generation_target
 from engine_adapters.contracts import (
     CANDIDATE_SCHEMA_VERSION,
     COVERAGE_SCHEMA_VERSION,
@@ -76,25 +76,25 @@ from engine_adapters.writeback import (
     render_writeback_plan,
     source_snapshot_fingerprint,
 )
-import keyword_glossary_merge
-import keyword_history
-import model_profile
-import model_usage_ledger
-import prompt_context
-import quality_report_export
-import revision_corpus
-import revision_proposals
-import revision_selection
-import review_index
-import translation_ab_experiment
-import story_memory
-import sync_translation_preview
-import translation_core
-import translation_plan
-import translation_quality
+from quality_review import keyword_glossary_merge
+from quality_review import keyword_history
+from providers import model_profile
+from providers import model_usage_ledger
+from context_engine import prompt_context
+from quality_review import quality_report_export
+from quality_review import revision_corpus
+from quality_review import revision_proposals
+from quality_review import revision_selection
+from quality_review import review_index
+from execution import translation_ab_experiment
+from context_engine import story_memory
+from execution import sync_translation_preview
+from quality_review import translation_core
+from quality_review import translation_plan
+from quality_review import translation_quality
 import translator_runtime as runtime
-import sync_request
-from sync_request import (
+from execution import sync_request
+from execution.sync_request import (
     serialize_unknown,
     extract_text_from_response_payload,
     extract_finish_reason,
@@ -103,14 +103,14 @@ from sync_request import (
     _require_task_route,
     _sync_result_to_dict,
 )
-from gemini_model_catalog import (
+from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     filter_gemini_generation_config,
     is_gemini_3_model,
 )
-from project_version import __version__
-from sync_model_backend import (
+from foundation.project_version import __version__
+from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     normalize_sync_timeout_seconds,
     sync_error_category,
@@ -173,7 +173,7 @@ REVIEW_INDEX_COMMANDS = frozenset(
 def _profile_stage_choices():
     """Derive stage choices from the shared editor core (no duplicated enum)."""
 
-    import model_profiles_editor as editor
+    from providers import model_profiles_editor as editor
 
     return tuple(editor.STAGE_ORDER)
 
@@ -181,7 +181,7 @@ def _profile_stage_choices():
 def _profile_strategy_choices():
     """Derive execution-strategy choices from the shared editor core."""
 
-    import model_profiles_editor as editor
+    from providers import model_profiles_editor as editor
 
     return tuple(editor.STRATEGY_ORDER)
 MACHINE_OUTPUT_COMMANDS = frozenset(
@@ -600,7 +600,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
 
     config = load_json_file(legacy.CONFIG_FILE)
     translator_config = load_json_file(legacy.TRANSLATOR_CONFIG)
-    from model_routing_reader import runtime_settings_view
+    from providers.model_routing_reader import runtime_settings_view
     routing_load_error = None
     try:
         translator_config = runtime_settings_view(translator_config)
@@ -610,7 +610,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
         routing_load_error = exc
     # Batch loaders can also be invoked directly by embedded callers.
     # Publish the validated section into the shared job-scoped runtime snapshot.
-    from model_routing_reader import checked_section, section_custom_providers
+    from providers.model_routing_reader import checked_section, section_custom_providers
     if "model_routing" in translator_config or legacy.MODEL_ROUTING_CONFIG is not None:
         with legacy.locked_runtime_state():
             runtime_snapshot = legacy.snapshot_runtime_config()
@@ -626,7 +626,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
                 )
                 runtime_snapshot.custom_litellm_providers = {}
             else:
-                from litellm_provider_config import custom_provider_registry
+                from providers.litellm_provider_config import custom_provider_registry
 
                 sync = translator_config.get("sync")
                 if not isinstance(sync, dict):
@@ -641,7 +641,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
             legacy.apply_runtime_config(runtime_snapshot)
     # Per-project RAG / source-index flags (work/project_context_settings.json).
     try:
-        from project_context_settings import apply_project_context_settings_to_config
+        from foundation.project_context_settings import apply_project_context_settings_to_config
 
         apply_project_context_settings_to_config(translator_config, legacy.BASE_DIR)
     except Exception as exc:
@@ -957,7 +957,7 @@ def load_batch_settings(*, tolerate_routing_errors=False):
 
 def compute_current_project_analysis_fingerprint(base_dir=None, store_dir=None):
     """Recompute structure fingerprint from scripts under build-time roots when known."""
-    from project_analysis import compute_current_project_analysis_fingerprint as impl
+    from quality_review.project_analysis import compute_current_project_analysis_fingerprint as impl
 
     resolved_store = store_dir if store_dir is not None else (PROJECT_ANALYSIS_STORE_DIR or None)
     return impl(
@@ -980,7 +980,7 @@ def load_injectable_project_context_for_prompts(file_rel_path='', line_numbers=N
     }
     if not PROJECT_ANALYSIS_ENABLED or not PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         return empty
-    from project_analysis import (
+    from quality_review.project_analysis import (
         KIND_LABEL,
         load_injectable_project_context,
         resolve_project_analysis_store,
@@ -4283,7 +4283,7 @@ def _build_retry_subchunk_plan_request(parent_chunk, subchunk):
         ),
         context_assembly=assembly.to_dict(),
     )
-    import structure_protection
+    from quality_review import structure_protection
     parent_protection = (parent_chunk.get('transport_metadata') or {}).get(structure_protection.KEY)
     if parent_protection is not None:
         structure_protection.validate_parent(
@@ -7047,7 +7047,7 @@ def _load_final_review_glossary_terms(glossary_path, limit=200):
 
 def collect_project_analysis_optional_inputs(store_dir=None, base_dir=None):
     """Collect bounded, non-blocking context layers with explicit provenance."""
-    from project_analysis import resolve_project_analysis_store
+    from quality_review.project_analysis import resolve_project_analysis_store
 
     store = resolve_project_analysis_store(store_dir, base_dir=base_dir)
     labels = store.load_summaries("label")
@@ -7134,7 +7134,7 @@ def collect_project_analysis_optional_inputs(store_dir=None, base_dir=None):
 
 def _collect_final_review_context_snapshot(translation_items):
     """Build the frozen context snapshot for a final-review campaign."""
-    import final_review as fr
+    from quality_review import final_review as fr
 
     include_filters = []
     raw_include = getattr(legacy, 'INCLUDE_FILTERS', None) or getattr(
@@ -7150,7 +7150,7 @@ def _collect_final_review_context_snapshot(translation_items):
     pa_lineage = None
     if PROJECT_ANALYSIS_ENABLED and PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         try:
-            from project_analysis import (
+            from quality_review.project_analysis import (
                 collect_project_analysis_status,
                 load_injectable_project_brief,
             )
@@ -7250,7 +7250,7 @@ def freeze_final_review_routing_plan():
     v1 config whose ``defaults.execution_strategy`` is sync from silently
     switching an existing final-review path from Batch to sync.
     """
-    from model_routing_reader import read_routing_plan
+    from providers.model_routing_reader import read_routing_plan
 
     section = legacy.MODEL_ROUTING_CONFIG
     try:
@@ -7293,7 +7293,7 @@ def create_final_review_package(
     require_zero_pending=None,
 ):
     """Build a report-only final-review campaign package (no LLM, no .rpy writes)."""
-    import final_review as fr
+    from quality_review import final_review as fr
 
     if not FINAL_REVIEW_ENABLED:
         raise SystemExit(
@@ -7373,7 +7373,7 @@ def create_final_review_package(
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
         display_name = f'{FINAL_REVIEW_DISPLAY_NAME_PREFIX}-{guess_project_slug()}-{timestamp}'
 
-    import final_review_llm as fr_llm
+    from quality_review import final_review_llm as fr_llm
 
     requests_path = os.path.join(package_dir, fr.REQUESTS_JSONL_FILENAME)
     if strategy == fr.EXECUTION_STRATEGY_SYNC:
@@ -7465,7 +7465,7 @@ def create_final_review_package(
 
 
 def run_final_review_status(target=None, as_json=False):
-    import final_review as fr
+    from quality_review import final_review as fr
 
     package_target = manifest_path_for_target(target)
     try:
@@ -7480,7 +7480,7 @@ def run_final_review_status(target=None, as_json=False):
 
 
 def run_final_review_export(target=None, output_jsonl='', output_markdown=''):
-    import final_review as fr
+    from quality_review import final_review as fr
 
     package_target = manifest_path_for_target(target)
     try:
@@ -7522,8 +7522,8 @@ def run_final_review_resume(target=None, force=False):
     stale detection matches the current workspace, not only the frozen build
     snapshot. Request prompts also inject the live prompt_context block.
     """
-    import final_review as fr
-    import final_review_llm as fr_llm
+    from quality_review import final_review as fr
+    from quality_review import final_review_llm as fr_llm
 
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
@@ -7604,8 +7604,8 @@ def run_final_review_run_sync(
     fail_fast=False,
 ):
     """Execute a sync final-review campaign through the frozen stage route."""
-    import final_review as fr
-    import final_review_sync as fr_sync
+    from quality_review import final_review as fr
+    from quality_review import final_review_sync as fr_sync
 
     if int(limit or 0) < 0:
         raise cli_contract.MachineContractError(
@@ -7825,8 +7825,8 @@ def run_final_review_run_sync(
 
 def run_final_review_ingest_results(target=None, result_path='', allow_stale_results=False):
     """Parse downloaded Batch/sync results into findings (report-only)."""
-    import final_review as fr
-    import final_review_llm as fr_llm
+    from quality_review import final_review as fr
+    from quality_review import final_review_llm as fr_llm
 
     package_target = manifest_path_for_target(target)
     package = fr.load_campaign_package(package_target)
@@ -7874,7 +7874,7 @@ def run_final_review_ingest_results(target=None, result_path='', allow_stale_res
 
 
 def run_final_review_create_revisions(target=None, finding_ids=None):
-    import final_review_revision
+    from quality_review import final_review_revision
     import sys
 
     return final_review_revision.create_revision_package(sys.modules[__name__], target, finding_ids)
@@ -10093,7 +10093,7 @@ def validate_result_contract(payload, mode, expected_items, *, request=None, can
         allow_legacy=True,
     )
     if request is not None and mode == translation_core.MODE_TRANSLATION:
-        import structure_protection
+        from quality_review import structure_protection
         report = structure_protection.validate_report(
             report, request, expected_items, canonical=canonical,
         )
@@ -12280,8 +12280,8 @@ def preview_revisions(
     )
     save_manifest(manifest, update_latest=should_update_latest)
     if manifest.get('final_review_source'):
-        import final_review as fr
-        import final_review_revision
+        from quality_review import final_review as fr
+        from quality_review import final_review_revision
 
         final_review_revision.sync_linked_findings(manifest, fr.REVISION_STATE_PREVIEWED)
     print_revision_summary(summary)
@@ -13412,8 +13412,8 @@ def probe_requests(target=None, limit=3, offset=0, api_key_index=None):
 
 def _resolve_durable_sync_store(target):
     """Return a durable store for an explicit RUN selector/path, else ``None``."""
-    from sync_run_contracts import validate_run_id
-    from sync_run_store import SyncRunStore
+    from execution.sync_run_contracts import validate_run_id
+    from execution.sync_run_store import SyncRunStore
 
     raw = str(target or '').strip()
     if not raw:
@@ -13458,8 +13458,8 @@ def _verified_store_artifact(store, kind):
 
 
 def _build_durable_sync_check_manifest(store):
-    from sync_result_export import export_run_artifacts
-    from sync_run_contracts import RunStatus
+    from execution.sync_result_export import export_run_artifacts
+    from execution.sync_run_contracts import RunStatus
 
     run = store.get_run()
     if RunStatus(str(run['status'])) not in {
@@ -15837,8 +15837,8 @@ def apply_revisions(target=None, force=False):
     require_manifest_project_match(manifest, 'apply-revisions')
     _require_valid_revision_preview(manifest)
     if manifest.get('final_review_source'):
-        import final_review as fr
-        import final_review_revision
+        from quality_review import final_review as fr
+        from quality_review import final_review_revision
 
         final_review_revision.sync_linked_findings(manifest, fr.REVISION_STATE_PREVIEWED)
     transaction_path = os.path.join(
@@ -16042,8 +16042,8 @@ def apply_revisions(target=None, force=False):
         manifest['revision_applied_at'] = now
     save_manifest(manifest, update_latest=manifest.get('execution') != 'sync')
     if manifest.get('final_review_source'):
-        import final_review as fr
-        import final_review_revision
+        from quality_review import final_review as fr
+        from quality_review import final_review_revision
 
         if apply_state in ('applied', 'partial'):
             applied_lines_by_file = {
@@ -17180,7 +17180,7 @@ def _build_repair_job(file_rel_path, file_path, entries, target_group, context_b
 
 
 def build_repair_request(job, model=None):
-    import structure_protection
+    from quality_review import structure_protection
     if job.get('engine', 'renpy') != 'renpy':
         raise ValueError('protection.unsupported_engine')
     request_id = 'repair-' + structure_protection.digest({'key': job['key'], 'items': job['items']})[:24]
@@ -17275,7 +17275,7 @@ def _runtime_keyring_has_credential(provider_id):
     category. Only a successful empty read becomes a missing-reference issue.
     """
     try:
-        from litellm_provider_config import load_provider_api_key
+        from providers.litellm_provider_config import load_provider_api_key
 
         return bool(load_provider_api_key(provider_id))
     except Exception:
@@ -17323,7 +17323,7 @@ def freeze_runtime_routing_plan(
             created_at=created_at,
             config_origins=_routing_config_origins(),
         )
-        from model_routing_reader import require_entrypoint_strategy
+        from providers.model_routing_reader import require_entrypoint_strategy
         if legacy.MODEL_ROUTING_CONFIG is not None:
             require_entrypoint_strategy(plan, execution=execution, stages=required_stages)
     except (ValueError, TypeError) as exc:
@@ -17420,7 +17420,7 @@ def build_project_analysis_sync_runner(plan, route):
     Freezes the TaskRoute/plan at construction time so retries and later
     config mutations cannot switch profiles.
     """
-    from sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationResult
+    from providers.sync_model_backend import SYNC_EXECUTION_MODE, SyncGenerationResult
 
     route = _require_task_route(route)
 
@@ -19194,7 +19194,7 @@ def collect_doctor_context_status():
                 source_index_status['sync_embedding_action'] = sync_compat.action
 
     try:
-        from project_analysis import collect_project_analysis_status
+        from quality_review.project_analysis import collect_project_analysis_status
 
         project_analysis_status = collect_project_analysis_status()
         project_analysis_status.update(
@@ -19357,7 +19357,7 @@ def collect_glossary_story_graph_conflicts(glossary_path='', story_graph_path=''
 
 
 def collect_doctor_project_assets_status(base_dir):
-    from project_asset_paths import (
+    from foundation.project_asset_paths import (
         expected_project_asset_paths,
         paths_match_project,
         resolve_configured_glossary_value,
@@ -22701,7 +22701,7 @@ def _durable_sync_root_dir():
 
 
 def _durable_sync_store_only_service(*, deliver_usage=False):
-    from sync_run_service import SyncRunService
+    from execution.sync_run_service import SyncRunService
 
     return SyncRunService(
         _durable_sync_root_dir(),
@@ -22717,7 +22717,7 @@ def _durable_sync_store_only_service(*, deliver_usage=False):
 
 
 def _durable_sync_production_service(*, require_provider):
-    from sync_run_service import build_production_sync_run_service
+    from execution.sync_run_service import build_production_sync_run_service
 
     context = legacy.prepare_sync_translation_execution_context(
         require_provider=require_provider,
@@ -22789,9 +22789,9 @@ def _print_durable_sync_snapshot(snapshot):
 
 def run_durable_sync_command(args):
     """Dispatch #347's five durable commands through the pure service API."""
-    from sync_run_contracts import RunStatus
-    from sync_run_service import SyncRunService
-    from sync_run_store import SyncRunStore
+    from execution.sync_run_contracts import RunStatus
+    from execution.sync_run_service import SyncRunService
+    from execution.sync_run_store import SyncRunStore
 
     command = str(args.command or '')
     root_dir = _durable_sync_root_dir()
@@ -22810,7 +22810,7 @@ def run_durable_sync_command(args):
             latest=latest,
         )
     elif command == 'sync-start':
-        from model_routing_reader import primary_profile_override
+        from providers.model_routing_reader import primary_profile_override
 
         with primary_profile_override(getattr(args, 'profile', '') or ''):
             service, context = _durable_sync_production_service(require_provider=True)
@@ -22887,7 +22887,7 @@ def _read_model_routing_config():
 
     import copy as _copy
 
-    import config_store
+    from foundation import config_store
 
     config = config_store.read_json_object(
         _translator_config_path(),
@@ -22912,7 +22912,7 @@ def _read_model_routing_config():
 
 
 def _require_valid_routing_section(section, command):
-    import model_profiles_editor as profiles_editor
+    from providers import model_profiles_editor as profiles_editor
 
     issues = profiles_editor.section_issues(section)
     if issues:
@@ -22927,7 +22927,7 @@ def _require_valid_routing_section(section, command):
 
 
 def _write_model_routing_section(config, section, *, changed, summary=None):
-    import config_store
+    from foundation import config_store
 
     _require_valid_routing_section(section, 'profiles-write')
     if changed:
@@ -22941,7 +22941,7 @@ def _write_model_routing_section(config, section, *, changed, summary=None):
 def run_profile_command(args):
     """Run one ModelProfile configuration command (offline, no provider calls)."""
 
-    import model_profiles_editor as profiles_editor
+    from providers import model_profiles_editor as profiles_editor
 
     command = str(args.command or '')
     config, section = _read_model_routing_config()
@@ -22974,7 +22974,7 @@ def run_profile_command(args):
         return {'issues': []}
 
     if command == 'profiles-probe':
-        import model_capability_probe as capability_probe
+        from providers import model_capability_probe as capability_probe
 
         if str(getattr(args, 'acknowledge_billable_request', '') or '') != (
             capability_probe.BILLABLE_ACK_TOKEN
@@ -23009,8 +23009,8 @@ def run_profile_command(args):
         return report
 
     if command == 'profiles-list-models':
-        import openai_compatible_model_catalog as catalog
-        from sync_model_backend import SyncBackendError
+        from providers import openai_compatible_model_catalog as catalog
+        from providers.sync_model_backend import SyncBackendError
 
         _require_valid_routing_section(section, command)
         try:
@@ -23146,7 +23146,7 @@ def _preflight_risk(code, severity, message):
 def run_translate_preflight(args):
     """Run the preflight under the profile selected on the command line."""
 
-    from model_routing_reader import (
+    from providers.model_routing_reader import (
         active_primary_profile_override,
         primary_profile_override,
     )
@@ -23354,9 +23354,9 @@ def _summarize_durable_sync_quality(*, plan_fingerprint, base_dir, tl_dir):
     timestamp alone is never treated as a match.
     """
 
-    from sync_run_contracts import ErrorCode, SyncRunError
-    from sync_run_service import find_latest_run
-    from sync_run_store import SyncRunStore
+    from execution.sync_run_contracts import ErrorCode, SyncRunError
+    from execution.sync_run_service import find_latest_run
+    from execution.sync_run_store import SyncRunStore
 
     root = _durable_sync_root_dir()
     try:
@@ -23551,8 +23551,8 @@ def _run_translate_preflight(args):
 
     import os
 
-    from model_capability_probe import default_credential_loader
-    from project_context_settings import resolve_batch_context_flags
+    from providers.model_capability_probe import default_credential_loader
+    from foundation.project_context_settings import resolve_batch_context_flags
 
     strategy = str(getattr(args, 'strategy', '') or '').strip()
     section = legacy.MODEL_ROUTING_CONFIG
@@ -24028,7 +24028,7 @@ def dispatch_command(parser, args):
         'project-analysis-publish',
         'project-analysis-unpublish',
     }:
-        from project_analysis import (
+        from quality_review.project_analysis import (
             ProjectAnalysisError,
             collect_project_analysis_status,
             format_brief_diff,
@@ -24037,11 +24037,11 @@ def dispatch_command(parser, args):
             resolve_project_analysis_store,
             unpublish_project_brief,
         )
-        from project_analysis_generate import (
+        from quality_review.project_analysis_generate import (
             build_structure_drafts,
             ingest_keyword_summaries,
         )
-        from project_analysis_llm import run_mapreduce_drafts
+        from quality_review.project_analysis_llm import run_mapreduce_drafts
 
         store_dir = getattr(args, 'store_dir', None) or None
         as_json = bool(getattr(args, 'json', False))
@@ -24489,7 +24489,7 @@ def dispatch_command(parser, args):
             peeked_manifest = None
         if isinstance(peeked_manifest, dict) and external_translation_work.is_work_manifest(peeked_manifest):
             require_api_key = False
-    from model_routing_reader import primary_profile_override
+    from providers.model_routing_reader import primary_profile_override
 
     with primary_profile_override(getattr(args, 'profile', '') or ''):
         try:
@@ -26108,7 +26108,7 @@ def run_machine_command(parser, args):
             return cli_contract.strict_exit_code(emitted)
         return legacy_exit_code
     except Exception as exc:
-        from sync_run_contracts import ErrorCode, SyncRunError
+        from execution.sync_run_contracts import ErrorCode, SyncRunError
 
         if isinstance(exc, SyncRunError):
             invalid_codes = {
@@ -26415,7 +26415,7 @@ def main(argv=None):
     try:
         result = dispatch_command(parser, args)
     except Exception as exc:
-        from sync_run_contracts import SyncRunError
+        from execution.sync_run_contracts import SyncRunError
 
         if isinstance(exc, SyncRunError):
             raise SystemExit(f'{exc.code.value}: {exc}') from exc

@@ -6,10 +6,10 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import model_profile as mp
-import sync_request
-from sync_model_backend import SyncBackendError, SyncGenerationResult
-from sync_run_service import build_production_backend_adapter
+from providers import model_profile as mp
+from execution import sync_request
+from providers.sync_model_backend import SyncBackendError, SyncGenerationResult
+from execution.sync_run_service import build_production_backend_adapter
 
 
 class SyncRequestTests(unittest.TestCase):
@@ -176,7 +176,7 @@ class NoCLI(importlib.abc.MetaPathFinder):
         if fullname in {'gemini_translate_batch', 'gemini_translate'}:
             raise AssertionError('CLI dependency: ' + fullname)
 sys.meta_path.insert(0, NoCLI())
-import sync_request
+from execution import sync_request
 sync_request.runtime_dependencies()
 from tests.test_sync_request import SyncRequestTests
 suite = unittest.TestSuite(SyncRequestTests(name) for name in (

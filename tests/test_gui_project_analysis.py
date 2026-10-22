@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest import mock
 from tests import gui_test_support
 
-import project_analysis as pa
+from quality_review import project_analysis as pa
 from gui_qt.check_report import idle_writeback_summary_for_work_mode
 from gui_qt.project_analysis_workflow import (
     ProjectAnalysisWorkflow,

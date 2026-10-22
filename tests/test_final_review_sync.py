@@ -9,14 +9,14 @@ import unittest
 from types import MappingProxyType
 from unittest import mock
 
-import cli_contract
-import final_review as fr
-import final_review_sync as frs
+from foundation import cli_contract
+from quality_review import final_review as fr
+from quality_review import final_review_sync as frs
 import gemini_translate_batch as batch
-import model_profiles_editor as editor
-import model_routing_reader as routing_reader
+from providers import model_profiles_editor as editor
+from providers import model_routing_reader as routing_reader
 import translator_runtime as runtime
-from sync_model_backend import SyncBackendError, SyncGenerationResult
+from providers.sync_model_backend import SyncBackendError, SyncGenerationResult
 
 
 def review_items(count: int = 3) -> list[dict]:

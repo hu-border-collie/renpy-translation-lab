@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import keyword_glossary_merge as merge_mod
-import keyword_history
+from quality_review import keyword_glossary_merge as merge_mod
+from quality_review import keyword_history
 from tests import gui_test_support
 
 try:

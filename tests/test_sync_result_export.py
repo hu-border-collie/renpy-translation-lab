@@ -7,19 +7,19 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from atomic_io import atomic_write_text, file_sha256
-from durable_sync_executor import DurableSyncExecutor, ProviderOutcome
-import model_usage_ledger
-from sync_result_export import (
+from foundation.atomic_io import atomic_write_text, file_sha256
+from execution.durable_sync_executor import DurableSyncExecutor, ProviderOutcome
+from providers import model_usage_ledger
+from execution.sync_result_export import (
     RESULTS_FILENAME,
     build_result_rows,
     deliver_usage_outbox,
     export_run_artifacts,
     render_results_jsonl,
 )
-from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import LineageKind, RunStatus, build_run_id
-from sync_run_store import SyncRunStore
+from execution.sync_retry_policy import ExecutorPolicy
+from execution.sync_run_contracts import LineageKind, RunStatus, build_run_id
+from execution.sync_run_store import SyncRunStore
 
 
 def make_plan():

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
-from litellm_provider_config import custom_provider_registry
+from providers.litellm_provider_config import custom_provider_registry
 
 try:
     from PySide6.QtCore import Qt
@@ -321,7 +321,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         )
 
     def test_saved_credential_is_reported_as_environment_override(self):
-        from litellm_provider_config import ProviderApiKeyStore
+        from providers.litellm_provider_config import ProviderApiKeyStore
 
         self._load_provider_choices()
         store = ProviderApiKeyStore(
@@ -351,7 +351,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
         load_store.assert_called_once_with("openai")
 
     def test_manage_keys_opens_dialog_and_saves_multi_key_store(self):
-        from litellm_provider_config import ProviderApiKeyStore
+        from providers.litellm_provider_config import ProviderApiKeyStore
         from PySide6.QtWidgets import QDialog
 
         self._load_provider_choices()
@@ -814,7 +814,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)
@@ -1152,7 +1152,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)
@@ -1211,7 +1211,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)
@@ -1299,7 +1299,7 @@ class GuiLiteLLMSettingsPageTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)

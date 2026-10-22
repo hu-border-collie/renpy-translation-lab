@@ -19,9 +19,9 @@ from unittest import mock
 
 import engine_adapters.versioning as versioning
 import gemini_translate_batch as batch
-import review_index
-import revision_corpus
-import translation_core
+from quality_review import review_index
+from quality_review import revision_corpus
+from quality_review import translation_core
 import translator_runtime as runtime
 from engine_adapters import GameVersion, build_project_snapshot
 from engine_adapters.contracts import (

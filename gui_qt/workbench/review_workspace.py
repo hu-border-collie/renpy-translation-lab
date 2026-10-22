@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-import review_index
-import review_workspace as service
+from quality_review import review_index
+from quality_review import review_workspace as service
 
 from ..user_copy import REVIEW_WORKSPACE_COPY as COPY
 

@@ -10,11 +10,11 @@ from pathlib import Path
 from unittest import mock
 
 from tests import gui_test_support
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
-import revision_corpus
-import revision_selection
-import review_workspace
+from quality_review import revision_corpus
+from quality_review import revision_selection
+from quality_review import review_workspace
 
 try:
     from PySide6.QtCore import QTimer, Qt

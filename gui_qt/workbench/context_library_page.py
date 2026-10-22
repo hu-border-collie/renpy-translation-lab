@@ -287,7 +287,7 @@ class ContextLibraryPage(QFrame):
         if project_analysis_label:
             analysis_text = project_analysis_label
         elif project_analysis_status is not None:
-            from project_analysis import format_status_label
+            from quality_review.project_analysis import format_status_label
 
             analysis_text = format_status_label(project_analysis_status)
         else:

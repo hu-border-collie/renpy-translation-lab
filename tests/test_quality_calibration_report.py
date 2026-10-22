@@ -7,7 +7,7 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 
-import translation_quality as quality
+from quality_review import translation_quality as quality
 from scripts import quality_calibration_report as report
 
 

@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-import structure_protection as protection
-import translation_core as core
-import translation_plan as plan
+from quality_review import structure_protection as protection
+from quality_review import translation_core as core
+from quality_review import translation_plan as plan
 from engine_adapters import structure_rules
 
 
@@ -251,7 +251,7 @@ class ProtectionTests(unittest.TestCase):
         self.assertEqual(restored, canonical['normalized_response']['translations'])
 
     def test_production_sync_accepts_only_restored_items(self):
-        from sync_run_service import ProductionSyncBackendAdapter
+        from execution.sync_run_service import ProductionSyncBackendAdapter
         request, items = build()
         raw = response(request, items)
         adapter = ProductionSyncBackendAdapter(
@@ -308,8 +308,8 @@ class ProtectionTests(unittest.TestCase):
 
     def test_failed_durable_response_is_persisted_without_winners_after_restart(self):
         from tests.test_sync_run_store import bootstrap_run
-        from sync_run_contracts import ErrorCategory
-        from sync_run_store import SyncRunStore
+        from execution.sync_run_contracts import ErrorCategory
+        from execution.sync_run_store import SyncRunStore
         with tempfile.TemporaryDirectory() as tmp:
             store, _ = bootstrap_run(Path(tmp))
             store.acquire_lease(owner_token='owner')

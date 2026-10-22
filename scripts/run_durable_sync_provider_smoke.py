@@ -23,12 +23,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from atomic_io import atomic_write_json
-from durable_sync_executor import DurableSyncExecutor
-from litellm_provider_config import CustomLiteLLMProvider
-from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import RequestStatus, RunStatus, build_run_id
-from sync_run_store import SyncRunStore
+from foundation.atomic_io import atomic_write_json
+from execution.durable_sync_executor import DurableSyncExecutor
+from providers.litellm_provider_config import CustomLiteLLMProvider
+from execution.sync_retry_policy import ExecutorPolicy
+from execution.sync_run_contracts import RequestStatus, RunStatus, build_run_id
+from execution.sync_run_store import SyncRunStore
 from scripts import run_provider_contract_smoke as contract_smoke
 
 
@@ -101,7 +101,7 @@ def _resolve_spec(args) -> contract_smoke.ProviderSpec:
 def _create_backend(spec, api_key, *, custom_base_url=''):
     if spec.name != 'custom':
         return contract_smoke.create_backend(spec, api_key)
-    from litellm_sync_backend import LiteLLMSyncBackend
+    from providers.litellm_sync_backend import LiteLLMSyncBackend
 
     custom = CustomLiteLLMProvider(
         id=CUSTOM_PROVIDER_ID,

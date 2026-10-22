@@ -10,10 +10,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
-import model_capability_probe as capability_probe
-import model_profile
-import openai_compatible_model_catalog as model_catalog
-from sync_run_contracts import ErrorCode, SyncRunError
+from providers import model_capability_probe as capability_probe
+from providers import model_profile
+from providers import openai_compatible_model_catalog as model_catalog
+from execution.sync_run_contracts import ErrorCode, SyncRunError
 
 
 class BatchCliContractTests(unittest.TestCase):
@@ -191,7 +191,7 @@ class BatchCliContractTests(unittest.TestCase):
         )
 
     def test_sync_status_json_reports_stored_gemini_sdk_usage(self):
-        from sync_run_service import SyncRunService
+        from execution.sync_run_service import SyncRunService
         from tests.test_sync_run_store import bootstrap_run
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,7 +222,7 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(envelope['result']['progress']['usage']['total_tokens'], 515)
 
     def test_final_review_resume_and_ingest_use_frozen_route_model(self):
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent
@@ -275,15 +275,15 @@ class BatchCliContractTests(unittest.TestCase):
             ),
             mock.patch.object(batch, 'remember_latest_manifest'),
             mock.patch(
-                'final_review.load_campaign_package',
+                'quality_review.final_review.load_campaign_package',
                 return_value=package,
             ),
             mock.patch(
-                'final_review_llm.prepare_resume_requests',
+                'quality_review.final_review_llm.prepare_resume_requests',
                 side_effect=fake_resume,
             ),
             mock.patch(
-                'final_review_llm.ingest_results_into_package',
+                'quality_review.final_review_llm.ingest_results_into_package',
                 side_effect=fake_ingest,
             ),
             contextlib.redirect_stdout(io.StringIO()),
@@ -2798,7 +2798,7 @@ class BatchCliContractTests(unittest.TestCase):
                             profile_section,
                         ),
                     ),
-                    mock.patch("config_store.write_json_object"),
+                    mock.patch("foundation.config_store.write_json_object"),
                     mock.patch.object(
                         capability_probe,
                         "default_generator",

@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-import advanced_context
+from context_engine import advanced_context
 import gemini_translate_batch as batch_mod
 import translator_runtime as runtime
-from embedding_runtime import parse_embedding_runtime_settings
-from rag_memory import JsonSourceIndexStore
+from context_engine.embedding_runtime import parse_embedding_runtime_settings
+from context_engine.rag_memory import JsonSourceIndexStore
 
 
 class QueryAndRenderTests(unittest.TestCase):
@@ -244,7 +244,7 @@ class EmbeddingLoaderRegressionTests(unittest.TestCase):
                     },
                 ],
             ), mock.patch(
-                'project_context_settings.apply_project_context_settings_to_config',
+                'foundation.project_context_settings.apply_project_context_settings_to_config',
                 side_effect=lambda config, root: config,
             ):
                 batch_mod.load_batch_settings()
@@ -279,7 +279,7 @@ class EmbeddingLoaderRegressionTests(unittest.TestCase):
                     },
                 ],
             ), mock.patch(
-                'project_context_settings.apply_project_context_settings_to_config',
+                'foundation.project_context_settings.apply_project_context_settings_to_config',
                 side_effect=lambda config, root: config,
             ):
                 with self.assertRaises(SystemExit) as captured:
@@ -310,7 +310,7 @@ class EmbeddingLoaderRegressionTests(unittest.TestCase):
                     },
                 ],
             ), mock.patch(
-                'project_context_settings.apply_project_context_settings_to_config',
+                'foundation.project_context_settings.apply_project_context_settings_to_config',
                 side_effect=lambda config, root: config,
             ), mock.patch('sys.stdout', io.StringIO()):
                 batch_mod.load_batch_settings()

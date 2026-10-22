@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import games_registry as registry
+from execution import games_registry as registry
 from gui_qt.games_registry_doctor_compare import (
     RegistryDoctorCompareResult,
     compare_registry_with_doctor_report,

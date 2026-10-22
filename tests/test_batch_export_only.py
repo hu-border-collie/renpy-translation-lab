@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import batch_export
+from execution import batch_export
 
 
 class BatchExportOnlyTests(unittest.TestCase):

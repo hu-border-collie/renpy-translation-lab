@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-import batch_submit_recovery
+from execution import batch_submit_recovery
 
 from gui_qt.batch_workflow_support import (
     build_recover_submit_cli_args,

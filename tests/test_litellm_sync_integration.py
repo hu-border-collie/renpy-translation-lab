@@ -5,9 +5,9 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import model_profile as mp
-import sync_request
-from litellm_sync_backend import LiteLLMBackendError
+from providers import model_profile as mp
+from execution import sync_request
+from providers.litellm_sync_backend import LiteLLMBackendError
 
 
 def _explicit_translation_plan(stage_model, *, backend="litellm", primary="sync-primary-should-lose"):

@@ -4,7 +4,7 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 import gemini_translate_batch as batch_mod
 
 

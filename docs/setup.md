@@ -11,7 +11,7 @@
 - `api_keys.example.json` -> `api_keys.json`
 - `translator_config.example.json` -> `translator_config.json`
 
-`game_root` / `workspace_root` 须显式配置；未配置时不会把工具父目录当成默认项目或工作区。GUI 用「创建 / 接入工作区…」预览并写入总表后，才会保存 `workspace_root`；CLI 可用 `python games_registry.py --workspace <path> setup`。Batch 日志在工具根下的 `logs/`。
+`game_root` / `workspace_root` 须显式配置；未配置时不会把工具父目录当成默认项目或工作区。GUI 用「创建 / 接入工作区…」预览并写入总表后，才会保存 `workspace_root`；CLI 可用 `python -m execution.games_registry --workspace <path> setup`。Batch 日志在工具根下的 `logs/`。
 
 项目资产放在当前 `game_root`（通常就是游戏的 `work` 目录）：
 
@@ -112,8 +112,8 @@ GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
 CLI：
 
 ```powershell
-python renpy_sdk_install.py show
-python renpy_sdk_install.py install --workspace path\to\RenPy_Workspace
+python -m execution.renpy_sdk_install show
+python -m execution.renpy_sdk_install install --workspace path\to\RenPy_Workspace
 # 默认目标：<workspace>/renpy-8.5.3-sdk/
 # 省略 --workspace 时，默认目标为 <当前工作目录>/renpy-8.5.3-sdk/
 # 可选：--target path\to\renpy-8.5.3-sdk --no-persist-config

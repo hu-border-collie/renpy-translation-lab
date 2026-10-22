@@ -3,7 +3,7 @@ import json
 import unittest
 from pathlib import Path
 
-import cli_contract
+from foundation import cli_contract
 
 
 class CliContractTests(unittest.TestCase):

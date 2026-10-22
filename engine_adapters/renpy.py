@@ -22,7 +22,7 @@ from types import ModuleType
 from typing import Any, Iterable, Mapping, Sequence
 import unicodedata
 
-import translation_core
+from quality_review import translation_core
 
 from .contracts import (
     CONTENT_FINGERPRINT_SCHEMA_VERSION,

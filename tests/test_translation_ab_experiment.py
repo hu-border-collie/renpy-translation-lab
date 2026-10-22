@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import translation_ab_experiment as ab_mod
+from execution import translation_ab_experiment as ab_mod
 
 
 FIXTURE_MANIFEST = (

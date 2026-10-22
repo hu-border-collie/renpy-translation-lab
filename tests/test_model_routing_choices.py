@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
-import model_routing_reader as reader
-from model_routing_migration import preview_migration
+from providers import model_routing_reader as reader
+from providers.model_routing_migration import preview_migration
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
 

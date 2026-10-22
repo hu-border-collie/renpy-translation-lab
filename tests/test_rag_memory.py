@@ -16,10 +16,10 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import prompt_context
-import rag_memory
-import story_memory
-import translation_core
+from context_engine import prompt_context
+from context_engine import rag_memory
+from context_engine import story_memory
+from quality_review import translation_core
 import translator_runtime as runtime
 
 

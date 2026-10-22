@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
-import translation_plan
+from quality_review import translation_plan
 from engine_adapters.contracts import ProjectDiscoveryRequest
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 

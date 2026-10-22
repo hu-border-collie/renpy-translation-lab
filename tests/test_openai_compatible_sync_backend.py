@@ -9,11 +9,11 @@ import threading
 import unittest
 from unittest import mock
 
-from openai_compatible_sync_backend import (
+from providers.openai_compatible_sync_backend import (
     HTTPResponse,
     OpenAICompatibleSyncBackend,
 )
-from sync_model_backend import SyncBackendError, SyncGenerationRequest
+from providers.sync_model_backend import SyncBackendError, SyncGenerationRequest
 
 
 def json_response(
@@ -110,7 +110,7 @@ def make_backend(
 
 class RequestShapeTests(unittest.TestCase):
     def test_keyword_json_object_prompt_exposes_numeric_confidence_contract(self) -> None:
-        import translation_core as core
+        from quality_review import translation_core as core
 
         units = [{"id": "kw-1", "text": "Cross Moonstone Bridge."}]
         candidate = {
@@ -141,7 +141,7 @@ class RequestShapeTests(unittest.TestCase):
         self.assertIn("result_invalid_field_type", invalid.reason_counts())
 
     def test_plain_text_analysis_does_not_inherit_json_profile_format(self) -> None:
-        from project_analysis_llm import complete_analysis_text
+        from quality_review.project_analysis_llm import complete_analysis_text
         for mode in ("json_object", "strict_json_schema"):
             with self.subTest(mode=mode):
                 transport = RecordingTransport(json_response(chat_payload(content="A traveler crosses the bridge.")))
@@ -450,7 +450,7 @@ class CredentialAndHeaderTests(unittest.TestCase):
             RecordingTransport(json_response(chat_payload())),
             credential_ref={"kind": "keyring", "name": "openai"},
         )
-        with mock.patch.dict("sys.modules", {"litellm_provider_config": None}):
+        with mock.patch.dict("sys.modules", {"providers.litellm_provider_config": None}):
             with self.assertRaises(SyncBackendError) as captured:
                 backend.generate(SyncGenerationRequest(model="m", contents="x"))
         self.assertEqual(captured.exception.category, "missing_dependency")
@@ -465,7 +465,7 @@ class CredentialAndHeaderTests(unittest.TestCase):
             credential_ref={"kind": "keyring", "name": "openai"},
         )
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             side_effect=RuntimeError("keyring backend exploded"),
         ):
             with self.assertRaises(SyncBackendError) as captured:

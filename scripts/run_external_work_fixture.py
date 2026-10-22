@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         })
     sys.path.insert(0, str(REPO))
     import gemini_translate_batch as batch
-    import external_translation_work as work
+    from execution import external_translation_work as work
 
     batch.legacy.TRANSLATOR_CONFIG = str(root / 'config.json')
     batch.legacy.API_KEYS = []

@@ -21,11 +21,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import translation_plan as tp  # noqa: E402 - repository path bootstrap
-import translation_core  # noqa: E402
-import structure_protection  # noqa: E402
-from openai_compatible_sync_backend import OpenAICompatibleSyncBackend  # noqa: E402
-from sync_model_backend import SyncGenerationRequest  # noqa: E402
+from quality_review import translation_plan as tp  # noqa: E402 - repository path bootstrap
+from quality_review import translation_core  # noqa: E402
+from quality_review import structure_protection  # noqa: E402
+from providers.openai_compatible_sync_backend import OpenAICompatibleSyncBackend  # noqa: E402
+from providers.sync_model_backend import SyncGenerationRequest  # noqa: E402
 
 VERSION = 1
 MODEL = 'openai/gpt-4.1-mini'

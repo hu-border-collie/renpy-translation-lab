@@ -9,9 +9,9 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import prompt_context
-from embedding_runtime import parse_embedding_runtime_settings
-from rag_memory import JsonSourceIndexStore, JsonSourceIndexStoreLockError, now_iso
+from context_engine import prompt_context
+from context_engine.embedding_runtime import parse_embedding_runtime_settings
+from context_engine.rag_memory import JsonSourceIndexStore, JsonSourceIndexStoreLockError, now_iso
 
 
 def seed_source_index_identity(store, *, dim=None):

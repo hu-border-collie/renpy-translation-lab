@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from project_analysis import (
+from quality_review.project_analysis import (
     KIND_CHUNK,
     KIND_LABEL,
     KIND_PROJECT_BRIEF,

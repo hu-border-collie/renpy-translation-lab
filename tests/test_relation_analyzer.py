@@ -402,7 +402,7 @@ class RelationAnalyzerTests(unittest.TestCase):
             csv_output=None,
             story_seed_output=None,
         )
-        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+        with patch('foundation.optional_feature.ensure_relation_analyzer_dependencies'), \
              patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
              patch.object(cli, 'load_text_units', return_value=[{'text': 'x'}]), \
@@ -433,7 +433,7 @@ class RelationAnalyzerTests(unittest.TestCase):
         units = [{'source': 'scene.rpy', 'line_no': 1, 'speaker': 'e', 'speaker_name': 'E', 'text': 'Hello.', 'context': 'E: Hello.'}]
         relation_data = {'characters': ['E', 'Noah'], 'pair_rows': [], 'segment_size': 12, 'pair_source_files': {}}
 
-        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+        with patch('foundation.optional_feature.ensure_relation_analyzer_dependencies'), \
              patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \
              patch.object(cli, 'load_text_units', return_value=units), \
@@ -468,7 +468,7 @@ class RelationAnalyzerTests(unittest.TestCase):
             csv_output=None,
             story_seed_output=None,
         )
-        with patch('optional_feature.ensure_relation_analyzer_dependencies'), \
+        with patch('foundation.optional_feature.ensure_relation_analyzer_dependencies'), \
              patch.object(cli, 'load_embedding_libs'), \
              patch.object(cli, 'parse_args', return_value=args), \
              patch.object(cli, 'resolve_path', side_effect=lambda value: Path(value)), \

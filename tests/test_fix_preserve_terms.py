@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import fix_preserve_terms as preserve_fix
+from execution import fix_preserve_terms as preserve_fix
 import gemini_translate_batch as batch
 
 

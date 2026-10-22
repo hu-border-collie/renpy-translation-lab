@@ -1,6 +1,6 @@
 import unittest
 
-from sync_model_backend import (
+from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,

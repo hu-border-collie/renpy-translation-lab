@@ -8,8 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import atomic_io
-import batch_export
+from foundation import atomic_io
+from execution import batch_export
 
 
 def _same_path(first, second) -> bool:

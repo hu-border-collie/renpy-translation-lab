@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import translation_quality as quality
+from quality_review import translation_quality as quality
 
 
 def subject(**overrides):

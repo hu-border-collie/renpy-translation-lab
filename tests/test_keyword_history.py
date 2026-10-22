@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import keyword_history
+from quality_review import keyword_history
 
 
 class KeywordHistoryEvidenceTests(unittest.TestCase):

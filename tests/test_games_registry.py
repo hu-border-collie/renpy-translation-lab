@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import games_registry as registry
+from execution import games_registry as registry
 
 
 SAMPLE_MD = """# 游戏状态总表
@@ -1151,8 +1151,8 @@ class GamesRegistryDocsTests(unittest.TestCase):
         setup_md = (Path(__file__).resolve().parents[1] / "docs" / "setup.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("python games_registry.py --workspace <path> setup", setup_md)
-        self.assertNotIn("python games_registry.py setup --workspace", setup_md)
+        self.assertIn("python -m execution.games_registry --workspace <path> setup", setup_md)
+        self.assertNotIn("python -m execution.games_registry setup --workspace", setup_md)
 
 
 if __name__ == "__main__":

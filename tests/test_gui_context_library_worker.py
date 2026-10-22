@@ -31,11 +31,11 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
                 return_value="fp-1",
             ) as fingerprint,
             mock.patch(
-                "project_analysis.collect_project_analysis_status",
+                "quality_review.project_analysis.collect_project_analysis_status",
                 return_value=status,
             ) as collect_status,
             mock.patch(
-                "project_analysis.format_status_label",
+                "quality_review.project_analysis.format_status_label",
                 return_value="已启用",
             ),
             mock.patch(

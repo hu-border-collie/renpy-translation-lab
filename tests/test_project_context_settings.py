@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from project_context_settings import (
+from foundation.project_context_settings import (
     apply_project_context_settings_to_config,
     default_context_flags_from_config,
     load_project_context_settings,

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from model_routing_migration import preview_migration
+from providers.model_routing_migration import preview_migration
 
 try:
     from PySide6.QtWidgets import QApplication

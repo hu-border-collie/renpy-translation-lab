@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 
 try:
     from PySide6.QtWidgets import QApplication

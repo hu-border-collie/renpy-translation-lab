@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-import batch_submit_recovery
+from execution import batch_submit_recovery
 
 from gui_qt.diagnostics_context import (
     build_cli_commands,
@@ -578,7 +578,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertEqual(context.status, idle_diagnostics_context().status)
         command_labels = [command.label for command in context.commands]
         self.assertIn("查看项目模型用量", command_labels)
-        self.assertEqual(len([c for c in context.commands if "model_config_migration.py" in c.command]), 3)
+        self.assertEqual(len([c for c in context.commands if "providers.model_config_migration" in c.command]), 3)
 
     def test_build_diagnostics_context_idle_when_latest_path_suppressed(self):
         context = build_diagnostics_context(
@@ -604,7 +604,7 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
 
     def test_migration_templates_are_available_without_a_batch_manifest(self):
         import shlex
-        from model_config_migration import build_parser
+        from providers.model_config_migration import build_parser
         contexts = [
             idle_diagnostics_context(batch_script_path="/tool dir/gemini_translate_batch.py"),
             sync_diagnostics_context(sync_script_path="/tool dir/gemini_translate.py"),
@@ -613,12 +613,12 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         groups.append(build_cli_commands(python_exe="python", batch_script_path="/tool dir/gemini_translate_batch.py",
                                          manifest_path="", manifest={}))
         for commands in groups:
-            selected = [c for c in commands if "model_config_migration.py" in c.command]
+            selected = [c for c in commands if "providers.model_config_migration" in c.command]
             self.assertEqual(len(selected), 3)
             for entry in selected:
                 parts = shlex.split(entry.command)
-                self.assertEqual(parts[1], "/tool dir/model_config_migration.py")
-                args = build_parser().parse_args(parts[2:])
+                self.assertEqual(parts[1:3], ["-m", "providers.model_config_migration"])
+                args = build_parser().parse_args(parts[3:])
                 self.assertEqual(str(args.config), "<CONFIG_COPY>")
                 if args.action == "migrate":
                     self.assertTrue(args.stage_only)

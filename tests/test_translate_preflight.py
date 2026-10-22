@@ -10,17 +10,17 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
-import model_profile
-import model_profiles_editor as editor
-import model_routing_reader as reader
-import sync_run_store
-import sync_translation_preview
-import translation_plan
+from providers import model_profile
+from providers import model_profiles_editor as editor
+from providers import model_routing_reader as reader
+from execution import sync_run_store
+from execution import sync_translation_preview
+from quality_review import translation_plan
 import translator_runtime as runtime
-from atomic_io import file_sha256, sha256_text
-from sync_run_contracts import build_run_id
+from foundation.atomic_io import file_sha256, sha256_text
+from execution.sync_run_contracts import build_run_id
 
 
 def routing_section(strategy: str = "sync") -> dict:
@@ -165,7 +165,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
         ):
@@ -197,7 +197,7 @@ class PreflightCommandTests(unittest.TestCase):
         ])
         with (
             mock.patch.object(runtime, "prepare_sync_translation_execution_context", return_value=context),
-            mock.patch("model_capability_probe.default_credential_loader", return_value="key"),
+            mock.patch("providers.model_capability_probe.default_credential_loader", return_value="key"),
             mock.patch.object(batch, "BATCH_TARGET_SIZE", 30),
             mock.patch.object(batch, "BATCH_TARGET_CHARS", 9000),
             mock.patch.object(batch, "BATCH_CONTEXT_BEFORE", 7),
@@ -240,7 +240,7 @@ class PreflightCommandTests(unittest.TestCase):
         args = self.parser.parse_args(["translate-preflight", "--strategy", "gemini_batch"])
         with (
             mock.patch.object(runtime, "prepare_sync_translation_execution_context", return_value=context),
-            mock.patch("model_capability_probe.default_credential_loader", return_value="key"),
+            mock.patch("providers.model_capability_probe.default_credential_loader", return_value="key"),
             mock.patch.object(batch, "RAG_ENABLED", True),
             mock.patch.object(batch, "SOURCE_INDEX_ENABLED", True),
             mock.patch.object(batch, "STORY_MEMORY_ENABLED", True),
@@ -334,7 +334,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
         ):
@@ -437,7 +437,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             redirect_stdout(io.StringIO()),
@@ -455,7 +455,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -524,7 +524,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -533,7 +533,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value={},
             ),
             mock.patch(
-                "project_context_settings.resolve_batch_context_flags",
+                "foundation.project_context_settings.resolve_batch_context_flags",
                 return_value=batch_flags,
             ),
         ):
@@ -550,7 +550,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -559,7 +559,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value={},
             ),
             mock.patch(
-                "project_context_settings.resolve_batch_context_flags",
+                "foundation.project_context_settings.resolve_batch_context_flags",
                 return_value={**batch_flags, "rag_enabled": False},
             ),
         ):
@@ -603,7 +603,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -636,7 +636,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="",
             ),
             mock.patch.object(
@@ -671,7 +671,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -741,7 +741,7 @@ class PreflightCommandTests(unittest.TestCase):
                 side_effect=resolved_context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -765,7 +765,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -794,7 +794,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -821,7 +821,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -846,7 +846,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(
@@ -873,7 +873,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="",
             ),
         ):
@@ -915,7 +915,7 @@ class PreflightCommandTests(unittest.TestCase):
                     return_value=context,
                 ),
                 mock.patch(
-                    "model_capability_probe.default_credential_loader",
+                    "providers.model_capability_probe.default_credential_loader",
                     return_value="",
                 ),
             ):
@@ -1062,7 +1062,7 @@ class PreflightCommandTests(unittest.TestCase):
                 return_value=context,
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader",
+                "providers.model_capability_probe.default_credential_loader",
                 return_value="key",
             ),
             mock.patch.object(

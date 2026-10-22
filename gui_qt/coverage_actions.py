@@ -54,7 +54,7 @@ def import_coverage_review(review_path: str) -> CoverageReviewImportResult:
             suggested_action="请选择 coverage 包中的 coverage_review.json 后重试。",
         )
     try:
-        import cli_contract
+        from foundation import cli_contract
         import gemini_translate_batch as batch_mod
     except Exception as exc:  # pragma: no cover - defensive GUI boundary
         return CoverageReviewImportResult(

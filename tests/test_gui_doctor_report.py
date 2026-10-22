@@ -11,7 +11,7 @@ from gui_qt.doctor_report import (
     summarize_doctor_output,
     summarize_doctor_report,
 )
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 
 from gui_qt.user_copy import format_doctor_recommendation_fact, primary_recommendation_message
 

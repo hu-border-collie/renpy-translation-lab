@@ -5,8 +5,8 @@ import json
 import unittest
 from unittest import mock
 
-import model_capability_probe as probe
-import model_profiles_editor as editor
+from providers import model_capability_probe as probe
+from providers import model_profiles_editor as editor
 
 
 def gemini_section() -> dict:
@@ -301,7 +301,7 @@ class DirectAdapterProbeTests(unittest.TestCase):
                 )()
 
         with mock.patch(
-            "model_profile.build_sync_backend",
+            "providers.model_profile.build_sync_backend",
             return_value=FakeBackend(),
         ):
             probe.default_generator(

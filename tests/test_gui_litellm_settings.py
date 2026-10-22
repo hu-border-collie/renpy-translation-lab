@@ -7,7 +7,7 @@ from gui_qt.litellm_settings import (
     validate_custom_provider_form,
     write_sync_backend_models,
 )
-from litellm_provider_config import custom_provider_registry
+from providers.litellm_provider_config import custom_provider_registry
 
 
 class _PresenceOnlyEnvironment(dict[str, str]):

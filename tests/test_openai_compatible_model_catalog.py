@@ -7,11 +7,11 @@ import os
 import unittest
 from unittest import mock
 
-import model_profiles_editor as editor
-import openai_compatible_model_catalog as catalog
-from model_profile import ADAPTER_OPENAI_COMPATIBLE
-from openai_compatible_connection import OpenAICompatibleConnection
-from sync_model_backend import SyncBackendError
+from providers import model_profiles_editor as editor
+from providers import openai_compatible_model_catalog as catalog
+from providers.model_profile import ADAPTER_OPENAI_COMPATIBLE
+from providers.openai_compatible_connection import OpenAICompatibleConnection
+from providers.sync_model_backend import SyncBackendError
 
 
 def models_response(payload: dict, *, status: int = 200) -> catalog.CatalogResponse:

@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gemini_model_catalog import allowed_gemini_rotation_models, write_model_catalog_extras
+from providers.gemini_model_catalog import allowed_gemini_rotation_models, write_model_catalog_extras
 
 from ..settings_schema import (
     CONTEXT_PRIMARY_SETTING_CATEGORY,

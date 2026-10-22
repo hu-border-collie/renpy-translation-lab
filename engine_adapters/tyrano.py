@@ -17,7 +17,7 @@ import re
 from typing import Any, Mapping, Sequence
 import unicodedata
 
-import translation_core
+from quality_review import translation_core
 
 from .contracts import (
     CANDIDATE_SCHEMA_VERSION,

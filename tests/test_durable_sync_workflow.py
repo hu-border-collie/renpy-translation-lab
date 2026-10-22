@@ -7,11 +7,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from durable_sync_executor import ProviderOutcome, TranslationPlanDerivedRequestBuilder
+from execution.durable_sync_executor import ProviderOutcome, TranslationPlanDerivedRequestBuilder
 import gemini_translate_batch as batch
-from sync_run_contracts import canonical_json
-from sync_run_service import SyncRunService
-from sync_run_store import SyncRunStore
+from execution.sync_run_contracts import canonical_json
+from execution.sync_run_service import SyncRunService
+from execution.sync_run_store import SyncRunStore
 import translator_runtime as runtime
 
 

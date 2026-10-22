@@ -7,12 +7,12 @@ import unittest
 from contextlib import ExitStack
 from unittest import mock
 
-import advanced_context
+from context_engine import advanced_context
 import gemini_translate_batch as batch_mod
-import model_profile
-import translation_plan
+from providers import model_profile
+from quality_review import translation_plan
 import translator_runtime as runtime
-from embedding_runtime import parse_embedding_runtime_settings
+from context_engine.embedding_runtime import parse_embedding_runtime_settings
 from engine_adapters.contracts import SourceDocument
 
 
@@ -410,7 +410,7 @@ class P5ProviderDiagnosticGoldenTests(unittest.TestCase):
                 return_value='current-source-fingerprint',
             ),
             mock.patch(
-                'project_analysis.load_injectable_project_context',
+                'quality_review.project_analysis.load_injectable_project_context',
                 return_value=payload,
             ),
         ):

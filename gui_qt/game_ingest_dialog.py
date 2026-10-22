@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from game_ingest import (
+from execution.game_ingest import (
     folder_conflict_message,
     game_name_to_folder,
     suggest_game_name,

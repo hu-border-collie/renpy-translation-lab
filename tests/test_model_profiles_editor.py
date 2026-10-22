@@ -6,7 +6,7 @@ import json
 import unittest
 from pathlib import Path
 
-import model_profiles_editor as editor
+from providers import model_profiles_editor as editor
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
 
@@ -439,7 +439,7 @@ class EditorViewTests(unittest.TestCase):
 
     def test_migrated_fixture_round_trips_through_view(self) -> None:
         payload = json.loads((FIXTURES / "gemini_batch.json").read_text(encoding="utf-8"))
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         section = preview_migration(payload).config["model_routing"]
         view = editor.editor_view(section)

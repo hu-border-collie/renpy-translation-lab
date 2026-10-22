@@ -86,13 +86,13 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QToolButton,
 )
-from project_version import __version__
-import cli_contract
-import model_profile
-import preflight_display
-import model_routing_config
-import model_usage_ledger
-import revision_selection
+from foundation.project_version import __version__
+from foundation import cli_contract
+from providers import model_profile
+from quality_review import preflight_display
+from providers import model_routing_config
+from providers import model_usage_ledger
+from quality_review import revision_selection
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
 from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
@@ -290,14 +290,14 @@ from .litellm_settings import (
     read_sync_backend_models,
 )
 from .custom_provider_dialog import CustomLiteLLMProviderDialog
-from gemini_model_catalog import (
+from providers.gemini_model_catalog import (
     BUILTIN_GEMINI_EMBEDDING_MODELS,
     BUILTIN_GEMINI_TRANSLATION_MODELS,
     merge_model_lists,
     resolve_gemini_embedding_models,
     resolve_gemini_translation_models,
 )
-from litellm_provider_config import (
+from providers.litellm_provider_config import (
     CustomLiteLLMProvider,
     catalog_source_label,
     credential_provider_candidates,
@@ -316,7 +316,7 @@ from litellm_provider_config import (
     load_provider_api_key,
     provider_from_model,
 )
-from optional_feature import FeatureInstallState, FeatureStatus
+from foundation.optional_feature import FeatureInstallState, FeatureStatus
 from .optional_feature_install import (
     OptionalFeatureInstallController,
     action_enabled_for_status,
@@ -2864,7 +2864,7 @@ class MainWindow(QMainWindow):
     def _project_analysis_publish_gate(self) -> tuple[bool, str, str]:
         """Block publishing drafts whose lineage is behind live scripts."""
         try:
-            from project_analysis import (
+            from quality_review.project_analysis import (
                 KIND_PROJECT_BRIEF,
                 normalize_lineage,
                 resolve_project_analysis_store,
@@ -3492,7 +3492,7 @@ class MainWindow(QMainWindow):
         if controller.feature.feature_id in self._optional_feature_last_failed:
             # Re-probe with failed overlay when not actively installing.
             if status.state != FeatureInstallState.INSTALLING:
-                from optional_feature import probe_feature
+                from foundation.optional_feature import probe_feature
 
                 status = probe_feature(
                     controller.feature,
@@ -3970,7 +3970,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return True
 
-        from model_capability_probe import BILLABLE_ACK_TOKEN
+        from providers.model_capability_probe import BILLABLE_ACK_TOKEN
 
         self._profile_probe_output_lines = []
         page = self._profiles_page()
@@ -4150,7 +4150,7 @@ class MainWindow(QMainWindow):
 
     def _on_download_recommended_sdk(self, line_edit: QLineEdit) -> None:
         """Explicit opt-in download of the tool-maintained official SDK build."""
-        from renpy_sdk_install import (
+        from execution.renpy_sdk_install import (
             default_sdk_target,
             format_size_mib,
             recommended_sdk,
@@ -4164,7 +4164,7 @@ class MainWindow(QMainWindow):
             self._append_log("用户取消推荐 SDK 下载")
             return
 
-        from renpy_sdk_install import existing_valid_sdk
+        from execution.renpy_sdk_install import existing_valid_sdk
 
         spec = recommended_sdk()
         workspace = self.state.get_workspace_root()
@@ -4242,7 +4242,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"SDK 解压中… {current}/{total}", 0)
 
     def _on_sdk_install_completed(self, result: object) -> None:
-        from renpy_sdk_install import SdkInstallResult
+        from execution.renpy_sdk_install import SdkInstallResult
 
         self._sdk_install_worker = None
         if getattr(self, "_shutdown_requested", False):
@@ -6760,7 +6760,7 @@ class MainWindow(QMainWindow):
         self.probe_btn.setEnabled(not running and ready)
 
     def _resolve_keyword_merge_glossary_path(self) -> str:
-        import keyword_glossary_merge as merge_mod
+        from quality_review import keyword_glossary_merge as merge_mod
 
         config = self.state.load_translator_config()
         game_root = str(self.state.get_game_root() or "")
@@ -8432,7 +8432,7 @@ class MainWindow(QMainWindow):
         ):
             return self._final_review_findings_cache
         try:
-            import final_review as fr
+            from quality_review import final_review as fr
 
             result: tuple[str, dict[str, object] | None] = (
                 path_text,
@@ -8832,7 +8832,7 @@ class MainWindow(QMainWindow):
         if package is None:
             message_box_information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
             return
-        import final_review as fr
+        from quality_review import final_review as fr
 
         status = fr.collect_campaign_status(package=package)
         if status.get("status") != fr.STATUS_DONE:
@@ -8919,7 +8919,7 @@ class MainWindow(QMainWindow):
         if mode == WorkMode.FINAL_REVIEW:
             _path, package = self._final_review_findings_context()
             if package is not None:
-                import final_review as fr
+                from quality_review import final_review as fr
                 review_status = fr.collect_campaign_status(package=package)
                 scope = review_status.get("scope") or {}
                 counts = review_status.get("status_counts") or {}
@@ -9041,7 +9041,7 @@ class MainWindow(QMainWindow):
                 )
             return
 
-        from model_routing_reader import profile_strategy_choices
+        from providers.model_routing_reader import profile_strategy_choices
 
         try:
             choices = profile_strategy_choices(config)
@@ -13591,7 +13591,7 @@ class MainWindow(QMainWindow):
             pass
         if not profile_id:
             try:
-                import model_profiles_editor as profiles_editor
+                from providers import model_profiles_editor as profiles_editor
 
                 routes = {
                     str(row.get("stage") or ""): row
@@ -13848,7 +13848,7 @@ class MainWindow(QMainWindow):
 
     def _readiness_project_identity(self) -> str | None:
         """Bind presentation to saved project settings, never log their contents."""
-        from project_context_settings import load_project_context_settings
+        from foundation.project_context_settings import load_project_context_settings
 
         try:
             root = str(self.state.get_game_root() or "")
@@ -15499,7 +15499,7 @@ class MainWindow(QMainWindow):
                 self._show_settings_status("高级设置有无效字段，未保存。", 6000)
                 return False
             self._clear_advanced_setting_errors()
-            from project_context_settings import save_project_context_settings
+            from foundation.project_context_settings import save_project_context_settings
 
             self.state.save_translator_config(config)
             cache = getattr(self, "_resolved_stage_fact_cache", None)

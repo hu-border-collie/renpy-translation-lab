@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 
 from .doctor_report import DoctorSummary, doctor_report_to_parsed
 from .user_copy import (

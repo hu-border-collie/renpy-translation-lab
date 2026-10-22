@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import project_analysis as pa
+from quality_review import project_analysis as pa
 
 
 def _lineage(source_fp: str = "src-fp-1", upstream: str = "up-1") -> dict:
@@ -450,7 +450,7 @@ class PathAndCliContractTests(unittest.TestCase):
 
         buf = io.StringIO()
         with mock.patch(
-            "project_analysis.collect_project_analysis_status",
+            "quality_review.project_analysis.collect_project_analysis_status",
             side_effect=noisy_collect,
         ), redirect_stdout(buf):
             batch_mod.main(["project-analysis-status", "--json", "--store-dir", "C:/tmp"])

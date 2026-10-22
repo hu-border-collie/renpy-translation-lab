@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 
-import keyword_glossary_merge as merge_mod
+from quality_review import keyword_glossary_merge as merge_mod
 
 from .path_utils import canonical_abs_path
 from .user_copy import KEYWORD_CANDIDATE_COPY

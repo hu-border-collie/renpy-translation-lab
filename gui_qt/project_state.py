@@ -21,8 +21,8 @@ from .manifest_lite import (
     read_manifest_index_fields,
     read_manifest_lite,
 )
-from atomic_io import write_latest_manifest_locked
-from project_asset_paths import (
+from foundation.atomic_io import write_latest_manifest_locked
+from foundation.project_asset_paths import (
     normalize_relative_project_assets_in_config,
     sync_project_asset_paths_in_config,
 )
@@ -346,11 +346,11 @@ class ProjectState:
     # --- JSON helpers ---
 
     def _read_json_object(self, path: Path, description: str) -> dict[str, Any]:
-        from config_store import read_json_object
+        from foundation.config_store import read_json_object
         return read_json_object(path, description)
 
     def _write_json_object(self, path: Path, data: dict[str, Any]) -> None:
-        from config_store import write_json_object
+        from foundation.config_store import write_json_object
         write_json_object(path, data)
 
     # --- Workspace root (multi-project area) ---

@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import atomic_io
+from foundation import atomic_io
 import gemini_translate_batch as batch_mod
 import translator_runtime as runtime
 
@@ -798,7 +798,7 @@ class AtomicProcessFileLockTests(unittest.TestCase):
             script = (
                 "import sys, time\n"
                 "from pathlib import Path\n"
-                "import atomic_io\n"
+                "from foundation import atomic_io\n"
                 "lock, marker = sys.argv[1:3]\n"
                 "with atomic_io.exclusive_file_lock(lock, timeout=5.0):\n"
                 "    Path(marker).write_text('held')\n"

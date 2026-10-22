@@ -11,12 +11,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import advanced_context
-import embedding_backend
-import embedding_runtime
-import project_analysis as pa
-from rag_memory import JsonSourceIndexStore
-import translation_plan
+from context_engine import advanced_context
+from context_engine import embedding_backend
+from context_engine import embedding_runtime
+from quality_review import project_analysis as pa
+from context_engine.rag_memory import JsonSourceIndexStore
+from quality_review import translation_plan
 
 
 class Issue341IntegrationTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class Issue341IntegrationTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            import project_analysis_generate as gen
+            from quality_review import project_analysis_generate as gen
             fixture_dir = Path(__file__).resolve().parent / "fixtures" / "project_analysis_routes_minimal"
             keywords_file = fixture_dir / "keyword_chunk_summaries.jsonl"
             store_dir = tmp_path / "project_analysis"

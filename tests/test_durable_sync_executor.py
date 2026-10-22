@@ -11,20 +11,20 @@ import time
 import unittest
 from pathlib import Path
 
-import sync_run_contracts as contracts
-from durable_sync_executor import (
+from execution import sync_run_contracts as contracts
+from execution.durable_sync_executor import (
     DurableSyncExecutor,
     ProviderFailure,
     ProviderOutcome,
     TranslationPlanDerivedRequestBuilder,
 )
-from sync_retry_policy import (
+from execution.sync_retry_policy import (
     ExecutorPolicy,
     classify_failure,
     compute_next_eligible_at,
     missing_lineage_suffix,
 )
-from sync_run_contracts import (
+from execution.sync_run_contracts import (
     AttemptStatus,
     ErrorCategory,
     ErrorCode,
@@ -34,7 +34,7 @@ from sync_run_contracts import (
     SyncRunError,
     build_run_id,
 )
-from sync_run_store import SyncRunStore
+from execution.sync_run_store import SyncRunStore
 
 
 def make_plan(plan_id='plan-1111111111111111'):

@@ -1,7 +1,7 @@
 import json
 import unittest
 
-import cli_contract
+from foundation import cli_contract
 
 from gui_qt.translation_workflow import (
     TranslationWorkflow,

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from renpy_sdk_install import SdkInstallResult, install_recommended_sdk
+from execution.renpy_sdk_install import SdkInstallResult, install_recommended_sdk
 
 
 class SdkInstallWorker(QThread):

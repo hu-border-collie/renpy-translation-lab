@@ -34,7 +34,7 @@ from gui_qt.work_modes import (
     workbench_nav_spec,
 )
 from gui_qt.user_copy import PROJECT_ANALYSIS_COPY, REVISION_PROPOSAL_COPY
-import revision_selection
+from quality_review import revision_selection
 from gui_qt.workbench import WorkbenchPageActions
 from gui_qt.workbench_session import WorkbenchModeSession
 from tests import gui_test_support
@@ -1022,7 +1022,7 @@ class GuiTaskPageTests(unittest.TestCase):
             "get_latest_manifest_path_for_mode",
             return_value=manifest_path,
         ), mock.patch(
-            "final_review.load_campaign_package",
+            "quality_review.final_review.load_campaign_package",
             return_value=package,
         ) as load:
             self.assertEqual(self.window._final_review_findings_context()[1], package)

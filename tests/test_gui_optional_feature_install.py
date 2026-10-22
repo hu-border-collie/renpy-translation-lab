@@ -16,7 +16,7 @@ try:
         build_litellm_controller,
     )
     from gui_qt.work_modes import WorkMode
-    from optional_feature import (
+    from foundation.optional_feature import (
         FeatureInstallState,
         FeatureStatus,
         litellm_feature,
@@ -147,7 +147,7 @@ class GuiOptionalFeatureInstallTests(unittest.TestCase):
         with (
             mock.patch("gui_qt.app.message_box_warning") as warning,
             mock.patch(
-                "optional_feature.probe_feature",
+                "foundation.optional_feature.probe_feature",
                 return_value=failed_status,
             ),
             mock.patch.object(

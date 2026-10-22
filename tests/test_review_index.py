@@ -12,9 +12,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import review_index as ri
-import revision_corpus
-import translation_quality
+from quality_review import review_index as ri
+from quality_review import revision_corpus
+from quality_review import translation_quality
 
 
 def _write_corpus(

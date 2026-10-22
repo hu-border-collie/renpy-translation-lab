@@ -176,7 +176,7 @@ class QualityFindingsReportTests(unittest.TestCase):
         self.assertEqual(updated["last_check_summary"]["quality_gate"]["acknowledged_count"], 1)
 
     def test_persist_quality_acknowledgement_rejects_project_mismatch(self):
-        import cli_contract
+        from foundation import cli_contract
 
         with mock.patch(
             "gemini_translate_batch.quality_acknowledge_command",

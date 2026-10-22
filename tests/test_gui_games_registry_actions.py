@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import games_registry as registry
+from execution import games_registry as registry
 from gui_qt.games_registry_actions import (
     apply_workspace_setup_action,
     delete_registry_project,
