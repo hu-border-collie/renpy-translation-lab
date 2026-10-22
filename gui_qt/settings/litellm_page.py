@@ -54,15 +54,15 @@ from providers.litellm_provider_config import (
     ProviderCredentialStoreError,
 )
 
-from ..api_key_helpers import mask_api_key
-from ..custom_provider_dialog import CustomLiteLLMProviderDialog
-from ..litellm_catalog_cache import (
+from gui_qt.settings.api_key_helpers import mask_api_key
+from gui_qt.dialogs.custom_provider_dialog import CustomLiteLLMProviderDialog
+from gui_qt.settings.litellm_catalog_cache import (
     CatalogSnapshot,
     LiteLLMCatalogCache,
     catalog_snapshot_warning,
 )
-from ..litellm_settings import provider_credential_status, read_sync_backend_models
-from ..litellm_worker import (
+from gui_qt.settings.litellm_settings import provider_credential_status, read_sync_backend_models
+from gui_qt.workers.litellm_worker import (
     LiteLLMConnectionTestWorker,
     LiteLLMModelCatalogWorker,
     LiteLLMModuleWarmupWorker,
@@ -70,14 +70,14 @@ from ..litellm_worker import (
     LiteLLMVersionWorker,
     is_cancelled_message,
 )
-from ..operation_identity import is_current_identity, litellm_connection_identity
+from gui_qt.runtime.operation_identity import is_current_identity, litellm_connection_identity
 from ..user_copy import (
     CUSTOM_LITELLM_PROVIDER_COPY,
     LITELLM_CACHE_COPY,
     LITELLM_CONNECTION_TEST_COPY,
     SETTINGS_MODEL_ENTRY_COPY,
 )
-from ..widget_helpers import (
+from gui_qt.widgets.widget_helpers import (
     NoWheelComboBox,
     add_editable_combo_popup_action,
     message_box_information,

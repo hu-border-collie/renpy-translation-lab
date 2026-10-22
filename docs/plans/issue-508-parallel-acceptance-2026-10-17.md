@@ -466,7 +466,7 @@ Computer Use 两次应用访问授权超时，随后用户要求暂停。10-18 �
 - `C_20261018/checkpoint_20261020_closeout.json`：本轮收尾检查点，单独记录新增恢复
   与代码发布进度；不覆写 10-19 的部分交付和原始评分。
 
-先前基线的 `tests.test_external_translation_work` **53 项通过**，使用本轮可写 TEMP/TMP；
+先前基线的 `tests.execution.test_external_translation_work` **53 项通过**，使用本轮可写 TEMP/TMP；
 没有放宽产品门禁。C 的 `profiles-validate` 通过，完全不带凭据的 preflight 按预期被缺少环境
 凭据引用拒绝；网络被实验 wrapper 阻断，包括 LiteLLM 的公共价格表获取尝试，没有实际
 私有/计费请求。上述早期离线预检不抹除后来明确授权后的两笔实际派发。

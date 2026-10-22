@@ -37,7 +37,7 @@ tempfile._mkstemp_inner
   → atomic_io.atomic_write
   → gui_qt/litellm_catalog_cache._save
   → app.py _save_litellm_cache（设置页构建时保存模型选择）
-  → tests/test_gui_control_layout_audit.py:157
+  → tests/gui/application/test_gui_control_layout_audit.py:157
 ```
 
 测试逻辑本身没有死循环——它卡在操作系统创建临时文件这一步。
@@ -82,7 +82,7 @@ tempfile._mkstemp_inner
   该 `OSError` 并仅记录日志，因此 GUI 测试可以继续跑完。
 - 实测（PySide6 6.11.1 + `QT_QPA_PLATFORM=offscreen`）：
   `test_settings_sections_controls_no_clip_or_overlap` 约 0.5 秒通过；
-  整个 `tests/test_gui_control_layout_audit.py` 3 个用例 1.136 秒全部通过，
+  整个 `tests/gui/application/test_gui_control_layout_audit.py` 3 个用例 1.136 秒全部通过，
   无进程残留。
 - 注意：当前环境未安装 `litellm` 时，该测试不会触发缓存 `_save`（埋点调用次数为 0），
   所以“测试通过”不能证明缓存路径可写；需要直接写入探针验证。
@@ -99,18 +99,18 @@ tempfile._mkstemp_inner
 
 ### 在 Codex 会话内
 
-- 自 #370 起，GUI 测试通过 `tests/gui_test_support.py` 使用一次性临时目录缓存，
+- 自 #370 起，GUI 测试通过 `tests/support/gui_test_support.py` 使用一次性临时目录缓存，
   不再读取/写入用户级 `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`，
   因此可以直接运行 GUI 全量测试，例如 `python -B tests/run_gui_tests.py -q`。
 - 自 #369 起，真实 GUI 运行时的 LiteLLM 缓存会在默认目录不可写时自动回退到系统临时目录，
   沙箱内跑真实 GUI 也不再卡在缓存写入上。
 - 在 #369 / #370 修复落地前的旧版本上，建议只跑改动相关文件（如
-  `python -m unittest tests.test_gui_settings_schema tests.test_gui_sync_translation_report`）；
+  `python -m unittest tests.gui.settings.test_gui_settings_schema tests.gui.reports.test_gui_sync_translation_report`）；
   确需全量时在沙箱外运行（需要用户批准 escalation）。
 
 ### 长期建议（可选）
 
-- 自 #370 起，GUI 测试通过 `tests/gui_test_support.py` 将默认 LiteLLM 缓存指向一次性临时目录，
+- 自 #370 起，GUI 测试通过 `tests/support/gui_test_support.py` 将默认 LiteLLM 缓存指向一次性临时目录，
   不再读取/写入用户级 `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`；
   因此在沙箱内跑 GUI 全量测试时，无需再为测试进程放行该路径。
 - 真实 GUI 运行时仍会写入用户级缓存；代码已实现自动回退（默认目录不可写时改用系统临时目录），

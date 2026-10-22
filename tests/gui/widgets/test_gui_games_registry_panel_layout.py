@@ -1,0 +1,357 @@
+"""Layout and lifecycle regressions for settings · workspace registry panel."""
+from __future__ import annotations
+
+import threading
+import unittest
+from pathlib import Path
+from unittest import mock
+
+try:
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
+
+    from gui_qt.app import MainWindow
+except ImportError as exc:
+    MainWindow = None  # type: ignore[assignment,misc]
+    QApplication = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
+
+from tests.support import gui_test_support
+
+
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
+class GuiGamesRegistryPanelLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = QApplication.instance()
+        if app is None:
+            cls._app = QApplication([])
+        else:
+            cls._app = app
+
+    def setUp(self) -> None:
+        self.window = MainWindow()
+
+    def tearDown(self) -> None:
+        gui_test_support.close_main_window(self.window)
+        self.window.deleteLater()
+
+    def test_registry_worker_is_owned_by_main_window_shutdown(self) -> None:
+        from execution import games_registry as registry
+
+        from gui_qt.workbench.games_registry_actions import RegistryActionResult
+        from gui_qt.workers.games_registry_worker import RegistryRefreshWorker
+
+        panel = self.window._games_registry_panel
+        started = threading.Event()
+        release = threading.Event()
+        worker = RegistryRefreshWorker(
+            workspace_root=Path.cwd(),
+            refresh_everything=True,
+            mode=registry.REFRESH_MODE_LITE,
+            parent=panel,
+        )
+        panel._refresh_worker = worker
+
+        def blocked_refresh(*_args, **_kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return RegistryActionResult(False, "已取消", cancelled=True)
+
+        try:
+            with mock.patch(
+                "gui_qt.workers.games_registry_worker.refresh_registry_projects",
+                side_effect=blocked_refresh,
+            ):
+                worker.start()
+                self.assertTrue(started.wait(timeout=1))
+                self.assertTrue(self.window.isAncestorOf(panel))
+                self.assertIn(worker, self.window.findChildren(QThread))
+                self.assertIn(worker, self.window._owned_background_threads())
+                self.assertIn(
+                    "后台下载、检查或列表任务",
+                    self.window._shutdown_coordinator.active_labels(),
+                )
+
+                self.window._request_background_threads_shutdown()
+                self.assertTrue(worker._should_cancel())
+
+                self.window._lock_ui_for_shutdown()
+                self.assertTrue(panel._shutdown_requested)
+                release.set()
+                self.assertTrue(worker.wait(1000))
+        finally:
+            release.set()
+            worker.request_stop()
+            worker.requestInterruption()
+            worker.wait(1000)
+            panel._refresh_worker = None
+
+    def test_workspace_toolbar_fits_settings_viewport_without_hscroll(self) -> None:
+        self.window.resize(960, 700)
+        self.window.show()
+        for _ in range(6):
+            self._app.processEvents()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+
+        page = self.window.settings_stack.currentWidget()
+        self.assertIsInstance(page, QScrollArea)
+        assert isinstance(page, QScrollArea)
+        panel = self.window._games_registry_panel
+        self.assertIsNotNone(panel)
+        assert panel is not None
+
+        # Toolbar must wrap instead of forcing a ~1250px min width.
+        self.assertLessEqual(panel.sizeHint().width(), page.viewport().width() + 80)
+        hbar = page.horizontalScrollBar()
+        self.assertIsNotNone(hbar)
+        assert hbar is not None
+        self.assertEqual(hbar.maximum(), 0)
+
+        # No header tool buttons should intersect.
+        items: list[tuple[str, object]] = []
+        from PySide6.QtCore import QRect
+
+        for wgt in list(panel.findChildren(QLabel)) + list(panel.findChildren(QPushButton)):
+            if not wgt.isVisible() or wgt.width() <= 1 or wgt.height() <= 1:
+                continue
+            top_left = wgt.mapTo(panel, wgt.rect().topLeft())
+            if top_left.y() > 160:
+                continue
+            rect = QRect(top_left.x(), top_left.y(), wgt.width(), wgt.height())
+            items.append((wgt.text() or wgt.objectName() or "?", rect))
+        hits: list[tuple[str, str]] = []
+        for i, (name_a, rect_a) in enumerate(items):
+            for name_b, rect_b in items[i + 1 :]:
+                inter = rect_a.intersected(rect_b)
+                if inter.width() >= 3 and inter.height() >= 3:
+                    hits.append((name_a, name_b))
+        self.assertEqual(hits, [])
+
+    def test_workspace_actions_are_grouped_and_details_follow_selection(self) -> None:
+        panel = self.window._games_registry_panel
+        root_layout = panel.layout()
+        title_row = root_layout.itemAt(0).layout()
+        self.assertEqual(
+            title_row.itemAt(0).widget().objectName(), "diagnostics_section_label"
+        )
+        # Primary strip: refresh + 维护 disclosure in one left-aligned cluster.
+        self.assertEqual(
+            [
+                widget.text() if hasattr(widget, "text") else widget.objectName()
+                for widget in panel._toolbar._items
+            ],
+            [
+                "刷新当前",
+                "刷新全部",
+                "games_registry_mode_host",
+                "停止",
+                "维护 ▾",
+            ],
+        )
+        # Expanded maintenance: section labels + four actions, nested left flow.
+        self.assertEqual(
+            [
+                widget.text() if hasattr(widget, "text") else widget.objectName()
+                for widget in panel._secondary_toolbar._items
+            ],
+            [
+                "项目发现",
+                "扫描新项目",
+                "导入游戏…",
+                "总表维护",
+                "从 GAMES.md 导入",
+                "同步 GAMES.md",
+            ],
+        )
+        self.assertEqual(panel._secondary_toolbar._align, "left")
+        self.assertEqual(panel._more_host.layout().contentsMargins().left(), 12)
+        self.assertTrue(panel._more_host.isHidden())
+        panel._more_btn.setChecked(True)
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertFalse(panel._more_host.isHidden())
+        self.assertEqual(panel._more_btn.text(), "维护 ▴")
+
+        self.window.resize(960, 700)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+        panel._table.clearSelection()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertTrue(panel._detail_host.isHidden())
+        self.assertTrue(panel._edit_group.isHidden())
+        self.assertGreaterEqual(panel._table.minimumHeight(), 280)
+        self.assertEqual(
+            panel._content_splitter.objectName(), "games_registry_content_splitter"
+        )
+        if panel._table.rowCount() > 0:
+            panel._table.selectRow(0)
+            for _ in range(4):
+                self._app.processEvents()
+            self.assertFalse(panel._detail_host.isHidden())
+            self.assertFalse(panel._edit_group.isHidden())
+            panel._collapse_detail_btn.click()
+            for _ in range(4):
+                self._app.processEvents()
+            self.assertTrue(panel._detail_host.isHidden())
+
+    def test_project_notes_editor_has_room_for_multiple_lines(self) -> None:
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+
+        panel = self.window._games_registry_panel
+        assert panel is not None
+        panel._set_detail_visible(True)
+        for _ in range(4):
+            self._app.processEvents()
+
+        notes = panel._notes_edit
+        notes.setPlainText("第一行\n第二行\n第三行")
+        self.assertEqual(notes.minimumHeight(), 112)
+        self.assertEqual(notes.maximumHeight(), 220)
+        self.assertGreaterEqual(notes.document().blockCount(), 3)
+        self.assertGreaterEqual(notes.height(), notes.minimumHeight())
+
+    def test_table_column_path_is_last_stretch_and_drag_clamps_eui_min(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QHeaderView
+
+        from gui_qt.widgets.games_registry_table import REGISTRY_TABLE_PATH_COLUMN
+
+        self.window.resize(1200, 800)
+        self.window.show()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+        panel = self.window._games_registry_panel
+        assert panel is not None
+        header = panel._table.horizontalHeader()
+        # Path is last flex column (EUI: one flex; Carbon-style resource list).
+        self.assertEqual(REGISTRY_TABLE_PATH_COLUMN, panel._table.columnCount() - 1)
+        self.assertTrue(header.stretchLastSection())
+        self.assertEqual(
+            header.sectionResizeMode(REGISTRY_TABLE_PATH_COLUMN),
+            QHeaderView.ResizeMode.Stretch,
+        )
+        self.assertEqual(
+            header.sectionResizeMode(0),
+            QHeaderView.ResizeMode.Interactive,
+        )
+        # Layout status (enum) min must cover longest known label sample.
+        layout_min = panel._header_min_width(1)
+        self.assertGreaterEqual(layout_min, panel._header_min_width(0))
+
+        panel._reset_table_column_layout()
+        min_name = panel._header_min_width(0)
+        # Shrink below header min → clamp.
+        panel._on_table_section_resized(0, 200, 10)
+        self.assertGreaterEqual(panel._table.columnWidth(0), min_name)
+        # Path stretch: resize handler is a no-op.
+        path_col = REGISTRY_TABLE_PATH_COLUMN
+        path_before = panel._table.columnWidth(path_col)
+        panel._on_table_section_resized(path_col, path_before, path_before + 80)
+        # Widen name freely; path absorbs leftover via last-section Stretch.
+        panel._on_table_section_resized(0, min_name, min_name + 60)
+        self.assertEqual(panel._table.columnWidth(0), min_name + 60)
+
+        self.assertEqual(
+            panel._table.textElideMode(),
+            Qt.TextElideMode.ElideRight,
+        )
+        # All stable headers exist; optional columns are hidden, path stays last.
+        headers = [
+            panel._table.horizontalHeaderItem(i).text()
+            for i in range(panel._table.columnCount())
+        ]
+        self.assertEqual(
+            headers,
+            [
+                "项目",
+                "目录状态",
+                "版本",
+                "游玩",
+                "翻译",
+                "来源",
+                "翻译进度",
+                "引擎",
+                "最近刷新",
+                "备注摘要",
+                "路径",
+            ],
+        )
+
+    def test_detail_translation_status_matches_annotated_table_value(self) -> None:
+        """Annotated statuses like 已完成（6.7 增量） must not collapse to 待确认."""
+        from gui_qt.widgets.games_registry_panel import _set_status_combo_value
+        from gui_qt.widgets.widget_helpers import NoWheelComboBox
+        from execution.games_registry import TRANSLATION_STATUSES
+
+        combo = NoWheelComboBox()
+        combo.addItems(sorted(TRANSLATION_STATUSES))
+        _set_status_combo_value(combo, "已完成（6.7 增量）")
+        self.assertEqual(combo.currentText(), "已完成（6.7 增量）")
+        _set_status_combo_value(combo, "已完成")
+        self.assertEqual(combo.currentText(), "已完成")
+
+    def test_workspace_status_and_filter_combos_share_widths(self) -> None:
+        """Play/translation status and engine/translation filters must match widths."""
+        from gui_qt.widgets.games_registry_panel import _combo_natural_width
+
+        self.window.resize(960, 700)
+        self.window.show()
+        for _ in range(6):
+            self._app.processEvents()
+        self.window._focus_settings_section("workspace")
+        for _ in range(12):
+            self._app.processEvents()
+
+        panel = self.window._games_registry_panel
+        self.assertIsNotNone(panel)
+        assert panel is not None
+
+        play = panel._play_status_combo
+        translation = panel._translation_status_combo
+        self.assertEqual(play.width(), translation.width())
+        self.assertEqual(play.minimumWidth(), play.maximumWidth())
+        self.assertEqual(translation.minimumWidth(), translation.maximumWidth())
+        # Content-sized pair — must not stretch to the form field column.
+        self.assertLess(play.width(), panel._name_edit.width() // 2)
+        # Must fit longest item under current style/font (no clipping).
+        for combo in (play, translation):
+            # Temporarily unlock to measure true natural width of this combo alone.
+            saved = combo.width()
+            natural = _combo_natural_width(combo)
+            combo.setFixedWidth(saved)
+            self.assertGreaterEqual(saved, natural)
+
+        # Simulate first-show remeasure: fixed width must keep the pair equal.
+        panel._reflow_uniform_combos()
+        for _ in range(4):
+            self._app.processEvents()
+        self.assertEqual(play.width(), translation.width())
+
+        engine = panel._engine_filter_combo
+        tl_filter = panel._translation_filter_combo
+        sort_combo = panel._sort_combo
+        self.assertEqual(engine.width(), tl_filter.width())
+        self.assertEqual(engine.width(), sort_combo.width())
+        for combo in (engine, tl_filter, sort_combo):
+            self.assertEqual(combo.minimumWidth(), combo.maximumWidth())
+            saved = combo.width()
+            natural = _combo_natural_width(combo)
+            combo.setFixedWidth(saved)
+            self.assertGreaterEqual(saved, natural)
+
+
+if __name__ == "__main__":
+    unittest.main()

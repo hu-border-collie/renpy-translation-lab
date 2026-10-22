@@ -1,0 +1,362 @@
+"""Layout contracts for the unified settings surface."""
+from __future__ import annotations
+
+import unittest
+
+try:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QFormLayout, QScrollArea
+except ImportError as exc:
+    Qt = None  # type: ignore[assignment,misc]
+    QApplication = None  # type: ignore[assignment,misc]
+    QFormLayout = None  # type: ignore[assignment,misc]
+    QScrollArea = None  # type: ignore[assignment,misc]
+    MainWindow = None  # type: ignore[assignment,misc]
+    _SETTINGS_PAGE_SPECS = ()  # type: ignore[assignment,misc]
+    apply_theme = None  # type: ignore[assignment,misc]
+    clear_theme_caches = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    # Project imports stay outside the PySide6 guard: failures here are real
+    # test failures, not a missing-GUI skip.
+    from gui_qt.app import MainWindow, _SETTINGS_PAGE_SPECS
+    from gui_qt.appearance.theme import apply_theme, clear_theme_caches
+    IMPORT_ERROR = None
+
+from tests.support import gui_test_support
+
+
+def _process(app: QApplication, rounds: int = 8) -> None:
+    for _ in range(rounds):
+        app.processEvents()
+
+
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
+class GuiSettingsLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        self.window = MainWindow()
+        self.window.resize(1600, 960)
+        self.window.show()
+        self.window._activate_shell_route("settings")
+        # Layout contracts inspect every settings body; materialize them all.
+        for key, _label, _builder in _SETTINGS_PAGE_SPECS:
+            self.window._ensure_settings_page(key)
+        _process(self._app)
+
+    def tearDown(self) -> None:
+        gui_test_support.close_main_window(self.window)
+        self.window.deleteLater()
+
+    def test_all_sections_share_the_same_bounded_content_body(self) -> None:
+        expected = {
+            "settings_workspace",
+            "settings_project",
+            "settings_api_keys",
+            "settings_models",
+            "settings_profiles",
+            "settings_litellm",
+            "settings_extensions",
+            "settings_context",
+            "settings_appearance",
+            "settings_shortcuts",
+            "settings_advanced",
+        }
+        self.assertEqual(set(self.window._settings_page_bodies), expected)
+
+    def test_workspace_action_bar_uses_immediate_save_context(self) -> None:
+        workspace_row = self.window._settings_nav_rows["workspace"]
+        project_row = self.window._settings_nav_rows["project"]
+
+        self.window.settings_nav.setCurrentRow(workspace_row)
+        _process(self._app, 5)
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertFalse(self.window.settings_action_context_label.isHidden())
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertTrue(button.isHidden())
+        self.assertFalse(self.window._save_config_shortcut.isEnabled())
+
+        self.window._config_tab_has_unsaved_changes = lambda: True
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=workspace_row,
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。",
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "warning",
+        )
+        self.assertFalse(self.window.save_config_btn.isHidden())
+        self.assertFalse(self.window.reload_config_btn.isHidden())
+        self.assertTrue(self.window.restore_defaults_btn.isHidden())
+        self.assertTrue(self.window._save_config_shortcut.isEnabled())
+
+        # Clear dirty (save/reload success) while staying on project list.
+        self.window._config_tab_has_unsaved_changes = lambda: False
+        self.window._sync_settings_action_bar_enabled(
+            task_running=False,
+            nav_row=workspace_row,
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertTrue(button.isHidden())
+        self.assertFalse(self.window._save_config_shortcut.isEnabled())
+
+        self.window.settings_nav.setCurrentRow(project_row)
+        _process(self._app, 5)
+        self.assertTrue(self.window.settings_action_context_label.isHidden())
+        for button in (
+            self.window.reload_config_btn,
+            self.window.restore_defaults_btn,
+            self.window.save_config_btn,
+        ):
+            self.assertFalse(button.isHidden())
+
+    def test_workspace_action_bar_refreshes_after_config_load_completes(self) -> None:
+        workspace_row = self.window._settings_nav_rows["workspace"]
+        self.window.settings_nav.setCurrentRow(workspace_row)
+        _process(self._app, 5)
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+
+        # Simulate the stale UNSAVED label that can appear while a settings page
+        # is populated from the user-level LiteLLM catalog cache.
+        original = self.window._config_tab_has_unsaved_changes
+        self.window._config_tab_has_unsaved_changes = lambda: True
+        try:
+            self.window._sync_settings_action_bar_enabled(
+                task_running=False,
+                nav_row=workspace_row,
+            )
+            self.assertEqual(
+                self.window.settings_action_context_label.text(),
+                "其他设置有未保存的更改；可保存、重新加载放弃，或切换项目时再处理。",
+            )
+            self.assertEqual(
+                self.window.settings_action_context_label.property("tone"),
+                "warning",
+            )
+        finally:
+            self.window._config_tab_has_unsaved_changes = original
+
+        # Loading config again must refresh the saved snapshot and recompute the
+        # action bar, dropping the stale UNSAVED variant.
+        self.window._load_config_to_ui(refresh_task_gates=False)
+        self.assertEqual(
+            self.window.settings_action_context_label.text(),
+            "项目列表操作即时保存，不受设置保存按钮影响。",
+        )
+        self.assertEqual(
+            self.window.settings_action_context_label.property("tone"),
+            "muted",
+        )
+
+    def test_shortcuts_section_lists_core_bindings(self) -> None:
+        from PySide6.QtWidgets import QLabel
+
+        row = self.window._settings_nav_rows.get("shortcuts")
+        self.assertIsNotNone(row)
+        assert row is not None
+        self.assertEqual(self.window.settings_nav.item(row).text(), "快捷键")
+        self.window.settings_nav.setCurrentRow(row)
+        _process(self._app, 5)
+        body = self.window._settings_page_bodies["settings_shortcuts"]
+        labels = [
+            widget.text()
+            for widget in body.findChildren(QLabel)
+            if widget.text().strip()
+        ]
+        joined = "\n".join(labels)
+        for needle in (
+            "Ctrl+D",
+            "Ctrl+T",
+            "Ctrl+K",
+            "Ctrl+L",
+            "Ctrl+Shift+L",
+            "Ctrl+S",
+            "Ctrl+1",
+            "Ctrl+2",
+            "Ctrl+3",
+            "Ctrl+0",
+            "项目与环境",
+            "翻译",
+            "设置",
+            "诊断与运行日志",
+            "导航",
+        ):
+            self.assertIn(needle, joined, msg=needle)
+
+    def test_number_shortcuts_activate_shell_routes_not_legacy_tabs(self) -> None:
+        """Ctrl+N must follow sidebar IA, not the hidden main tab indices."""
+        entries = self.window._shell_nav_shortcut_entries()
+        self.assertGreaterEqual(len(entries), 6)
+        self.assertEqual(entries[0][0], "project_prepare")
+        self.assertEqual(entries[0][1], "项目与环境")
+        self.assertTrue(entries[1][0].startswith("workbench:"))
+        self.assertEqual(entries[5][0], "settings")
+
+        self.window._activate_shell_route(entries[0][0])
+        self.assertEqual(self.window._current_shell_route(), "project_prepare")
+        self.window._activate_shell_route(entries[1][0])
+        self.assertEqual(self.window._current_shell_route(), entries[1][0])
+        self.window._activate_shell_route("diagnostics")
+        self.assertEqual(self.window._current_shell_route(), "diagnostics")
+
+        for key, body in self.window._settings_page_bodies.items():
+            with self.subTest(section=key):
+                self.assertEqual(body.objectName(), "settings_page_body")
+                self.assertEqual(body.property("settingsPage"), key)
+                # Bodies expand with the viewport (no hard 1080px content cap).
+                self.assertGreaterEqual(body.maximumWidth(), 10000)
+                margins = body.layout().contentsMargins()
+                self.assertEqual(
+                    (margins.left(), margins.top(), margins.right(), margins.bottom()),
+                    (20, 18, 20, 20),
+                )
+                self.assertEqual(body.layout().spacing(), 14)
+
+    def test_settings_pages_do_not_require_horizontal_scrolling(self) -> None:
+        for width in (960, 1280, 1600):
+            self.window.resize(width, 800)
+            _process(self._app)
+            for key, row in self.window._settings_nav_rows.items():
+                with self.subTest(width=width, section=key):
+                    self.window.settings_nav.setCurrentRow(row)
+                    _process(self._app, 5)
+                    page = self.window.settings_stack.currentWidget()
+                    self.assertIsInstance(page, QScrollArea)
+                    self.assertEqual(page.horizontalScrollBar().maximum(), 0)
+                    body_key = f"settings_{key}"
+                    body = self.window._settings_page_bodies[body_key]
+                    # Content body should track the viewport width (fullscreen-friendly).
+                    self.assertGreaterEqual(body.width(), page.viewport().width() - 2)
+                    self.assertLessEqual(body.width(), page.viewport().width() + 2)
+
+    def test_settings_navigation_items_fit_at_supported_narrow_width(self) -> None:
+        self.window.resize(960, 640)
+        _process(self._app)
+
+        viewport_rect = self.window.settings_nav.viewport().rect()
+        for row in range(self.window.settings_nav.count()):
+            item = self.window.settings_nav.item(row)
+            with self.subTest(section=item.text()):
+                self.assertTrue(
+                    viewport_rect.contains(
+                        self.window.settings_nav.visualItemRect(item)
+                    )
+                )
+
+    def test_settings_nav_overflow_is_never_silently_clipped(self) -> None:
+        # The real GUI loads the theme stylesheet, which widens every nav item
+        # (QSS margins/padding). Load it here so the regression exercises the
+        # production metrics; otherwise the default style stays comfortably
+        # narrow and would never reproduce the clipping bug.
+        try:
+            apply_theme(self._app, self.window._resources_dir, "light")
+            self.window.resize(960, 640)
+            _process(self._app, 12)
+            nav = self.window.settings_nav
+            # Exact policy: overflow must be scrollable, never silently hidden.
+            self.assertEqual(
+                nav.horizontalScrollBarPolicy(),
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded,
+            )
+            last_item = nav.item(nav.count() - 1)
+            # Default state: containment when the row fits; otherwise the
+            # overflow must be exposed through the horizontal scrollbar instead
+            # of being silently clipped. QRect's right() is inclusive, so
+            # equality with the viewport width is already one pixel outside.
+            rect = nav.visualItemRect(last_item)
+            if rect.right() >= nav.viewport().width():
+                self.assertTrue(nav.horizontalScrollBar().isVisible())
+                nav.scrollToItem(last_item)
+                _process(self._app, 5)
+                self.assertLess(
+                    nav.visualItemRect(last_item).right(),
+                    nav.viewport().width(),
+                )
+            else:
+                self.assertLess(rect.right(), nav.viewport().width())
+            # Overflow fallback (wider items force the horizontal scrollbar):
+            # the last section must stay reachable and its text line must fit
+            # the scrollbar-compressed viewport height.
+            nav.setStyleSheet(
+                "QListWidget#settings_nav::item { padding: 6px 60px; }"
+            )
+            _process(self._app, 8)
+            self.assertTrue(nav.horizontalScrollBar().isVisible())
+            nav.scrollToItem(last_item)
+            _process(self._app, 5)
+            rect = nav.visualItemRect(last_item)
+            self.assertLess(rect.right(), nav.viewport().width())
+            self.assertLessEqual(
+                nav.fontMetrics().height(),
+                nav.viewport().height(),
+            )
+        finally:
+            # Restore the unthemed state used by the other layout tests.
+            # apply_theme(..., "") would normalize to the system theme instead
+            # of clearing the stylesheet, so reset it directly.
+            self._app.setStyleSheet("")
+            clear_theme_caches()
+
+    def test_settings_forms_share_label_and_field_spacing(self) -> None:
+        form_count = 0
+        for page_index in range(self.window.settings_stack.count()):
+            page = self.window.settings_stack.widget(page_index)
+            for form in page.findChildren(QFormLayout, "settings_form"):
+                form_count += 1
+                margins = form.contentsMargins()
+                self.assertEqual(
+                    (margins.left(), margins.top(), margins.right(), margins.bottom()),
+                    (14, 18, 14, 14),
+                )
+                self.assertEqual(form.horizontalSpacing(), 16)
+                self.assertEqual(form.verticalSpacing(), 10)
+                self.assertEqual(
+                    form.rowWrapPolicy(),
+                    QFormLayout.RowWrapPolicy.WrapLongRows,
+                )
+        self.assertGreaterEqual(form_count, 7)
+
+    def test_model_selectors_use_consistent_editing_affordances(self) -> None:
+        # Gemini model page is select-only; custom catalog editing lives on Advanced.
+        for combo in (
+            self.window.sync_model_combo,
+            self.window.batch_model_combo,
+            self.window.sync_embedding_combo,
+            self.window.batch_embedding_combo,
+            self.window.batch_thinking_combo,
+        ):
+            with self.subTest(combo=combo.objectName() or type(combo).__name__):
+                self.assertFalse(combo.isEditable())
+
+
+if __name__ == "__main__":
+    unittest.main()

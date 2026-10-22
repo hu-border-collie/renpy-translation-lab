@@ -25,14 +25,14 @@ from PySide6.QtWidgets import (
 
 from providers.gemini_model_catalog import allowed_gemini_rotation_models, write_model_catalog_extras
 
-from ..settings_schema import (
+from gui_qt.settings.settings_schema import (
     CONTEXT_PRIMARY_SETTING_CATEGORY,
     ADVANCED_SETTING_FIELDS,
     SettingField,
     grouped_advanced_fields,
 )
 from ..user_copy import ADVANCED_SETTINGS_NAV_COPY as COPY
-from ..widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox
 from .field_widgets import (
     apply_setting_value_to_widget,
     create_basic_setting_widget,

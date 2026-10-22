@@ -10,7 +10,7 @@
 | --- | --- | --- | --- |
 | Sync 生成（翻译 / 术语 / 订正 / 项目分析） | `litellm_sync_backend.LiteLLMSyncBackend`；`model_profile.build_sync_backend` | `sync.backend=litellm` 或 `adapter=litellm` 的同步文本生成 | 直连 `openai_compatible` 已覆盖同一合同；LiteLLM 分支保留 |
 | Embedding | `translator_runtime` / `gemini_translate_batch` 的 `litellm.embedding` | RAG / Source Index embedding | **仍需 LiteLLM**（#341 范围，S2 不覆盖） |
-| 能力探测 / 连接测试 | `model_capability_probe.default_generator`；`gui_qt/litellm_worker.py` | 一次有界请求 + capability 报告 | 走 `build_sync_backend`：直连 profile 已不走 LiteLLM；LiteLLM profile 仍走 |
+| 能力探测 / 连接测试 | `model_capability_probe.default_generator`；`gui_qt/workers/litellm_worker.py` | 一次有界请求 + capability 报告 | 走 `build_sync_backend`：直连 profile 已不走 LiteLLM；LiteLLM profile 仍走 |
 | Provider 目录 / 模型列表 | `litellm_provider_config` 的 native catalog / model cost map；GUI LiteLLM 设置页 worker | LiteLLM 内置 / 在线模型目录、版本与安装 | **仍需 LiteLLM**；直连 adapter 使用自己的 models 端点，不读 LiteLLM 目录 |
 | 自定义 Provider 注册与迁移 | `litellm_provider_config.custom_provider_registry`；`model_routing_migration` | 旧 `sync.custom_litellm_providers` 解析与迁移 | **仍需 LiteLLM 语义**；直连 provider 使用 `model_routing` provider/profile |
 | LiteLLM 安装 / 版本 / 可选依赖 gating | `optional_feature.py`、`gui_qt/settings/litellm_page.py`、requirements lock | 仅 LiteLLM 用户需要 | 与直连路径解耦；S2 不改 |

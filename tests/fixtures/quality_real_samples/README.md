@@ -5,7 +5,7 @@ Issue #364（真实项目质量规则校准）的离线回归样本。这里**�
 ## 运行
 
 ```bash
-python -m unittest tests.test_quality_real_samples -v
+python -m unittest tests.quality_review.test_quality_real_samples -v
 ```
 
 测试对每个首版 reason code 断言：

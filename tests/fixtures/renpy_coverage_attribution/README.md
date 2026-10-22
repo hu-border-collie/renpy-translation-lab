@@ -27,5 +27,5 @@ Original synthetic fixture for issue
 
 The fixture is consumed read-only by
 `scripts/coverage_block_attribution.py` and
-`tests/test_coverage_attribution.py`. It is not a translation workflow
+`tests/engine_adapters/test_coverage_attribution.py`. It is not a translation workflow
 fixture and must not be written back to.

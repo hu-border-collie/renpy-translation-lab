@@ -233,7 +233,7 @@ GUI 主文案通常取**第一条**（最高优先的必需准备）；其余建
 - `gemini_translate_batch.py::collect_doctor_workflow_state()`：生成不进入建议列表的正常流程状态。
 - `gemini_translate_batch.py::collect_doctor_engine_status()`：生成只读 `engine_status` 块（capabilities / live schema / snapshot / catalog / writeback 前置），失败用 `engine.*` 稳定 code 表达。
 - `doctor_recommendations.py`：稳定建议代码、参数和 CLI 序列化兼容。
-- `gui_qt/doctor_report.py`：把 report 转换成 GUI 摘要、事实和状态。
+- `gui_qt/reports/doctor_report.py`：把 report 转换成 GUI 摘要、事实和状态。
 - `gui_qt/user_copy.py`：根据稳定代码生成中文文案和严重程度表现。
 
 `doctor` 还会返回 `model_routing`：其中分别保存 `sync` 与 `gemini_batch`

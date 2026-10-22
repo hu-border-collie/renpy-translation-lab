@@ -134,13 +134,13 @@ usage token、目录估价、Provider 实报费用、预留和最终账单核对
 ```powershell
 python -B scripts/openrouter_batch_spike.py freeze --output-dir tmp/issue-520/rebuilt
 python -B scripts/openrouter_batch_spike.py freeze --experiment deepseek41-v2 --output-dir tmp/issue-520/deepseek-v2/rebuilt
-python -B -m unittest tests.test_openrouter_batch_spike -q
+python -B -m unittest tests.tooling.test_openrouter_batch_spike -q
 python -B scripts/openrouter_batch_spike.py inspect --help
 ```
 
 fixture 位于 [source.json](../../tests/fixtures/openrouter_batch_spike/source.json)，
 [harness](../../scripts/openrouter_batch_spike.py) 不含 HTTP 或凭据访问；
-[测试](../../tests/test_openrouter_batch_spike.py) 的合成回执显式标记为离线，不构成 Provider smoke。
+[测试](../../tests/tooling/test_openrouter_batch_spike.py) 的合成回执显式标记为离线，不构成 Provider smoke。
 研究 harness 没有产品 GUI，这是范围内的有意例外，不是一个未同步的生产功能。
 
 若未来有明确需求并补齐保留/质量与完整对照缺口，再独立拆最小生产范围：能力/配置与 runtime reader、现有

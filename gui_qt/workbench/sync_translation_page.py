@@ -19,8 +19,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..empty_state import EmptyStateWidget
-from ..sync_translation_workflow import TERMINAL_RUN_STATUSES
+from gui_qt.widgets.empty_state import EmptyStateWidget
+from gui_qt.workflows.sync_translation_workflow import TERMINAL_RUN_STATUSES
 from ..user_copy import DURABLE_SYNC_RUN_COPY, TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession

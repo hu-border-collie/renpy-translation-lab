@@ -37,7 +37,7 @@ from providers import openai_compatible_provider_config as openai_compatible_pre
 from providers.model_profile import ADAPTER_OPENAI_COMPATIBLE
 from providers.openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
-from ..widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox
 from .page_chrome import (
     SettingsMasterDetail, add_model_navigation, build_settings_scroll_page,
     limit_short_field, settings_group,

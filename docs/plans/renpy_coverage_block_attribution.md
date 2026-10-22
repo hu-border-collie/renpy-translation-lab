@@ -150,7 +150,7 @@ python scripts/coverage_block_attribution.py `
 > `line/start_col/end_line/end_col` 半开区间、跨行 expected fragment hash 与 plan digest，
 > 再由既有 atomic writer 写回；非法/重叠/越界跨行 span 仍 fail closed。
 > #460 实现时版本为 `renpy@1.1.3`（当前 `renpy@1.1.8`，含 #461–#471）；新增测试
-> `tests/test_engine_adapter_multiline_strings.py` / `tests/test_engine_adapter_multiline_writeback.py`，
+> `tests/engine_adapters/test_engine_adapter_multiline_strings.py` / `tests/engine_adapters/test_engine_adapter_multiline_writeback.py`，
 > 并更新了本 fixture 的 characterization。
 
 - **问题**：`_inventory_document()` 逐物理行 `tokenize.generate_tokens(io.StringIO(line))`；多行三引号与
@@ -161,7 +161,7 @@ python scripts/coverage_block_attribution.py `
   或在现有逐行路径显式累积未闭合的 triple-quote / 反斜杠续行区域；不得用全局正则替换 parser。
 - **验收**：
   1. fixture 22–28 行不再产生 `renpy.tokenize_error`，且出现可提取 candidate；
-  2. 更新 `tests/test_coverage_attribution.py` 的 characterization 期望；
+  2. 更新 `tests/engine_adapters/test_coverage_attribution.py` 的 characterization 期望；
   3. 保留非法未闭合字符串的 `parse_error` 行为；
   4. 现有 P1/P2 adapter 等价性测试通过；
   5. 不改变 writeback；若需要 adapter 行为版本升级，单独按既有规则处理。
@@ -171,7 +171,7 @@ python scripts/coverage_block_attribution.py `
 > **状态：已实现。** 所有 string/f-string 候选都会基于逻辑语句尝试 pairing：`old` marker 只配 `new` 行，
 > voice 行不消费 comment marker，真正没有后继字符串的 quoted comment 仍保持
 > `renpy.source_marker_unpaired`。没有新增 reason code，沿用 #420 allowlist。
-> 当前实现版本 `renpy@1.1.4`，新增测试 `tests/test_engine_adapter_marker_pairing.py`。
+> 当前实现版本 `renpy@1.1.4`，新增测试 `tests/engine_adapters/test_engine_adapter_marker_pairing.py`。
 
 - **问题**：字符串 candidate 一旦是 `unsupported` / `unknown` / tokenize 失败，上方合法 marker comment 不会被加入
   `paired_source_marker_lines`，随后作为 `renpy.source_marker_unpaired` 再记一个 `parse_error`，使 block 计数虚高。
@@ -195,7 +195,7 @@ python scripts/coverage_block_attribution.py `
 > 把 candidate 标为 `already_translated`，并在 evidence / unit metadata 记录 `source_marker_missing=true`；
 > dynamic f-string 仍保持 `unsupported`，按结构化支持计划处理，不自动翻译；非目标语言或证据不足的字符串
 > 仍保留 `unknown` 供人工 review/repair。
-> 当前实现版本 `renpy@1.1.6`，新增测试 `tests/test_engine_adapter_unmarked_translation.py`。
+> 当前实现版本 `renpy@1.1.6`，新增测试 `tests/engine_adapters/test_engine_adapter_unmarked_translation.py`。
 
 - **问题**：没有 paired comment 的已译 TL 字符串落到 `unknown / renpy.visibility_unknown`（本 fixture 的单引号对白）；
   动态 f-string 落到 `unsupported`。两者都会使 coverage `block`，但当前没有「官方 parser 接受性 + catalog provenance」
@@ -220,7 +220,7 @@ python scripts/coverage_block_attribution.py `
 > - 仍有后继 target 但未配对的 dangling marker → 保持 `renpy.source_marker_unpaired` parse_error；
 > - 孤儿 `old` 行 → 保持 parse_error；`old` 行含额外 token → 保持 `renpy.custom_statement_unsupported`
 >   unsupported。所有候选都保留在 inventory，不静默丢弃。
-> 当前实现版本 `renpy@1.1.7`，新增测试 `tests/test_engine_adapter_comment_policy.py`。
+> 当前实现版本 `renpy@1.1.7`，新增测试 `tests/engine_adapters/test_engine_adapter_comment_policy.py`。
 
 - **问题**：尾部 `# TODO "…"` 与只有 `old` 没有 `new` 的行目前不能区分「开发者注释」与「真实 source marker
   缺失」，都会进入 parse_error 并 block。
@@ -236,7 +236,7 @@ python scripts/coverage_block_attribution.py `
 > **状态：已实现。** `_stable_error_text()` 会移除异常文本中的 `at 0x…` 等进程地址，再写入
 > parse-error evidence / exception excerpt；相同输入、规则与 adapter 版本下 `inventory_digest` /
 > `coverage_digest` 跨进程稳定。adapter version `renpy@1.1.5`，新增测试
-> `tests/test_engine_adapter_digest_stability.py`；归因脚本重新输出两个 digest。
+> `tests/engine_adapters/test_engine_adapter_digest_stability.py`；归因脚本重新输出两个 digest。
 > 该修复只规范化错误文本，不改变 classification、reason code 或 writeback。
 
 - **问题**：动态 f-string 的 `evidence["parse_error"]` 含 `<ast.JoinedStr object at 0x…>` 地址，

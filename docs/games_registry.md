@@ -263,7 +263,7 @@ python -m execution.games_registry --workspace path\to\workspace ingest --source
 与本功能相关的自动化测试：
 
 ```powershell
-python -m unittest -q tests.test_game_ingest tests.test_games_registry tests.test_games_registry_source_url
+python -m unittest -q tests.execution.test_game_ingest tests.execution.test_games_registry tests.execution.test_games_registry_source_url
 python -m unittest discover -s tests -p "test_gui_games_registry*.py" -q
 ```
 

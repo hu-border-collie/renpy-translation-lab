@@ -11,6 +11,30 @@
 
 ## 分层
 
+### GUI 与测试目录
+
+GUI 的目录按现有职责组织，`python -m gui_qt` 仍是启动入口：
+
+| 目录 | 职责 |
+| --- | --- |
+| `gui_qt/settings/`、`gui_qt/workbench/` | 设置页、工作台页面及对应的协调和动作 |
+| `gui_qt/workflows/` | 任务步骤、CLI 参数与运行结果的流程编排 |
+| `gui_qt/reports/` | 检查、进度、失败与订正结果的展示投影和格式化 |
+| `gui_qt/dialogs/`、`gui_qt/widgets/` | 对话框和复用控件 |
+| `gui_qt/workers/` | GUI 后台操作与结果信号 |
+| `gui_qt/runtime/` | CLI 子进程、安装控制器、异步操作身份与生命周期 |
+| `gui_qt/appearance/` | 主题、字体和图标 |
+
+根目录保留应用壳、启动入口、项目与会话状态、工作模式、共享文案、路径与诊断命令参考。
+模块迁移不改变翻译语义、CLI 命令或配置格式；`app.py` 的内部拆分属于后续独立工作。
+
+`tests/` 按 CLI、runtime 和各核心包分组；GUI 测试位于 `tests/gui/`，与上述职责对应。
+共享测试辅助代码位于 `tests/support/`，原创夹具统一留在 `tests/fixtures/`。
+两套 runner 递归发现测试，并使用完整包名加载；GUI 与 CLI 的划分仍由原有文件命名规则决定。
+具体运行方式见 [测试目录说明](../tests/README.md)。
+
+### 运行职责
+
 1. **CLI 与 GUI 入口**
    - `gemini_translate.py`、`gemini_translate_batch.py` 提供 CLI 和机器 JSON 合同。
    - `gui_qt/app.py` 是当前桌面壳；工作台页面与 workflow 负责把用户动作映射到共用服务或 CLI。
@@ -19,7 +43,7 @@
    - `translator_runtime.py` 从代码默认值、`api_keys.json`、环境变量和
      `translator_config.json` 构造运行时快照。
    - `gui_qt/project_state.py` 负责 GUI 项目路径，原始 JSON 读取/保存委托给共用 `foundation/config_store.py`。
-   - `gui_qt/settings_schema.py` 描述高级设置字段；当前 Settings 总体 load/save/dirty
+   - `gui_qt/settings/settings_schema.py` 描述高级设置字段；当前 Settings 总体 load/save/dirty
      编排仍位于 `gui_qt/app.py`。
    - 当前项目的 `project_context_settings.json` 保存 RAG / 原文索引 / 项目分析开关；
      全局默认值仍在 `translator_config.json`。
@@ -33,7 +57,7 @@
 4. **执行与耐久状态**
    - CLI 耐久路径：`sync-start` → `execution/sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
      `execution/sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
-   - GUI Sync 页由 `gui_qt/sync_translation_workflow.py` 驱动 #347 的
+   - GUI Sync 页由 `gui_qt/workflows/sync_translation_workflow.py` 驱动 #347 的
      `sync-start` / `sync-resume` / `sync-status` / `sync-cancel` / `sync-derive`，
      写回经 `check <RUN>` → `apply <RUN>`；GUI 不读取运行数据库，也不复制任务状态机。
      统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。

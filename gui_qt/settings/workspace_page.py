@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..games_registry_panel import GamesRegistryPanel
+from gui_qt.widgets.games_registry_panel import GamesRegistryPanel
 from .page_chrome import build_settings_scroll_page
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS

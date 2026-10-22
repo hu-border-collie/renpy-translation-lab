@@ -95,11 +95,11 @@ from providers import model_usage_ledger
 from quality_review import revision_selection
 
 from .path_utils import canonical_abs_path, normalize_context_storage_location
-from .responsive_layout import FlowButtonBar, ResponsiveActionPanel
-from .empty_state import EmptyStateWidget
-from .api_key_dialog import ApiKeyDialog
-from .api_key_helpers import mask_api_key
-from .bootstrap_report import (
+from gui_qt.widgets.responsive_layout import FlowButtonBar, ResponsiveActionPanel
+from gui_qt.widgets.empty_state import EmptyStateWidget
+from gui_qt.dialogs.api_key_dialog import ApiKeyDialog
+from gui_qt.settings.api_key_helpers import mask_api_key
+from gui_qt.reports.bootstrap_report import (
     BootstrapProgressState,
     BootstrapProgressTracker,
     BootstrapSummary,
@@ -114,19 +114,19 @@ from .bootstrap_report import (
     summarize_source_index_bootstrap_output,
     update_bootstrap_progress_from_line,
 )
-from .apply_failure_dialog import ApplyFailureDialog
-from .apply_failure_report import (
+from gui_qt.dialogs.apply_failure_dialog import ApplyFailureDialog
+from gui_qt.reports.apply_failure_report import (
     apply_failure_report_available,
     build_apply_failure_report,
 )
-from .check_failures_report import build_check_issues_report
-from .check_issues_dialog import CheckIssuesDialog
-from .quality_findings_dialog import QualityFindingsDialog
-from .quality_findings_report import (
+from gui_qt.reports.check_failures_report import build_check_issues_report
+from gui_qt.dialogs.check_issues_dialog import CheckIssuesDialog
+from gui_qt.dialogs.quality_findings_dialog import QualityFindingsDialog
+from gui_qt.reports.quality_findings_report import (
     build_quality_findings_report,
     quality_issues_report_ready,
 )
-from .check_report import (
+from gui_qt.reports.check_report import (
     WritebackSummary,
     build_recheck_cli_args,
     idle_writeback_summary,
@@ -146,20 +146,20 @@ from .diagnostics_context import (
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
-from .export_writeback_dialog import (
+from gui_qt.dialogs.export_writeback_dialog import (
     APPLY_EXPORT_MODE,
     EXPORT_ONLY_MODE,
     ExportPreviewFacts,
     ExportWritebackDialog,
 )
-from .probe_report import (
+from gui_qt.reports.probe_report import (
     build_probe_cli_args,
     probe_summary_to_diagnostics_context,
     running_probe_summary,
     summarize_probe_output,
     translation_probe_ready,
 )
-from .ab_experiment_report import (
+from gui_qt.reports.ab_experiment_report import (
     AB_VARIANT_CHOICE_FORCE_OFF,
     AB_VARIANT_CHOICE_FORCE_ON,
     AB_VARIANT_CHOICE_SKIP,
@@ -175,8 +175,8 @@ from .ab_experiment_report import (
     validate_ab_experiment_variants,
     write_variants_to_temp_file,
 )
-from .keyword_merge_dialog import KeywordMergeDialog
-from .keyword_merge_report import (
+from gui_qt.dialogs.keyword_merge_dialog import KeywordMergeDialog
+from gui_qt.reports.keyword_merge_report import (
     KeywordCandidateSelection,
     KeywordReviewContext,
     format_keyword_candidate_selection,
@@ -190,37 +190,37 @@ from .keyword_merge_report import (
     read_keyword_candidate_snapshot,
     summarize_keyword_merge_result,
 )
-from .keyword_report import summarize_keyword_result_from_manifest
-from .revision_report import summarize_revision_apply_output
-from .revision_writeback_report import (
+from gui_qt.reports.keyword_report import summarize_keyword_result_from_manifest
+from gui_qt.reports.revision_report import summarize_revision_apply_output
+from gui_qt.reports.revision_writeback_report import (
     summarize_revision_writeback_from_manifest,
     summarize_revision_writeback_from_preview_output,
 )
-from .split_batch import (
+from gui_qt.workflows.split_batch import (
     SplitManifestEntry,
     load_split_manifest_entries,
     summarize_split_entries,
 )
-from .split_report import (
+from gui_qt.reports.split_report import (
     build_split_cli_args,
     running_split_summary,
     split_summary_to_diagnostics_context,
     summarize_split_output,
     translation_split_ready,
 )
-from .split_batch_workflow import SplitBatchQueueWorkflow
-from .sync_translation_workflow import SyncTranslationWorkflow, durable_sync_facts
-from .split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
-from .split_status_table_helpers import is_split_action_column, split_action_item_payload
-from .retry_preview_dialog import RetryPreviewDialog
-from .retry_report import (
+from gui_qt.workflows.split_batch_workflow import SplitBatchQueueWorkflow
+from gui_qt.workflows.sync_translation_workflow import SyncTranslationWorkflow, durable_sync_facts
+from gui_qt.widgets.split_status_delegate import SPLIT_ACTION_DATA_ROLE, SplitStatusActionDelegate
+from gui_qt.widgets.split_status_table_helpers import is_split_action_column, split_action_item_payload
+from gui_qt.dialogs.retry_preview_dialog import RetryPreviewDialog
+from gui_qt.reports.retry_report import (
     assess_retry_eligibility,
     build_retry_cli_args,
     parse_build_retry_output,
     retry_followup_allowed,
     summarize_retry_manifest,
 )
-from .repair_report import (
+from gui_qt.reports.repair_report import (
     RepairReportCandidate,
     assess_repair_eligibility,
     build_repair_cli_args,
@@ -231,14 +231,14 @@ from .repair_report import (
     running_repair_summary,
     summarize_repair_output,
 )
-from .retry_workflow import (
+from gui_qt.workflows.retry_workflow import (
     create_retry_followup_workflow,
     describe_retry_followup_button,
     retry_followup_workflow_ready,
 )
-from .cli_runner import CliRunner
-from .lifecycle import ShutdownCoordinator
-from .doctor_report import (
+from gui_qt.runtime.cli_runner import CliRunner
+from gui_qt.runtime.lifecycle import ShutdownCoordinator
+from gui_qt.reports.doctor_report import (
     DoctorSummary,
     idle_summary,
     cancelled_summary,
@@ -247,32 +247,32 @@ from .doctor_report import (
     summarize_doctor_output,
     summarize_doctor_report,
 )
-from .doctor_worker import DoctorWorker, DoctorWorkerResult
-from .readiness_display import doctor_overview, preflight_line
+from gui_qt.workers.doctor_worker import DoctorWorker, DoctorWorkerResult
+from gui_qt.reports.readiness_display import doctor_overview, preflight_line
 from .user_copy import READINESS_COPY
-from .font_helpers import optional_fonts_installed, user_fonts_dir
-from .font_worker import FontInstallResult, FontInstallWorker
+from gui_qt.appearance.font_helpers import optional_fonts_installed, user_fonts_dir
+from gui_qt.workers.font_worker import FontInstallResult, FontInstallWorker
 
-from .games_registry_actions import handle_post_apply_registry_update
-from .games_registry_doctor_compare import compare_registry_with_doctor_report
+from gui_qt.workbench.games_registry_actions import handle_post_apply_registry_update
+from gui_qt.reports.games_registry_doctor_compare import compare_registry_with_doctor_report
 
-from .manifest_resume_summary import (
+from gui_qt.reports.manifest_resume_summary import (
     ManifestWorkflowDisplay,
     build_manifest_workflow_display,
     completed_manifest_entry_fact,
 )
-from .template_generation_report import (
+from gui_qt.reports.template_generation_report import (
     running_template_generation_summary,
     summarize_template_generation_output,
     template_generation_to_doctor_summary,
 )
-from .work_bootstrap_report import (
+from gui_qt.reports.work_bootstrap_report import (
     running_work_bootstrap_summary,
     summarize_work_bootstrap_output,
     with_game_root_persist_warning,
     work_bootstrap_to_doctor_summary,
 )
-from .litellm_worker import (
+from gui_qt.workers.litellm_worker import (
     LiteLLMConnectionTestWorker,
     LiteLLMModelCatalogWorker,
     LiteLLMModuleWarmupWorker,
@@ -280,16 +280,16 @@ from .litellm_worker import (
     LiteLLMVersionWorker,
     is_cancelled_message,
 )
-from .litellm_catalog_cache import (
+from gui_qt.settings.litellm_catalog_cache import (
     CatalogSnapshot,
     LiteLLMCatalogCache,
     catalog_snapshot_warning,
 )
-from .litellm_settings import (
+from gui_qt.settings.litellm_settings import (
     provider_credential_status,
     read_sync_backend_models,
 )
-from .custom_provider_dialog import CustomLiteLLMProviderDialog
+from gui_qt.dialogs.custom_provider_dialog import CustomLiteLLMProviderDialog
 from providers.gemini_model_catalog import (
     BUILTIN_GEMINI_EMBEDDING_MODELS,
     BUILTIN_GEMINI_TRANSLATION_MODELS,
@@ -317,16 +317,16 @@ from providers.litellm_provider_config import (
     provider_from_model,
 )
 from foundation.optional_feature import FeatureInstallState, FeatureStatus
-from .optional_feature_install import (
+from gui_qt.runtime.optional_feature_install import (
     OptionalFeatureInstallController,
     action_enabled_for_status,
     build_litellm_controller,
     build_relation_analyzer_controller,
 )
 from .project_state import ProjectState
-from .theme import apply_theme, system_prefers_dark
-from .icon_provider import set_tabler_button_icon
-from .theme_helpers import (
+from gui_qt.appearance.theme import apply_theme, system_prefers_dark
+from gui_qt.appearance.icon_provider import set_tabler_button_icon
+from gui_qt.appearance.theme_helpers import (
     DEFAULT_THEME_PREFERENCE,
     THEME_DARK,
     THEME_SYSTEM,
@@ -335,7 +335,7 @@ from .theme_helpers import (
     resolve_effective_theme,
     write_gui_theme_to_config,
 )
-from .settings_schema import (
+from gui_qt.settings.settings_schema import (
     ADVANCED_SETTING_FIELD_BY_KEY,
     ADVANCED_SETTING_FIELDS,
     CONTEXT_PRIMARY_SETTING_CATEGORY,
@@ -389,8 +389,8 @@ from .settings.registry import (
     build_default_registry,
 )
 
-from .translation_workflow import WorkflowUpdate, build_export_writeback_cli_args
-from .widget_helpers import (
+from gui_qt.workflows.translation_workflow import WorkflowUpdate, build_export_writeback_cli_args
+from gui_qt.widgets.widget_helpers import (
     message_box_information,
     message_box_question,
     message_box_warning,
@@ -418,29 +418,29 @@ from .user_copy import (
     format_job_state_fact,
     format_manifest_path_fact,
 )
-from .final_review_dialog import FinalReviewFindingsDialog
-from .final_review_workflow import FinalReviewWorkflow
-from .revision_selection_dialog import RevisionProposalSelectionDialog
-from .revision_workflow import (
+from gui_qt.dialogs.final_review_dialog import FinalReviewFindingsDialog
+from gui_qt.workflows.final_review_workflow import FinalReviewWorkflow
+from gui_qt.dialogs.revision_selection_dialog import RevisionProposalSelectionDialog
+from gui_qt.workflows.revision_workflow import (
     RevisionProposalConfirmWorkflow,
     RevisionProposalImportWorkflow,
 )
-from .coverage_worker import CoverageReviewImportWorker
-from .context_library_worker import (
+from gui_qt.workers.coverage_worker import CoverageReviewImportWorker
+from gui_qt.workers.context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
     collect_context_library_status,
 )
-from .operation_identity import (
+from gui_qt.runtime.operation_identity import (
     context_library_config_digest,
     is_current_identity,
     litellm_connection_identity,
     revision_corpus_export_identity,
 )
-from .revision_corpus_report import RevisionCorpusExportResult
-from .revision_corpus_workflow import RevisionCorpusExportWorkflow
-from .project_analysis_review_dialog import ProjectAnalysisReviewDialog
-from .project_analysis_workflow import (
+from gui_qt.reports.revision_corpus_report import RevisionCorpusExportResult
+from gui_qt.workflows.revision_corpus_workflow import RevisionCorpusExportWorkflow
+from gui_qt.dialogs.project_analysis_review_dialog import ProjectAnalysisReviewDialog
+from gui_qt.workflows.project_analysis_workflow import (
     ProjectAnalysisWorkflow,
     discover_keyword_summary_path,
 )
@@ -467,22 +467,22 @@ from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench.translation_page import TranslationTargetSection, strategy_label
 from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
-from .batch_workflow_support import resolve_submit_max_cost
-from .workflow_factory import create_workflow, resume_workflow
-from .workflow_progress import (
+from gui_qt.workflows.batch_workflow_support import resolve_submit_max_cost
+from gui_qt.workflows.workflow_factory import create_workflow, resume_workflow
+from gui_qt.reports.workflow_progress import (
     WorkflowProgressState,
     create_workflow_progress_state,
     update_workflow_progress_from_line,
 )
-from .widget_helpers import (
+from gui_qt.widgets.widget_helpers import (
     NoWheelComboBox,
     NoWheelTabWidget,
     add_editable_combo_popup_action,
 )
-from .wizard_timeline import WizardTimeline
-from .log_highlighter import LogHighlighter
-from .status_icons import StatusBadge
-from .toast_widget import ToastNotification
+from gui_qt.widgets.wizard_timeline import WizardTimeline
+from gui_qt.widgets.log_highlighter import LogHighlighter
+from gui_qt.appearance.status_icons import StatusBadge
+from gui_qt.widgets.toast_widget import ToastNotification
 
 # #348 P3: each work mode maps to the routing stage whose resolved profile is
 # shown as a workflow fact.
@@ -2744,7 +2744,7 @@ class MainWindow(QMainWindow):
 
     def _open_engine_snapshot_dialog(self, *, start_tab: int = 0) -> None:
         """Open the read-only engine/snapshot/reuse dialog for the active project."""
-        from .engine_snapshot_dialog import EngineSnapshotDialog
+        from gui_qt.dialogs.engine_snapshot_dialog import EngineSnapshotDialog
 
         dialog = EngineSnapshotDialog(
             self,
@@ -4210,7 +4210,7 @@ class MainWindow(QMainWindow):
         if reply != "yes":
             return
 
-        from .sdk_install_worker import SdkInstallWorker
+        from gui_qt.workers.sdk_install_worker import SdkInstallWorker
 
         worker = SdkInstallWorker(
             Path(target_text),

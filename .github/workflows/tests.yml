@@ -228,7 +228,7 @@ jobs:
           python -m pip install --require-hashes -r requirements-lock/py311-cli.txt
 
       - name: Run relation analyzer and RPA safety tests
-        run: python -B -m unittest tests.test_relation_analyzer tests.test_rpa_safety -v
+        run: python -B -m unittest tests.relation_analyzer.test_relation_analyzer tests.foundation.test_rpa_safety -v
 
       - name: Smoke test extract_relations entry
         run: python extract_relations.py --help

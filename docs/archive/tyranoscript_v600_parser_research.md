@@ -197,7 +197,7 @@
 
 fixture 冻结的 reason code 词表见
 `tests/fixtures/tyranoscript_v600/expected/inventory.json` 和
-`tests/test_tyranoscript_p5_fixtures.py`；实现阶段若扩词表，先更新三处：
+`tests/engine_adapters/test_tyranoscript_p5_fixtures.py`；实现阶段若扩词表，先更新三处：
 inventory、测试常量、本文。
 
 ### 7.2 locator（建议 v1）
@@ -252,7 +252,7 @@ inventory、测试常量、本文。
 | `expected/inventory.json` | P5 adapter 应达到的严格 candidate 输出合同 |
 | `negative_cases.json` | missing row / stale extra / missing scenario / empty translation / stale tag registry 变异 |
 
-表征测试：`python -m unittest tests.test_tyranoscript_p5_fixtures`（runner 中为
+表征测试：`python -m unittest tests.engine_adapters.test_tyranoscript_p5_fixtures`（runner 中为
 `python -B tests/run_cli_tests.py -q` 的一部分）。测试不调用模型、不运行 Node、
 不写 `work/` / `build/`。
 

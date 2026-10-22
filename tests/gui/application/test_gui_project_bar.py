@@ -1,0 +1,305 @@
+"""Tests for global project bar and writeback issues collapse (GUI IA P0b / #159)."""
+from __future__ import annotations
+
+import unittest
+from unittest.mock import MagicMock
+
+try:
+    from PySide6.QtWidgets import QApplication
+
+    from gui_qt.app import MainWindow
+    from gui_qt.reports.check_report import WritebackSummary
+except ImportError as exc:
+    MainWindow = None  # type: ignore[assignment,misc]
+    QApplication = None  # type: ignore[assignment,misc]
+    WritebackSummary = None  # type: ignore[assignment,misc]
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
+
+from tests.support import gui_test_support
+
+
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
+class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        app = QApplication.instance()
+        if app is None:
+            cls._app = QApplication([])
+        else:
+            cls._app = app
+
+    def setUp(self) -> None:
+        self.window = MainWindow()
+
+    def tearDown(self) -> None:
+        gui_test_support.close_main_window(self.window)
+        self.window.deleteLater()
+
+    def test_global_project_bar_widgets_exist(self) -> None:
+        self.assertTrue(hasattr(self.window, "global_project_bar"))
+        self.assertTrue(hasattr(self.window, "global_project_path_edit"))
+        self.assertTrue(hasattr(self.window, "global_switch_project_btn"))
+        self.assertTrue(hasattr(self.window, "global_browse_project_btn"))
+        for button in (
+            self.window.global_switch_project_btn,
+            self.window.global_browse_project_btn,
+            self.window.doctor_btn,
+            self.window.bootstrap_work_btn,
+        ):
+            self.assertGreaterEqual(button.minimumWidth(), 108)
+
+        # Project-level prep lives on the global bar with directory switch.
+        self.assertEqual(self.window.global_switch_project_btn.text(), "切换项目")
+        self.assertEqual(
+            self.window.global_browse_project_btn.text(), "指定本地目录…"
+        )
+        self.assertEqual(self.window.doctor_btn.text(), "环境检查")
+        self.assertEqual(self.window.bootstrap_work_btn.text(), "准备工作目录")
+
+        # Task-route bar is compact: prep actions stay on 项目与环境 (#298).
+        self.assertTrue(self.window.doctor_btn.isHidden())
+        self.assertTrue(self.window.bootstrap_work_btn.isHidden())
+        self.window._activate_shell_route("project_prepare")
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
+        self.assertIs(
+            self.window.doctor_btn.parentWidget(),
+            self.window.global_project_actions,
+        )
+        self.assertIs(
+            self.window.bootstrap_work_btn.parentWidget(),
+            self.window.global_project_actions,
+        )
+        # Legacy alias still points at browse control for enable/disable callers.
+        self.assertIs(self.window.select_btn, self.window.global_browse_project_btn)
+        self.assertIs(self.window.project_path_edit, self.window.global_project_path_edit)
+
+    def test_registry_settings_are_labeled_as_project_list(self) -> None:
+        row = self.window._settings_nav_rows["workspace"]
+        self.assertEqual(self.window.settings_nav.item(row).text(), "项目列表")
+        self.assertIn("项目列表", self.window.global_switch_project_btn.toolTip())
+        self.assertEqual(
+            self.window.settings_go_workspace_btn.text(),
+            "在项目列表切换…",
+        )
+
+    def test_task_running_disables_global_prep_buttons(self) -> None:
+        self.window._set_task_running(True)
+        self.assertFalse(self.window.doctor_btn.isEnabled())
+        self.assertFalse(self.window.bootstrap_work_btn.isEnabled())
+        # Settings entry and project list browse stay available; switch is gated.
+        self.assertTrue(self.window.settings_go_workspace_btn.isEnabled())
+        panel = self.window._games_registry_panel
+        self.assertIsNotNone(panel)
+        assert panel is not None
+        self.assertTrue(panel.isEnabled())
+        self.assertTrue(panel._host_task_running)
+        self.assertFalse(panel._switch_btn.isEnabled())
+        self.window._set_task_running(False)
+        self.assertTrue(self.window.doctor_btn.isEnabled())
+        self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
+        self.assertFalse(panel._host_task_running)
+
+    def test_global_prep_actions_switch_to_workbench_tab(self) -> None:
+        """Doctor / bootstrap from Settings/Diagnostics must reveal Workbench UI."""
+        from gui_qt.app import _BATCH_STAGE_PREPARE
+
+        workbench = self.window._workbench_tab
+        config = self.window._config_tab
+        self.assertIsNotNone(workbench)
+        self.assertIsNotNone(config)
+
+        # --- doctor from Settings ---
+        self.window.tab_widget.setCurrentWidget(config)
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._confirm_unsaved_config_before_workflow = lambda: True  # type: ignore[method-assign]
+        self.window._is_doctor_running = lambda: False  # type: ignore[method-assign]
+        self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
+        self.window._append_log = lambda *_a, **_k: None  # type: ignore[method-assign]
+        self.window._set_task_running = lambda *_a, **_k: None  # type: ignore[method-assign]
+        started: list[str] = []
+
+        class _FakeDoctorWorker:
+            def __init__(self, *args, **kwargs) -> None:
+                self.completed = MagicMock()
+                self.finished = MagicMock()
+
+            def isRunning(self) -> bool:
+                return False
+
+            def start(self) -> None:
+                started.append("doctor")
+
+        import gui_qt.app as app_mod
+
+        original_worker = app_mod.DoctorWorker
+        app_mod.DoctorWorker = _FakeDoctorWorker  # type: ignore[misc,assignment]
+        try:
+            self.window._on_run_doctor()
+        finally:
+            app_mod.DoctorWorker = original_worker  # type: ignore[misc,assignment]
+
+        self.assertIs(self.window.tab_widget.currentWidget(), workbench)
+        self.assertEqual(
+            self.window.workbench_status_tabs.currentIndex(),
+            _BATCH_STAGE_PREPARE,
+        )
+        self.assertEqual(started, ["doctor"])
+
+        # --- bootstrap-work from Diagnostics ---
+        self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)
+        runner_calls: list[list[str]] = []
+        self.window.runner.run = (  # type: ignore[method-assign]
+            lambda _script, args: runner_calls.append(list(args))
+        )
+        self.window._on_bootstrap_work()
+        self.assertIs(self.window.tab_widget.currentWidget(), workbench)
+        self.assertEqual(
+            self.window.workbench_status_tabs.currentIndex(),
+            _BATCH_STAGE_PREPARE,
+        )
+        self.assertEqual(runner_calls, [["bootstrap-work"]])
+
+    def test_project_bar_persists_on_task_routes_in_compact_mode(self) -> None:
+        """Task routes keep identity + switch; prep actions stay on 项目与环境."""
+        self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertIs(
+            self.window.global_project_bar.parentWidget(),
+            self.window.workbench_primary,
+        )
+        self.assertFalse(self.window.global_switch_project_btn.isHidden())
+        self.assertTrue(self.window.global_browse_project_btn.isHidden())
+        self.assertTrue(self.window.doctor_btn.isHidden())
+        self.assertTrue(self.window.bootstrap_work_btn.isHidden())
+
+        self.window._activate_shell_route("project_prepare")
+
+        self.assertFalse(self.window.global_project_bar.isHidden())
+        self.assertFalse(self.window.global_browse_project_btn.isHidden())
+        self.assertFalse(self.window.doctor_btn.isHidden())
+        self.assertFalse(self.window.bootstrap_work_btn.isHidden())
+        self.assertTrue(self.window.workbench_stack.isHidden())
+
+    def test_compact_project_bar_is_one_bounded_row(self) -> None:
+        """#298 visual follow-up: task identity must not absorb page height."""
+        from PySide6.QtCore import QPoint, QRect
+
+        self.window.resize(960, 640)
+        self.window.show()
+        for _ in range(12):
+            self._app.processEvents()
+
+        bar = self.window.global_project_bar
+        path = self.window.global_project_path_edit
+        switch = self.window.global_switch_project_btn
+        self.assertLessEqual(bar.height(), 64)
+        self.assertTrue(self.window.global_project_bar_label.isHidden())
+        path_rect = QRect(path.mapTo(bar, QPoint(0, 0)), path.size())
+        switch_rect = QRect(switch.mapTo(bar, QPoint(0, 0)), switch.size())
+        self.assertTrue(bar.rect().contains(path_rect))
+        self.assertTrue(bar.rect().contains(switch_rect))
+        self.assertLessEqual(abs(path_rect.center().y() - switch_rect.center().y()), 4)
+
+        compact_height = bar.height()
+        self.window._activate_shell_route("project_prepare")
+        for _ in range(8):
+            self._app.processEvents()
+        self.assertFalse(self.window.global_project_bar_label.isHidden())
+        self.assertGreater(bar.height(), compact_height)
+
+    def test_refresh_project_label_updates_global_bar(self) -> None:
+        self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
+        self.window._refresh_project_label()
+        self.assertEqual(
+            self.window.global_project_path_edit.text(),
+            "C:/games/Demo/work",
+        )
+
+    def test_task_running_disables_global_project_switch_controls(self) -> None:
+        self.window._set_task_running(True)
+        self.assertFalse(self.window.global_switch_project_btn.isEnabled())
+        self.assertFalse(self.window.global_browse_project_btn.isEnabled())
+        self.window._set_task_running(False)
+        self.assertTrue(self.window.global_switch_project_btn.isEnabled())
+        self.assertTrue(self.window.global_browse_project_btn.isEnabled())
+
+    def test_select_project_respects_dirty_leave_guard(self) -> None:
+        calls: list[str] = []
+        self.window._confirm_unsaved_config_before_registry_switch = (  # type: ignore[method-assign]
+            lambda: calls.append("guard") or False
+        )
+        self.window._switch_game_root = lambda _path: calls.append("switch") or True  # type: ignore[method-assign]
+
+        self.window._on_select_project()
+
+        self.assertEqual(calls, ["guard"])
+
+    def test_select_project_blocked_while_running(self) -> None:
+        calls: list[str] = []
+        self.window._task_running = True
+        self.window._confirm_unsaved_config_before_registry_switch = (  # type: ignore[method-assign]
+            lambda: calls.append("guard") or True
+        )
+        self.window._on_select_project()
+        self.assertEqual(calls, [])
+
+    def test_global_switch_opens_workspace_section(self) -> None:
+        focused: list[str] = []
+        self.window._focus_settings_section = lambda key: focused.append(key)  # type: ignore[method-assign]
+        self.window._on_global_switch_project()
+        self.assertEqual(focused, ["workspace"])
+
+    def test_writeback_issues_panel_collapsed_by_default(self) -> None:
+        self.assertFalse(self.window._writeback_issues_expanded)
+        self.assertTrue(self.window.writeback_issues_panel.isHidden())
+
+    def test_writeback_issues_auto_expand_on_warn(self) -> None:
+        summary = WritebackSummary(
+            status="warn",
+            heading="需处理",
+            message="检查为需处理",
+            facts=[],
+            findings=[],
+            can_apply=False,
+            manifest_path="C:/m.json",
+        )
+        # Minimal stubs so update path can run without full manifest IO.
+        self.window._writeback_issues_ready = lambda _s: True  # type: ignore[method-assign]
+        self.window._load_writeback_manifest = lambda: None  # type: ignore[method-assign]
+        self.window._apply_failure_report_ready = lambda *_a, **_k: False  # type: ignore[method-assign]
+        self.window._retry_button_mode = lambda *_a, **_k: "hidden"  # type: ignore[method-assign]
+        self.window._remediation_ready = lambda *_a, **_k: False  # type: ignore[method-assign]
+
+        from gui_qt.work_modes import WorkMode
+
+        self.window._work_mode = WorkMode.BATCH_TRANSLATION
+        self.window._update_writeback_action_buttons(summary, running=False)
+
+        self.assertTrue(self.window._writeback_issues_expanded)
+        self.assertFalse(self.window.writeback_issues_panel.isHidden())
+        self.assertFalse(self.window.writeback_issues_badge.isHidden())
+        self.assertEqual(self.window.writeback_issues_badge.text(), "有待处理问题")
+
+    def test_apply_btn_stays_outside_issues_panel(self) -> None:
+        panel = self.window.writeback_issues_panel
+        self.assertNotIn(self.window.apply_btn, panel.findChildren(type(self.window.apply_btn)))
+        # Primary apply is a sibling layout control, not inside the collapse panel.
+        self.assertIsNot(self.window.apply_btn.parentWidget(), panel)
+
+    def test_recheck_btn_lives_under_issues_panel(self) -> None:
+        # Design SSOT: 重新检查 is a recovery tool under 「问题处理」, not a primary action.
+        panel = self.window.writeback_issues_panel
+        self.assertIn(self.window.recheck_btn, panel._items)
+        self.assertNotIn(self.window.recheck_btn, self.window.writeback_primary_bar._items)
+
+    def test_writeback_issues_panel_is_right_aligned(self) -> None:
+        panel = self.window.writeback_issues_panel
+        self.assertEqual(panel._align, "right")
+        self.assertTrue(panel._leading_stretch)
+        self.assertFalse(panel._trailing_stretch)
+
+
+if __name__ == "__main__":
+    unittest.main()

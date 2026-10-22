@@ -1,0 +1,1561 @@
+"""Pure helpers for GUI-managed translator settings.
+
+This module intentionally has no Qt dependency.  The GUI owns widgets and user
+interaction; this module owns field metadata, coercion, validation, and
+translator_config.json writes for managed advanced settings.
+
+``sync.custom_litellm_providers`` is intentionally NOT modeled here: it is a
+list of structured objects managed exclusively by the dedicated LiteLLM
+settings page (table + dialog) and validated by
+``litellm_provider_config.parse_custom_litellm_providers`` (shared by CLI and
+GUI).  Adding it to ADVANCED_SETTING_FIELDS would render it as a plain
+advanced-page widget, which is not the intended UX.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+from typing import Any, Iterable, Literal
+
+from providers.gemini_model_catalog import (
+    DEFAULT_GEMINI_EMBEDDING_MODEL,
+    DEFAULT_GEMINI_TRANSLATION_MODEL,
+    allowed_gemini_rotation_models,
+    extras_beyond_builtins,
+    filter_gemini_rotation_models,
+)
+from providers.sync_model_backend import (
+    DEFAULT_SYNC_TIMEOUT_SECONDS,
+    MAX_SYNC_TIMEOUT_SECONDS,
+    MIN_SYNC_TIMEOUT_SECONDS,
+)
+from gui_qt.user_copy import (
+    BATCH_MAX_OUTPUT_TOKENS_COPY,
+    QUALITY_POLICY_SETTING_COPY,
+    SYNC_CONTEXT_AFTER_COPY,
+    SYNC_CONTEXT_BEFORE_COPY,
+    SYNC_MACRO_SETTING_FILE_COPY,
+    SYNC_TIMEOUT_COPY,
+)
+
+
+SettingKind = Literal[
+    "bool",
+    "int",
+    "float",
+    "str",
+    "text",
+    "list",
+    "json",
+    "gemini_model_list",
+    "gemini_catalog_list",
+]
+SettingValue = Any
+
+
+@dataclass(frozen=True)
+class SettingField:
+    key: str
+    path: tuple[str, ...]
+    label: str
+    description: str
+    kind: SettingKind
+    default: SettingValue
+    category: str
+    recommended: SettingValue | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    allow_empty: bool = False
+
+    @property
+    def recommended_value(self) -> SettingValue:
+        return self.default if self.recommended is None else self.recommended
+
+
+BASIC_RECOMMENDED_VALUES: dict[str, SettingValue] = {
+    "theme": "system",
+    "context_storage_location": "tool",
+    "rag_enabled": False,
+    "source_index_enabled": False,
+    "bootstrap_on_build": True,
+    "sync_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "batch_model": DEFAULT_GEMINI_TRANSLATION_MODEL,
+    "sync_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
+    "batch_embedding_model": DEFAULT_GEMINI_EMBEDDING_MODEL,
+    "batch_thinking_level": "",
+}
+
+# Core fields shown only on 设置 · 上下文. They must not also appear as
+# independent advanced-page widgets — keep a single write source per key.
+PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "batch_project_analysis_enabled",
+        "batch_project_analysis_inject_published_brief",
+        "batch_project_analysis_model",
+        "batch_project_analysis_thinking_level",
+    }
+)
+CONTEXT_PRIMARY_SETTING_KEYS: frozenset[str] = frozenset(
+    {
+        "sync_rag_enabled",
+        "sync_story_memory_enabled",
+        "batch_story_memory_enabled",
+    }
+) | PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS
+CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
+
+
+ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField(
+        "catalog_gemini_models",
+        ("model_catalog", "gemini"),
+        "翻译模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义翻译模型 ID。内置模型始终可选，无需在此重复添加。",
+        "gemini_catalog_list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
+    SettingField(
+        "catalog_gemini_embedding_models",
+        ("model_catalog", "gemini_embedding"),
+        "向量模型扩展",
+        "追加到「设置 → 模型」下拉列表的自定义 RAG 向量模型 ID。内置 embedding 始终可选。",
+        "gemini_catalog_list",
+        [],
+        "模型目录",
+        allow_empty=True,
+    ),
+    SettingField(
+        "api_key_rotation_enabled",
+        ("rotation", "api_key", "enabled"),
+        "启用 API Key 轮换",
+        "配额/限流时在 api_keys.json 的多把 Key 之间自动切换；仅一把 Key 时无效果。默认开启。",
+        "bool",
+        True,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_enabled",
+        ("rotation", "model", "enabled"),
+        "启用模型轮换",
+        "同步翻译遇限流或模型不可用时自动切换到下一模型；默认关闭，避免意外换模型。",
+        "bool",
+        False,
+        "请求轮换",
+    ),
+    SettingField(
+        "model_rotation_models",
+        ("rotation", "model", "models"),
+        "模型轮换范围",
+        "启用模型轮换时从下列已知 Gemini 模型中勾选候选；至少选 2 个才有轮换意义。"
+        "未勾选任何项时，回退为「当前模型 + 内置目录」。",
+        "gemini_model_list",
+        [],
+        "请求轮换",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_chunk_size",
+        ("sync", "chunk_size"),
+        "同步分块条数",
+        "同步翻译单次请求最多包含的条目数。",
+        "int",
+        60,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_max_source_chars",
+        ("sync", "max_source_chars"),
+        "同步原文字符上限",
+        "同步翻译单次请求允许的原文字符预算。",
+        "int",
+        18000,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_max_output_tokens",
+        ("sync", "max_output_tokens"),
+        "同步输出 token 上限",
+        "同步请求传给模型的 max_output_tokens。",
+        "int",
+        24576,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_timeout_seconds",
+        ("sync", "timeout_seconds"),
+        SYNC_TIMEOUT_COPY["label"],
+        SYNC_TIMEOUT_COPY["description"],
+        "int",
+        DEFAULT_SYNC_TIMEOUT_SECONDS,
+        "翻译吞吐",
+        minimum=MIN_SYNC_TIMEOUT_SECONDS,
+        maximum=MAX_SYNC_TIMEOUT_SECONDS,
+    ),
+    SettingField(
+        "sync_context_before",
+        ("sync", "context_before"),
+        SYNC_CONTEXT_BEFORE_COPY["label"],
+        SYNC_CONTEXT_BEFORE_COPY["description"],
+        "int",
+        30,
+        "翻译吞吐",
+        minimum=0,
+    ),
+    SettingField(
+        "sync_context_after",
+        ("sync", "context_after"),
+        SYNC_CONTEXT_AFTER_COPY["label"],
+        SYNC_CONTEXT_AFTER_COPY["description"],
+        "int",
+        10,
+        "翻译吞吐",
+        minimum=0,
+    ),
+    SettingField(
+        "sync_macro_setting_file",
+        ("sync", "macro_setting_file"),
+        SYNC_MACRO_SETTING_FILE_COPY["label"],
+        SYNC_MACRO_SETTING_FILE_COPY["description"],
+        "str",
+        "macro_setting.md",
+        "术语与风格",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_chunk_size",
+        ("batch", "chunk_size"),
+        "批量分块条数",
+        "Batch 构建时每个请求最多包含的条目数。",
+        "int",
+        60,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_max_source_chars",
+        ("batch", "max_source_chars"),
+        "批量原文字符上限",
+        "Batch 构建时每个请求允许的原文字符预算。",
+        "int",
+        18000,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_context_before",
+        ("batch", "context_before"),
+        "前文条目数",
+        "Batch 请求附带的前文条目数量；取当前文件对白顺序，包含已译邻句，并在多行翻译块或路线/场景边界处截断。",
+        "int",
+        30,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_context_after",
+        ("batch", "context_after"),
+        "后文条目数",
+        "Batch 请求附带的后文条目数量；取当前文件对白顺序，包含已译邻句，并在多行翻译块或路线/场景边界处截断。",
+        "int",
+        10,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_max_output_tokens",
+        ("batch", "max_output_tokens"),
+        BATCH_MAX_OUTPUT_TOKENS_COPY["label"],
+        BATCH_MAX_OUTPUT_TOKENS_COPY["description"],
+        "int",
+        12288,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_temperature",
+        ("batch", "temperature"),
+        "批量 temperature",
+        "仅供仍支持采样参数的模型；Lab 会对不兼容的新 Gemini 型号自动移除该值。",  # noqa: RUF001
+        "float",
+        0.2,
+        "翻译吞吐",
+        minimum=0.0,
+        maximum=2.0,
+    ),
+    SettingField(
+        "batch_display_name_prefix",
+        ("batch", "display_name_prefix"),
+        "批量任务名称前缀",
+        "提交 Batch 任务时使用的 display name 前缀。",
+        "str",
+        "renpy-translate",
+        "翻译吞吐",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_submit_max_cost",
+        ("batch", "submit_max_cost"),
+        "提交成本上限",
+        "提交 Batch 任务前的估算成本上限（与 batch.pricing 货币一致）；留空或 0 表示不限制。",
+        "float",
+        0.0,
+        "翻译吞吐",
+        minimum=0.0,
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_non_chinese_extra_static_paths",
+        ("batch", "non_chinese_validation", "extra_static_name_credit_rel_paths"),
+        "非中文白名单追加路径",
+        "追加到默认静态姓名/名单文件白名单的相对路径；每行一个，例如 credits.rpy。",
+        "list",
+        [],
+        "翻译吞吐",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_quality_gate",
+        ("batch", "quality_gate"),
+        "质量检查策略（JSON）",
+        QUALITY_POLICY_SETTING_COPY,
+        "json",
+        {
+            "enabled": True,
+            "rules": {},
+            "allowed_latin_tokens": [],
+            "garbled_phrases": [],
+        },
+        "翻译吞吐",
+    ),
+    SettingField(
+        "context_storage_game_dir_name",
+        ("context_storage", "game_dir_name"),
+        "游戏目录上下文文件夹",
+        "context storage 使用游戏目录模式时的文件夹名。",
+        "str",
+        "translation_context",
+        "上下文路径",
+    ),
+    SettingField(
+        "sync_rag_enabled",
+        ("sync", "rag", "enabled"),
+        "启用同步 RAG",
+        "同步翻译时检索本地记忆库。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_enabled",
+        ("batch", "project_analysis", "enabled"),
+        "启用项目分析上下文",
+        "允许在翻译/订正 prompt 中使用已发布的项目 brief（仍须开启下方注入开关）。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_inject_published_brief",
+        ("batch", "project_analysis", "inject_published_brief"),
+        "注入已发布项目 brief",
+        "仅当 brief 已发布且结构 fingerprint 未过期时注入；草稿永不注入。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_project_analysis_model",
+        ("batch", "project_analysis", "model"),
+        "项目分析生成模型",
+        "project-analysis-generate 使用的模型；留空则回退到 Batch/同步模型。",
+        "str",
+        "",
+        "项目分析",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_project_analysis_thinking_level",
+        ("batch", "project_analysis", "thinking_level"),
+        "项目分析思考级别",
+        "传给分析生成请求的 thinking level；留空表示不发送。",
+        "str",
+        "",
+        "项目分析",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_project_analysis_max_brief_chars",
+        ("batch", "project_analysis", "max_brief_chars"),
+        "项目 brief 最大字符",
+        "LLM 生成与注入 brief 的长度上限。",
+        "int",
+        4000,
+        "项目分析",
+        minimum=200,
+    ),
+    SettingField(
+        "batch_project_analysis_max_label_summary_chars",
+        ("batch", "project_analysis", "max_label_summary_chars"),
+        "Label 摘要最大字符",
+        "单 label LLM 摘要输出上限。",
+        "int",
+        800,
+        "项目分析",
+        minimum=100,
+    ),
+    SettingField(
+        "batch_project_analysis_max_route_summary_chars",
+        ("batch", "project_analysis", "max_route_summary_chars"),
+        "Route 摘要最大字符",
+        "单 route LLM 摘要输出上限。",
+        "int",
+        1200,
+        "项目分析",
+        minimum=100,
+    ),
+    SettingField(
+        "batch_project_analysis_max_input_chars_per_request",
+        ("batch", "project_analysis", "max_input_chars_per_request"),
+        "单次请求输入字符上限",
+        "map-reduce 单次请求塞入证据/上游摘要的最大字符数。",
+        "int",
+        12000,
+        "项目分析",
+        minimum=500,
+    ),
+    SettingField(
+        "batch_project_analysis_max_output_tokens",
+        ("batch", "project_analysis", "max_output_tokens"),
+        "分析生成 max_output_tokens",
+        "项目分析 LLM 请求的最大输出 token。",
+        "int",
+        2048,
+        "项目分析",
+        minimum=64,
+    ),
+    SettingField(
+        "batch_final_review_enabled",
+        ("batch", "final_review", "enabled"),
+        "启用最终审校 campaign",
+        "允许构建最终审校 campaign 包（report-only；不直接写回 .rpy）。",
+        "bool",
+        True,
+        "最终审校",
+    ),
+    SettingField(
+        "batch_final_review_require_zero_pending",
+        ("batch", "final_review", "require_zero_pending"),
+        "审校前要求零未译项",
+        "范围内仍有未完成翻译时拒绝 final-review-build（可用 CLI --allow-pending 覆盖，不推荐）。",
+        "bool",
+        True,
+        "最终审校",
+    ),
+    SettingField(
+        "batch_final_review_chunk_size",
+        ("batch", "final_review", "chunk_size"),
+        "审校 unit 条目数",
+        "每个 review unit 包含的原文/译文对数量。",
+        "int",
+        16,
+        "最终审校",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_final_review_model",
+        ("batch", "final_review", "model"),
+        "最终审校模型",
+        "最终审校执行使用的模型；留空则回退到 Batch 模型。",
+        "str",
+        "",
+        "最终审校",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_output_dimensionality",
+        ("sync", "rag", "output_dimensionality"),
+        "同步 RAG 向量维度",
+        "同步 RAG 存储和查询使用的 embedding 维度。",
+        "int",
+        768,
+        "同步 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_rag_top_k_history",
+        ("sync", "rag", "top_k_history"),
+        "同步历史命中数",
+        "同步翻译检索历史译文的最大命中数。",
+        "int",
+        4,
+        "同步 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_rag_top_k_terms",
+        ("sync", "rag", "top_k_terms"),
+        "同步术语命中数",
+        "同步翻译检索术语/短语的最大命中数。",
+        "int",
+        8,
+        "同步 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_rag_min_similarity",
+        ("sync", "rag", "min_similarity"),
+        "同步相似度阈值",
+        "同步 RAG 命中的最低相似度。",
+        "float",
+        0.72,
+        "同步 RAG",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    SettingField(
+        "sync_rag_segment_lines",
+        ("sync", "rag", "segment_lines"),
+        "同步索引分段行数",
+        "写入同步记忆库时每段合并的行数。",
+        "int",
+        4,
+        "同步 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_rag_history_char_limit",
+        ("sync", "rag", "history_char_limit"),
+        "同步历史字符上限",
+        "同步 RAG 单条历史命中注入 prompt 前的截断上限。",
+        "int",
+        220,
+        "同步 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_rag_store_dir",
+        ("sync", "rag", "store_dir"),
+        "同步 RAG 存储路径",
+        "留空时使用当前 context storage 默认路径。",
+        "str",
+        "",
+        "同步 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_update_on_success",
+        ("sync", "rag", "update_on_success"),
+        "同步成功后更新记忆库",
+        "同步翻译成功后把结果写入本地 RAG 记忆库。",
+        "bool",
+        True,
+        "同步 RAG",
+    ),
+    SettingField(
+        "batch_rag_output_dimensionality",
+        ("batch", "rag", "output_dimensionality"),
+        "批量 RAG 向量维度",
+        "Batch RAG 存储和查询使用的 embedding 维度。",
+        "int",
+        768,
+        "批量 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_rag_top_k_history",
+        ("batch", "rag", "top_k_history"),
+        "批量历史命中数",
+        "Batch 请求检索历史译文的最大命中数。",
+        "int",
+        4,
+        "批量 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_rag_top_k_terms",
+        ("batch", "rag", "top_k_terms"),
+        "批量术语命中数",
+        "Batch 请求检索术语/短语的最大命中数。",
+        "int",
+        8,
+        "批量 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_rag_min_similarity",
+        ("batch", "rag", "min_similarity"),
+        "批量相似度阈值",
+        "Batch RAG 命中的最低相似度。",
+        "float",
+        0.72,
+        "批量 RAG",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    SettingField(
+        "batch_rag_segment_lines",
+        ("batch", "rag", "segment_lines"),
+        "批量索引分段行数",
+        "预建批量记忆库时每段合并的行数。",
+        "int",
+        4,
+        "批量 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_rag_history_char_limit",
+        ("batch", "rag", "history_char_limit"),
+        "批量历史字符上限",
+        "Batch RAG 单条历史命中注入 prompt 前的截断上限。",
+        "int",
+        220,
+        "批量 RAG",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_rag_store_dir",
+        ("batch", "rag", "store_dir"),
+        "批量 RAG 存储路径",
+        "留空时使用当前 context storage 默认路径。",
+        "str",
+        "",
+        "批量 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_source_index_top_k",
+        ("batch", "source_index", "top_k"),
+        "原文索引命中数",
+        "Batch 请求检索原文索引的最大命中数。",
+        "int",
+        4,
+        "原文索引",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_source_index_min_similarity",
+        ("batch", "source_index", "min_similarity"),
+        "原文索引相似度阈值",
+        "原文索引命中的最低相似度。",
+        "float",
+        0.72,
+        "原文索引",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    SettingField(
+        "batch_source_index_char_limit",
+        ("batch", "source_index", "char_limit"),
+        "原文索引字符上限",
+        "单条原文索引命中注入 prompt 前的截断上限。",
+        "int",
+        220,
+        "原文索引",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_source_index_store_dir",
+        ("batch", "source_index", "store_dir"),
+        "原文索引存储路径",
+        "留空时使用当前 context storage 默认路径。",
+        "str",
+        "",
+        "原文索引",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_embedding_backend",
+        ("sync", "rag", "embedding_backend"),
+        "同步向量后端",
+        "gemini 或 openai_compatible。不得从生成模型推断；换后端后需重建记忆库/原文索引。",
+        "str",
+        "gemini",
+        "同步 RAG",
+    ),
+    SettingField(
+        "sync_rag_embedding_provider",
+        ("sync", "rag", "embedding_provider"),
+        "同步向量 Provider",
+        "Gemini 默认为 google_ai。OpenAI-compatible 必须显式填写 provider id。",
+        "str",
+        "",
+        "同步 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_embedding_endpoint",
+        ("sync", "rag", "embedding_endpoint"),
+        "同步向量接口地址",
+        "OpenAI-compatible 的 api_base。留空时仅 openai+LiteLLM 使用官方默认地址。",
+        "str",
+        "",
+        "同步 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_embedding_timeout_seconds",
+        ("sync", "rag", "embedding_timeout_seconds"),
+        "同步向量请求超时",
+        "同步 RAG / 原文索引 embedding 请求超时秒数。",
+        "float",
+        30.0,
+        "同步 RAG",
+        minimum=1.0,
+    ),
+    SettingField(
+        "sync_rag_embedding_api_key_env",
+        ("sync", "rag", "embedding_api_key_env"),
+        "同步向量 API Key 环境变量",
+        "OpenAI-compatible embedding 读取的环境变量名；不要把 Key 本身写入配置。",
+        "str",
+        "",
+        "同步 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_rag_embedding_backend",
+        ("batch", "rag", "embedding_backend"),
+        "批量向量后端",
+        "gemini 或 openai_compatible。Batch RAG 与原文索引共用该后端，不得从生成模型推断。",
+        "str",
+        "gemini",
+        "批量 RAG",
+    ),
+    SettingField(
+        "batch_rag_embedding_provider",
+        ("batch", "rag", "embedding_provider"),
+        "批量向量 Provider",
+        "Gemini 默认为 google_ai。OpenAI-compatible 必须显式填写 provider id。",
+        "str",
+        "",
+        "批量 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_rag_embedding_endpoint",
+        ("batch", "rag", "embedding_endpoint"),
+        "批量向量接口地址",
+        "OpenAI-compatible 的 api_base。留空时仅 openai+LiteLLM 使用官方默认地址。",
+        "str",
+        "",
+        "批量 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_rag_embedding_timeout_seconds",
+        ("batch", "rag", "embedding_timeout_seconds"),
+        "批量向量请求超时",
+        "Batch RAG / 原文索引 embedding 请求超时秒数。",
+        "float",
+        30.0,
+        "批量 RAG",
+        minimum=1.0,
+    ),
+    SettingField(
+        "batch_rag_embedding_api_key_env",
+        ("batch", "rag", "embedding_api_key_env"),
+        "批量向量 API Key 环境变量",
+        "OpenAI-compatible embedding 读取的环境变量名；不要把 Key 本身写入配置。",
+        "str",
+        "",
+        "批量 RAG",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_source_index_top_k",
+        ("sync", "source_index", "top_k"),
+        "同步原文索引命中数",
+        "同步翻译检索原文索引的最大命中数。",
+        "int",
+        4,
+        "同步原文索引",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_source_index_min_similarity",
+        ("sync", "source_index", "min_similarity"),
+        "同步原文索引相似度阈值",
+        "同步原文索引命中的最低相似度。",
+        "float",
+        0.72,
+        "同步原文索引",
+        minimum=0.0,
+        maximum=1.0,
+    ),
+    SettingField(
+        "sync_source_index_char_limit",
+        ("sync", "source_index", "char_limit"),
+        "同步原文索引字符上限",
+        "同步翻译单条原文索引命中注入 prompt 前的截断上限。",
+        "int",
+        220,
+        "同步原文索引",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_source_index_store_dir",
+        ("sync", "source_index", "store_dir"),
+        "同步原文索引存储路径",
+        "留空时复用当前项目的 Source Index Store，不复制第二套索引。",
+        "str",
+        "",
+        "同步原文索引",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_story_memory_enabled",
+        ("sync", "story_memory", "enabled"),
+        "启用同步剧情记忆",
+        "同步翻译时注入本地 story_graph 上下文。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "sync_story_memory_graph_file",
+        ("sync", "story_memory", "graph_file"),
+        "同步剧情图谱路径",
+        "留空时使用当前 context storage 默认 story_graph 路径。",
+        "str",
+        "",
+        "同步剧情记忆",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_story_memory_max_context_chars",
+        ("sync", "story_memory", "max_context_chars"),
+        "同步剧情字符预算",
+        "同步翻译注入剧情记忆的最大字符预算。",
+        "int",
+        1200,
+        "同步剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_story_memory_top_k_relations",
+        ("sync", "story_memory", "top_k_relations"),
+        "同步关系命中数",
+        "同步剧情记忆检索关系的最大命中数。",
+        "int",
+        4,
+        "同步剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_story_memory_top_k_terms",
+        ("sync", "story_memory", "top_k_terms"),
+        "同步剧情术语命中数",
+        "同步剧情记忆检索术语的最大命中数。",
+        "int",
+        8,
+        "同步剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "sync_story_memory_include_scene_summary",
+        ("sync", "story_memory", "include_scene_summary"),
+        "同步包含场景摘要",
+        "同步剧情记忆命中时把场景摘要也注入 prompt。",
+        "bool",
+        True,
+        "同步剧情记忆",
+    ),
+    SettingField(
+        "batch_story_memory_enabled",
+        ("batch", "story_memory", "enabled"),
+        "启用批量剧情记忆",
+        "Batch 构建时注入本地 story_graph 上下文。",
+        "bool",
+        False,
+        CONTEXT_PRIMARY_SETTING_CATEGORY,
+    ),
+    SettingField(
+        "batch_story_memory_graph_file",
+        ("batch", "story_memory", "graph_file"),
+        "批量剧情图谱路径",
+        "留空时使用当前 context storage 默认 story_graph 路径。",
+        "str",
+        "",
+        "批量剧情记忆",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_story_memory_max_context_chars",
+        ("batch", "story_memory", "max_context_chars"),
+        "批量剧情字符预算",
+        "Batch 请求注入剧情记忆的最大字符预算。",
+        "int",
+        1200,
+        "批量剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_story_memory_top_k_relations",
+        ("batch", "story_memory", "top_k_relations"),
+        "批量关系命中数",
+        "Batch 剧情记忆检索关系的最大命中数。",
+        "int",
+        6,
+        "批量剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_story_memory_top_k_terms",
+        ("batch", "story_memory", "top_k_terms"),
+        "批量剧情术语命中数",
+        "Batch 剧情记忆检索术语的最大命中数。",
+        "int",
+        12,
+        "批量剧情记忆",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_story_memory_include_scene_summary",
+        ("batch", "story_memory", "include_scene_summary"),
+        "批量包含场景摘要",
+        "Batch 剧情记忆命中时把场景摘要也注入 prompt。",
+        "bool",
+        True,
+        "批量剧情记忆",
+    ),
+)
+
+
+FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField(
+        "game_root",
+        ("game_root",),
+        "游戏 work 目录",
+        "当前项目的 work 目录；通常建议在工作台选择项目。",
+        "str",
+        "",
+        "项目与资源",
+    ),
+    SettingField(
+        "glossary_file",
+        ("glossary_file",),
+        "术语表路径",
+        "glossary.json 路径。相对路径（如 glossary.json）相对当前 work；"
+        "切换项目时会同步到当前 work。留空则使用当前 work 下的 glossary.json。",
+        "str",
+        "glossary.json",
+        "项目与资源",
+        allow_empty=True,
+    ),
+    SettingField(
+        "tl_subdir",
+        ("tl_subdir",),
+        "翻译目录",
+        "相对 work 目录的 Ren'Py TL 目录。末段是目录语言（如 schinese / japanese），"
+        "不是模型生成目标；当前版本生成仍是简体中文。",
+        "str",
+        "game/tl/schinese",
+        "项目与资源",
+        allow_empty=True,
+    ),
+    SettingField(
+        "include_files",
+        ("include_files",),
+        "仅包含文件",
+        "可选过滤列表；每行一个相对路径。留空表示不过滤。",
+        "list",
+        [],
+        "项目与资源",
+        allow_empty=True,
+    ),
+    SettingField(
+        "include_prefixes",
+        ("include_prefixes",),
+        "仅包含路径前缀",
+        "可选过滤列表；每行一个相对路径前缀。留空表示不过滤。",
+        "list",
+        [],
+        "项目与资源",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_enabled",
+        ("prepare", "enabled"),
+        "启用准备流程",
+        "允许 build 前准备 work 目录、解包和生成翻译模板。",
+        "bool",
+        True,
+        "准备流程",
+    ),
+    SettingField(
+        "prepare_source_game_dir",
+        ("prepare", "source_game_dir"),
+        "源 game 目录",
+        "准备流程复制/生成模板时使用的原始 game 目录。",
+        "str",
+        "../original/game",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_unpack_rpa",
+        ("prepare", "unpack_rpa"),
+        "解包 RPA",
+        "准备流程中是否尝试解包 .rpa 资源。",
+        "bool",
+        True,
+        "准备流程",
+    ),
+    SettingField(
+        "prepare_generate_template",
+        ("prepare", "generate_template"),
+        "生成翻译模板",
+        "准备流程中是否调用 Ren'Py 生成翻译模板。",
+        "bool",
+        True,
+        "准备流程",
+    ),
+    SettingField(
+        "prepare_refresh_existing_template",
+        ("prepare", "refresh_existing_template"),
+        "刷新已有模板",
+        "已存在翻译模板时是否允许准备流程刷新。",
+        "bool",
+        True,
+        "准备流程",
+    ),
+    SettingField(
+        "prepare_language",
+        ("prepare", "language"),
+        "模板语言代码",
+        "Ren'Py generate_translations 使用的目录语言名，需与 tl_subdir 末段一致。"
+        "它只影响模板路径，不会让模型改翻其他语言。",
+        "str",
+        "schinese",
+        "准备流程",
+    ),
+    SettingField(
+        "generation_target_language",
+        ("generation", "target_language"),
+        "生成目标语言",
+        "模型译文的目标语言。当前版本只支持 schinese（简体中文）。"
+        "留空视为 schinese。设为其他值会在调用模型前报错。",
+        "str",
+        "schinese",
+        "项目与资源",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_renpy_sdk_dir",
+        ("prepare", "renpy_sdk_dir"),
+        "Ren'Py SDK 目录",
+        "须显式指定：填写路径、环境变量 RENPY_SDK_DIR、点「浏览…」或「查找 SDK」。"
+        "留空时不会自动扫描其它目录；仅点击「查找 SDK」才会在项目 / 工作区 / 工具附近搜索。",
+        "str",
+        "",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_python_exe",
+        ("prepare", "python_exe"),
+        "准备流程 Python",
+        "自定义 Python 可执行文件路径；留空时使用默认。",
+        "str",
+        "",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_launcher_py",
+        ("prepare", "launcher_py"),
+        "Ren'Py launcher.py",
+        "自定义 Ren'Py launcher.py 路径；留空时使用 SDK 默认路径。",
+        "str",
+        "",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_unpack_command",
+        ("prepare", "unpack_command"),
+        "自定义解包命令",
+        "推荐 JSON 数组 argv，例如 [\"python\", \"unpack.py\", \"{archive}\"]。"
+        "字符串形式会走 shell，需同时开启「允许 shell 字符串命令」。留空使用内置解包。",
+        "json",
+        "",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_template_command",
+        ("prepare", "template_command"),
+        "自定义模板命令",
+        "推荐 JSON 数组 argv，例如 [\"python\", \"{launcher_py}\", \"{base_dir}\", \"translate\", \"{language}\"]。"
+        "字符串形式会走 shell，需同时开启「允许 shell 字符串命令」。留空使用内置模板流程。",
+        "json",
+        "",
+        "准备流程",
+        allow_empty=True,
+    ),
+    SettingField(
+        "prepare_allow_shell_commands",
+        ("prepare", "allow_shell_commands"),
+        "允许 shell 字符串命令（高风险）",
+        "开启后，自定义准备命令才可用 shell 字符串执行。"
+        "translator_config.json 视为可执行本地配置；仅在完全信任该配置时启用。默认关闭。",
+        "bool",
+        False,
+        "准备流程",
+    ),
+    SettingField(
+        "batch_retry_chunk_size",
+        ("batch", "retry_chunk_size"),
+        "补译分块条数",
+        "build-retry 生成补译请求时每个分块的最大条目数。",
+        "int",
+        8,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_retry_max_source_chars",
+        ("batch", "retry_max_source_chars"),
+        "补译原文字符上限",
+        "build-retry 生成补译请求时每个 chunk 的原文字符预算。",
+        "int",
+        4000,
+        "翻译吞吐",
+        minimum=1,
+    ),
+    SettingField(
+        "batch_safety_settings",
+        ("batch", "safety_settings"),
+        "安全设置",
+        "可填 relaxed_adult 等预设，或 Google safety settings JSON 数组。留空表示默认。",
+        "json",
+        [],
+        "翻译吞吐",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_macro_setting_file",
+        ("batch", "macro_setting_file"),
+        "风格设定文件",
+        "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。"
+        "留空则使用当前 work 下的 macro_setting.md。",
+        "str",
+        "macro_setting.md",
+        "术语与风格",
+        allow_empty=True,
+    ),
+    SettingField(
+        "batch_macro_setting",
+        ("batch", "macro_setting"),
+        "内联风格设定",
+        "直接写入 prompt 的风格设定文本；留空时读取风格设定文件。",
+        "text",
+        "",
+        "术语与风格",
+        allow_empty=True,
+    ),
+    SettingField(
+        "keyword_chunk_size",
+        ("batch", "keyword_extraction", "chunk_size"),
+        "关键词分块条数",
+        "批量关键词提取每个请求的最大条目数。",
+        "int",
+        40,
+        "关键词提取",
+        minimum=1,
+    ),
+    SettingField(
+        "keyword_max_candidates_per_chunk",
+        ("batch", "keyword_extraction", "max_candidates_per_chunk"),
+        "每分块候选上限",
+        "关键词提取每个分块允许返回的候选数量。",
+        "int",
+        12,
+        "关键词提取",
+        minimum=1,
+    ),
+    SettingField(
+        "keyword_display_name_prefix",
+        ("batch", "keyword_extraction", "display_name_prefix"),
+        "关键词任务名称前缀",
+        "提交关键词 Batch 任务时使用的 display name 前缀。",
+        "str",
+        "renpy-keywords",
+        "关键词提取",
+        allow_empty=True,
+    ),
+    SettingField(
+        "revision_chunk_size",
+        ("batch", "revision", "chunk_size"),
+        "订正分块条数",
+        "批量订正每个请求的最大条目数。",
+        "int",
+        6,
+        "订正",
+        minimum=1,
+    ),
+    SettingField(
+        "revision_display_name_prefix",
+        ("batch", "revision", "display_name_prefix"),
+        "订正任务名称前缀",
+        "提交订正 Batch 任务时使用的 display name 前缀。",
+        "str",
+        "renpy-revise",
+        "订正",
+        allow_empty=True,
+    ),
+    SettingField(
+        "sync_rag_query_task_type",
+        ("sync", "rag", "query_task_type"),
+        "同步查询 task type",
+        "同步 RAG 查询 embedding 的 task type。",
+        "str",
+        "RETRIEVAL_QUERY",
+        "同步 RAG",
+    ),
+    SettingField(
+        "sync_rag_document_task_type",
+        ("sync", "rag", "document_task_type"),
+        "同步文档 task type",
+        "同步 RAG 写入文档 embedding 的 task type。",
+        "str",
+        "RETRIEVAL_DOCUMENT",
+        "同步 RAG",
+    ),
+    SettingField(
+        "batch_rag_query_task_type",
+        ("batch", "rag", "query_task_type"),
+        "批量查询 task type",
+        "Batch RAG 查询 embedding 的 task type。",
+        "str",
+        "RETRIEVAL_QUERY",
+        "批量 RAG",
+    ),
+    SettingField(
+        "batch_rag_document_task_type",
+        ("batch", "rag", "document_task_type"),
+        "批量文档 task type",
+        "Batch RAG / 原文索引写入文档 embedding 的 task type。",
+        "str",
+        "RETRIEVAL_DOCUMENT",
+        "批量 RAG",
+    ),
+)
+
+ADVANCED_SETTING_FIELDS = FULL_COVERAGE_SETTING_FIELDS + ADVANCED_SETTING_FIELDS
+
+
+ADVANCED_SETTING_FIELD_BY_KEY = {field.key: field for field in ADVANCED_SETTING_FIELDS}
+
+
+def grouped_advanced_fields(
+    *,
+    include_context_primary: bool = True,
+) -> list[tuple[str, list[SettingField]]]:
+    """Group schema fields by category for settings UI.
+
+    When *include_context_primary* is False, omit switches that live only on the
+    上下文 page (P2b single-source rule).
+    """
+    groups: list[tuple[str, list[SettingField]]] = []
+    by_category: dict[str, list[SettingField]] = {}
+    for field in ADVANCED_SETTING_FIELDS:
+        if (
+            not include_context_primary
+            and field.key in CONTEXT_PRIMARY_SETTING_KEYS
+        ):
+            continue
+        if field.category not in by_category:
+            by_category[field.category] = []
+            groups.append((field.category, by_category[field.category]))
+        by_category[field.category].append(field)
+    return groups
+
+
+def context_primary_setting_fields() -> tuple[SettingField, ...]:
+    return tuple(
+        field
+        for field in ADVANCED_SETTING_FIELDS
+        if field.key in CONTEXT_PRIMARY_SETTING_KEYS
+    )
+
+
+def read_advanced_settings(config: dict[str, Any]) -> dict[str, SettingValue]:
+    return {field.key: read_setting(config, field) for field in ADVANCED_SETTING_FIELDS}
+
+
+def resolve_project_analysis_flags_for_save(
+    saved_context_flags: dict[str, Any],
+    advanced_values: dict[str, Any],
+    complete_advanced_values: dict[str, Any],
+) -> dict[str, bool]:
+    """Resolve project-scoped analysis flags, with present UI values winning.
+
+    Missing/unmaterialized context widgets preserve the current project's saved
+    flags. When those widgets are present, their validated complete values override
+    the saved defaults.
+    """
+    enabled = bool(saved_context_flags.get("project_analysis_enabled"))
+    inject_enabled = bool(
+        saved_context_flags.get("project_analysis_inject_enabled")
+    )
+    if "batch_project_analysis_enabled" in advanced_values:
+        enabled = bool(
+            complete_advanced_values.get("batch_project_analysis_enabled")
+        )
+    if "batch_project_analysis_inject_published_brief" in advanced_values:
+        inject_enabled = bool(
+            complete_advanced_values.get(
+                "batch_project_analysis_inject_published_brief"
+            )
+        )
+    return {
+        "project_analysis_enabled": enabled,
+        "project_analysis_inject_enabled": inject_enabled,
+    }
+
+
+def recommended_advanced_settings() -> dict[str, SettingValue]:
+    return {field.key: field.recommended_value for field in ADVANCED_SETTING_FIELDS}
+
+
+def config_with_pending_catalog_updates(
+    config: dict[str, Any] | None,
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a config view where pending model_catalog edits from values are applied.
+
+    Used so ``model_rotation_models`` validation can accept catalog entries that
+    are being added in the same save, without writing the real config yet.
+    """
+    base: dict[str, Any] = dict(config) if isinstance(config, dict) else {}
+    existing_catalog = base.get("model_catalog")
+    catalog: dict[str, Any] = (
+        dict(existing_catalog) if isinstance(existing_catalog, dict) else {}
+    )
+    for field in ADVANCED_SETTING_FIELDS:
+        if field.kind != "gemini_catalog_list" or field.key not in values:
+            continue
+        try:
+            normalized = normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=base,
+            )
+        except ValueError:
+            # Leave validation of this field to the normal pass.
+            continue
+        set_nested_value(catalog, field.path[1:], normalized)
+    if catalog:
+        base["model_catalog"] = catalog
+    elif "model_catalog" in base and not catalog:
+        # Explicit empty catalogs from values should clear section keys.
+        for field in ADVANCED_SETTING_FIELDS:
+            if field.kind == "gemini_catalog_list" and field.key in values:
+                base.pop("model_catalog", None)
+                break
+    return base
+
+
+def apply_advanced_settings(
+    config: dict[str, Any],
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    # Validate rotation against the catalog *as it will look after this save*.
+    provisional = config_with_pending_catalog_updates(config, values)
+    errors = validate_advanced_settings(values, translator_config=provisional)
+    if errors:
+        first = next(iter(errors.values()))
+        raise ValueError(first)
+
+    for field in ADVANCED_SETTING_FIELDS:
+        set_nested_value(
+            config,
+            field.path,
+            normalize_for_write(
+                field,
+                values[field.key],
+                translator_config=provisional,
+            ),
+        )
+    return config
+
+
+def read_setting(config: dict[str, Any], field: SettingField) -> SettingValue:
+    raw = get_nested_value(config, field.path)
+    if raw is None:
+        return field.default
+    try:
+        return normalize_for_write(field, raw, translator_config=config)
+    except ValueError:
+        return field.default
+
+
+def validate_value(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> str:
+    try:
+        normalized = normalize_for_write(
+            field,
+            value,
+            translator_config=translator_config,
+        )
+    except ValueError as exc:
+        return str(exc)
+
+    if field.kind in {"str", "text"}:
+        if not field.allow_empty and not str(normalized).strip():
+            return f"{field.label}不能为空。"
+        return ""
+
+    if field.kind in {"bool", "list", "json", "gemini_model_list", "gemini_catalog_list"}:
+        return ""
+
+    number = float(normalized)
+    if field.minimum is not None and number < field.minimum:
+        if field.kind == "int" and field.minimum == 1:
+            return f"{field.label}必须是大于 0 的整数。"
+        return f"{field.label}不能小于 {field.minimum:g}。"
+    if field.maximum is not None and number > field.maximum:
+        return f"{field.label}不能大于 {field.maximum:g}。"
+    return ""
+
+
+def validate_advanced_settings(
+    values: dict[str, Any],
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    # Include pending catalog_* values so rotation can select brand-new extras.
+    provisional = config_with_pending_catalog_updates(translator_config, values)
+    errors: dict[str, str] = {}
+    for field in ADVANCED_SETTING_FIELDS:
+        error = validate_value(
+            field,
+            values.get(field.key),
+            translator_config=provisional,
+        )
+        if error:
+            errors[field.key] = error
+    return errors
+
+
+def normalize_for_write(
+    field: SettingField,
+    value: Any,
+    *,
+    translator_config: dict[str, Any] | None = None,
+) -> SettingValue:
+    if field.kind == "bool":
+        if isinstance(value, bool):
+            return value
+        raise ValueError(f"{field.label}必须是布尔值。")
+
+    if field.kind == "int":
+        if isinstance(value, bool):
+            raise ValueError(f"{field.label}必须是整数。")
+        try:
+            if isinstance(value, str) and not value.strip():
+                raise ValueError
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{field.label}必须是整数。") from None
+
+    if field.kind == "float":
+        if isinstance(value, bool):
+            raise ValueError(f"{field.label}必须是数字。")
+        try:
+            if isinstance(value, str) and not value.strip():
+                raise ValueError
+            return float(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{field.label}必须是数字。") from None
+
+    if field.kind in {"str", "text"}:
+        return value.strip() if isinstance(value, str) else str(value).strip()
+
+    if field.kind == "list":
+        return normalize_list_value(field, value)
+
+    if field.kind == "gemini_catalog_list":
+        normalized = normalize_list_value(field, value)
+        if field.key == "catalog_gemini_embedding_models":
+            return extras_beyond_builtins(normalized, kind="embedding")
+        return extras_beyond_builtins(normalized, kind="translation")
+
+    if field.kind == "gemini_model_list":
+        return filter_gemini_rotation_models(
+            value,
+            translator_config=translator_config,
+            reject_unknown=True,
+        )
+
+    if field.kind == "json":
+        return normalize_json_value(field, value)
+
+    raise ValueError(f"Unsupported setting type: {field.kind}")
+
+
+def normalize_list_value(field: SettingField, value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{field.label}必须是 JSON 数组或逐行列表。") from exc
+            value = parsed
+        else:
+            value = [part.strip() for line in text.splitlines() for part in line.split(",")]
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError(f"{field.label}必须是列表。")
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def normalize_json_value(field: SettingField, value: Any) -> Any:
+    if value is None:
+        return field.default if field.allow_empty else None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return field.default if field.allow_empty else ""
+        if text.startswith("[") or text.startswith("{"):
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{field.label}必须是有效 JSON。") from exc
+        return text
+    return value
+
+
+def get_nested_value(config: dict[str, Any], path: Iterable[str]) -> Any:
+    current: Any = config
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def set_nested_value(config: dict[str, Any], path: tuple[str, ...], value: SettingValue) -> None:
+    current: dict[str, Any] = config
+    for part in path[:-1]:
+        existing = current.get(part)
+        if not isinstance(existing, dict):
+            existing = {}
+            current[part] = existing
+        current = existing
+    current[path[-1]] = value
+

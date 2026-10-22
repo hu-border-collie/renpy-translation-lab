@@ -16,13 +16,13 @@ from providers.gemini_model_catalog import (
     BUILTIN_GEMINI_TRANSLATION_MODELS,
 )
 
-from ..settings_schema import BASIC_RECOMMENDED_VALUES
+from gui_qt.settings.settings_schema import BASIC_RECOMMENDED_VALUES
 from ..user_copy import (
     BATCH_THINKING_COPY,
     MODEL_ROUTING_RUNTIME_COPY,
     SETTINGS_MODEL_ENTRY_COPY,
 )
-from ..widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox
 from .page_chrome import add_model_navigation, build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS

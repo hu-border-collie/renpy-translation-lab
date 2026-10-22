@@ -233,8 +233,8 @@ Coordinator → 页面（只通过上述方法）：
   `_on_settings_nav_row_changed` 经 coordinator 补建与切换；项目页首次打开会加载其 owned 字段；
   `_ensure_settings_pages_for_config` 只保留已加载页面的快照，且 `_restore_config_ui_snapshot`
   只回写快照中存在的 advanced 键，避免补建页面被推荐值覆盖。
-- 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
-  `tests.test_settings_coordinator`（纯 Python）与 `tests.test_gui_settings_coordinator`（GUI 集成）。
+- 测试：`tests.gui.settings.test_settings_page_contract`、`tests.gui.settings.test_settings_registry`、
+  `tests.gui.settings.test_settings_coordinator`（纯 Python）与 `tests.gui.settings.test_gui_settings_coordinator`（GUI 集成）。
 
 按合同由宿主持有（不是未交付项）：
 
@@ -251,7 +251,7 @@ Phase C 已落地：
 - 目录/版本/连接测试/warmup worker 由页面持有；取消后 retired 到真实 `finished`，warmup 仍使用
   模块级 retired set。连接测试继续用 `litellm_connection_identity` 丢弃 stale result。
 - 凭据对话框、LiteLLM 安装控制器、密钥页下拉与模型页 Gemini 下拉 gating 仍由宿主回调提供。
-- 测试：`tests.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
+- 测试：`tests.gui.settings.test_settings_litellm_page`（独立构造）与既有 `test_gui_litellm_*`。
 
 Phase D（已完成；以下保留分批迁移记录，宿主持久化边界见上）：
 
@@ -289,13 +289,13 @@ Phase D（已完成；以下保留分批迁移记录，宿主持久化边界见�
   `gui_qt/settings/legacy.py` 已删除；registry `builder_name` 指向 `_create_*_settings_page`。
 - LiteLLM 选中时禁用 Gemini 同步模型下拉的跨页 gating 仍由宿主调用
   `set_gemini_sync_allowed`，避免 `set_task_running(False)` 把该控件重新点亮。
-- 测试：`tests.test_settings_models_page`、`tests.test_settings_project_page`、
-  `tests.test_settings_context_page`、`tests.test_settings_advanced_page`、
-  `tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、
-  `tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、
-  `tests.test_settings_workspace_page`（独立构造）与既有
+- 测试：`tests.gui.settings.test_settings_models_page`、`tests.gui.settings.test_settings_project_page`、
+  `tests.gui.settings.test_settings_context_page`、`tests.gui.settings.test_settings_advanced_page`、
+  `tests.gui.settings.test_settings_appearance_page`、`tests.gui.settings.test_settings_shortcuts_page`、
+  `tests.gui.settings.test_settings_api_keys_page`、`tests.gui.settings.test_settings_extensions_page`、
+  `tests.gui.settings.test_settings_workspace_page`（独立构造）与既有
   `test_gui_app_config` / `test_gui_settings_coordinator` / `test_gui_settings_context_primary` /
-  `tests.test_settings_save_apply`。
+  `tests.gui.settings.test_settings_save_apply`。
 
 ## Phase B 验收映射
 
@@ -311,36 +311,36 @@ Phase D（已完成；以下保留分批迁移记录，宿主持久化边界见�
 
 ## 相关测试入口
 
-- contract / registry / coordinator（纯 Python）：`tests.test_settings_page_contract`、
-  `tests.test_settings_registry`、`tests.test_settings_coordinator`。
-- GUI 集成：`tests.test_gui_settings_coordinator`。
-- 布局 / 导航 / 配置：`tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
-  `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
-  `tests.test_gui_settings_schema`。
-- LiteLLM：`tests.test_settings_litellm_page`（独立构造）、`tests.test_gui_litellm_settings_page`、
-  `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、`tests.test_gui_litellm_install`、
-  `tests.test_litellm_catalog_cache`、`tests.test_litellm_provider_config`。
-- 模型页：`tests.test_settings_models_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_app_config`。
-- 项目页：`tests.test_settings_project_page`（独立构造）、`tests.test_gui_settings_coordinator`。
-- 上下文页：`tests.test_settings_context_page`（独立构造）、`tests.test_gui_settings_context_primary`、
-  `tests.test_gui_settings_coordinator`。
-- 高级页：`tests.test_settings_advanced_page`（独立构造）、`tests.test_gui_settings_coordinator`。
-- 外观页：`tests.test_settings_appearance_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_app_config`。
-- 快捷键页：`tests.test_settings_shortcuts_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_settings_layout`。
-- 密钥页：`tests.test_settings_api_keys_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_litellm_settings_page`。
-- 扩展页：`tests.test_settings_extensions_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_optional_feature_install`。
-- 项目列表页：`tests.test_settings_workspace_page`（独立构造）、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_games_registry_panel_layout`、`tests.test_gui_startup_perf`。
-- 生命周期与 worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
-  `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、
-  `tests.test_gui_games_registry_worker`。
-- 配置持久化：`tests.test_gui_project_state`、`tests.test_project_context_settings`、
-  `tests.test_gui_theme_helpers`。
+- contract / registry / coordinator（纯 Python）：`tests.gui.settings.test_settings_page_contract`、
+  `tests.gui.settings.test_settings_registry`、`tests.gui.settings.test_settings_coordinator`。
+- GUI 集成：`tests.gui.settings.test_gui_settings_coordinator`。
+- 布局 / 导航 / 配置：`tests.gui.settings.test_gui_settings_layout`、`tests.gui.application.test_gui_shell_navigation`、
+  `tests.gui.application.test_gui_app_config`、`tests.gui.settings.test_gui_settings_context_primary`、
+  `tests.gui.settings.test_gui_settings_schema`。
+- LiteLLM：`tests.gui.settings.test_settings_litellm_page`（独立构造）、`tests.gui.settings.test_gui_litellm_settings_page`、
+  `tests.gui.settings.test_gui_litellm_settings`、`tests.gui.workers.test_gui_litellm_worker`、`tests.gui.settings.test_gui_litellm_install`、
+  `tests.gui.settings.test_litellm_catalog_cache`、`tests.providers.test_litellm_provider_config`。
+- 模型页：`tests.gui.settings.test_settings_models_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.application.test_gui_app_config`。
+- 项目页：`tests.gui.settings.test_settings_project_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`。
+- 上下文页：`tests.gui.settings.test_settings_context_page`（独立构造）、`tests.gui.settings.test_gui_settings_context_primary`、
+  `tests.gui.settings.test_gui_settings_coordinator`。
+- 高级页：`tests.gui.settings.test_settings_advanced_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`。
+- 外观页：`tests.gui.settings.test_settings_appearance_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.application.test_gui_app_config`。
+- 快捷键页：`tests.gui.settings.test_settings_shortcuts_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.settings.test_gui_settings_layout`。
+- 密钥页：`tests.gui.settings.test_settings_api_keys_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.settings.test_gui_litellm_settings_page`。
+- 扩展页：`tests.gui.settings.test_settings_extensions_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.runtime.test_gui_optional_feature_install`。
+- 项目列表页：`tests.gui.settings.test_settings_workspace_page`（独立构造）、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.widgets.test_gui_games_registry_panel_layout`、`tests.gui.application.test_gui_startup_perf`。
+- 生命周期与 worker：`tests.gui.runtime.test_gui_lifecycle`、`tests.gui.runtime.test_gui_operation_identity`、
+  `tests.gui.runtime.test_gui_optional_feature_install`、`tests.gui.workers.test_gui_font_worker`、
+  `tests.gui.workers.test_gui_games_registry_worker`。
+- 配置持久化：`tests.gui.application.test_gui_project_state`、`tests.foundation.test_project_context_settings`、
+  `tests.gui.appearance.test_gui_theme_helpers`。
 - 全量 GUI / CLI 回归：`python -B tests/run_gui_tests.py -q`、`python -B tests/run_cli_tests.py -q`。
 
 ## 非目标

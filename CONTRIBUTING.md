@@ -14,12 +14,12 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 | 核心逻辑 | 实现在可复用模块或 CLI 脚本中 | 调用同一套 Python API，或通过 `QProcess` 执行同一 CLI 子命令与参数 |
 | 用户可见行为 | 命令、参数、输出、错误语义 | 工作台摘要、「诊断与工具」、设置项、失败提示与 CLI 一致 |
 | 配置 | `translator_config.json` 等 | 设置页可读写同一配置键；workflow 构造 CLI 参数时不得漏传 |
-| 测试 | CLI/core 用例（含纯设置合约） | `tests/test_gui_*.py` 与 `tests/test_settings_*_page.py` 覆盖对应 GUI 包装层和 Qt 设置页 |
+| 测试 | 按核心包分组的用例（含纯设置合约） | `tests/gui/` 中的 `test_gui_*.py` 与 `test_settings_*_page.py` 覆盖对应 GUI 包装层和 Qt 设置页 |
 
 ### 推荐实现顺序
 
 1. **先写可复用核心**  
-   优先放在 CLI 侧模块（例如 `gemini_translate_batch.py`、`batch_cost_estimate.py`、`story_memory.py`），或抽到 CLI/GUI 共用的纯函数模块（例如 `gui_qt/batch_workflow_support.py` 只做参数与展示辅助，核心估算仍来自 `batch_cost_estimate.py`）。
+   优先放在 CLI 侧模块（例如 `gemini_translate_batch.py`、`batch_cost_estimate.py`、`story_memory.py`），或抽到 CLI/GUI 共用的纯函数模块（例如 `gui_qt/workflows/batch_workflow_support.py` 只做参数与展示辅助，核心估算仍来自 `batch_cost_estimate.py`）。
 
 2. **再接 CLI 入口**  
    子命令、参数、manifest 字段、doctor 报告等。
@@ -79,10 +79,10 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 
 若将来要提高覆盖率，应 **分阶段调高 `threshold`**，而不是一次性要求 80%。
 
-- **配置向后兼容**：改 `translator_config.json` 结构时更新 `translator_config.example.json` 与 `gui_qt/settings_schema.py`。
+- **配置向后兼容**：改 `translator_config.json` 结构时更新 `translator_config.example.json` 与 `gui_qt/settings/settings_schema.py`。
 - **写回安全**：不得绕过 `check -> apply` 合约；GUI 写回按钮仍须服从 `safe` / `warn` / `block` 语义。
 - **不要提交私有文件**：见 [docs/project_notes.md](docs/project_notes.md) 安全说明。
-- **测试**：改动后运行相关 `python -m unittest tests.test_*`；GUI 改动优先跑 `tests.test_gui_*`。
+- **测试**：改动后按[测试目录说明](tests/README.md)运行相关完整模块名，例如 `python -m unittest tests.providers.test_model_profile`；GUI 改动优先跑 `tests.gui` 下对应模块。
 - **依赖**：直接版本只在对应的 `requirements-*.txt` 权威输入中维护；依赖升级应单独成 PR，并按[依赖输入与哈希锁](docs/dependencies.md)重生成全部锁。不要手改 `requirements-lock/`。
 - **质量门禁**：PR 会跑 `scripts/run_quality_gates.py all`（lint / 类型检查 / 依赖审计）。工具版本在 `requirements-dev.txt`，配置在 `pyproject.toml`，漏洞例外在 `quality/pip-audit-exceptions.json`。blocking 范围刻意收窄；扩大范围前先测量基线并单独 PR。说明见 [CI 与定时集成检查](docs/ci.md)。
 

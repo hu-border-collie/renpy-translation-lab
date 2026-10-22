@@ -41,8 +41,8 @@ Ren'Py 未闭合方括号、花括号或不合法嵌套会拒绝生成或恢复�
 ## 离线验证
 
 ```powershell
-python -m unittest tests.test_structure_protection tests.test_translation_plan tests.test_batch_golden_corpus -q
-python -m unittest tests.test_sync_run_service tests.test_sync_run_store tests.test_durable_sync_executor -q
+python -m unittest tests.quality_review.test_structure_protection tests.quality_review.test_translation_plan tests.cli.test_batch_golden_corpus -q
+python -m unittest tests.execution.test_sync_run_service tests.execution.test_sync_run_store tests.execution.test_durable_sync_executor -q
 python -B tests/run_cli_tests.py -q
 python -B tests/run_gui_tests.py -q
 python scripts/run_quality_gates.py all

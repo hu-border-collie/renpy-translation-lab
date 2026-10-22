@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..empty_state import EmptyStateWidget
-from ..revision_corpus_report import RevisionCorpusExportResult
-from ..revision_guidance import revision_guidance
+from gui_qt.widgets.empty_state import EmptyStateWidget
+from gui_qt.reports.revision_corpus_report import RevisionCorpusExportResult
+from gui_qt.reports.revision_guidance import revision_guidance
 from ..user_copy import (
     REVIEW_WORKSPACE_COPY,
     REVISION_CORPUS_COPY,

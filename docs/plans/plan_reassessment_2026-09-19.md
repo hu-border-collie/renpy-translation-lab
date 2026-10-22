@@ -55,7 +55,7 @@
 
 ## 3. 复用、恢复与回滚 GUI
 
-**复用决策 GUI：已登记 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512)。** [复用核心](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/engine_adapters/reuse.py#L1361) 和 [现行合同](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/docs/engine_adapter.md#L224) 已存在，CLI 可导入带 reviewer 的决定，校验 freshness/冲突，再导出复用结果进入 check/apply。现有 [GUI](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/gui_qt/engine_snapshot_dialog.py#L188) 只有读取、查看和打开报告，表格禁用编辑。两个端到端复用测试已通过。
+**复用决策 GUI：已登记 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512)。** [复用核心](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/engine_adapters/reuse.py#L1361) 和 [现行合同](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/docs/engine_adapter.md#L224) 已存在，CLI 可导入带 reviewer 的决定，校验 freshness/冲突，再导出复用结果进入 check/apply。现有 [GUI](https://github.com/hu-border-collie/renpy-translation-lab/blob/a94ff891a1bb2353d50fc9de8f00a622f3d6b2eb/gui_qt/dialogs/engine_snapshot_dialog.py#L188) 只有读取、查看和打开报告，表格禁用编辑。两个端到端复用测试已通过。
 
 首个增量可以限定为已有候选包上的 accept/reject、审阅者与备注、人工选择歧义目标、调用既有导入服务生成新包，以及导出符合条件的复用结果。保留 stale 拒绝、同一目标竞争拒绝、reference-only 不进入可写结果、Agent 不确认歧义等规则。高级 override/lineage 操作可保持 CLI；应明确首版范围，不自动按相似度接受，也不与 [#427](https://github.com/hu-border-collie/renpy-translation-lab/issues/427) 的普通条目审校状态混用。
 
@@ -118,8 +118,8 @@
 
 在 Windows、Python 3.14.0 的固定源码副本执行；以下为评估阶段记录，不是对 PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 的测试：
 
-- `python -B -m unittest tests.test_translation_plan tests.test_translation_quality tests.test_quality_real_samples tests.test_translation_reuse_workflow -q`：125 项通过。
-- `python -B -m unittest tests.test_atomic_io.AtomicIoHelperTests tests.test_atomic_io.AtomicWriteStrictRecoveryGuardTests tests.test_atomic_io.AtomicWriteRollbackPhaseTests tests.test_atomic_io.AtomicWriteLegacyJournalCompatibilityTests -q`：20 项，其中 19 通过、1 项按 Windows 平台跳过 POSIX mode bits。
+- `python -B -m unittest tests.quality_review.test_translation_plan tests.quality_review.test_translation_quality tests.quality_review.test_quality_real_samples tests.engine_adapters.test_translation_reuse_workflow -q`：125 项通过。
+- `python -B -m unittest tests.foundation.test_atomic_io.AtomicIoHelperTests tests.foundation.test_atomic_io.AtomicWriteStrictRecoveryGuardTests tests.foundation.test_atomic_io.AtomicWriteRollbackPhaseTests tests.foundation.test_atomic_io.AtomicWriteLegacyJournalCompatibilityTests -q`：20 项，其中 19 通过、1 项按 Windows 平台跳过 POSIX mode bits。
 - `python -B benchmark_rag_store.py --sizes 100,1000,5000 --queries 5 --dim 768 --seed 42`：完成；表中为实际输出。
 - 独立合成探针验证白名单耦合、显式场景边界和成功事务清理；本机字体只读探针验证 cmap 层可行性。
 

@@ -1,0 +1,1492 @@
+import ast
+import hashlib
+import importlib
+import io
+import json
+import os
+import pickle
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import zlib
+from pathlib import Path
+from unittest import mock
+
+import gemini_translate_batch as batch_mod
+from context_engine import prompt_context
+from context_engine import rag_memory
+from context_engine import story_memory
+from quality_review import translation_core
+import translator_runtime as runtime
+
+
+GOLDEN_BATCH_FIXTURE_DIR = Path(__file__).parents[1] / 'fixtures' / 'golden_batch_minimal'
+GOLDEN_REVISION_FIXTURE_DIR = Path(__file__).parents[1] / 'fixtures' / 'golden_revision_minimal'
+GOLDEN_KEYWORD_FIXTURE_DIR = Path(__file__).parents[1] / 'fixtures' / 'golden_keyword_minimal'
+UPDATE_GOLDEN_BATCH_ENV = 'UPDATE_GOLDEN_BATCH'
+UPDATE_GOLDEN_REVISION_ENV = 'UPDATE_GOLDEN_REVISION'
+UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
+
+
+
+class BatchRagRegressionTests(unittest.TestCase):
+    @mock.patch.object(batch_mod, 'BATCH_THINKING_LEVEL', 'minimal')
+    def test_generation_configs_filter_sampling_by_effective_model(self):
+        items = [{
+            'id': 'script.rpy:1:0',
+            'text': 'Hello',
+            'translation': '你好',
+        }]
+        builders = (
+            lambda model: batch_mod.build_generation_config(items, model=model),
+            lambda model: batch_mod.build_revision_generation_config(items, model=model),
+            lambda model: batch_mod.build_keyword_generation_config(model=model),
+        )
+        for builder in builders:
+            with self.subTest(builder=builder):
+                new_config = builder('gemini/gemini-3.5-flash')
+                self.assertNotIn('temperature', new_config)
+                self.assertIn('max_output_tokens', new_config)
+                self.assertEqual(
+                    new_config['thinking_config']['thinking_level'],
+                    batch_mod.BATCH_THINKING_LEVEL.upper(),
+                )
+
+                old_config = builder('gemini-3.1-flash-lite')
+                self.assertEqual(old_config['temperature'], batch_mod.BATCH_TEMPERATURE)
+
+    def test_empty_thinking_level_omits_thinking_config_and_warning(self):
+        old_values = {
+            'model': batch_mod.BATCH_MODEL,
+            'thinking_level': batch_mod.BATCH_THINKING_LEVEL,
+        }
+        try:
+            batch_mod.BATCH_MODEL = 'gemini-3.1-flash-lite'
+            batch_mod.BATCH_THINKING_LEVEL = ''
+
+            config = batch_mod.build_generation_config([
+                {
+                    'id': 'script.rpy:1:0',
+                    'text': 'Hello',
+                }
+            ])
+            warnings = batch_mod.get_batch_risk_warnings()
+        finally:
+            batch_mod.BATCH_MODEL = old_values['model']
+            batch_mod.BATCH_THINKING_LEVEL = old_values['thinking_level']
+
+        self.assertNotIn('thinking_config', config)
+        self.assertFalse(any('thinking_level' in warning for warning in warnings))
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_chunks_keeps_context_task_dicts(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Before line',
+                            'line': 1,
+                            'start': 0,
+                            'end': 11,
+                            'speaker_id': 'e',
+                            'speaker_name': 'Eileen',
+                            'progress_entry': 'task:1:0',
+                        },
+                        {
+                            'id': 'script.rpy:2:0',
+                            'text': 'Target line',
+                            'line': 2,
+                            'start': 0,
+                            'end': 11,
+                            'speaker_id': 'n',
+                            'speaker_name': 'Noah',
+                            'progress_entry': 'task:2:0',
+                        },
+                        {
+                            'id': 'script.rpy:3:0',
+                            'text': 'After line',
+                            'line': 3,
+                            'start': 0,
+                            'end': 10,
+                            'speaker_id': 'e',
+                            'speaker_name': 'Eileen',
+                            'progress_entry': 'task:3:0',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual(chunks[1]['context_past'][0]['speaker_name'], 'Eileen')
+        self.assertEqual(chunks[1]['context_past'][0]['progress_entry'], 'task:1:0')
+        self.assertEqual(chunks[1]['context_future'][0]['speaker_name'], 'Eileen')
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_chunks_respects_source_char_limit(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 20
+            batch_mod.BATCH_TARGET_CHARS = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            tasks = []
+            for index, text in enumerate(['x' * 12, 'short', 'small', 'tiny']):
+                tasks.append({
+                    'id': f'script.rpy:{index}:0',
+                    'text': text,
+                    'line': index,
+                    'start': 0,
+                    'end': len(text),
+                })
+
+            chunks = batch_mod.build_chunks([{
+                'file_rel_path': 'script.rpy',
+                'file_path': 'script.rpy',
+                'tasks': tasks,
+            }])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual([len(chunk['items']) for chunk in chunks], [1, 2, 1])
+        self.assertEqual([chunk['source_char_count'] for chunk in chunks], [12, 10, 4])
+        self.assertEqual(chunks[0]['items'][0]['text'], 'x' * 12)
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_chunks_injects_lexical_glossary_without_rag(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = ['Sample Ensemble']
+
+            sample_text = 'Hello Sample Ensemble'
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': sample_text,
+                            'line': 0,
+                            'start': 0,
+                            'end': len(sample_text),
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+
+        self.assertTrue(chunks)
+        hits = chunks[0].get('glossary_hits') or []
+        self.assertTrue(any(str(hit.get('source') or '') == 'Sample Ensemble' for hit in hits))
+        self.assertNotIn('story_hits', chunks[0])
+        user_prompt = str(chunks[0].get('user_prompt') or '')
+        self.assertIn('Existing glossary entries:', user_prompt)
+        self.assertIn('Preserve: Sample Ensemble', user_prompt)
+        self.assertNotIn('LOCKED TERMS:', user_prompt)
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_chunks_lexical_glossary_covers_normalize_and_non_translatable(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        old_normalize_map = dict(batch_mod.legacy.NORMALIZE_TRANSLATION_MAP or {})
+        old_non_translatable = set(getattr(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', set()) or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = ['Director B']
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {'setlist': '曲目单'}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
+
+            sample_text = 'Sample Ensemble setlist and Director B'
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': sample_text,
+                            'line': 0,
+                            'start': 0,
+                            'end': len(sample_text),
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = old_normalize_map
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = old_non_translatable
+
+        self.assertEqual(len(chunks), 1)
+        hits = chunks[0].get('glossary_hits') or []
+        pushed = {(hit.get('source'), hit.get('kind')) for hit in hits}
+        self.assertIn(('setlist', 'normalize'), pushed)
+        self.assertIn(('Sample Ensemble', 'non_translatable'), pushed)
+        self.assertIn(('Director B', 'preserve'), pushed)
+        user_prompt = str(chunks[0].get('user_prompt') or '')
+        self.assertIn('Existing mapping: setlist -> 曲目单', user_prompt)
+        self.assertIn('Non-translatable: Sample Ensemble', user_prompt)
+        self.assertIn('Preserve: Director B', user_prompt)
+        self.assertNotIn('LOCKED TERMS:', user_prompt)
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_chunks_embeds_plan_request_fields(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 1
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': 'Target line',
+                            'line': 0,
+                            'start': 0,
+                            'end': 11,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+
+        self.assertEqual(len(chunks), 1)
+        chunk = chunks[0]
+        for field in (
+            'request_id',
+            'plan_id',
+            'chunk_id',
+            'system_instruction',
+            'user_prompt',
+            'response_schema',
+            'prompt_fingerprint',
+            'request_fingerprint',
+        ):
+            self.assertTrue(chunk.get(field), field)
+
+        row = batch_mod.build_batch_request(chunk)
+        self.assertEqual(row['key'], chunk['key'])
+        self.assertEqual(row['request_id'], chunk['request_id'])
+        self.assertEqual(row['prompt_fingerprint'], chunk['prompt_fingerprint'])
+        self.assertEqual(row['request_fingerprint'], chunk['request_fingerprint'])
+        self.assertEqual(
+            row['request']['contents'][0]['parts'][0]['text'],
+            chunk['user_prompt'],
+        )
+        self.assertEqual(
+            row['request']['system_instruction']['parts'][0]['text'],
+            chunk['system_instruction'],
+        )
+        self.assertEqual(
+            row['request']['generation_config']['response_json_schema'],
+            chunk['response_schema'],
+        )
+
+    @mock.patch.object(batch_mod, "_batch_plan_source_identity",
+                       new=lambda jobs: batch_mod.translation_plan.SourceIdentity(engine="renpy"))
+    def test_build_retry_subchunk_rebuilds_canonical_plan_request(self):
+        old_values = {
+            'target_size': batch_mod.BATCH_TARGET_SIZE,
+            'target_chars': batch_mod.BATCH_TARGET_CHARS,
+            'context_before': batch_mod.BATCH_CONTEXT_BEFORE,
+            'context_after': batch_mod.BATCH_CONTEXT_AFTER,
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'story_enabled': batch_mod.STORY_MEMORY_ENABLED,
+        }
+        old_preserve_terms = list(batch_mod.legacy.PRESERVE_TERMS or [])
+        old_normalize_map = dict(batch_mod.legacy.NORMALIZE_TRANSLATION_MAP or {})
+        old_non_translatable = set(getattr(batch_mod.legacy, 'NON_TRANSLATABLE_EXACT', set()) or [])
+        try:
+            batch_mod.BATCH_TARGET_SIZE = 10
+            batch_mod.BATCH_CONTEXT_BEFORE = 1
+            batch_mod.BATCH_CONTEXT_AFTER = 1
+            batch_mod.RAG_ENABLED = False
+            batch_mod.STORY_MEMORY_ENABLED = False
+            batch_mod.legacy.PRESERVE_TERMS = []
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = {}
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = {'Sample Ensemble'}
+
+            sample_text = 'Sample Ensemble'
+            chunks = batch_mod.build_chunks([
+                {
+                    'file_rel_path': 'script.rpy',
+                    'file_path': 'script.rpy',
+                    'tasks': [
+                        {
+                            'id': 'script.rpy:1:0',
+                            'text': sample_text,
+                            'line': 0,
+                            'start': 0,
+                            'end': len(sample_text),
+                            'block_name': 'script.rpy::start',
+                        },
+                        {
+                            'id': 'script.rpy:2:0',
+                            'text': 'Second line',
+                            'line': 1,
+                            'start': 0,
+                            'end': 11,
+                            'block_name': 'script.rpy::start',
+                        },
+                    ],
+                }
+            ])
+            parent = chunks[0]
+            subchunk = batch_mod.build_retry_subchunk(parent, 0, 1, 1)
+            row = batch_mod.build_batch_request(subchunk)
+        finally:
+            batch_mod.BATCH_TARGET_SIZE = old_values['target_size']
+            batch_mod.BATCH_TARGET_CHARS = old_values['target_chars']
+            batch_mod.BATCH_CONTEXT_BEFORE = old_values['context_before']
+            batch_mod.BATCH_CONTEXT_AFTER = old_values['context_after']
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.STORY_MEMORY_ENABLED = old_values['story_enabled']
+            batch_mod.legacy.PRESERVE_TERMS = old_preserve_terms
+            batch_mod.legacy.NORMALIZE_TRANSLATION_MAP = old_normalize_map
+            batch_mod.legacy.NON_TRANSLATABLE_EXACT = old_non_translatable
+
+        self.assertTrue(batch_mod._chunk_has_plan_request(subchunk))
+        self.assertNotEqual(subchunk['request_id'], parent['request_id'])
+        self.assertEqual(row['request_id'], subchunk['request_id'])
+        system_text = row['request']['system_instruction']['parts'][0]['text']
+        self.assertIn('Keep all person names in English; do not translate names.', system_text)
+        self.assertIn('No markdown, no Pinyin, no explanations.', system_text)
+        user_prompt = row['request']['contents'][0]['parts'][0]['text']
+        self.assertIn('Non-translatable: Sample Ensemble', user_prompt)
+        self.assertIn('TARGET:', user_prompt)
+
+    def test_format_history_hits_block_shows_source_translation_pair(self):
+        block = batch_mod.format_history_hits_block([
+            {
+                'file_rel_path': 'script.rpy',
+                'line_start': 10,
+                'line_end': 12,
+                'score': 0.8123,
+                'quality_state': 'seed',
+                'source_text': 'Aether Gate',
+                'translated_text': '\u4ee5\u592a\u95e8',
+            }
+        ])
+
+        self.assertIn('Source: Aether Gate -> Translation: \u4ee5\u592a\u95e8', block)
+        self.assertIn('score=0.812', block)
+
+    def test_format_history_hits_block_compares_untruncated_text(self):
+        shared_prefix = 'A' * batch_mod.RAG_HISTORY_CHAR_LIMIT
+        block = batch_mod.format_history_hits_block([
+            {
+                'file_rel_path': 'script.rpy',
+                'line_start': 10,
+                'line_end': 12,
+                'score': 0.8123,
+                'quality_state': 'seed',
+                'source_text': shared_prefix + 'S',
+                'translated_text': shared_prefix + 'T',
+            }
+        ])
+
+        self.assertIn(' Source: ', block)
+        self.assertIn(' -> Translation: ', block)
+        self.assertNotIn('] Translation: ', block)
+
+    def test_embed_history_records_uses_source_text_only(self):
+        record = batch_mod.build_rag_record(
+            'script.rpy',
+            [{'line_number': 3, 'source': 'Aether Gate', 'translation': '\u4ee5\u592a\u95e8'}],
+            'seed',
+        )
+
+        with mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock:
+            embedded = batch_mod.embed_history_records([record])
+
+        embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+        self.assertEqual(embedded[0]['embedding_text_kind'], 'source_text')
+        self.assertEqual(embedded[0]['embedding_text_checksum'], batch_mod.hash_text('Aether Gate'))
+
+    def test_prepare_rag_store_bootstraps_all_allowed_tl_files(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_bootstrap': batch_mod.RAG_BOOTSTRAP_ON_BUILD,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'rag_segment_lines': batch_mod.RAG_SEGMENT_LINES,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                pending_file = tl_dir / 'pending.rpy'
+                memory_file = tl_dir / 'memory.rpy'
+                pending_file.write_text('old "Needs translation"\nnew ""\n', encoding='utf-8')
+                memory_file.write_text('old "Aether Gate"\nnew "\u4ee5\u592a\u95e8"\n', encoding='utf-8')
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_BOOTSTRAP_ON_BUILD = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod.RAG_SEGMENT_LINES = 4
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                embedded_inputs = []
+
+                def fake_embed(contents, task_type):
+                    embedded_inputs.extend(contents)
+                    return [[1.0, 0.0, 0.0] for _ in contents]
+
+                file_jobs = [{
+                    'file_rel_path': 'pending.rpy',
+                    'file_path': str(pending_file),
+                    'task_count': 1,
+                    'tasks': [],
+                }]
+                with mock.patch.object(batch_mod, 'embed_texts', side_effect=fake_embed):
+                    summary = batch_mod.prepare_rag_store(file_jobs)
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+
+            self.assertEqual(summary['scan_scope'], 'all_files')
+            self.assertEqual(summary['files_scanned'], 2)
+            self.assertEqual(summary['scanned'], 1)
+            self.assertEqual(summary['upserted'], 1)
+            self.assertEqual(embedded_inputs, ['Aether Gate'])
+            self.assertEqual(records[0]['source_text'], 'Aether Gate')
+            self.assertEqual(records[0]['translated_text'], '\u4ee5\u592a\u95e8')
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_BOOTSTRAP_ON_BUILD = old_values['rag_bootstrap']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_bootstrap_rag_store_scans_all_allowed_tl_files_explicitly(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_bootstrap': batch_mod.RAG_BOOTSTRAP_ON_BUILD,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'rag_segment_lines': batch_mod.RAG_SEGMENT_LINES,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                memory_file = tl_dir / 'memory.rpy'
+                memory_file.write_text('old "Aether Gate"\nnew "\u4ee5\u592a\u95e8"\n', encoding='utf-8')
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_BOOTSTRAP_ON_BUILD = False
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod.RAG_SEGMENT_LINES = 4
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                stdout = io.StringIO()
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock,
+                    mock.patch('sys.stdout', stdout),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(skip_prepare=True)
+
+                store = batch_mod.get_rag_store()
+                output = stdout.getvalue()
+
+            embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertIn('RAG bootstrap summary:', output)
+            self.assertIn('- scan_scope: all_files', output)
+            self.assertIn('- embedded: 1', output)
+            self.assertEqual(summary['scan_scope'], 'all_files')
+            self.assertEqual(summary['files_scanned'], 1)
+            self.assertEqual(summary['scanned'], 1)
+            self.assertEqual(summary['embedded'], 1)
+            self.assertEqual(summary['upserted'], 1)
+            self.assertEqual(store.count_history(), 1)
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_BOOTSTRAP_ON_BUILD = old_values['rag_bootstrap']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_bootstrap_rag_store_disabled_does_not_require_tl_dir(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+        }
+        try:
+            batch_mod.RAG_ENABLED = False
+            batch_mod.legacy.TL_DIR = str(Path('missing') / 'tl')
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(batch_mod.legacy, 'run_prepare_steps') as prepare_mock,
+                mock.patch('sys.stdout', stdout),
+            ):
+                summary = batch_mod.bootstrap_rag_store(skip_prepare=False)
+
+            prepare_mock.assert_not_called()
+            self.assertEqual(summary, {'enabled': False})
+            self.assertIn('RAG is disabled', stdout.getvalue())
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+
+    def test_bootstrap_rag_store_imports_external_jsonl_seed(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                seed_path = root / 'parallel.jsonl'
+                seed_path.write_text(
+                    '\n'.join([
+                        json.dumps({
+                            'file_rel_path': 'external/memory.txt',
+                            'line_start': None,
+                            'line': 7,
+                            'source': 'Aether Gate',
+                            'translation': '\u4ee5\u592a\u95e8',
+                        }, ensure_ascii=False),
+                        '{"source": ',
+                        json.dumps({'source': 'Same', 'translation': 'Same'}, ensure_ascii=False),
+                    ]),
+                    encoding='utf-8',
+                )
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                stdout = io.StringIO()
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock,
+                    mock.patch('sys.stdout', stdout),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(
+                        skip_prepare=True,
+                        seed_jsonl_paths=[str(seed_path)],
+                    )
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+                output = stdout.getvalue()
+
+            embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertIn('- external_seed_files: 1', output)
+            self.assertIn('- external_seed_records: 1', output)
+            self.assertIn('- external_seed_invalid_json: 1', output)
+            self.assertIn('- external_seed_filtered: 1', output)
+            self.assertIn('- external_seed_skipped: 2', output)
+            self.assertEqual(summary['external_seed_files'], 1)
+            self.assertEqual(summary['external_seed_records'], 1)
+            self.assertEqual(summary['external_seed_invalid_json'], 1)
+            self.assertEqual(summary['external_seed_filtered'], 1)
+            self.assertEqual(summary['external_seed_skipped'], 2)
+            self.assertEqual(summary['files_scanned'], 0)
+            self.assertEqual(summary['scanned'], 1)
+            self.assertEqual(summary['embedded'], 1)
+            self.assertEqual(records[0]['file_rel_path'], 'external/memory.txt')
+            self.assertEqual(records[0]['line_start'], 7)
+            self.assertEqual(records[0]['quality_state'], 'external_seed')
+            self.assertEqual(records[0]['source_text'], 'Aether Gate')
+            self.assertEqual(records[0]['translated_text'], '\u4ee5\u592a\u95e8')
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_external_jsonl_seed_default_source_name_preserves_path_uniqueness(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tl_dir = root / 'game' / 'tl' / 'schinese'
+                tl_dir.mkdir(parents=True)
+                left_seed = root / 'left' / 'parallel.jsonl'
+                right_seed = root / 'right' / 'parallel.jsonl'
+                left_seed.parent.mkdir()
+                right_seed.parent.mkdir()
+                seed_row = json.dumps({
+                    'line': 1,
+                    'source': 'Aether Gate',
+                    'translation': '\u4ee5\u592a\u95e8',
+                }, ensure_ascii=False)
+                left_seed.write_text(
+                    '\n'.join([
+                        seed_row,
+                        json.dumps({'source': 'left noop', 'translation': 'left noop'}, ensure_ascii=False),
+                    ]),
+                    encoding='utf-8',
+                )
+                right_seed.write_text(
+                    '\n'.join([
+                        seed_row,
+                        json.dumps({'source': 'right noop', 'translation': 'right noop'}, ensure_ascii=False),
+                    ]),
+                    encoding='utf-8',
+                )
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(tl_dir)
+                batch_mod.legacy.INCLUDE_FILES = set()
+                batch_mod.legacy.INCLUDE_PREFIXES = set()
+
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(
+                        skip_prepare=True,
+                        seed_jsonl_paths=[str(left_seed), str(right_seed)],
+                    )
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+                file_rel_paths = {record['file_rel_path'] for record in records}
+                memory_ids = {record['memory_id'] for record in records}
+
+            self.assertEqual(summary['external_seed_files'], 2)
+            self.assertEqual(summary['external_seed_records'], 2)
+            self.assertEqual(summary['upserted'], 2)
+            self.assertEqual(store.count_history(), 2)
+            self.assertEqual(len(file_rel_paths), 2)
+            self.assertEqual(len(memory_ids), 2)
+            self.assertTrue(all(path.startswith('external/') for path in file_rel_paths))
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_external_jsonl_seed_default_source_name_is_content_stable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            left_seed = root / 'left' / 'parallel.jsonl'
+            right_seed = root / 'right' / 'renamed.jsonl'
+            left_seed.parent.mkdir()
+            right_seed.parent.mkdir()
+            seed_content = json.dumps({
+                'line': 1,
+                'source': 'Aether Gate',
+                'translation': '\u4ee5\u592a\u95e8',
+            }, ensure_ascii=False)
+            left_seed.write_text(seed_content, encoding='utf-8')
+            right_seed.write_text(seed_content, encoding='utf-8')
+
+            self.assertEqual(
+                batch_mod.external_seed_source_name(str(left_seed)),
+                batch_mod.external_seed_source_name(str(right_seed)),
+            )
+
+    def test_bootstrap_rag_store_imports_seed_when_tl_dir_is_missing(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+            'include_files': set(batch_mod.legacy.INCLUDE_FILES),
+            'include_prefixes': set(batch_mod.legacy.INCLUDE_PREFIXES),
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                seed_path = root / 'parallel.jsonl'
+                seed_path.write_text(
+                    json.dumps({
+                        'source': 'Aether Gate',
+                        'translation': '\u4ee5\u592a\u95e8',
+                    }, ensure_ascii=False),
+                    encoding='utf-8',
+                )
+
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(root / 'rag_store')
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(root / 'missing_tl')
+
+                with (
+                    mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock,
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    summary = batch_mod.bootstrap_rag_store(
+                        skip_prepare=True,
+                        seed_jsonl_paths=[str(seed_path)],
+                    )
+
+                store = batch_mod.get_rag_store()
+
+            embed_mock.assert_called_once_with(['Aether Gate'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertEqual(summary['files_scanned'], 0)
+            self.assertEqual(summary['external_seed_records'], 1)
+            self.assertEqual(summary['upserted'], 1)
+            self.assertEqual(store.count_history(), 1)
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+            batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
+            batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
+
+    def test_build_arg_parser_accepts_bootstrap_rag_command(self):
+        args = batch_mod.build_arg_parser().parse_args([
+            'bootstrap-rag',
+            '--skip-prepare',
+            '--seed-jsonl',
+            'parallel.jsonl',
+        ])
+
+        self.assertEqual(args.command, 'bootstrap-rag')
+        self.assertTrue(args.skip_prepare)
+        self.assertEqual(args.seed_jsonl, ['parallel.jsonl'])
+
+        parser = batch_mod.build_arg_parser()
+        parser.parse_args(['bootstrap-rag', '--seed-jsonl', 'first.jsonl'])
+        parsed_without_seed = parser.parse_args(['bootstrap-rag'])
+        self.assertIsNone(parsed_without_seed.seed_jsonl)
+
+    def test_build_arg_parser_accepts_doctor_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['doctor'])
+
+        self.assertEqual(args.command, 'doctor')
+
+    def test_build_arg_parser_accepts_bootstrap_work_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['bootstrap-work'])
+
+        self.assertEqual(args.command, 'bootstrap-work')
+        self.assertFalse(args.no_update_game_root)
+
+    def test_build_arg_parser_accepts_generate_template_command(self):
+        args = batch_mod.build_arg_parser().parse_args(['generate-template'])
+
+        self.assertEqual(args.command, 'generate-template')
+
+    def test_run_generate_template_prints_summary_when_prepare_raises(self):
+        buffer = io.StringIO()
+        with (
+            mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', True),
+            mock.patch.object(batch_mod.legacy, 'PREP_GENERATE_TEMPLATE', True),
+            mock.patch.object(batch_mod.legacy, 'TL_DIR', 'C:/Games/Example/work/game/tl/schinese'),
+            mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+            mock.patch.object(batch_mod, 'collect_tl_doctor_counts', return_value={'rpy_files': 0}),
+            mock.patch.object(batch_mod.os.path, 'isdir', return_value=False),
+            mock.patch.object(batch_mod.sys, 'stdout', buffer),
+            mock.patch.object(
+                batch_mod.legacy,
+                'run_prepare_steps',
+                side_effect=SystemExit('[Prepare] Cannot generate translation template'),
+            ),
+        ):
+            with self.assertRaises(SystemExit):
+                batch_mod.run_generate_template()
+
+        self.assertIn('Template generation summary:', buffer.getvalue())
+        self.assertIn('status: failed', buffer.getvalue())
+
+    def test_run_generate_template_disabled_prepare_reports_existing_rpy_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'work' / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    e "hello"\n',
+                encoding='utf-8',
+            )
+            buffer = io.StringIO()
+            with (
+                mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', False),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.sys, 'stdout', buffer),
+            ):
+                with self.assertRaises(SystemExit):
+                    batch_mod.run_generate_template()
+
+            output = buffer.getvalue()
+            self.assertIn('Template generation summary:', output)
+            self.assertIn('rpy_files: 1', output)
+            self.assertIn('tl_exists: True', output)
+
+    def test_assess_doctor_layout_status_failed_without_work_or_original(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': '',
+            'can_generate_template': False,
+        }
+        with (
+            mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True),
+            mock.patch('os.path.isdir', return_value=False),
+        ):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'failed')
+
+    def test_assess_doctor_layout_status_switch_when_original_exists(self):
+        report = {
+            'base_dir': 'C:/Games/Example',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 0},
+            'original_game_dir': 'C:/Games/Example/original/game',
+            'can_generate_template': True,
+        }
+        with mock.patch.object(batch_mod.legacy, 'is_work_dir_empty', return_value=True):
+            self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'switch_to_work')
+
+    def test_assess_doctor_layout_status_ready_on_work_with_tl(self):
+        report = {
+            'base_dir': 'C:/Games/Example/work',
+            'work_dir': 'C:/Games/Example/work',
+            'counts': {'rpy_files': 2},
+            'original_game_dir': '',
+            'can_generate_template': True,
+        }
+        self.assertEqual(batch_mod.assess_doctor_layout_status(report), 'ready')
+
+    def test_doctor_report_recommends_bootstrap_work_when_work_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            original_game = project / 'original' / 'game'
+            original_game.mkdir(parents=True)
+            (original_game / 'script.rpy').write_text('label start:\n', encoding='utf-8')
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(project)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(project / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(project / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_ENABLED', True),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+                mock.patch.object(batch_mod.legacy, 'resolve_original_game_dir', return_value=str(original_game)),
+                mock.patch.object(batch_mod.legacy, 'work_dir_bootstrap_allowed', return_value=(True, str(project / 'work'), '')),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        from foundation import doctor_recommendations as doctor_rec
+
+        codes = doctor_rec.doctor_recommendation_codes(report.get('recommendations', []))
+        self.assertIn(doctor_rec.BOOTSTRAP_WORK, codes)
+
+    def test_doctor_report_prefers_existing_tl_when_files_and_sdk_available(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    # e "Hello"\n'
+                '    e "\u4f60\u597d"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', 'C:/RenPy'),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', 'C:/RenPy/renpy.exe'),
+                mock.patch.object(
+                    batch_mod.legacy,
+                    'get_prepare_template_command_info',
+                    return_value={
+                        'available': True,
+                        'kind': 'renpy-sdk',
+                        'command': ['C:/RenPy/renpy.exe', 'translate', 'schinese'],
+                        'cwd': str(base / 'game'),
+                        'reason': '',
+                    },
+                ),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['mode'], 'existing_tl_only')
+        self.assertTrue(report['can_generate_template'])
+        self.assertEqual(report['counts']['rpy_files'], 1)
+
+    def test_doctor_report_classifies_existing_tl_without_sdk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    # e "Hello"\n'
+                '    e "\u4f60\u597d"\n'
+                '\n'
+                'translate schinese strings:\n'
+                '    old "Start"\n'
+                '    new "\u5f00\u59cb"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'TL_SUBDIR', 'game/tl/schinese'),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LANGUAGE', 'schinese'),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['mode'], 'existing_tl_only')
+        self.assertFalse(report['can_generate_template'])
+        self.assertEqual(report['counts']['rpy_files'], 1)
+        self.assertEqual(report['counts']['translate_blocks'], 1)
+        self.assertEqual(report['counts']['string_sections'], 1)
+        self.assertEqual(report['counts']['old_lines'], 1)
+        self.assertEqual(report['counts']['new_lines'], 1)
+        self.assertEqual(report['counts']['commented_original_lines'], 1)
+
+    def test_doctor_report_warns_when_dialogue_comments_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'script.rpy').write_text(
+                'translate schinese start_123:\n'
+                '    e "\u4f60\u597d"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertIn('Dialogue translation blocks do not include source comments', ' '.join(report['warnings']))
+
+    def test_doctor_report_does_not_treat_translate_python_as_dialogue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+            tl_dir = base / 'game' / 'tl' / 'schinese'
+            tl_dir.mkdir(parents=True)
+            (tl_dir / 'style.rpy').write_text(
+                'translate schinese python:\n'
+                '    gui.text_font = "SourceHanSansLite.ttf"\n',
+                encoding='utf-8',
+            )
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(tl_dir)),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', None),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        self.assertEqual(report['counts']['translate_blocks'], 0)
+        self.assertNotIn('Dialogue translation blocks do not include source comments', ' '.join(report['warnings']))
+
+    def test_doctor_command_does_not_require_api_keys(self):
+        load_settings = mock.Mock()
+        with (
+            mock.patch.object(batch_mod, 'initialize_batch_logging') as logging_mock,
+            mock.patch.object(batch_mod.legacy, 'load_translator_settings', load_settings),
+            mock.patch.object(batch_mod.legacy, 'load_glossary'),
+            mock.patch.object(batch_mod, 'load_batch_settings'),
+            mock.patch.object(batch_mod, 'print_banner'),
+            mock.patch.object(batch_mod, 'collect_doctor_report', return_value={'counts': {}, 'warnings': []}),
+            mock.patch.object(batch_mod, 'print_doctor_report'),
+            mock.patch.object(batch_mod.legacy, 'load_config') as load_config_mock,
+        ):
+            batch_mod.main(['doctor'])
+
+        load_config_mock.assert_not_called()
+        logging_mock.assert_not_called()
+        load_settings.assert_called_once_with(
+            persist_corrected_game_root=False,
+            tolerate_routing_errors=True,
+        )
+
+    def test_doctor_command_does_not_persist_corrected_game_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / 'Game_Example'
+            (project / 'original' / 'game').mkdir(parents=True)
+            (project / 'work' / 'game' / 'tl' / 'schinese').mkdir(parents=True)
+            (project / 'work' / 'game' / 'script.rpy').write_text('label start:\n    return\n', encoding='utf-8')
+            config_path = root / 'translator_config.json'
+            config_path.write_text(
+                json.dumps({'game_root': str(project), 'tl_subdir': 'game/tl/schinese'}, ensure_ascii=False, indent=2)
+                + '\n',
+                encoding='utf-8',
+            )
+            before = config_path.read_bytes()
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'TRANSLATOR_CONFIG', str(config_path)),
+                mock.patch.object(batch_mod.legacy, 'persist_game_root') as persist_mock,
+                mock.patch.object(batch_mod, 'print_banner'),
+                mock.patch.object(batch_mod, 'print_doctor_report'),
+                runtime.runtime_config_scope(),
+            ):
+                exit_code = batch_mod.main(['doctor'])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(config_path.read_bytes(), before)
+            persist_mock.assert_not_called()
+
+    def test_main_without_command_exits_usage(self):
+        with self.assertRaises(SystemExit) as raised:
+            batch_mod.main([])
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_doctor_report_explains_custom_template_command_errors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / 'work'
+
+            with (
+                mock.patch.object(batch_mod.legacy, 'BASE_DIR', str(base)),
+                mock.patch.object(batch_mod.legacy, 'WORK_GAME_DIR', str(base / 'game')),
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', str(base / 'game' / 'tl' / 'schinese')),
+                mock.patch.object(batch_mod.legacy, 'SOURCE_GAME_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_RENPY_SDK_DIR', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_LAUNCHER_PY', ''),
+                mock.patch.object(batch_mod.legacy, 'PREP_TEMPLATE_COMMAND', ['{missing_placeholder}']),
+            ):
+                report = batch_mod.collect_doctor_report()
+
+        joined_warnings = ' '.join(report['warnings'])
+        self.assertFalse(report['can_generate_template'])
+        self.assertEqual(report['template_command_kind'], 'custom')
+        self.assertIn('missing_placeholder', report['template_reason'])
+        self.assertIn('Custom template command cannot be rendered', joined_warnings)
+
+    def test_summarize_batch_rag_reports_hit_count_rate_and_errors(self):
+        summary = batch_mod.summarize_batch_rag(
+            [
+                {
+                    'glossary_hits': [{'source': 'Aether', 'target': '\u4ee5\u592a'}],
+                    'history_hits': [{'memory_id': 'm1'}, {'memory_id': 'm2'}],
+                    'rag_stats': {'hit_count': 2},
+                },
+                {
+                    'history_hits': [],
+                    'rag_stats': {'error': 'embedding failed'},
+                },
+            ],
+            {'upserted': 1},
+        )
+
+        self.assertEqual(summary['prepare'], {'upserted': 1})
+        self.assertEqual(summary['chunks_with_glossary_hits'], 1)
+        self.assertEqual(summary['chunks_with_history_hits'], 1)
+        self.assertEqual(summary['history_hit_count'], 2)
+        self.assertEqual(summary['history_hit_rate'], 0.5)
+        self.assertEqual(summary['history_retrieval_errors'], 1)
+
+    def test_summarize_batch_story_memory_reports_diagnostics(self):
+        summary = batch_mod.summarize_batch_story_memory(
+            [
+                {
+                    'story_hits': {
+                        'characters': [{'id': 'eileen'}],
+                        'relations': [{'left': 'eileen', 'right': 'noah'}],
+                        'terms': [{'source': 'Void Gate', 'target': '\u865a\u7a7a\u95e8'}],
+                        'scenes': [{'file_rel_path': 'chapter1.rpy'}],
+                    },
+                },
+                {
+                    'story_hits': {
+                        'terms': [{'source': 'Aether', 'note': 'x' * 80}],
+                    },
+                },
+                {},
+            ],
+            graph_file='logs/story_memory/story_graph.json',
+            max_context_chars=30,
+        )
+
+        self.assertEqual(summary['graph_file'], 'logs/story_memory/story_graph.json')
+        self.assertEqual(summary['chunks_with_story_hits'], 2)
+        self.assertEqual(summary['story_hit_rate'], 2 / 3)
+        self.assertEqual(
+            summary['hit_counts'],
+            {
+                'characters': 1,
+                'relations': 1,
+                'terms': 2,
+                'scenes': 1,
+            },
+        )
+        self.assertEqual(summary['total_hit_count'], 5)
+        self.assertGreaterEqual(summary['truncated_story_blocks'], 1)
+        self.assertGreater(summary['formatted_char_count'], 0)
+        self.assertLessEqual(summary['formatted_char_count'], 60)
+
+    def test_summarize_batch_story_memory_uses_default_limit_for_bad_context_chars(self):
+        old_limit = batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS
+        try:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = 200
+            summary = batch_mod.summarize_batch_story_memory(
+                [
+                    {
+                        'story_hits': {
+                            'terms': [{'source': 'Aether', 'target': '\u4ee5\u592a'}],
+                        },
+                    },
+                ],
+                max_context_chars={'bad': 'shape'},
+            )
+        finally:
+            batch_mod.STORY_MEMORY_MAX_CONTEXT_CHARS = old_limit
+
+        self.assertEqual(summary['chunks_with_story_hits'], 1)
+        self.assertEqual(summary['truncated_story_blocks'], 0)
+        self.assertGreater(summary['formatted_char_count'], 1)
+
+    def test_sync_rag_store_reuses_embedding_when_only_translation_changes(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'rag_segment_lines': batch_mod.RAG_SEGMENT_LINES,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store_dir = root / 'rag_store'
+                target_file = root / 'script.rpy'
+                target_file.write_text('old "Aether Gate"\nnew "\u65e7\u8bd1"\n', encoding='utf-8')
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(store_dir)
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod.RAG_SEGMENT_LINES = 4
+                batch_mod._RAG_STORE = None
+                file_jobs = [{'file_rel_path': 'script.rpy', 'file_path': str(target_file)}]
+
+                with mock.patch.object(batch_mod, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed_mock:
+                    first_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
+                target_file.write_text('old "Aether Gate"\nnew "\u65b0\u8bd1"\n', encoding='utf-8')
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock_second:
+                    second_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock_third:
+                    third_summary = batch_mod.sync_rag_store_for_jobs(file_jobs)
+
+                store = batch_mod.get_rag_store()
+                records = list(store.history.values())
+
+            embed_mock.assert_called_once()
+            embed_mock_second.assert_not_called()
+            embed_mock_third.assert_not_called()
+            self.assertEqual(first_summary['embedded'], 1)
+            self.assertEqual(second_summary['embedding_pending'], 0)
+            self.assertEqual(second_summary['reused_embeddings'], 1)
+            self.assertEqual(second_summary['upserted'], 1)
+            self.assertEqual(third_summary['pending'], 0)
+            self.assertEqual(third_summary['embedded'], 0)
+            self.assertEqual(records[0]['translated_text'], '\u65b0\u8bd1')
+            self.assertEqual(records[0]['embedding'], [1.0, 0.0, 0.0])
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.RAG_SEGMENT_LINES = old_values['rag_segment_lines']
+
+    def test_sync_rag_store_for_jobs_does_not_rebuild_incompatible_store(self):
+        old_values = {
+            'rag_enabled': batch_mod.RAG_ENABLED,
+            'rag_store_dir': batch_mod.RAG_STORE_DIR,
+            'rag_store': batch_mod._RAG_STORE,
+            'rag_dim': batch_mod.RAG_OUTPUT_DIMENSIONALITY,
+            'base_dir': batch_mod.legacy.BASE_DIR,
+            'tl_dir': batch_mod.legacy.TL_DIR,
+        }
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                store_dir = root / 'rag_store'
+                store = rag_memory.JsonRagStore(str(store_dir))
+                store.upsert_history(
+                    [
+                        {
+                            'memory_id': 'm1',
+                            'source_text': 'Hello',
+                            'translated_text': '你好',
+                            'embedding': [1.0, 0.0, 0.0],
+                        }
+                    ]
+                )
+                batch_mod.RAG_ENABLED = True
+                batch_mod.RAG_STORE_DIR = str(store_dir)
+                batch_mod.RAG_OUTPUT_DIMENSIONALITY = 3
+                batch_mod._RAG_STORE = None
+                batch_mod.legacy.BASE_DIR = str(root)
+                batch_mod.legacy.TL_DIR = str(root / 'tl')
+
+                with mock.patch.object(batch_mod, 'embed_texts') as embed_mock:
+                    summary = batch_mod.sync_rag_store_for_jobs(
+                        [{'file_rel_path': 'script.rpy', 'file_path': str(root / 'script.rpy')}]
+                    )
+
+                store.load()
+                self.assertEqual(summary['error'], 'rebuild_store')
+                self.assertEqual(summary['action'], 'rebuild_store')
+                self.assertEqual(summary['upserted'], 0)
+                self.assertEqual(store.count_history(), 1)
+                embed_mock.assert_not_called()
+
+                with mock.patch.object(
+                    batch_mod,
+                    'embed_texts',
+                    return_value=[[0.0, 1.0, 0.0]],
+                ), mock.patch.object(
+                    batch_mod,
+                    'collect_files_to_process',
+                    return_value=[],
+                ), mock.patch.object(
+                    batch_mod,
+                    'collect_rag_seed_records_for_jobs',
+                    return_value=[],
+                ):
+                    rebuilt = batch_mod.sync_rag_store_for_jobs(
+                        [],
+                        scan_all_files=True,
+                        rebuild=True,
+                    )
+                reloaded = rag_memory.JsonRagStore(str(store_dir))
+                reloaded.load()
+                self.assertNotEqual(rebuilt.get('error'), 'rebuild_store')
+                self.assertEqual(reloaded.count_history(), 0)
+        finally:
+            batch_mod.RAG_ENABLED = old_values['rag_enabled']
+            batch_mod.RAG_STORE_DIR = old_values['rag_store_dir']
+            batch_mod._RAG_STORE = old_values['rag_store']
+            batch_mod.RAG_OUTPUT_DIMENSIONALITY = old_values['rag_dim']
+            batch_mod.legacy.BASE_DIR = old_values['base_dir']
+            batch_mod.legacy.TL_DIR = old_values['tl_dir']
+
+    def test_batch_plan_context_policy_keeps_source_index_budget_separate(self):
+        old_values = {
+            'history': batch_mod.RAG_HISTORY_CHAR_LIMIT,
+            'enabled': batch_mod.SOURCE_INDEX_ENABLED,
+            'top_k': batch_mod.SOURCE_INDEX_TOP_K,
+            'char_limit': batch_mod.SOURCE_INDEX_CHAR_LIMIT,
+        }
+        try:
+            batch_mod.RAG_HISTORY_CHAR_LIMIT = 220
+            batch_mod.SOURCE_INDEX_ENABLED = True
+            batch_mod.SOURCE_INDEX_TOP_K = 4
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = 220
+            policy = batch_mod._batch_plan_context_policy()
+            self.assertEqual(policy.history_char_limit, 220)
+            self.assertEqual(policy.source_index_char_limit, 880)
+        finally:
+            batch_mod.RAG_HISTORY_CHAR_LIMIT = old_values['history']
+            batch_mod.SOURCE_INDEX_ENABLED = old_values['enabled']
+            batch_mod.SOURCE_INDEX_TOP_K = old_values['top_k']
+            batch_mod.SOURCE_INDEX_CHAR_LIMIT = old_values['char_limit']
+
+
+
+if __name__ == '__main__':
+    unittest.main()

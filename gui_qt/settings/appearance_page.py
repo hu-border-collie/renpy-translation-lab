@@ -19,13 +19,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..theme_helpers import (
+from gui_qt.appearance.theme_helpers import (
     THEME_DARK,
     THEME_LIGHT,
     THEME_SYSTEM,
     normalize_theme_preference,
 )
-from ..widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox
 from .page_chrome import build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS

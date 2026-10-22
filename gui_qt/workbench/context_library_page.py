@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..empty_state import EmptyStateWidget
+from gui_qt.widgets.empty_state import EmptyStateWidget
 from ..user_copy import (
     CONTEXT_LIBRARY_COPY,
     ENGINE_SNAPSHOT_COPY,

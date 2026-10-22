@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .manifest_lite import (
+from gui_qt.workflows.manifest_lite import (
     manifest_should_use_lite_reader,
     read_manifest_index_fields,
     read_manifest_lite,
@@ -314,7 +314,7 @@ class ProjectState:
         work_mode=None,
     ) -> dict[str, Any]:
         from .work_modes import WorkMode, normalize_work_mode
-        from .workflow_factory import validate_resume_manifest
+        from gui_qt.workflows.workflow_factory import validate_resume_manifest
 
         manifest = self.load_manifest_file(manifest_path)
         game_root = self.get_game_root()

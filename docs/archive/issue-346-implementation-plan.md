@@ -141,8 +141,8 @@ ContextLayer / ContextAssembly
 
 ### 4.3 涉及文件与测试
 
-- 新增 `translation_plan.py`、`tests/test_translation_plan.py`、`tests/fixtures/translation_plan_*`；
-- 修改 `translation_core.py`（canonical prompt 与共享 chunking helper）与 `tests/test_translation_core.py`；
+- 新增 `translation_plan.py`、`tests/quality_review/test_translation_plan.py`、`tests/fixtures/translation_plan_*`；
+- 修改 `translation_core.py`（canonical prompt 与共享 chunking helper）与 `tests/quality_review/test_translation_core.py`；
 - 出口：纯函数单测通过；P2/P3 可同时基于 P1 接口评审，不触发生产路径变化。
 
 ## 5. P2：Gemini Batch 消费 TranslationPlan
@@ -156,7 +156,7 @@ ContextLayer / ContextAssembly
 
 出口：
 
-- `python -m unittest tests.test_translation_plan tests.test_gemini_translate_batch_cli_contract -q` 通过；
+- `python -m unittest tests.quality_review.test_translation_plan tests.cli.test_gemini_translate_batch_cli_contract -q` 通过；
 - `python -B tests/run_cli_tests.py -q` 通过；
 - 真实小项目 build → submit（dry-run）→ check 流程不变，manifest 新字段可解释。
 
@@ -171,7 +171,7 @@ ContextLayer / ContextAssembly
 
 出口：
 
-- `python -m unittest tests.test_translation_plan tests.test_sync_model_backend tests.test_sync_translation_preview -q` 通过；
+- `python -m unittest tests.quality_review.test_translation_plan tests.providers.test_sync_model_backend tests.execution.test_sync_translation_preview -q` 通过；
 - `python -B tests/run_cli_tests.py -q` 通过；
 - Sync 小项目 preview → apply 的 source snapshot 与 plan fingerprint 门禁生效。
 
@@ -231,8 +231,8 @@ ContextLayer / ContextAssembly
 按阶段增量跑针对性测试，P2 起跑完整门禁：
 
 ```bash
-python -m unittest tests.test_translation_plan tests.test_translation_core -q
-python -m unittest tests.test_gemini_translate_batch_cli_contract tests.test_sync_model_backend tests.test_sync_translation_preview -q
+python -m unittest tests.quality_review.test_translation_plan tests.quality_review.test_translation_core -q
+python -m unittest tests.cli.test_gemini_translate_batch_cli_contract tests.providers.test_sync_model_backend tests.execution.test_sync_translation_preview -q
 python -B tests/run_cli_tests.py -q
 python -B tests/run_gui_tests.py -q      # P3/P4 若 GUI 诊断或 workflow 有变化
 python scripts/run_quality_gates.py all

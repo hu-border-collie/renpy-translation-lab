@@ -226,7 +226,7 @@ python -B scripts/run_external_work_fixture.py --output-dir outputs/external-par
 语义审校仍标为未审；一个风格建议明确 deferred，未改共享术语文件。
 这轮包括协调者准备材料、分配 ID、接收和检查；没有测量端到端人工介入成本。
 
-[合同测试](../tests/test_external_translation_work.py) 另覆盖竞争提交、stale、接收回执中断、
+[合同测试](../tests/execution/test_external_translation_work.py) 另覆盖竞争提交、stale、接收回执中断、
 事务中断、写回状态补记失败、第三方编辑保护、质量 warning/blocker、glossary 版本，以及
 现有订正提案导入/写回的互操作。空 TL 槽的写回预镜像复用 Adapter 的实际 catalog 文本，
 原文仅用于翻译输入；没有放宽原文或目标文件校验。
@@ -235,7 +235,7 @@ python -B scripts/run_external_work_fixture.py --output-dir outputs/external-par
 
 | 验证 | 结果 |
 |---|---|
-| `tests.test_external_translation_work` | 44 项通过，已包含在针对性组合与完整 CLI 集合中 |
+| `tests.execution.test_external_translation_work` | 44 项通过，已包含在针对性组合与完整 CLI 集合中 |
 | `python -B tests/run_cli_tests.py -q` | 共 2700 项，运行成功（4 项跳过） |
 | `python -B tests/run_gui_tests.py -q` | 1325 项中 1 项设置页焦点断言失败；修复前的 `630304d` 隔离基线同样失败，协调器 26 项单独运行通过 |
 | 质量门禁 | Ruff、mypy 本轮通过；五份未变依赖锁沿用同日 pip-audit 通过记录及现有审计例外 |

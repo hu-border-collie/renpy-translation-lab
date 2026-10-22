@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..user_copy import READINESS_COPY, TRANSLATION_TARGET_COPY
-from ..widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox
 
 _STRATEGY_ORDER = ("sync", "gemini_batch")
 

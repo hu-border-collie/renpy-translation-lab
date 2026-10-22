@@ -631,9 +631,9 @@ RAG / history store 继续以 `memory_id` 关联记录。升级到 v2 后，已�
 Golden corpus 测试使用离线 fixture 和 mock 模型结果验证格式合约，不调用 Gemini，也不需要真实 API key。
 
 ```bash
-python -m unittest tests.test_batch_golden_corpus.BatchGoldenCorpusTests -q
-python -m unittest tests.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
-python -m unittest tests.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.BatchGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
 ```
 
 fixture 位置：
@@ -646,15 +646,15 @@ fixture 位置：
 
 ```powershell
 $env:UPDATE_GOLDEN_BATCH = "1"
-python -m unittest tests.test_batch_golden_corpus.BatchGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.BatchGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_BATCH
 
 $env:UPDATE_GOLDEN_REVISION = "1"
-python -m unittest tests.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.RevisionGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_REVISION
 
 $env:UPDATE_GOLDEN_KEYWORD = "1"
-python -m unittest tests.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
+python -m unittest tests.cli.test_batch_golden_corpus.KeywordGoldenCorpusTests -q
 Remove-Item Env:UPDATE_GOLDEN_KEYWORD
 ```
 

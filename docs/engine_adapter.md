@@ -401,18 +401,18 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 
 P6 收口不依赖真实游戏运行时，回归分为三层，全部在 CI 的 CLI / GUI 套件中执行：
 
-- **Ren'Py 产品路径**：`tests/test_batch_golden_corpus.py` 用最小 fixture 走
+- **Ren'Py 产品路径**：`tests/cli/test_batch_golden_corpus.py` 用最小 fixture 走
   `build -> check -> apply`、`apply --export-only/--export-dir` 与幂等重放；
-  `tests/test_engine_adapter_p1.py` / `p3` / `p4` 覆盖 adapter、coverage、
-  snapshot、reconciliation 与 reuse 合同；`tests/test_engine_offline_corpus.py`
+  `tests/engine_adapters/test_engine_adapter_p1.py` / `p3` / `p4` 覆盖 adapter、coverage、
+  snapshot、reconciliation 与 reuse 合同；`tests/engine_adapters/test_engine_offline_corpus.py`
   冻结 Ren'Py fixture 的 candidate / occurrence / 分类计数，并断言同一 checkout
   内 `inventory_digest` / `coverage_digest` 稳定（不跨 OS 固定 digest：Git 可能
   在 Windows 以 CRLF 检出文本 fixture，合法地改变源字节哈希），同时验证
   coverage package 与 review template。
-- **TyranoScript 离线 corpus**：`tests/test_engine_adapter_p5_tyrano.py` +
+- **TyranoScript 离线 corpus**：`tests/engine_adapters/test_engine_adapter_p5_tyrano.py` +
   `tests/fixtures/tyranoscript_v600`（含 `expected/inventory.json`）覆盖
   hybrid inventory、原生 catalog 双向对账、`lang_set` 完整性、语义重定位和
-  声明式 `json_catalog_set` 渲染；`tests/test_engine_offline_corpus.py` 同时
+  声明式 `json_catalog_set` 渲染；`tests/engine_adapters/test_engine_offline_corpus.py` 同时
   冻结 Tyrano fixture 的 candidate / occurrence / 分类计数与同一 checkout 内的
   snapshot / coverage digest 稳定性。Tyrano 的 CLI/GUI 入口与
   端到端写回按 2026-09-12 决策不在本单范围。

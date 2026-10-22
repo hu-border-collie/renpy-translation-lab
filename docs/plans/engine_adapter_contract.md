@@ -820,7 +820,7 @@ P1 的最小切入顺序：
 
 ## 10. P0 characterization tests
 
-[`tests/test_engine_adapter_p0_characterization.py`](../../tests/test_engine_adapter_p0_characterization.py)
+[`tests/engine_adapters/test_engine_adapter_p0_characterization.py`](../../tests/engine_adapters/test_engine_adapter_p0_characterization.py)
 直接固定：
 
 - source marker、speaker、translated count 与重复 translate block 的扫描输出；

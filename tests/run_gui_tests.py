@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import sys
 import unittest
 
-from test_runner_common import (
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tests.support.runner_support import (
     ensure_tests_on_path,
     is_gui_test_module,
+    iter_test_modules,
     parse_runner_args,
     run_discovered_suite,
+    test_module_name,
 )
 
 
@@ -17,9 +23,9 @@ def build_suite() -> unittest.TestSuite:
     _, directory = ensure_tests_on_path()
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
-    for path in sorted(directory.glob("test_*.py")):
+    for path in iter_test_modules(directory):
         if is_gui_test_module(path):
-            suite.addTests(loader.loadTestsFromName(path.stem))
+            suite.addTests(loader.loadTestsFromName(test_module_name(path, directory)))
     return suite
 
 
@@ -35,7 +41,7 @@ def main(
     """
     args = parse_runner_args(__doc__ or "", argv)
     ensure_tests_on_path()
-    from gui_test_support import (
+    from tests.support.gui_test_support import (
         guarded_gui_test_environment,
         guarded_test_result_class,
         shutdown_gui_test_runtime,

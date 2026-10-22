@@ -1,0 +1,79 @@
+"""Shared helpers for CLI/GUI unittest discovery entrypoints."""
+from __future__ import annotations
+
+import argparse
+import pathlib
+import sys
+import unittest
+
+
+def repo_root() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[2]
+
+
+def tests_dir() -> pathlib.Path:
+    return pathlib.Path(__file__).resolve().parents[1]
+
+
+def iter_test_modules(directory: pathlib.Path):
+    """Find nested test modules, keeping executable fixtures out of discovery."""
+    for path in sorted(directory.rglob("test_*.py")):
+        if "fixtures" not in path.relative_to(directory).parts[:-1]:
+            yield path
+
+
+def test_module_name(path: pathlib.Path, directory: pathlib.Path) -> str:
+    """Use package-qualified names so nested modules cannot shadow each other."""
+    relative = path.relative_to(directory).with_suffix("")
+    return ".".join((directory.name, *relative.parts))
+
+
+def is_gui_test_module(path: pathlib.Path) -> bool:
+    """Route widget tests to the guarded GUI runner, including settings pages.
+
+    The ``test_settings_*_page.py`` family predates the GUI filename prefix.
+    Pure settings contracts/coordinators remain in the CLI suite.
+    """
+    return path.match("test_gui_*.py") or path.match("test_settings_*_page.py")
+
+
+def ensure_tests_on_path() -> tuple[pathlib.Path, pathlib.Path]:
+    root = repo_root()
+    directory = tests_dir()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from tests.support.runtime_test_isolation import isolate_developer_translator_config
+
+    isolate_developer_translator_config()
+    return root, directory
+
+
+def parse_runner_args(
+    description: str,
+    argv: list[str] | None = None,
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("-q", "--quiet", action="store_true", help="Minimal output")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
+    return parser.parse_args(argv)
+
+
+def run_discovered_suite(
+    suite: unittest.TestSuite,
+    *,
+    quiet: bool = False,
+    verbose: bool = False,
+    resultclass=None,
+) -> int:
+    """Run a suite and return its process exit status.
+
+    When provided, ``resultclass`` is passed to ``unittest.TextTestRunner``
+    and must be a compatible ``unittest.TextTestResult`` implementation.
+    """
+    verbosity = 2 if verbose else (1 if quiet else 2)
+    runner_options = {"verbosity": verbosity}
+    if resultclass is not None:
+        runner_options["resultclass"] = resultclass
+    runner = unittest.TextTestRunner(**runner_options)
+    result = runner.run(suite)
+    return 0 if result.wasSuccessful() else 1

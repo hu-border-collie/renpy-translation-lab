@@ -21,6 +21,10 @@ CLI/core 与 GUI 套件共同覆盖全部 `test_*.py` 用例，且两套之间�
 - `python -B tests/run_cli_tests.py -q`：CLI/core，以及不依赖 Qt 控件的设置协议、注册表、协调器和保存逻辑。
 - `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。
 
+测试按模块存放在子包中，两套入口递归发现并以 `tests.<分组>.<模块>` 加载，夹具目录不参与发现。
+同一测试模块只使用完整包名导入；复用其他测试的 fixture 时优先导入模块，避免把其 `TestCase`
+类作为当前模块的测试再次加载。目录和定向运行示例见 [测试目录说明](../tests/README.md)。
+
 Linux 的 GUI 用例只在 `gui` job 运行一次，Windows 在 `unittest` job 中分进程运行两套测试。`cli-without-gui` 仍运行完整 CLI/core 套件，以验证缺少 GUI 和分析器依赖时的行为；这是不同安装环境的兼容性检查。
 
 本地修改先运行受影响的模块。纯文案、颜色、间距等低影响改动按已有覆盖验证；新增用例应对应独立失败场景，已有场景优先扩充现有测试。规则判断优先使用轻量夹具，真实窗口测试用于验证控件接线、状态交互和布局。不要为了减少测试数量删掉写回闸门、源快照、解析身份或恢复流程的独有回归覆盖。
