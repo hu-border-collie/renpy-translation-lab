@@ -35,7 +35,7 @@ D4 默认（60/18000）由 `ChunkingTests` 单独断言。多行文本 fixture �
 合同有意变更后（并确认 D1–D7 决策允许该变更）：
 
 ```bash
-RTP_FIXTURE_UPDATE=1 python -m unittest tests.test_translation_plan -q
+RTP_FIXTURE_UPDATE=1 python -m unittest tests.quality_review.test_translation_plan -q
 ```
 
 ## 约束

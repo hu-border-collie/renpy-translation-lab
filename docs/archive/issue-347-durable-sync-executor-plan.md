@@ -618,8 +618,8 @@ P0 即本文，只改计划/索引；#346 P2 正在另一工作树实施，本�
 | 阶段 | 内容 | 依赖/出口 | 预计文件 |
 |---|---|---|---|
 | P0 | 本设计、状态机、存储/崩溃语义、测试矩阵 | 文档链接与 diff 通过 | `docs/plans/issue-347-durable-sync-executor-plan.md`、plans 索引 |
-| P1 | 纯状态/SQLite store/schema migration/event/lease/投影 | 无网络、无生产入口；转换表和事务单测全过 | 新增 `sync_run_store.py`、`sync_run_contracts.py`、`tests/test_sync_run_store.py`、fixtures |
-| P2 | fake-provider scheduler、预算 reservation、退避、取消、lineage、fault harness | 先消费 #346-owned pure derived-request helper；不接普通 Sync；F01–F21/F26–F27 通过 | 新增 `durable_sync_executor.py`、`sync_retry_policy.py`、`tests/test_durable_sync_executor.py`、subprocess fixture；不复制 `translation_plan.py` ID 逻辑 |
+| P1 | 纯状态/SQLite store/schema migration/event/lease/投影 | 无网络、无生产入口；转换表和事务单测全过 | 新增 `sync_run_store.py`、`sync_run_contracts.py`、`tests/execution/test_sync_run_store.py`、fixtures |
+| P2 | fake-provider scheduler、预算 reservation、退避、取消、lineage、fault harness | 先消费 #346-owned pure derived-request helper；不接普通 Sync；F01–F21/F26–F27 通过 | 新增 `durable_sync_executor.py`、`sync_retry_policy.py`、`tests/execution/test_durable_sync_executor.py`、subprocess fixture；不复制 `translation_plan.py` ID 逻辑 |
 | P3 | attempt usage outbox 与 durable result/exporter adapter | 直接适配既有 Batch/Sync result-row 字段角色，不等待新的 #346 result codec；usage 重放、result golden 与 F30 脱敏断言通过 | 新增 `sync_result_export.py`，修改 `model_usage_ledger.py` 及对应测试 |
 | P4 | 生产 `TranslationPlan`/backend 接线和服务层 | **必须基于 #346 P3/P4 合并点**；不再走 legacy prompt/chunk builder | 新增 `sync_run_service.py`；消费 #346 API，按最终接缝修改 `translator_runtime.py`、`sync_model_backend.py` 及测试，不回改 plan builder |
 | P5 | CLI JSON、共享 check gate、durable Sync preview/apply 集成 | F22–F25/F28–F29、partial gate、重复 apply 验收通过；不得给 Batch translation 增加 mandatory preview | 修改 `gemini_translate_batch.py`、`cli_contract.py`（仅必要扩展）、`sync_translation_preview.py`、CLI/preview/gate 测试、现行 workflow 文档，并同步 GUI“诊断与运行日志”的命令参考/user copy 测试；不改页面布局 |
@@ -678,8 +678,8 @@ git diff --check
 后续代码 PR 按范围运行：
 
 ```powershell
-python -m unittest tests.test_sync_run_store tests.test_durable_sync_executor -q
-python -m unittest tests.test_model_usage_ledger tests.test_sync_translation_preview -q
+python -m unittest tests.execution.test_sync_run_store tests.execution.test_durable_sync_executor -q
+python -m unittest tests.providers.test_model_usage_ledger tests.execution.test_sync_translation_preview -q
 python -B tests/run_cli_tests.py -q
 python -B tests/run_gui_tests.py -q
 python scripts/run_quality_gates.py all

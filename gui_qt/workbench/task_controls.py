@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..status_icons import StatusBadge
+from gui_qt.appearance.status_icons import StatusBadge
 
-from ..responsive_layout import FlowButtonBar
+from gui_qt.widgets.responsive_layout import FlowButtonBar
 
 
 TASK_PAGE_MIN_WIDTH = 260

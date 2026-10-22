@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..settings_schema import (
+from gui_qt.settings.settings_schema import (
     PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
     SettingField,
     context_primary_setting_fields,

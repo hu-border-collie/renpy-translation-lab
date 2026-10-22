@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..settings_schema import ADVANCED_SETTING_FIELDS, SettingField
+from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELDS, SettingField
 from .field_widgets import (
     apply_setting_value_to_widget,
     create_basic_setting_widget,

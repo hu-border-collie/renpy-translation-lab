@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from gui_qt.font_helpers import (  # noqa: E402
+from gui_qt.appearance.font_helpers import (  # noqa: E402
     MONO_FONT_FILENAME,
     UI_FONT_FILENAME,
     user_fonts_dir,

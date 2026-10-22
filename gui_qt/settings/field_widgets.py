@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..settings_schema import SettingField
+from gui_qt.settings.settings_schema import SettingField
 
 SettingValue = Any
 

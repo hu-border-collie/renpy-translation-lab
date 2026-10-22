@@ -21,7 +21,7 @@
 |---|---|---|
 | 核心 API | `font_coverage.py` | `load_font_face` / `scan_font_references` / `extract_translation_strings` / `analyze_font_coverage` / `format_report_markdown` |
 | CLI | `scripts/font_coverage_report.py` | `--game-root`、可选 `--tl-dir` / `--text-file` / `--text`；`--output markdown|json`；可原子 `--output-file` |
-| 离线测试 | `tests/test_font_coverage.py` | 正反例、无副作用、路径边界、CLI JSON |
+| 离线测试 | `tests/foundation/test_font_coverage.py` | 正反例、无副作用、路径边界、CLI JSON |
 | Fixture | `tests/fixtures/font_coverage_minimal/` | 原创最小 Ren'Py 脚本、可再分发 Noto 子集字体、损坏字体、译文/文本样本 |
 
 核心 API 不导入 Qt、不导入 Provider SDK，只用标准库读取 `.rpy` 文本与字体表。

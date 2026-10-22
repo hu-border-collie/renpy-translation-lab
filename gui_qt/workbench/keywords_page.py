@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..empty_state import EmptyStateWidget
+from gui_qt.widgets.empty_state import EmptyStateWidget
 from ..user_copy import KEYWORD_CANDIDATE_COPY, TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode, work_mode_submode_label
 from ..workbench_session import WorkbenchModeSession

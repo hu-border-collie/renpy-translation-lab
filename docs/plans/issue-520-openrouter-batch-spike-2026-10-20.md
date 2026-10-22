@@ -150,8 +150,8 @@ OR 拒绝没有 batch/generation ID 可用于逐条 cost 查询；保留预留�
 
 交付验证结果：
 
-- `python -B -m unittest tests.test_openrouter_batch_spike tests.test_translation_plan tests.test_translation_plan_p4 tests.test_translation_core -q`：**130 tests 通过**，含新增 11 tests；首次使用沙箱默认 TEMP 的文件权限失败保留记录，改用仓库内 TEMP 后同一组全部通过。
-- `python -m ruff check scripts/openrouter_batch_spike.py tests/test_openrouter_batch_spike.py`：通过。
+- `python -B -m unittest tests.tooling.test_openrouter_batch_spike tests.quality_review.test_translation_plan tests.quality_review.test_translation_plan_p4 tests.quality_review.test_translation_core -q`：**130 tests 通过**，含新增 11 tests；首次使用沙箱默认 TEMP 的文件权限失败保留记录，改用仓库内 TEMP 后同一组全部通过。
+- `python -m ruff check scripts/openrouter_batch_spike.py tests/tooling/test_openrouter_batch_spike.py`：通过。
 - `python -m mypy scripts/openrouter_batch_spike.py --follow-imports skip`：通过。
 - CLI `freeze` 重建摘要不变；`inspect` 处理明确标记的合成回执得到 2 candidates、`writeback_authorized=false`。
 - 全部 tracked Markdown 加本次新增文档共 86 文件，检查 533 个本地文件目标，无缺失；不包括联网 URL 或 heading anchor 的可达性证明。

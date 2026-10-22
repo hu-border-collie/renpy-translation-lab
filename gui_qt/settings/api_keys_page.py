@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..widget_helpers import NoWheelComboBox, add_editable_combo_popup_action
+from gui_qt.widgets.widget_helpers import NoWheelComboBox, add_editable_combo_popup_action
 from .page_chrome import build_settings_scroll_page, settings_group
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS

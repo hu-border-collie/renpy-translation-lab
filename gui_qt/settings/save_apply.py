@@ -13,15 +13,15 @@ from typing import Any
 from providers.gemini_model_catalog import write_model_catalog_extras
 from foundation.project_context_settings import resolve_batch_context_flags
 
-from ..litellm_settings import write_sync_backend_models
-from ..settings_schema import (
+from gui_qt.settings.litellm_settings import write_sync_backend_models
+from gui_qt.settings.settings_schema import (
     ADVANCED_SETTING_FIELDS,
     apply_advanced_settings,
     read_advanced_settings,
     resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
 )
-from ..theme_helpers import write_gui_theme_to_config
+from gui_qt.appearance.theme_helpers import write_gui_theme_to_config
 from ..user_copy import CUSTOM_LITELLM_PROVIDER_COPY, MODEL_ROUTING_RUNTIME_COPY
 from .registry import WORKSPACE_MANAGED_KEYS
 

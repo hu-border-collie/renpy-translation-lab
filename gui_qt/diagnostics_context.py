@@ -13,7 +13,7 @@ from quality_review import translation_plan
 from execution.external_translation_work import is_work_manifest
 from quality_review.keyword_glossary_merge import build_merge_keywords_cli_command
 
-from .batch_workflow_support import (
+from gui_qt.workflows.batch_workflow_support import (
     build_recover_submit_cli_args,
     build_submit_cli_args,
     format_cost_estimate_facts,
@@ -962,7 +962,7 @@ def build_cli_commands(
             ),
         )
     )
-    from .ab_experiment_report import build_compare_variants_cli_args
+    from gui_qt.reports.ab_experiment_report import build_compare_variants_cli_args
 
     commands.append(
         DiagnosticsCommand(

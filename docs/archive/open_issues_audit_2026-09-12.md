@@ -82,9 +82,9 @@
 - 调用方三处：`config_store.py:91`（timeout 1s）、`sync_run_store.py:471`（timeout 30s）、
   `model_usage_ledger.py:722`（默认抢占路径，issue 未列出）。latest 服务已在
   `atomic_io.py:244-249`、`:267-272` 硬编码 `stale_after=-1` / `preempt_dead_owner=False`
-  规避，并有 `tests/test_latest_manifest_lock.py` 保护。
+  规避，并有 `tests/foundation/test_latest_manifest_lock.py` 保护。
 - 测试缺口：generic `exclusive_file_lock` 没有“两个抢占者交错”用例；
-  `tests/test_sync_run_store.py` 没有 `.start.lock` 的 stale 回收测试。
+  `tests/execution/test_sync_run_store.py` 没有 `.start.lock` 的 stale 回收测试。
 - 附带发现：`write_latest_manifest_locked` / `compare_and_swap_latest_manifest_locked`
   的公开 `stale_after` 参数（`atomic_io.py:234`、`:259`）在函数体内从未使用，
   `gemini_translate_batch.py:2313-2314/2326-2327` 仍传 300，属误导性悬空参数。
@@ -149,7 +149,7 @@
 #### #344：Epic 不能关闭
 
 - 验收 ①（Sync / Batch 等价 prompt / schema / context）已在离线合同级完成：
-  共用 `translation_plan.build_translation_plan`，`tests/test_translation_plan.py:1102`
+  共用 `translation_plan.build_translation_plan`，`tests/quality_review/test_translation_plan.py:1102`
   断言两侧 `prompt_fingerprint` 相同；但没有真实端到端对比。
 - 验收 ②（中断只重跑缺失 chunk）只有假 Provider 子进程测试；真实计费中断 smoke 脚本
   `scripts/run_durable_sync_provider_smoke.py` 尚未执行。

@@ -55,7 +55,7 @@ extra_instructions = """
 重点检查：
 1. CLI / GUI / 配置 / 文案 / 测试是否同步；不要只改 CLI 漏 GUI，或只改 GUI 另写一套翻译语义。
 2. 不得绕过 Batch check -> apply 合约；apply --force 也不能绕过 stale check、源快照校验或 block。
-3. 配置结构变更是否同步 translator_config.example.json、runtime reader、gui_qt/settings_schema.py、GUI 设置页和文档。
+3. 配置结构变更是否同步 translator_config.example.json、runtime reader、gui_qt/settings/settings_schema.py、GUI 设置页和文档。
 4. doctor 规则变更是否同步 report/user copy、docs/doctor_recommendations.md、状态矩阵和测试。
 5. Windows 路径兼容、编码、日志路径、权限错误处理。
 6. 不要引入 API Key、本地配置、私有游戏脚本、Batch 结果或 logs/ 到仓库。

@@ -311,7 +311,7 @@ RAG 可以索引这些成果，但不成为成果是否存在或是否通过审�
 评估阶段在本地基线运行以下针对性测试，64 项通过：
 
 ```powershell
-python -B -m unittest tests.test_engine_adapter_p2 tests.test_revision_proposals -q
+python -B -m unittest tests.engine_adapters.test_engine_adapter_p2 tests.quality_review.test_revision_proposals -q
 ```
 
 这些测试验证已有 Adapter 和外部订正合同，不证明拟议初译接口、并行协作或整部作品的

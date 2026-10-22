@@ -22,7 +22,7 @@
 - 改 CLI 子命令、参数或输出：同步 argparse 帮助、相关 workflow、GUI「诊断与运行日志」命令参考和测试。
 - 改 GUI 入口或用户用语：同步 `gui_qt/user_copy.py`、现行 GUI 文档和相关 GUI 测试。
 - 改 doctor 规则：同步 doctor report/user copy、`docs/doctor_recommendations.md`、状态矩阵和测试。
-- 改配置结构：同步 `translator_config.example.json`、runtime reader、`gui_qt/settings_schema.py`、GUI 设置页和文档。
+- 改配置结构：同步 `translator_config.example.json`、runtime reader、`gui_qt/settings/settings_schema.py`、GUI 设置页和文档。
 - 新增或显著改动公共 API、非显而易见的配置解析或写回安全逻辑时补充 docstring；不要为追求覆盖率批量添加无信息注释。
 
 ## 验证
@@ -30,7 +30,7 @@
 按改动范围先运行针对性测试，再决定是否扩到完整门禁：
 
 ```powershell
-python -m unittest tests.test_<module>
+python -m unittest tests.<group>.test_<module>
 python -B tests/run_cli_tests.py -q
 python -B tests/run_gui_tests.py -q
 python scripts/run_quality_gates.py all
@@ -38,3 +38,5 @@ git diff --check
 ```
 
 纯文档改动至少检查所有 tracked 本地 Markdown 链接和 `git diff --check`。不要用手动 GUI 点击代替已有自动化测试。
+
+测试目录和完整模块名示例见 [tests/README.md](tests/README.md)。测试按包递归发现；共享辅助代码放在 `tests/support/`，夹具放在 `tests/fixtures/`。

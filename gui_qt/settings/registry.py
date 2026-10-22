@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from ..settings_schema import ADVANCED_SETTING_FIELDS, CONTEXT_PRIMARY_SETTING_KEYS
+from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELDS, CONTEXT_PRIMARY_SETTING_KEYS
 
 WORKSPACE_MANAGED_KEYS: frozenset[str] = frozenset({"game_root"})
 

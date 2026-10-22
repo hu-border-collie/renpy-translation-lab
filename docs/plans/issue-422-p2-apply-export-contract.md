@@ -246,10 +246,10 @@ journal 并清理。跨磁盘文件集合不声称瞬时全局原子性；合同
 
 ## 7. 故障注入矩阵
 
-测试文件：`tests/test_batch_apply_export.py`（单元 + 故障注入）、
-`tests/test_atomic_io.py`（严格回滚阶段 / legacy 边界）、
-`tests/test_batch_golden_corpus.py`（端到端 + 并发锁）、
-`tests/test_gemini_translate_batch_cli_contract.py`（机器输出）。
+测试文件：`tests/execution/test_batch_apply_export.py`（单元 + 故障注入）、
+`tests/foundation/test_atomic_io.py`（严格回滚阶段 / legacy 边界）、
+`tests/cli/test_batch_golden_corpus.py`（端到端 + 并发锁）、
+`tests/cli/test_gemini_translate_batch_cli_contract.py`（机器输出）。
 
 | ID | 注入点 | 期望 journal / receipt | 期望可见状态 | 期望重试/恢复 |
 |----|--------|------------------------|--------------|----------------|

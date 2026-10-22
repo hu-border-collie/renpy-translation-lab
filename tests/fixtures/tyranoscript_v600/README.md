@@ -1,7 +1,7 @@
 # tyranoscript_v600 fixture（#265 P5 parser 预研基线）
 
 本目录是 TyranoScript V600+ Adapter 的**离线 parser / catalog / candidate 基线**。
-当前不包含生产 adapter 实现；`tests/test_tyranoscript_p5_fixtures.py` 只校验夹具
+当前不包含生产 adapter 实现；`tests/engine_adapters/test_tyranoscript_p5_fixtures.py` 只校验夹具
 自洽性和手写期望，不要求 Node 或 TyranoScript 运行时。
 
 ## 目录结构

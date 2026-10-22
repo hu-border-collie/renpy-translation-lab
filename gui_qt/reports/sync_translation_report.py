@@ -1,0 +1,200 @@
+"""User-facing summaries for GUI sync translation runs."""
+from __future__ import annotations
+
+import re
+
+from gui_qt.workflows.translation_workflow import WorkflowUpdate
+from gui_qt.reports.sync_usage_report import collect_sync_usage_facts
+from gui_qt.user_copy import MODEL_CONTRACT_COPY, PROMPT_CONTEXT_COPY
+
+
+def summarize_sync_translation_output(
+    output: str,
+    exit_code: int,
+    *,
+    operation: str = "preview",
+) -> WorkflowUpdate:
+    if exit_code != 0:
+        return WorkflowUpdate(
+            status="failed",
+            heading="同步翻译中断",
+            message=_failure_message(output),
+            facts=_collect_facts(output),
+        )
+
+    if "ERROR: No valid API keys found!" in output:
+        return WorkflowUpdate(
+            status="failed",
+            heading="未配置 API Key",
+            message="请先配置有效 API Key，或设置 GEMINI_API_KEY 环境变量。",
+            facts=[],
+        )
+
+    facts = _collect_facts(output)
+    if operation == "apply":
+        if "Sync translation apply complete." not in output:
+            return WorkflowUpdate(
+                status="failed",
+                heading="同步翻译写回未完成",
+                message="写回命令没有返回完成标记，请查看原始输出。",
+                facts=facts,
+            )
+        return WorkflowUpdate(
+            status="done",
+            heading="同步翻译已写回",
+            message="预览已通过项目与源文件复核，并原子写入项目脚本。",
+            facts=facts,
+        )
+
+    files_done = len(re.findall(r"^\s*Previewed .+\.$", output, re.MULTILINE))
+    lines_to_translate = sum(
+        int(match.group(1))
+        for match in re.finditer(r"Found (\d+) lines to translate\.", output)
+    )
+    translated_count = sum(
+        int(match.group(1))
+        for match in re.finditer(r"Translated (\d+)/\d+ items\.", output)
+    )
+
+    if _tl_dir_missing(output):
+        return WorkflowUpdate(
+            status="failed",
+            heading="翻译目录不存在",
+            message="翻译目录不存在；请先运行环境检查或准备工作目录。",
+            facts=facts,
+        )
+
+    if files_done == 0 and lines_to_translate == 0:
+        return WorkflowUpdate(
+            status="done",
+            heading="没有待翻译内容",
+            message="当前项目没有需要同步翻译的新行。",
+            facts=facts,
+        )
+
+    preview_status_safe = "Preview status: safe" in output
+    preview_status_partial = "Preview status: partial" in output
+    if (
+        lines_to_translate > 0
+        and translated_count == 0
+        and not preview_status_partial
+    ):
+        return WorkflowUpdate(
+            status="failed",
+            heading="同步翻译未完成",
+            message="有待翻译行但未成功写回任何译文，请查看下方原始输出或失败日志。",
+            facts=facts,
+        )
+
+    if "Sync preview manifest:" not in output or not (
+        preview_status_safe or preview_status_partial
+    ):
+        return WorkflowUpdate(
+            status="failed",
+            heading="同步翻译预览未完成",
+            message="没有生成可写回的安全预览，请查看下方原始输出。",
+            facts=facts,
+        )
+
+    message = "同步翻译预览已生成；项目脚本尚未修改。请检查 diff 后再确认写回。"
+    if files_done:
+        message = f"已处理 {files_done} 个文件。{message}"
+    translation_is_partial = (
+        lines_to_translate > 0 and translated_count < lines_to_translate
+    )
+    if preview_status_partial:
+        if re.search(r"^Unresolved contract items:\s*[1-9]\d*\s*$", output, re.MULTILINE):
+            message = f"{MODEL_CONTRACT_COPY['partial_translation']}{message}"
+        else:
+            message = f"部分文件未通过写回计划或结果合同校验，其余安全预览已生成。{message}"  # noqa: RUF001
+    if translation_is_partial:
+        message = (
+            f"部分完成（已翻译 {translated_count}/{lines_to_translate} 行）。{message}"  # noqa: RUF001
+        )
+    if preview_status_partial or translation_is_partial:
+        return WorkflowUpdate(
+            status="warning",
+            heading="同步翻译预览部分完成",
+            message=message,
+            facts=facts,
+        )
+
+    return WorkflowUpdate(
+        status="done",
+        heading="同步翻译预览可写回",
+        message=message,
+        facts=facts,
+    )
+
+
+def _tl_dir_missing(output: str) -> bool:
+    return "TL_DIR does not exist" in output or "WARNING: TL_DIR does not exist" in output
+
+
+def _failure_message(output: str) -> str:
+    if "ERROR: No valid API keys found!" in output:
+        return "请先配置有效 API Key，或设置 GEMINI_API_KEY 环境变量。"
+    if _tl_dir_missing(output):
+        return "翻译目录不存在；请先运行环境检查或准备工作目录。"
+    return "同步翻译没有正常完成，请查看下方原始输出。"
+
+
+def _collect_facts(output: str) -> list[str]:
+    facts: list[str] = []
+    for pattern, label in (
+        (r"^Found (\d+) files\.$", "待处理文件"),
+        (r"^Progress log: (.+)$", "进度日志"),
+        (r"^Sync preview manifest: (.+)$", "预览清单"),
+        (r"^Sync preview report: (.+)$", "差异报告"),
+        (r"^Preview failures: (\d+)$", "预览失败文件"),
+        (r"^Model contract completeness: (\d+/\d+)$", MODEL_CONTRACT_COPY["completeness"]),
+        (r"^Unresolved contract items: (\d+)$", MODEL_CONTRACT_COPY["unresolved_items"]),
+        (r"^Contract partial requests: (\d+)$", MODEL_CONTRACT_COPY["partial_requests"]),
+        (r"^Applied files: (\d+)$", "已写回文件"),
+    ):
+        match = re.search(pattern, output, re.MULTILINE)
+        if match:
+            if label in {
+                "待处理文件",
+                "预览失败文件",
+                "未解决结果",
+                "不完整请求",
+                "已写回文件",
+            }:
+                facts.append(f"{label}：{match.group(1)} 个")
+            else:
+                facts.append(f"{label}：{match.group(1).strip()}")
+    retry_match = re.search(
+        r"^Targeted retries: (\d+) requests / (\d+) items$",
+        output,
+        re.MULTILINE,
+    )
+    if retry_match:
+        facts.append(
+            f"{MODEL_CONTRACT_COPY['targeted_retries']}："
+            f"{retry_match.group(1)} 次请求 / {retry_match.group(2)} 项"
+        )
+    context_match = re.search(
+        r"^Sync local context: before=(\d+), after=(\d+), batches=(\d+), truncated=(\d+)$",
+        output,
+        re.MULTILINE,
+    )
+    if context_match:
+        facts.append(
+            f"{PROMPT_CONTEXT_COPY['local_context']}："
+            f"前文 {context_match.group(1)} / 后文 {context_match.group(2)}，"
+            f"{context_match.group(3)} 个批次，截断 {context_match.group(4)} 个"
+        )
+    macro_match = re.search(
+        r"^Sync macro setting: file=(.+), applied=(True|False), fingerprint=(.+)$",
+        output,
+        re.MULTILINE,
+    )
+    if macro_match:
+        applied = "已应用" if macro_match.group(2) == "True" else "未应用"
+        facts.append(
+            f"{PROMPT_CONTEXT_COPY['macro_setting']}："
+            f"{macro_match.group(1).strip()}（{applied}）"
+        )
+    facts.extend(collect_sync_usage_facts(output))
+    return facts

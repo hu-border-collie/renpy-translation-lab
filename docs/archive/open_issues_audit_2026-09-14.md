@@ -90,8 +90,8 @@
 
 #### #487 字体字形 spike：前提成立，但要先解决依赖与许可证两个前置
 
-- **现状证据**：仓库内的字体能力只服务工具 GUI——`gui_qt/font_helpers.py:1`（`QFont` 加载与系统字体回退）、
-  `gui_qt/font_worker.py`、`scripts/download_gui_fonts.py` 与对应测试；issue 正文已明确这类“工具 GUI 字体是否安装”
+- **现状证据**：仓库内的字体能力只服务工具 GUI——`gui_qt/appearance/font_helpers.py:1`（`QFont` 加载与系统字体回退）、
+  `gui_qt/workers/font_worker.py`、`scripts/download_gui_fonts.py` 与对应测试；issue 正文已明确这类“工具 GUI 字体是否安装”
   不能作为游戏字体有效性的证据。Ren'Py adapter 不解析字体配置（`engine_adapters/renpy.py` 无 `font` 命中），
   `tests/fixtures/renpy_smoke` 没有任何字体 / `gui.text_font` 配置；`fonttools` 只作为 matplotlib 的传递依赖
   出现在 `requirements-lock/py311-relation-analyzer.txt:77`，不在任何权威 requirements 输入中。
@@ -193,7 +193,7 @@
 
 | 上轮 issue | 修复证据 |
 | --- | --- |
-| #474 | `atomic_io.py` 改为进程级 kernel 锁（POSIX `fcntl.flock` / Windows `msvcrt.locking`，`:96-121`），不再有 read-then-unlink 抢占窗口；`tests/test_atomic_io.py` 覆盖 |
+| #474 | `atomic_io.py` 改为进程级 kernel 锁（POSIX `fcntl.flock` / Windows `msvcrt.locking`，`:96-121`），不再有 read-then-unlink 抢占窗口；`tests/foundation/test_atomic_io.py` 覆盖 |
 | #424 / #265 P6 | coverage 门禁接入零待译完成声明（`gemini_translate_batch.py:22692-22724`）、PA 发布（`project_analysis.py:1545-1567`）、Final Review readiness（`:7034-7049`）；doctor `engine_status`（`:19080+`）；GUI coverage / review 与 engine snapshot 浏览；CLI `coverage-status` / `coverage-review-import`；矩阵文档 PR #485 记录 #265 关闭 |
 | #15 | 2026-09-13 按 not planned / wontfix 关闭，并留下了“重新开聚焦单格式 issue”的明确指引；不属于已完成交付 |
 

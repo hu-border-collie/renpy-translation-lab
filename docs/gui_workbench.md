@@ -224,7 +224,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 2. 通过 GUI 运行一次本地环境检查（doctor，不调用 Provider）；确认任务开始后日志区显示，普通输出逐条追加，完成/停止后仍能查看，清空后回到空状态。
 3. 展开日志并拖动分隔条，再追加输出、切到其他页、调整窗口大小、结束任务并清空；确认用户比例不被重设。
 4. 在「命令参考」横向查看一条长命令，并用复制按钮粘贴到临时文本框核对完整参数。
-5. 错误状态由原创无凭据 fixture 自动验证：`python -B -m unittest tests.test_gui_log_focus`；该离屏测试不等同于原生 Windows 桌面验收。
+5. 错误状态由原创无凭据 fixture 自动验证：`python -B -m unittest tests.gui.application.test_gui_log_focus`；该离屏测试不等同于原生 Windows 桌面验收。
 6. 用「隐藏运行日志」收起日志后：启动任务确认不会自动展开；再让任务失败，确认错误会重新显示日志区并保留此前拖动的比例。
 
 **试跑样本请求（probe）**：入口位于 **批量翻译 · 翻译进度 · 高级工具**，用于对 package 内少量请求做同步 `generate_content` 冒烟测试（默认 `--limit 3`）。不会提交批量任务或修改项目文件；适合在 `submit` 前排障 API、模型与请求格式。抽样 request row 必须仍能对应当前任务记录中的非空 chunk；若 package 已过期或损坏，命令会在调用 Provider 前失败并提示重建，避免无效请求产生费用或被误报为成功。
@@ -603,7 +603,7 @@ GUI 不提供普通用户入口来运行 `apply --force`。`apply --force` 只�
 
 - 同步翻译、关键词提取（批量/同步）与 glossary 合并、订正与写回订正、翻译 A/B 对比。
 
-仓库 CI：Linux 的 `unittest` 运行含 GUI 依赖的 CLI/core 套件，`gui` 单独运行 offscreen GUI 套件；Windows 的 `unittest` 分进程运行两套测试。`cli-without-gui` 验证没有 GUI / 分析器依赖时的 CLI/core 行为。GUI 套件包含 `test_gui_*.py` 与历史命名的 Qt 设置页测试 `test_settings_*_page.py`；纯设置协议、注册表、协调器和保存逻辑仍属 CLI/core 套件。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/gui_test_support.py`。
+仓库 CI：Linux 的 `unittest` 运行含 GUI 依赖的 CLI/core 套件，`gui` 单独运行 offscreen GUI 套件；Windows 的 `unittest` 分进程运行两套测试。`cli-without-gui` 验证没有 GUI / 分析器依赖时的 CLI/core 行为。GUI 套件包含 `test_gui_*.py` 与历史命名的 Qt 设置页测试 `test_settings_*_page.py`；纯设置协议、注册表、协调器和保存逻辑仍属 CLI/core 套件。本地 `python -B tests/run_gui_tests.py -q` 保留当前 Qt 平台，但会禁用原生文件对话框，并自动拒绝意外进入 `exec()` 的模态弹窗，避免无人值守运行等待人工点击；被拒绝的弹窗类型、标题和当前测试会写到测试输出（不记录正文），并使该次测试运行失败，防止弹窗回归被静默忽略。需要完全无窗口运行时可设置 `QT_QPA_PLATFORM=offscreen`；需要人工调试真实模态交互时，可用 `RENPY_TRANSLATION_LAB_GUI_TEST_MODAL_GUARD=0` 临时关闭守卫。新增 GUI 测试及窗口清理约定见 `tests/support/gui_test_support.py`。
 
 **烟测**：GUI **批量翻译**主路径曾在数千待译行的私有项目副本上跑通。兼容 Provider 的同步翻译也在隔离的最小 Ren'Py 项目副本上完成过小规模真实调用烟测，确认系统凭据读取、JSON 返回以及占位符和 Ren'Py 标签保留正常。该记录只验证小规模同步链路，不等于批量吞吐、成本或完整项目 QA。关键词 / 订正 / A/B 仍只有单元测试，建议在副本上小范围试跑。
 

@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..empty_state import EmptyStateWidget
-from ..responsive_layout import FlowButtonBar
+from gui_qt.widgets.empty_state import EmptyStateWidget
+from gui_qt.widgets.responsive_layout import FlowButtonBar
 from ..user_copy import TASK_PROJECT_GATE_COPY
 from ..work_modes import WorkMode
 from ..workbench_session import WorkbenchModeSession

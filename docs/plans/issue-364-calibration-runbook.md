@@ -14,7 +14,7 @@
 
 ## 仓库内已完成（无需私有数据）
 
-- A1：`tests/fixtures/quality_real_samples/samples.json` + `tests/test_quality_real_samples.py`，
+- A1：`tests/fixtures/quality_real_samples/samples.json` + `tests/quality_review/test_quality_real_samples.py`，
   每个首版 reason code 一个脱敏正例和一个白名单/合法反例。
 - A3：`scripts/quality_calibration_report.py`，从 `quality_findings.jsonl`
   生成 Markdown 校准基线。

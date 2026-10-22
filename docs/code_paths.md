@@ -17,7 +17,7 @@
   - `ProjectState.set_game_root()` / `set_workspace_root()`：项目/工作区切换的即时持久化入口。
 - `foundation/config_store.py`：`read_json_object()` / `write_json_object()`，共用写锁与原子替换；
   GUI 配置、`api_keys.json` 和 #348 离线迁移都经这里。
-- `gui_qt/settings_schema.py`
+- `gui_qt/settings/settings_schema.py`
   - `SettingField` / `ADVANCED_SETTING_FIELDS`：高级字段定义。
   - `read_advanced_settings()` / `validate_advanced_settings()` / `apply_advanced_settings()`：
     高级字段读取、验证与合并。
@@ -53,7 +53,7 @@
 - `translator_runtime.py`：生产 Sync plan/build 与 backend 接线。
 - `gemini_translate_batch.py`：Batch build/submit/status/download/check/apply 与阶段请求入口。
 - `execution/sync_run_service.py`：CLI `sync-start` 等命令使用的耐久 Sync start/resume/status/cancel/derive 服务。
-- `gui_qt/sync_translation_workflow.py` → `gemini_translate_batch.py sync-*`：当前 GUI Sync
+- `gui_qt/workflows/sync_translation_workflow.py` → `gemini_translate_batch.py sync-*`：当前 GUI Sync
   入口；步骤状态机只消费 schema-v1 envelope，运行/恢复/取消均经 #347 服务。
 - `execution/sync_run_contracts.py`：状态、退出码、错误码和合法转换。
 - `execution/sync_run_store.py`：SQLite/WAL 持久层；产品 UI 不应直接读取。
@@ -78,10 +78,10 @@
 - `gui_qt/app.py`：应用壳、导航、Settings 总协调和遗留 glue。
 - `gui_qt/workbench/`：真实工作台页面及页面 contract 的参考实现
   （`page_contract.py` / `coordinator.py`）。
-- `gui_qt/*_workflow.py`：GUI 动作到 CLI/服务调用的包装。
+- `gui_qt/workflows/*_workflow.py`：GUI 动作到 CLI/服务调用的包装。
 - `gui_qt/diagnostics_context.py`：CLI 命令参考与诊断入口。
 - `gui_qt/user_copy.py`：共享用户文案；新增产品能力须同步。
-- `gui_qt/readiness_display.py`：doctor / preflight 结果的纯呈现投影（不扫描、不判断业务门禁）；
+- `gui_qt/reports/readiness_display.py`：doctor / preflight 结果的纯呈现投影（不扫描、不判断业务门禁）；
   `app.py` 的 `_readiness_project_identity` / `_readiness_task_identity` / `_sync_readiness_display`
   绑定已保存设置与操作代次，`workbench/translation_page.py` 显示两个翻译页的摘要。
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
@@ -127,17 +127,17 @@
 - 采集与建议：`gemini_translate_batch.py` 的 `collect_doctor_translation_progress()`、
   `collect_tl_doctor_counts()`、`collect_doctor_layout_context()` / `assess_doctor_layout_status()`、
   `collect_doctor_workflow_state()`、`collect_doctor_recommendations()` →
-  `doctor_recommendations.py` 的稳定 code 与 `gui_qt/doctor_report.py` 的用户摘要。
+  `doctor_recommendations.py` 的稳定 code 与 `gui_qt/reports/doctor_report.py` 的用户摘要。
 - GUI：`doctor_btn` / `Ctrl+D` → `MainWindow._on_doctor_button_clicked()` → `_on_run_doctor()` →
-  `_snapshot_runtime_config_for_job(persist_corrected_game_root=False)` → `gui_qt/doctor_worker.py` 的
+  `_snapshot_runtime_config_for_job(persist_corrected_game_root=False)` → `gui_qt/workers/doctor_worker.py` 的
   `DoctorWorker`（QThread）→ `run_doctor_check_in_subprocess()`（spawn 子进程，测试/启动失败回退
   进程内）→ `run_doctor_check()` → `summarize_doctor_report()` → `_on_doctor_completed()`。
   工作区总表对照由 `compare_registry_with_doctor_report()` 提供。
 - 取消/身份：`_invalidate_doctor_worker()`、`_retire_doctor_worker()`、
   `_wire_doctor_worker_terminal()`；doctor 不占用全局任务锁的导航冻结。
-- 测试：`tests.test_gui_doctor_worker`、`tests.test_gui_doctor_report`、
-  `tests.test_gui_doctor_gating`、`tests.test_doctor_recommendations`、
-  `tests.test_doctor_layout_status`、`tests.test_gui_games_registry_doctor_compare`。
+- 测试：`tests.gui.workers.test_gui_doctor_worker`、`tests.gui.reports.test_gui_doctor_report`、
+  `tests.gui.application.test_gui_doctor_gating`、`tests.foundation.test_doctor_recommendations`、
+  `tests.cli.test_doctor_layout_status`、`tests.gui.reports.test_gui_games_registry_doctor_compare`。
 
 ## 字体字形覆盖 spike（#487）
 
@@ -148,7 +148,7 @@
   `--output markdown|json`；路径边界限定在 `game_root` 内，越界字体引用标记 unknown。
 - Fixture：`tests/fixtures/font_coverage_minimal/`（原创脚本/文本 + 可再分发 Noto 子集
   字体 + 损坏字体；许可证见 `game/fonts/README.md` / `LICENSE-OFL-1.1.txt`）。
-- 测试：`tests.test_font_coverage`；合同与 doctor / preflight 接入建议见
+- 测试：`tests.foundation.test_font_coverage`；合同与 doctor / preflight 接入建议见
   [Ren'Py 字体字形覆盖只读 spike](plans/renpy_font_coverage_spike.md)。
 
 ## Batch 翻译主路径
@@ -161,24 +161,24 @@
   只能绕过“已写回”保护，不能绕过这些检查。
 - GUI 页面：`gui_qt/workbench/batch_translation_page.py`（`BatchTranslationPage`，只渲染与回调）
   → `MainWindow._on_batch_translation_page_action()` / `_on_start_translation()` →
-  `gui_qt/workflow_factory.py` 的 `create_workflow()` → `gui_qt/translation_workflow.py` 的
+  `gui_qt/workflows/workflow_factory.py` 的 `create_workflow()` → `gui_qt/workflows/translation_workflow.py` 的
   `TranslationWorkflow`（`start_new()` 生成 `build`/`submit`/`status`，`current_step()` /
   `_args_for_step()` 规划命令，`complete_current_step()` 解析输出）。
-- 执行与收尾：`_run_workflow_current_step()` → `_start_cli_command()` → `gui_qt/cli_runner.py` 的
+- 执行与收尾：`_run_workflow_current_step()` → `_start_cli_command()` → `gui_qt/runtime/cli_runner.py` 的
   `CliRunner`（QProcess，参数列表、无 shell）→ `gemini_translate_batch.py`；
   `_on_workflow_step_finished()` → `_update_writeback_from_check()` →
-  `gui_qt/check_report.py` 的 `summarize_check_envelope()` / `summarize_check_output()` 生成
+  `gui_qt/reports/check_report.py` 的 `summarize_check_envelope()` / `summarize_check_output()` 生成
   `WritebackSummary`；用户点击写回后 `_on_apply_writeback()` 才执行
   `apply <manifest> --output json --non-interactive`。
-- 拆分/补译：`gui_qt/split_batch_workflow.py` 的 `SplitBatchQueueWorkflow`、
-  `gui_qt/retry_workflow.py` 的 `create_retry_followup_workflow()`；
-  不确定提交状态由 `gui_qt/batch_workflow_support.py` 的
+- 拆分/补译：`gui_qt/workflows/split_batch_workflow.py` 的 `SplitBatchQueueWorkflow`、
+  `gui_qt/workflows/retry_workflow.py` 的 `create_retry_followup_workflow()`；
+  不确定提交状态由 `gui_qt/workflows/batch_workflow_support.py` 的
   `plan_unsubmitted_workflow_steps()` / `build_submit_cli_args()` / `build_recover_submit_cli_args()` 规划。
-- 测试：`tests.test_gui_translation_workflow`、`tests.test_gui_batch_workflow_support`、
-  `tests.test_gui_workflow_factory`、`tests.test_gui_workflow_guards`、
-  `tests.test_gui_task_pages`、`tests.test_gui_task_controls`、`tests.test_gui_split_batch`、
-  `tests.test_gui_retry_workflow`、`tests.test_gemini_translate_batch_cli_contract`、
-  `tests.test_batch_golden_corpus`。
+- 测试：`tests.gui.workflows.test_gui_translation_workflow`、`tests.gui.workflows.test_gui_batch_workflow_support`、
+  `tests.gui.workflows.test_gui_workflow_factory`、`tests.gui.workflows.test_gui_workflow_guards`、
+  `tests.gui.workbench.test_gui_task_pages`、`tests.gui.workbench.test_gui_task_controls`、`tests.gui.workflows.test_gui_split_batch`、
+  `tests.gui.workflows.test_gui_retry_workflow`、`tests.cli.test_gemini_translate_batch_cli_contract`、
+  `tests.cli.test_batch_golden_corpus`。
 
 ## 设置 · 模型与供应商（#348 P3）
 
@@ -194,18 +194,18 @@
 - 直连 adapter：`openai_compatible_sync_backend.py` 调用 Chat Completions；
   `openai_compatible_connection.py` 统一生成/目录路径的凭据、headers、URL 与脱敏；
   `openai_compatible_model_catalog.py` 提供只读模型目录发现。
-- 测试：`tests.test_model_profiles_editor`、`tests.test_settings_profiles_page`、
-  `tests.test_settings_registry`、`tests.test_settings_save_apply`、
-  `tests.test_openai_compatible_model_catalog`。
+- 测试：`tests.providers.test_model_profiles_editor`、`tests.gui.settings.test_settings_profiles_page`、
+  `tests.gui.settings.test_settings_registry`、`tests.gui.settings.test_settings_save_apply`、
+  `tests.providers.test_openai_compatible_model_catalog`。
 - #540 A 的 GUI 分类入口：`gui_qt/app.py` 的 `settings_nav` 保留单行横向滚动，
   与页面直接跳转同步，仍复用 Settings coordinator 的页面实例；`gui_qt/settings/page_chrome.py`
   的 `add_model_navigation()` 通过页面 action 回调连接统一编辑器和旧模型页。
-  行为与布局回归：`tests.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
+  行为与布局回归：`tests.gui.settings.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
   默认值、配置状态区分、保存/重载与选择保留）。
 - #540 B 的长表单：`advanced_page.py` 按标签 / 配置键 / 路径过滤现有行并聚焦命中项，
   不改变 collect / baseline；`page_chrome.SettingsMasterDetail` 仅重排现有模型和供应商
-  列表 / 详情控件。`tests.test_settings_advanced_page` 覆盖键盘搜索、类别跳转、清除、
-  无匹配及编辑保留；`tests.test_gui_settings_entry` 覆盖响应式布局与共同保存回归。
+  列表 / 详情控件。`tests.gui.settings.test_settings_advanced_page` 覆盖键盘搜索、类别跳转、清除、
+  无匹配及编辑保留；`tests.gui.settings.test_gui_settings_entry` 覆盖响应式布局与共同保存回归。
 
 ## 同步翻译
 
@@ -215,7 +215,7 @@
   `WORKBENCH_NAV_ORDER` 的单一 `TRANSLATION` 导航项内切换两个执行页。
 - GUI 耐久运行：`gui_qt/workbench/sync_translation_page.py`（`SyncTranslationPage`）→
   `_on_start_translation()` / `_on_resume_durable_sync()` / `_on_cancel_durable_sync()` →
-  `gui_qt/sync_translation_workflow.py` 的 `SyncTranslationWorkflow` 步骤（`sync-start --profile`、
+  `gui_qt/workflows/sync_translation_workflow.py` 的 `SyncTranslationWorkflow` 步骤（`sync-start --profile`、
   `sync-status`、`sync-resume`、`sync-cancel`、`sync-derive`、`check`、`apply`）→
   `CliRunner` → `gemini_translate_batch.py --output json --non-interactive` →
   `run_durable_sync_command()` → `sync_run_service.SyncRunService` →
@@ -231,9 +231,9 @@
   `gemini_translate_batch.run_sync_request()` 仍供非 durable CLI 调用者使用，保留原轮换行为，
   只作装配/薄转发。durable 禁止共享执行层与 LiteLLM adapter 的同 attempt 隐藏重试。
   响应/usage helper 同样从共享模块导入，不再由共享层回读 CLI。
-- 依赖边界回归：`tests.test_sync_request` 在新解释器中禁止导入两个 CLI 入口，执行共享请求与
+- 依赖边界回归：`tests.execution.test_sync_request` 在新解释器中禁止导入两个 CLI 入口，执行共享请求与
   durable adapter；并验证 Provider/model/usage、超时、重试预算、固定 key 与单次调用语义。
-  `tests.test_durable_request_isolation` 通过生产 adapter 与 fake transport 验证 A/B/A
+  `tests.execution.test_durable_request_isolation` 通过生产 adapter 与 fake transport 验证 A/B/A
   创建顺序、真实 start/resume 的超时与凭据边界、默认/显式绑定、Gemini key、
   LiteLLM/直连模型地址和内部限流换 key 边界。
   这些离线检查不替代 #344 / #431 的真实 Provider 验收。
@@ -243,26 +243,26 @@
   `_on_apply_sync_translation()` → `apply <RUN>`，由 `apply_durable_sync_results()` 复核
   run/results/targets/check 制品哈希、源快照与预览绑定；重复 apply 为无副作用
   `already_applied`。旧 `gemini_translate.py` 入口仍保留为 CLI 兼容路径，不再是 GUI 主流程。
-- 测试：`tests.test_gui_sync_translation_workflow`、`tests.test_gui_durable_sync_page`、
-  `tests.test_gui_sync_translation_report`、`tests.test_sync_run_service`、
-  `tests.test_durable_sync_workflow`、`tests.test_durable_sync_executor`、
-  `tests.test_durable_sync_subprocess_recovery`、`tests.test_sync_translation_preview`。
+- 测试：`tests.gui.workflows.test_gui_sync_translation_workflow`、`tests.gui.workbench.test_gui_durable_sync_page`、
+  `tests.gui.reports.test_gui_sync_translation_report`、`tests.execution.test_sync_run_service`、
+  `tests.execution.test_durable_sync_workflow`、`tests.execution.test_durable_sync_executor`、
+  `tests.execution.test_durable_sync_subprocess_recovery`、`tests.execution.test_sync_translation_preview`。
 
 ## 关键词提取与合并
 
 - Batch 提取：CLI `build-keywords` → `submit` → `status` → `download` → `export-keywords`。
   GUI `KeywordsPage` → `create_workflow(KEYWORD_EXTRACTION)` →
-  `gui_qt/keyword_workflow.py` 的 `KeywordBatchWorkflow`；导出完成后
+  `gui_qt/workflows/keyword_workflow.py` 的 `KeywordBatchWorkflow`；导出完成后
   `_copy_keyword_reports_to_game_parent()` 与 `keyword_merge_candidates_path_from_manifest()` 记录候选路径。
-- 同步提取：`gui_qt/sync_keyword_workflow.py` 的 `SyncKeywordWorkflow` →
+- 同步提取：`gui_qt/workflows/sync_keyword_workflow.py` 的 `SyncKeywordWorkflow` →
   `gemini_translate_batch.py sync-keywords` → `keyword_merge_candidates_path_from_sync_output()`。
 - 人工合并：工作台 Keywords 页「打开候选文件」→ `_on_open_keyword_candidates()`（`_load_keyword_candidate_selection()`
   经 `load_keyword_merge_context()` 解析候选、术语表目标，记入按项目绑定的
   `KeywordCandidateSelection`），再由「审核并合并到术语表」→ `_on_open_keyword_merge()` →
-  `gui_qt/keyword_merge_report.py` 的 `keyword_merge_ready()` / `read_keyword_candidate_snapshot()`
+  `gui_qt/reports/keyword_merge_report.py` 的 `keyword_merge_ready()` / `read_keyword_candidate_snapshot()`
   （一次读取同时产出解析文本与内容指纹，避免解析旧内容再对新文件计时）/
   `load_keyword_merge_context(candidates_text=…)` →
-  `gui_qt/keyword_merge_dialog.py` 的 `KeywordMergeDialog`（先 `preview_selected_merge_actions()`，
+  `gui_qt/dialogs/keyword_merge_dialog.py` 的 `KeywordMergeDialog`（先 `preview_selected_merge_actions()`，
   再 `merge_selected_candidates()`；写入前用 `KeywordReviewContext` +
   `keyword_review_context_stale_reason()` 复核项目、当前候选选择代次、
   `keyword_candidate_content_fingerprint()` 内容版本与术语表目标）→
@@ -271,11 +271,11 @@
   `keyword_glossary_merge.build_merge_keywords_cli_command()` 生成。
 - 历史证据：`keyword_history.py` 只读匹配已有 old/new 译文，产出 consistent/conflict/ambiguous
   等证据状态，不直接改 glossary 或脚本。
-- 测试：`tests.test_gui_keyword_workflow`、`tests.test_gui_sync_keyword_workflow`、
-  `tests.test_gui_keyword_merge_dialog`、`tests.test_gui_keyword_merge_report`、
-  `tests.test_gui_keyword_candidate_entry`（#539 打开/审核入口端到端）、
-  `tests.test_keyword_glossary_merge`、`tests.test_keyword_history`、
-  `tests.test_keyword_history_corpus`。
+- 测试：`tests.gui.workflows.test_gui_keyword_workflow`、`tests.gui.workflows.test_gui_sync_keyword_workflow`、
+  `tests.gui.dialogs.test_gui_keyword_merge_dialog`、`tests.gui.reports.test_gui_keyword_merge_report`、
+  `tests.gui.application.test_gui_keyword_candidate_entry`（#539 打开/审核入口端到端）、
+  `tests.quality_review.test_keyword_glossary_merge`、`tests.quality_review.test_keyword_history`、
+  `tests.quality_review.test_keyword_history_corpus`。
 
 ## 订正与写回
 
@@ -284,10 +284,10 @@
   JSONL/Markdown；用户确认后 `apply-revisions` → `apply_revisions()` 重新校验
   `_require_valid_revision_preview()`、manifest/project identity、result JSONL hash、源文件快照、
   质量规则/策略和结构 blocker。`--force` 只绕过 `revision_applied_at`，不绕过这些检查。
-- Sync 订正：`gui_qt/sync_revision_workflow.py` 的 `SyncRevisionWorkflow` →
+- Sync 订正：`gui_qt/workflows/sync_revision_workflow.py` 的 `SyncRevisionWorkflow` →
   `gemini_translate_batch.py sync-revisions` 生成 preview 报告，仍经同一 `apply-revisions` 门禁。
 - 订正提案：CLI `export-revision-corpus` → 外部/人工编辑 → `import-revision-proposals` →
-  `gui_qt/revision_selection_dialog.py` + `revision_selection.py` 的 staged selection →
+  `gui_qt/dialogs/revision_selection_dialog.py` + `revision_selection.py` 的 staged selection →
   `confirm-revision-proposals` → `preview-revisions` / `apply-revisions`。最终审校的
   `final-review-create-revisions` 也汇入同一门禁。
 - 最终审校：`final_review.py` 管 campaign package / unit / findings / quality 映射，
@@ -296,12 +296,12 @@
   final-review-ingest-results`，sync 走 `final_review_sync.py` 的
   `final-review-run-sync`（逐 unit 调用 `run_sync_request` 并原子落盘）。
 - GUI 编排：`gui_qt/workbench/revision_page.py`（`RevisionPage`）→
-  `gui_qt/revision_workflow.py` 的 `RevisionBatchWorkflow` / `RevisionProposalImportWorkflow` /
+  `gui_qt/workflows/revision_workflow.py` 的 `RevisionBatchWorkflow` / `RevisionProposalImportWorkflow` /
   `RevisionProposalConfirmWorkflow` 与 `RevisionCorpusExportWorkflow`；
   写回按钮 `_on_apply_revision()` → `apply-revisions <manifest>`，摘要由
-  `gui_qt/revision_writeback_report.py` / `gui_qt/revision_report.py` 生成。
+  `gui_qt/reports/revision_writeback_report.py` / `gui_qt/reports/revision_report.py` 生成。
 - 阶段呈现：`MainWindow._sync_revision_page_controls()` →
-  `RevisionPage.set_guidance_state()` → `gui_qt/revision_guidance.py`；仅投影 workflow、
+  `RevisionPage.set_guidance_state()` → `gui_qt/reports/revision_guidance.py`；仅投影 workflow、
   服务摘要、候选会话和审校状态，不授权动作。取消导入与跳过可选配套语料由
   `_choose_revision_corpus_manifest()` 区分；仍汇入同一提案导入路径。
 - 纯核心：`revision_corpus.py`（只读导出）、`revision_proposals.py`（导入校验）、
@@ -309,12 +309,12 @@
   `review_index.py`（#427 逐条审校索引、独立决定日志与 `needs_recheck` 绑定语义）。
 - CLI：`review-index-build` / `review-index-status` / `review-decisions-import` /
   `review-decisions-export`（只读写本地 index 包，不触碰写回授权）。
-- 测试：`tests.test_gui_revision_workflow`、`tests.test_gui_sync_revision_workflow`、
-  `tests.test_gui_revision_guidance`（原创离线 fixture、窗口接线与取消/停止/失效）、
-  `tests.test_gui_revision_selection`、`tests.test_gui_revision_writeback_report`、
-  `tests.test_gui_revision_report`、`tests.test_gui_revision_corpus`、
-  `tests.test_revision_proposals`、`tests.test_revision_corpus`、`tests.test_review_index`、
-  `tests.test_final_review_revision`、`tests.test_batch_golden_corpus`。
+- 测试：`tests.gui.workflows.test_gui_revision_workflow`、`tests.gui.workflows.test_gui_sync_revision_workflow`、
+  `tests.gui.reports.test_gui_revision_guidance`（原创离线 fixture、窗口接线与取消/停止/失效）、
+  `tests.gui.dialogs.test_gui_revision_selection`、`tests.gui.reports.test_gui_revision_writeback_report`、
+  `tests.gui.reports.test_gui_revision_report`、`tests.gui.reports.test_gui_revision_corpus`、
+  `tests.quality_review.test_revision_proposals`、`tests.quality_review.test_revision_corpus`、`tests.quality_review.test_review_index`、
+  `tests.quality_review.test_final_review_revision`、`tests.cli.test_batch_golden_corpus`。
 
 ## 项目切换与工作区
 
@@ -329,14 +329,14 @@
   `reset_project()` 上下文库/Sync/关键词/订正页 → 清空 workflow、writeback、manifest、doctor、
   revision corpus/proposal 状态 → `_apply_work_mode_ui()` → `_refresh_diagnostics_context()`。
 - 工作区：`_on_workspace_changed()` → `ProjectState.set_workspace_root()`；
-  项目列表维护经 `gui_qt/games_registry_actions.py` → `games_registry.py` 的
+  项目列表维护经 `gui_qt/workbench/games_registry_actions.py` → `games_registry.py` 的
   `load_registry()` / `save_registry()` / `refresh_all()` / `merge_discovered_projects()` /
   `record_batch()` / `apply_workspace_setup()`，后台执行由 `RegistryRefreshWorker` /
   `RegistryIngestWorker` 承担。
-- 测试：`tests.test_gui_project_state`、`tests.test_gui_project_bar`、
-  `tests.test_gui_games_registry_panel_layout`、`tests.test_gui_games_registry_worker`、
-  `tests.test_gui_games_registry_actions`、`tests.test_gui_games_registry_view`、
-  `tests.test_games_registry`、`tests.test_gui_workspace_setup_dialog`。
+- 测试：`tests.gui.application.test_gui_project_state`、`tests.gui.application.test_gui_project_bar`、
+  `tests.gui.widgets.test_gui_games_registry_panel_layout`、`tests.gui.workers.test_gui_games_registry_worker`、
+  `tests.gui.workbench.test_gui_games_registry_actions`、`tests.gui.widgets.test_gui_games_registry_view`、
+  `tests.execution.test_games_registry`、`tests.gui.dialogs.test_gui_workspace_setup_dialog`。
 
 ## Settings 加载、保存、dirty 与离开保护
 
@@ -374,34 +374,34 @@
   `set_workspace_root()`；字体 `_on_download_recommended_fonts()` → `FontInstallWorker`；
   扩展 `_on_install_relation_analyzer()` → `OptionalFeatureInstallController`；
   主题 `_on_theme_changed()` → `_set_theme_preference(persist=False)` 仅预览。
-- 测试：`tests.test_settings_page_contract`、`tests.test_settings_registry`、
-  `tests.test_settings_coordinator`、`tests.test_settings_save_apply`、`tests.test_gui_settings_coordinator`、
-  `tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
-  `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
-  `tests.test_gui_settings_schema`、`tests.test_settings_litellm_page`、
-  `tests.test_settings_models_page`、`tests.test_settings_project_page`、`tests.test_settings_context_page`、`tests.test_settings_advanced_page`、`tests.test_settings_appearance_page`、`tests.test_settings_shortcuts_page`、`tests.test_settings_api_keys_page`、`tests.test_settings_extensions_page`、`tests.test_settings_workspace_page`、`tests.test_gui_litellm_settings_page`、
-  `tests.test_gui_litellm_settings`、`tests.test_gui_litellm_worker`、
-  `tests.test_litellm_catalog_cache`、`tests.test_project_context_settings`。
+- 测试：`tests.gui.settings.test_settings_page_contract`、`tests.gui.settings.test_settings_registry`、
+  `tests.gui.settings.test_settings_coordinator`、`tests.gui.settings.test_settings_save_apply`、`tests.gui.settings.test_gui_settings_coordinator`、
+  `tests.gui.settings.test_gui_settings_layout`、`tests.gui.application.test_gui_shell_navigation`、
+  `tests.gui.application.test_gui_app_config`、`tests.gui.settings.test_gui_settings_context_primary`、
+  `tests.gui.settings.test_gui_settings_schema`、`tests.gui.settings.test_settings_litellm_page`、
+  `tests.gui.settings.test_settings_models_page`、`tests.gui.settings.test_settings_project_page`、`tests.gui.settings.test_settings_context_page`、`tests.gui.settings.test_settings_advanced_page`、`tests.gui.settings.test_settings_appearance_page`、`tests.gui.settings.test_settings_shortcuts_page`、`tests.gui.settings.test_settings_api_keys_page`、`tests.gui.settings.test_settings_extensions_page`、`tests.gui.settings.test_settings_workspace_page`、`tests.gui.settings.test_gui_litellm_settings_page`、
+  `tests.gui.settings.test_gui_litellm_settings`、`tests.gui.workers.test_gui_litellm_worker`、
+  `tests.gui.settings.test_litellm_catalog_cache`、`tests.foundation.test_project_context_settings`。
 
 ## GUI 局部异步任务与生命周期
 
-- CLI 长任务：`gui_qt/cli_runner.py` 的 `CliRunner`（QProcess，参数列表，流式 stdout/stderr，
+- CLI 长任务：`gui_qt/runtime/cli_runner.py` 的 `CliRunner`（QProcess，参数列表，流式 stdout/stderr，
   可 kill）；`MainWindow._start_cli_command()` / `_on_workflow_step_finished()` 管理任务槽。
 - QThread worker：`doctor_worker.DoctorWorker`、`litellm_worker.*`、`font_worker.FontInstallWorker`、
   `games_registry_worker.RegistryRefreshWorker` / `RegistryIngestWorker`、
   `sdk_install_worker.SdkInstallWorker`。
 - QThreadPool：`context_library_worker.ContextLibraryStatusJob`（QRunnable）由
   `QThreadPool.globalInstance().start(job, -1)` 调度。
-- QProcess 本地动作：`gui_qt/optional_feature_install.py` 的 `OptionalFeatureInstallController`
+- QProcess 本地动作：`gui_qt/runtime/optional_feature_install.py` 的 `OptionalFeatureInstallController`
   串行执行 pip 安装。
-- 生命周期设施（#297）：`gui_qt/lifecycle.py` 的 `ShutdownParticipant` /
-  `CallbackShutdownParticipant`，`gui_qt/operation_identity.py` 的 operation identity 摘要；
+- 生命周期设施（#297）：`gui_qt/runtime/lifecycle.py` 的 `ShutdownParticipant` /
+  `CallbackShutdownParticipant`，`gui_qt/runtime/operation_identity.py` 的 operation identity 摘要；
   worker 取消后保留 retired ownership 到真实 `finished`，GUI 线程不得 `wait()` 固定等待，
   stale 结果不得覆盖新项目/新请求。Settings 页面化必须复用这些设施，不另建生命周期框架。
-- 测试：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
-  `tests.test_gui_optional_feature_install`、`tests.test_gui_font_worker`、
-  `tests.test_gui_games_registry_worker`、`tests.test_gui_cli_runner`、
-  `tests.test_gui_context_library_worker`。
+- 测试：`tests.gui.runtime.test_gui_lifecycle`、`tests.gui.runtime.test_gui_operation_identity`、
+  `tests.gui.runtime.test_gui_optional_feature_install`、`tests.gui.workers.test_gui_font_worker`、
+  `tests.gui.workers.test_gui_games_registry_worker`、`tests.gui.runtime.test_gui_cli_runner`、
+  `tests.gui.workers.test_gui_context_library_worker`。
 
 ## P1/P2 配置迁移与生产读取
 
@@ -412,20 +412,20 @@ P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 
 
 ## 测试入口速查
 
-- Settings / 导航 / 配置：`tests.test_gui_settings_layout`、`tests.test_gui_shell_navigation`、
-  `tests.test_gui_app_config`、`tests.test_gui_settings_context_primary`、
-  `tests.test_gui_settings_schema`、`tests.test_gui_project_state`、
-  `tests.test_project_context_settings`。
-- doctor / Batch / 同步：`tests.test_gui_doctor_worker`、`tests.test_gui_doctor_report`、
-  `tests.test_gui_translation_workflow`、`tests.test_gui_sync_translation_workflow`、
-  `tests.test_gemini_translate_batch_cli_contract`、`tests.test_sync_run_service`。
-- 关键词 / 订正：`tests.test_gui_keyword_workflow`、`tests.test_keyword_glossary_merge`、
-  `tests.test_gui_revision_workflow`、`tests.test_gui_revision_selection`、
-  `tests.test_revision_proposals`。
-- 工作区 / 项目切换：`tests.test_gui_project_bar`、`tests.test_gui_games_registry_panel_layout`、
-  `tests.test_gui_games_registry_worker`、`tests.test_games_registry`。
-- 生命周期 / worker：`tests.test_gui_lifecycle`、`tests.test_gui_operation_identity`、
-  `tests.test_gui_optional_feature_install`、`tests.test_gui_litellm_worker`。
+- Settings / 导航 / 配置：`tests.gui.settings.test_gui_settings_layout`、`tests.gui.application.test_gui_shell_navigation`、
+  `tests.gui.application.test_gui_app_config`、`tests.gui.settings.test_gui_settings_context_primary`、
+  `tests.gui.settings.test_gui_settings_schema`、`tests.gui.application.test_gui_project_state`、
+  `tests.foundation.test_project_context_settings`。
+- doctor / Batch / 同步：`tests.gui.workers.test_gui_doctor_worker`、`tests.gui.reports.test_gui_doctor_report`、
+  `tests.gui.workflows.test_gui_translation_workflow`、`tests.gui.workflows.test_gui_sync_translation_workflow`、
+  `tests.cli.test_gemini_translate_batch_cli_contract`、`tests.execution.test_sync_run_service`。
+- 关键词 / 订正：`tests.gui.workflows.test_gui_keyword_workflow`、`tests.quality_review.test_keyword_glossary_merge`、
+  `tests.gui.workflows.test_gui_revision_workflow`、`tests.gui.dialogs.test_gui_revision_selection`、
+  `tests.quality_review.test_revision_proposals`。
+- 工作区 / 项目切换：`tests.gui.application.test_gui_project_bar`、`tests.gui.widgets.test_gui_games_registry_panel_layout`、
+  `tests.gui.workers.test_gui_games_registry_worker`、`tests.execution.test_games_registry`。
+- 生命周期 / worker：`tests.gui.runtime.test_gui_lifecycle`、`tests.gui.runtime.test_gui_operation_identity`、
+  `tests.gui.runtime.test_gui_optional_feature_install`、`tests.gui.workers.test_gui_litellm_worker`。
 - 全量：`python -B tests/run_gui_tests.py -q`、`python -B tests/run_cli_tests.py -q`、
   `python scripts/run_quality_gates.py all`。
 

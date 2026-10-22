@@ -8,7 +8,7 @@ unit 内 adaptive split 或完整恢复器。
 固定 fixture 位于
 [`tests/fixtures/final_review_result_cases.json`](../../tests/fixtures/final_review_result_cases.json)，
 并由
-[`tests/test_final_review_result_spike.py`](../../tests/test_final_review_result_spike.py)
+[`tests/quality_review/test_final_review_result_spike.py`](../../tests/quality_review/test_final_review_result_spike.py)
 直接走 `ingest_result_rows()`。每个 case 使用含两个 item 的同一 review unit，避免
 把 parser 结果与不同 unit shape 混在一起。
 
@@ -99,10 +99,10 @@ targeted resume 的依赖，也不要求复制进 campaign manifest。
 
 2026-08-09 在独立 `codex/issue-309-final-review-spike` worktree 验证：
 
-- `python -m unittest tests.test_final_review_result_spike tests.test_final_review_llm -q`：
+- `python -m unittest tests.quality_review.test_final_review_result_spike tests.quality_review.test_final_review_llm -q`：
   25 项通过；
 - `python -B tests/run_cli_tests.py -q`：953 项通过，1 项跳过；
-- `python -m unittest tests.test_gui_final_review_workflow -q`：8 项通过；
+- `python -m unittest tests.gui.workflows.test_gui_final_review_workflow -q`：8 项通过；
 - `python scripts/run_quality_gates.py all`：ruff、mypy、pip-audit blocking gate 全通过；
 - 39 个 Markdown 文件的 201 个本地链接目标均存在；
 - `git diff --check` 通过。
