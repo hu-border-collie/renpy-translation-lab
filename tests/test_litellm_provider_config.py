@@ -2,7 +2,7 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from litellm_provider_config import (
+from providers.litellm_provider_config import (
     KEYRING_SERVICE,
     CustomLiteLLMProvider,
     ProviderApiKeyStore,
@@ -411,15 +411,15 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
     def test_reserved_ids_non_blocking_never_imports_litellm(self):
         with (
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_PROBED",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_PROBED",
                 False,
             ),
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_MODULE",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_MODULE",
                 None,
             ),
             mock.patch(
-                "litellm_provider_config.warm_litellm_module",
+                "providers.litellm_provider_config.warm_litellm_module",
             ) as warm,
         ):
             reserved = reserved_litellm_provider_ids(allow_import=False)
@@ -430,11 +430,11 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         fake_litellm = SimpleNamespace(models_by_provider={"cached_prefix": ()})
         with (
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_PROBED",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_PROBED",
                 True,
             ),
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_MODULE",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_MODULE",
                 fake_litellm,
             ),
         ):
@@ -446,15 +446,15 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         raw = [{"id": "vendor-x", "base_url": "https://v.example.com"}]
         with (
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_PROBED",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_PROBED",
                 False,
             ),
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_MODULE",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_MODULE",
                 None,
             ),
             mock.patch(
-                "litellm_provider_config.warm_litellm_module",
+                "providers.litellm_provider_config.warm_litellm_module",
             ) as warm,
         ):
             providers = parse_custom_litellm_providers(raw, allow_import=False)
@@ -464,11 +464,11 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
     def test_cached_litellm_module_is_empty_before_warmup(self):
         with (
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_PROBED",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_PROBED",
                 False,
             ),
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_MODULE",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_MODULE",
                 None,
             ),
             mock.patch("importlib.util.find_spec", return_value=None),
@@ -480,11 +480,11 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         fake_litellm = SimpleNamespace(models_by_provider={})
         with (
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_PROBED",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_PROBED",
                 True,
             ),
             mock.patch(
-                "litellm_provider_config._INSTALLED_LITELLM_MODULE",
+                "providers.litellm_provider_config._INSTALLED_LITELLM_MODULE",
                 fake_litellm,
             ),
             mock.patch(

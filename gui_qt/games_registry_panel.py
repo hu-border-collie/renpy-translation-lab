@@ -37,7 +37,7 @@ _REGISTRY_DETAIL_DEFAULT_HEIGHT = 260
 _REGISTRY_NOTES_MIN_HEIGHT = 112
 _REGISTRY_NOTES_MAX_HEIGHT = 220
 
-from games_registry import (
+from execution.games_registry import (
     PLAY_STATUSES,
     REFRESH_MODE_DEEP,
     REFRESH_MODE_LITE,

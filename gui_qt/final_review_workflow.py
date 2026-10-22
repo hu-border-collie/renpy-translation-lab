@@ -5,7 +5,7 @@ import json
 import re
 from typing import Sequence
 
-import final_review as fr
+from quality_review import final_review as fr
 
 from .batch_workflow_support import build_submit_cli_args, machine_output_args
 from .revision_report import summarize_revision_preview_output

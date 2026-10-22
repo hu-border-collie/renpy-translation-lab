@@ -5,7 +5,7 @@ import json
 import unittest
 from pathlib import Path
 
-import cli_contract
+from foundation import cli_contract
 from unittest import mock
 
 try:
@@ -23,7 +23,7 @@ except ImportError as exc:
 else:
     IMPORT_ERROR = None
 
-from model_routing_migration import preview_migration
+from providers.model_routing_migration import preview_migration
 from tests import gui_test_support
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"

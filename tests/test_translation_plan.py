@@ -14,8 +14,8 @@ import os
 import unittest
 from pathlib import Path
 
-import translation_core
-import translation_plan
+from quality_review import translation_core
+from quality_review import translation_plan
 
 FIXTURE_DIR = Path(__file__).parent / 'fixtures' / 'translation_plan_minimal'
 INPUTS_DIR = FIXTURE_DIR / 'inputs'
@@ -1176,7 +1176,7 @@ class PlanPurityTests(unittest.TestCase):
 
         repo_root = str(Path(__file__).resolve().parent.parent)
         code = (
-            'import sys, json; import translation_plan; '
+            'import sys, json; from quality_review import translation_plan; '
             "print(json.dumps(sorted(name for name in sys.modules if name in "
             "('google.genai', 'litellm', 'requests', 'urllib.request', "
             "'translator_runtime', 'gemini_translate_batch'))))"

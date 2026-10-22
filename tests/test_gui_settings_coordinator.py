@@ -599,7 +599,7 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)
@@ -648,7 +648,7 @@ class GuiSettingsCoordinatorTests(unittest.TestCase):
             mock.patch("gui_qt.app.message_box_information"),
             mock.patch("gui_qt.app.load_provider_api_key", return_value=""),
             mock.patch("gui_qt.app.load_provider_key_store"),
-            mock.patch("project_context_settings.save_project_context_settings"),
+            mock.patch("foundation.project_context_settings.save_project_context_settings"),
         ):
             saved = self.window._on_save_config()
         self.assertTrue(saved)

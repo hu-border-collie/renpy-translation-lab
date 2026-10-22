@@ -8,8 +8,8 @@ import unittest
 import zipfile
 from pathlib import Path
 
-import game_ingest
-import games_registry as registry
+from execution import game_ingest
+from execution import games_registry as registry
 
 
 def _write_min_renpy_install(root: Path, *, title: str = "Demo") -> None:

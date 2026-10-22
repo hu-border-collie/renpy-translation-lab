@@ -14,8 +14,8 @@ from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QThread, Signal
 
-from gemini_model_catalog import filter_gemini_generation_config
-from litellm_provider_config import (
+from providers.gemini_model_catalog import filter_gemini_generation_config
+from providers.litellm_provider_config import (
     LITELLM_CATALOG_URL,
     LITELLM_PYPI_URL,
     CustomLiteLLMProvider,
@@ -28,9 +28,9 @@ from litellm_provider_config import (
     providers_from_remote_catalog,
     warm_litellm_module,
 )
-from litellm_sync_backend import LiteLLMBackendError
-import model_profile
-from sync_model_backend import SyncGenerationRequest, sync_error_category
+from providers.litellm_sync_backend import LiteLLMBackendError
+from providers import model_profile
+from providers.sync_model_backend import SyncGenerationRequest, sync_error_category
 from .user_copy import CUSTOM_LITELLM_PROVIDER_COPY, LITELLM_CONNECTION_TEST_COPY
 
 

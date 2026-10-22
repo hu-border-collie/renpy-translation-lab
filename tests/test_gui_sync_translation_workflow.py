@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import cli_contract
+from foundation import cli_contract
 from gui_qt.sync_translation_workflow import (
     SyncTranslationWorkflow,
     durable_sync_facts,
@@ -507,7 +507,7 @@ class DurableSyncRecoveryTests(unittest.TestCase):
 
 class DurableSyncFactTests(unittest.TestCase):
     def test_facts_show_stored_gemini_sdk_tokens_and_preserve_unknown(self) -> None:
-        from sync_run_service import SyncRunService
+        from execution.sync_run_service import SyncRunService
         from tests.test_sync_run_store import bootstrap_run
 
         for usage, expected in (({'total_token_count': 515}, 515), ({}, None)):

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import unittest
 
-import revision_corpus
-import revision_selection
+from quality_review import revision_corpus
+from quality_review import revision_selection
 
 from tests import gui_test_support
 

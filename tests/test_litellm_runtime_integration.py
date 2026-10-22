@@ -2,9 +2,9 @@ import io
 import unittest
 from unittest import mock
 
-import model_profile as mp
-from litellm_provider_config import CustomLiteLLMProvider
-import translation_plan
+from providers import model_profile as mp
+from providers.litellm_provider_config import CustomLiteLLMProvider
+from quality_review import translation_plan
 import translator_runtime as runtime
 
 
@@ -89,7 +89,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
             mock.patch.object(runtime, "SYNC_TIMEOUT_SECONDS", 45),
             mock.patch.object(runtime, "get_current_model", return_value="openai/test"),
             mock.patch.object(runtime, "create_genai_client") as create_gemini,
-            mock.patch("litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
+            mock.patch("providers.litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
         ):
             result = runtime.call_gemini_sdk("prompt", items)
 
@@ -128,7 +128,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
         with (
             mock.patch.object(runtime, "SYNC_BACKEND", "litellm"),
             mock.patch.object(runtime, "get_current_model", return_value="openai/test"),
-            mock.patch("litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
+            mock.patch("providers.litellm_sync_backend.LiteLLMSyncBackend", return_value=fake_backend),
         ):
             runtime.call_gemini_sdk(
                 "legacy prompt",
@@ -265,7 +265,7 @@ class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
                 mock.patch.object(runtime, "get_current_model", return_value="opencode-go/test"),
                 mock.patch.object(runtime, "create_genai_client") as create_gemini,
                 mock.patch(
-                    "litellm_sync_backend.LiteLLMSyncBackend",
+                    "providers.litellm_sync_backend.LiteLLMSyncBackend",
                     return_value=fake_backend,
                 ) as backend_cls,
             ):

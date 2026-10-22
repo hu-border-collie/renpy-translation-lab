@@ -5,7 +5,7 @@ import json
 import math
 import unittest
 
-import embedding_backend as embedding
+from context_engine import embedding_backend as embedding
 
 
 def identity(task=embedding.EmbeddingTaskType.DOCUMENT, **overrides):

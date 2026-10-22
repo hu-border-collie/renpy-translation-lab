@@ -6,10 +6,10 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
-import sync_translation_preview as preview
-import translation_plan
+from execution import sync_translation_preview as preview
+from quality_review import translation_plan
 import translator_runtime as runtime
-from atomic_io import file_sha256
+from foundation.atomic_io import file_sha256
 
 
 class SyncTranslationPreviewTests(unittest.TestCase):

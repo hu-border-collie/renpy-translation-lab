@@ -10,8 +10,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from gemini_model_catalog import write_model_catalog_extras
-from project_context_settings import resolve_batch_context_flags
+from providers.gemini_model_catalog import write_model_catalog_extras
+from foundation.project_context_settings import resolve_batch_context_flags
 
 from ..litellm_settings import write_sync_backend_models
 from ..settings_schema import (
@@ -163,7 +163,7 @@ def apply_collected_settings(
         )
     )
     if effective_routing is not None:
-        from model_routing_config import validate_model_routing_section
+        from providers.model_routing_config import validate_model_routing_section
 
         if not isinstance(effective_routing, Mapping):
             return SettingsSaveApplyResult(

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import revision_selection
+from quality_review import revision_selection
 
 from .user_copy import REVISION_PROPOSAL_COPY
 

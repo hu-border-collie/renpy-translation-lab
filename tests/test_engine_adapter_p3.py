@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 import gemini_translate_batch as batch
-import translation_core
+from quality_review import translation_core
 from engine_adapters.contracts import (
     Occurrence,
     OpaqueLocator,

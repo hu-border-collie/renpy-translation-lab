@@ -16,10 +16,10 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import prompt_context
-import rag_memory
-import story_memory
-import translation_core
+from context_engine import prompt_context
+from context_engine import rag_memory
+from context_engine import story_memory
+from quality_review import translation_core
 import translator_runtime as runtime
 
 
@@ -484,7 +484,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
         ]
         with (
             mock.patch(
-                "project_analysis.resolve_project_analysis_store",
+                "quality_review.project_analysis.resolve_project_analysis_store",
                 return_value=fake_store,
             ),
             mock.patch.object(
@@ -585,11 +585,11 @@ class TranslationCoreRegressionTests(unittest.TestCase):
                 return_value="fp-1",
             ),
             mock.patch(
-                "project_analysis.load_injectable_project_context",
+                "quality_review.project_analysis.load_injectable_project_context",
                 return_value=global_payload,
             ) as load_global,
             mock.patch(
-                "project_analysis.resolve_project_analysis_store",
+                "quality_review.project_analysis.resolve_project_analysis_store",
                 return_value=fake_store,
             ) as resolve_store,
         ):
@@ -619,7 +619,7 @@ class TranslationCoreRegressionTests(unittest.TestCase):
                 return_value="fp-1",
             ),
             mock.patch(
-                "project_analysis.load_injectable_project_context",
+                "quality_review.project_analysis.load_injectable_project_context",
                 side_effect=ValueError("corrupt analysis store"),
             ),
             mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,

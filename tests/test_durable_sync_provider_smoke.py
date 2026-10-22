@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts import run_durable_sync_provider_smoke as smoke
-from sync_run_store import SyncRunStore
+from execution.sync_run_store import SyncRunStore
 
 
 class DurableProviderSmokeTests(unittest.TestCase):

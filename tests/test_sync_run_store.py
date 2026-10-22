@@ -15,10 +15,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import atomic_io
-import sync_run_contracts as contracts
-import sync_run_store
-from sync_run_contracts import (
+from foundation import atomic_io
+from execution import sync_run_contracts as contracts
+from execution import sync_run_store
+from execution.sync_run_contracts import (
     AttemptStatus,
     ErrorCategory,
     ErrorCode,
@@ -27,7 +27,7 @@ from sync_run_contracts import (
     SyncRunError,
     build_run_id,
 )
-from sync_run_store import SyncRunStore
+from execution.sync_run_store import SyncRunStore
 
 
 def make_plan(plan_id='plan-1111111111111111'):

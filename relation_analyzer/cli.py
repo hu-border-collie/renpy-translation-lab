@@ -45,7 +45,7 @@ def main():
         raise SystemExit('❌ relation-window-size 必须大于 0。')
 
     # Fail fast with an actionable install command; never silent-install.
-    from optional_feature import ensure_relation_analyzer_dependencies
+    from foundation.optional_feature import ensure_relation_analyzer_dependencies
 
     ensure_relation_analyzer_dependencies(python_executable=sys.executable, repo_root=TOOL_ROOT)
     if args.mode == 'semantic':

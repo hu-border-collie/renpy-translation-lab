@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sync_run_store import SyncRunStore
+from execution.sync_run_store import SyncRunStore
 
 
 def _expire_and_exit(store: SyncRunStore, code: int) -> None:

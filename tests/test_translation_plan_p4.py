@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch
-import sync_translation_preview
-import translation_plan
+from execution import sync_translation_preview
+from quality_review import translation_plan
 import translator_runtime as runtime
 from tests.test_translation_plan import build_fixture_plan
 

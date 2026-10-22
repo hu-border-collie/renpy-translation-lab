@@ -10,11 +10,11 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-import litellm_provider_config as lpc
-import model_profile as mp
-import translation_ab_experiment as ab_mod
-from litellm_sync_backend import LiteLLMBackendError
-from sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
+from providers import litellm_provider_config as lpc
+from providers import model_profile as mp
+from execution import translation_ab_experiment as ab_mod
+from providers.litellm_sync_backend import LiteLLMBackendError
+from providers.sync_model_backend import GeminiSyncBackend, SyncGenerationRequest
 
 
 def _custom_providers() -> dict[str, lpc.CustomLiteLLMProvider]:
@@ -1051,7 +1051,7 @@ class SerializationTests(unittest.TestCase):
 
 class BuildSyncBackendTests(unittest.TestCase):
     def test_litellm_backend_gets_custom_providers(self) -> None:
-        from litellm_sync_backend import LiteLLMSyncBackend
+        from providers.litellm_sync_backend import LiteLLMSyncBackend
 
         registry = mp.build_profile_registry(
             {"sync": {"backend": "litellm", "model": "opencode-go/glm-5.3"}},
@@ -1193,7 +1193,7 @@ def _direct_sync_backend_constructor_hits(repo: Path) -> list[str]:
             stripped = line.strip()
             if "LiteLLMSyncBackend(" not in stripped and "GeminiSyncBackend(" not in stripped:
                 continue
-            if rel == "model_profile.py" and "return " in stripped:
+            if rel == "providers/model_profile.py" and "return " in stripped:
                 continue
             hits.append(f"{rel}:{index}:{stripped}")
     return hits
@@ -1648,7 +1648,7 @@ class SyncEntryWiringTests(unittest.TestCase):
             self.assertIn("routes", snapshot)
 
     def test_final_review_effective_model_prefers_frozen_route(self) -> None:
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent
@@ -1688,7 +1688,7 @@ class SyncEntryWiringTests(unittest.TestCase):
         )
 
     def test_final_review_package_uses_frozen_route_model(self) -> None:
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent

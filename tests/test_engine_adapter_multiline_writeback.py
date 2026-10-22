@@ -13,7 +13,7 @@ from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslat
 from engine_adapters.coverage import digest_json
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.writeback import WritebackPlanError, render_writeback_plan
-from sync_translation_preview import _deserialize_writeback_plan
+from execution.sync_translation_preview import _deserialize_writeback_plan
 
 
 class RenPyMultilineWritebackTests(unittest.TestCase):

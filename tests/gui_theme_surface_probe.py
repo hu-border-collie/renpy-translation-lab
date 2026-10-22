@@ -118,7 +118,7 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
             self._app.processEvents()
 
     def test_keyword_review_uses_explicit_theme_with_opposite_native_palette(self) -> None:
-        import keyword_glossary_merge as merge
+        from quality_review import keyword_glossary_merge as merge
 
         candidates = [{"source": "Moon Gate", "suggested_target": "月门", "confidence": 0.9}]
         rows = merge.build_candidate_merge_rows(candidates, {"normalize_map": {}})
@@ -177,8 +177,8 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
                 self._app.processEvents()
 
     def test_revision_selection_indicators_survive_opposite_native_palette(self) -> None:
-        import revision_corpus
-        import revision_selection
+        from quality_review import revision_corpus
+        from quality_review import revision_selection
 
         item = {"id": "original-lantern", "file_rel_path": "lantern.rpy",
                 "source": "Carry the lantern.", "current_translation": "带上灯。"}

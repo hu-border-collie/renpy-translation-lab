@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import font_coverage as fc
+from foundation import font_coverage as fc
 
 
 def format_12_subtable(groups: list[tuple[int, int]]) -> bytes:

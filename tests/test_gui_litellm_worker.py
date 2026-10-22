@@ -24,8 +24,8 @@ try:
         LiteLLMVersionWorker,
         is_cancelled_message,
     )
-    from litellm_sync_backend import LiteLLMBackendError
-    from litellm_provider_config import custom_provider_registry
+    from providers.litellm_sync_backend import LiteLLMBackendError
+    from providers.litellm_provider_config import custom_provider_registry
 except ImportError as exc:
     LiteLLMConnectionTestWorker = None
     LiteLLMModuleWarmupWorker = None

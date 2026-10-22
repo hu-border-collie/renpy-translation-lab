@@ -13,14 +13,14 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-import config_store
-import model_config_migration as cli
-from model_profile import ModelRoutingConfigError
-from model_routing_migration import preview_migration
-from model_routing_migration_store import (
+from foundation import config_store
+from providers import model_config_migration as cli
+from providers.model_profile import ModelRoutingConfigError
+from providers.model_routing_migration import preview_migration
+from providers.model_routing_migration_store import (
     fingerprint, migrate_config_file, preview_config_file, rollback_config_file,
 )
-from model_routing_reader import read_routing_plan, read_embedding_settings, section_custom_providers
+from providers.model_routing_reader import read_routing_plan, read_embedding_settings, section_custom_providers
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
@@ -36,7 +36,7 @@ class MigrationPlanTests(unittest.TestCase):
         for name in ("gemini_batch", "gemini_sync", "litellm_builtin", "litellm_custom"):
             config = fixture(name)
             with runtime.runtime_config_scope(runtime.default_runtime_config()):
-                with redirect_stdout(io.StringIO()), patch("litellm_provider_config._installed_litellm_module", return_value=None):
+                with redirect_stdout(io.StringIO()), patch("providers.litellm_provider_config._installed_litellm_module", return_value=None):
                     runtime.load_sync_translation_settings(config)
                 plan = read_routing_plan(preview_migration(config).config, legacy_execution="sync")
                 profile = plan.profiles[plan.routes["translation"].profile_id]
@@ -69,7 +69,7 @@ class MigrationPlanTests(unittest.TestCase):
         from gui_qt.diagnostics_context import build_cli_commands
         commands = build_cli_commands(python_exe="python", batch_script_path="/tool/gemini_translate_batch.py",
                                       manifest_path="/run/manifest.json", manifest={})
-        selected = [c for c in commands if "model_config_migration.py" in c.command]
+        selected = [c for c in commands if "providers/model_config_migration.py" in c.command]
         self.assertEqual(len(selected), 3)
         self.assertTrue(any("--stage-only" in c.command for c in selected))
         self.assertTrue(all("<CONFIG_COPY>" in c.command and "--json" in c.command for c in selected))
@@ -242,7 +242,7 @@ class MigrationPlanTests(unittest.TestCase):
         self.assertEqual(migrated["model_routing"]["profiles"]["legacy-batch"]["model"], "gemini-other")
 
     def test_offline_import_does_not_load_optional_sdks_or_gui(self):
-        source = "import sys; import model_routing_migration; assert not any(x in sys.modules for x in ('litellm','PySide6','google.genai'))"
+        source = "import sys; from providers import model_routing_migration; assert not any(x in sys.modules for x in ('litellm','PySide6','google.genai'))"
         subprocess.run([sys.executable, "-c", source], check=True, capture_output=True)
 
 
@@ -320,7 +320,7 @@ class MigrationTransactionTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), migrated)
 
     def test_failed_replace_keeps_config_and_durable_recovery_evidence(self):
-        with patch("config_store.os.replace", side_effect=OSError("injected")):
+        with patch("foundation.config_store.os.replace", side_effect=OSError("injected")):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original)
@@ -337,7 +337,7 @@ class MigrationTransactionTests(unittest.TestCase):
         def commit_then_interrupt(*args):
             replace(*args)
             raise KeyboardInterrupt
-        with patch("config_store.os.replace", side_effect=commit_then_interrupt):
+        with patch("foundation.config_store.os.replace", side_effect=commit_then_interrupt):
             with self.assertRaises(KeyboardInterrupt):
                 self.migrate()
         report_path, = self.root.glob("*.migration-*.json")
@@ -345,7 +345,7 @@ class MigrationTransactionTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), self.original)
 
     def test_fsync_failure_does_not_replace_source(self):
-        with patch("config_store.os.fsync", side_effect=OSError("injected")):
+        with patch("foundation.config_store.os.fsync", side_effect=OSError("injected")):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original)
@@ -382,7 +382,7 @@ class MigrationTransactionTests(unittest.TestCase):
             self.assertEqual(dacl(path), original_acl)
 
     def test_backup_and_report_failures_never_replace_config(self):
-        from model_routing_migration_store import write_private_artifact
+        from providers.model_routing_migration_store import write_private_artifact
         for fail_at in (1, 2):
             count = 0
             def injected(*args, **kwargs):
@@ -391,17 +391,17 @@ class MigrationTransactionTests(unittest.TestCase):
                 if count == fail_at:
                     raise OSError("injected")
                 return write_private_artifact(*args, **kwargs)
-            with patch("model_routing_migration_store.write_private_artifact", side_effect=injected):
+            with patch("providers.model_routing_migration_store.write_private_artifact", side_effect=injected):
                 with self.assertRaises(OSError):
                     self.migrate()
             self.assertEqual(self.path.read_bytes(), self.original)
 
     def test_source_change_during_preparation_is_not_overwritten(self):
-        from model_routing_migration_store import replace_config_bytes
+        from providers.model_routing_migration_store import replace_config_bytes
         def concurrent(*args, **kwargs):
             self.path.write_bytes(self.original + b" ")
             return replace_config_bytes(*args, **kwargs)
-        with patch("model_routing_migration_store.replace_config_bytes", side_effect=concurrent):
+        with patch("providers.model_routing_migration_store.replace_config_bytes", side_effect=concurrent):
             with self.assertRaisesRegex(ValueError, "changed"):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original + b" ")
@@ -498,7 +498,7 @@ class MigrationTransactionTests(unittest.TestCase):
             self.assertEqual(p.stat().st_mode & 0o777, 0o600)
 
     def test_permission_copy_failure_never_writes_payload_or_replaces_source(self):
-        with patch("config_store._copy_access_mode", side_effect=OSError("injected")):
+        with patch("foundation.config_store._copy_access_mode", side_effect=OSError("injected")):
             with self.assertRaises(OSError):
                 self.migrate()
         self.assertEqual(self.path.read_bytes(), self.original)

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from games_registry import (
+from execution.games_registry import (
     ENGINES,
     GAMES_MD_FILENAME,
     REGISTRY_FILENAME,

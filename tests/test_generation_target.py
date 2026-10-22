@@ -1,6 +1,6 @@
 import unittest
 
-import generation_target
+from quality_review import generation_target
 
 
 class GenerationTargetContractTests(unittest.TestCase):

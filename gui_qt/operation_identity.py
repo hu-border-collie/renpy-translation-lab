@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import PurePath
 
-from project_context_settings import default_context_flags_from_config
+from foundation.project_context_settings import default_context_flags_from_config
 
 
 def _canonical_value(value: object) -> object:

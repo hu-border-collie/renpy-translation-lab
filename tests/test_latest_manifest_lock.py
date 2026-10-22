@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
-import atomic_io
+from foundation import atomic_io
 import gemini_translate_batch as batch_mod
 from gui_qt.project_state import ProjectState
 
@@ -64,7 +64,7 @@ def _direct_latest_write_offenders(relative_path: str, source: str) -> list[str]
 
 
 def _collect_direct_latest_write_offenders(repo_root: Path) -> list[str]:
-    allowed = {"atomic_io.py"}
+    allowed = {"foundation/atomic_io.py"}
     offenders: list[str] = []
     for path in repo_root.rglob("*.py"):
         relative = path.relative_to(repo_root).as_posix()
@@ -145,7 +145,7 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
             script = (
                 "import sys, time\n"
                 "from pathlib import Path\n"
-                "import atomic_io\n"
+                "from foundation import atomic_io\n"
                 "lock, latest, marker = sys.argv[1:4]\n"
                 "with atomic_io._latest_manifest_file_lock(lock, timeout=5.0):\n"
                 "    Path(marker).write_text('held')\n"
@@ -341,7 +341,7 @@ class LatestManifestSharedWriterTests(unittest.TestCase):
                 script = (
                     "import sys, time\n"
                     "from pathlib import Path\n"
-                    "import atomic_io\n"
+                    "from foundation import atomic_io\n"
                     "latest, marker, start = sys.argv[1:4]\n"
                     "while not Path(start).exists():\n"
                     "    time.sleep(0.01)\n"

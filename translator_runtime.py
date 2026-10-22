@@ -34,9 +34,9 @@ def locked_runtime_state():
     with _runtime_state_lock:
         yield
 
-from atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
-import cli_contract
-import generation_target
+from foundation.atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
+from foundation import cli_contract
+from quality_review import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
@@ -45,7 +45,7 @@ from engine_adapters.writeback import (
     render_writeback_plan,
     source_snapshot_fingerprint,
 )
-from gemini_model_catalog import (
+from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     catalog_extra_models,
@@ -54,11 +54,11 @@ from gemini_model_catalog import (
     merge_model_lists,
     normalize_model_names,
 )
-from rag_memory import JsonRagStore, JsonSourceIndexStore, hash_text
-import advanced_context
-import embedding_runtime
-from embedding_backend import EmbeddingBackendError, EmbeddingContractError
-from rpa_safety import (
+from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore, hash_text
+from context_engine import advanced_context
+from context_engine import embedding_runtime
+from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
+from foundation.rpa_safety import (
     DEFAULT_RPA_LIMITS,
     RpaExtractionBudget,
     copy_member,
@@ -66,15 +66,15 @@ from rpa_safety import (
     member_output_size,
     read_bounded_compressed_index,
 )
-import model_profile
-import model_usage_ledger
-import prompt_context
-import story_memory
-import sync_translation_preview
-import translation_core
-import translation_plan
-import translation_quality
-from sync_model_backend import (
+from providers import model_profile
+from providers import model_usage_ledger
+from context_engine import prompt_context
+from context_engine import story_memory
+from execution import sync_translation_preview
+from quality_review import translation_core
+from quality_review import translation_plan
+from quality_review import translation_quality
+from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,
@@ -1134,7 +1134,7 @@ def load_rotation_settings(config):
         model_cfg.get("enabled"),
         DEFAULT_MODEL_ROTATION_ENABLED,
     )
-    from gemini_model_catalog import filter_gemini_rotation_models
+    from providers.gemini_model_catalog import filter_gemini_rotation_models
 
     raw_pool = normalize_model_names(model_cfg.get("models"))
     MODEL_ROTATION_MODELS = filter_gemini_rotation_models(
@@ -1175,7 +1175,7 @@ def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
     global SYNC_MACRO_SETTING_FILE, SYNC_MACRO_SETTING, SYNC_MACRO_FINGERPRINT
 
     global MODEL_ROUTING_CONFIG
-    from model_routing_reader import checked_section, runtime_settings_view, section_custom_providers
+    from providers.model_routing_reader import checked_section, runtime_settings_view, section_custom_providers
 
     MODEL_ROUTING_CONFIG = None
     if "model_routing" in config:
@@ -1202,7 +1202,7 @@ def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
         )
     SYNC_BACKEND = backend_name
 
-    from litellm_provider_config import custom_provider_registry
+    from providers.litellm_provider_config import custom_provider_registry
 
     try:
         CUSTOM_LITELLM_PROVIDERS = custom_provider_registry(
@@ -1992,7 +1992,7 @@ def load_translator_settings(
 
     config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
     if "model_routing" in config:
-        from model_routing_reader import runtime_settings_view
+        from providers.model_routing_reader import runtime_settings_view
 
         try:
             config = runtime_settings_view(config)
@@ -2034,7 +2034,7 @@ def load_translator_settings(
 
     load_context_storage_settings(config)
 
-    from project_asset_paths import (
+    from foundation.project_asset_paths import (
         resolve_configured_glossary_value,
         resolve_glossary_path,
     )
@@ -2163,7 +2163,7 @@ def load_translator_settings(
             "commands can run arbitrary processes. Prefer argv lists and enable "
             f"prepare.allow_shell_commands only for trusted shell strings. Details: {exc}"
         ) from exc
-    from project_context_settings import apply_project_context_settings_to_config
+    from foundation.project_context_settings import apply_project_context_settings_to_config
 
     apply_project_context_settings_to_config(config, BASE_DIR)
     load_include_filters_from_config(config)
@@ -2171,7 +2171,7 @@ def load_translator_settings(
         config,
         tolerate_routing_errors=tolerate_routing_errors,
     )
-    from model_routing_reader import runtime_settings_view
+    from providers.model_routing_reader import runtime_settings_view
     try:
         rag_config = runtime_settings_view(config)
     except (ValueError, TypeError) as exc:
@@ -2511,7 +2511,7 @@ def _apply_game_root(work_dir):
 
 
 def persist_game_root(work_dir):
-    from project_asset_paths import sync_project_asset_paths_in_config
+    from foundation.project_asset_paths import sync_project_asset_paths_in_config
 
     normalized = _canonical_abs_path(work_dir)
     config = {}
@@ -3813,7 +3813,7 @@ def load_sync_injectable_project_context(file_rel_path="", line_numbers=None):
     }
     if not SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
         return empty
-    from project_analysis import (
+    from quality_review.project_analysis import (
         compute_current_project_analysis_fingerprint,
         load_injectable_project_context,
     )
@@ -5985,7 +5985,7 @@ def freeze_translation_routing_plan(*, stage_overrides=None):
             execution=model_profile.ExecutionStrategy.SYNC,
             stage_overrides=overrides,
         )
-        from model_routing_reader import require_entrypoint_strategy
+        from providers.model_routing_reader import require_entrypoint_strategy
         if MODEL_ROUTING_CONFIG is not None:
             require_entrypoint_strategy(plan, execution="sync", stages={model_profile.STAGE_TRANSLATION})
     except (ValueError, TypeError) as exc:
@@ -5994,7 +5994,7 @@ def freeze_translation_routing_plan(*, stage_overrides=None):
             stage=model_profile.STAGE_TRANSLATION,
         ) from exc
     try:
-        from litellm_provider_config import load_provider_api_key
+        from providers.litellm_provider_config import load_provider_api_key
 
         def _has_key(provider_id):
             try:
@@ -6140,7 +6140,7 @@ def call_gemini_sdk(
             allow_legacy=True,
         )
         if translation_request is not None:
-            import structure_protection
+            from quality_review import structure_protection
             report = structure_protection.validate_report(report, translation_request, items)
             if structure_protection.KEY in translation_request.transport_metadata:
                 report.metadata['protection_trace'] = {

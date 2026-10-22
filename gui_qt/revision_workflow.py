@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-import cli_contract
+from foundation import cli_contract
 
 from .revision_report import summarize_revision_preview_output
 from .batch_workflow_support import (

@@ -2,9 +2,9 @@ import json
 import unittest
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
-import translation_quality
+from quality_review import translation_quality
 
 
 class WritebackGateContractTests(unittest.TestCase):

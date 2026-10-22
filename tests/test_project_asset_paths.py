@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import gemini_translate_batch as batch_mod
-from project_asset_paths import (
+from foundation.project_asset_paths import (
     canonical_abs_path,
     expected_project_asset_paths,
     normalize_relative_project_assets_in_config,

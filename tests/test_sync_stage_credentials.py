@@ -10,8 +10,8 @@ import unittest
 from unittest import mock
 
 import gemini_translate_batch as batch
-import model_profile
-import sync_request
+from providers import model_profile
+from execution import sync_request
 import translator_runtime as runtime
 
 

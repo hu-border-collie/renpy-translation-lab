@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import json
+import re
+import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-import games_registry as registry
+from execution import games_registry as registry
 
 
 SAMPLE_MD = """# 游戏状态总表
@@ -105,6 +109,24 @@ class GamesRegistryTests(unittest.TestCase):
             "| Alpha | `Game_Alpha` |  | 1.0 | 就绪 | 待确认 | 待翻译 | 下一步：初译。 |",
             rendered,
         )
+
+    def test_rendered_regeneration_command_runs_for_explicit_workspace(self):
+        rendered = registry.render_games_md({"projects": []})
+        command = re.search(r"`(python [^`]*\brender-md)`", rendered)
+        self.assertIsNotNone(command)
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            arguments = [
+                str(workspace) if part == "<WORKSPACE_ROOT>" else part
+                for part in shlex.split(command.group(1))[1:]
+            ]
+            completed = subprocess.run(
+                [sys.executable, "-B", *arguments],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True, text=True, encoding="utf-8", timeout=30,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertTrue((workspace / "GAMES.md").is_file())
 
     def test_suggest_translation_status_for_empty_work(self):
         project = {"translation_status_source": "doctor"}
@@ -1151,8 +1173,8 @@ class GamesRegistryDocsTests(unittest.TestCase):
         setup_md = (Path(__file__).resolve().parents[1] / "docs" / "setup.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("python games_registry.py --workspace <path> setup", setup_md)
-        self.assertNotIn("python games_registry.py setup --workspace", setup_md)
+        self.assertIn("python -m execution.games_registry --workspace <path> setup", setup_md)
+        self.assertNotIn("python -m execution.games_registry setup --workspace", setup_md)
 
 
 if __name__ == "__main__":

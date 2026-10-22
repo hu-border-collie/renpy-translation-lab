@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-import cli_contract
-import final_review as fr
+from foundation import cli_contract
+from quality_review import final_review as fr
 import gemini_translate_batch as batch
-import sync_translation_preview as preview
-import translation_quality as quality
+from execution import sync_translation_preview as preview
+from quality_review import translation_quality as quality
 import translator_runtime as runtime
 from gui_qt.quality_findings_report import (
     filter_quality_items,
@@ -441,7 +441,7 @@ class SyncQualityFindingsTests(unittest.TestCase):
                 mechanical_subject(translation='你{w=0.5}好', item_id='id:1')
             ],
         }]
-        from atomic_io import file_sha256
+        from foundation.atomic_io import file_sha256
         rows[0]['source_sha256'] = file_sha256(target)
         return preview.create_sync_preview(
             log_dir=root / 'logs',

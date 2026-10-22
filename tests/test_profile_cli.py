@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 import gemini_translate_batch as batch
-import model_capability_probe as capability_probe
-import model_profiles_editor as editor
-import openai_compatible_model_catalog as model_catalog
+from providers import model_capability_probe as capability_probe
+from providers import model_profiles_editor as editor
+from providers import openai_compatible_model_catalog as model_catalog
 import translator_runtime as legacy
-from model_routing_migration import preview_migration
+from providers.model_routing_migration import preview_migration
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
 
@@ -62,7 +62,7 @@ class ProfileCliTests(unittest.TestCase):
     def test_cli_choices_follow_shared_core_constants(self) -> None:
         import argparse
 
-        import model_profiles_editor as editor
+        from providers import model_profiles_editor as editor
 
         parser = batch.build_arg_parser()
         subparsers = next(

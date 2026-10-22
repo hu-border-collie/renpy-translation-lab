@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from atomic_io import atomic_write_json, atomic_write_lines, atomic_write_text
+from foundation.atomic_io import atomic_write_json, atomic_write_lines, atomic_write_text
 
 from .coverage import digest_json, stable_json_dumps
 from .versioning import (

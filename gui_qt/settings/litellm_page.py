@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from litellm_provider_config import (
+from providers.litellm_provider_config import (
     CustomLiteLLMProvider,
     catalog_source_label,
     custom_provider_from_mapping,
@@ -1311,7 +1311,7 @@ class LiteLLMSettingsPage(QObject):
         return entries
 
     def _reserved_custom_provider_ids(self) -> frozenset[str]:
-        from litellm_provider_config import reserved_litellm_provider_ids
+        from providers.litellm_provider_config import reserved_litellm_provider_ids
 
         # Reserved set is based only on known LiteLLM prefixes and the current
         # registry. Historical catalog cache ids are intentionally excluded:

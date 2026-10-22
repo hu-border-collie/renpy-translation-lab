@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from litellm_provider_config import (
+from providers.litellm_provider_config import (
     CustomLiteLLMProvider,
     provider_from_model,
     validate_custom_provider_env_name,

@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import translation_quality
-from quality_report_export import (
+from quality_review import translation_quality
+from quality_review.quality_report_export import (
     DEFAULT_REPORT_FILENAME,
     QualityReportExportError,
     export_quality_report,

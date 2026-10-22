@@ -4,7 +4,7 @@ import unittest
 
 import gemini_translate
 import gemini_translate_batch
-from project_version import __version__
+from foundation.project_version import __version__
 from scripts import build_source_release
 
 

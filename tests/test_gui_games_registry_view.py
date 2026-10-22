@@ -14,7 +14,7 @@ from gui_qt.games_registry_view import (
     registry_row_from_project,
     row_matches_game_root,
 )
-import games_registry as registry
+from execution import games_registry as registry
 
 
 class GuiGamesRegistryViewTests(unittest.TestCase):

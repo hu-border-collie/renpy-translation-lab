@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import doctor_recommendations as doctor_rec
-from sync_model_backend import MAX_SYNC_TIMEOUT_SECONDS, MIN_SYNC_TIMEOUT_SECONDS
+from foundation import doctor_recommendations as doctor_rec
+from providers.sync_model_backend import MAX_SYNC_TIMEOUT_SECONDS, MIN_SYNC_TIMEOUT_SECONDS
 
 SAFETY_LEVEL_LABELS = {
     "safe": "可写回",
@@ -1650,8 +1650,8 @@ MODEL_PROFILES_PAGE_COPY = {
         "凭据只保存引用；保存前会校验配置。"
     ),
     "legacy_hint": (
-        "这个项目仍使用旧模型配置。请先在「诊断与运行日志」的任务命令参考中，"
-        "按 model_config_migration.py 的 preview / migrate 步骤预览并迁移；"
+        "这个项目仍使用旧模型配置。请先打开「诊断与运行日志」的命令参考，"
+        "复制带完整脚本路径的 preview / migrate 模板预览并迁移；"
         "需要撤销时可使用 rollback。迁移前运行行为不变，已有模型与执行策略会保留。"
     ),
     "legacy_title": "需先迁移旧模型配置",

@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from tests import gui_test_support
-import model_profiles_editor as editor
+from providers import model_profiles_editor as editor
 
 try:
     from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt

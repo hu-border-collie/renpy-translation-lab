@@ -1,7 +1,7 @@
 import json
 import unittest
 
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 
 
 class DoctorRecommendationTests(unittest.TestCase):

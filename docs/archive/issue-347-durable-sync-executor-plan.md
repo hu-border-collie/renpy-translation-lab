@@ -26,7 +26,7 @@
 5. **resume 只继续同一冻结合同**。plan、source snapshot、resolved profile、关键配置或持久化请求
    fingerprint 不兼容时拒绝原地 resume；原 run 保持可查看，后续操作是派生新 run，不覆盖历史。
 6. **usage 以 attempt 为去重单位**。attempt 事务先写 usage outbox；再幂等投递到现有
-   [`model_usage_ledger.py`](../../model_usage_ledger.py)。崩溃后重复投递不会重复累计。
+   [`model_usage_ledger.py`](../../providers/model_usage_ledger.py)。崩溃后重复投递不会重复累计。
 7. **执行器没有项目写回权限**。它只生成统一 result 产物；durable Sync 必须经过
    `check -> bound preview/diff -> apply`。Gemini Batch translation 保持现行 `check -> apply`，
    两者共享 `writeback_gate`、source snapshot、adapter 和 `--force` 不可绕过谓词，而不是强制共享一条 CLI 序列。
@@ -56,14 +56,14 @@
 
 | 区域 | 当前事实 | #347 缺口 |
 |---|---|---|
-| [`translation_plan.py`](../../translation_plan.py) | #346 P1 已有 schema v1、16 hex `plan_id`/`request_id`、稳定 chunk、source identity、profile/config 脱敏快照、prompt/request/plan fingerprint。`plan_id` 不含 `run_id` 和检索结果；检索内容进入 request 的 `prompt_fingerprint`，并经 request summary 进入 `plan_fingerprint` | 还没有执行状态、attempt、checkpoint、resume 或耐久 result |
-| [`model_profile.py`](../../model_profile.py) | `ModelProfile`、`ModelCapabilities`、`TaskRoute`、`ModelRoutingPlan` 可序列化；routing plan 明确要求一次 run 内冻结 | 当前普通 Sync 仍会在错误恢复中轮换模型；没有 attempt 级实际目标与 freshness 记录 |
+| [`translation_plan.py`](../../quality_review/translation_plan.py) | #346 P1 已有 schema v1、16 hex `plan_id`/`request_id`、稳定 chunk、source identity、profile/config 脱敏快照、prompt/request/plan fingerprint。`plan_id` 不含 `run_id` 和检索结果；检索内容进入 request 的 `prompt_fingerprint`，并经 request summary 进入 `plan_fingerprint` | 还没有执行状态、attempt、checkpoint、resume 或耐久 result |
+| [`model_profile.py`](../../providers/model_profile.py) | `ModelProfile`、`ModelCapabilities`、`TaskRoute`、`ModelRoutingPlan` 可序列化；routing plan 明确要求一次 run 内冻结 | 当前普通 Sync 仍会在错误恢复中轮换模型；没有 attempt 级实际目标与 freshness 记录 |
 | [`translator_runtime.py`](../../translator_runtime.py) | 普通同步初译仍在内存中按 `40/12000` 切块、递归重试/二分；处理完文件后才构造 preview；进程退出即丢失尚未汇总的成功结果 | 无稳定 request checkpoint、scheduler lease、cancel 状态或 resume |
-| [`sync_model_backend.py`](../../sync_model_backend.py) | 已有 provider-neutral 请求/结果边界、有限 timeout 和基础错误分类；`rate_limit`、`timeout` 等有恢复决策 | 分类粒度不足以覆盖 quota、policy、local persistence 等；恢复不是耐久状态机 |
-| [`model_usage_ledger.py`](../../model_usage_ledger.py) | 项目级 JSON ledger 使用文件锁和原子替换，并按 response/payload/call fingerprint 去重；普通 Sync 先缓存在内存，`finally` 才批量 flush | 崩溃会丢 usage buffer；execution result 与 ledger 不能原子提交 |
-| [`sync_translation_preview.py`](../../sync_translation_preview.py) | preview manifest 绑定项目、源/候选快照、diff、质量 finding、adapter writeback plan；apply 前全量验证，并用多文件事务 journal 写回 | preview 生成仍与内存执行耦合，尚未消费统一耐久 result；没有独立的最新 `check` 绑定 |
+| [`sync_model_backend.py`](../../providers/sync_model_backend.py) | 已有 provider-neutral 请求/结果边界、有限 timeout 和基础错误分类；`rate_limit`、`timeout` 等有恢复决策 | 分类粒度不足以覆盖 quota、policy、local persistence 等；恢复不是耐久状态机 |
+| [`model_usage_ledger.py`](../../providers/model_usage_ledger.py) | 项目级 JSON ledger 使用文件锁和原子替换，并按 response/payload/call fingerprint 去重；普通 Sync 先缓存在内存，`finally` 才批量 flush | 崩溃会丢 usage buffer；execution result 与 ledger 不能原子提交 |
+| [`sync_translation_preview.py`](../../execution/sync_translation_preview.py) | preview manifest 绑定项目、源/候选快照、diff、质量 finding、adapter writeback plan；apply 前全量验证，并用多文件事务 journal 写回 | preview 生成仍与内存执行耦合，尚未消费统一耐久 result；没有独立的最新 `check` 绑定 |
 | [`gemini_translate_batch.py`](../../gemini_translate_batch.py) | Batch 已有 result fingerprint、最近一次 `writeback_gate=allow`、apply 时二次 source/adapter revalidation；同步结果行已有 `response`、`provider_response_attempts`、`normalized_response` 语义 | 本地同步结果仍整批在内存生成后一次性写 `results.jsonl`，中断不可恢复 |
-| [`atomic_io.py`](../../atomic_io.py) | 单文件使用 fsync + replace；项目多文件写回有 prepared/committed journal 和回滚恢复 | 适合最终 artifact/writeback，不适合作为并发 request 状态数据库 |
+| [`atomic_io.py`](../../foundation/atomic_io.py) | 单文件使用 fsync + replace；项目多文件写回有 prepared/committed journal 和回滚恢复 | 适合最终 artifact/writeback，不适合作为并发 request 状态数据库 |
 
 ## 2. 名词和不可破坏的不变量
 
@@ -500,7 +500,7 @@ sync-derive RUN [--retry-unknown --ack-duplicate-billing-risk | --exclude-unknow
 
 `RUN` 选择器不允许隐式 cwd/latest。`--non-interactive` 必须显式给出 `RUN` 或命令明确支持的 `--latest`。`sync-status --latest` 只枚举目录名匹配 `sync-run-v1-*`、含可读 `state.sqlite3`、且 DB 内 `runs.run_id` 与目录一致的 durable run；现有 `YYYYMMDDThhmmss.uuuuuuZ` Sync preview 目录没有 state DB，必须忽略。latest 以 DB `created_at` 排序；没有候选或无法唯一判定时返回 `SYNC_RUN_NOT_FOUND`。
 
-机器模式 stdout 只输出一个 [`cli_contract.py`](../../cli_contract.py) schema-v1 envelope；进度写 stderr 或受控日志。顶层键固定为 `schema_version`、`command`、`ok`、`status`、`result`、`artifacts`、`warnings`、`error`；下面是 `result` 的稳定主体：
+机器模式 stdout 只输出一个 [`cli_contract.py`](../../foundation/cli_contract.py) schema-v1 envelope；进度写 stderr 或受控日志。顶层键固定为 `schema_version`、`command`、`ok`、`status`、`result`、`artifacts`、`warnings`、`error`；下面是 `result` 的稳定主体：
 
 ```json
 {

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import batch_non_chinese_rules
+from quality_review import batch_non_chinese_rules
 import gemini_translate_batch as batch_mod
 
 

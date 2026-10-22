@@ -22,7 +22,7 @@ Registry 回答的是：「工作区里有哪些项目？各自路径、版本�
 工作区根目录**必须显式指定**，不会默认使用工具安装目录的上一级：
 
 - GUI：**设置 → 项目列表 → 创建 / 接入工作区…**（预览后初始化或接入 `games_registry.json`，成功后再写入 `translator_config.json` 的 `workspace_root`）
-- CLI：`python games_registry.py --workspace <path> setup`（可用 `--dry-run` 只预览）；其它子命令同样把全局 `--workspace` 放在子命令前，或先在 `translator_config.json` 中设置 `workspace_root`
+- CLI：`python -m execution.games_registry --workspace <path> setup`（可用 `--dry-run` 只预览）；其它子命令同样把全局 `--workspace` 放在子命令前，或先在 `translator_config.json` 中设置 `workspace_root`
 - 未设置时：项目列表为空状态；CLI 的 registry 命令以退出码 2 报错
 - SDK、API 密钥与工具日志**不是**工作区必需文件；接入工作区不会自动下载 SDK，也不会运行项目级 prepare。GUI 向导第二步可**可选**查找 / 浏览 / 下载推荐 SDK，或跳过
 
@@ -36,10 +36,12 @@ RenPy_Workspace/              # 用户指定的工作区根
 │  ├─ original/
 │  └─ work/
 └─ renpy-translation-lab/     # 可选：工具放在工作区子目录
-   └─ games_registry.py
+   └─ execution/
+      └─ games_registry.py
 ```
 
 仓库内提供 `games_registry.example.json` 作为字段示例；**实际数据**应放在工作区根目录，不纳入本仓库版本控制。
+生成的 `GAMES.md` 中，重新生成命令须在工具根目录执行，并将 `<WORKSPACE_ROOT>` 替换为该总表所在目录。
 
 ## 数据模型要点
 
@@ -97,43 +99,43 @@ Markdown 与 JSON 一致，请再执行「同步 GAMES.md」。
 
 ```powershell
 # 创建或接入工作区（推荐首次使用；--dry-run 只预览）
-python games_registry.py --workspace path\to\RenPy_Workspace setup --dry-run
-python games_registry.py --workspace path\to\RenPy_Workspace setup
+python -m execution.games_registry --workspace path\to\RenPy_Workspace setup --dry-run
+python -m execution.games_registry --workspace path\to\RenPy_Workspace setup
 # 可选：--import-md / --no-import-md、--discover / --no-discover、--render-md、--create-directory
 
 # 从现有 GAMES.md 初始化 / 合并导入（首次迁移时常用）
-python games_registry.py import-md
+python -m execution.games_registry import-md
 
 # 按路径合并到已有 registry（不覆盖未出现在 GAMES.md 中的项目）
-python games_registry.py import-md --merge
+python -m execution.games_registry import-md --merge
 
 # 扫描工作区 Game_* 目录，登记尚未出现在 registry 中的项目
-python games_registry.py discover
+python -m execution.games_registry discover
 
 # 从游戏目录或 .zip 复制整理为 Game_*/original/work/build 并登记
-python games_registry.py ingest --source path\to\game_or.zip
-python games_registry.py ingest --source game.zip --name "Sample Title"
+python -m execution.games_registry ingest --source path\to\game_or.zip
+python -m execution.games_registry ingest --source game.zip --name "Sample Title"
 # → 磁盘目录 Game_SampleTitle，总表显示名 “Sample Title”；不移动源、不自动 bootstrap-work
 
 # 快速刷新全部项目（默认：扫磁盘 + TL 行数，不跑 doctor）
-python games_registry.py refresh --all
+python -m execution.games_registry refresh --all
 # 完成后会对比刷新前后状态（忽略仅更新的 last_refresh_at）。
 # GUI 总会弹出「刷新完成」汇报：
 # 无实质变化 → 仅说明没有新增变更，不提供同步 GAMES.md；
 # 有变化 → 汇报更新数量，并询问是否同步 GAMES.md。
 
 # 深度刷新单个项目（含 doctor，较慢）
-python games_registry.py refresh --project game_example --deep
+python -m execution.games_registry refresh --project game_example --deep
 
 # 由 registry 重新生成 GAMES.md
-python games_registry.py render-md
+python -m execution.games_registry render-md
 
 # 记录一次批量写回 manifest（一般由 GUI 写回后自动调用）
-python games_registry.py record-batch --project game_example --manifest path/to/manifest.json
+python -m execution.games_registry record-batch --project game_example --manifest path/to/manifest.json
 
 # 查看 JSON
-python games_registry.py show
-python games_registry.py show --project game_example
+python -m execution.games_registry show
+python -m execution.games_registry show --project game_example
 ```
 
 可选参数：
@@ -229,8 +231,8 @@ GUI **设置 → 项目列表 → 创建 / 接入工作区…**（预览后写�
 CLI 须先指定工作区：
 
 ```text
-python games_registry.py --workspace path\to\workspace import-md
-python games_registry.py --workspace path\to\workspace discover
+python -m execution.games_registry --workspace path\to\workspace import-md
+python -m execution.games_registry --workspace path\to\workspace discover
 # 或在 translator_config.json 设置 workspace_root 后省略 --workspace
 ```
 
@@ -247,7 +249,7 @@ GUI 切换项目 → 环境检查 → 翻译 / 写回
 ```text
 GUI **设置 → 项目列表** → 导入游戏… → 确认预填/修改游戏名称 → 确认复制
 # 或 CLI：
-python games_registry.py --workspace path\to\workspace ingest --source path\to\game_or.zip --name "游戏名"
+python -m execution.games_registry --workspace path\to\workspace ingest --source path\to\game_or.zip --name "游戏名"
 ```
 
 导入后 `work/` 为空；需要翻译工作副本时再「准备工作目录」或 `bootstrap-work`。

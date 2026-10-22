@@ -16,8 +16,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from atomic_io import atomic_write_text  # noqa: E402
-import font_coverage  # noqa: E402
+from foundation.atomic_io import atomic_write_text  # noqa: E402
+from foundation import font_coverage  # noqa: E402
 
 
 def _write_stdout(text: str) -> None:

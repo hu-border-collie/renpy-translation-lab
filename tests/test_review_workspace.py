@@ -5,9 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import review_index
-import review_workspace
-import revision_proposals
+from quality_review import review_index
+from quality_review import review_workspace
+from quality_review import revision_proposals
 import gemini_translate_batch as batch
 
 from tests.test_review_index import _write_corpus, _write_findings

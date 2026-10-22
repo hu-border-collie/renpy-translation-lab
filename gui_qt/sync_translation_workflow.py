@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import cli_contract
+from foundation import cli_contract
 
 from .batch_workflow_support import machine_output_args
 from .translation_workflow import WorkflowStep, WorkflowUpdate

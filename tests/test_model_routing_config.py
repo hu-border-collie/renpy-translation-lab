@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 import unittest
 
-import model_profile
-import model_routing_config as contract
+from providers import model_profile
+from providers import model_routing_config as contract
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

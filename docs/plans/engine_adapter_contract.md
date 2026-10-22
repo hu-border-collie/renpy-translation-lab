@@ -23,7 +23,7 @@ P0 只交付两类内容：
 
 ### 2.1 当前没有单一 Ren'Py pipeline
 
-现有共享核心是 [`translation_core.py`](../../translation_core.py)：
+现有共享核心是 [`translation_core.py`](../../quality_review/translation_core.py)：
 
 - `TranslationUnit`、`ModelResult`、`WritebackAction`；
 - sync / Batch / revision / keyword 的 legacy dict 转换；
@@ -37,7 +37,7 @@ P0 只交付两类内容：
 - [`gemini_translate_batch.py`](../../gemini_translate_batch.py)：Batch 文件发现、
   第二套 revision/keyword entry 扫描、identity span 绑定、v2 relocation、
   check/apply、Batch progress 与 Batch RAG 回灌；
-- [`project_analysis_routes.py`](../../project_analysis_routes.py)：面向剧情结构的
+- [`project_analysis_routes.py`](../../quality_review/project_analysis_routes.py)：面向剧情结构的
   `.rpy` label/jump/call/menu 解析。它不是翻译单元扫描器。
 
 因此“Ren'Py scan”目前至少有三种不同目的的扫描：

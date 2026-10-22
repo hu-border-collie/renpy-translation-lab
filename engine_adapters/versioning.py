@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 import unicodedata
 
-from atomic_io import atomic_write_json, atomic_write_lines
+from foundation.atomic_io import atomic_write_json, atomic_write_lines
 
 from .contracts import Occurrence
 from .coverage import (

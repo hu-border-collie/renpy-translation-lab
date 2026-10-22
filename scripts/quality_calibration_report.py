@@ -41,7 +41,7 @@ def _quality_module() -> Any:
 
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    import translation_quality
+    from quality_review import translation_quality
 
     return translation_quality
 

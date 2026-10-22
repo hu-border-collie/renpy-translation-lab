@@ -8,7 +8,7 @@ from unittest import mock
 
 from gui_qt.litellm_catalog_cache import LiteLLMCatalogCache
 from gui_qt.settings.page_contract import SettingsIssue, SettingsPage, SettingsPageActions
-from litellm_provider_config import custom_provider_registry
+from providers.litellm_provider_config import custom_provider_registry
 
 try:
     from PySide6.QtWidgets import QApplication

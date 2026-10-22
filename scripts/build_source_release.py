@@ -126,7 +126,10 @@ def build_release(ref: str, output_dir: Path) -> tuple[Path, Path, str]:
     timestamp = _zip_datetime(epoch)
     entries = _tree_entries(commit)
 
-    version_entry = next((item for item in entries if item.path == "project_version.py"), None)
+    version_entry = next(
+        (item for item in entries if item.path in ("foundation/project_version.py", "project_version.py")),
+        None,
+    )
     if version_entry is None:
         raise RuntimeError("project_version.py is missing from the selected ref")
     version = _version_from_blob(_git("cat-file", "blob", version_entry.object_id))

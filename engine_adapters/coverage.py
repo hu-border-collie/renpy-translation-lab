@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from atomic_io import atomic_write_json, atomic_write_text
+from foundation.atomic_io import atomic_write_json, atomic_write_text
 
 from .contracts import (
     CANDIDATE_SCHEMA_VERSION,

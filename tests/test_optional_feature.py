@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from optional_feature import (
+from foundation.optional_feature import (
     FeatureInstallState,
     PackageRequirement,
     ensure_relation_analyzer_dependencies,
@@ -197,20 +197,20 @@ class OptionalFeatureTests(unittest.TestCase):
         package = PackageRequirement("numpy", "2.4.2", import_names=("numpy",))
         fake_spec = object()
         with mock.patch(
-            "optional_feature.importlib.util.find_spec",
+            "foundation.optional_feature.importlib.util.find_spec",
             return_value=fake_spec,
         ) as find_spec:
             self.assertTrue(package.import_names_available())
         find_spec.assert_called_once_with("numpy")
 
         with mock.patch(
-            "optional_feature.importlib.util.find_spec",
+            "foundation.optional_feature.importlib.util.find_spec",
             return_value=None,
         ):
             self.assertFalse(package.import_names_available())
 
         with mock.patch(
-            "optional_feature.importlib.util.find_spec",
+            "foundation.optional_feature.importlib.util.find_spec",
             side_effect=ValueError("broken"),
         ):
             self.assertFalse(package.import_names_available())
@@ -253,7 +253,7 @@ class OptionalFeatureTests(unittest.TestCase):
         self,
     ) -> None:
         with mock.patch(
-            "optional_feature.probe_feature",
+            "foundation.optional_feature.probe_feature",
             return_value=mock.Mock(
                 state=FeatureInstallState.NOT_INSTALLED,
                 missing=("numpy",),

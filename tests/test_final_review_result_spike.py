@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import final_review as fr
-import final_review_llm as frl
+from quality_review import final_review as fr
+from quality_review import final_review_llm as frl
 
 
 FIXTURE_PATH = (

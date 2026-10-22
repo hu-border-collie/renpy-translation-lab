@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import translation_quality as quality
+from quality_review import translation_quality as quality
 
-from quality_report_export import (
+from quality_review.quality_report_export import (
     DEFAULT_REPORT_FILENAME,
     QualityReportExportError,
     export_quality_report,

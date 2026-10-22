@@ -34,9 +34,9 @@ from engine_adapters.renpy import (
     RenPyAdapter,
     build_translation_snapshot,
 )
-import translation_core
+from quality_review import translation_core
 import translator_runtime as runtime
-import sync_translation_preview as preview
+from execution import sync_translation_preview as preview
 
 
 class TestRenPyAdapterP1(unittest.TestCase):

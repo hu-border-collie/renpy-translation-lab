@@ -14,7 +14,7 @@ try:
     from PySide6.QtCore import QCoreApplication, QEvent
     from PySide6.QtWidgets import QApplication, QWidget
     from gui_qt.workbench.review_workspace import ReviewWorkspaceWidget
-    import review_workspace
+    from quality_review import review_workspace
 except ImportError as exc:
     QApplication = None
     ReviewWorkspaceWidget = None

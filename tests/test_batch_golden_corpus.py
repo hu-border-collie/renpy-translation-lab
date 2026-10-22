@@ -16,12 +16,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import batch_export
+from execution import batch_export
 import gemini_translate_batch as batch_mod
-import prompt_context
-import rag_memory
-import story_memory
-import translation_core
+from context_engine import prompt_context
+from context_engine import rag_memory
+from context_engine import story_memory
+from quality_review import translation_core
 import translator_runtime as runtime
 
 
@@ -370,7 +370,7 @@ class BatchGoldenCorpusTests(unittest.TestCase):
         )
 
     def test_golden_batch_build_uses_frozen_translation_route_model(self):
-        from model_routing_migration import preview_migration
+        from providers.model_routing_migration import preview_migration
 
         fixture = (
             Path(__file__).parent
@@ -1637,7 +1637,7 @@ class BatchGoldenCorpusTests(unittest.TestCase):
                     script = (
                         "import sys, time\n"
                         "from pathlib import Path\n"
-                        "import atomic_io\n"
+                        "from foundation import atomic_io\n"
                         "lock, latest, marker, value = sys.argv[1:5]\n"
                         "with atomic_io._latest_manifest_file_lock(lock, timeout=5.0):\n"
                         "    Path(marker).write_text('held')\n"

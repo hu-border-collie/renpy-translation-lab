@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 import gemini_translate_batch as batch
-import translation_core
+from quality_review import translation_core
 import translator_runtime as runtime
 
 

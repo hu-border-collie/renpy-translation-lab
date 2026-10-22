@@ -7,15 +7,15 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest import mock
 
-from litellm_sync_backend import (
+from providers.litellm_sync_backend import (
     LiteLLMBackendError,
     LiteLLMCapabilityError,
     LiteLLMSyncBackend,
     LiteLLMUnavailableError,
     _KEYLESS_CUSTOM_API_KEY,
 )
-from litellm_provider_config import ProviderApiKeyStore, custom_provider_registry
-from sync_model_backend import SyncGenerationRequest, SyncModelBackend
+from providers.litellm_provider_config import ProviderApiKeyStore, custom_provider_registry
+from providers.sync_model_backend import SyncGenerationRequest, SyncModelBackend
 
 
 class LiteLLMSyncBackendTests(unittest.TestCase):
@@ -248,7 +248,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
 
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             return_value="stored-secret",
         ) as load_key:
             backend.generate(SyncGenerationRequest("anthropic/test", "hello"))
@@ -262,7 +262,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             completion=lambda **kwargs: calls.append(kwargs) or {"choices": []}
         )
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             side_effect=RuntimeError("no keyring"),
         ):
             backend.generate(SyncGenerationRequest("openai/test", "hello"))
@@ -322,11 +322,11 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="first-key-1111",
             ),
             mock.patch(
-                "litellm_provider_config.load_provider_key_store",
+                "providers.litellm_provider_config.load_provider_key_store",
                 return_value=store,
             ) as load_store,
             mock.patch.object(
@@ -370,11 +370,11 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="stored-secret-1111",
             ),
             mock.patch(
-                "litellm_provider_config.load_provider_key_store",
+                "providers.litellm_provider_config.load_provider_key_store",
                 return_value=store,
             ),
         ):
@@ -390,7 +390,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
 
     def test_credential_identity_is_non_reversible_and_stable(self):
-        from litellm_sync_backend import _masked_key_identity
+        from providers.litellm_sync_backend import _masked_key_identity
 
         identity = _masked_key_identity("openai", "first-key-1111", index=0)
         self.assertEqual(identity, "openai#1:key:c8c5267554")
@@ -496,7 +496,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             custom_providers=self._custom_registry(),
         )
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             return_value="stored-custom-key",
         ):
             backend.generate(SyncGenerationRequest(
@@ -551,7 +551,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="",
             ),
             mock.patch.dict(
@@ -577,7 +577,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             custom_providers=self._custom_registry(),
         )
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             return_value="stored-custom-key",
         ):
             result = asyncio.run(
@@ -597,7 +597,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
             custom_providers=self._custom_registry(),
         )
         with mock.patch(
-            "litellm_provider_config.load_provider_api_key",
+            "providers.litellm_provider_config.load_provider_api_key",
             return_value="openai-key",
         ):
             backend.generate(SyncGenerationRequest(
@@ -619,7 +619,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="",
             ),
             mock.patch.dict(
@@ -652,7 +652,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="",
             ),
             mock.patch.dict(
@@ -721,7 +721,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         try:
             with (
                 mock.patch(
-                    "litellm_provider_config.load_provider_api_key",
+                    "providers.litellm_provider_config.load_provider_api_key",
                     return_value="",
                 ),
                 mock.patch.dict(
@@ -764,7 +764,7 @@ class LiteLLMSyncBackendTests(unittest.TestCase):
         )
         with (
             mock.patch(
-                "litellm_provider_config.load_provider_api_key",
+                "providers.litellm_provider_config.load_provider_api_key",
                 return_value="",
             ),
             mock.patch.dict(

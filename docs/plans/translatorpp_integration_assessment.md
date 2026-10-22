@@ -107,14 +107,14 @@ flowchart TD
 
 | 当前代码事实 `[仓库]` | bridge 的工作 `[推断 / 待实测]` |
 | --- | --- |
-| [translation_core.py](../../translation_core.py) 已有 `TranslationUnit`；[contracts.py](../../engine_adapters/contracts.py) 已有 `Occurrence`、opaque locator 与声明式 plan | 沿用现有核心对象。区分**交换格式** `.trans`、**真实源引擎**及其规则版本，不把所有输入伪装成 `renpy` 或一种通用文本引擎。 |
+| [translation_core.py](../../quality_review/translation_core.py) 已有 `TranslationUnit`；[contracts.py](../../engine_adapters/contracts.py) 已有 `Occurrence`、opaque locator 与声明式 plan | 沿用现有核心对象。区分**交换格式** `.trans`、**真实源引擎**及其规则版本，不把所有输入伪装成 `renpy` 或一种通用文本引擎。 |
 | `Occurrence.to_dict()` 只序列化固定 TU 字段，不会自动保存任意 `metadata` | 位置映射、parser/列策略、context 证据必须进入明确序列化并参与摘要的 locator/绑定记录，不能只藏在内存 metadata。 |
 | [versioning.py](../../engine_adapters/versioning.py)、[reuse.py](../../engine_adapters/reuse.py)、[coverage.py](../../engine_adapters/coverage.py) 已有快照、对账和覆盖机制 | 为外部制品定义快照范围与 coverage 分母；文本相同不足以确认跨版本 lineage。 |
 | [writeback.py](../../engine_adapters/writeback.py) 只接受 `localization_catalog` 目标根；`json_catalog_set` 仅遍历非空字符串字典键、替换已有字符串 | `.trans` 的 `data[row][column]` 需要公共合同支持类型化数组路径及 `null`/空值语义，并明确受限的外部制品输出根。现有操作不能直接使用。该扩展不等于允许改写 RPG Maker 源地图。 |
 | [structure_rules.py](../../engine_adapters/structure_rules.py) 只支持 `renpy` / `tyrano`；未知引擎会拒绝 | 为首个源引擎添加有版本和 fixture 的规则，覆盖官方控制码、已登记插件扩展及未知语法处理，不能复用错误规则或关闭结构检查。 |
 | [gemini_translate_batch.py](../../gemini_translate_batch.py) 的 `collect_pending_file_jobs()`、`_build_adapter_writeback_plan()` 仍显式构造 `RenPyAdapter` | 仅添加 adapter 类不会接通产品链路。需要公共服务/dispatch、CLI 与 GUI 表面；首轮若只提供离线研究脚本，必须明确例外，不宣称生产支持。 |
-| [translation_plan.py](../../translation_plan.py) 的计划绑定源身份、ModelProfile、执行策略、上下文与请求 | 外部 Agent 工作包应复用身份机制，区分“持久化译文结果”和“本项目执行过模型请求”，不虚构 Profile 或 Provider 成功。 |
-| [revision_proposals.py](../../revision_proposals.py) 已校验 identity、当前译文和 producer；[import_manual_translations.py](../../import_manual_translations.py) 会生成 Batch 结果并设 `JOB_STATE_SUCCEEDED` | 前者可供公共结果校验复用，后者仅是兼容导入实现，不能直接当作支持 partial、幂等、冲突和完整 provenance 的通用外部结果协议。 |
+| [translation_plan.py](../../quality_review/translation_plan.py) 的计划绑定源身份、ModelProfile、执行策略、上下文与请求 | 外部 Agent 工作包应复用身份机制，区分“持久化译文结果”和“本项目执行过模型请求”，不虚构 Profile 或 Provider 成功。 |
+| [revision_proposals.py](../../quality_review/revision_proposals.py) 已校验 identity、当前译文和 producer；[import_manual_translations.py](../../execution/import_manual_translations.py) 会生成 Batch 结果并设 `JOB_STATE_SUCCEEDED` | 前者可供公共结果校验复用，后者仅是兼容导入实现，不能直接当作支持 partial、幂等、冲突和完整 provenance 的通用外部结果协议。 |
 
 ### 4.2 身份、上下文与工作包
 

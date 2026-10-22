@@ -1,6 +1,6 @@
 import unittest
 
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 
 from gui_qt.user_copy import (
     QUALITY_DELIVERY_NOTICE,

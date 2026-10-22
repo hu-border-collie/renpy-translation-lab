@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
 
-import translation_core
+from quality_review import translation_core
 
 
 ENGINE_ADAPTER_PROTOCOL_VERSION = 1

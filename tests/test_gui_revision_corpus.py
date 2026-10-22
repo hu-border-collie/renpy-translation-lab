@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import cli_contract
+from foundation import cli_contract
 
 from gui_qt.operation_identity import revision_corpus_export_identity
 from gui_qt.revision_corpus_report import (

@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from project_version import __version__
+from foundation.project_version import __version__
 import translator_runtime as runtime
 from translator_runtime import *  # noqa: F401,F403
 

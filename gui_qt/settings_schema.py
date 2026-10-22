@@ -17,14 +17,14 @@ from dataclasses import dataclass
 import json
 from typing import Any, Iterable, Literal
 
-from gemini_model_catalog import (
+from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
     allowed_gemini_rotation_models,
     extras_beyond_builtins,
     filter_gemini_rotation_models,
 )
-from sync_model_backend import (
+from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,

@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import final_review as fr
-import final_review_revision as handoff
+from quality_review import final_review as fr
+from quality_review import final_review_revision as handoff
 import gemini_translate_batch as batch
 
 

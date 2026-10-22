@@ -1,0 +1,1204 @@
+# -*- coding: utf-8 -*-
+from contextlib import contextmanager
+import hashlib
+import json
+import math
+import os
+import socket
+import stat
+from datetime import datetime
+
+from context_engine.embedding_backend import (
+    EmbeddingContractError,
+    EmbeddingIdentity,
+    EmbeddingTaskType,
+    check_persisted_store_query_compatibility,
+)
+
+
+LOCK_STALE_AFTER_SECONDS = 60 * 60
+
+
+def now_iso():
+    return datetime.now().isoformat(timespec='seconds')
+
+
+def hash_text(text):
+    return hashlib.sha1((text or '').encode('utf-8')).hexdigest()
+
+
+def truncate_text(text, limit=220):
+    if not isinstance(text, str):
+        return ''
+    if limit <= 0 or len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[:limit - 3] + '...'
+
+
+def vector_norm(values):
+    if not values:
+        return 0.0
+    total = 0.0
+    for value in values:
+        number = float(value)
+        total += number * number
+    return math.sqrt(total)
+
+
+def dot_product(left, right):
+    if not left or not right or len(left) != len(right):
+        return 0.0
+    total = 0.0
+    for left_value, right_value in zip(left, right):
+        try:
+            total += left_value * right_value
+        except TypeError:
+            total += float(left_value) * float(right_value)
+    return total
+
+
+def cosine_similarity(left, right):
+    left_norm = vector_norm(left)
+    right_norm = vector_norm(right)
+    if left_norm <= 0.0 or right_norm <= 0.0:
+        return 0.0
+    return dot_product(left, right) / (left_norm * right_norm)
+
+
+class JsonRagStoreLockError(RuntimeError):
+    pass
+
+
+class EmbeddingStoreIdentityError(RuntimeError):
+    """Raised when identity metadata would silently bless existing vectors."""
+
+    action = 'rebuild_store'
+
+    def __init__(self):
+        super().__init__('embedding store identity cannot change; rebuild the store')
+
+
+class _EmbeddingIdentityStoreMixin:
+    def _embedding_record_count(self):
+        raise NotImplementedError
+
+    def set_embedding_identity(self, identity):
+        """Persist a document identity without silently migrating existing vectors."""
+
+        if not isinstance(identity, EmbeddingIdentity):
+            raise EmbeddingContractError('identity must be an EmbeddingIdentity')
+        if identity.task_type is not EmbeddingTaskType.DOCUMENT:
+            raise EmbeddingContractError('store embedding identity must use document task type')
+        with self._locked('set_embedding_identity') as lock_info:
+            self._refresh_from_disk_if_changed()
+            existing_payload = self.metadata.get('embedding_identity')
+            if existing_payload is not None:
+                try:
+                    existing = EmbeddingIdentity.from_dict(existing_payload)
+                except EmbeddingContractError:
+                    existing = None
+                if existing == identity:
+                    return
+            if self._embedding_record_count() > 0:
+                raise EmbeddingStoreIdentityError()
+            self._update_metadata_unlocked(
+                'set_embedding_identity',
+                {'embedding_identity': identity.to_dict()},
+                lock_info,
+            )
+
+    def _clear_embedding_records_unlocked(self):
+        raise NotImplementedError
+
+    def rebuild_document_identity(self, identity):
+        """Drop persisted vectors and write a new document identity.
+
+        Query/search must never call this. Bootstrap and other explicit rebuild
+        actions use it when the current adapter identity cannot bless existing
+        vectors.
+        """
+
+        if not isinstance(identity, EmbeddingIdentity):
+            raise EmbeddingContractError('identity must be an EmbeddingIdentity')
+        if identity.task_type is not EmbeddingTaskType.DOCUMENT:
+            raise EmbeddingContractError('store embedding identity must use document task type')
+        with self._locked('rebuild_document_identity') as lock_info:
+            self._refresh_from_disk_if_changed()
+            self._clear_embedding_records_unlocked()
+            self._update_metadata_unlocked(
+                'rebuild_document_identity',
+                {'embedding_identity': identity.to_dict()},
+                lock_info,
+            )
+
+    def embedding_compatibility(self, query_identity):
+        """Return a fail-closed, field-level compatibility/rebuild diagnostic."""
+
+        self.load()
+        return check_persisted_store_query_compatibility(
+            self.metadata.get('embedding_identity'),
+            query_identity,
+        )
+
+    @staticmethod
+    def _validate_metadata_updates(updates):
+        if 'embedding_identity' in updates:
+            raise EmbeddingContractError(
+                'embedding_identity must be written with set_embedding_identity'
+            )
+
+
+def _record_has_embedding(record):
+    if not isinstance(record, dict):
+        return False
+    embedding = record.get('embedding')
+    return isinstance(embedding, (list, tuple)) and bool(embedding)
+
+
+class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
+    def __init__(self, store_dir):
+        self.store_dir = os.path.abspath(store_dir)
+        self.metadata_path = os.path.join(self.store_dir, 'metadata.json')
+        self.history_path = os.path.join(self.store_dir, 'history.jsonl')
+        self.lock_path = os.path.join(self.store_dir, '.rag_store.lock')
+        self._loaded = False
+        self._disk_snapshot = None
+        self.metadata = {}
+        self.history = {}
+        self.file_index = {}
+
+    def _warn(self, message):
+        print(f'Warning: {message}')
+
+    def load(self):
+        if self._loaded:
+            return
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        os.makedirs(self.store_dir, exist_ok=True)
+        self.metadata = self._load_json_file(self.metadata_path)
+        self.history = {}
+        self.file_index = {}
+        if os.path.isfile(self.history_path):
+            with open(self.history_path, 'r', encoding='utf-8-sig') as handle:
+                for line_number, raw_line in enumerate(handle, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        self._warn(f'Skipping invalid RAG history row {self.history_path}:{line_number}: {exc}')
+                        continue
+                    if not isinstance(record, dict):
+                        self._warn(f'Skipping non-object RAG history row {self.history_path}:{line_number}')
+                        continue
+                    memory_id = record.get('memory_id')
+                    if memory_id:
+                        self.history[memory_id] = record
+                        self._index_record(memory_id, record)
+        self._loaded = True
+        self._disk_snapshot = self._disk_version()
+
+    def _file_version(self, path):
+        try:
+            stat = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _disk_version(self):
+        return (
+            self._file_version(self.metadata_path),
+            self._file_version(self.history_path),
+        )
+
+    def _refresh_from_disk_if_changed(self):
+        if not self._loaded or self._disk_snapshot != self._disk_version():
+            self._load_from_disk()
+
+    def _load_json_file(self, path):
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            self._warn(f'Failed to load RAG metadata {path}: {exc}')
+            return {}
+        if not isinstance(data, dict):
+            self._warn(f'Ignoring non-object RAG metadata {path}')
+            return {}
+        return data
+
+    def count_history(self):
+        self.load()
+        return len(self.history)
+
+    def _embedding_record_count(self):
+        return sum(1 for record in self.history.values() if _record_has_embedding(record))
+
+    def _clear_embedding_records_unlocked(self):
+        self.history = {}
+        self.file_index = {}
+        self._write_history()
+
+    def get_history_record(self, memory_id):
+        self.load()
+        return self.history.get(memory_id)
+
+    def set_metadata(self, **updates):
+        self._validate_metadata_updates(updates)
+        with self._locked('set_metadata') as lock_info:
+            self._refresh_from_disk_if_changed()
+            self._update_metadata_unlocked('set_metadata', updates, lock_info)
+
+    def _write_metadata(self):
+        def write(handle):
+            json.dump(self.metadata, handle, ensure_ascii=False, indent=2)
+
+        self._atomic_write(self.metadata_path, write)
+
+    def _write_history(self):
+        def write(handle):
+            for memory_id in sorted(self.history):
+                handle.write(json.dumps(self.history[memory_id], ensure_ascii=False) + '\n')
+
+        self._atomic_write(self.history_path, write)
+
+    def _atomic_write(self, path, writer):
+        os.makedirs(self.store_dir, exist_ok=True)
+        tmp_path = f'{path}.tmp.{os.getpid()}.{id(self)}'
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as handle:
+                writer(handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+            self._disk_snapshot = self._disk_version()
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary RAG store file {tmp_path}: {exc}')
+
+    def _lock_owner(self, operation):
+        return {
+            'operation': operation,
+            'owner': socket.gethostname(),
+            'pid': os.getpid(),
+            'created_at': now_iso(),
+        }
+
+    def _format_lock_owner(self, data):
+        if not isinstance(data, dict):
+            return 'unknown owner'
+        parts = []
+        operation = data.get('operation')
+        owner = data.get('owner')
+        pid = data.get('pid')
+        created_at = data.get('created_at')
+        released_at = data.get('released_at')
+        if operation:
+            parts.append(f'operation={operation}')
+        if owner:
+            parts.append(f'owner={owner}')
+        if pid:
+            parts.append(f'pid={pid}')
+        if created_at:
+            parts.append(f'created_at={created_at}')
+        if released_at:
+            parts.append(f'released_at={released_at}')
+        return ', '.join(parts) if parts else 'unknown owner'
+
+    def _read_lock_owner(self):
+        try:
+            with open(self.lock_path, 'r', encoding='utf-8-sig') as handle:
+                return json.load(handle)
+        except Exception:
+            return {}
+
+    def _lock_age_seconds(self, data):
+        if not isinstance(data, dict):
+            return None
+        created_at = data.get('created_at')
+        if not created_at:
+            return None
+        try:
+            created_at = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return None
+        return (datetime.now() - created_at).total_seconds()
+
+    def _lock_file_age_seconds(self):
+        try:
+            return datetime.now().timestamp() - os.path.getmtime(self.lock_path)
+        except OSError:
+            return None
+
+    def _is_lock_owner_alive(self, pid):
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+        if os.name == 'nt':
+            return self._is_windows_process_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
+
+    def _is_windows_process_alive(self, pid):
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        error_invalid_parameter = 87
+        still_active = 259
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            if ctypes.get_last_error() == error_invalid_parameter:
+                return False
+            return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _is_stale_lock(self, data):
+        if not isinstance(data, dict):
+            age_seconds = self._lock_file_age_seconds()
+            return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+        if data.get('released_at'):
+            return True
+        local_owner = data.get('owner') == socket.gethostname()
+        if local_owner and data.get('pid') is not None:
+            is_alive = self._is_lock_owner_alive(data.get('pid'))
+            if is_alive is False:
+                return True
+            if is_alive is True:
+                return False
+        age_seconds = self._lock_age_seconds(data)
+        if age_seconds is None and not data:
+            age_seconds = self._lock_file_age_seconds()
+        return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+
+    def _recover_stale_lock(self, existing):
+        if not self._is_stale_lock(existing):
+            return False
+        try:
+            os.remove(self.lock_path)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._warn(f'Failed to remove stale RAG store lock {self.lock_path}: {exc}')
+            return False
+        self._warn(f'Recovered stale RAG store lock {self.lock_path} ({self._format_lock_owner(existing)})')
+        return True
+
+    def _open_lock_file(self):
+        return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+
+    def _lock_path_is_regular_file(self):
+        try:
+            lock_stat = os.lstat(self.lock_path)
+        except FileNotFoundError:
+            return True
+        return stat.S_ISREG(lock_stat.st_mode)
+
+    def _mark_lock_released(self, lock_info):
+        if not os.path.exists(self.lock_path):
+            return True
+        if not self._lock_path_is_regular_file():
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: not a regular file')
+            return False
+        released_info = dict(lock_info)
+        released_info['released_at'] = now_iso()
+        tmp_path = f'{self.lock_path}.released.tmp.{os.getpid()}.{id(self)}'
+        try:
+            fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                handle = os.fdopen(fd, 'w', encoding='utf-8')
+            except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            with handle:
+                json.dump(released_info, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.lock_path)
+        except Exception as exc:
+            self._warn(f'Failed to mark RAG store lock released {self.lock_path}: {exc}')
+            return False
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary RAG store lock marker {tmp_path}: {exc}')
+        return True
+
+    @contextmanager
+    def _locked(self, operation):
+        os.makedirs(self.store_dir, exist_ok=True)
+        lock_info = self._lock_owner(operation)
+        try:
+            fd = self._open_lock_file()
+        except FileExistsError:
+            existing = self._read_lock_owner()
+            if not self._recover_stale_lock(existing):
+                raise JsonRagStoreLockError(
+                    f'RAG store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+            try:
+                fd = self._open_lock_file()
+            except FileExistsError:
+                existing = self._read_lock_owner()
+                raise JsonRagStoreLockError(
+                    f'RAG store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+
+        try:
+            operation_succeeded = False
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump(lock_info, handle, ensure_ascii=False)
+            yield lock_info
+            operation_succeeded = True
+        finally:
+            try:
+                os.remove(self.lock_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                self._mark_lock_released(lock_info)
+                self._warn(f'Failed to remove RAG store lock {self.lock_path}: {exc}')
+                if operation_succeeded:
+                    raise JsonRagStoreLockError(
+                        f'Failed to remove RAG store lock {self.lock_path}: {exc}'
+                    ) from exc
+
+    def _update_metadata_unlocked(self, operation, updates, lock_info):
+        if not isinstance(self.metadata, dict):
+            self.metadata = {}
+        for key, value in updates.items():
+            self.metadata[key] = value
+        updated_at = now_iso()
+        self.metadata['updated_at'] = updated_at
+        if 'created_at' not in self.metadata:
+            self.metadata['created_at'] = updated_at
+        self.metadata['last_write'] = {
+            'operation': operation,
+            'owner': lock_info.get('owner'),
+            'pid': lock_info.get('pid'),
+            'lock_created_at': lock_info.get('created_at'),
+            'updated_at': updated_at,
+        }
+        self._write_metadata()
+
+    def _index_record(self, memory_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        self.file_index.setdefault(file_rel_path, set()).add(memory_id)
+
+    def _unindex_record(self, memory_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        bucket = self.file_index.get(file_rel_path)
+        if not bucket:
+            return
+        bucket.discard(memory_id)
+        if not bucket:
+            self.file_index.pop(file_rel_path, None)
+
+    def upsert_history(self, records):
+        with self._locked('upsert_history') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                memory_id = record.get('memory_id')
+                embedding = record.get('embedding')
+                if not memory_id or not isinstance(embedding, list) or not embedding:
+                    continue
+                existing = self.history.get(memory_id)
+                if existing == record:
+                    continue
+                if existing:
+                    self._unindex_record(memory_id, existing)
+                self.history[memory_id] = record
+                self._index_record(memory_id, record)
+                changed += 1
+            if changed:
+                self._write_history()
+                self._update_metadata_unlocked(
+                    'upsert_history',
+                    {'history_count': len(self.history)},
+                    lock_info,
+                )
+        return changed
+
+    def delete_history(self, memory_ids):
+        with self._locked('delete_history') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for memory_id in memory_ids:
+                existing = self.history.pop(memory_id, None)
+                if not existing:
+                    continue
+                self._unindex_record(memory_id, existing)
+                changed += 1
+            if changed:
+                self._write_history()
+                self._update_metadata_unlocked(
+                    'delete_history',
+                    {'history_count': len(self.history)},
+                    lock_info,
+                )
+        return changed
+
+    def history_ids_for_file(self, file_rel_path, quality_state=None):
+        self.load()
+        memory_ids = list(self.file_index.get(file_rel_path, set()))
+        if quality_state is None:
+            return memory_ids
+        return [
+            memory_id for memory_id in memory_ids
+            if self.history.get(memory_id, {}).get('quality_state') == quality_state
+        ]
+
+    def search_history(self, query_vector, top_k=4, min_similarity=0.72):
+        self.load()
+        results = []
+        for record in self.history.values():
+            vector = record.get('embedding')
+            if not isinstance(vector, list) or not vector:
+                continue
+            score = cosine_similarity(query_vector, vector)
+            if score < min_similarity:
+                continue
+            result = dict(record)
+            result['score'] = score
+            results.append(result)
+        results.sort(key=self._sort_key, reverse=True)
+        if top_k > 0:
+            return results[:top_k]
+        return results
+
+    def search_history_compatible(self, query_vector, query_identity, top_k=4, min_similarity=0.72):
+        """Search only when the persisted document and query identities match."""
+
+        compatibility = self.embedding_compatibility(query_identity)
+        diagnostics = {'embedding_compatibility': compatibility.to_dict()}
+        if not compatibility.compatible:
+            return [], diagnostics
+        return self.search_history(
+            query_vector,
+            top_k=top_k,
+            min_similarity=min_similarity,
+        ), diagnostics
+
+    def _sort_key(self, record):
+        quality_state = record.get('quality_state') or ''
+        quality_rank = {
+            'manual_polished': 3,
+            'seed': 2,
+            'batch_applied': 1,
+            'revision_applied': 1,
+            'sync_applied': 1,
+        }.get(quality_state, 0)
+        return (float(record.get('score') or 0.0), quality_rank, record.get('created_at') or '')
+
+
+class JsonSourceIndexStoreLockError(RuntimeError):
+    pass
+
+
+class JsonSourceIndexStore(_EmbeddingIdentityStoreMixin, object):
+    def __init__(self, store_dir):
+        self.store_dir = os.path.abspath(store_dir)
+        self.metadata_path = os.path.join(self.store_dir, 'source_metadata.json')
+        self.segments_path = os.path.join(self.store_dir, 'source_segments.jsonl')
+        self.lock_path = os.path.join(self.store_dir, '.source_index.lock')
+        self._loaded = False
+        self._disk_snapshot = None
+        self.metadata = {}
+        self.segments = {}
+        self.file_index = {}
+        self._search_cache = {}
+
+    def _warn(self, message):
+        print(f'Warning: {message}')
+
+    def load(self):
+        if self._loaded:
+            return
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        os.makedirs(self.store_dir, exist_ok=True)
+        self.metadata = self._load_json_file(self.metadata_path)
+        self.segments = {}
+        self.file_index = {}
+        self._search_cache = {}
+        if os.path.isfile(self.segments_path):
+            with open(self.segments_path, 'r', encoding='utf-8-sig') as handle:
+                for line_number, raw_line in enumerate(handle, start=1):
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError as exc:
+                        self._warn(f'Skipping invalid source segment row {self.segments_path}:{line_number}: {exc}')
+                        continue
+                    if not isinstance(record, dict):
+                        self._warn(f'Skipping non-object source segment row {self.segments_path}:{line_number}')
+                        continue
+                    source_id = record.get('source_id')
+                    if source_id:
+                        self.segments[source_id] = record
+                        self._index_record(source_id, record)
+        self._loaded = True
+        self._disk_snapshot = self._disk_version()
+
+    def _file_version(self, path):
+        try:
+            st = os.stat(path)
+        except FileNotFoundError:
+            return None
+        return (st.st_mtime_ns, st.st_size)
+
+    def _disk_version(self):
+        return (
+            self._file_version(self.metadata_path),
+            self._file_version(self.segments_path),
+        )
+
+    def _refresh_from_disk_if_changed(self):
+        if not self._loaded or self._disk_snapshot != self._disk_version():
+            self._load_from_disk()
+
+    def _load_json_file(self, path):
+        if not os.path.isfile(path):
+            return {}
+        try:
+            with open(path, 'r', encoding='utf-8-sig') as handle:
+                data = json.load(handle)
+        except Exception as exc:
+            self._warn(f'Failed to load source metadata {path}: {exc}')
+            return {}
+        if not isinstance(data, dict):
+            self._warn(f'Ignoring non-object source metadata {path}')
+            return {}
+        return data
+
+    def count_segments(self):
+        self.load()
+        return len(self.segments)
+
+    def _embedding_record_count(self):
+        return sum(1 for record in self.segments.values() if _record_has_embedding(record))
+
+    def _clear_embedding_records_unlocked(self):
+        self.segments = {}
+        self.file_index = {}
+        self._search_cache = {}
+        self._write_segments()
+
+    def get_segment(self, source_id):
+        self.load()
+        return self.segments.get(source_id)
+
+    def set_metadata(self, **updates):
+        self._validate_metadata_updates(updates)
+        with self._locked('set_metadata') as lock_info:
+            self._refresh_from_disk_if_changed()
+            self._update_metadata_unlocked('set_metadata', updates, lock_info)
+
+    def _write_metadata(self):
+        def write(handle):
+            json.dump(self.metadata, handle, ensure_ascii=False, indent=2)
+
+        self._atomic_write(self.metadata_path, write)
+
+    def _write_segments(self):
+        def write(handle):
+            for source_id in sorted(self.segments):
+                handle.write(json.dumps(self.segments[source_id], ensure_ascii=False) + '\n')
+
+        self._atomic_write(self.segments_path, write)
+
+    def _atomic_write(self, path, writer):
+        os.makedirs(self.store_dir, exist_ok=True)
+        tmp_path = f'{path}.tmp.{os.getpid()}.{id(self)}'
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as handle:
+                writer(handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, path)
+            self._disk_snapshot = self._disk_version()
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary source store file {tmp_path}: {exc}')
+
+    def _lock_owner(self, operation):
+        return {
+            'operation': operation,
+            'owner': socket.gethostname(),
+            'pid': os.getpid(),
+            'created_at': now_iso(),
+        }
+
+    def _format_lock_owner(self, data):
+        if not isinstance(data, dict):
+            return 'unknown owner'
+        parts = []
+        operation = data.get('operation')
+        owner = data.get('owner')
+        pid = data.get('pid')
+        created_at = data.get('created_at')
+        released_at = data.get('released_at')
+        if operation:
+            parts.append(f'operation={operation}')
+        if owner:
+            parts.append(f'owner={owner}')
+        if pid:
+            parts.append(f'pid={pid}')
+        if created_at:
+            parts.append(f'created_at={created_at}')
+        if released_at:
+            parts.append(f'released_at={released_at}')
+        return ', '.join(parts) if parts else 'unknown owner'
+
+    def _read_lock_owner(self):
+        try:
+            with open(self.lock_path, 'r', encoding='utf-8-sig') as handle:
+                return json.load(handle)
+        except Exception:
+            return {}
+
+    def _lock_age_seconds(self, data):
+        if not isinstance(data, dict):
+            return None
+        created_at = data.get('created_at')
+        if not created_at:
+            return None
+        try:
+            created_at = datetime.fromisoformat(str(created_at))
+        except (TypeError, ValueError):
+            return None
+        return (datetime.now() - created_at).total_seconds()
+
+    def _lock_file_age_seconds(self):
+        try:
+            return datetime.now().timestamp() - os.path.getmtime(self.lock_path)
+        except OSError:
+            return None
+
+    def _is_lock_owner_alive(self, pid):
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if pid <= 0:
+            return None
+        if os.name == 'nt':
+            return self._is_windows_process_alive(pid)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
+
+    def _is_windows_process_alive(self, pid):
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        error_invalid_parameter = 87
+        still_active = 259
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+        kernel32.CloseHandle.restype = ctypes.c_int
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            if ctypes.get_last_error() == error_invalid_parameter:
+                return False
+            return True
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _is_stale_lock(self, data):
+        if not isinstance(data, dict):
+            age_seconds = self._lock_file_age_seconds()
+            return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+        if data.get('released_at'):
+            return True
+        local_owner = data.get('owner') == socket.gethostname()
+        if local_owner and data.get('pid') is not None:
+            is_alive = self._is_lock_owner_alive(data.get('pid'))
+            if is_alive is False:
+                return True
+            if is_alive is True:
+                return False
+        age_seconds = self._lock_age_seconds(data)
+        if age_seconds is None and not data:
+            age_seconds = self._lock_file_age_seconds()
+        return age_seconds is not None and age_seconds >= LOCK_STALE_AFTER_SECONDS
+
+    def _recover_stale_lock(self, existing):
+        if not self._is_stale_lock(existing):
+            return False
+        try:
+            os.remove(self.lock_path)
+        except FileNotFoundError:
+            return True
+        except OSError as exc:
+            self._warn(f'Failed to remove stale source store lock {self.lock_path}: {exc}')
+            return False
+        self._warn(f'Recovered stale source store lock {self.lock_path} ({self._format_lock_owner(existing)})')
+        return True
+
+    def _open_lock_file(self):
+        return os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+
+    def _lock_path_is_regular_file(self):
+        try:
+            lock_stat = os.lstat(self.lock_path)
+        except FileNotFoundError:
+            return True
+        return stat.S_ISREG(lock_stat.st_mode)
+
+    def _mark_lock_released(self, lock_info):
+        if not os.path.exists(self.lock_path):
+            return True
+        if not self._lock_path_is_regular_file():
+            self._warn(f'Failed to mark source store lock released {self.lock_path}: not a regular file')
+            return False
+        released_info = dict(lock_info)
+        released_info['released_at'] = now_iso()
+        tmp_path = f'{self.lock_path}.released.tmp.{os.getpid()}.{id(self)}'
+        try:
+            fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                handle = os.fdopen(fd, 'w', encoding='utf-8')
+            except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            with handle:
+                json.dump(released_info, handle, ensure_ascii=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, self.lock_path)
+        except Exception as exc:
+            self._warn(f'Failed to mark source store lock released {self.lock_path}: {exc}')
+            return False
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError as exc:
+                    self._warn(f'Failed to remove temporary source store lock marker {tmp_path}: {exc}')
+        return True
+
+    @contextmanager
+    def _locked(self, operation):
+        os.makedirs(self.store_dir, exist_ok=True)
+        lock_info = self._lock_owner(operation)
+        try:
+            fd = self._open_lock_file()
+        except FileExistsError:
+            existing = self._read_lock_owner()
+            if not self._recover_stale_lock(existing):
+                raise JsonSourceIndexStoreLockError(
+                    f'Source store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+            try:
+                fd = self._open_lock_file()
+            except FileExistsError:
+                existing = self._read_lock_owner()
+                raise JsonSourceIndexStoreLockError(
+                    f'Source store is locked at {self.lock_path} ({self._format_lock_owner(existing)}).'
+                )
+
+        try:
+            operation_succeeded = False
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                json.dump(lock_info, handle, ensure_ascii=False)
+            yield lock_info
+            operation_succeeded = True
+        finally:
+            try:
+                os.remove(self.lock_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                self._mark_lock_released(lock_info)
+                self._warn(f'Failed to remove source store lock {self.lock_path}: {exc}')
+                if operation_succeeded:
+                    raise JsonSourceIndexStoreLockError(
+                        f'Failed to remove source store lock {self.lock_path}: {exc}'
+                    ) from exc
+
+    def _update_metadata_unlocked(self, operation, updates, lock_info):
+        if not isinstance(self.metadata, dict):
+            self.metadata = {}
+        for key, value in updates.items():
+            self.metadata[key] = value
+        updated_at = now_iso()
+        self.metadata['updated_at'] = updated_at
+        if 'created_at' not in self.metadata:
+            self.metadata['created_at'] = updated_at
+        self.metadata['last_write'] = {
+            'operation': operation,
+            'owner': lock_info.get('owner'),
+            'pid': lock_info.get('pid'),
+            'lock_created_at': lock_info.get('created_at'),
+            'updated_at': updated_at,
+        }
+        self._write_metadata()
+
+    def _index_record(self, source_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        self.file_index.setdefault(file_rel_path, set()).add(source_id)
+
+    def _unindex_record(self, source_id, record):
+        file_rel_path = record.get('file_rel_path')
+        if not file_rel_path:
+            return
+        bucket = self.file_index.get(file_rel_path)
+        if not bucket:
+            return
+        bucket.discard(source_id)
+        if not bucket:
+            self.file_index.pop(file_rel_path, None)
+
+    def upsert_segments(self, records):
+        with self._locked('upsert_segments') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                source_id = record.get('source_id')
+                embedding = record.get('embedding')
+                if not source_id or not isinstance(embedding, list) or not embedding:
+                    continue
+                existing = self.segments.get(source_id)
+                if existing == record:
+                    continue
+                if existing:
+                    self._unindex_record(source_id, existing)
+                self.segments[source_id] = record
+                self._index_record(source_id, record)
+                changed += 1
+            if changed:
+                self._write_segments()
+                self._update_metadata_unlocked(
+                    'upsert_segments',
+                    {'segment_count': len(self.segments)},
+                    lock_info,
+                )
+                self._search_cache = {}
+        return changed
+
+    def delete_segments(self, source_ids):
+        with self._locked('delete_segments') as lock_info:
+            self._refresh_from_disk_if_changed()
+            changed = 0
+            for source_id in source_ids:
+                existing = self.segments.pop(source_id, None)
+                if not existing:
+                    continue
+                self._unindex_record(source_id, existing)
+                changed += 1
+            if changed:
+                self._write_segments()
+                self._update_metadata_unlocked(
+                    'delete_segments',
+                    {'segment_count': len(self.segments)},
+                    lock_info,
+                )
+                self._search_cache = {}
+        return changed
+
+    def segment_ids_for_file(self, file_rel_path):
+        self.load()
+        return list(self.file_index.get(file_rel_path, set()))
+
+    def _segment_search_candidates(
+        self,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+    ):
+        self.load()
+        cache_key = (embedding_model, embedding_task_type, embedding_dim)
+        cached = self._search_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        candidates = []
+        diagnostics = {
+            'segments_seen': 0,
+            'segments_with_embedding': 0,
+            'invalid_embedding_count': 0,
+            'filtered_embedding_model_count': 0,
+            'filtered_embedding_task_type_count': 0,
+            'filtered_embedding_dim_count': 0,
+            'metadata_filtered_count': 0,
+            'below_similarity_count': 0,
+            'matched_before_top_k': 0,
+            'returned_count': 0,
+        }
+        for record in self.segments.values():
+            diagnostics['segments_seen'] += 1
+            vector = record.get('embedding')
+            if not isinstance(vector, list) or not vector:
+                diagnostics['invalid_embedding_count'] += 1
+                continue
+            diagnostics['segments_with_embedding'] += 1
+            metadata = record.get('embedding_metadata') or {}
+            if embedding_model is not None and metadata.get('embedding_model') != embedding_model:
+                diagnostics['filtered_embedding_model_count'] += 1
+                continue
+            if embedding_task_type is not None and metadata.get('embedding_task_type') != embedding_task_type:
+                diagnostics['filtered_embedding_task_type_count'] += 1
+                continue
+            if embedding_dim is not None:
+                if metadata.get('embedding_dim') != embedding_dim or len(vector) != embedding_dim:
+                    diagnostics['filtered_embedding_dim_count'] += 1
+                    continue
+            try:
+                norm = vector_norm(vector)
+            except (TypeError, ValueError):
+                diagnostics['invalid_embedding_count'] += 1
+                continue
+            if norm <= 0.0:
+                diagnostics['invalid_embedding_count'] += 1
+                continue
+            candidates.append((record, vector, norm))
+        diagnostics['metadata_filtered_count'] = (
+            diagnostics['filtered_embedding_model_count']
+            + diagnostics['filtered_embedding_task_type_count']
+            + diagnostics['filtered_embedding_dim_count']
+        )
+        cached = (candidates, diagnostics)
+        self._search_cache[cache_key] = cached
+        return cached
+
+    def search_segments(
+        self,
+        query_vector,
+        top_k=4,
+        min_similarity=0.72,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+        return_diagnostics=False,
+    ):
+        candidates, base_diagnostics = self._segment_search_candidates(
+            embedding_model=embedding_model,
+            embedding_task_type=embedding_task_type,
+            embedding_dim=embedding_dim,
+        )
+        diagnostics = dict(base_diagnostics)
+        results = []
+        try:
+            query_norm = vector_norm(query_vector)
+        except (TypeError, ValueError):
+            query_norm = 0.0
+        for record, vector, vector_norm_value in candidates:
+            if query_norm > 0.0:
+                score = dot_product(query_vector, vector) / (query_norm * vector_norm_value)
+            else:
+                score = 0.0
+            if score < min_similarity:
+                diagnostics['below_similarity_count'] += 1
+                continue
+            result = dict(record)
+            result['score'] = score
+            results.append(result)
+        diagnostics['matched_before_top_k'] = len(results)
+        results.sort(key=lambda item: float(item.get('score') or 0.0), reverse=True)
+        if top_k > 0:
+            results = results[:top_k]
+        diagnostics['returned_count'] = len(results)
+        if return_diagnostics:
+            return results, diagnostics
+        return results
+
+    def search_segments_compatible(
+        self,
+        query_vector,
+        query_identity,
+        top_k=4,
+        min_similarity=0.72,
+        embedding_model=None,
+        embedding_task_type=None,
+        embedding_dim=None,
+    ):
+        """Search only when store metadata identifies the same vector space."""
+
+        compatibility = self.embedding_compatibility(query_identity)
+        diagnostics = {'embedding_compatibility': compatibility.to_dict()}
+        if not compatibility.compatible:
+            return [], diagnostics
+        results, search_diagnostics = self.search_segments(
+            query_vector,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            embedding_model=embedding_model,
+            embedding_task_type=embedding_task_type,
+            embedding_dim=embedding_dim,
+            return_diagnostics=True,
+        )
+        diagnostics.update(search_diagnostics)
+        return results, diagnostics

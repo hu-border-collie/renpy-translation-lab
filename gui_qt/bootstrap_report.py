@@ -78,7 +78,7 @@ def read_batch_context_flags(
     game_root: str | None = None,
 ) -> dict[str, bool]:
     """Effective batch context flags (global defaults + per-project overrides)."""
-    from project_context_settings import resolve_batch_context_flags
+    from foundation.project_context_settings import resolve_batch_context_flags
 
     return resolve_batch_context_flags(config, game_root)
 

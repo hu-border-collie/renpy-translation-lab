@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import project_analysis as pa
-import project_analysis_generate as gen
-import project_analysis_llm as llm
-from sync_model_backend import SyncGenerationRequest, SyncGenerationResult, SYNC_EXECUTION_MODE
+from quality_review import project_analysis as pa
+from quality_review import project_analysis_generate as gen
+from quality_review import project_analysis_llm as llm
+from providers.sync_model_backend import SyncGenerationRequest, SyncGenerationResult, SYNC_EXECUTION_MODE
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "project_analysis_routes_minimal"
 SCRIPT = FIXTURE_DIR / "script.rpy"

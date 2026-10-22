@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import final_review as fr
+from quality_review import final_review as fr
 
 
 def _items(*pairs: tuple[str, str, str]) -> list[dict]:
@@ -647,7 +647,7 @@ class UnitErrorClassificationTests(unittest.TestCase):
         self.assertIn("failure_reasons", text)
         self.assertIn("schema", text)
 
-        import cli_contract
+        from foundation import cli_contract
 
         envelope = cli_contract.success_envelope(
             "final-review-status", status="failed", result=status

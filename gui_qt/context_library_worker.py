@@ -37,7 +37,7 @@ def collect_context_library_status(
             game_root=base_dir or None,
         )
         import gemini_translate_batch as batch_mod
-        from project_analysis import (
+        from quality_review.project_analysis import (
             collect_project_analysis_status,
             format_status_label,
         )

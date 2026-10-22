@@ -14,7 +14,7 @@ from gui_qt.settings_schema import (
 class GuiSettingsSchemaTests(unittest.TestCase):
     def test_quality_policy_json_round_trip_uses_runtime_reader(self):
         import json
-        import translation_quality as quality
+        from quality_review import translation_quality as quality
 
         config = {
             'game_root': 'C:/Game/work',

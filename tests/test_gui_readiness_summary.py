@@ -12,8 +12,8 @@ import unittest
 from unittest import mock
 
 from tests import gui_test_support
-import cli_contract
-import doctor_recommendations as rec
+from foundation import cli_contract
+from foundation import doctor_recommendations as rec
 
 try:
     from PySide6.QtCore import QObject, Signal, Qt
@@ -269,7 +269,7 @@ class ReadinessSummaryTests(unittest.TestCase):
         self.assertEqual(self.window.translate_btn.isEnabled(), before)
 
     def test_project_context_override_change_invalidates_evidence(self):
-        from project_context_settings import save_project_context_settings
+        from foundation.project_context_settings import save_project_context_settings
 
         self.finish_doctor(report_fixture())
         save_project_context_settings(self.root, {"rag_enabled": True})
@@ -377,7 +377,7 @@ class ReadinessSummaryTests(unittest.TestCase):
                 return_value=fake_context(section),
             ),
             mock.patch(
-                "model_capability_probe.default_credential_loader", return_value="offline-fixture"
+                "providers.model_capability_probe.default_credential_loader", return_value="offline-fixture"
             ),
         ):
             payload = batch.run_translate_preflight(

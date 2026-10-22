@@ -7,11 +7,11 @@ from contextlib import redirect_stdout
 from unittest import TestCase
 from unittest.mock import patch
 
-import model_profile
+from providers import model_profile
 import translator_runtime as runtime
 import gemini_translate_batch as batch
-from model_routing_migration import preview_migration
-from model_routing_reader import runtime_settings_view, read_routing_plan
+from providers.model_routing_migration import preview_migration
+from providers.model_routing_reader import runtime_settings_view, read_routing_plan
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "model_routing_legacy"
@@ -120,7 +120,7 @@ class ProductionRoutingTests(TestCase):
     def test_backend_uses_frozen_custom_connection(self):
         plan = read_routing_plan(migrated("litellm_custom"), legacy_execution="sync")
         profile = plan.profiles[plan.routes["translation"].profile_id]
-        with patch("litellm_sync_backend.LiteLLMSyncBackend") as factory:
+        with patch("providers.litellm_sync_backend.LiteLLMSyncBackend") as factory:
             model_profile.build_sync_backend(profile, custom_providers={})
         kwargs = factory.call_args.kwargs
         self.assertEqual(kwargs["custom_providers"][profile.provider].base_url, profile.base_url)
@@ -265,7 +265,7 @@ class ProductionRoutingTests(TestCase):
                 preview_migration(config)
 
     def test_real_loader_rejects_invalid_routing_before_path_correction(self):
-        from cli_contract import MachineContractError
+        from foundation.cli_contract import MachineContractError
         with runtime.runtime_config_scope(runtime.default_runtime_config()):
             with patch.object(runtime, "_read_json_object", return_value={"model_routing": {"schema_version": 900}}), \
                  patch.object(runtime, "persist_game_root") as persist:
@@ -275,10 +275,10 @@ class ProductionRoutingTests(TestCase):
                 persist.assert_not_called()
 
     def test_environment_reference_does_not_read_provider_keyring(self):
-        from litellm_sync_backend import LiteLLMSyncBackend, LiteLLMBackendError
+        from providers.litellm_sync_backend import LiteLLMSyncBackend, LiteLLMBackendError
         backend = LiteLLMSyncBackend(credential_ref={"kind": "env", "name": "ROUTING_TEST_KEY"})
         with patch.dict("os.environ", {"ROUTING_TEST_KEY": "synthetic-test-value"}, clear=True), \
-             patch("litellm_provider_config.load_provider_api_key") as keyring:
+             patch("providers.litellm_provider_config.load_provider_api_key") as keyring:
             creds = backend._resolve_credentials("openai", None)
             self.assertEqual(len(creds), 1)
             keyring.assert_not_called()
@@ -343,7 +343,7 @@ class ProductionRoutingTests(TestCase):
         self.assertEqual(view["batch"]["model"], expected["batch"]["model"])
 
     def test_batch_command_rejects_sync_only_stage_before_artifacts(self):
-        from cli_contract import MachineContractError
+        from foundation.cli_contract import MachineContractError
         config = migrated()
         section = config["model_routing"]
         section["routes"]["keyword"] = {"profile_id": section["legacy_entrypoints"]["sync_profile_id"], "strategy": "sync"}
@@ -354,7 +354,7 @@ class ProductionRoutingTests(TestCase):
             self.assertEqual(plan.routes["keyword"].strategy.value, "sync")
 
     def test_final_review_command_accepts_configured_sync_strategy(self):
-        from cli_contract import MachineContractError
+        from foundation.cli_contract import MachineContractError
         config = migrated()
         section = config["model_routing"]
         section["routes"]["final_review"] = {
@@ -374,7 +374,7 @@ class ProductionRoutingTests(TestCase):
     def test_frozen_native_profile_does_not_acquire_live_custom_endpoint(self):
         plan = read_routing_plan(migrated("litellm_builtin"), legacy_execution="sync")
         profile = plan.profiles[plan.routes["translation"].profile_id]
-        with patch("litellm_sync_backend.LiteLLMSyncBackend") as factory:
+        with patch("providers.litellm_sync_backend.LiteLLMSyncBackend") as factory:
             model_profile.build_sync_backend(profile, custom_providers={profile.provider: object()})
         self.assertNotIn(profile.provider, factory.call_args.kwargs["custom_providers"])
 
@@ -384,7 +384,7 @@ class ProductionRoutingTests(TestCase):
         profile = plan.profiles[plan.routes["translation"].profile_id]
         self.assertTrue(profile.base_url)
         other = object()
-        with patch("litellm_sync_backend.LiteLLMSyncBackend") as factory:
+        with patch("providers.litellm_sync_backend.LiteLLMSyncBackend") as factory:
             model_profile.build_sync_backend(profile, custom_providers={"other": other})
         connections = factory.call_args.kwargs["custom_providers"]
         self.assertEqual(connections[profile.provider].base_url, profile.base_url)

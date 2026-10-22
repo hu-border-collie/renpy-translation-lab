@@ -10,10 +10,10 @@ import time
 import unittest
 from pathlib import Path
 
-from durable_sync_executor import DurableSyncExecutor, ProviderOutcome
-from sync_retry_policy import ExecutorPolicy
-from sync_run_contracts import RequestStatus, RunStatus, build_run_id
-from sync_run_store import SyncRunStore
+from execution.durable_sync_executor import DurableSyncExecutor, ProviderOutcome
+from execution.sync_retry_policy import ExecutorPolicy
+from execution.sync_run_contracts import RequestStatus, RunStatus, build_run_id
+from execution.sync_run_store import SyncRunStore
 
 
 def _plan():

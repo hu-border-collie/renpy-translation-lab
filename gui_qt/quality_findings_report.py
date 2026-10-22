@@ -7,9 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
-import translation_quality
-from atomic_io import atomic_write_json
-from quality_report_export import reason_label, severity_label
+from quality_review import translation_quality
+from foundation.atomic_io import atomic_write_json
+from quality_review.quality_report_export import reason_label, severity_label
 
 from .diagnostics_context import resolve_package_dir
 from .user_copy import QUALITY_DELIVERY_NOTICE
@@ -281,7 +281,7 @@ def persist_quality_acknowledgement(
     never rewritten.
     """
 
-    import cli_contract
+    from foundation import cli_contract
     import gemini_translate_batch as batch
 
     try:

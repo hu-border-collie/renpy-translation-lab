@@ -8,10 +8,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import translation_core
+from quality_review import translation_core
 import translator_runtime as runtime
 import gemini_translate_batch as batch_mod
-from rag_memory import JsonRagStore, hash_text
+from context_engine.rag_memory import JsonRagStore, hash_text
 
 
 class TestIdentityV2AndCompatibility(unittest.TestCase):

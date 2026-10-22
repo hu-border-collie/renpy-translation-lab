@@ -89,7 +89,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
     def test_workflow_writeback_gate_accepts_json_check_envelope(self):
         import json
 
-        import cli_contract
+        from foundation import cli_contract
         from gui_qt.app import _workflow_output_updates_writeback
 
         output = json.dumps(cli_contract.success_envelope("check", status="safe"))
@@ -552,7 +552,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(flags["source_index_enabled"])
 
     def test_saved_project_analysis_flags_reads_project_override(self):
-        from project_context_settings import save_project_context_settings
+        from foundation.project_context_settings import save_project_context_settings
 
         with tempfile.TemporaryDirectory() as tmp:
             game_root = Path(tmp)
@@ -661,7 +661,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
                     "project_analysis_inject_enabled": True,
                 },
             ),
-            mock.patch("project_context_settings.save_project_context_settings") as save_project,
+            mock.patch("foundation.project_context_settings.save_project_context_settings") as save_project,
         ):
             saved = self.window._on_save_config()
 
@@ -692,7 +692,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window.context_storage_game_cb = FakeCheckBox(False)
         with (
             mock.patch(
-                "project_context_settings.save_project_context_settings",
+                "foundation.project_context_settings.save_project_context_settings",
                 side_effect=OSError("project write failed"),
             ),
             mock.patch("gui_qt.app.message_box_warning"),
@@ -765,7 +765,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._refresh_project_label = lambda: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        with mock.patch("project_context_settings.save_project_context_settings"):
+        with mock.patch("foundation.project_context_settings.save_project_context_settings"):
             saved = self.window._on_save_config()
 
         self.assertTrue(saved)
@@ -871,7 +871,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: FakeStatusBar()
 
-        with mock.patch("project_context_settings.save_project_context_settings"):
+        with mock.patch("foundation.project_context_settings.save_project_context_settings"):
             saved = self.window._on_save_config()
 
         self.assertTrue(saved)
@@ -990,7 +990,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.window._append_log = lambda _text: None
         self.window.statusBar = lambda: status_bar
 
-        with mock.patch("project_context_settings.save_project_context_settings") as save_project:
+        with mock.patch("foundation.project_context_settings.save_project_context_settings") as save_project:
             saved = self.window._on_save_config()
 
         self.assertFalse(saved)
@@ -3465,7 +3465,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from unittest.mock import patch
 
         from gui_qt.work_modes import WorkMode
-        from project_asset_paths import canonical_abs_path
+        from foundation.project_asset_paths import canonical_abs_path
 
         jsonl_path = "C:/dummy/game/logs/keyword_candidates.jsonl"
         keyword_manifest_path = "C:/dummy/game/logs/keyword_manifest.json"
@@ -3506,7 +3506,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         from unittest.mock import patch
 
         from gui_qt.work_modes import WorkMode
-        from project_asset_paths import canonical_abs_path
+        from foundation.project_asset_paths import canonical_abs_path
 
         jsonl_path = "C:/dummy/game/logs/keyword_candidates.jsonl"
         keyword_manifest_path = "C:/dummy/game/logs/keyword_manifest.json"

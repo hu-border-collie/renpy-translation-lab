@@ -16,7 +16,7 @@ import sys
 import tempfile
 from typing import Callable, Mapping
 
-from atomic_io import atomic_write_json
+from foundation.atomic_io import atomic_write_json
 from .user_copy import LITELLM_CACHE_COPY
 
 

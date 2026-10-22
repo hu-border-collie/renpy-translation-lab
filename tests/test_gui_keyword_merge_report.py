@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import keyword_glossary_merge as merge_mod
-from project_asset_paths import canonical_abs_path
+from quality_review import keyword_glossary_merge as merge_mod
+from foundation.project_asset_paths import canonical_abs_path
 
 from gui_qt.keyword_merge_report import (
     KeywordCandidateSelection,

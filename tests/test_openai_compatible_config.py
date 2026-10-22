@@ -7,12 +7,12 @@ import sys
 import unittest
 from unittest import mock
 
-import model_profile as routing
-import model_profiles_editor as editor
-import model_routing_config as config
-import model_routing_reader as reader
-import openai_compatible_provider_config as presets
-from openai_compatible_sync_backend import OpenAICompatibleSyncBackend
+from providers import model_profile as routing
+from providers import model_profiles_editor as editor
+from providers import model_routing_config as config
+from providers import model_routing_reader as reader
+from providers import openai_compatible_provider_config as presets
+from providers.openai_compatible_sync_backend import OpenAICompatibleSyncBackend
 
 
 def direct_section(
@@ -241,8 +241,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertNotIn("sensitive_extra_header", issue_codes(section))
 
     def test_structured_output_modes_share_one_contract_source(self) -> None:
-        import openai_compatible_contract as contract
-        from openai_compatible_sync_backend import STRUCTURED_OUTPUT_MODES
+        from providers import openai_compatible_contract as contract
+        from providers.openai_compatible_sync_backend import STRUCTURED_OUTPUT_MODES
 
         self.assertEqual(config.STRUCTURED_OUTPUT_MODES, contract.STRUCTURED_OUTPUT_MODES)
         self.assertEqual(STRUCTURED_OUTPUT_MODES, contract.STRUCTURED_OUTPUT_MODES)
@@ -312,13 +312,13 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(preset.structured_output_mode, "prompt_only_json")
 
     def test_credential_reader_imports_without_litellm(self) -> None:
-        saved = sys.modules.pop("litellm_provider_config", None)
+        saved = sys.modules.pop("providers.litellm_provider_config", None)
         try:
             with mock.patch.dict(sys.modules, {"litellm": None}):
-                module = importlib.import_module("litellm_provider_config")
+                module = importlib.import_module("providers.litellm_provider_config")
         finally:
             if saved is not None:
-                sys.modules["litellm_provider_config"] = saved
+                sys.modules["providers.litellm_provider_config"] = saved
         self.assertTrue(callable(getattr(module, "load_provider_api_key", None)))
 
 

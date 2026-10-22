@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
 
-from games_registry import (
+from execution.games_registry import (
     REFRESH_MODE_DEEP,
     REFRESH_MODE_LITE,
     CancelCheck,
@@ -36,7 +36,7 @@ from games_registry import (
     update_project_manual_fields,
     write_games_md,
 )
-from game_ingest import ingest_game
+from execution.game_ingest import ingest_game
 
 from .games_registry_view import find_project_id_for_game_root, resolve_registry_path
 

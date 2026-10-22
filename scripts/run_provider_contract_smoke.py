@@ -14,15 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from litellm_provider_config import DEFAULT_MODELS, SUPPORTED_PROVIDERS
-import model_usage_ledger
-from sync_model_backend import (
+from providers.litellm_provider_config import DEFAULT_MODELS, SUPPORTED_PROVIDERS
+from providers import model_usage_ledger
+from providers.sync_model_backend import (
     GeminiSyncBackend,
     SyncGenerationRequest,
     sync_error_category,
     sync_error_summary,
 )
-from translation_core import MODE_TRANSLATION, build_translation_schema, validate_model_response
+from quality_review.translation_core import MODE_TRANSLATION, build_translation_schema, validate_model_response
 
 
 REQUEST_TIMEOUT_SECONDS = 30
@@ -112,7 +112,7 @@ def contract_request(spec: ProviderSpec) -> SyncGenerationRequest:
 
 def create_backend(spec: ProviderSpec, api_key: str) -> Any:
     if spec.backend == "litellm":
-        from litellm_sync_backend import LiteLLMSyncBackend
+        from providers.litellm_sync_backend import LiteLLMSyncBackend
 
         return LiteLLMSyncBackend(api_key=api_key)
 

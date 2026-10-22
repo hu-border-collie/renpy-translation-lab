@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-import doctor_recommendations as doctor_rec
+from foundation import doctor_recommendations as doctor_rec
 
 from .coverage_actions import format_coverage_detail_facts, format_coverage_facts
 from .summary_helpers import append_unique_fact

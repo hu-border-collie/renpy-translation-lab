@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from final_review import REVISION_STATE_APPLIED, SELECTION_STATE_SELECTED
+from quality_review.final_review import REVISION_STATE_APPLIED, SELECTION_STATE_SELECTED
 
 
 class FinalReviewFindingsDialog(QDialog):

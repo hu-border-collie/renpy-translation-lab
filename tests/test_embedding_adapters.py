@@ -10,19 +10,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from embedding_adapters import (
+from context_engine.embedding_adapters import (
     GeminiEmbeddingAdapter,
     OpenAICompatibleEmbeddingAdapter,
     build_provider_identity,
 )
-from embedding_backend import (
+from context_engine.embedding_backend import (
     EmbeddingBackendError,
     EmbeddingBatchRequest,
     EmbeddingContractError,
     EmbeddingErrorCategory,
     EmbeddingTaskType,
 )
-from rag_memory import (
+from context_engine.rag_memory import (
     EmbeddingStoreIdentityError,
     JsonRagStore,
     JsonSourceIndexStore,

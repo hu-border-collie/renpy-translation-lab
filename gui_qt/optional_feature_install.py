@@ -14,7 +14,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
-from optional_feature import (
+from foundation.optional_feature import (
     FeatureInstallState,
     FeatureStatus,
     OptionalFeatureSpec,

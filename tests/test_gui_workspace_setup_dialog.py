@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import games_registry as registry
+from execution import games_registry as registry
 
 try:
     from PySide6.QtCore import QObject, Signal
@@ -228,7 +228,7 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
         self.assertEqual(dialog.result(), 0)
 
     def test_sdk_completed_suppressed_during_deferred_stop(self):
-        from renpy_sdk_install import SdkInstallResult
+        from execution.renpy_sdk_install import SdkInstallResult
 
         dialog = WorkspaceSetupDialog(None)
         worker = _FakeSdkWorker(dialog)
@@ -246,7 +246,7 @@ class GuiWorkspaceSetupDialogTests(unittest.TestCase):
         self.assertIsNone(dialog._sdk_worker)
 
     def test_worker_reference_held_between_completed_and_finished(self):
-        from renpy_sdk_install import SdkInstallResult
+        from execution.renpy_sdk_install import SdkInstallResult
 
         dialog = WorkspaceSetupDialog(None)
         worker = _FakeSdkWorker(dialog)

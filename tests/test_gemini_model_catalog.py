@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import unittest
 
-import gemini_model_catalog as catalog
+from providers import gemini_model_catalog as catalog
 
 
 class GeminiModelCatalogTests(unittest.TestCase):

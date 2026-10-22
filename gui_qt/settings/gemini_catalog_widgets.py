@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gemini_model_catalog import allowed_gemini_rotation_models, extras_beyond_builtins
+from providers.gemini_model_catalog import allowed_gemini_rotation_models, extras_beyond_builtins
 
 StatusCallback = Callable[[str], None]
 

@@ -76,7 +76,7 @@ class ConfigExampleSyncTests(unittest.TestCase):
             self.assertEqual(basic[f"{key}_enabled"], example[key]["enabled"])
 
     def test_new_rag_default_preserves_saved_project_retrieval_choices(self):
-        from project_context_settings import default_context_flags_from_config
+        from foundation.project_context_settings import default_context_flags_from_config
 
         saved = {"batch": {"rag": {"enabled": True}, "source_index": {"enabled": True}}}
         flags = default_context_flags_from_config(saved)

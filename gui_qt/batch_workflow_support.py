@@ -6,7 +6,7 @@ import json
 import os
 from typing import Any
 
-import batch_submit_recovery
+from execution import batch_submit_recovery
 
 
 def resolve_submit_max_cost(translator_config: dict[str, Any] | None) -> float | None:

@@ -27,15 +27,17 @@ v1 结构示例见 [合同 fixture](../tests/fixtures/model_routing_config_v1.js
 ## 操作
 
 先手动准备配置副本，使用明确路径；工具不默认定位或自动迁移实际配置。
+以下模块命令在工具根目录运行。
 
 ```powershell
-python model_config_migration.py preview --config <CONFIG_COPY> --json
-python model_config_migration.py migrate --config <CONFIG_COPY> --expected-fingerprint <SOURCE_FINGERPRINT> --stage-only --json
-python model_config_migration.py rollback --config <CONFIG_COPY> --report <MIGRATION_REPORT> --json
+python -m providers.model_config_migration preview --config <CONFIG_COPY> --json
+python -m providers.model_config_migration migrate --config <CONFIG_COPY> --expected-fingerprint <SOURCE_FINGERPRINT> --stage-only --json
+python -m providers.model_config_migration rollback --config <CONFIG_COPY> --report <MIGRATION_REPORT> --json
 ```
 
 `SOURCE_FINGERPRINT` 必须来自刚才的 preview；`MIGRATION_REPORT` 来自 migrate 返回的
-`report_path`。GUI「诊断与运行日志」的任务命令参考也提供这三个模板。
+`report_path`。GUI「诊断与运行日志」的任务命令参考也提供这三个模板，使用迁移脚本的
+完整路径，可复制到其它工作目录执行；CLI 也支持 `python "<TOOL_ROOT>/providers/model_config_migration.py" --help`。
 
 文件迁移要求明确的 `batch.model`，不会读取外部游戏配置的 `batch_model`。纯内存
 API `preview_migration(config, game_config=...)` 可由后续服务传入已确认的项目默认值。
@@ -115,7 +117,7 @@ read-then-unlink 竞态；锁文件释放后保留，不应手动删除。latest
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
 四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。首次迁移须先通过
-`model_config_migration.py preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
+`python -m providers.model_config_migration preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
 迁移完成后，P3 的「设置 → 模型与供应商」页面可统一维护 providers / profiles / 默认值与阶段路由；
 该页按 #202 的页面合同编辑 `model_routing`、跟踪未保存修改并保留未知字段。
 页首可调整默认主模型与执行方式，并查看配置校验摘要；摘要不代表凭据或实际连接已经验证。

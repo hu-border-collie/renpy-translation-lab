@@ -11,7 +11,7 @@ from typing import Any
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QGroupBox, QLabel, QScrollArea, QWidget
 
-from gemini_model_catalog import (
+from providers.gemini_model_catalog import (
     BUILTIN_GEMINI_EMBEDDING_MODELS,
     BUILTIN_GEMINI_TRANSLATION_MODELS,
 )
