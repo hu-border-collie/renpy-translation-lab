@@ -408,7 +408,10 @@ class SourceJsonWritebackTests(unittest.TestCase):
         atomic_io.atomic_write_many_lines(writes, journal_path=journal, expected_preimages=guards)
         self.assertEqual((target_root / "Map001.json").read_bytes(), self.expected)
         self.assertEqual((source_root / "Map001.json").read_bytes(), self.raw)
-        self.assertEqual(json.loads((target_root / "meta.json").read_text()), {"caption":"另一盏灯","n":100})
+        self.assertEqual(
+            json.loads((target_root / "meta.json").read_text(encoding="utf-8")),
+            {"caption": "另一盏灯", "n": 100},
+        )
         self.assertFalse(journal.exists())
 
     def test_late_target_edit_is_rejected_by_existing_atomic_preimage_guard(self):
