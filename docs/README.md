@@ -84,6 +84,7 @@
 - [#427 普通译文审校合同](plans/issue-427-review-index-contract.md)：S1/S2 工程已合并；真实验收仍归 #427，当前 GUI 说明见[GUI 工作台](gui_workbench.md)。
 - [#431 OpenAI-compatible 与 final_review Sync 合同](plans/issue-431-openai-compatible-contract.md)：S1–S3 及首期真实验收已完成，issue 已关闭；保留历史合同，后续 Provider 验收归 #344。
 - [#272 研究归档、#565 调查衔接与 #147 暂缓](plans/issue-272-research-closeout-2026-10-22.md)：#272 保持开放，等待 Komorebi 的版本/文本范围与选型回填；生产实现待调查后另拆，Story Graph 维持低优先级；issue 文字仅为草稿。
+- [#565 Komorebi 离线调查](plans/issue-565-komorebi-survey-2026-10-23.md)：实际 MV 包的版本声明冲突、文本分母、101 项试点与公共数组写回合同范围；原生场景、显示和存读档按用户指示暂缓，issue 未完成全部验收。
 - [Translator++ 接入评估](plans/translatorpp_integration_assessment.md)：#509 / PR #562 已交付 MV 1.5.1 单版本有限往返；保留独立使用，生产 bridge 暂缓，不扩展引擎支持范围。
 
 ### 历史参考（已归档）

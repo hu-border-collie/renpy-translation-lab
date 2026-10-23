@@ -43,6 +43,18 @@ fresh PA、非 Gemini embedding 和 128 对原生上下文实验；语义收益�
 
 ## 计划、合同与研究目录
 
+2026-10-23 的 [#565 Komorebi 离线调查](issue-565-komorebi-survey-2026-10-23.md)
+已冻结实际 MV 包、记录 core 头部 1.6.2 / 常量 1.6.1 冲突，完成 205 份 JSON 的范围分类，
+建立三个候选场景的 101 项主要 occurrence / 7 个镜像目标与 20 项宿主 Agent 静态核对。
+原生启动授权超时后，用户选择先完成离线调查；可达性、字体显示、存读档和人类验收未完成。
+公共数组路径的 P1 核心实现见下，Adapter / 耐久 Sync 产品接入另拆；线上回填草稿尚未发送，
+#272 / #565 均不能据本报告自动关闭。
+
+用户随后授权实施的 P1 [公共源 JSON 核心合同](../engine_adapter.md#source-json-writeback-p1)
+已在本地增加 schema 2、独立源 / 目标快照、类型化数组路径与字符串 token 渲染，
+用[原创对白 / 选项 / 402 夹具](../../tests/fixtures/source_json_writeback/README.md)验证。
+这是共享核心增量，P2 Adapter / P3 CLI、GUI、doctor 和配置接线及原生游戏验收仍待实施。
+
 2026-10-22 的 [#272 研究归档与 #565 调查衔接](issue-272-research-closeout-2026-10-22.md)
 保留候选合同判断、#509 正反证据与未完成验收。新 [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)
 已登记真实需求，先确认版本、插件/文本范围及最小试点，再回填 #272；生产实现待调查后另拆。

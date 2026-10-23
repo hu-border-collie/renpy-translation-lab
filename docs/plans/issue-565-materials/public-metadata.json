@@ -1,0 +1,577 @@
+{
+  "survey_schema_version": 1,
+  "date": "2026-10-23",
+  "scope": "offline static investigation; native runtime and human acceptance are pending",
+  "repository_head": "09de6dcfd25ea8e21fe00d22251bb590a917b88e",
+  "baseline": {
+    "engine_family": "MV",
+    "core_header_version": "1.6.2",
+    "utils_rpgmaker_version": "1.6.1",
+    "exact_upstream_core_version": "unknown: conflicting declarations, no upstream byte-equivalence proof",
+    "editor_version": "unknown",
+    "game_release_version": "unknown",
+    "nwjs_pe_product_version": "0.77.0",
+    "nwjs_executed_version": "unknown",
+    "original_file_count": 8190,
+    "work_file_count": 8191,
+    "original_total_bytes": 1906811365,
+    "source_material_file_count": 266,
+    "source_material_manifest_sha256": "363f42f980f2c1002a4bfdcbcd391386df95780e03aaf01241ef59e74573cc55",
+    "same_hashed_relevant_files": 272,
+    "different_hashed_relevant_files": 0,
+    "additional_work_files": 1,
+    "core_files": [
+      {
+        "file": "rpg_core.js",
+        "header_version": "1.6.2",
+        "sha256": "2cd0ee745cfa69875de23b3f4c26841b5c997297c94b378abda6e4535a218a69"
+      },
+      {
+        "file": "rpg_managers.js",
+        "header_version": "1.6.2",
+        "sha256": "8e45720ea9aa04d8cdc35c3965e69f474b8f063e310b1ca813c4b7e42e768df4"
+      },
+      {
+        "file": "rpg_objects.js",
+        "header_version": "1.6.2",
+        "sha256": "f52edc719d2f55cf2b3bc61f6bbf5df3812dc445b2590305df54ba3d3d2b0f8a"
+      },
+      {
+        "file": "rpg_scenes.js",
+        "header_version": "1.6.2",
+        "sha256": "d7a1cc37a681cfc0be9c0777e3970d1040ac6e801c6425ccf1cf4b3f1120f298"
+      },
+      {
+        "file": "rpg_sprites.js",
+        "header_version": "1.6.2",
+        "sha256": "c06ff7c119a7e9870da57a581ef798262ec2d3d3ea5090a4e965b5ac447f09b5"
+      },
+      {
+        "file": "rpg_windows.js",
+        "header_version": "1.6.2",
+        "sha256": "f840fcf50a22ed00b3548dc6fb9357c6205daf0350f8f96ffc718611ac5889b6"
+      }
+    ],
+    "plugins_registry_sha256": "24d4492eaea4c34492845d4ddf36f88f5c37092c6bcad60b945b127c4faa6065"
+  },
+  "plugins": [
+    {
+      "name": "NovelStyle",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "dd66cc2402c80977ad8c2bc0cd8e8b8ae5f69fdb6e68700cd391b8b02da0a8be"
+    },
+    {
+      "name": "TDDP_MouseSystemEx",
+      "enabled": true,
+      "version": "1.8.2 (fix v.1.2), header declaration",
+      "file_present": true,
+      "sha256": "d872f8380fdfd836806696719d62e786fd4aacb155d7d2a460004cda4e0cc0f0"
+    },
+    {
+      "name": "Galv_ChoicePause",
+      "enabled": true,
+      "version": "1.0",
+      "file_present": true,
+      "sha256": "12b8d752c7a5427ded0878b3ce379e30adbddbb131aefa77ede855ae3dabdbeb"
+    },
+    {
+      "name": "cy_PicSmartFade",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "337ba4f601a5d6e381780f88f890e7cce84df61ecf4168256b9c42062f55bdf5"
+    },
+    {
+      "name": "TDDP_AnimationCurves",
+      "enabled": true,
+      "version": "1.0.3b",
+      "file_present": true,
+      "sha256": "b12b579dbb17e5bc6e4bb04ca4b55f10e2feb8fa303af7dc0251d9f903ce376b"
+    },
+    {
+      "name": "MOG_PictureEffectsMZ",
+      "enabled": true,
+      "version": "1.0",
+      "file_present": true,
+      "sha256": "44f85e7e94b2486d2141f6c040c17387b3dcaab8bd5b3bf7b2458bd44342017d"
+    },
+    {
+      "name": "RS_SimpleCanvasFilter",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "5a049fefdeb457d636fc6b21b976b21b534ff168f4506c42a25c149fbec88233"
+    },
+    {
+      "name": "SE_SkipTitle",
+      "enabled": true,
+      "version": "1.11",
+      "file_present": true,
+      "sha256": "bc6f3c82a410b041b306dfe3ee6e75ce0972a1d5d80e71e73acaba2ad7d872af"
+    },
+    {
+      "name": "BBS_BGMFadeIn",
+      "enabled": true,
+      "version": "1.02",
+      "file_present": true,
+      "sha256": "15cbcc6d0131cc46418eb13857ea949e2d83c845018f8fb1b88bb13b2741a976"
+    },
+    {
+      "name": "BugFixLoadErrorChoiceSetup",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "33153d01cc5936f56097d37805b683bd767d18b98f9527fafa4cff8821bbf8d6"
+    },
+    {
+      "name": "GALV_MessageStyles",
+      "enabled": true,
+      "version": "2.8",
+      "file_present": true,
+      "sha256": "568b6a44240253aa0037efb57646ce1d703472f631f94b983f95fd2fdc156baa"
+    },
+    {
+      "name": "ChoiceCore",
+      "enabled": true,
+      "version": "1.0",
+      "file_present": true,
+      "sha256": "4e1302c1bf04a9780360cda75d8e3d1b53d20419784a3ad8bd065d353881a027"
+    },
+    {
+      "name": "Irina_AntiAudioDelay",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "884145f06e8f44fa1f8a000fa72c00edc6a2ab16cc2a1c8dde716ef516cd6a3d"
+    },
+    {
+      "name": "Irina_PerformanceUpgrade",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "be4ab12807f0bb70c3278f4517eef9bea4572c086428cd92999a20f8e04d0e89"
+    },
+    {
+      "name": "SaveFileExtras",
+      "enabled": true,
+      "version": "1.07",
+      "file_present": true,
+      "sha256": "4342273b31b774aaed19bcda828209d9f13aee09bf1e96ebf9b3b72c1e9ae567"
+    },
+    {
+      "name": "OpheliaEnigma_MouseHover",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "166c5feb37f971a892fcc17cad27da675fe0e586406783b7e81a2340be3caeb7"
+    },
+    {
+      "name": "meike_saveFiles",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "0d6a995fef1ce1efbff418470085147174af2a220327275e0c2d1e9373ef8874"
+    },
+    {
+      "name": "cy_FixPlaytime",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "facc9eb8c243faa2e17a196b33768f24405601bef6f30d8d30d325b055b24ddf"
+    },
+    {
+      "name": "SRD_FullscreenToggleOption",
+      "enabled": true,
+      "version": "1.00",
+      "file_present": true,
+      "sha256": "6123a264e167ea9375149b72e4b7050793f71a25c26d5dcf2099041cf3dd9552"
+    },
+    {
+      "name": "cy_NoFaces",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "fe982eadfe444a861ea2af1ea8a7610526dc3fd2deb732514bf9dbcb669e66a8"
+    },
+    {
+      "name": "GraphicsRenderFix",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "1e2af027ae88b2e3439f5966be1d181f0f4c98e5f6ff9b768fdfaf5999ffea2a"
+    },
+    {
+      "name": "FilterController",
+      "enabled": false,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "c9dc933f6ff06e38c961cede598e733e45e4ba57912f08a2af409c7fe40f34b8"
+    },
+    {
+      "name": "JavaHut_AudioManagerEx",
+      "enabled": false,
+      "version": "1.02",
+      "file_present": true,
+      "sha256": "6b0c3659b1e5f1813d0f49f149205b8a4b71f3713f6aee41def9370788861d46"
+    },
+    {
+      "name": "cy_SteamworksJs",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "6ed934b06b7ba7ea0ba58e511c9d1bc74255d747b38f4a017f8ac9187f342054"
+    },
+    {
+      "name": "OrangeGreenworks",
+      "enabled": false,
+      "version": "1.2",
+      "file_present": true,
+      "sha256": "a8741c9e25aaeafeb4de8d6fa8b9cc81558754a83549adf78959e9c5376aad5a"
+    },
+    {
+      "name": "cy_PadChoiceItemHeight",
+      "enabled": true,
+      "version": "unknown",
+      "file_present": true,
+      "sha256": "9b457d6acae84f1fc29bfedbee6ea8452ed3fd82083b423748f00dd08d8be1c7"
+    }
+  ],
+  "counts": {
+    "occurrence_categories": {
+      "dialogue": 24633,
+      "choice": 3149,
+      "choice_mirror": 3149,
+      "actor_name_change": 1,
+      "database_display_candidate": 90,
+      "map_display_candidate": 162,
+      "system_display_candidate": 131
+    },
+    "primary_occurrences": 27782,
+    "primary_unique_text": 16866,
+    "primary_characters": 1408012,
+    "all_json_string_leaves": 117135,
+    "nonempty_json_string_leaves": 104149,
+    "json_string_classification": {
+      "unclassified": 73401,
+      "database_display_candidate": 90,
+      "event_known": 30362,
+      "map_display_candidate": 162,
+      "note_plugin_boundary": 3,
+      "system_display_candidate": 131
+    },
+    "json_files": 205,
+    "map_files": 191,
+    "map_pages": 4852,
+    "map_events": 3548,
+    "multi_page_events": 1152,
+    "plugins_registered": 26,
+    "plugins_enabled": 23,
+    "choice_mirrors": 3149,
+    "choice_mirror_mismatches": 0,
+    "choice_cancel_modes": {
+      "1": 5,
+      "-1": 1465
+    },
+    "encodings": {
+      "utf8_no_bom": 205
+    },
+    "parse_errors": [],
+    "code_counts": {
+      "map": {
+        "0": 8144,
+        "101": 19736,
+        "102": 1470,
+        "108": 5422,
+        "111": 94,
+        "117": 2005,
+        "122": 951,
+        "129": 949,
+        "135": 1,
+        "201": 1193,
+        "214": 5,
+        "230": 3500,
+        "231": 8553,
+        "232": 15818,
+        "235": 1226,
+        "241": 305,
+        "242": 1109,
+        "245": 116,
+        "246": 1005,
+        "249": 3,
+        "250": 10084,
+        "251": 10886,
+        "281": 2,
+        "320": 1,
+        "355": 746,
+        "356": 21133,
+        "401": 24633,
+        "402": 3149,
+        "404": 1470,
+        "411": 49,
+        "412": 94
+      },
+      "common": {
+        "0": 168,
+        "111": 154,
+        "231": 156,
+        "232": 6,
+        "235": 3,
+        "356": 76,
+        "412": 154
+      }
+    },
+    "control_tokens": {
+      "\\pop[arg]": 18058,
+      "\\i[arg]": 4562,
+      "\\c[arg]": 10852,
+      "\\C[arg]": 4,
+      "\\ ": 1
+    },
+    "empty_dialogue_401": 570,
+    "nonempty_primary_occurrences": 27212,
+    "nonempty_primary_unique_text": 16865,
+    "message_blocks_detail": {
+      "message_blocks": 19736,
+      "multiline_blocks": 3758,
+      "empty_only_blocks": 570,
+      "without_401": 0
+    },
+    "orphan_401": 0,
+    "pilot": {
+      "scenes": 3,
+      "primary_occurrences": 101,
+      "mirrors": 7,
+      "string_leaf_positions": 108,
+      "independent_static_checks": 20,
+      "human_review": false,
+      "native_verified": false
+    }
+  },
+  "font_coverage": [
+    {
+      "file": "bebas.ttf",
+      "unicode_mappings": 110,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "book.ttf",
+      "unicode_mappings": 497,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "duality.ttf",
+      "unicode_mappings": 475,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Exo-Regular.otf",
+      "unicode_mappings": 398,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "junegull.ttf",
+      "unicode_mappings": 578,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "komika.ttf",
+      "unicode_mappings": 210,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "komikaslim.ttf",
+      "unicode_mappings": 210,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Metropolis-Regular.otf",
+      "unicode_mappings": 287,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Now-Regular.otf",
+      "unicode_mappings": 380,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Postamt.ttf",
+      "unicode_mappings": 398,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Simpleness.otf",
+      "unicode_mappings": 176,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Summerfriday.otf",
+      "unicode_mappings": 178,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    },
+    {
+      "file": "Vegur.otf",
+      "unicode_mappings": 204,
+      "cjk_basic_glyphs": 0,
+      "probe_glyphs": {
+        "中": false,
+        "文": false,
+        "测": false,
+        "试": false
+      }
+    }
+  ],
+  "pilot": {
+    "scenes": [
+      {
+        "id": "S1",
+        "primary_occurrences": 11,
+        "counts": {
+          "dialogue": 9,
+          "choice": 2,
+          "choice_mirror": 2
+        },
+        "message_blocks": 9,
+        "choice_commands": 1,
+        "route_evidence": "static JSON and plugin declarations; no native reachability observation"
+      },
+      {
+        "id": "S2",
+        "primary_occurrences": 46,
+        "counts": {
+          "dialogue": 41,
+          "choice": 5,
+          "choice_mirror": 5
+        },
+        "message_blocks": 34,
+        "choice_commands": 1,
+        "route_evidence": "static JSON and plugin declarations; no native reachability observation"
+      },
+      {
+        "id": "S3",
+        "primary_occurrences": 44,
+        "counts": {
+          "dialogue": 44
+        },
+        "message_blocks": 33,
+        "choice_commands": 0,
+        "route_evidence": "static JSON and plugin declarations; no native reachability observation"
+      }
+    ],
+    "position_checks": 20,
+    "position_check_method": "host Agent reviewed selected source literals and target positions independently of any future Adapter; no human review claimed",
+    "native_checks": 0,
+    "prepared_story_saves": 0
+  },
+  "asset_extension_counts": {
+    ".html": 2,
+    ".dll": 12,
+    ".exe": 2,
+    ".dat": 1,
+    ".pak": 60,
+    ".info": 57,
+    ".json": 212,
+    ".ts": 111,
+    "<no extension>": 2,
+    ".md": 2,
+    ".so": 1,
+    ".node": 4,
+    ".dylib": 1,
+    ".lib": 1,
+    ".js": 45,
+    ".txt": 1,
+    ".bin": 1,
+    ".ogg": 7157,
+    ".mp3": 1,
+    ".ttf": 7,
+    ".otf": 6,
+    ".css": 1,
+    ".png": 501,
+    ".rpgsave": 1,
+    ".vdf": 1
+  },
+  "decision": "continue scoped native JSON contract design for the frozen Komorebi MV bundle; defer production support, native acceptance and public issue closure",
+  "not_done": [
+    "game translation",
+    "game-file modifications",
+    "native reachability",
+    "native display and save/load",
+    "human translation review",
+    "production Adapter",
+    "TPP bridge",
+    "Batch or external work-package engine expansion"
+  ]
+}

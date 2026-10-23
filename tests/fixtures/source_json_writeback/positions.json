@@ -1,0 +1,7 @@
+[
+  {"id":"dialogue", "path":["events",1,"pages",0,"list",1,"parameters",0], "source":"\\pop[1]The lantern is lit.", "translation":"\\pop[1]灯已经亮了。"},
+  {"id":"enter-option", "path":["events",1,"pages",0,"list",4,"parameters",0,0], "source":"\\i[1]Enter", "translation":"\\i[1]进去"},
+  {"id":"wait-option", "path":["events",1,"pages",0,"list",4,"parameters",0,1], "source":"\\i[2]Wait", "translation":"\\i[2]等一等"},
+  {"id":"enter-label", "path":["events",1,"pages",0,"list",5,"parameters",1], "source":"\\i[1]Enter", "translation":"\\i[1]进去"},
+  {"id":"wait-label", "path":["events",1,"pages",0,"list",7,"parameters",1], "source":"\\i[2]Wait", "translation":"\\i[2]等一等"}
+]

@@ -1,0 +1,23 @@
+{
+  "displayName" : "Original P1 fixture",
+  "ratio":1.234567890123456789, "scale":1e+02,
+  "0": {"label":"String key, never an array index"},
+  "events": [null, {
+    "id":1, "name":"Lantern event", "x":3, "y":5,
+    "pages":[{"conditions":{"switch1Valid":false,"switch1Id":1},
+      "list":[
+        {"code":101,"indent":0,"parameters":["",0,0,2]},
+        {"code":401,"indent":0,"parameters":["\\pop[1]灯已经亮了。"]},
+        {"code":101,"indent":0,"parameters":["",0,0,2]},
+        {"code":401,"indent":0,"parameters":[""]},
+        {"code":102,"indent":0,"parameters":[["\\i[1]进去","\\i[2]等一等"],-1,0,2,0]},
+        {"code":402,"indent":0,"parameters":[0,"\\i[1]进去"]},
+        {"code":122,"indent":1,"parameters":[1,1,0,0,1]},
+        {"code":402,"indent":0,"parameters":[1,"\\i[2]等一等"]},
+        {"code":230,"indent":1,"parameters":[30]},
+        {"code":404,"indent":0,"parameters":[]},
+        {"code":0,"indent":0,"parameters":[]}
+      ]}, {"conditions":{"switch1Valid":true,"switch1Id":1},"list":[{"code":0,"indent":0,"parameters":[]}]}]
+  }],
+  "opaque":{"asset":"Lantern_A","enabled":true,"nothing":null}
+}

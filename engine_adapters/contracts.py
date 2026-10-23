@@ -19,6 +19,8 @@ OCCURRENCE_SCHEMA_VERSION = 1
 CONTENT_FINGERPRINT_SCHEMA_VERSION = 1
 VALIDATION_SCHEMA_VERSION = 1
 WRITEBACK_PLAN_SCHEMA_VERSION = 1
+# Opt-in source-copy operations; existing adapters keep emitting schema 1.
+SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION = 2
 CANDIDATE_SCHEMA_VERSION = 1
 COVERAGE_SCHEMA_VERSION = 1
 COVERAGE_REVIEW_SCHEMA_VERSION = 1
@@ -311,11 +313,17 @@ class WritebackOperation:
 
     ``expected_fragment_sha256`` is the common consumer's live value guard. For
     ``text_span_replace`` / ``multiline_text_span_replace`` it covers the raw
-    source span; for ``json_catalog_set`` it covers the current string value at
+    source span; for JSON operations it covers the current target string at
     ``target_json_path``.
     ``expected_text_digest`` binds the adapter-decoded source text into the
     operation and plan digests; the engine-neutral consumer deliberately does
     not decode engine-specific literals a second time.
+
+    Schema 2 ``json_source_string_set`` operations use ``source_copy`` and an
+    ``op2:`` digest. Paths contain nonempty dictionary keys or nonnegative
+    integer array indexes (never booleans). The same relative file/path is
+    resolved in separate immutable-source and current-target snapshots;
+    ``expected_text_digest`` is SHA-256 of the decoded original source string.
 
     ``end_line`` is only serialized for ``multiline_text_span_replace``; when
     present, ``line``/``start_col`` are the start and ``end_line``/``end_col``
@@ -335,7 +343,7 @@ class WritebackOperation:
     expected_text_digest: str
     replacement_fragment: str
     validation_digest: str
-    target_json_path: tuple[str, ...] = ()
+    target_json_path: tuple[str | int, ...] = ()
     end_line: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -365,6 +373,13 @@ class WritebackOperation:
 
 @dataclass(frozen=True)
 class WritebackPlan:
+    """Bound rendering instructions, without filesystem write authority.
+
+    Schema 1 payloads and their default version remain unchanged. Schema 2
+    requires a separate ``target_snapshot_fingerprint`` and live target
+    documents; it cannot be consumed through the legacy single-snapshot path.
+    """
+
     engine: str
     adapter_version: str
     project_identity_digest: str
@@ -374,9 +389,10 @@ class WritebackPlan:
     operations: tuple[WritebackOperation, ...]
     plan_digest: str
     writeback_plan_schema_version: int = WRITEBACK_PLAN_SCHEMA_VERSION
+    target_snapshot_fingerprint: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "writeback_plan_schema_version": self.writeback_plan_schema_version,
             "engine": self.engine,
             "adapter_version": self.adapter_version,
@@ -387,6 +403,12 @@ class WritebackPlan:
             "operations": [operation.to_dict() for operation in self.operations],
             "plan_digest": self.plan_digest,
         }
+        if (
+            self.writeback_plan_schema_version == SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION
+            or self.target_snapshot_fingerprint
+        ):
+            payload["target_snapshot_fingerprint"] = self.target_snapshot_fingerprint
+        return payload
 
 
 @runtime_checkable
