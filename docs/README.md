@@ -72,7 +72,7 @@
 
 - 本轮工程已分别由 PR #522（#521）、#515 / #517 / #523（#427 S1/S2）、#524（#512）和 #527（#513）合并。#427 仍等待真实语料、操作与游戏验收；#512 / #513 的 issue 验收清单尚未回填，OPEN 不表示实现缺失。
 - 统一真实项目 / Provider 验收仍跟踪 #518、#508、#344、#470；#431 已按首期范围完成并关闭，后续 Provider 验收由 #344 跟踪。工程合并、CI 或合成 fixture 均不能替代这些证据。操作与记录入口分别见[外部初译工作包](external_translation_work.md)、[Provider Smoke Matrix](provider_smoke_matrix.md)及计划索引。
-- #509 Translator++ 往返、#520 OpenRouter Batch、#272 第三引擎与 #147 Story Graph 不属于本轮；#509 / #520 先做实验，再决定是否创建生产接入任务。
+- 上述工程范围不包含 #509 / #520 的独立实验或 #272 / #147。2026-10-22 补记：#509 / PR #562 已交付有限往返并决定暂缓生产 bridge；#272 / #147 的研究收尾与重启条件见下方新文档，其他历史项仍按各自日期解释。
 - [维护复杂度治理路线](plans/maintainability_roadmap.md)：#528 已由 PR #529 / #530 完成并关闭；#531 已登记但尚未实施，属于独立维护队列，不是 #510 或本轮功能的前置条件。
 - [#202 Settings 页面合同](plans/issue-202-settings-page-contract.md)：Phase A–D 已完成，issue 已关闭；当前界面见[GUI 工作台](gui_workbench.md)。
 - [#348 Model Routing 合同](plans/issue-348-model-routing-config-contract.md)：P0–P3 已完成，issue 已关闭；当前迁移见[模型配置迁移](model_config_migration.md)，后续真实 smoke 归 #344，#431 首期记录保留。
@@ -83,7 +83,8 @@
 - [#487 字体覆盖只读 spike](plans/renpy_font_coverage_spike.md)：PR #511 已交付并关闭；字体生产接入仍待评估，没有纳入本轮。
 - [#427 普通译文审校合同](plans/issue-427-review-index-contract.md)：S1/S2 工程已合并；真实验收仍归 #427，当前 GUI 说明见[GUI 工作台](gui_workbench.md)。
 - [#431 OpenAI-compatible 与 final_review Sync 合同](plans/issue-431-openai-compatible-contract.md)：S1–S3 及首期真实验收已完成，issue 已关闭；保留历史合同，后续 Provider 验收归 #344。
-- [Translator++ 接入评估](plans/translatorpp_integration_assessment.md)：尚无 bridge 或真实往返证据；按 #509 先实验、后决定是否实施。
+- [#272 研究归档、#565 调查衔接与 #147 暂缓](plans/issue-272-research-closeout-2026-10-22.md)：#272 保持开放，等待 Komorebi 的版本/文本范围与选型回填；生产实现待调查后另拆，Story Graph 维持低优先级；issue 文字仅为草稿。
+- [Translator++ 接入评估](plans/translatorpp_integration_assessment.md)：#509 / PR #562 已交付 MV 1.5.1 单版本有限往返；保留独立使用，生产 bridge 暂缓，不扩展引擎支持范围。
 
 ### 历史参考（已归档）
 
