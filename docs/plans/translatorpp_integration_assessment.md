@@ -4,14 +4,15 @@
 > **核对日期与基线**：2026-09-16；本仓库 `main@f5cec70`、GitHub issue 正文及最新状态评论、Translator++ 官方文档与发行说明。
 > **#509 续验补记（2026-10-22）**：[本轮报告与原创数据](issue-509-translatorpp-roundtrip-2026-10-21.md)固定 MV 编辑器/core **1.5.1**、TPP **8.8.9**，实际由前端 parser 3.3 委派 RMMVJS **2.19**。已完成真实 `.trans` 保存与导出：限定译文精确命中19处；独立null保存/重开/导出补测通过，混合空值回退原文；无修改全资源导出改写插件注释/换行；staging恢复重试成功，源前插注释后丢失一处context译文。部分原生/HTML5运行及负例另列，限定spike证据已齐；决定保留TPP独立使用、bridge暂缓。下方9月版本表仍是历史快照，其余引擎未刷新。
 > **关联**：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[多引擎能力矩阵](visual_novel_localization_matrix.md)、[生态研究](multi_engine_localization_ecosystem_research.md)。
-> **排期边界**：本文补充外部工具路线，不解除 #272 的暂缓决定，不把其他引擎标为已支持，也不扩大 [Agent 工具包提案 PR #499](https://github.com/hu-border-collie/renpy-translation-lab/pull/499) 的首轮 Ren'Py 实验范围。
+> **排期边界**：本文补充外部工具路线，不自动解除第三 Adapter 生产实现的暂缓，不把其他引擎标为已支持，也不扩大 [Agent 工具包提案 PR #499](https://github.com/hu-border-collie/renpy-translation-lab/pull/499) 的首轮 Ren'Py 实验范围；当前研究由 #565 承接，见下条。
+> **当前决定（2026-10-22）**：#509 已随 PR #562 合并关闭，保留独立工具使用、生产 bridge 暂缓；新 [#565](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)启动 Komorebi 只读调查，#272 保持 open 等待选型回填，生产 Adapter 待调查后另拆。下方 9 月表格与 bridge/MCP 设计为历史记录，不因 #565 自动恢复；见[研究归档与调查衔接](issue-272-research-closeout-2026-10-22.md)。
 > **当前状态对照（2026-09-27；保留下方 9 月 16 日快照）**：#457 已于 9 月 16 日关闭并维持原默认值；#488 已于 9 月 17 日关闭；字体 spike #487 由 PR #511 交付并于 9 月 20 日关闭。#427 S1/S2 后续由 PR #515 / #517 / #523 合并；#431 S1–S3 由 PR #504–#506 合并，真实 smoke 仍待 #431 / #344。Translator++ 往返仍由 #509 决定是否继续，未创建生产 bridge。全量当前映射见[计划状态索引](README.md)。
 
 ## 1. 结论与帮助范围
 
-**Translator++ 可以充当可选的外部格式适配后端，最有希望节省的是特定引擎的解包、文本提取和游戏格式导出工作。** 本项目仍需负责导入制品的身份、上下文映射、结果完整性、冲突与过期检测、结构规则、受控写回，以及独立的游戏验收。
+**当前保留 Translator++ 独立使用，暂不立项生产 bridge。** #509 在 MV 1.5.1 固定窗口取得有限提取/导出证据，也暴露严格文件保护失败与漂移缺译。本项目若接入仍需承担身份、上下文、完整性、冲突/stale、结构、安全写回和独立游戏验收，净收益尚无同口径对照。
 
-推荐先验证 **一个固定版本的 RPG Maker 叙事工程，经 `.trans` 文件交换完成往返**。文件 bridge 通过后再评估 MCP 自动化。Naninovel 仍保留为原生 Adapter 首选；是否开发 bridge，应由实验中的净收益决定。
+旧“先单版本文件往返、再 bridge/MCP”是实验依赖设计，首个阶段已由 #509 有界交付，不是自动推进后的开发清单。Naninovel 仅为原生目录条件候选；没有第三 Adapter 排名或实施承诺。
 
 目前不能给出“节省百分之多少开发量”或“几百行换来所有引擎支持”的可信估算。不同 parser 的支持窗口、上下文粒度与导出依赖差异很大；#509 只取得单版本有限样本，尚无同口径净收益 A/B 数据。
 
@@ -54,7 +55,7 @@ Translator++ 已有 [LiteLLM add-on](https://dreamsavior.net/docs/add-on/litellm
 
 ## 3. 对当前 issues 和路线的影响
 
-下表为 2026-09-16 状态快照。issue 的新评论可能修正正文中的旧记录；更新本文时应同时读取两者。
+下表为 2026-09-16 状态快照，包含当时的 A+/B+ 候选与未完成提案描述，均不代表今天状态；2026-10-22 的路线以页首补记和有限研究收尾为准。issue 正文和后续评论须一起阅读。
 
 | 工作项与当前状态 | Translator++ 的作用与处理建议 |
 | --- | --- |
@@ -152,14 +153,14 @@ Translator++ 中的人工修改可作为新的结果或 revision proposal 导入
 
 ## 5. 最小实验与验收
 
-### 5.1 分阶段推进
+### 5.1 历史分阶段方案（未排期）
 
 1. **先验证 Translator++ 自身往返**：取得允许使用的指定安装包，建立原创、可再分发的单版本 RPG Maker 叙事 fixture。记录 parser/配置，先做无译文改动导出，再做少量手工译文导出，检查实际选列、上下文与 staging 行为。此时不需要开发完整 bridge。
 2. **收敛公共外部结果合同**：沿 PR #499 的 Ren'Py 实验验证工作包、partial、冲突、stale 与安全写回。保留它的初译/订正原范围，不把第三引擎插入首轮验收。
 3. **只接一个外部格式窗口**：复用公共合同，补 `.trans` reader、身份映射、源引擎结构规则和受控制品 writer；先通过离线正反例，再经 Translator++ 导出到新游戏副本。
 4. **比较实际收益后决定产品化**：成立则再拆 CLI/GUI、doctor/preflight 和可选 MCP 自动化；收益不足则保留 Translator++ 独立使用或差分检查，不扩大 Adapter 支持声明。
 
-这是建议的实验依赖顺序，不是新的已排期实现单。按 [#272 的暂缓条件](https://github.com/hu-border-collie/renpy-translation-lab/issues/272#issuecomment-5664156832)，正式立项时还应刷新版本、fixture 许可与当前优先级。
+这是 2026-09-16 的实验依赖顺序，不是已排期实现单；步骤 1 的限定结果见 #509，步骤 2 的[现有外部工作包](../external_translation_work.md)仍限 Ren'Py，步骤 3/4 未启动。#565 已登记具体游戏需求，先调查实际版本和文本范围、优先评估原生路线；只有实际缺口才另比较外部 bridge。生产实现仍须合法素材/再分发边界、输入/覆盖和安全写回验收，不以队列清空或本轮文档合并触发。
 
 ### 5.2 必须通过的检查
 
