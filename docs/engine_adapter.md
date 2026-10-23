@@ -397,6 +397,59 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
 
+<a id="source-json-writeback-p1"></a>
+
+## 公共源 JSON 字符串节点（P1 核心 API）
+
+现有 Ren'Py / Tyrano 计划继续使用 schema 1：`WRITEBACK_PLAN_SCHEMA_VERSION`、默认
+构造、序列化字段与 digest 保持原样，`json_catalog_set` 仍只允许
+`localization_catalog` 下的字符串字典键。它没有被放宽为游戏源树写回。
+
+P1 新增显式选择的 `SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION = 2`。这只是共享核心
+合同；RPG Maker Adapter、Sync / CLI / GUI 入口、doctor 和配置属于后续阶段，当前不提供
+可对真实游戏运行的新命令。该分阶段边界及后续任务见
+[#565 调查与实施范围](plans/issue-565-komorebi-survey-2026-10-23.md#7-可直接立项的后续任务)。
+
+| schema 2 字段 | 含义 |
+| --- | --- |
+| `kind=json_source_string_set`、`target_root=source_copy` | 只描述受控目标副本中的已有字符串叶子；操作 ID 为 `op2:` 加 payload digest |
+| `target_json_path` | 非空字典键和非负整数数组下标的类型化路径；拒绝布尔值、浮点数、负数、空键和把数字字符串当数组下标 |
+| `source_snapshot_fingerprint` | 冻结原文文档的快照；与当前已译副本分开，原文不能从副本重新推断 |
+| `target_snapshot_fingerprint` | 当前目标副本文档的独立快照；即使只改变未选字段，旧计划也失效 |
+| `expected_text_digest` | 同一相对文件 / JSON 路径下，原始源字符串 UTF-8 的 SHA-256 |
+| `expected_file_sha256` / `expected_fragment_sha256` | 当前目标文件字节 / 当前目标字符串的 SHA-256，不要求当前目标仍是英文 |
+
+源和目标使用同一相对布局，不支持通过本合同重映射到另一个文件 / 参数。两份快照的
+文档内容、长度与摘要会重新核对，重复文件 / 目标被拒绝。schema 2 不能混入 schema 1
+操作，也不能降级到单快照写回。源为空白字符串时保持结构；译文必须为非空白 UTF-8
+字符串。当前目标可以是空串，但必须由其文件、字符串和目标快照摘要明确绑定。
+
+核心 API 要求调用方同时提供两份现场文档：
+
+```python
+rendered = render_writeback_plan(
+    plan,
+    immutable_source_documents,
+    live_targets=current_target_documents,
+)
+```
+
+返回值仍是相对文件到内存行数组的映射，不打开文件写入。新 renderer 只替换选中
+**字符串值 token**：未选字节、数值精度 / 指数拼写、键、空白、BOM、换行和末尾换行均
+保留；译文与现值相同时不重新序列化。非法 JSON、重复对象键、非 JSON 数值常量、缺失
+路径和 null / 非字符串叶子均拒绝，不创建节点或改变数组结构。
+
+Sync 持久化计划 reader 能读取 schema 2 的整数路径和目标快照，但当前单快照的
+Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目标目录隔离、紧邻提交的
+现场重读、项目 / 任务身份和最新 `check -> apply` 门禁，再把渲染结果交给既有原子事务。
+核心 plan 校验不等于写回授权，也不新增绕过入口或削弱 `force` 的限制。
+
+[原创夹具](../tests/fixtures/source_json_writeback/README.md)手工固定一条对白、两个选项
+及两个独立 402 镜像的预期输出；[回归测试](../tests/engine_adapters/test_source_json_writeback.py)
+验证字节保护、独立源 / 现译、持久化读取、漂移 / 类型错误拒绝，并组合既有原子 writer
+验证副本提交、失败回滚、晚到目标编辑保护和崩溃日志恢复。它不包含商业游戏材料，也
+不代表 RPG Maker 引擎、结构保护或原生运行验收完成。
+
 ## P6 离线端到端回归与边界
 
 P6 收口不依赖真实游戏运行时，回归分为三层，全部在 CI 的 CLI / GUI 套件中执行：

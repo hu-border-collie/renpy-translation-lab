@@ -211,7 +211,12 @@ def _deserialize_writeback_plan(payload: Any):
     reject malformed or edited manifests through one public failure mode.
     """
 
-    from engine_adapters.contracts import WritebackOperation, WritebackPlan
+    from engine_adapters.contracts import (
+        SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION,
+        WRITEBACK_PLAN_SCHEMA_VERSION,
+        WritebackOperation,
+        WritebackPlan,
+    )
 
     if not isinstance(payload, dict):
         raise ValueError("Sync preview writeback plan must be an object.")
@@ -219,6 +224,23 @@ def _deserialize_writeback_plan(payload: Any):
     if not isinstance(raw_operations, list):
         raise ValueError("Sync preview writeback plan operations must be a list.")
     operations = []
+    schema = payload.get("writeback_plan_schema_version")
+    if type(schema) is not int or schema != SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION:
+        # Preserve the existing schema-1 reader's numeric coercion. Opting in
+        # to source-copy semantics still requires an actual JSON integer 2.
+        try:
+            schema = int(schema)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Unsupported sync preview writeback plan schema version.") from exc
+        if schema != WRITEBACK_PLAN_SCHEMA_VERSION:
+            raise ValueError("Unsupported sync preview writeback plan schema version.")
+    source_copy = schema == SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION
+    target_snapshot = payload.get("target_snapshot_fingerprint", "")
+    if source_copy:
+        if not isinstance(target_snapshot, str) or not target_snapshot:
+            raise ValueError("Source-copy writeback plans require a target snapshot fingerprint.")
+    elif target_snapshot:
+        raise ValueError("Schema 1 writeback plans cannot bind a separate target snapshot.")
     operation_fields = (
         "operation_id",
         "kind",
@@ -247,9 +269,13 @@ def _deserialize_writeback_plan(payload: Any):
                 values["end_line"] = int(raw_end_line)
             raw_json_path = raw_operation.get("target_json_path", [])
             if not isinstance(raw_json_path, list) or any(
-                not isinstance(part, str) for part in raw_json_path
+                not (
+                    (isinstance(part, str) if not source_copy else type(part) is str and bool(part))
+                    or (source_copy and type(part) is int and part >= 0)
+                )
+                for part in raw_json_path
             ):
-                raise ValueError("Sync preview writeback target_json_path must be a string list.")
+                raise ValueError("Sync preview writeback target_json_path has invalid key/index types.")
             values["target_json_path"] = tuple(raw_json_path)
             operations.append(WritebackOperation(**values))
         return WritebackPlan(
@@ -261,7 +287,8 @@ def _deserialize_writeback_plan(payload: Any):
             coverage_review_digest=str(payload.get("coverage_review_digest") or ""),
             operations=tuple(operations),
             plan_digest=str(payload["plan_digest"]),
-            writeback_plan_schema_version=int(payload["writeback_plan_schema_version"]),
+            writeback_plan_schema_version=schema,
+            target_snapshot_fingerprint=target_snapshot,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"Invalid sync preview writeback plan: {exc}") from exc
