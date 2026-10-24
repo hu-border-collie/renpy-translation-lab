@@ -9,3 +9,6 @@ certifi>=2026.10.19
 aiohttp>=3.14.4
 # Security floor for aiohttp's transitive dependency (GHSA-54p9-h82j-f925).
 multidict>=6.9.1
+# Security floor for filelock's SQLite and Windows soft-lock advisories:
+# GHSA-v4x8-3wr5-3wq8, GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92.
+filelock>=4.2.1
