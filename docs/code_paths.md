@@ -1,8 +1,8 @@
 # 代码路径索引
 
 本文列出维护当前配置、模型路由、执行、写回和 GUI 页面时需要核对的主要入口。它是调用链
-索引，不替代模块 docstring、测试或用户手册。2026-09-09（#202 Phase A）补齐了 doctor、Batch、
-同步翻译、关键词、订正写回、项目切换和 Settings 保存的可追踪入口。
+索引，不替代模块 docstring、测试或用户手册。源码与测试路径已按 2026-10-24 的
+`main@b5a3f14` 核对，目录分层见[架构概览](architecture.md)，测试运行见[测试目录](../tests/README.md)。
 
 ## `translator_config.json`
 
@@ -77,16 +77,16 @@
 
 - `gui_qt/app.py`：应用壳、导航、Settings 总协调和遗留 glue。
 - `gui_qt/workbench/`：真实工作台页面及页面 contract 的参考实现
-  （`page_contract.py` / `coordinator.py`）。
+  （`gui_qt/workbench/page_contract.py` / `gui_qt/workbench/coordinator.py`）。
 - `gui_qt/workflows/*_workflow.py`：GUI 动作到 CLI/服务调用的包装。
 - `gui_qt/diagnostics_context.py`：CLI 命令参考与诊断入口。
 - `gui_qt/user_copy.py`：共享用户文案；新增产品能力须同步。
 - `gui_qt/reports/readiness_display.py`：doctor / preflight 结果的纯呈现投影（不扫描、不判断业务门禁）；
-  `app.py` 的 `_readiness_project_identity` / `_readiness_task_identity` / `_sync_readiness_display`
-  绑定已保存设置与操作代次，`workbench/translation_page.py` 显示两个翻译页的摘要。
+  `gui_qt/app.py` 的 `_readiness_project_identity` / `_readiness_task_identity` / `_sync_readiness_display`
+  绑定已保存设置与操作代次，`gui_qt/workbench/translation_page.py` 显示两个翻译页的摘要。
 - `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`。
 - `gui_qt/settings/registry.py`：`SettingsPageSpec` / `SettingsPageRegistry` / `build_default_registry`；
-  10 页身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
+  11 个分类的页面身份、唯一配置键所有权与 lazy 属性映射的唯一来源。
 - `gui_qt/settings/coordinator.py`：`SettingsCoordinator` 的 `ensure_page` / `activate` / `load` /
   `collect` / `validate` / `reset` / `focus_issue` / `set_task_running`（记录并在建页时补发） /
   `set_baseline` / `is_dirty` / `leave_guard_prompt` / `save`（经 host `persist`）；不依赖 Qt。
@@ -127,7 +127,7 @@
 - 采集与建议：`gemini_translate_batch.py` 的 `collect_doctor_translation_progress()`、
   `collect_tl_doctor_counts()`、`collect_doctor_layout_context()` / `assess_doctor_layout_status()`、
   `collect_doctor_workflow_state()`、`collect_doctor_recommendations()` →
-  `doctor_recommendations.py` 的稳定 code 与 `gui_qt/reports/doctor_report.py` 的用户摘要。
+  `foundation/doctor_recommendations.py` 的稳定 code 与 `gui_qt/reports/doctor_report.py` 的用户摘要。
 - GUI：`doctor_btn` / `Ctrl+D` → `MainWindow._on_doctor_button_clicked()` → `_on_run_doctor()` →
   `_snapshot_runtime_config_for_job(persist_corrected_game_root=False)` → `gui_qt/workers/doctor_worker.py` 的
   `DoctorWorker`（QThread）→ `run_doctor_check_in_subprocess()`（spawn 子进程，测试/启动失败回退
@@ -141,7 +141,7 @@
 
 ## 字体字形覆盖 spike（#487）
 
-- 只读核心：`font_coverage.py` 的 `load_font_face()` / `scan_font_references()` /
+- 只读核心：`foundation/font_coverage.py` 的 `load_font_face()` / `scan_font_references()` /
   `extract_translation_strings()` / `analyze_font_coverage()` / `format_report_markdown()`；
   只解析 `.rpy` 文本与 sfnt cmap，不启动 Ren'Py、不执行游戏 Python、不写项目。
 - CLI：`scripts/font_coverage_report.py --game-root ... [--tl-dir ...] [--text-file ...]`
@@ -183,7 +183,7 @@
 ## 设置 · 模型与供应商（#348 P3）
 
 - `gui_qt/settings/profiles_page.py`（`ProfilesSettingsPage`）持有单一配置键
-  `model_routing`；增删改查通过 Qt-free 的 `model_profiles_editor.py` 完成，保存经
+  `model_routing`；增删改查通过 Qt-free 的 `providers/model_profiles_editor.py` 完成，保存经
   #202 coordinator → `gui_qt/settings/save_apply.py` 校验并原位写回，未知字段保留。
 - `model_profiles_editor.editor_view()` 输出无凭据的 provider/profile/能力/阶段路由投影；
   `section_issues()` 复用 `model_routing_config.validate_model_routing_section()`。
@@ -191,9 +191,9 @@
   `profiles-set-route` / `profiles-list-models`（`gemini_translate_batch.py`，离线、原子写回、
   保留未知字段；`profiles-list-models` 只读直连 provider 的 models 端点），
   与 GUI 页共用同一 editor 核心。
-- 直连 adapter：`openai_compatible_sync_backend.py` 调用 Chat Completions；
-  `openai_compatible_connection.py` 统一生成/目录路径的凭据、headers、URL 与脱敏；
-  `openai_compatible_model_catalog.py` 提供只读模型目录发现。
+- 直连 adapter：`providers/openai_compatible_sync_backend.py` 调用 Chat Completions；
+  `providers/openai_compatible_connection.py` 统一生成/目录路径的凭据、headers、URL 与脱敏；
+  `providers/openai_compatible_model_catalog.py` 提供只读模型目录发现。
 - 测试：`tests.providers.test_model_profiles_editor`、`tests.gui.settings.test_settings_profiles_page`、
   `tests.gui.settings.test_settings_registry`、`tests.gui.settings.test_settings_save_apply`、
   `tests.providers.test_openai_compatible_model_catalog`。
@@ -202,7 +202,7 @@
   的 `add_model_navigation()` 通过页面 action 回调连接统一编辑器和旧模型页。
   行为与布局回归：`tests.gui.settings.test_gui_settings_entry`（最小/常规/宽窗口、未保存编辑、
   默认值、配置状态区分、保存/重载与选择保留）。
-- #540 B 的长表单：`advanced_page.py` 按标签 / 配置键 / 路径过滤现有行并聚焦命中项，
+- #540 B 的长表单：`gui_qt/settings/advanced_page.py` 按标签 / 配置键 / 路径过滤现有行并聚焦命中项，
   不改变 collect / baseline；`page_chrome.SettingsMasterDetail` 仅重排现有模型和供应商
   列表 / 详情控件。`tests.gui.settings.test_settings_advanced_page` 覆盖键盘搜索、类别跳转、清除、
   无匹配及编辑保留；`tests.gui.settings.test_gui_settings_entry` 覆盖响应式布局与共同保存回归。
@@ -266,10 +266,10 @@
   再 `merge_selected_candidates()`；写入前用 `KeywordReviewContext` +
   `keyword_review_context_stale_reason()` 复核项目、当前候选选择代次、
   `keyword_candidate_content_fingerprint()` 内容版本与术语表目标）→
-  `keyword_glossary_merge.py` 写 `glossary.json`（写入前备份）。
+  `quality_review/keyword_glossary_merge.py` 写 `glossary.json`（写入前备份）。
   CLI 等价入口为 `merge-keywords-to-glossary`，命令模板由
   `keyword_glossary_merge.build_merge_keywords_cli_command()` 生成。
-- 历史证据：`keyword_history.py` 只读匹配已有 old/new 译文，产出 consistent/conflict/ambiguous
+- 历史证据：`quality_review/keyword_history.py` 只读匹配已有 old/new 译文，产出 consistent/conflict/ambiguous
   等证据状态，不直接改 glossary 或脚本。
 - 测试：`tests.gui.workflows.test_gui_keyword_workflow`、`tests.gui.workflows.test_gui_sync_keyword_workflow`、
   `tests.gui.dialogs.test_gui_keyword_merge_dialog`、`tests.gui.reports.test_gui_keyword_merge_report`、
@@ -287,11 +287,11 @@
 - Sync 订正：`gui_qt/workflows/sync_revision_workflow.py` 的 `SyncRevisionWorkflow` →
   `gemini_translate_batch.py sync-revisions` 生成 preview 报告，仍经同一 `apply-revisions` 门禁。
 - 订正提案：CLI `export-revision-corpus` → 外部/人工编辑 → `import-revision-proposals` →
-  `gui_qt/dialogs/revision_selection_dialog.py` + `revision_selection.py` 的 staged selection →
+  `gui_qt/dialogs/revision_selection_dialog.py` + `quality_review/revision_selection.py` 的 staged selection →
   `confirm-revision-proposals` → `preview-revisions` / `apply-revisions`。最终审校的
   `final-review-create-revisions` 也汇入同一门禁。
-- 最终审校：`final_review.py` 管 campaign package / unit / findings / quality 映射，
-  `final_review_llm.py` 管 prompt / schema / Batch JSONL / ingest；`final-review-build`
+- 最终审校：`quality_review/final_review.py` 管 campaign package / unit / findings / quality 映射，
+  `quality_review/final_review_llm.py` 管 prompt / schema / Batch JSONL / ingest；`final-review-build`
   按冻结的 `routes.final_review.strategy` 分流：Batch 走 `submit → download →
   final-review-ingest-results`，sync 走 `final_review_sync.py` 的
   `final-review-run-sync`（逐 unit 调用 `run_sync_request` 并原子落盘）。
@@ -304,9 +304,9 @@
   `RevisionPage.set_guidance_state()` → `gui_qt/reports/revision_guidance.py`；仅投影 workflow、
   服务摘要、候选会话和审校状态，不授权动作。取消导入与跳过可选配套语料由
   `_choose_revision_corpus_manifest()` 区分；仍汇入同一提案导入路径。
-- 纯核心：`revision_corpus.py`（只读导出）、`revision_proposals.py`（导入校验）、
-  `revision_selection.py`（选择/摘要绑定）、`final_review_revision.py`（审校联动）、
-  `review_index.py`（#427 逐条审校索引、独立决定日志与 `needs_recheck` 绑定语义）。
+- 纯核心：`quality_review/revision_corpus.py`（只读导出）、`quality_review/revision_proposals.py`（导入校验）、
+  `quality_review/revision_selection.py`（选择/摘要绑定）、`quality_review/final_review_revision.py`（审校联动）、
+  `quality_review/review_index.py`（#427 逐条审校索引、独立决定日志与 `needs_recheck` 绑定语义）。
 - CLI：`review-index-build` / `review-index-status` / `review-decisions-import` /
   `review-decisions-export`（只读写本地 index 包，不触碰写回授权）。
 - 测试：`tests.gui.workflows.test_gui_revision_workflow`、`tests.gui.workflows.test_gui_sync_revision_workflow`、
@@ -329,7 +329,7 @@
   `reset_project()` 上下文库/Sync/关键词/订正页 → 清空 workflow、writeback、manifest、doctor、
   revision corpus/proposal 状态 → `_apply_work_mode_ui()` → `_refresh_diagnostics_context()`。
 - 工作区：`_on_workspace_changed()` → `ProjectState.set_workspace_root()`；
-  项目列表维护经 `gui_qt/workbench/games_registry_actions.py` → `games_registry.py` 的
+  项目列表维护经 `gui_qt/workbench/games_registry_actions.py` → `execution/games_registry.py` 的
   `load_registry()` / `save_registry()` / `refresh_all()` / `merge_discovered_projects()` /
   `record_batch()` / `apply_workspace_setup()`，后台执行由 `RegistryRefreshWorker` /
   `RegistryIngestWorker` 承担。
@@ -405,7 +405,7 @@
 
 ## P1/P2 配置迁移与生产读取
 
-`model_config_migration.py` → `model_routing_migration_store.py` →
+`providers/model_config_migration.py` → `providers/model_routing_migration_store.py` →
 `model_routing_migration.preview_migration` → schema validator / 兼容 reader →
 `config_store` 备份、报告和原子替换。GUI 的原始 JSON 保存也委托该 store 并共用写锁。
 P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 [迁移说明](model_config_migration.md)。
@@ -433,7 +433,7 @@ P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 
 
 - 配置结构：同步 example、runtime reader、Settings schema/page、迁移和文档。
 - CLI 命令/输出：同步 argparse、workflow、诊断命令参考和机器合同测试。
-- GUI 入口/用语：同步 `user_copy.py`、GUI 文档和 GUI 测试。
+- GUI 入口/用语：同步 `gui_qt/user_copy.py`、GUI 文档和 GUI 测试。
 - Settings 结构/导航：同步 `_SETTINGS_PAGE_SPECS`、lazy 映射、dirty 键所有权、
   `gui_qt/settings/` 合同（Phase B 起）和相关 GUI 测试。
 - 写回：保持 check → bound preview → apply、source snapshot 和 blocker 合同。

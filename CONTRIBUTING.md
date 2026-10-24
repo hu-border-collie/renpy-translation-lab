@@ -19,17 +19,17 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 ### 推荐实现顺序
 
 1. **先写可复用核心**  
-   优先放在 CLI 侧模块（例如 `gemini_translate_batch.py`、`batch_cost_estimate.py`、`story_memory.py`），或抽到 CLI/GUI 共用的纯函数模块（例如 `gui_qt/workflows/batch_workflow_support.py` 只做参数与展示辅助，核心估算仍来自 `batch_cost_estimate.py`）。
+   优先放在 CLI 侧模块（例如 `gemini_translate_batch.py`、`providers/batch_cost_estimate.py`、`context_engine/story_memory.py`），或抽到 CLI/GUI 共用的纯函数模块（例如 `gui_qt/workflows/batch_workflow_support.py` 只做参数与展示辅助，核心估算仍来自 `providers/batch_cost_estimate.py`）。
 
 2. **再接 CLI 入口**  
    子命令、参数、manifest 字段、doctor 报告等。
 
 3. **最后接 GUI**  
-   - 批量类流程：`translation_workflow.py` / `keyword_workflow.py` / `revision_workflow.py` / `split_batch_workflow.py`  
-   - 环境检查：`doctor_worker.py` + `doctor_report.py` + `user_copy.py`  
-   - 设置：`settings_schema.py`  
-   - 诊断：`diagnostics_context.py`  
-   - 应用壳：`app.py`
+   - 批量类流程：`gui_qt/workflows/translation_workflow.py` / `gui_qt/workflows/keyword_workflow.py` / `gui_qt/workflows/revision_workflow.py` / `gui_qt/workflows/split_batch_workflow.py`
+   - 环境检查：`gui_qt/workers/doctor_worker.py` + `gui_qt/reports/doctor_report.py` + `gui_qt/user_copy.py`
+   - 设置：`gui_qt/settings/settings_schema.py`
+   - 诊断：`gui_qt/diagnostics_context.py`
+   - 应用壳：`gui_qt/app.py`
 
 4. **两边一起测**  
    至少各有一条自动化测试；能跑 unittest 时不要只用手动点 GUI 代替。
@@ -41,18 +41,18 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 - [ ] CLI 行为已实现，并有对应测试或 golden/smoke 覆盖（视改动类型而定）
 - [ ] GUI 能触发同一能力，或展示同一诊断/配置结果
 - [ ] 新增配置项在 `translator_config.example.json` 与 GUI 高级设置中同步出现（如适用）
-- [ ] 用户可见中文文案在 `user_copy.py` 或相关 report 模块中有对应翻译（如适用）
+- [ ] 用户可见中文文案在 `gui_qt/user_copy.py` 或相关 report 模块中有对应翻译（如适用）
 - [ ] 未同步的一方在 PR 描述中 **明确写出原因** 和后续 issue（仅允许有意的例外）
 
 ### 常见落点对照
 
 | 能力类型 | CLI | GUI |
 |----------|-----|-----|
-| 新子命令 | `gemini_translate_batch.py` `build_arg_parser()` / `main()` | `diagnostics_context.py` 命令参考；workflow 的 `args` |
+| 新子命令 | `gemini_translate_batch.py` `build_arg_parser()` / `main()` | `gui_qt/diagnostics_context.py` 命令参考；workflow 的 `args` |
 | doctor 检查项 | `collect_doctor_report()` | `doctor_report_to_parsed()`、警告翻译、`summarize_doctor_report()` |
 | 成本 / 限额 / 闸门 | 命令行 flag 或 manifest 字段 | 设置项 + workflow 传参 + 摘要 facts |
-| 进度 / ETA | 标准输出（如有） | `*_report.py` / `workflow_progress.py` 等解析与展示 |
-| Gemini 内置模型列表 | `gemini_model_catalog.py`（单一源） | 同上；用户扩展写 `translator_config.json` → `model_catalog` |
+| 进度 / ETA | 标准输出（如有） | `*_report.py` / `gui_qt/reports/workflow_progress.py` 等解析与展示 |
+| Gemini 内置模型列表 | `providers/gemini_model_catalog.py`（单一源） | 同上；用户扩展写 `translator_config.json` → `model_catalog` |
 | API Key / 模型轮换 | `translator_runtime.py` `rotation.*`；`rotate_api_key` / `rotate_model` | 设置 → 高级「请求轮换」 |
 
 ### 允许的例外（须在 PR 中说明）
@@ -85,6 +85,15 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 - **测试**：改动后按[测试目录说明](tests/README.md)运行相关完整模块名，例如 `python -m unittest tests.providers.test_model_profile`；GUI 改动优先跑 `tests.gui` 下对应模块。
 - **依赖**：直接版本只在对应的 `requirements-*.txt` 权威输入中维护；依赖升级应单独成 PR，并按[依赖输入与哈希锁](docs/dependencies.md)重生成全部锁。不要手改 `requirements-lock/`。
 - **质量门禁**：PR 会跑 `scripts/run_quality_gates.py all`（lint / 类型检查 / 依赖审计）。工具版本在 `requirements-dev.txt`，配置在 `pyproject.toml`，漏洞例外在 `quality/pip-audit-exceptions.json`。blocking 范围刻意收窄；扩大范围前先测量基线并单独 PR。说明见 [CI 与定时集成检查](docs/ci.md)。
+
+## 文档维护
+
+- 根目录 `README.md` 保留项目定位、安装和角色入口；专题导航集中在[文档地图](docs/README.md)。
+- 当前行为更新对应用户手册；包分层与所有权更新[架构概览](docs/architecture.md)，调用链、路径和测试模块更新[代码路径索引](docs/code_paths.md)。
+- issue 状态、合并证据和剩余任务集中在[计划索引](docs/plans/README.md)，核对 GitHub 后注明日期，避免在多个入口重复维护待办。
+- 新增计划或公开材料说明时登记到计划索引；有日期的报告保留原始基线与结果，后续变化用注明日期的补记衔接。
+- 只归档仅具历史回顾价值的过程稿；仍被现行实现、测试或决策引用的合同保持路径稳定。关闭 issue 不自动触发归档。
+- 纯文档修改至少检查所有 tracked 本地 Markdown 路径、锚点和 `git diff --check`；源码与测试路径也应按当前 checkout 核对。
 
 ## 相关文档
 

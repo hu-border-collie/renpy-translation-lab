@@ -1,220 +1,143 @@
 # 架构概览
 
-本文描述当前 `main` 的维护者边界。面向使用者的操作步骤以快速开始和工作流文档为准；
-规划中的结构以 `docs/plans/` 为准。
-
-> 2026-09-09（#202 Phase A/B/C/D 十页已迁出）核对：Phase A 文档已合并；Phase B 已落地
-> `gui_qt/settings/` 的 page contract、registry、coordinator。Phase C 已将
-> LiteLLM 页迁到独立 `LiteLLMSettingsPage`。Phase D 已将 10 个 Settings 页迁到独立
-> `SettingsPage`（含「项目列表」`WorkspaceSettingsPage`）；legacy adapter 与旧 builder 已删除。
-> 保存收口仍属 Phase D：`MainWindow` 仍执行两文件写盘并弹出 Qt 对话框。
+本文描述当前 `main` 的维护者边界，按 2026-10-24 的 `main@b5a3f14` 核对。
+操作步骤见[文档地图](README.md)，函数与测试入口见[代码路径索引](code_paths.md)；
+历史设计及实施状态见[规划、合同与研究索引](plans/README.md)。
 
 ## 分层
 
+### 核心包与入口
+
+PR #563 将根目录核心模块归入五个包；根目录继续保留 CLI、runtime 和兼容入口。
+CLI 保持行为事实来源，GUI 调用同一核心或同一 CLI。核心与 CLI 不依赖 GUI，
+不安装 PySide6 仍可运行核心流程。
+
+| 位置 | 职责 |
+| --- | --- |
+| `gemini_translate_batch.py`、`gemini_translate.py` | Batch / 耐久 Sync 命令与兼容同步入口 |
+| `translator_runtime.py` | runtime 配置快照、SDK、计划和生产请求接线 |
+| `foundation/` | 原子 I/O、配置、路径安全、doctor 和基础合同 |
+| `context_engine/` | glossary、原文索引、RAG、Story Memory 与 embedding runtime |
+| `providers/` | Provider 连接、ModelProfile、模型路由、迁移、能力与成本 |
+| `quality_review/` | TranslationPlan、翻译单元、结构 / 质量检查、审校、提案与 Project Analysis |
+| `execution/` | Batch 导出、耐久 Sync、外部工作包、用量与工作区管理 |
+| `engine_adapters/` | 引擎发现、候选、coverage、occurrence、重定位与声明式写回 |
+| `relation_analyzer/` | 可选关系与语义分析 |
+
 ### GUI 与测试目录
 
-GUI 的目录按现有职责组织，`python -m gui_qt` 仍是启动入口：
+PR #564 按职责组织 GUI；启动入口仍为 `python -m gui_qt`。
 
 | 目录 | 职责 |
 | --- | --- |
-| `gui_qt/settings/`、`gui_qt/workbench/` | 设置页、工作台页面及对应的协调和动作 |
-| `gui_qt/workflows/` | 任务步骤、CLI 参数与运行结果的流程编排 |
-| `gui_qt/reports/` | 检查、进度、失败与订正结果的展示投影和格式化 |
-| `gui_qt/dialogs/`、`gui_qt/widgets/` | 对话框和复用控件 |
-| `gui_qt/workers/` | GUI 后台操作与结果信号 |
-| `gui_qt/runtime/` | CLI 子进程、安装控制器、异步操作身份与生命周期 |
+| `gui_qt/settings/`、`gui_qt/workbench/` | 设置页、工作台页面及其协调与动作 |
+| `gui_qt/workflows/` | 任务步骤、CLI 参数与运行结果编排 |
+| `gui_qt/reports/` | 检查、进度、失败与订正结果的展示投影 |
+| `gui_qt/dialogs/`、`gui_qt/widgets/` | 对话框与复用控件 |
+| `gui_qt/workers/` | 后台操作与结果信号 |
+| `gui_qt/runtime/` | CLI 子进程、安装、异步操作身份与生命周期 |
 | `gui_qt/appearance/` | 主题、字体和图标 |
 
-根目录保留应用壳、启动入口、项目与会话状态、工作模式、共享文案、路径与诊断命令参考。
-模块迁移不改变翻译语义、CLI 命令或配置格式；`app.py` 的内部拆分属于后续独立工作。
+`gui_qt/app.py` 保留应用壳和宿主协调；项目 / 会话状态、共享文案、路径与诊断参考
+仍在 GUI 包根部。模块迁移没有改变命令或配置格式。
 
-`tests/` 按 CLI、runtime 和各核心包分组；GUI 测试位于 `tests/gui/`，与上述职责对应。
-共享测试辅助代码位于 `tests/support/`，原创夹具统一留在 `tests/fixtures/`。
-两套 runner 递归发现测试，并使用完整包名加载；GUI 与 CLI 的划分仍由原有文件命名规则决定。
-具体运行方式见 [测试目录说明](../tests/README.md)。
-
-### 运行职责
-
-1. **CLI 与 GUI 入口**
-   - `gemini_translate.py`、`gemini_translate_batch.py` 提供 CLI 和机器 JSON 合同。
-   - `gui_qt/app.py` 是当前桌面壳；工作台页面与 workflow 负责把用户动作映射到共用服务或 CLI。
-   - CLI 核心保持可脱离 GUI 导入；CLI 不得反向导入 GUI，GUI 测试显式导入并在缺少 PySide6 时跳过。
-2. **项目与配置**
-   - `translator_runtime.py` 从代码默认值、`api_keys.json`、环境变量和
-     `translator_config.json` 构造运行时快照。
-   - `gui_qt/project_state.py` 负责 GUI 项目路径，原始 JSON 读取/保存委托给共用 `foundation/config_store.py`。
-   - `gui_qt/settings/settings_schema.py` 描述高级设置字段；当前 Settings 总体 load/save/dirty
-     编排仍位于 `gui_qt/app.py`。
-   - 当前项目的 `project_context_settings.json` 保存 RAG / 原文索引 / 项目分析开关；
-     全局默认值仍在 `translator_config.json`。
-3. **模型路由与请求计划**
-   - `providers/model_profile.py` 把现有 `sync.*` / `batch.*` 只读解析为 provider-neutral
-     ModelRoutingPlan。它的 `primary`/`batch` 等 ID 是兼容 slot，不是长期用户 ID。
-   - `quality_review/translation_plan.py` 冻结 source snapshot、模型路由、上下文、prompt/schema 和预算。
-   - #348 的 schema-v1 合同位于 `providers/model_routing_config.py`；P2 已在兼容入口接入生产读取。
-   - `providers/model_routing_reader.py` / `providers/model_routing_migration.py` 提供兼容读取和迁移候选，
-     `providers/model_routing_migration_store.py` 通过共用 config store 完成显式暂存/回滚。
-4. **执行与耐久状态**
-   - CLI 耐久路径：`sync-start` → `execution/sync_run_service.py` / `SyncRunService`；状态机和机器错误位于
-     `execution/sync_run_contracts.py`，SQLite 细节不暴露给 GUI。
-   - GUI Sync 页由 `gui_qt/workflows/sync_translation_workflow.py` 驱动 #347 的
-     `sync-start` / `sync-resume` / `sync-status` / `sync-cancel` / `sync-derive`，
-     写回经 `check <RUN>` → `apply <RUN>`；GUI 不读取运行数据库，也不复制任务状态机。
-     统一翻译页的模型/策略选择与 Settings Model Profiles 仍属 #348 P3 后续增量。
-   - `execution/sync_request.py` 持有共享请求执行、响应提取与重试。`SyncRunService` 直接调用它，
-     不再为执行请求导入 CLI；`gemini_translate_batch.run_sync_request` 只装配依赖并单向转发。
-     `SyncRequestRuntime` 是当前进程内的短期依赖：生产 service 创建时绑定 timeout、
-     深复制 custom providers，并把 Gemini key 列表、当前选择及 SDK client factory 绑定到任务；
-     key 只在内存回调内，不进入 plan、数据库或可见 repr。模型与地址仍来自 frozen
-     ModelRoutingPlan。新 run 的默认 attempt timeout 取创建时绑定值并写入冻结的 executor policy；
-     显式 policy 优先，resume 使用 run 已存储的 policy。durable 固定 `retry_attempts=1`、`allow_credential_rotation=False`，
-     包括关闭 LiteLLM adapter 内部的限流换 key；重试由外层执行器记录为新 attempt。
-     跨进程 resume 重新装配当前凭据并执行原有 freshness、credential_ref 与路由检查；
-     env/keyring 等外部凭据源仍按引用在请求时解析。非 durable CLI 保留进程级轮换。
-   - Gemini Batch 继续使用 Batch 生命周期，但与 Sync 消费相同 TranslationPlan 合同。
-5. **检查与写回**
-   - 模型结果先规范化并检查，再生成绑定 preview，最后由公共 apply 安全层写回。
-   - `--force` 不得绕过 stale check、源快照、结构 blocker 或 adapter 写回计划验证。
-6. **引擎边界**
-   - Engine adapter 负责 discovery、candidate inventory、coverage、occurrence、relocation、
-     translation validation 和声明式 writeback plan。
-   - 公共层负责 manifest/result/project identity、实时源复核和原子事务写入。
+`tests/` 按核心职责分包，GUI 测试位于 `tests/gui/`；共享辅助位于
+`tests/support/`，原创夹具位于 `tests/fixtures/`。两套 runner 递归发现并以完整模块名
+加载；GUI / CLI 分流沿用文件命名规则。运行方式见[测试目录](../tests/README.md)。
 
 ## 配置事实来源
 
-当前生产事实仍是旧 `translator_config.json`：
+- `translator_config.json` 保存非敏感项目 / 翻译设置；`foundation/config_store.py`
+  提供原始 JSON、共用写锁与原子替换，GUI 通过 `ProjectState` 委托读取 / 保存。
+- `model_routing` 存在时，`providers/model_routing_reader.py` 整体验证并使用该 section；
+  无效或不支持的 schema 拒绝读取，不逐字段回退到旧配置。
+- 缺少 `model_routing` 时，保留 `sync.*` / `batch.*` 的兼容路径。
+  新任务冻结解析后的 profile / strategy / route，旧任务优先消费原冻结路由。
+- 显式文件迁移由 `providers/model_config_migration.py` 的 preview / migrate / rollback
+  完成。GUI 编辑迁移后的配置；存在旧字段时引导离线迁移，不建立第二套 GUI 迁移事务。
+- API Key 由 `api_keys.json`、环境变量或 keyring 提供；项目配置只保存适用的凭据引用。
+- 项目级 `project_context_settings.json` 保存 RAG / 索引 / 项目分析等覆盖值；全局默认
+  仍在 `translator_config.json`，读取由 `foundation/project_context_settings.py` 统一处理。
 
-- `sync.backend/model/models/custom_litellm_providers` 描述同步模型；
-- `batch.model` 及阶段 `model` 描述 Gemini Batch 和少数阶段覆盖；
-- GUI 从原始 JSON 加载并在原对象上修改，以保留未建模字段；
-- API Key 值只来自 `api_keys.json`、环境变量或系统 keyring，不属于项目配置。
+迁移和兼容用法见[模型配置迁移](model_config_migration.md)；
+schema 的设计边界见[#348 合同](plans/issue-348-model-routing-config-contract.md)。
 
-`#348` 将以版本化 `model_routing` 替代模型相关旧字段。迁移期必须选择完整的新或旧事实
-来源，不允许逐字段混合。合同见
-[Model Routing 配置与迁移合同](plans/issue-348-model-routing-config-contract.md)。
+## 请求计划与耐久执行
 
-## Settings：as-is 与 target
+`providers/model_profile.py` 与路由 reader 解析模型、能力、策略与阶段，
+`quality_review/translation_plan.py` 冻结 source、context、prompt / schema、路由和预算。
+Sync 与 Gemini Batch 消费相同计划合同，传输与调度生命周期分别实现。
 
-### as-is（当前 `main`）
+- 耐久 Sync：CLI `sync-start / resume / status / cancel / derive` 调用
+  `execution/sync_run_service.py`；状态与机器错误由 `execution/sync_run_contracts.py`
+  定义，SQLite 细节不暴露给 GUI。
+- GUI 的 `gui_qt/workflows/sync_translation_workflow.py` 消费同一 CLI 信封；
+  统一翻译页选择 profile 和执行方式，配置编辑由 `gui_qt/settings/profiles_page.py` 承接。
+- `execution/sync_request.py` 执行共享请求与响应提取；service 不通过导入 CLI 执行请求，
+  `gemini_translate_batch.run_sync_request` 保留依赖装配与单向转发。
+- `SyncRequestRuntime` 在进程内绑定请求超时、Provider 配置和凭据回调。Key 不进入
+  plan、数据库或 repr；resume 重新装配当前凭据，并保留 frozen route 与 freshness 检查。
+- durable attempt 固定 `retry_attempts=1`、`allow_credential_rotation=False`；
+  重试由外层执行器记录为新 attempt。新 run 冻结 executor policy，resume 使用已有 policy，
+  非 durable 兼容路径保留自己的轮换边界。
 
-`MainWindow` 仍是 Settings 的实际所有者：
+操作与证据见[同步工作流](sync_workflow.md)及[Provider Smoke Matrix](provider_smoke_matrix.md)。
 
-- 10 个页面由 `gui_qt/settings/registry.py` 的 `SettingsPageSpec` 登记；`SettingsCoordinator`
-  负责页面身份、延迟补建与切换，普通切页只补建目标页。页面经 `_create_*_settings_page` 构造。
-- `_load_config_to_ui` 负责把 `translator_config.json` 推入控件；项目页首次 materialize 会加载其
-  owned advanced 字段。coordinator 持有 dirty 基线（与 `_config_ui_saved_snapshot` 同步）；
-  `apply_collected_settings` 是 Qt-free apply 入口，`MainWindow._on_save_config` 仍执行两文件写盘。
-- `_confirm_unsaved_config_before_workflow` / `_confirm_unsaved_config_before_registry_switch` /
-  `_confirm_unsaved_config_before_close` / `_confirm_leave_config_tab` 覆盖启动任务、切换项目、
-  关闭窗口和离开设置页的保护。
-- 即时持久化（API Key、LiteLLM keyring、工作区总表、`game_root`/`workspace_root`、字体与可选能力
-  安装）与普通项目配置保存边界不同；主题只做即时预览，保存后才写入 `gui.theme`。
-- LiteLLM 页已迁到 `gui_qt/settings/litellm_page.py`：页面持有控件、目录/版本/连接/warmup
-  worker，并可脱离 `MainWindow` 构造。凭据对话框、pip 安装控制器和跨页 gating 仍由宿主回调提供。
-- 「模型」页已迁到 `gui_qt/settings/models_page.py`：Gemini 同步/批量模型与思考程度下拉由页面
-  持有，并可脱离 `MainWindow` 构造。目录 extras 与保存事务仍由宿主注入/执行。
-- 「项目」页已迁到 `gui_qt/settings/project_page.py`：项目与资源、准备流程字段由页面持有，并可
-  脱离 `MainWindow` 构造。`game_root` 只读；SDK 浏览/查找/下载仍由宿主执行。
-- 「上下文」页已迁到 `gui_qt/settings/context_page.py`：项目级 RAG/索引/分析开关与上下文主开关
-  由页面持有，并可脱离 `MainWindow` 构造。保存事务仍由宿主执行。
-- 「高级」页已迁到 `gui_qt/settings/advanced_page.py`：剩余 advanced 字段、Gemini 目录扩展与
-  模型轮换清单由页面持有，并可脱离 `MainWindow` 构造。保存事务与 `validate_advanced_settings`
-  仍由宿主执行。
-- 「外观」页已迁到 `gui_qt/settings/appearance_page.py`：主题下拉由页面持有；切换立即预览但
-  `persist=False`，保存后才写入。字体下载/安装仍由宿主 `FontInstallWorker` 执行。
-- 「快捷键」页已迁到 `gui_qt/settings/shortcuts_page.py`：只读目录，无 translator_config 字段，
-  导航行由宿主 shell IA 注入。
-- 「密钥」页已迁到 `gui_qt/settings/api_keys_page.py`：Gemini / LiteLLM 密钥 chrome 由页面持有，
-  无 translator_config 字段；对话框、keyring 写入与状态刷新仍由宿主回调提供。
-- 「扩展」页已迁到 `gui_qt/settings/extensions_page.py`：关系分析器 chrome 由页面持有，
-  无 translator_config 字段；`OptionalFeatureInstallController` 与 pip 安装仍由宿主执行。
-- 「项目列表」页已迁到 `gui_qt/settings/workspace_page.py`：chrome 与 `GamesRegistryPanel`
-  由页面持有，无 translator_config 字段；刷新/导入 worker 仍在面板内，切换项目与
-  `workspace_root` 写入仍由宿主回调提供。
-- 字体、扩展安装、SDK 安装等其余局部任务仍由 `MainWindow` 属性与私有回调持有。
+## 检查、预览与写回
 
-Phase B 已消除的 as-is 缺口：
+Engine Adapter 提供 discovery、candidate inventory、coverage、occurrence、relocation、
+translation validation 和声明式 writeback plan。公共层复核材料 / 结果 / 项目身份、
+源快照、目标现值及计划，再交给既有原子事务；adapter 自身不写文件。
 
-- 项目页首次单独打开不填充 advanced 字段（`_load_config_to_ui` 现按 registry 键加载 project 页）；
-- dirty 键所有权重叠（registry 强制一键一主，`advanced` 不再包含 context 主开关）；
-- 补建页面被 preserve/restore 用推荐值覆盖（只恢复已加载页面、且只回写快照中存在的 advanced 键）；
-- 页面级 load/collect/validate/reset/错误聚焦接口缺失（coordinator + contract 已提供）。
+只有与当前 manifest / results 匹配的最近检查给出 `writeback_gate.decision=allow`
+才能写回；需要绑定预览的路径还须复核 preview。普通质量报警默认不阻断，项目配置
+提升为 blocker 的规则必须阻断。`--force` 不能绕过 stale check、源快照、结构 blocker
+或 adapter plan 验证。检查与 apply 在各执行路径中的实现仍分别维护，不能只凭模型完成状态授权。
 
-仍未消除（Phase D）：
+公共源 JSON schema 2 由 PR #568 合并，支持独立源 / 目标快照与数组路径，但尚未接通
+RPG Maker Adapter、耐久 Sync 写回和 CLI / GUI 产品入口。具体范围见
+[Engine Adapter 手册](engine_adapter.md#source-json-writeback-p1)。
 
-- 10 页均已迁出独立 `SettingsPage`；dirty 基线、离开保护文案、collect→persist 与 Qt-free apply 已落地；两文件写盘与 Qt 对话框仍在 `MainWindow`。旧 builder / legacy adapter 已删除。
-- 字体/安装/registry 等非 LiteLLM 局部 worker 的取消、stale result 与关闭语义仍以整窗为单位。
+## Settings 页面与保存所有权
 
-完整页面清单、字段/即时持久化所有权与测试入口见
-[#202 Phase A 契约与现状基线](plans/issue-202-settings-page-contract.md)。
+`gui_qt/settings/registry.py` 统一登记当前 11 个分类、页面身份、配置键和 lazy 映射。
+`SettingsCoordinator` 负责补建、切页、load / collect / validate / reset、错误定位、
+任务锁、dirty 基线和离开提示；它不依赖 Qt，也不持有文件写盘事务。
+
+页面拥有控件、字段映射、局部校验和局部 worker；通过显式 callback 请求宿主执行动作，
+不读取其他页面控件。关键落点如下：
+
+| 位置 | 所有权 |
+| --- | --- |
+| `gui_qt/settings/page_contract.py` | `SettingsPage`、`SettingsIssue` 与页面动作协议 |
+| `gui_qt/settings/profiles_page.py` | 统一模型 / Provider / strategy / route 编辑，调用 `providers/model_profiles_editor.py` |
+| `gui_qt/settings/settings_schema.py`、`gui_qt/settings/field_widgets.py`、`gui_qt/settings/page_chrome.py` | 字段定义、控件工厂和共用布局 |
+| `gui_qt/settings/save_apply.py` | 将收集快照应用到原始 JSON，保留未建模字段，不写盘 |
+| `gui_qt/settings/leave_guard.py` | 启动任务、切项目、关闭与离开设置的保护文案 |
+| `gui_qt/app.py` | 全局 route / header / sidebar、配置加载、两文件持久化与失败回滚、Qt 对话框和 shutdown |
+
+普通配置由宿主执行 collect → validate → persist，并同步 dirty 基线。
+API Key、keyring、工作区总表、`game_root` / `workspace_root` 和安装操作有各自即时
+持久化边界；主题只即时预览，保存后才持久化。首次加载或切换分类不应覆盖未保存编辑。
 
 ### #528 Settings 内部兼容清理
 
-LiteLLM 的 worker、版本、供应商编辑状态与 Models 的 thinking 状态只由页面持有。
-主窗口不再通过动态 property 转发这些内部属性，也不再保存构造前的平行副本；
-安装提示、版本提示、模型 thinking 切换均使用页面实现。页面未加载时的刷新回调为空操作，
-不会触发 lazy materialize。测试直接检查页面状态，安装控件测试使用真实独立页面。
+LiteLLM worker / 目录 / 编辑状态和 Models thinking 状态由各自页面持有；
+无生产调用者的宿主事件转发与平行副本已删除。保留接口仍有明确消费者：
 
-保留的宿主接口及调用者：
+- 控件别名与 `_settings_widget` 供加载、快照恢复、推荐值和布局使用；只读取已创建控件
+  的查询不触发补建。
+- LiteLLM / Models 薄委托服务保存、安装后刷新、密钥管理和关闭流程。
+- `_litellm_cache` 由宿主注入并供密钥页读取；未加载 LiteLLM 页时使用已保存配置，
+  不同步导入 LiteLLM。
+- save extras 读取页面真实修改标志，后台线程清单读取页面实际 worker。
 
-- 控件别名与 `_settings_widget`：现有 `_load_config_to_ui`、快照恢复、推荐值与宿主布局仍使用；
-  `_settings_widget` 只读取已构造控件，普通属性仍由 registry 按需创建页面。
-- LiteLLM 薄委托：配置快照/保存、安装完成刷新、凭据管理和关闭流程使用；
-  无生产调用者的目录/连接/版本事件转发已删除，信号直接连接页面方法。
-- `_litellm_cache`：主窗口注入同一个缓存实例给 LiteLLM 页，密钥页也读取其供应商目录；
-  worker/编辑状态不在宿主复制。密钥页通过 `_litellm_provider_registry` 读取已加载页的编辑值，
-  未加载时读取保存的配置（禁止同步导入 LiteLLM）。
-- Models 薄委托与 save extras：配置恢复/推荐值及首次保存使用，thinking 修改标志取自页面；
-  未构造页面不再运行旧控件算法。其他页面的宿主 load/save 生命周期不在本轮重写。
+### 异步任务与历史合同
 
-### target（#202 Phase B 最小接线、Phase C LiteLLM 页与 Phase D 十页已落地；保存收口仍属 D）
+worker、QProcess 和线程池操作复用 `gui_qt/runtime/lifecycle.py` 与
+`gui_qt/runtime/operation_identity.py`：结果绑定项目 / 配置 / 任务身份及代次，旧结果不得覆盖新任务。
+取消后保留 worker 所有权到真实终态，GUI 线程不得用固定等待阻塞退出。
 
-已落地目录：
-
-- `gui_qt/settings/page_contract.py`：`SettingsPage` Protocol、`SettingsIssue`、`SettingsPageActions`；
-  冻结 `load/collect/validate/reset/focus_issue/set_task_running` 与 `config_keys` 单一所有权。
-- `gui_qt/settings/registry.py`：页面登记、唯一配置键所有权与 lazy 属性映射；强制一键一主。
-- `gui_qt/settings/coordinator.py`：页内导航、lazy 构建、load/collect/validate/reset、错误聚焦、
-  任务锁分发（含新建页补发）、dirty 基线、离开保护文案与 collect→persist；不依赖 Qt，可脱离
-  `MainWindow` 测试。
-- `gui_qt/settings/leave_guard.py`：未保存离开保护的四套文案（workflow / 切项目 / 关窗 / 离开设置页）。
-- `gui_qt/settings/save_apply.py`：把 collect() 快照应用到原始 `translator_config` 对象；不写盘。
-- `gui_qt/settings/litellm_page.py`：Phase C 迁出的 LiteLLM 页面；局部 worker 与
-  load/collect/validate/reset 由页面持有。
-- `gui_qt/settings/page_chrome.py`：迁移页共用的 Settings 滚动页/表单 chrome。
-- `gui_qt/settings/models_page.py`：Phase D 迁出的「模型」页面；Gemini 同步/批量模型选择由页面持有。
-- `gui_qt/settings/field_widgets.py`：迁移页共用的基础 SettingField 控件工厂。
-- `gui_qt/settings/project_page.py`：Phase D 迁出的「项目」页面；SDK 下载 worker 仍由宿主持有。
-- `gui_qt/settings/context_page.py`：Phase D 迁出的「上下文」页面；项目级开关与上下文主开关由页面持有。
-- `gui_qt/settings/advanced_page.py`：Phase D 迁出的「高级」页面；Gemini 目录扩展与轮换清单由页面持有。
-- `gui_qt/settings/gemini_catalog_widgets.py`：高级页的 Gemini 目录/轮换控件，供宿主 load/collect 复用。
-- `gui_qt/settings/appearance_page.py`：Phase D 迁出的「外观」页面；主题预览由页面回调宿主，字体下载 worker 仍由宿主持有。
-- `gui_qt/settings/shortcuts_page.py`：Phase D 迁出的「快捷键」页面；只读目录，导航行由宿主注入。
-- `gui_qt/settings/api_keys_page.py`：Phase D 迁出的「密钥」页面；对话框与 keyring 写入仍由宿主持有。
-- `gui_qt/settings/extensions_page.py`：Phase D 迁出的「扩展」页面；安装控制器仍由宿主持有。
-- `gui_qt/settings/workspace_page.py`：Phase D 迁出的「项目列表」页面；`GamesRegistryPanel` 与刷新/导入 worker 由页面嵌入的面板持有，切换项目仍由宿主回调提供。
-- `MainWindow`：仍保留全局 `settings` route、header/sidebar、全局任务锁、runner/log、主题应用、
-  两文件写盘、Qt 离开保护对话框与 shutdown 协调。
-
-页面只拥有控件、字段读写映射、局部校验和动作；页面通过显式 callback 与宿主交互，不读取其他
-页面控件，也不依赖整窗私有属性才能独立构造。同一行为只能有一个实际状态所有者。
-`gui_qt/workbench/page_contract.py` 与 `gui_qt/workbench/coordinator.py` 是已交付的
-工作台页面化参考实现，Settings 合同复用其“页面报告意图、宿主持有执行与生命周期”的边界。
-
-## #202 / #348 所有权
-
-- #202 负责 Settings page contract/coordinator、页面局部生命周期与 `MainWindow` 收壳。
-- #348 负责 `model_routing` schema、validator、migrator、rollback 与 ModelProfile/ExecutionStrategy/
-  TaskRoute 解析和 Model Profiles 产品流程。
-- 双方共用唯一配置 reader/persistence 边界：原始 JSON、unknown-field preservation、原子保存与
-  共用写锁归 `ProjectState` / `config_store`；dirty snapshot/save 与迁移备份不得出现平行实现。
-- #348 P2 可独立推进；P3 Settings 集成依赖本单 Phase B 的最小 contract/coordinator 接线。
-
-逐项所有权表与 Phase B 验收映射见
-[#348 合同](plans/issue-348-model-routing-config-contract.md#202--348-所有权) 与
-[#202 Phase A 契约](plans/issue-202-settings-page-contract.md#202--348-所有权)。
-
-## 调用链索引
-
-doctor、Batch、同步翻译、关键词、订正写回、项目切换和 Settings 保存/加载/dirty 的可追踪入口、
-关键函数与测试入口见 [代码路径索引](code_paths.md)。
+#202 的页面迁移与 #348 P3 集成都已交付。两文件写盘保留在宿主是当前所有权边界；
+历史 Phase / target 描述见[#202 合同](plans/issue-202-settings-page-contract.md)和
+[#348 合同](plans/issue-348-model-routing-config-contract.md)，不作为新增待办。

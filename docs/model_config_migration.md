@@ -1,7 +1,7 @@
-# 模型配置离线迁移（#348 P1）
+# 模型配置迁移与兼容读取
 
-P1 提供可复用迁移器、兼容 reader 与开发者 CLI，用于在配置副本上验证 schema-v1。
-它不会加载密钥、连接模型、执行 prepare 命令或改变游戏文件。
+本页说明显式文件迁移、生产兼容读取及迁移后的 GUI 编辑边界。迁移器与开发者 CLI
+用于在配置副本上验证 schema-v1，不加载密钥、连接模型、执行 prepare 命令或改变游戏文件。
 
 **P2 已接入生产读取。** 配置含合法 `model_routing` 时，新任务使用其中的模型、Provider、
 阶段路由与 embedding 连接；保留的旧模型字段不参与补值。缺少新 section 时保持旧行为；
@@ -9,16 +9,18 @@ P1 提供可复用迁移器、兼容 reader 与开发者 CLI，用于在配置�
 
 `migrate --stage-only` 仍只修改指定文件，不启动任务、不自动安装配置；若指定生产配置，
 新 section 在下次加载时生效。请先在副本上预览和验证，再替换生产配置。
-GUI 原有 workflow 调用相同 CLI，因此同样消费新配置；统一 Model Profiles 表单与耐久任务
-页面仍属于 P3。本阶段 GUI 模型页显示兼容说明，保存时校验并保留新 section 和未知字段。
+GUI workflow 调用相同 CLI，消费同一新配置。统一翻译入口和 Model Profiles 表单已交付：
+「设置 → 模型与供应商」编辑模型、连接、默认策略和阶段路由，保存时校验并保留未知字段。
+存在旧字段时引导使用本页的离线迁移，不在 GUI 内另建迁移事务；界面详见[GUI 工作台](gui_workbench.md#设置)。
 
-现有兼容命令使用 `legacy_entrypoints` 角色指针；项目分析保持 Sync、最终审校保持 Gemini
-Batch。跨 Provider 的模型字符串覆盖、Gemini 非 `api_keys_json/api_keys` 凭据槽仍会明确
+兼容命令使用 `legacy_entrypoints` 角色指针；项目分析使用 Sync，未显式配置最终审校策略时
+保留 Gemini Batch 默认。已支持显式 `final_review.strategy=sync`，见[最终审校工作流](batch_workflows.md)。
+跨 Provider 的模型字符串覆盖、Gemini 非 `api_keys_json/api_keys` 凭据槽仍会明确
 拒绝，不能静默忽略。`openai_compatible` 直连 profile 的白名单生成参数
 （`temperature` / `max_output_tokens` / `top_p` 等）已接入 Sync 生成；Gemini / LiteLLM
 profile 的非空 `params` 仍按原合同拒绝，不能静默忽略。生成请求参数继续保存在
 `sync` / `batch` 执行设置中；embedding profile 的 `params` 已按独立连接读取。
-P3 再提供统一 profile/strategy 选择和完整参数编辑表面。
+统一编辑器不扩大上述参数支持范围；profile / strategy 选择仍须满足能力校验。
 
 生产示例 `translator_config.example.json` 已添加等价的 v1 section，旧字段保留用于回滚，
 默认模型和 Sync/Batch 策略不变。
@@ -116,7 +118,8 @@ read-then-unlink 竞态；锁文件释放后保留，不应手动删除。latest
 - `config_store`：GUI 与迁移共用原始 JSON 保存边界；不引入另一个配置状态源。
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
-四类真实 Provider smoke 仍在 P4 验收，不以离线测试替代。首次迁移须先通过
+四类真实 Provider smoke 已在 #344 的限定范围完成，记录见[Smoke Matrix](provider_smoke_matrix.md)，
+不代表任意 Provider 已验收。首次迁移须先通过
 `python -m providers.model_config_migration preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
 迁移完成后，P3 的「设置 → 模型与供应商」页面可统一维护 providers / profiles / 默认值与阶段路由；
 该页按 #202 的页面合同编辑 `model_routing`、跟踪未保存修改并保留未知字段。

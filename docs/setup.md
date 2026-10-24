@@ -69,7 +69,7 @@
 - GUI「设置 · 上下文」保存时写入该文件；加载时按当前 `game_root` 读取。
 - CLI 的 `load_batch_settings` 会在解析 `translator_config.json` 后套用该文件。
 - 文件不存在时：回退到 `translator_config.json` 里 `batch.rag.enabled` / `batch.source_index.enabled` / `batch.rag.bootstrap_on_build` / `batch.project_analysis.enabled` / `batch.project_analysis.inject_published_brief` / `sync.source_index.enabled` / `sync.project_analysis.inject_published_brief`。
-- 实现见 `project_context_settings.py`。
+- 实现见 `foundation/project_context_settings.py`。
 - 如果你不想使用 `api_keys.json`，也可以改用环境变量 `GEMINI_API_KEY`、`GEMINI_API_KEY_2`、`GEMINI_API_KEY_3`。
 - 如果你不想使用 `translator_config.json`，也可以至少通过 `GAME_ROOT` 或 `SA_GAME_ROOT` 指向目标 `work` 目录。
 - 也可以把 `.env.example` 复制为 `.env`，填写后供本地 shell/启动器加载；`.env` 只用于本机私有配置，不应提交。
@@ -105,7 +105,7 @@ Game_Example/
 
 GUI **设置 → 项目 → Ren'Py SDK 目录** 提供：
 
-- **查找 SDK**（主动）：仅在**已选工作区**与**当前项目**目录下扫描 `renpy-*-sdk` / `renpy.py`（不扫描工具安装目录的上一级）；找到后写入配置字段（多结果时选择）
+- **查找 SDK**（主动）：仅在**已选工作区**与**当前项目**目录下扫描 `renpy-*-sdk` / SDK 入口 `renpy.py`（不扫描工具安装目录的上一级）；找到后写入配置字段（多结果时选择）
 - **浏览…**（主动）：手动选择目录
 - **下载推荐 SDK…**（主动确认）：仅从官方 `renpy.org` 下载本工具维护的固定推荐版 **8.5.3**；展示版本、URL、预计大小与 SHA-256；下载到临时文件校验后再安全解压。默认目标为 `<workspace>/renpy-8.5.3-sdk/`（可改）。失败不会破坏已初始化工作区
 
@@ -277,7 +277,7 @@ JSON object 模式的术语提示也会明确置信度是 0–1 的数字，字�
 当前模型选择说明：
 
 - 为兼容现有项目，Batch / 同步默认模型目前仍是 `gemini-3.1-flash-lite`；默认值不等于长期推荐，正式运行前应检查模型生命周期、价格和当前 API 能力。
-- **内置模型列表的单一源**是仓库根目录的 `gemini_model_catalog.py`（GUI 与 CLI 共用）。发版更新模型时优先改该文件。
+- **内置模型列表的单一源**是 `providers/gemini_model_catalog.py`（GUI 与 CLI 共用）。发版更新模型时优先改该文件。
 - **配置可扩展**：在 `translator_config.json` 增加 `model_catalog`，无需改代码即可把新模型 ID 加进下拉框与 CLI 轮换列表：
 
 ```json
