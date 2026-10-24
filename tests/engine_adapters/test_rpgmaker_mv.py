@@ -13,9 +13,9 @@ from unittest import mock
 
 from engine_adapters import (
     EngineAdapter, InventoryPolicy, MvSupportWindow, ProjectDiscoveryRequest,
-    RpgMakerMvAdapter, ValidatedTranslation, render_writeback_plan,
+    RpgMakerMvAdapter, VALIDATION_SCHEMA_VERSION, ValidatedTranslation, render_writeback_plan,
 )
-from engine_adapters.coverage import build_coverage_report
+from engine_adapters.coverage import build_coverage_report, digest_json
 from engine_adapters.rpgmaker_mv import CORE_FILES
 from engine_adapters.writeback import WritebackPlanError
 from execution.sync_translation_preview import _deserialize_writeback_plan
@@ -492,6 +492,61 @@ class MvAdapterTests(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertEqual(self.adapter.validate_translation(first, text).status, "block")
+
+    def test_invalid_utf8_translation_returns_a_serializable_block(self):
+        _, _, _, occurrences = self.snapshot()
+        occurrence = next(row for row in occurrences if row.unit.text == "Same words.")
+        for encoded in (r'"\ud800"', r'"\udfff"', r'"before\ud800after"',
+                        r'"\ud800\ud800"'):
+            with self.subTest(encoded=encoded):
+                text = json.loads(encoded)
+                result = self.adapter.validate_translation(occurrence, text)
+                self.assertEqual(result.status, "block")
+                self.assertEqual(result.reason_codes, ("rpgmaker_mv.translation.encoding",))
+                self.assertRegex(result.translation_digest, r"^[0-9a-f]{64}$")
+                json.dumps(result.to_dict(), ensure_ascii=False).encode("utf-8")
+
+    def test_invalid_utf8_digest_preserves_distinct_input_codepoints(self):
+        _, _, _, occurrences = self.snapshot()
+        occurrence = next(row for row in occurrences if row.unit.text == "Same words.")
+        texts = (
+            chr(0xD800), chr(0xDFFF), chr(0xD800) * 2,
+            chr(0xD800) + chr(0xDC00) + chr(0xD800),
+            chr(0x10000) + chr(0xD800),
+        )
+        digests = [self.adapter.validate_translation(occurrence, text).translation_digest
+                   for text in texts]
+        self.assertEqual(len(set(digests)), len(texts))
+        self.assertEqual(self.adapter.validate_translation(occurrence, texts[0]).translation_digest,
+                         digests[0])
+        for repaired in ("\ufffd", r"\ud800"):
+            self.assertNotIn(self.adapter.validate_translation(occurrence, repaired).translation_digest,
+                             digests)
+
+    def test_valid_utf8_translation_digest_keeps_the_existing_contract(self):
+        _, _, _, occurrences = self.snapshot()
+        occurrence = next(row for row in occurrences if row.unit.text == "Same words.")
+        for text in ("同一句话。", "旅人🌿"):
+            with self.subTest(text=text):
+                result = self.adapter.validate_translation(occurrence, text)
+                self.assertEqual(result.status, "pass")
+                self.assertEqual(result.translation_digest, digest_json({
+                    "validation_schema_version": VALIDATION_SCHEMA_VERSION, "translation": text,
+                }))
+
+    def test_invalid_utf8_and_forged_pass_cannot_authorize_writeback(self):
+        project, _, _, occurrences = self.snapshot()
+        occurrence = next(row for row in occurrences if row.unit.text == "Same words.")
+        text = json.loads(r'"\ud800"')
+        blocked = self.adapter.validate_translation(occurrence, text)
+        for validation in (blocked, replace(blocked, status="pass", reason_codes=())):
+            with self.subTest(status=validation.status), self.assertRaises(WritebackPlanError) as error:
+                self.adapter.build_writeback_plan(
+                    project, [ValidatedTranslation(occurrence, text, validation)],
+                    project.source_documents, live_targets=project.target_documents)
+            self.assertEqual(error.exception.reason_code, "rpgmaker_mv.validation.stale")
+        for document in project.target_documents:
+            self.assertEqual(Path(document.file_path).read_bytes(), document.content)
 
     def test_no_mv_translation_plan_route_is_enabled_by_core_adapter(self):
         with self.assertRaisesRegex(ValueError, "unsupported_engine"):

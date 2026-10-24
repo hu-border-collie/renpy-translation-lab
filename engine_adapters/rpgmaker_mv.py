@@ -41,7 +41,7 @@ from .contracts import (
     WritebackOperation,
     WritebackPlan,
 )
-from .coverage import REVIEW_POLICIES, build_coverage_report, digest_json
+from .coverage import REVIEW_POLICIES, build_coverage_report, digest_json, stable_json_dumps
 from .rpgmaker_mv_controls import validate_message_position
 from . import structure_rules
 from .writeback import WritebackPlanError, source_snapshot_fingerprint, validate_writeback_plan
@@ -775,17 +775,29 @@ class RpgMakerMvAdapter:
         return RelocationResult(tuple(accepted), tuple(unresolved))
 
     def validate_translation(self, occurrence: Occurrence, translated_text: str) -> ValidationResult:
-        """Validate physical-line ownership and exact MV control spelling/order."""
+        """Validate MV structure and UTF-8, preserving invalid input identity in blocked results."""
         if occurrence.engine != self.engine or occurrence.locator.engine != self.engine:
             raise ValueError("rpgmaker_mv.validation.engine")
         reasons = []
+        serialized_translation = stable_json_dumps({
+            "validation_schema_version": VALIDATION_SCHEMA_VERSION,
+            "translation": translated_text,
+        })
+        try:
+            translation_digest = _sha(serialized_translation.encode("utf-8"))
+        except UnicodeEncodeError:
+            # Preserve exact invalid code points for diagnostics only. They
+            # remain blocked and are never repaired into writable translations.
+            translation_digest = _sha(
+                serialized_translation.encode("utf-8", errors="surrogatepass"))
+            reasons.append("rpgmaker_mv.translation.encoding")
         address = occurrence.locator.locator
         if (
             not isinstance(translated_text, str) or not translated_text.strip()
             or not occurrence.unit.text.strip()
         ):
             reasons.append("rpgmaker_mv.translation.empty")
-        else:
+        elif not reasons:
             try:
                 for text in (occurrence.unit.text, translated_text):
                     validate_message_position(
@@ -797,7 +809,6 @@ class RpgMakerMvAdapter:
                     occurrence.unit.text, translated_text, self.engine,
                     mv_message_styles=self.support_window.message_styles,
                 )
-                translated_text.encode("utf-8")
             except (ValueError, UnicodeError) as exc:
                 reasons.append(str(exc) if not isinstance(exc, UnicodeError)
                                else "rpgmaker_mv.translation.encoding")
@@ -807,9 +818,7 @@ class RpgMakerMvAdapter:
             source_constraints_digest=digest_json({
                 "window": self.support_window.digest, "locator": occurrence.locator.to_dict(),
                 "content": occurrence.content_fingerprint, "source": occurrence.unit.text}),
-            translation_digest=digest_json({
-                "validation_schema_version": VALIDATION_SCHEMA_VERSION,
-                "translation": translated_text}),
+            translation_digest=translation_digest,
         )
 
     def build_writeback_plan(self, project: ProjectDiscovery, validated: Sequence[ValidatedTranslation],

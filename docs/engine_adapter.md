@@ -509,6 +509,9 @@ inventory 与 audit 分别遍历语义事件和原始 JSON 的 401 / 102 / 402 �
 只有内存输出；A3 还须提供最新 `check -> apply` 授权、目录 / 项目身份、紧邻提交的现场
 读取、预览和原子事务。调用这个核心 API 不能替代写回授权。
 
+不可编码为 UTF-8 的译文返回 `rpgmaker_mv.translation.encoding` 阻断结果。
+诊断摘要保留其原始非法码点身份，不以替换或丢弃字符修复译文；有效译文的摘要合同保持不变。
+
 [原创材料](../tests/fixtures/rpgmaker_mv_narrative/README.md)手选 **14 个非空 occurrence、
 6 个独立 402 目标**，加一条保留空消息；固定输出独立于 Adapter / renderer 编写。
 [回归测试](../tests/engine_adapters/test_rpgmaker_mv.py)组合公共 reader、renderer 与既有
