@@ -3,18 +3,19 @@
 本目录保存技术合同、方向研究和有日期的实验记录。用户操作从[文档地图](../README.md)
 进入现行手册；本页集中维护任务状态和证据入口。
 
-**状态核对：2026-10-24，公开 `main@b5a3f14`，与本地 checkout 一致。**
-已读回 GitHub 开放 / 关闭记录及主线合并历史。报告自己的日期、代码基线和原始结果
+**状态核对：2026-10-24，合并基线 `main@4aa751c`；A2 开发由 #570 跟踪。**
+已读回相关 GitHub issue 并核对主线合并历史；本分支 A2 增量尚未合并。报告自己的日期、代码基线和原始结果
 保持原样；旧报告里的 OPEN、待验或本地草稿描述属于当时状态。
 
 ## 当前开放工作
 
-当前开放 issue 为 #147、#272、#565、#567。工程合并、离线 fixture、原生运行和译文质量
+当前开放 issue 为 #147、#272、#565、#567、#570。工程合并、离线 fixture、原生运行和译文质量
 分别验收，不能相互代替。
 
 | 跟踪 | 当前交付与下一步 |
 | --- | --- |
-| [#567 RPG Maker MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | 统领 MV 首期正式支持与完整游戏汉化两个里程碑。A1 公共 JSON 核心已由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/568) 合并；A2 Adapter、A3 耐久 Sync / CLI / GUI / doctor / 配置及真实游戏验收尚未完成，不能宣称 MV 已支持。issue 创建时的“本地草稿”基线早于该合并。 |
+| [#567 RPG Maker MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | 统领 MV 首期正式支持与完整游戏汉化两个里程碑。A1 公共 JSON 核心已由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/568) 合并；正文已回填，A2 由 #570 承接。A3 耐久 Sync / CLI / GUI / doctor / 配置及真实游戏验收仍待完成，不能宣称 MV 已支持。 |
+| [#570 A2 MV 叙事 Adapter 与结构保护](https://github.com/hu-border-collie/renpy-translation-lab/issues/570) | [共享核心](../engine_adapter.md#rpgmaker-mv-a2)与[原创离线材料](../../tests/fixtures/rpgmaker_mv_narrative/README.md)覆盖显式材料窗口、物理 occurrence、独立 coverage、消息 / 选项 / 镜像和 schema 2 计划。合并与原生验收分别核对；A3 产品接入、A4 真实小样本不在本子任务。 |
 | [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) | [离线报告](issue-565-komorebi-survey-2026-10-23.md)与[公开材料说明](issue-565-materials/README.md)已入主线：205 份 JSON、101 个试点 occurrence 和 7 个镜像目标；core 版本声明冲突仍保留。原生可达性、字体显示、存读档及 issue 验收回填尚未完成。 |
 | [#272 多引擎研究与选型](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) | [有限研究与调查衔接](issue-272-research-closeout-2026-10-22.md)保留研究范围；#565 提供真实 MV 需求，#567 承接生产实现。其他引擎未全量重查，不按旧评级自动排期或承诺支持。 |
 | [#147 Story Graph 试点](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) | 保持低优先级；仅在实际关系、称呼或场景问题超出现有 glossary / source index 能力时评估，不作为 #567 前置条件。 |

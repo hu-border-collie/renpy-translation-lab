@@ -1,4 +1,4 @@
-"""Versioned structural spans for the two supported catalog engines.
+"""Versioned structural spans under explicitly selected engine policies.
 
 Offsets refer to decoded canonical strings, never script byte offsets. These
 rules deliberately do not infer a third engine from punctuation.
@@ -14,13 +14,16 @@ PERCENT = re.compile(
 PAIRED = frozenset('a alpha b color cps font i k outlinecolor plain s size u'.split())
 
 
-def spans(text, engine, *, literal_brackets=False):
+def spans(text, engine, *, literal_brackets=False, mv_message_styles=False):
     """Return non-overlapping spans under explicit engine rules.
 
     ``literal_brackets`` is parser provenance for Tyrano dialogue nodes, where
     unescaped tags have already been separated. Never infer that provenance
     from the spelling of a normalized string.
     """
+    if engine == 'rpgmaker_mv':
+        from .rpgmaker_mv_controls import control_spans
+        return control_spans(text, message_styles=mv_message_styles)
     if engine not in ('renpy', 'tyrano'):
         raise ValueError('protection.unsupported_engine')
     result = []
@@ -82,14 +85,18 @@ def spans(text, engine, *, literal_brackets=False):
     return result
 
 
-def validate(text, translated, engine, *, literal_brackets=False):
+def validate(text, translated, engine, *, literal_brackets=False, mv_message_styles=False):
     """Check exact token multiplicity, structural order and tag nesting.
 
     Named variables may move with language order. Positional formats, engine
     commands, escapes, tags and line boundaries retain their relative order.
     """
-    original = [(text[a:b], kind) for a, b, kind in spans(text, engine, literal_brackets=literal_brackets)]
-    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine, literal_brackets=literal_brackets)]
+    original = [(text[a:b], kind) for a, b, kind in spans(text, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)]
+    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)]
+    if engine == 'rpgmaker_mv' and any(kind == 'popup' for _, kind in original):
+        from .rpgmaker_mv_controls import validate_message_position
+        validate_message_position(text, message_styles=mv_message_styles, first_line=True)
+        validate_message_position(translated, message_styles=mv_message_styles, first_line=True)
     if Counter(original) != Counter(current):
         raise ValueError('protection.structure_changed')
     if [x for x in original if x[1] != 'variable'] != [x for x in current if x[1] != 'variable']:

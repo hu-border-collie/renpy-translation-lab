@@ -8,6 +8,7 @@
 
 ### 新增
 
+- 新增 #570 的 RPG Maker MV 叙事 Adapter 共享核心：显式 core / 插件摘要窗口、独立源 / 目标、物理 occurrence 与独立 coverage，保护消息续行、控制码及 102 / 402 关联，并通过公共 schema 2 输出计划。原创离线材料验证字节保护、漂移拒绝及既有事务恢复；耐久 Sync、CLI / GUI / doctor / 配置接入仍归 #567 A3，真实游戏与正式支持仍待验收，见[当前边界](docs/engine_adapter.md#rpgmaker-mv-a2)。
 - 新增源 JSON 字符串节点写回的 schema 2 核心合同：分开绑定冻结原文和当前目标副本，支持类型化数组路径，只替换选中的字符串 token，并保留未选字节；Sync 计划 reader 支持对应持久化格式，schema 1 输出保持兼容。原创对白 / 选项 / 402 夹具覆盖漂移拒绝、原子回滚与恢复；本阶段未新增 RPG Maker Adapter 或 CLI / GUI 游戏入口，见[核心合同](docs/engine_adapter.md#source-json-writeback-p1)。
 - #508 新增 [外部初译工作包（实验 CLI）](docs/external_translation_work.md)：宿主提供译文，工具导出材料、接收部分成果与订正，记录冲突和剩余项，并复用现有 check、预览及事务写回。无需项目模型调用，GUI 提供诊断命令参考；已用原创 fixture 验证串行与独立子代理成果，真实章节质量对照仍待授权样本和预算。
 - #431 S1 新增直连 `openai_compatible` Sync 生成 adapter：通过标准库 HTTP 直接调用 Chat Completions，无需安装或导入 LiteLLM；Provider 连接支持 `base_url` / `models_url` / `credential_ref`（none / env / keyring）与非敏感 `extra_headers`，ModelProfile 支持白名单生成参数与 `capability_overrides.structured_output.mode`（`strict_json_schema` / `json_object` / `prompt_only_json`）。GUI「模型与 Provider」页新增 adapter、供应商预设、额外请求头与结构化输出模式；能力探测与连接测试复用同一 `build_sync_backend` 入口。S1 不删除 LiteLLM、不改默认值，final_review 仍限 `gemini_batch`（S3 已解绑）。
