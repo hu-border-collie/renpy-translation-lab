@@ -425,7 +425,7 @@ from gui_qt.workflows.revision_workflow import (
     RevisionProposalConfirmWorkflow,
     RevisionProposalImportWorkflow,
 )
-from gui_qt.workers.coverage_worker import CoverageReviewImportWorker
+from gui_qt.workers.coverage_worker import CoverageReviewImportWorker, CoverageExportWorker
 from gui_qt.workers.context_library_worker import (
     ContextLibraryStatusJob,
     ContextLibraryStatusResult,
@@ -1595,6 +1595,10 @@ class MainWindow(QMainWindow):
         self.bootstrap_work_btn.setToolTip(
             "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
         )
+        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            self.bootstrap_work_btn.setEnabled(False)
+            self.bootstrap_work_btn.setToolTip(MV_PROJECT_COPY['prepare_unsupported'])
         self._repolish_widget(self.bootstrap_work_btn)
         self._apply_bootstrap_prep_button_icon(stopping=False)
 
@@ -2319,6 +2323,12 @@ class MainWindow(QMainWindow):
         self.coverage_import_btn.setToolTip(COVERAGE_REVIEW_COPY["import_review_tip"])
         self.coverage_import_btn.clicked.connect(self._on_import_coverage_review)
         doctor_action_layout.addWidget(self.coverage_import_btn)
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        self.coverage_export_btn = QPushButton(MV_PROJECT_COPY['coverage_export'])
+        self.coverage_export_btn.setToolTip(MV_PROJECT_COPY['coverage_export_tip'])
+        self.coverage_export_btn.clicked.connect(self._on_export_coverage_package)
+        doctor_action_layout.addWidget(self.coverage_export_btn)
+        self._coverage_export_worker = None
         doctor_action_layout.addStretch(1)
         doctor_content_layout.addWidget(doctor_action_row)
         self._coverage_import_worker: CoverageReviewImportWorker | None = None
@@ -7314,6 +7324,7 @@ class MainWindow(QMainWindow):
         )
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             sync_preview_path = self.sync_translation_page.preview_manifest_path()
+            diagnostics_engine = str(self._context_library_config_snapshot.get('engine', 'renpy'))
             sync_preview_mtime = self._diagnostics_manifest_mtime_ns(
                 sync_preview_path or None
             )
@@ -7336,10 +7347,12 @@ class MainWindow(QMainWindow):
                 str(game_root or ""),
                 usage_ledger_mtime,
                 running,
+                diagnostics_engine,
             )
             if not force and self._diagnostics_refresh_input_key == input_key:
                 return
             context = sync_diagnostics_context(
+                engine=diagnostics_engine,
                 sync_script_path=str(self.state.get_sync_script_path()),
                 batch_script_path=str(self.state.get_batch_script_path()),
                 game_root=str(game_root or ""),
@@ -7374,6 +7387,7 @@ class MainWindow(QMainWindow):
             manifest_path = str(latest_manifest) if latest_manifest is not None else None
         shared_path = str(manifest_path or "")
         submit_max_cost = self._submit_max_cost_from_config()
+        diagnostics_engine = str(self._context_library_config_snapshot.get('engine', 'renpy'))
         input_key = (
             "batch",
             spec.mode.value,
@@ -7386,6 +7400,7 @@ class MainWindow(QMainWindow):
             submit_max_cost,
             running,
             usage_ledger_mtime,
+            diagnostics_engine,
         )
         if not force and self._diagnostics_refresh_input_key == input_key:
             # Inputs unchanged since last tab visit — skip disk/widget rebuild.
@@ -7397,6 +7412,7 @@ class MainWindow(QMainWindow):
         ):
             manifest = self._load_diagnostics_manifest(manifest_path)
         context = build_diagnostics_context(
+            engine=diagnostics_engine,
             latest_manifest_path=str(latest_manifest) if latest_manifest is not None else None,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -8055,6 +8071,9 @@ class MainWindow(QMainWindow):
     def _resume_task_available(self) -> tuple[bool, str]:
         """Whether 「继续」 can load a resumable task for the current mode (P3 / #166)."""
         spec = work_mode_spec(self._current_work_mode())
+        if not self._engine_allows_work_mode(spec.mode):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            return False, MV_PROJECT_COPY['unsupported']
         if not spec.implemented or not spec.supports_resume:
             return False, "当前模式不支持继续任务。"
         if self.kill_btn.isEnabled() or bool(getattr(self, "_task_running", False)):
@@ -8252,6 +8271,8 @@ class MainWindow(QMainWindow):
         bootstrap_ready: bool,
         running: bool,
     ) -> bool:
+        if not self._engine_allows_work_mode(spec.mode):
+            return False
         if self._litellm_install_blocks_mode(spec.mode):
             return False
         if running or not spec.implemented or not bootstrap_ready:
@@ -8270,6 +8291,16 @@ class MainWindow(QMainWindow):
         if self._translation_requires_doctor_check(spec.mode):
             return self._doctor_allows_translate_action()
         return True
+
+    def _engine_allows_work_mode(self, mode) -> bool:
+        """Mirror the CLI engine route boundary without implementing semantics."""
+        config = getattr(self, '_context_library_config_snapshot', None)
+        config = config if isinstance(config, dict) else {}
+        try:
+            from engine_adapters.project_config import project_engine
+            return project_engine(config) != 'rpgmaker_mv' or mode == WorkMode.SYNC_TRANSLATION
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _update_translate_button_label(self) -> None:
         self.translate_btn.setText(self._translate_button_label())
@@ -9109,6 +9140,8 @@ class MainWindow(QMainWindow):
         return str(target.get("profile_id") or "")
 
     def _translation_target_is_runnable(self) -> bool:
+        if not self._engine_allows_work_mode(self._current_work_mode()):
+            return False
         if not getattr(self, "_translation_routing_active", False):
             return True
         target = getattr(self, "_translation_target", {}) or {}
@@ -9193,6 +9226,9 @@ class MainWindow(QMainWindow):
         else:
             hint = spec.not_implemented_message
         self.work_mode_hint_label.setText(hint)
+        if not self._engine_allows_work_mode(spec.mode):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            self.work_mode_hint_label.setText(MV_PROJECT_COPY['unsupported'])
         self._refresh_active_workbench_page(spec)
 
         # Prefer session-bound writeback path when restoring a page.
@@ -11231,10 +11267,46 @@ class MainWindow(QMainWindow):
             game_root = str(self.state.get_game_root() or "")
         except Exception:
             game_root = ""
-        import_running = getattr(self, "_coverage_import_worker", None) is not None
+        import_running = (getattr(self, "_coverage_import_worker", None) is not None
+                          or getattr(self, '_coverage_export_worker', None) is not None)
         enabled = bool(game_root) and not bool(running) and not import_running
         rescan_btn.setEnabled(enabled)
         import_btn.setEnabled(enabled)
+        export_btn = getattr(self, 'coverage_export_btn', None)
+        if export_btn is not None:
+            export_btn.setEnabled(enabled)
+
+    def _on_export_coverage_package(self):
+        if (getattr(self, '_coverage_export_worker', None) is not None
+                or getattr(self, '_coverage_import_worker', None) is not None
+                or bool(getattr(self, '_task_running', False))):
+            return
+        if not self._confirm_unsaved_config_before_workflow():
+            return
+        output = QFileDialog.getExistingDirectory(self, '选择覆盖材料导出目录')
+        if not output:
+            return
+        config = self._snapshot_runtime_config_for_job(persist_corrected_game_root=False)
+        worker = CoverageExportWorker(output, self, config=config)
+        worker._rtl_readiness_identity = self._readiness_project_identity()
+        worker.completed.connect(self._on_coverage_export_completed)
+        self._coverage_export_worker = worker
+        self._sync_doctor_coverage_buttons()
+        worker.start()
+
+    def _on_coverage_export_completed(self, result):
+        worker = self.sender()
+        if worker is not getattr(self, '_coverage_export_worker', None):
+            return
+        self._coverage_export_worker = None
+        worker.finished.connect(worker.deleteLater)
+        self._sync_doctor_coverage_buttons()
+        if getattr(worker, '_rtl_readiness_identity', None) != self._readiness_project_identity():
+            return
+        if result.get('ok'):
+            self.statusBar().showMessage(f"覆盖材料已导出：{result['output_dir']}", 8000)
+        else:
+            message_box_warning(self, '导出覆盖材料失败', result.get('error', ''))
 
     def _on_doctor_coverage_rescan(self) -> None:
         if getattr(self, "_coverage_import_worker", None) is not None:
@@ -11289,7 +11361,8 @@ class MainWindow(QMainWindow):
         self._append_log(f"=== 正在导入覆盖核对：{selected} ===\n")
         self.statusBar().showMessage(COVERAGE_REVIEW_COPY["import_running"], 0)
         self._sync_doctor_coverage_buttons(running=True)
-        worker = CoverageReviewImportWorker(selected, parent=self)
+        worker = CoverageReviewImportWorker(selected, parent=self,
+            config=self._snapshot_runtime_config_for_job(persist_corrected_game_root=False))
         worker.completed.connect(self._on_coverage_review_import_completed)
         self._coverage_import_worker = worker
         worker.start()
@@ -11345,6 +11418,10 @@ class MainWindow(QMainWindow):
     def _on_bootstrap_work(self):
         if not self._confirm_unsaved_config_before_workflow():
             return
+        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            message_box_information(self, '准备流程不可用', MV_PROJECT_COPY['prepare_unsupported'])
+            return
         if not self.state.get_game_root():
             message_box_information(
                 self,
@@ -11381,6 +11458,10 @@ class MainWindow(QMainWindow):
 
     def _on_generate_template(self):
         if not self._confirm_unsaved_config_before_workflow():
+            return
+        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            message_box_information(self, '准备流程不可用', MV_PROJECT_COPY['prepare_unsupported'])
             return
         if not self.state.get_game_root():
             message_box_information(
@@ -11536,6 +11617,10 @@ class MainWindow(QMainWindow):
 
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())
+        if not self._engine_allows_work_mode(spec.mode):
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            message_box_information(self, '执行方式不可用', MV_PROJECT_COPY['unsupported'])
+            return
         if not spec.implemented:
             message_box_information(self, "功能开发中", spec.not_implemented_message)
             return
@@ -13855,7 +13940,9 @@ class MainWindow(QMainWindow):
             config = self.state.load_translator_config()
             flags = load_project_context_settings(root)
             credentials = self.state.get_api_key_status()
-            encoded = json.dumps([root, config, flags, credentials], sort_keys=True, ensure_ascii=False).encode("utf-8")
+            from engine_adapters.project_config import mv_material_revision
+            material = mv_material_revision(config, getattr(self.state, 'config_path', 'translator_config.json'))
+            encoded = json.dumps([root, config, flags, credentials, material], sort_keys=True, ensure_ascii=False).encode("utf-8")
         except (OSError, ValueError, TypeError):
             return None
         return hashlib.sha256(encoded).hexdigest()

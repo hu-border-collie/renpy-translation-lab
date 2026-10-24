@@ -14,6 +14,7 @@
 | 第一次通过 GUI 翻译 | [GUI 快速开始](quickstart_gui.md) → [GUI 工作台](gui_workbench.md) |
 | 让 Agent / 脚本通过 CLI 翻译 | [Agent / CLI 快速开始](quickstart_agent.md) → [Batch 工作流](batch_workflows.md)或[耐久同步工作流](sync_workflow.md) |
 | 由宿主 Agent 提供初译 | [外部初译工作包（实验 CLI）](external_translation_work.md) |
+| 处理限定窗口的 RPG Maker MV 叙事文本 | [MV 耐久 Sync](rpgmaker_mv_sync.md) |
 | 安装、配置模型或迁移旧配置 | [安装与配置](setup.md) → [模型配置迁移](model_config_migration.md) → [Provider Smoke Matrix](provider_smoke_matrix.md) |
 | 查检查结果、覆盖范围和写回阻断 | [doctor 建议](doctor_recommendations.md) · [Engine Adapter](engine_adapter.md) · [结构 token 保护](structure_protection.md) |
 | 管理多个游戏项目 | [工作区项目总表](games_registry.md) |
@@ -37,6 +38,7 @@
 
 - [Batch 工作流与安全检查](batch_workflows.md)：Batch 生命周期、重试与恢复、订正、最终审校、关键词和质量规则。
 - [同步翻译工作流](sync_workflow.md)：耐久 `sync-start / resume / status`、检查、预览与安全写回；兼容同步入口另有边界。
+- [RPG Maker MV 叙事模式](rpgmaker_mv_sync.md)：独立源／目标、显式支持窗口、覆盖审阅、CLI / GUI 耐久 Sync；真实试点与原生验收仍单列。
 - [外部初译工作包（实验 CLI）](external_translation_work.md)：导出材料、接收部分成果、候选订正、持久冲突、恢复和绑定预览写回；当前支持范围为 Ren'Py。
 - [Engine Adapter、覆盖审计与安全写回](engine_adapter.md)：Ren'Py 产品路径、TyranoScript 原生 catalog 核心与离线验证，以及公共源 JSON 核心 API 的范围。
 - [结构 token 保护](structure_protection.md)：保护、恢复与校验引擎结构，旧请求兼容和失败边界。

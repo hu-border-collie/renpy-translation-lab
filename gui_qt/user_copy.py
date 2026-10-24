@@ -18,6 +18,21 @@ SAFETY_LEVEL_LABELS = {
     "block": "禁止写回",
 }
 
+MV_PROJECT_COPY = {
+    'prepare_unsupported': '当前引擎不使用 Ren\'Py 准备流程；请配置可信原始源与独立目标副本。',
+    'coverage_export': '导出覆盖材料',
+    'coverage_export_tip': '导出当前候选清单、独立覆盖报告和待填写审阅模板；不会批准范围或写入游戏。',
+    'engine_label': '游戏引擎',
+    'engine_description': 'renpy 或 rpgmaker_mv。MV 叙事模式当前仅支持耐久 Sync。',
+    'source_label': 'MV 原始源目录',
+    'source_description': '可信原始内容根目录（含 data / js）；须与项目列表中的目标副本分离且不互相嵌套。',
+    'window_label': 'MV 支持窗口文件',
+    'window_description': '经审计的 schema 1 核心／插件摘要文件；另需导入当前覆盖审阅，原生验收仍单列。',
+    'unsupported': 'MV 叙事模式当前仅支持耐久 Sync；请前往同步翻译。',
+    'scope_ready': 'MV 已审阅叙事范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
+    'scope_empty': 'MV 当前已审阅叙事范围没有待译条目；全游戏覆盖与原生验收仍单列。',
+}
+
 EXTERNAL_WORK_COPY = {
     'work-export': '外部初译：导出工作包（实验）',
     'work-read': '外部初译：读取材料',
@@ -65,6 +80,7 @@ DIAGNOSTICS_LOG_COPY = {
 }
 
 DOCTOR_MODE_LABELS = {
+    'mv_narrative': 'MV 叙事模式',
     "can_generate_template": "可生成翻译模板",
     "existing_tl_only": "已有翻译模板",
     "blocked_missing_template": "缺少模板且无法生成",
@@ -971,6 +987,8 @@ _NO_PENDING_STATUS_MESSAGE = (
 )
 
 DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
+    doctor_rec.START_PENDING_SYNC: MV_PROJECT_COPY['scope_ready'],
+    doctor_rec.MV_SCOPE_NO_PENDING: MV_PROJECT_COPY['scope_empty'],
     doctor_rec.SUBSTANTIALLY_COMPLETE: "项目已基本译完；剩余待译行很少，可忽略或按需补译。",
     doctor_rec.ENABLE_RAG_FOR_CONSISTENCY: (
         "可选优化：补译量较大，可在「设置 · 上下文」启用记忆库，再到「上下文库」预建。"
@@ -1003,6 +1021,8 @@ DOCTOR_RECOMMENDATION_PRIMARY_MESSAGES: dict[str, str] = {
 
 # Keep workflow-state copy in lockstep with primary recommendation messages.
 _SHARED_WORKFLOW_STATE_CODES = (
+    doctor_rec.START_PENDING_SYNC,
+    doctor_rec.MV_SCOPE_NO_PENDING,
     doctor_rec.SUBSTANTIALLY_COMPLETE,
     doctor_rec.START_INCREMENTAL_BATCH,
     doctor_rec.NO_PENDING_LINES,

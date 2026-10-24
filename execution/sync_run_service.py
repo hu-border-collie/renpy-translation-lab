@@ -890,6 +890,11 @@ def build_production_sync_run_service(
             reasons.append('translation_plan_changed')
         if not requests_fresh:
             reasons.append('root_requests_changed')
+        material_checker = getattr(execution_context, 'material_freshness', None)
+        material_reasons = list(material_checker() or []) if callable(material_checker) else []
+        reasons.extend(material_reasons)
+        if material_reasons:
+            source_fresh = False
         return {
             'resume_allowed': not reasons,
             'source': 'fresh' if source_fresh else 'stale',

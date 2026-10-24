@@ -11,6 +11,16 @@ GUI 摘要另有呈现生命周期：未检查、检查中、失败、过期均�
 
 ## 1. 维度一：文件与目录结构状态 (Layout Status)
 
+下表的 work / TL / SDK 派生针对 Ren'Py。MV 使用[独立材料模式](rpgmaker_mv_sync.md)：
+
+| MV 事实 | 输出 | 计数与启动 |
+| --- | --- | --- |
+| 源／目标／窗口缺失、漂移或不可读 | `engine.mv.material_invalid`；blocked | 扫描失败计数为未知，不补零。 |
+| 覆盖审阅缺失、pending、stale 或不满足 policy | `engine.mv.scope_review_required`；blocked | 可展示已测得的候选数，禁止启动。 |
+| 开启未接入 MV 的 Ren'Py 检索／分析注入 | `engine.mv.context_unsupported`；blocked | 关闭相关源后重新检查。 |
+| 材料和独立审阅有效，存在待处理叙事条目 | `start_pending_sync` | 只开放耐久 Sync。 |
+| 当前已审阅叙事范围无待处理条目 | `mv_scope_no_pending` | 全游戏覆盖和原生验收仍未确认。 |
+
 这是环境检查的最底层，决定项目所处的物理阶段，也是判定是否存在“阻断级”异常的基础。
 
 | 评估字段 / 派生事实 | 校验逻辑与物理路径 | 对应含义 |

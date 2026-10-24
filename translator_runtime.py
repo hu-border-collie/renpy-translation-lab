@@ -1991,6 +1991,8 @@ def load_translator_settings(
     _reset_project_settings_to_defaults()
 
     config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
+    from engine_adapters.project_config import project_engine
+    engine = project_engine(config)
     if "model_routing" in config:
         from providers.model_routing_reader import runtime_settings_view
 
@@ -2008,7 +2010,12 @@ def load_translator_settings(
 
     if ENV_GAME_ROOT:
         original_root = _canonical_abs_path(ENV_GAME_ROOT)
-        resolved_root = resolve_effective_game_root(original_root)
+        if engine == 'rpgmaker_mv':
+            configured_root = Path(ENV_GAME_ROOT)
+            if not configured_root.is_absolute():
+                configured_root = Path(TRANSLATOR_CONFIG).resolve().parent / configured_root
+            original_root = _canonical_abs_path(configured_root)
+        resolved_root = original_root if engine == 'rpgmaker_mv' else resolve_effective_game_root(original_root)
         if os.path.normcase(resolved_root) != os.path.normcase(original_root):
             ENV_GAME_ROOT = resolved_root
             should_persist = (
@@ -2050,6 +2057,8 @@ def load_translator_settings(
     GLOSSARY_FILE = resolved_glossary or DEFAULT_GLOSSARY_FILE
 
     tl_subdir = config.get("tl_subdir")
+    if engine == 'rpgmaker_mv':
+        tl_subdir = None
     try:
         # Always start from DEFAULT_TL_SUBDIR (not the previous load's value).
         candidate_subdir = DEFAULT_TL_SUBDIR
@@ -2077,6 +2086,8 @@ def load_translator_settings(
 
     TL_SUBDIR = candidate_subdir
     TL_DIR = candidate_tl_dir
+    if engine == 'rpgmaker_mv':
+        TL_SUBDIR, TL_DIR = '', BASE_DIR
     WORK_GAME_DIR = (
         _canonical_abs_path(os.path.join(BASE_DIR, WORK_GAME_SUBDIR)) if BASE_DIR else ""
     )
@@ -3146,6 +3157,8 @@ def _describe_template_unavailable(template_info):
 
 
 def run_prepare_steps():
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'prepare')
     if not PREP_ENABLED:
         print("[Prepare] Disabled by translator_config.")
         return
@@ -5173,6 +5186,9 @@ def _sync_plan_config_snapshot():
 
 
 def _sync_plan_source_identity(adapter_snapshot):
+    if adapter_snapshot.project.engine == 'rpgmaker_mv':
+        from execution.mv_sync import source_identity
+        return source_identity(adapter_snapshot)
     project = adapter_snapshot.project
     documents = tuple(project.source_documents or ())
     return translation_plan.SourceIdentity(
@@ -5199,6 +5215,8 @@ def current_sync_source_identity():
     mutate project files, so offline check/apply can use it as a final
     writeback freshness predicate.
     """
+    if current_project_engine() == 'rpgmaker_mv':
+        return _sync_plan_source_identity(current_mv_sync_snapshot(require_review=False)).to_dict()
     adapter = RenPyAdapter(legacy_module=sys.modules[__name__])
     snapshot = build_translation_snapshot(
         adapter,
@@ -5211,6 +5229,24 @@ def current_sync_source_identity():
         ),
     )
     return _sync_plan_source_identity(snapshot).to_dict()
+
+
+def current_project_engine():
+    """Read the selected engine without retaining another project's settings."""
+    from engine_adapters.project_config import project_engine, read_project_configuration
+    return project_engine(read_project_configuration(TRANSLATOR_CONFIG))
+
+
+def current_mv_sync_snapshot(*, require_review=True):
+    """Rescan both MV roots and their audited window without provider calls."""
+    from execution.mv_sync import build_snapshot
+    from engine_adapters.project_config import read_project_configuration
+    snapshot = build_snapshot(read_project_configuration(TRANSLATOR_CONFIG),
+                              TRANSLATOR_CONFIG, language=PREP_LANGUAGE, require_review=require_review)
+    if (_canonical_abs_path(snapshot.project.localization_root) != _canonical_abs_path(BASE_DIR)
+            or _canonical_abs_path(snapshot.project.localization_root) != _canonical_abs_path(TL_DIR)):
+        raise ValueError('MV active project changed; reload settings before continuing.')
+    return snapshot
 
 
 def validate_sync_translation_plan_before_dispatch(plan_build):
@@ -5685,6 +5721,20 @@ class SyncTranslationExecutionContext:
         valid, _reason = self.validate_translation(item, translation)
         return valid
 
+    def material_freshness(self):
+        """Rehash MV source/target/window/config immediately before dispatch."""
+        if self.adapter_snapshot.project.engine != 'rpgmaker_mv':
+            return []
+        from execution.mv_sync import live_material_identity, material_identity, require_material_fresh
+        from engine_adapters.project_config import read_project_configuration
+        try:
+            require_material_fresh(material_identity(self.adapter_snapshot), live_material_identity(
+                self.adapter_snapshot,
+                read_project_configuration(TRANSLATOR_CONFIG), TRANSLATOR_CONFIG))
+        except (OSError, ValueError, TypeError):
+            return ['mv_material_changed']
+        return []
+
     def durable_targets_payload(self, *, run_id=''):
         """Return the redacted, offline target shape consumed by check/preview."""
         chunks = []
@@ -5756,6 +5806,14 @@ def prepare_sync_translation_execution_context(
         persist_corrected_game_root=bool(persist_corrected_game_root)
     )
     require_supported_generation_target()
+    mv_snapshot = None
+    if current_project_engine() == 'rpgmaker_mv':
+        if prepare:
+            raise ValueError('RPG Maker MV does not support Ren\'Py prepare commands.')
+        if (SYNC_RAG_ENABLED or SYNC_SOURCE_INDEX_ENABLED or SYNC_STORY_MEMORY_ENABLED
+                or SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF):
+            raise ValueError('MV durable Sync currently requires Ren\'Py retrieval, source index, story memory and project analysis injection to be disabled.')
+        mv_snapshot = current_mv_sync_snapshot()
     if require_provider and SYNC_BACKEND == 'gemini':
         _require_gemini_api_key()
     load_glossary()
@@ -5766,13 +5824,13 @@ def prepare_sync_translation_execution_context(
         _require_sync_embedding_binding_for_retrieval()
     if prepare:
         run_prepare_steps()
-    elif PREP_ENABLED:
+    elif PREP_ENABLED and mv_snapshot is None:
         print(
             'Prepare step skipped in durable Sync mode; use --prepare explicitly if needed.'
         )
 
-    adapter = RenPyAdapter(legacy_module=sys.modules[__name__])
-    adapter_snapshot = build_translation_snapshot(
+    adapter = mv_snapshot.adapter if mv_snapshot is not None else RenPyAdapter(legacy_module=sys.modules[__name__])
+    adapter_snapshot = mv_snapshot if mv_snapshot is not None else build_translation_snapshot(
         adapter,
         ProjectDiscoveryRequest(
             project_root=BASE_DIR,
@@ -5787,7 +5845,7 @@ def prepare_sync_translation_execution_context(
         for occurrence in adapter_snapshot.occurrences
         if occurrence.unit.id
     }
-    global_progress = _upgrade_legacy_progress_keys(
+    global_progress = {} if mv_snapshot is not None else _upgrade_legacy_progress_keys(
         load_progress(),
         [document.file_path for document in adapter_snapshot.project.source_documents],
     )
@@ -5814,12 +5872,14 @@ def prepare_sync_translation_execution_context(
                     continue
             task['progress_entry'] = _progress_entry_for_task(task)
             task['file_rel_path'] = progress_key
-            task['file_path'] = document.file_path
+            task['file_path'] = (os.path.join(TL_DIR, *progress_key.split('/'))
+                                 if mv_snapshot is not None else document.file_path)
             tasks.append(task)
         if tasks:
             pending_jobs.append({
                 'file_rel_path': progress_key,
-                'file_path': document.file_path,
+                'file_path': (os.path.join(TL_DIR, *progress_key.split('/'))
+                              if mv_snapshot is not None else document.file_path),
                 'tasks': tasks,
             })
     translation_plan.attach_context_items_from_units(pending_jobs, units_by_file)
@@ -7455,8 +7515,11 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     """
     load_config(require_api_key=False)
     load_translator_settings()
+    active_engine = current_project_engine()
 
     def record_progress(entry):
+        if active_engine == 'rpgmaker_mv':
+            return
         update_progress(entry["relative_path"], entry.get("progress_entries") or [])
         translated_path = os.path.join(TL_DIR, *entry["relative_path"].split("/"))
         maybe_update_sync_rag_store(translated_path, full_file=True)
@@ -7490,6 +7553,11 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
         runtime_config
     )
     try:
+        material_options = {}
+        if active_engine == 'rpgmaker_mv':
+            from execution.mv_sync import material_identity
+            material_options['active_material_loader'] = lambda: material_identity(
+                current_mv_sync_snapshot(require_review=False))
         manifest = sync_translation_preview.apply_sync_preview(
             manifest_path,
             active_project_root=BASE_DIR,
@@ -7497,6 +7565,7 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
             on_file_applied=record_progress,
             active_quality_policy=active_quality_policy,
             active_glossary_file=GLOSSARY_FILE,
+            **material_options,
         )
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
@@ -7526,6 +7595,8 @@ def run_translation(*, prepare=False):
             stage=model_profile.STAGE_TRANSLATION,
         ) from exc
     load_translator_settings()
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'legacy-sync')
     require_supported_generation_target()
     if SYNC_BACKEND == "gemini":
         _require_gemini_api_key()

@@ -65,7 +65,11 @@
 - `engine_adapters/rpgmaker_mv.py`：#570 的 MV 叙事共享核心、显式 core / 插件窗口、
   独立源 / 目标快照和 102 / 402 联动计划；`rpgmaker_mv_controls.py` 提供严格控制码规则。
   原创材料与回归见 `tests/fixtures/rpgmaker_mv_narrative/` 和
-  `tests/engine_adapters/test_rpgmaker_mv.py`；产品接入归 #567 A3。
+  `tests/engine_adapters/test_rpgmaker_mv.py`。
+- `engine_adapters/project_config.py`：显式引擎选择、MV 支持窗口读取与产品入口限制。
+- `execution/mv_sync.py`：MV 完整材料审计、独立 review 绑定、耐久 Sync 源／目标身份、
+  occurrence 到共享结果与 schema 2 plan 的桥接；产品回归见 `tests/execution/test_mv_durable_sync.py`，
+  操作与真实验收边界见 [MV Sync](rpgmaker_mv_sync.md)。
 - `quality_review/translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
 - Batch 与 durable Sync 的 check/preview/apply 测试是写回安全事实；新增入口必须复用，
   不得仅凭模型任务完成状态授权写回。

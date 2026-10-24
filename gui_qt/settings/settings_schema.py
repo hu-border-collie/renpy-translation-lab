@@ -36,6 +36,7 @@ from gui_qt.user_copy import (
     SYNC_CONTEXT_BEFORE_COPY,
     SYNC_MACRO_SETTING_FILE_COPY,
     SYNC_TIMEOUT_COPY,
+    MV_PROJECT_COPY,
 )
 
 
@@ -106,6 +107,12 @@ CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 
 ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField('engine', ('engine',), MV_PROJECT_COPY['engine_label'],
+                 MV_PROJECT_COPY['engine_description'], 'str', 'renpy', '项目与资源'),
+    SettingField('mv_source_root', ('rpgmaker_mv', 'source_root'), MV_PROJECT_COPY['source_label'],
+                 MV_PROJECT_COPY['source_description'], 'str', '', '项目与资源', allow_empty=True),
+    SettingField('mv_support_window_file', ('rpgmaker_mv', 'support_window_file'), MV_PROJECT_COPY['window_label'],
+                 MV_PROJECT_COPY['window_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField(
         "catalog_gemini_models",
         ("model_catalog", "gemini"),
@@ -1412,6 +1419,8 @@ def validate_value(
         return str(exc)
 
     if field.kind in {"str", "text"}:
+        if field.key == 'engine' and normalized not in {'renpy', 'rpgmaker_mv'}:
+            return '游戏引擎必须是 renpy 或 rpgmaker_mv。'
         if not field.allow_empty and not str(normalized).strip():
             return f"{field.label}不能为空。"
         return ""

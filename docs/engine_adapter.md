@@ -25,6 +25,7 @@ JSON 的声明式语义写回和多 catalog / `lang_set` 完整性门禁。Tyran
 | `engine_adapters/contracts.py` | engine-neutral protocol、capability、candidate、occurrence、validation / writeback 的版本化信封 |
 | `engine_adapters/renpy.py` | Ren'Py 项目发现、`.rpy` inventory、分类、source marker、speaker、translate block / occurrence / ordinal、只读 occurrence 提取 |
 | `engine_adapters/tyrano.py` | TyranoScript V600+ `.ks` inventory、原生语言 JSON 对账、occurrence extraction、译文校验与 `json_catalog_set` plan |
+| `engine_adapters/rpgmaker_mv.py`、`project_config.py`、`execution/mv_sync.py` | 显式 MV 材料窗口、独立源／目标、叙事 occurrence 与双快照计划；桥接共享耐久 Sync、结果和写回，不新增调度器或 writer |
 | `engine_adapters/coverage.py` | 独立校验 inventory invariant、生成稳定 digest、导出 coverage/review package、导入并校验人工或 Agent review |
 | `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span / JSON path、冲突和 plan digest 校验；只在内存中渲染，不持有 writer |
 | `engine_adapters/versioning.py` | P3 `GameVersion` / `ProjectSnapshot` / source-only `UnitOccurrenceRecord`、JSON/JSONL 导入导出、只读 reconciliation 与 freshness 校验 |
@@ -47,7 +48,7 @@ plan digest；旧消费者遇到未知 operation kind 会 fail closed，adapter 
 
 ## 扫描与等价性
 
-一次 translation build 只建立一个不可变扫描快照：
+一次 Ren'Py translation build 只建立一个不可变扫描快照；MV 的完整材料审计与请求筛选见[MV 产品路线](rpgmaker_mv_sync.md)：
 
 1. `discover_project()` 按现有 include allowlist 读取目标语言目录下的 `.rpy`；
 2. `inventory_candidates()` 独立枚举字符串、source marker 和解析错误区域；
@@ -413,7 +414,7 @@ P1 由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/
 可对真实游戏运行的新命令。该分阶段边界及后续任务见
 [#565 调查与实施范围](plans/issue-565-komorebi-survey-2026-10-23.md#7-可直接立项的后续任务)；
 后续产品与游戏交付由 [#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567)
-承接，其中 A1 对应该公共核心，A2 / A3 及真实游戏验收尚未完成。
+承接，其中 A1 对应该公共核心，A2 提供 MV Adapter，A3 的[耐久 Sync 产品路线](rpgmaker_mv_sync.md)复用该消费者；真实游戏验收仍单列。
 
 | schema 2 字段 | 含义 |
 | --- | --- |
@@ -461,9 +462,8 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
 
 [#570](https://github.com/hu-border-collie/renpy-translation-lab/issues/570) 在上述 schema 2
 上增加 [RpgMakerMvAdapter](../engine_adapters/rpgmaker_mv.py) 和显式的
-`MvSupportWindow`。它提供共享库 API 和原创离线验收；耐久 Sync、TranslationPlan、
-CLI / GUI、配置、doctor 及产品帮助接线归 [#567 的 A3](https://github.com/hu-border-collie/renpy-translation-lab/issues/567)。
-当前没有可对 MV 游戏运行的产品命令，不能据此声明 MV 正式支持或 Komorebi 汉化完成。
+`MvSupportWindow`。它提供共享库 API 和原创离线验收；[#572 的 A3](https://github.com/hu-border-collie/renpy-translation-lab/issues/572)
+已接通[耐久 Sync、CLI / GUI、配置和 doctor](rpgmaker_mv_sync.md)。真实试点与原生验收仍未完成，不能据工程接线声明 MV 正式支持已验收或 Komorebi 汉化完成。
 
 ### 材料窗口与源 / 目标
 
@@ -494,8 +494,8 @@ CLI / GUI、配置、doctor 及产品帮助接线归 [#567 的 A3](https://githu
 
 [控制规则](../engine_adapters/rpgmaker_mv_controls.py)供 Adapter 和共享
 [结构保护](../quality_review/structure_protection.py)复用。popup profile 参与占位符映射的身份
-绑定；Ren'Py / Tyrano 的既有映射格式保持不变。共享 TranslationPlan 仍拒绝 MV engine，
-待 A3 同步接线后才能成为执行入口。
+绑定；Ren'Py / Tyrano 的既有映射格式保持不变。共享 TranslationPlan 接受 MV Sync，
+产品入口限定为耐久 Sync；Batch 和外部 Agent 工作包继续拒绝 MV。
 
 ### Coverage、计划与验证
 
@@ -506,8 +506,8 @@ inventory 与 audit 分别遍历语义事件和原始 JSON 的 401 / 102 / 402 �
 `build_writeback_plan(project, validated, live_sources, live_targets=...)` 必须同时收到完整
 的现场源 / 目标、当前 coverage digest 和独立 review binding。它重建 canonical occurrence、
 复核译文验证，拒绝重复提交和伪造的镜像路径，再返回 schema 2 计划。计划及公共 renderer
-只有内存输出；A3 还须提供最新 `check -> apply` 授权、目录 / 项目身份、紧邻提交的现场
-读取、预览和原子事务。调用这个核心 API 不能替代写回授权。
+只有内存输出；A3 产品路线提供最新 `check -> apply` 授权、目录 / 项目身份、紧邻提交的现场
+读取、双快照预览和原子事务。调用这个核心 API 不能替代写回授权。
 
 不可编码为 UTF-8 的译文返回 `rpgmaker_mv.translation.encoding` 阻断结果。
 诊断摘要保留其原始非法码点身份，不以替换或丢弃字符修复译文；有效译文的摘要合同保持不变。

@@ -1,4 +1,9 @@
 {
+  "engine": "renpy",
+  "rpgmaker_mv": {
+    "source_root": "",
+    "support_window_file": ""
+  },
   "workspace_root": "",
   "game_root": "C:/games/Game_Example/work",
   "glossary_file": "glossary.json",
