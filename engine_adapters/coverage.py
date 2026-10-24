@@ -82,6 +82,16 @@ CANDIDATE_REASON_CODES = frozenset(
         "renpy.catalog.provenance_unknown",
         "renpy.catalog.stale",
         "project.extraction_override",
+        # RPG Maker MV narrative core (#570); product support is separate.
+        "rpgmaker_mv.message",
+        "rpgmaker_mv.choice",
+        "rpgmaker_mv.choice_mirror",
+        "rpgmaker_mv.empty_message",
+        "rpgmaker_mv.deferred_text",
+        "rpgmaker_mv.outside_narrative_scope",
+        "rpgmaker_mv.invalid_event",
+        "rpgmaker_mv.invalid_json",
+        "rpgmaker_mv.unknown_control",
         # TyranoScript V600+ P5 (#399 / #265 P5)
         "tyrano.comment",
         "tyrano.engine_control_structure",
@@ -120,6 +130,8 @@ REPORT_REASON_CODES = frozenset(
         "coverage.inventory.invalid_candidate",
         "coverage.inventory.source_mismatch",
         "coverage.source_changed_during_scan",
+        "rpgmaker_mv.coverage.mismatch",
+        "rpgmaker_mv.snapshot.stale",
         "renpy.catalog.provenance_unknown",
         "renpy.catalog.stale",
         "renpy.catalog.missing_entry",
@@ -400,6 +412,9 @@ def build_coverage_report(
         or any(
             code in reason_counts
             for code in {
+                "rpgmaker_mv.coverage.mismatch",
+                "rpgmaker_mv.snapshot.stale",
+                "rpgmaker_mv.invalid_json",
                 "tyrano.catalog.missing_file",
                 "tyrano.catalog.missing_scenario",
                 "tyrano.catalog.missing_row",

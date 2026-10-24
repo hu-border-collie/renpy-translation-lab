@@ -1,0 +1,32 @@
+{
+  "displayName":"Old Harbor", "width":12, "height":8, "ratio":1.234567890123456789,
+  "events":[null,{"id":1,"name":"GuideHotspot","note":"preserve","x":3,"y":2,"pages":[
+    {"conditions":{"switch1Valid":false,"switch1Id":1},"image":{"characterName":"Guide","characterIndex":0},"list":[
+      {"code":101,"indent":0,"parameters":["GuideFaces",2,0,2]},
+      {"code":401,"indent":0,"parameters":["\\pop[0]\\c[2]Hello, traveler.\\C[0]"]},
+      {"code":401,"indent":0,"parameters":["A second line with \\v[1] and \\n[2]."]},
+      {"code":102,"indent":0,"parameters":[["Enter \\i[3]","Wait"],-2,0,2,0]},
+      {"code":402,"indent":0,"parameters":[0,"Enter \\i[3]"]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["The door is open."]},
+      {"code":402,"indent":0,"parameters":[1,"Wait"]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["Take your time."]},
+      {"code":403,"indent":0,"parameters":[]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["Maybe later."]},
+      {"code":404,"indent":0,"parameters":[]},
+      {"code":101,"indent":0,"parameters":["",0,0,2]},
+      {"code":401,"indent":0,"parameters":[""]},
+      {"code":117,"indent":0,"parameters":[1]},
+      {"code":0,"indent":0,"parameters":[]}
+    ]},
+    {"conditions":{"switch1Valid":true,"switch1Id":1},"image":{"characterName":"Guide","characterIndex":1},"list":[
+      {"code":101,"indent":0,"parameters":["",0,0,2]},
+      {"code":401,"indent":0,"parameters":["Same words."]},
+      {"code":320,"indent":0,"parameters":[1,"Arden"]},
+      {"code":117,"indent":0,"parameters":[1]},
+      {"code":0,"indent":0,"parameters":[]}
+    ]}
+  ]}]
+}

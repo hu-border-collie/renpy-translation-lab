@@ -455,6 +455,75 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
 验证副本提交、失败回滚、晚到目标编辑保护和崩溃日志恢复。它不包含商业游戏材料，也
 不代表 RPG Maker 引擎、结构保护或原生运行验收完成。
 
+<a id="rpgmaker-mv-a2"></a>
+
+## RPG Maker MV 叙事 Adapter（A2 共享核心）
+
+[#570](https://github.com/hu-border-collie/renpy-translation-lab/issues/570) 在上述 schema 2
+上增加 [RpgMakerMvAdapter](../engine_adapters/rpgmaker_mv.py) 和显式的
+`MvSupportWindow`。它提供共享库 API 和原创离线验收；耐久 Sync、TranslationPlan、
+CLI / GUI、配置、doctor 及产品帮助接线归 [#567 的 A3](https://github.com/hu-border-collie/renpy-translation-lab/issues/567)。
+当前没有可对 MV 游戏运行的产品命令，不能据此声明 MV 正式支持或 Komorebi 汉化完成。
+
+### 材料窗口与源 / 目标
+
+- 输入根分别包含 `data/` 和 `js/`；游戏包有 `www/` 时显式传该内容根。冻结源和目标根
+  必须独立、互不嵌套；不接受部分文件过滤来隐藏 coverage 分母。
+- `MvSupportWindow.material_sha256` 必须来自已核对的材料清单，包含六个
+  `js/rpg_*.js` core、`js/plugins.js` 及每个注册插件的 `js/plugins/<name>.js`，
+  包括未启用插件。没有“从当前游戏自动采信摘要”的默认窗口；摘要匹配也不是原生验收。
+- core 必须静态声明 MV；MZ 被拒绝。头部和运行常量的版本冲突继续保留为 unknown，
+  不能只按一个声明版本泛化支持。core、注册表、启用状态或插件文件变化后须重新调查窗口。
+- `MvProjectDiscovery.source_documents` 和 `target_documents` 分别冻结原文与当前目标。
+  目标已有中文也不改变原文身份。缺失 `CommonEvents.json` 不按零条公共事件处理。
+  目标可以更改获准的非空叙事字符串；其他 JSON 结构、空消息、资源名和事件参数须与源一致。
+- `read_live_documents(project, target=...)` 重新读取完整材料集，包括新出现的数据 JSON；
+  任何源材料变化都会使旧位置失效。重定位只验证同一快照，不按重复原文自动追踪移动。
+
+### 叙事与结构范围
+
+| 材料 | A2 行为 |
+| --- | --- |
+| 地图多事件页、公共事件 | 按文件、事件 / 页、指令和参数的类型化路径定位；重复原文分别产生 occurrence。公共事件记录静态调用位置，物理文本只记一次，不声称运行调用覆盖率。 |
+| 101 / 401 | 保存消息设置、完整消息块和物理续行位置；每条非空 401 独立处理，空消息保留；不允许把换行或 popup 移入另一条物理消息。 |
+| 102 / 402 | 102 选项是翻译 occurrence；402 是独立记账的关联目标。翻译一个选项必定生成对应两处操作；嵌套关联按 indent 区分。缺失、重复、越界或标签不一致会阻断。 |
+| 取消行为 | 保留禁用取消、映射到已有选项、独立 403 取消分支及默认 / 位置 / 背景参数；越界值和不一致分支拒绝，不模拟 core 的容错归一化。 |
+| MV 控制码 | 保留 `\V[n]` / `\N[n]` / `\P[n]` / `\I[n]` / `\C[n]` 的大小写变体、货币、等待 / 暂停 / 快显 / 字号及字面反斜杠；参数拼写、数量和顺序必须一致。未知、嵌套参数或畸形转义阻断，不猜测修复。 |
+| GALV_MessageStyles | 仅在窗口显式设置 `message_styles=True` 且注册表启用该插件时支持 `\pop[整数]`，只允许一处且在消息块第一条 401 的开头。actor / 坐标等其他 popup 形式尚不支持。 |
+| 其他文本 | 角色名修改、滚动文本、脚本和插件命令显式记录为 unsupported；数据库等 JSON 标记在叙事范围之外。它们及插件 UI、图片、动态文本仍归 B0 核查，不计为全游戏已覆盖。 |
+
+[控制规则](../engine_adapters/rpgmaker_mv_controls.py)供 Adapter 和共享
+[结构保护](../quality_review/structure_protection.py)复用。popup profile 参与占位符映射的身份
+绑定；Ren'Py / Tyrano 的既有映射格式保持不变。共享 TranslationPlan 仍拒绝 MV engine，
+待 A3 同步接线后才能成为执行入口。
+
+### Coverage、计划与验证
+
+inventory 与 audit 分别遍历语义事件和原始 JSON 的 401 / 102 / 402 位置；原始位置分母包含
+空消息与 402 镜像。公共 coverage 层继续验证分类、文件和摘要；删掉候选、错分类、重复
+位置或材料漂移会阻断。审阅记录仍由上层按现行 policy 独立核验，不能由 Adapter 自报通过。
+
+`build_writeback_plan(project, validated, live_sources, live_targets=...)` 必须同时收到完整
+的现场源 / 目标、当前 coverage digest 和独立 review binding。它重建 canonical occurrence、
+复核译文验证，拒绝重复提交和伪造的镜像路径，再返回 schema 2 计划。计划及公共 renderer
+只有内存输出；A3 还须提供最新 `check -> apply` 授权、目录 / 项目身份、紧邻提交的现场
+读取、预览和原子事务。调用这个核心 API 不能替代写回授权。
+
+不可编码为 UTF-8 的译文返回 `rpgmaker_mv.translation.encoding` 阻断结果。
+诊断摘要保留其原始非法码点身份，不以替换或丢弃字符修复译文；有效译文的摘要合同保持不变。
+
+[原创材料](../tests/fixtures/rpgmaker_mv_narrative/README.md)手选 **14 个非空 occurrence、
+6 个独立 402 目标**，加一条保留空消息；固定输出独立于 Adapter / renderer 编写。
+[回归测试](../tests/engine_adapters/test_rpgmaker_mv.py)组合公共 reader、renderer 与既有
+原子事务，验证精确目标、非目标字节、现译 / 原文分离、漂移拒绝、晚到编辑、失败回滚
+和崩溃恢复。材料不含引擎或插件实现，不是可运行的 MV 工程；真实 101 + 7 试点、中文
+显示、原生存读档和语义质量仍按 A0 / A4 分别验收。
+
+语义核对参考 [MV 官方事件解释器](https://github.com/rpgtkoolmv/corescript/blob/master/js/rpg_objects/Game_Interpreter.js)、
+[MV 官方文字转义实现](https://github.com/rpgtkoolmv/corescript/blob/master/js/rpg_windows/Window_Base.js)及
+[GALV Message Styles 作者说明](https://galvs-scripts.com/2016/03/31/mv-message-styles/)；
+这些资料不是 Komorebi 实际 core 的版本等价证明。
+
 ## P6 离线端到端回归与边界
 
 P6 收口不依赖真实游戏运行时，回归分为三层，全部在 CI 的 CLI / GUI 套件中执行：

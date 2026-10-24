@@ -89,6 +89,12 @@ from .tyrano import (
     TyranoTranslationSnapshot,
     build_translation_snapshot as build_tyrano_translation_snapshot,
 )
+from .rpgmaker_mv import (
+    ADAPTER_VERSION as RPGMAKER_MV_ADAPTER_VERSION,
+    MvProjectDiscovery,
+    MvSupportWindow,
+    RpgMakerMvAdapter,
+)
 
 __all__ = [
     "CANDIDATE_SCHEMA_VERSION",
@@ -106,6 +112,10 @@ __all__ = [
     "RECONCILIATION_SCHEMA_VERSION",
     "RENPY_ADAPTER_VERSION",
     "TYRANO_ADAPTER_VERSION",
+    "RPGMAKER_MV_ADAPTER_VERSION",
+    "MvProjectDiscovery",
+    "MvSupportWindow",
+    "RpgMakerMvAdapter",
     "UNIT_OCCURRENCE_SCHEMA_VERSION",
     "VALIDATION_SCHEMA_VERSION",
     "WRITEBACK_PLAN_SCHEMA_VERSION",

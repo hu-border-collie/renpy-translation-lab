@@ -62,6 +62,10 @@
 
 - `engine_adapters/`：项目发现、候选、coverage、occurrence、relocation、
   validation、声明式 writeback plan。
+- `engine_adapters/rpgmaker_mv.py`：#570 的 MV 叙事共享核心、显式 core / 插件窗口、
+  独立源 / 目标快照和 102 / 402 联动计划；`rpgmaker_mv_controls.py` 提供严格控制码规则。
+  原创材料与回归见 `tests/fixtures/rpgmaker_mv_narrative/` 和
+  `tests/engine_adapters/test_rpgmaker_mv.py`；产品接入归 #567 A3。
 - `quality_review/translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
 - Batch 与 durable Sync 的 check/preview/apply 测试是写回安全事实；新增入口必须复用，
   不得仅凭模型任务完成状态授权写回。
