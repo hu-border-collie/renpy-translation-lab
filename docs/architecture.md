@@ -94,9 +94,10 @@ translation validation 和声明式 writeback plan。公共层复核材料 / 结
 提升为 blocker 的规则必须阻断。`--force` 不能绕过 stale check、源快照、结构 blocker
 或 adapter plan 验证。检查与 apply 在各执行路径中的实现仍分别维护，不能只凭模型完成状态授权。
 
-公共源 JSON schema 2 由 PR #568 合并，支持独立源 / 目标快照与数组路径，但尚未接通
-RPG Maker Adapter、耐久 Sync 写回和 CLI / GUI 产品入口。具体范围见
-[Engine Adapter 手册](engine_adapter.md#source-json-writeback-p1)。
+公共源 JSON schema 2 由 PR #568 合并，支持独立源 / 目标快照与数组路径。
+`RpgMakerMvAdapter` 在显式材料窗口上提供 MV 叙事共享核心，复用该计划消费者与结构保护；
+耐久 Sync 写回和 CLI / GUI 产品接入仍归 #567 A3。核心与产品边界见
+[Engine Adapter 手册](engine_adapter.md#rpgmaker-mv-a2)。
 
 ## Settings 页面与保存所有权
 

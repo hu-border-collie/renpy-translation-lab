@@ -1,0 +1,19 @@
+{"displayName":"Hill","events":[null,{"id":1,"name":"SecondContext","pages":[{"conditions":{"switch1Valid":false},"list":[
+{"code":101,"indent":0,"parameters":["",0,0,2]},
+{"code":401,"indent":0,"parameters":["Same words."]},
+{"code":102,"indent":0,"parameters":[["Yes","No"],-1,0,2,0]},
+{"code":402,"indent":0,"parameters":[0,"Yes"]},
+{"code":121,"indent":1,"parameters":[2,2,0]},
+{"code":402,"indent":0,"parameters":[1,"No"]},
+{"code":121,"indent":1,"parameters":[2,2,1]},
+{"code":404,"indent":0,"parameters":[]},
+{"code":102,"indent":0,"parameters":[["Keep","Leave"],1,-1,1,1]},
+{"code":402,"indent":0,"parameters":[0,"Keep"]},
+{"code":230,"indent":1,"parameters":[10]},
+{"code":402,"indent":0,"parameters":[1,"Leave"]},
+{"code":230,"indent":1,"parameters":[20]},
+{"code":404,"indent":0,"parameters":[]},
+{"code":355,"indent":0,"parameters":["originalDynamicUi('Still outside narrative scope')"]},
+{"code":356,"indent":0,"parameters":["OriginalPlugin keep"]},
+{"code":0,"indent":0,"parameters":[]}
+]}]}]}

@@ -1,0 +1,16 @@
+[
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",1,"parameters",0],"source":"\\pop[0]\\c[2]Hello, traveler.\\C[0]","translation":"\\pop[0]\\c[2]你好，旅人。\\C[0]","mirrors":[]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",2,"parameters",0],"source":"A second line with \\v[1] and \\n[2].","translation":"第二行包含 \\v[1] 和 \\n[2]。","mirrors":[]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",3,"parameters",0,0],"source":"Enter \\i[3]","translation":"进入 \\i[3]","mirrors":[["events",1,"pages",0,"list",4,"parameters",1]]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",3,"parameters",0,1],"source":"Wait","translation":"等一等","mirrors":[["events",1,"pages",0,"list",7,"parameters",1]]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",6,"parameters",0],"source":"The door is open.","translation":"门开着。","mirrors":[]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",9,"parameters",0],"source":"Take your time.","translation":"慢慢来。","mirrors":[]},
+ {"file":"data/Map001.json","path":["events",1,"pages",0,"list",12,"parameters",0],"source":"Maybe later.","translation":"以后再说吧。","mirrors":[]},
+ {"file":"data/Map001.json","path":["events",1,"pages",1,"list",1,"parameters",0],"source":"Same words.","translation":"同一句话。","mirrors":[]},
+ {"file":"data/Map002.json","path":["events",1,"pages",0,"list",1,"parameters",0],"source":"Same words.","translation":"相同的话语。","mirrors":[]},
+ {"file":"data/Map002.json","path":["events",1,"pages",0,"list",2,"parameters",0,0],"source":"Yes","translation":"是","mirrors":[["events",1,"pages",0,"list",3,"parameters",1]]},
+ {"file":"data/Map002.json","path":["events",1,"pages",0,"list",2,"parameters",0,1],"source":"No","translation":"否","mirrors":[["events",1,"pages",0,"list",5,"parameters",1]]},
+ {"file":"data/Map002.json","path":["events",1,"pages",0,"list",8,"parameters",0,0],"source":"Keep","translation":"保留","mirrors":[["events",1,"pages",0,"list",9,"parameters",1]]},
+ {"file":"data/Map002.json","path":["events",1,"pages",0,"list",8,"parameters",0,1],"source":"Leave","translation":"离开","mirrors":[["events",1,"pages",0,"list",11,"parameters",1]]},
+ {"file":"data/CommonEvents.json","path":[1,"list",1,"parameters",0],"source":"Shared help for \\p[1]: \\g.","translation":"给 \\p[1] 的共用提示：\\g。","mirrors":[]}
+]

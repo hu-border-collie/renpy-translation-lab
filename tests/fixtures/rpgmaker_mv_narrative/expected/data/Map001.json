@@ -1,0 +1,32 @@
+{
+  "displayName":"Old Harbor", "width":12, "height":8, "ratio":1.234567890123456789,
+  "events":[null,{"id":1,"name":"GuideHotspot","note":"preserve","x":3,"y":2,"pages":[
+    {"conditions":{"switch1Valid":false,"switch1Id":1},"image":{"characterName":"Guide","characterIndex":0},"list":[
+      {"code":101,"indent":0,"parameters":["GuideFaces",2,0,2]},
+      {"code":401,"indent":0,"parameters":["\\pop[0]\\c[2]你好，旅人。\\C[0]"]},
+      {"code":401,"indent":0,"parameters":["第二行包含 \\v[1] 和 \\n[2]。"]},
+      {"code":102,"indent":0,"parameters":[["进入 \\i[3]","等一等"],-2,0,2,0]},
+      {"code":402,"indent":0,"parameters":[0,"进入 \\i[3]"]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["门开着。"]},
+      {"code":402,"indent":0,"parameters":[1,"等一等"]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["慢慢来。"]},
+      {"code":403,"indent":0,"parameters":[]},
+      {"code":101,"indent":1,"parameters":["",0,0,2]},
+      {"code":401,"indent":1,"parameters":["以后再说吧。"]},
+      {"code":404,"indent":0,"parameters":[]},
+      {"code":101,"indent":0,"parameters":["",0,0,2]},
+      {"code":401,"indent":0,"parameters":[""]},
+      {"code":117,"indent":0,"parameters":[1]},
+      {"code":0,"indent":0,"parameters":[]}
+    ]},
+    {"conditions":{"switch1Valid":true,"switch1Id":1},"image":{"characterName":"Guide","characterIndex":1},"list":[
+      {"code":101,"indent":0,"parameters":["",0,0,2]},
+      {"code":401,"indent":0,"parameters":["同一句话。"]},
+      {"code":320,"indent":0,"parameters":[1,"Arden"]},
+      {"code":117,"indent":0,"parameters":[1]},
+      {"code":0,"indent":0,"parameters":[]}
+    ]}
+  ]}]
+}

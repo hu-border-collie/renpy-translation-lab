@@ -46,15 +46,19 @@ def request_scope(request):
     })
 
 
-def protect(source, *, engine, request_id, item_id, scope=None, literal_brackets=False):
+def protect(source, *, engine, request_id, item_id, scope=None, literal_brackets=False,
+            mv_message_styles=False):
     """Build a deterministic, collision-free view and its identity-bound map."""
     binding = dict(version=VERSION, engine=engine, request_id=request_id,
                    item_id=item_id, source_digest=digest(source), scope=scope or request_id, literal_brackets=bool(literal_brackets))
+    if engine == 'rpgmaker_mv':
+        binding['mv_message_styles'] = bool(mv_message_styles)
     namespace = digest({key: value for key, value in binding.items() if key != 'request_id'})[:24]
     while f'__RTL_{namespace}_' in source:
         namespace = digest(namespace)[:24]
     entries, parts, end = [], [], 0
-    spans = list(structure_rules.spans(source, engine, literal_brackets=literal_brackets))
+    spans = list(structure_rules.spans(source, engine, literal_brackets=literal_brackets,
+                                      mv_message_styles=mv_message_styles))
     for match in LITERAL_MARKER.finditer(source):
         if not any(start < match.end() and stop > match.start() for start, stop, _ in spans):
             spans.append((match.start(), match.end(), 'literal'))
@@ -74,15 +78,18 @@ def model_units(units, *, engine, request_id, scope=None):
     views, maps = [], {}
     for unit in units:
         view, mapping = protect(unit.text, engine=engine, request_id=request_id, item_id=unit.id, scope=scope,
-                                literal_brackets=unit.metadata.get('tyrano_literal_brackets', False))
+                                literal_brackets=unit.metadata.get('tyrano_literal_brackets', False),
+                                mv_message_styles=unit.metadata.get('mv_message_styles', False))
         views.append(replace(unit, text=view))
         maps[unit.id] = mapping
     return views, dict(version=VERSION, engine=engine, request_id=request_id, scope=scope or request_id, items=maps)
 
 
-def restore(text, mapping, *, source, engine, request_id, item_id, scope=None, literal_brackets=False):
+def restore(text, mapping, *, source, engine, request_id, item_id, scope=None, literal_brackets=False,
+            mv_message_styles=False):
     """Restore only exact, once-present markers; never repair missing tokens."""
-    _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=scope, literal_brackets=literal_brackets)
+    _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=scope,
+                          literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)
     if mapping != expected:
         raise ValueError('protection.mapping_mismatch')
     markers = {entry['marker']: entry['value'] for entry in mapping['entries']}
@@ -98,7 +105,8 @@ def restore(text, mapping, *, source, engine, request_id, item_id, scope=None, l
         raise ValueError('protection.extra_token')
     restored = MARKER.sub(lambda match: markers.get(match.group(), match.group()), text)
     validate_literal_markers(source, restored)
-    structure_rules.validate(source, restored, engine, literal_brackets=literal_brackets)
+    structure_rules.validate(source, restored, engine, literal_brackets=literal_brackets,
+                             mv_message_styles=mv_message_styles)
     return restored
 
 
@@ -119,7 +127,8 @@ def validate_parent(request, units):
         _, expected = protect(unit.text, engine=metadata['engine'],
                               request_id=request.request_id, item_id=unit.id,
                               scope=request_scope(request),
-                              literal_brackets=unit.metadata.get('tyrano_literal_brackets', False))
+                              literal_brackets=unit.metadata.get('tyrano_literal_brackets', False),
+                              mv_message_styles=unit.metadata.get('mv_message_styles', False))
         if metadata['items'].get(unit.id) != expected:
             raise ValueError('protection.mapping_mismatch')
 
@@ -155,16 +164,21 @@ def validate_report(report, request, units, *, canonical=False):
             unit = sources[item_id]
             source = unit.text
             literal_brackets = unit.metadata.get('tyrano_literal_brackets', False)
-            _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id, scope=request_scope(payload), literal_brackets=literal_brackets)
+            mv_message_styles = unit.metadata.get('mv_message_styles', False)
+            _, expected = protect(source, engine=engine, request_id=request_id, item_id=item_id,
+                                  scope=request_scope(payload), literal_brackets=literal_brackets,
+                                  mv_message_styles=mv_message_styles)
             if metadata['items'].get(item_id) != expected:
                 raise ValueError('protection.mapping_mismatch')
             text = item['translation']
             if canonical:
                 validate_literal_markers(source, text)
-                structure_rules.validate(source, text, engine, literal_brackets=literal_brackets)
+                structure_rules.validate(source, text, engine, literal_brackets=literal_brackets,
+                                         mv_message_styles=mv_message_styles)
             else:
                 text = restore(text, expected, source=source, engine=engine,
-                               request_id=request_id, item_id=item_id, scope=request_scope(payload), literal_brackets=literal_brackets)
+                               request_id=request_id, item_id=item_id, scope=request_scope(payload),
+                               literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)
             accepted.append({**item, 'translation': text})
         except (ValueError, KeyError, TypeError) as exc:
             reason = str(exc)
