@@ -37,7 +37,9 @@ class MvAdapterTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        # Discovery expands Windows 8.3 aliases. Transaction targets and their
+        # preimage keys must use the same canonical spelling.
+        self.root = Path(temporary.name).resolve()
         self.source, self.target = self.root / "source", self.root / "target"
         shutil.copytree(FIXTURE / "source", self.source)
         # These are original inert marker bytes, not distributed engine/plugin code.
