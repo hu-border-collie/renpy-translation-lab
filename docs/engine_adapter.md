@@ -14,8 +14,9 @@ workflow 执行 check→apply、路径约束、事务恢复和 atomic write。P3
 已在两部私有 Ren'Py 项目的副本上完成 P1–P4 门禁实测；摘要见
 [真实项目门禁实测](#真实项目门禁实测)。P5 TyranoScript V600+ 已交付发现、
 inventory、coverage、occurrence extraction、relocation、译文验证，以及原生语言
-JSON 的声明式语义写回和多 catalog / `lang_set` 完整性门禁。P6 的 CLI、GUI、doctor
-与产品化接入仍未交付。
+JSON 的声明式语义写回和多 catalog / `lang_set` 完整性门禁。Tyrano 的 CLI / GUI / doctor
+产品端到端入口未纳入 #265 的 P6 收尾范围；P6 的 Ren'Py 产品回归与 Tyrano
+离线 corpus 已交付，见[P6 边界](#p6-离线端到端回归与边界)。
 
 ## 当前边界
 
@@ -27,7 +28,7 @@ JSON 的声明式语义写回和多 catalog / `lang_set` 完整性门禁。P6 �
 | `engine_adapters/coverage.py` | 独立校验 inventory invariant、生成稳定 digest、导出 coverage/review package、导入并校验人工或 Agent review |
 | `engine_adapters/writeback.py` | 公共 plan schema、source snapshot、相对路径、文件 hash、span / JSON path、冲突和 plan digest 校验；只在内存中渲染，不持有 writer |
 | `engine_adapters/versioning.py` | P3 `GameVersion` / `ProjectSnapshot` / source-only `UnitOccurrenceRecord`、JSON/JSONL 导入导出、只读 reconciliation 与 freshness 校验 |
-| `translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
+| `quality_review/translation_core.py` | 唯一的 `TranslationUnit` / `ModelResult` 核心模型；adapter 不创建第二套翻译单元 |
 | sync / Batch / revision workflow | 模型调用、prompt、progress、manifest、preview/check/apply、RAG / Source Index 回灌；atomic writer 仍在 workflow/common 层 |
 
 P2 的 Ren'Py `relocate_occurrences()` 先按 identity v2，再在同一 localization 文件内按
@@ -383,16 +384,17 @@ source ↔ catalog 双向检查。多 catalog 的 tag registry 不一致、stale
 coverage；自动状态为 `block` 或已记录 coverage digest 过期时不生成计划。
 
 coverage review 的候选表同时列出 `.ks` locator、分类理由和原生 catalog JSON path，
-可直接回到源 occurrence 与目标 row 核对。P6 的 CLI / GUI / doctor 与 Project Analysis /
-Final Review 产品化接入不在 P5 中。下列既有 Ren'Py 问题不阻挡 P5，应另开 follow-up：
+可直接回到源 occurrence 与目标 row 核对。Tyrano 的 CLI / GUI / doctor 与 Project Analysis /
+Final Review 产品端到端接入未提供；P6 按下文的离线范围收尾。
 
 speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 #416 修复：
 同一行后续对白含中文时，字符串 speaker-label 保留在 inventory / occurrence 中，
 但分类为 `already_translated`，不再进入 pending。
 
-仍需另开 follow-up 的问题：
-
-1. 大型项目上 unknown / unsupported / parse_error 导致 coverage `block`；#426 的只读归因脚本、原创合成 fixture 与后续修复拆单草案见 [coverage block 归因报告](plans/renpy_coverage_block_attribution.md)，真实项目频率与运行时修复仍未完成。
+#426 的合成归因与相关修复见 [coverage block 归因报告](plans/renpy_coverage_block_attribution.md)。
+后续 [#470](https://github.com/hu-border-collie/renpy-translation-lab/issues/470) 已完成真实项目
+12,686 个候选的只读归因并关闭；4 个结构 / tokenizer 区域的精确引擎语义仍为 unknown，
+不能据此放宽 coverage `block` 或宣称运行时修复完成。
 
 完整 schema、P2 安全边界与后续阶段见
 [Engine Adapter 合同设计](plans/engine_adapter_contract.md)。
@@ -405,10 +407,13 @@ speaker-label 在对白已是目标语言时仍标 translatable 的问题已由 
 构造、序列化字段与 digest 保持原样，`json_catalog_set` 仍只允许
 `localization_catalog` 下的字符串字典键。它没有被放宽为游戏源树写回。
 
-P1 新增显式选择的 `SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION = 2`。这只是共享核心
+P1 由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/568) 合并，新增
+显式选择的 `SOURCE_JSON_WRITEBACK_PLAN_SCHEMA_VERSION = 2`。这只是共享核心
 合同；RPG Maker Adapter、Sync / CLI / GUI 入口、doctor 和配置属于后续阶段，当前不提供
 可对真实游戏运行的新命令。该分阶段边界及后续任务见
-[#565 调查与实施范围](plans/issue-565-komorebi-survey-2026-10-23.md#7-可直接立项的后续任务)。
+[#565 调查与实施范围](plans/issue-565-komorebi-survey-2026-10-23.md#7-可直接立项的后续任务)；
+后续产品与游戏交付由 [#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567)
+承接，其中 A1 对应该公共核心，A2 / A3 及真实游戏验收尚未完成。
 
 | schema 2 字段 | 含义 |
 | --- | --- |

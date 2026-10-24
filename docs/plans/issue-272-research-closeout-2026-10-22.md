@@ -1,6 +1,7 @@
 # #272 有限研究归档、#565 调查衔接与 #147 暂缓
 
 > 决策日期：**2026-10-22**。本轮只归档研究与路线判断，不启动新实验或实现。
+> 后续（2026-10-24）：#565 离线调查与 PR #568 公共 JSON 核心已进入 main；[#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接 MV 产品与 Komorebi 交付。下文保留 10-22 研究决定及草案，不视为当前实现状态；最新映射见[计划索引](README.md)。
 > 首次复核基线：`09de6dcfd25ea8e21fe00d22251bb590a917b88e`；发布前按 `main@1a220214072e2fc44632c43cc0459cdb149287a1` 与新 issue #565 更新，在独立文档分支交付，保留原工作区。
 > 关联：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) · [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) · [#147](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) · [#509 实测报告](issue-509-translatorpp-roundtrip-2026-10-21.md) · [能力矩阵](visual_novel_localization_matrix.md)
 

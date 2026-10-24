@@ -8,9 +8,9 @@
 
 - **GUI**（`python -m gui_qt`）：普通用户的推荐入口，覆盖项目准备、翻译、检查、问题处理和安全写回。
 - **Batch CLI**（`gemini_translate_batch.py`）：Agent 与自动化主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
-- **统一翻译（GUI/CLI）**：先选主模型（ModelProfile），再选执行方式（同步 / Gemini Batch）；同一模型与凭据可切换策略而不复制配置。CLI 用 `gemini_translate_batch.py sync-start --profile <ID>` / `build --profile <ID>`，模型与阶段路由在 GUI「设置 → 模型与 Provider」或 `profiles-*` 命令维护。
+- **统一翻译（GUI/CLI）**：先选主模型（ModelProfile），再选执行方式（同步 / Gemini Batch）；同一模型与凭据可切换策略而不复制配置。CLI 用 `gemini_translate_batch.py sync-start --profile <ID>` / `build --profile <ID>`，模型与阶段路由在 GUI「设置 → 模型与供应商」或 `profiles-*` 命令维护。
 - **同步 CLI**（`gemini_translate.py`，兼容入口）：保留可用，但不再持久化可恢复 run；新任务请使用耐久 `sync-start` → `check <RUN>` → `apply <RUN>`，详见 [同步翻译工作流](docs/sync_workflow.md)。
-- **上下文**：glossary / macro setting、RAG（`rag_memory.py`）、可选 Story Memory（`story_memory.py`）。
+- **上下文**：glossary / macro setting、RAG（`context_engine/rag_memory.py`）、可选 Story Memory（`context_engine/story_memory.py`）。
 - **共用 runtime**（`translator_runtime.py`）：配置、SDK、校验、响应解析与文件处理。
 - **可选分析**（`extract_relations.py` / `relation_analyzer/`）：关系与语义分析。
 - **可独立使用的 CLI**：不安装 GUI 依赖时，Agent、脚本和高级用户仍可完成全部核心工作流。
@@ -26,7 +26,7 @@
 - 构造带 glossary、macro setting、RAG 与可选 Story Memory 的请求。
 - 完整 Batch 异步流程，以及 `check` / `apply` / `repair` 写回闸门（`apply` 默认只接受最近一次 `safe` check）。
 - 订正、关键词候选提取，以及独立关系 / 语义分析工作流。
-- Batch、同步翻译、订正与最终审校共享统一质量 finding schema（`quality_findings.jsonl` + `quality_gate`），机械规则集中维护在 `translation_quality.py`。
+- Batch、同步翻译、订正与最终审校共享统一质量 finding schema（`quality_findings.jsonl` + `quality_gate`），机械规则集中维护在 `quality_review/translation_quality.py`。
 
 ## 快速开始
 
@@ -41,7 +41,7 @@
 
 ### 选择模型与执行方式
 
-1. **主模型（ModelProfile）**：在 GUI 左导航「翻译」页首选择；Provider 连接、模型、能力覆盖与阶段路由在「设置 → 模型与 Provider」维护。
+1. **主模型（ModelProfile）**：在 GUI 左导航「翻译」页首选择；Provider 连接、模型、能力覆盖与阶段路由在「设置 → 模型与供应商」维护。
 2. **执行方式（ExecutionStrategy）**：该 profile 支持「同步」或「Gemini Batch」；不支持的组合会禁用并给出缺失能力说明。
 3. **CLI 对等**：`--profile` 选择本次运行的主模型（`sync-start --profile` / `build --profile`）；`profiles-show / profiles-validate / profiles-set-default / profiles-set-route` 用于查看与修改配置；`translate-preflight` 在不调用 Provider 的前提下预览条目、chunk、上下文来源、成本 / coverage / 已有质量摘要与风险。
 4. **旧配置**：仍使用旧 `sync.*` / `batch.model` 的项目行为不变；迁移说明见 [模型配置迁移](docs/model_config_migration.md)。
@@ -70,23 +70,9 @@ python -m gui_qt
 
 ## 文档
 
-完整导航见 [文档地图](docs/README.md)。
-
-| 主题 | 文档 |
-|---|---|
-| GUI 快速开始 | [quickstart_gui.md](docs/quickstart_gui.md) |
-| Agent / CLI 快速开始 | [quickstart_agent.md](docs/quickstart_agent.md) |
-| 安装与配置 | [setup.md](docs/setup.md) |
-| GUI 工作台 | [gui_workbench.md](docs/gui_workbench.md) |
-| Batch 与写回安全 | [batch_workflows.md](docs/batch_workflows.md) |
-| 同步翻译预览与写回 | [sync_workflow.md](docs/sync_workflow.md) |
-| 实际模型用量账本 | [model_usage_ledger.md](docs/model_usage_ledger.md) |
-| RAG / 索引 / Story Memory | [context_systems.md](docs/context_systems.md) |
-| 边界、安全与烟测 | [project_notes.md](docs/project_notes.md) |
-| 项目沿革 | [project_history.md](docs/project_history.md) |
-| Agent 开发约定 | [AGENTS.md](AGENTS.md) |
-| 贡献与 CLI/GUI 同步 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 历史设计/审计稿 | [docs/archive/](docs/archive/README.md) |
+- [文档地图](docs/README.md)：按使用任务查安装、配置、GUI、翻译、上下文与用量手册。
+- [架构概览](docs/architecture.md)与[代码路径索引](docs/code_paths.md)：修改代码时定位核心包、GUI 所有权和测试入口。
+- [规划、合同与研究索引](docs/plans/README.md)：查已交付证据、开放任务与实验边界；过程稿见[历史归档](docs/archive/README.md)。
 
 ## 安全提示
 

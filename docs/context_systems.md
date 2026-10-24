@@ -88,7 +88,7 @@ Sync 与 Batch 的 RAG / Source Index 共用 provider-neutral Embedding 后端�
   project_brief.published.md
 ```
 
-核心模块：`project_analysis.py`（schema、原子写入、lineage fingerprint、失效规划、状态汇总）。
+核心模块：`quality_review/project_analysis.py`（schema、原子写入、lineage fingerprint、失效规划、状态汇总）。
 
 ### 状态
 
@@ -421,7 +421,7 @@ Sync TranslationPlan 的配置指纹不会记录 Story graph 的绝对机器路�
 
 Batch `build` 生成的 `manifest.json` 会在 `story_memory_summary` 中记录 diagnostics，包括 `graph_file`、命中 chunk 数、命中率、characters / relations / terms / scenes 各类命中数量、总命中数、预算内格式化字符数，以及有多少个 `STORY MEMORY` 块会被 `max_context_chars` 截断。`split` 会按子包重新计算这些统计。
 
-`repair` 在 `batch.story_memory.enabled=true` 时也会复用同一个 `story_memory.py` 读取和格式化路径，为 repair request 注入受 `max_context_chars` 限制的 `STORY MEMORY` 块，并在 `repair_summary.json` 记录 repair job 的 Story Memory 命中统计。`probe` 只探测当前 package 里的既有 `requests.jsonl`，不会重新读取或刷新 `story_graph.json`；如果这些请求是在 Story Memory 启用时 build 出来的，probe 会自然测试已经写入请求的 prompt。
+`repair` 在 `batch.story_memory.enabled=true` 时也会复用同一个 `context_engine/story_memory.py` 读取和格式化路径，为 repair request 注入受 `max_context_chars` 限制的 `STORY MEMORY` 块，并在 `repair_summary.json` 记录 repair job 的 Story Memory 命中统计。`probe` 只探测当前 package 里的既有 `requests.jsonl`，不会重新读取或刷新 `story_graph.json`；如果这些请求是在 Story Memory 启用时 build 出来的，probe 会自然测试已经写入请求的 prompt。
 
 `relation_analyzer` 可以额外导出 `story_graph.seed.json` 候选数据，帮助从 Ren'Py 剧本里半自动整理 `speaker_ids`、候选角色和候选关系：
 
