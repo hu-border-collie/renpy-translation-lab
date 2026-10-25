@@ -13,6 +13,7 @@ from typing import Any, Callable, Iterable
 from foundation.atomic_io import (
     atomic_write_json,
     atomic_write_many_lines,
+    atomic_write_many_bytes,
     atomic_write_text,
     file_sha256,
     recover_atomic_write_transaction,
@@ -75,7 +76,10 @@ def _validate_translation_plan_binding(manifest: dict[str, Any]) -> None:
                 "Sync preview file is missing from its TranslationPlan source "
                 f"digests: file={relative_path}."
             )
-        if str(entry.get("source_sha256") or "") != file_digests[relative_path]:
+        expected_digest = file_digests[relative_path]
+        if identity.get('engine') == 'rpgmaker_mv':
+            expected_digest = (identity.get('material_identity') or {}).get('target_files', {}).get(relative_path)
+        if str(entry.get("source_sha256") or "") != expected_digest:
             raise ValueError(
                 "Sync preview source digest does not match its TranslationPlan: "
                 f"file={relative_path}."
@@ -186,6 +190,7 @@ def _fingerprint_payload(manifest: dict[str, Any]) -> dict[str, Any]:
         "plan_fingerprint",
         "request_ids",
         "external_check_binding",
+        "material_snapshots",
     ):
         if key in manifest:
             payload[key] = manifest.get(key)
@@ -309,6 +314,7 @@ def create_sync_preview(
     request_ids: Iterable[str] = (),
     durable_check_binding: dict[str, Any] | None = None,
     external_check_binding: dict[str, Any] | None = None,
+    material_snapshot: Any = None,
 ) -> tuple[str, dict[str, Any]]:
     """Persist source/proposed snapshots, a unified diff, and a bound manifest.
 
@@ -346,6 +352,21 @@ def create_sync_preview(
     contract = dict(contract_diagnostics or {})
     package_dir = Path(log_dir) / "sync_runs" / run_name
     package_dir.mkdir(parents=True, exist_ok=False)
+
+    material_snapshots = None
+    if material_snapshot is not None:
+        material_snapshots = {}
+        writes = []
+        for label, documents in (('source', material_snapshot.project.source_documents),
+                                 ('target', material_snapshot.project.target_documents)):
+            material_snapshots[label] = []
+            for document in documents:
+                relative = _safe_relative_path(document.file_rel_path)
+                snapshot_rel = f'material/{label}/{relative}'
+                writes.append((_artifact_path(package_dir, snapshot_rel), document.content))
+                material_snapshots[label].append({
+                    'relative_path': relative, 'snapshot_path': snapshot_rel, 'sha256': document.sha256})
+        atomic_write_many_bytes(writes, journal_path=package_dir / '.material_transaction.json')
 
     entries: list[dict[str, Any]] = []
     quality_subjects: list[dict[str, Any]] = []
@@ -436,6 +457,7 @@ def create_sync_preview(
         "created_at": created.isoformat(),
         "project_root": os.path.realpath(os.path.abspath(os.fspath(project_root))),
         "tl_dir": os.path.realpath(os.path.abspath(os.fspath(tl_dir))),
+        **({'material_snapshots': material_snapshots} if material_snapshots is not None else {}),
         "report_path": "preview.diff",
         "report_sha256": file_sha256(report_path),
         "summary": {
@@ -570,6 +592,7 @@ def prepare_sync_preview_apply(
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
     loaded_manifest: dict[str, Any] | None = None,
+    active_material_loader: Callable[[], dict] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Validate every source and artifact before the first project write."""
     manifest = loaded_manifest if loaded_manifest is not None else load_sync_preview(manifest_path)
@@ -689,6 +712,32 @@ def prepare_sync_preview_apply(
     if not report_path.is_file() or file_sha256(report_path) != manifest.get("report_sha256"):
         raise ValueError("Sync preview diff report changed after preview generation.")
     target_root = Path(active_tl_dir).resolve()
+    frozen_material = None
+    if manifest.get('material_snapshots') is not None:
+        from engine_adapters.contracts import SourceDocument
+        from execution.mv_sync import require_material_fresh
+        identity = (manifest.get('translation_plan') or {}).get('source_identity') or {}
+        if (identity.get('engine') != 'rpgmaker_mv' or not manifest.get('durable_check_binding')
+                or active_material_loader is None):
+            raise ValueError('MV dual snapshots require a durable check and active material validation.')
+        expected = identity.get('material_identity') or {}
+        require_material_fresh(expected, active_material_loader(), applied_files={
+            entry['relative_path']: entry['preview_sha256'] for entry in manifest['files']})
+        frozen_material = {}
+        for label, identity_key in (('source', 'source_files'), ('target', 'target_files')):
+            documents = []
+            for row in manifest['material_snapshots'].get(label) or []:
+                relative = _safe_relative_path(row.get('relative_path'))
+                path = _artifact_path(package_dir, row.get('snapshot_path'))
+                content = path.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+                if digest != row.get('sha256'):
+                    raise ValueError(f'MV frozen snapshot changed: {label}/{relative}.')
+                documents.append(SourceDocument(relative, str(path), len(content), digest, content))
+            digests = {doc.file_rel_path: doc.sha256 for doc in documents}
+            if len(digests) != len(documents) or digests != expected.get(identity_key):
+                raise ValueError(f'MV {label} snapshots do not match frozen material.')
+            frozen_material[label] = tuple(documents)
     prepared: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in manifest["files"]:
@@ -729,7 +778,13 @@ def prepare_sync_preview_apply(
                 content=source_content,
             )
             plan = _deserialize_writeback_plan(writeback_plan_payload)
-            rendered_by_file = render_writeback_plan(plan, (source_document,))
+            if plan.writeback_plan_schema_version == 2:
+                if frozen_material is None:
+                    raise ValueError('MV source/target snapshots are missing.')
+                rendered_by_file = render_writeback_plan(plan, frozen_material['source'],
+                                                       live_targets=frozen_material['target'])
+            else:
+                rendered_by_file = render_writeback_plan(plan, (source_document,))
             rendered_text = "".join(rendered_by_file.get(relative_path, ()))
             if source_content.startswith(b"\xef\xbb\xbf") and not rendered_text.startswith("\ufeff"):
                 rendered_text = "\ufeff" + rendered_text
@@ -757,6 +812,7 @@ def apply_sync_preview(
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
     allow_external: bool = False,
+    active_material_loader: Callable[[], dict] | None = None,
 ) -> dict[str, Any]:
     manifest_file = Path(manifest_path).resolve()
     loaded_preview = load_sync_preview(manifest_path)
@@ -772,6 +828,7 @@ def apply_sync_preview(
         active_quality_policy=active_quality_policy,
         active_glossary_file=active_glossary_file,
         loaded_manifest=loaded_preview,
+        active_material_loader=active_material_loader,
     )
     applied_paths: list[str] = []
     try:
@@ -782,6 +839,20 @@ def apply_sync_preview(
         ]
         if writes:
             external_guards = {}
+            if manifest.get('material_snapshots') is not None:
+                from execution.mv_sync import require_material_fresh
+
+                def validate_material_commit():
+                    require_material_fresh(
+                        manifest['translation_plan']['source_identity']['material_identity'],
+                        active_material_loader(), applied_files={
+                            entry['relative_path']: entry['preview_sha256'] for entry in manifest['files']})
+
+                external_guards = {
+                    'expected_preimages': {item['target']: item['entry']['source_sha256']
+                                          for item in prepared if not item['already_applied']},
+                    'post_commit_validator': validate_material_commit,
+                }
             if external:
                 from execution.external_translation_work import validate_preview_binding
 

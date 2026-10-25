@@ -390,6 +390,8 @@ def export_work(*, output_dir=None, occurrence_ids=(), reference_files=(), refer
     this package, including those outside an explicit occurrence selection.
     """
     batch = _batch()
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(batch.legacy.TRANSLATOR_CONFIG), 'work-export')
     batch.legacy.require_supported_generation_target()
     jobs = batch.collect_pending_file_jobs(include_preserved=include_preserved)
     snapshot = jobs.adapter_snapshot

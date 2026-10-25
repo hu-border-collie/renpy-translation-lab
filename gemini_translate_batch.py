@@ -2568,6 +2568,7 @@ def save_manifest(manifest, update_latest=True):
     data.pop('_manifest_path', None)
     data.pop('_package_dir', None)
     data.pop('_translation_plan_compatibility', None)
+    data.pop('_mv_snapshot', None)
     atomic_write_json(manifest_path, data, ensure_ascii=False, indent=2)
     if update_latest:
         remember_latest_manifest(manifest_path)
@@ -3641,6 +3642,8 @@ def _build_live_coverage_snapshot():
     """Run the read-only adapter scan used by the coverage CLI commands."""
 
     try:
+        if legacy.current_project_engine() == 'rpgmaker_mv':
+            return legacy.current_mv_sync_snapshot(require_review=False)
         return build_translation_snapshot(
             RenPyAdapter(legacy_module=legacy),
             ProjectDiscoveryRequest(
@@ -3727,6 +3730,13 @@ def collect_coverage_status(*, unresolved_limit=20):
         'review_path': review_path,
         'gate': gate.to_dict(),
     }
+
+
+def export_live_coverage_package(output_dir):
+    """Export current independent inventory and a pending review, without approving it."""
+    snapshot = _build_live_coverage_snapshot()
+    return export_coverage_package(output_dir, snapshot.project, snapshot.inventory,
+                                   snapshot.report, review_policy='agent_or_human')
 
 
 def print_coverage_status(payload):
@@ -4748,6 +4758,8 @@ def get_batch_risk_warnings():
 
 
 def create_batch_package(display_name_override='', skip_prepare=False):
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build')
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -6065,6 +6077,8 @@ def build_revision_request(chunk, model=None):
 
 
 def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-revisions')
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -8036,6 +8050,8 @@ def build_keyword_request(chunk, max_candidates_per_chunk=None, model=None):
 
 
 def create_keyword_package(display_name_override='', skip_prepare=True, chunk_size=None, max_candidates_per_chunk=None):
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-keywords')
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -10848,6 +10864,12 @@ def validate_replacements_for_lines(manifest, file_key, replacements_by_line, li
 
 
 def validate_result_replacements(manifest, replacements_by_file, summary):
+    if _is_mv_sync_manifest(manifest):
+        _mv_snapshot_for_manifest(manifest)
+        translated = {path: {str(action[6]) for actions in lines.values() for action in actions}
+                      for path, lines in replacements_by_file.items()}
+        summarize_pending_replacements(replacements_by_file, translated, summary)
+        return replacements_by_file, translated, []
     validated_replacements = {}
     validated_lines_by_file = {}
     failure_entries = []
@@ -11077,6 +11099,10 @@ def _find_adapter_occurrence(occurrences, file_key, line, start, end, expected_t
 
 
 def _build_adapter_writeback_plan(manifest, replacements_by_file, live_sources=None):
+    if _is_mv_sync_manifest(manifest):
+        from execution.mv_sync import build_plan
+        snapshot = _mv_snapshot_for_manifest(manifest)
+        return build_plan(snapshot, replacements_by_file), snapshot
     file_keys = tuple(
         sorted(
             file_key
@@ -11218,7 +11244,7 @@ def _validate_adapter_writeback_plan(
             live_sources=live_sources,
         )
         rendered_by_file = _normalize_adapter_rendered_files(
-            render_writeback_plan(plan, snapshot.project.source_documents)
+            _render_adapter_plan(plan, snapshot)
         )
         _require_adapter_render_targets(replacements_by_file, rendered_by_file)
     except (ValueError, OSError) as exc:
@@ -11354,6 +11380,23 @@ def _manifest_occurrence(project, chunk, item, mode, item_index):
 
 
 def relocate_v2_chunk_items(manifest, chunk, scanned_units_by_file, mode):
+    if _is_mv_sync_manifest(manifest):
+        snapshot = _mv_snapshot_for_manifest(manifest)
+        by_id = {row.unit.id: row for row in snapshot.occurrences
+                 if row.unit.file_rel_path == chunk['file_rel_path']}
+        missing = []
+        for item in chunk.get('items') or []:
+            occurrence = by_id.get(str(item.get('id') or ''))
+            if occurrence is None:
+                missing.append(item)
+                continue
+            canonical = translation_core.legacy_item_from_unit(occurrence.unit)
+            mismatched = [key for key, value in canonical.items() if item.get(key) != value]
+            if mismatched:
+                raise ValueError('MV frozen item no longer matches its canonical occurrence: ' + ', '.join(mismatched))
+        scanned_units_by_file[chunk['file_rel_path']] = {
+            'adapter': snapshot.adapter, 'project': snapshot.project, 'relocated_by_id': by_id}
+        return missing
     if not is_v2_manifest(manifest):
         return []
     file_key = chunk['file_rel_path']
@@ -12291,6 +12334,9 @@ def preview_revisions(
 
 
 def collect_result_actions(manifest, validate_sources=False):
+    if _is_mv_sync_manifest(manifest):
+        manifest.pop('_mv_snapshot', None)
+        _mv_snapshot_for_manifest(manifest)
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
         raise SystemExit('Result JSONL not found. Run download first.')
@@ -13570,6 +13616,30 @@ def _build_durable_sync_check_manifest(store):
     return load_manifest(str(manifest_path))
 
 
+def _is_mv_sync_manifest(manifest):
+    return ((manifest.get('translation_plan') or {}).get('source_identity') or {}).get('engine') == 'rpgmaker_mv'
+
+
+def _mv_snapshot_for_manifest(manifest):
+    """Bind canonical MV occurrences to both frozen roots for offline check."""
+    from execution.mv_sync import material_identity, require_material_fresh
+    if not manifest.get('durable_sync_source'):
+        raise ValueError('MV results require the durable Sync check/apply route.')
+    if '_mv_snapshot' not in manifest:
+        snapshot = legacy.current_mv_sync_snapshot()
+        expected = manifest['translation_plan']['source_identity'].get('material_identity') or {}
+        require_material_fresh(expected, material_identity(snapshot))
+        manifest['_mv_snapshot'] = snapshot
+    return manifest['_mv_snapshot']
+
+
+def _render_adapter_plan(plan, snapshot):
+    kwargs = {}
+    if getattr(plan, 'writeback_plan_schema_version', 1) == 2:
+        kwargs['live_targets'] = snapshot.project.target_documents
+    return render_writeback_plan(plan, snapshot.project.source_documents, **kwargs)
+
+
 def _translation_preview_files(manifest, replacements_by_file, translated_by_file):
     """Build shared preview inputs from fully checked translation replacements."""
     quality_subjects = collect_quality_subjects(manifest, replacements_by_file)
@@ -13583,12 +13653,13 @@ def _translation_preview_files(manifest, replacements_by_file, translated_by_fil
             {file_key: replacements},
         )
         rendered = _normalize_adapter_rendered_files(
-            render_writeback_plan(plan, snapshot.project.source_documents)
+            _render_adapter_plan(plan, snapshot)
         )
         _require_adapter_render_targets({file_key: replacements}, rendered)
         document = next(
             item
-            for item in snapshot.project.source_documents
+            for item in (snapshot.project.target_documents if _is_mv_sync_manifest(manifest)
+                         else snapshot.project.source_documents)
             if _adapter_render_key(item.file_rel_path) == _adapter_render_key(file_key)
         )
         source_text = ''.join(document.lines())
@@ -13666,6 +13737,8 @@ def _create_checked_durable_sync_preview(store, manifest):
             if row.get('parent_request_id') is None
         ],
         durable_check_binding=bindings,
+        material_snapshot=(_mv_snapshot_for_manifest(manifest)
+                           if _is_mv_sync_manifest(manifest) else None),
     )
     relative = Path(preview_path).resolve().relative_to(store.run_dir.resolve())
     store.put_artifact(
@@ -13697,6 +13770,13 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
     """
     stored_identity = dict(store.get_plan()['plan'].get('source_identity') or {})
     current_identity = dict(legacy.current_sync_source_identity() or {})
+    if stored_identity.get('engine') == 'rpgmaker_mv':
+        from execution.mv_sync import require_material_fresh
+        require_material_fresh(stored_identity.get('material_identity') or {},
+                               current_identity.get('material_identity') or {}, applied_files={
+                                   row['relative_path']: row['preview_sha256']
+                                   for row in preview_manifest.get('files') or []})
+        return
     stored_files = {
         str(path).replace('\\', '/'): str(digest or '')
         for path, digest in dict(stored_identity.get('file_digests') or {}).items()
@@ -20406,6 +20486,8 @@ def collect_doctor_engine_status(adapter_snapshot=None, *, has_tl_files=None):
 
 
 def collect_doctor_report():
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        return collect_mv_doctor_report()
     source_game_dir = legacy._guess_source_game_dir()
     template_info = legacy.get_prepare_template_command_info(source_game_dir)
     can_generate_template = bool(template_info.get('available'))
@@ -20647,6 +20729,61 @@ def collect_doctor_report():
     return report
 
 
+def collect_mv_doctor_report():
+    """Diagnose the scoped MV Sync route without Ren'Py prepare or retrieval."""
+    issues = []
+    snapshot = None
+    try:
+        snapshot = legacy.current_mv_sync_snapshot(require_review=False)
+        if snapshot.review_error:
+            issues.append(_engine_status_issue('engine.mv.scope_review_required', 'error',
+                snapshot.review_error, suggested_action='coverage-review-import'))
+        if (legacy.SYNC_RAG_ENABLED or legacy.SYNC_SOURCE_INDEX_ENABLED
+                or legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF):
+            issues.append(_engine_status_issue('engine.mv.context_unsupported', 'error',
+                'Disable Ren\'Py retrieval, source index, story memory and project analysis injection for MV.',
+                suggested_action='configure_context'))
+    except (ValueError, OSError) as exc:
+        issues.append(_engine_status_issue('engine.mv.material_invalid', 'error', str(exc),
+                                          suggested_action='configure_mv_project'))
+    routing = collect_doctor_model_routing_status()
+    routing_warnings = [
+        f"Model routing preflight [{issue['code']}] (sync/{issue.get('stage') or 'profile'}): {issue['message']}"
+        for issue in routing.get('issues') or []
+        if issue.get('execution_strategy') == 'sync' and issue.get('stage') in {'', None, 'translation'}]
+    blocked = bool(issues)
+    report = {
+        'base_dir': legacy.BASE_DIR, 'tl_dir': legacy.TL_DIR, 'tl_subdir': '',
+        'language': legacy.PREP_LANGUAGE, 'catalog_language': legacy.PREP_LANGUAGE,
+        'generation_target': legacy.GENERATION_TARGET_LANGUAGE,
+        'generation_target_supported': legacy.current_generation_target_resolution().supported,
+        'tl_exists': bool(legacy.TL_DIR and os.path.isdir(legacy.TL_DIR)),
+        'mode': 'mv_narrative', 'layout_status': 'failed' if blocked else 'ready',
+        'counts': {'json_files': (sum(doc.file_rel_path.endswith('.json') for doc in snapshot.project.source_documents)
+                                  if snapshot is not None else None)},
+        'coverage_evidence_available': snapshot is not None,
+        'coverage': (summarize_coverage_for_doctor(snapshot, review_path=resolve_coverage_review_path())
+                     if snapshot is not None else None),
+        'model_routing': routing, 'recommendations': [],
+        'engine_status': {'engine': 'rpgmaker_mv',
+            'adapter_version': snapshot.adapter.adapter_version if snapshot is not None else '',
+            'status': 'blocked' if blocked else 'ready', 'issues': issues,
+            'supported_routes': ['durable_sync'],
+            'unsupported_routes': ['gemini_batch', 'legacy_sync', 'external_work', 'revision', 'keywords'],
+            'runtime_acceptance': 'unverified'},
+        'warnings': routing_warnings, 'workflow_state': '',
+    }
+    if snapshot is not None:
+        total = len(snapshot.selected_occurrences)
+        pending = snapshot.pending_task_count
+        report.update(pending_task_count=pending,
+                      pending_file_count=len(snapshot.pending_tasks_by_file),
+                      translated_task_count=total - pending, total_task_count=total)
+        if not blocked:
+            report['workflow_state'] = (doctor_rec.START_PENDING_SYNC if pending else doctor_rec.MV_SCOPE_NO_PENDING)
+    return report
+
+
 def finalize_doctor_actionable_signals(report):
     """Attach recommendations + workflow_state with required-prep gate.
 
@@ -20669,6 +20806,23 @@ def finalize_doctor_actionable_signals(report):
 
 
 def print_doctor_report(report):
+    if report.get('mode') == 'mv_narrative':
+        print('Doctor report:')
+        print(f"- Base dir: {report['base_dir']}")
+        print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
+        print(f"- Mode: {report['mode']}")
+        print(f"- Engine: rpgmaker_mv (status: {report['engine_status']['status']})")
+        print('- Route: durable Sync; Batch / external work / legacy Sync / revisions / keywords unsupported')
+        print('- Runtime acceptance: unverified (A0 / A4 pending)')
+        if report.get('coverage_evidence_available'):
+            print(f"- Pending translation: task_count={report['pending_task_count']}, file_count={report['pending_file_count']}, translated_count={report['translated_task_count']}, total_count={report['total_task_count']}")
+        if report.get('workflow_state'):
+            print(f"- Workflow state: {report['workflow_state']}")
+        for issue in report['engine_status']['issues']:
+            print(f"  - [{issue['severity']}] {issue['code']}: {issue['message']}")
+        for warning in report.get('warnings') or []:
+            print(f'  - {warning}')
+        return
     counts = report['counts']
     context_status = report.get('context_status') or {}
     rag_context = context_status.get('rag') or {}
@@ -20960,7 +21114,8 @@ def _manifest_target_language_fields(source_manifest=None):
 
 def print_banner():
     print('=' * 60)
-    print('Gemini Batch Translator (Ren\'Py)')
+    print('RPG Maker MV narrative translator (durable Sync)' if legacy.current_project_engine() == 'rpgmaker_mv'
+          else 'Gemini Batch Translator (Ren\'Py)')
     print(f'Base dir: {legacy.BASE_DIR}')
     print(f'TL subdir: {legacy.TL_SUBDIR}')
     print(f'TL dir: {legacy.TL_DIR} (exists: {os.path.isdir(legacy.TL_DIR)})')
@@ -21064,7 +21219,7 @@ def add_durable_sync_output_arguments(command_parser):
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
-        description='Batch translator for Ren\'Py tl files using Gemini Batch API.'
+        description='Translation workbench: Ren\'Py Batch / Sync and scoped RPG Maker MV durable Sync.'
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command', required=True)
@@ -21076,6 +21231,10 @@ def build_arg_parser():
     coverage_status_parser = subparsers.add_parser(
         'coverage-status',
         help='Read-only live coverage classification and coverage/review gate status.',
+    )
+    coverage_status_parser.add_argument(
+        '--export-dir',
+        help='Export the live coverage inventory, report and pending review template into this directory (Ren\'Py or MV).',
     )
     coverage_status_parser.add_argument(
         '--limit',
@@ -23560,7 +23719,12 @@ def _run_translate_preflight(args):
         defaults = section.get('defaults')
         defaults = dict(defaults) if isinstance(defaults, dict) else {}
         strategy = str(defaults.get('execution_strategy') or '').strip()
-    strategy = strategy or 'gemini_batch'
+    mv_mode = legacy.current_project_engine() == 'rpgmaker_mv'
+    strategy = strategy or ('sync' if mv_mode else 'gemini_batch')
+    if mv_mode and strategy != 'sync':
+        raise cli_contract.MachineContractError('MV narrative mode requires durable Sync.',
+            code_name='ENGINE_ROUTE_UNSUPPORTED', suggested_action='use_sync_strategy',
+            semantic_exit_code=cli_contract.EXIT_BLOCKED)
 
     context = legacy.prepare_sync_translation_execution_context(
         prepare=False,
@@ -23760,7 +23924,7 @@ def _run_translate_preflight(args):
             'info',
             '预检不调用 embedding/检索存储；实际运行时会在首个模型请求前物化上下文。',
         ))
-    if getattr(legacy, 'PREP_ENABLED', False):
+    if getattr(legacy, 'PREP_ENABLED', False) and not mv_mode:
         risks.append(_preflight_risk(
             'PREPARE_PREFLIGHT_SKIPPED',
             'info',
@@ -23768,7 +23932,10 @@ def _run_translate_preflight(args):
             '实际运行可能在 prepare 后变化。',
         ))
     if not requests:
-        if coverage_summary['completion'] == 'unconfirmed':
+        if mv_mode:
+            risks.append(_preflight_risk('MV_SCOPE_NO_PENDING', 'info',
+                '当前 MV 已审阅叙事范围没有待译条目；这不表示全游戏覆盖或原生验收完成。'))
+        elif coverage_summary['completion'] == 'unconfirmed':
             # #265 下游门禁：零待译不等于解析器识别完整，不得报告为完成。
             risks.append(_preflight_risk(
                 'COVERAGE_UNCONFIRMED',
@@ -23805,6 +23972,9 @@ def _run_translate_preflight(args):
             'provider': profile.provider,
         },
         'project': {
+            **({'engine': 'rpgmaker_mv', 'source_root': context.adapter_snapshot.project.project_root,
+                'support_window_digest': context.adapter_snapshot.project.support_window_digest,
+                'runtime_acceptance': 'unverified'} if mv_mode else {}),
             'root': str(getattr(legacy, 'BASE_DIR', '') or ''),
             'tl_dir': str(getattr(legacy, 'TL_DIR', '') or ''),
             'target_language': str(
@@ -23897,6 +24067,15 @@ def dispatch_command(parser, args):
 
     if command in MACHINE_OUTPUT_COMMANDS:
         validate_machine_invocation(args)
+
+    if command not in PROFILE_COMMANDS and command not in {'init', 'config'}:
+        from engine_adapters.project_config import read_project_configuration, require_engine_operation
+        try:
+            require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), command)
+        except ValueError as exc:
+            raise cli_contract.MachineContractError(str(exc), code_name='ENGINE_ROUTE_UNSUPPORTED',
+                suggested_action='configure_mv_project_or_use_durable_sync',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED) from exc
 
     if command in DURABLE_SYNC_COMMANDS:
         return run_durable_sync_command(args)
@@ -24510,6 +24689,8 @@ def dispatch_command(parser, args):
             return run_translate_preflight(args)
 
         if command == 'coverage-status':
+            if getattr(args, 'export_dir', None):
+                export_live_coverage_package(args.export_dir)
             payload = collect_coverage_status(
                 unresolved_limit=getattr(args, 'limit', 20)
             )

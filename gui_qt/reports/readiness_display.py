@@ -49,7 +49,8 @@ def count_line(report: Mapping[str, object] | None, *, preflight: bool = False) 
         pending_files=_count(
             counts.get("files_with_pending") if preflight else data.get("pending_file_count")
         ),
-        files=_count(project.get("file_count") if preflight else counts.get("rpy_files")),
+        files=_count(project.get("file_count") if preflight else counts.get(
+            'json_files' if data.get('mode') == 'mv_narrative' else 'rpy_files')),
     )
 
 

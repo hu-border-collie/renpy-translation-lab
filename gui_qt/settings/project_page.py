@@ -29,6 +29,7 @@ from .field_widgets import (
 from .page_chrome import build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import PROJECT_CONFIG_KEYS, SETTINGS_PAGE_SPEC_OBJECTS
+from gui_qt.user_copy import MV_PROJECT_COPY
 
 PROJECT_PAGE_KEY = "project"
 _PROJECT_SPEC = next(
@@ -220,7 +221,8 @@ class ProjectSettingsPage(QObject):
         page, body, layout = build_settings_scroll_page("settings_project")
         hint = QLabel(
             "配置当前选中项目的 translator_config.json 参数。"
-            "切换 work 目录请前往「项目列表」；此处只调整术语表、翻译目录、过滤器和准备流程。"
+            "切换目标目录请前往「项目列表」。MV 须选择独立目标内容副本，并配置原始源与支持窗口文件；"
+            + MV_PROJECT_COPY['unsupported']
         )
         hint.setWordWrap(True)
         hint.setObjectName("config_hint_label")

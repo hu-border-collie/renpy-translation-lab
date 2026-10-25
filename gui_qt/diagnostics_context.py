@@ -263,7 +263,10 @@ def build_cli_commands(
     manifest_path: str,
     manifest: dict[str, object],
     submit_max_cost: float | None = None,
+    engine: str = 'renpy',
 ) -> list[DiagnosticsCommand]:
+    if engine == 'rpgmaker_mv':
+        return mv_cli_commands(python_exe, batch_script_path)
     if is_work_manifest(manifest):
         return [DiagnosticsCommand(
             label=label,
@@ -276,6 +279,11 @@ def build_cli_commands(
         )]
     if not manifest_path:
         commands = []
+        commands.append(DiagnosticsCommand(
+            label='导出覆盖材料（Ren\'Py / MV）',
+            command=format_cli_command(python_exe, batch_script_path,
+                                       ['coverage-status', '--export-dir', '<OUTPUT_DIR>']),
+        ))
         preflight = _translate_preflight_command(python_exe, batch_script_path)
         if preflight is not None:
             commands.append(preflight)
@@ -1345,11 +1353,27 @@ def _usage_report_command(
     ]
 
 
+def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[DiagnosticsCommand]:
+    """Only advertise the actual MV product routes."""
+    commands = [
+        ('MV 项目检查', ['doctor']),
+        ('MV 启动预检', ['translate-preflight', '--strategy', 'sync']),
+        ('导出覆盖材料', ['coverage-status', '--export-dir', '<OUTPUT_DIR>']),
+        ('导入覆盖审阅', ['coverage-review-import', '--file', '<REVIEW.json>']),
+    ]
+    for name in ('sync-start', 'sync-status', 'sync-resume', 'sync-cancel', 'sync-derive', 'check', 'apply'):
+        args = [name, *(['--latest'] if name == 'sync-status' else ([] if name == 'sync-start' else ['<RUN>']))]
+        commands.append((DURABLE_SYNC_COPY.get(name.removeprefix('sync-'), name), args))
+    return [DiagnosticsCommand(label=label, command=format_cli_command(python_exe, batch_script_path, args))
+            for label, args in commands]
+
+
 def idle_diagnostics_context(
     *,
     game_root: str | None = None,
     batch_script_path: str = "",
     python_exe: str = "python",
+    engine: str = 'renpy',
 ) -> DiagnosticsContext:
     commands = list(_usage_report_command(batch_script_path, python_exe))
     preflight = _translate_preflight_command(python_exe, batch_script_path)
@@ -1360,6 +1384,8 @@ def idle_diagnostics_context(
             python_exe=python_exe, script_path=batch_script_path
         )
     )
+    if engine == 'rpgmaker_mv':
+        commands = mv_cli_commands(python_exe, batch_script_path)
     return DiagnosticsContext(
         status="idle",
         heading="暂无任务上下文",
@@ -1380,6 +1406,7 @@ def sync_diagnostics_context(
     preview_manifest_path: str = "",
     preview_manifest: dict[str, object] | None = None,
     path_exists: Callable[[str], bool] | None = None,
+    engine: str = 'renpy',
 ) -> DiagnosticsContext:
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
@@ -1410,6 +1437,9 @@ def sync_diagnostics_context(
         if not isinstance(preview_manifest.get("translation_plan"), dict):
             status = "warning"
             message = TRANSLATION_PLAN_COPY["legacy"]
+    if engine == 'rpgmaker_mv':
+        commands = mv_cli_commands(python_exe, batch_script_path)
+        message = 'MV 叙事模式使用耐久 Sync；原生验收仍单列。'
     return DiagnosticsContext(
         status=status,
         heading="同步翻译上下文",
@@ -1431,11 +1461,13 @@ def build_diagnostics_context(
     path_exists: Callable[[str], bool] | None = None,
     submit_max_cost: float | None = None,
     game_root: str | None = None,
+    engine: str = 'renpy',
 ) -> DiagnosticsContext:
     exists = path_exists or _default_path_exists
 
     if not latest_manifest_path and not manifest:
         return idle_diagnostics_context(
+            engine=engine,
             game_root=game_root,
             batch_script_path=batch_script_path,
             python_exe=python_exe,
@@ -1464,6 +1496,7 @@ def build_diagnostics_context(
                 manifest_json_preview="",
             )
         return idle_diagnostics_context(
+            engine=engine,
             game_root=game_root,
             batch_script_path=batch_script_path,
             python_exe=python_exe,
@@ -1480,6 +1513,7 @@ def build_diagnostics_context(
     facts.extend(_project_usage_facts(effective_game_root))
     paths = collect_existing_report_paths(package_dir, manifest, path_exists=exists)
     commands = build_cli_commands(
+        engine=engine,
         python_exe=python_exe,
         batch_script_path=batch_script_path,
         manifest_path=manifest_path,

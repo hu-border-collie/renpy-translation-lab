@@ -27,6 +27,7 @@ Hard constraints (enforced by tests):
 """
 
 from dataclasses import dataclass, field
+from typing import Any
 import difflib
 import hashlib
 import json
@@ -495,6 +496,7 @@ def source_identity_differences(expected, actual):
         ('project_identity_digest', 'project_identity_changed'),
         ('source_snapshot_fingerprint', 'source_snapshot_changed'),
         ('file_digests', 'source_file_digests_changed'),
+        ('material_identity', 'material_identity_changed'),
     ):
         if canonical_json(expected.get(field) or ({} if field == 'file_digests' else '')) != canonical_json(
             actual.get(field) or ({} if field == 'file_digests' else '')
@@ -1251,20 +1253,29 @@ def assemble_context_layers(chunk_input, context_policy=None):
 
 @dataclass
 class SourceIdentity:
+    """Frozen source identity; material_identity adds MV's independent target.
+
+    The optional field is omitted for legacy engines so their persisted shape
+    and fingerprints remain byte-compatible.
+    """
     engine: str = ''
     adapter_version: str = ''
     project_identity_digest: str = ''
     source_snapshot_fingerprint: str = ''
     file_digests: Mapping[str, str] = field(default_factory=dict)
+    material_identity: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self):
-        return {
+        payload = {
             'engine': self.engine,
             'adapter_version': self.adapter_version,
             'project_identity_digest': self.project_identity_digest,
             'source_snapshot_fingerprint': self.source_snapshot_fingerprint,
             'file_digests': dict(self.file_digests or {}),
         }
+        if self.material_identity:
+            payload['material_identity'] = dict(self.material_identity)
+        return payload
 
     @classmethod
     def from_dict(cls, payload):
@@ -1275,6 +1286,7 @@ class SourceIdentity:
             project_identity_digest=str(payload.get('project_identity_digest') or ''),
             source_snapshot_fingerprint=str(payload.get('source_snapshot_fingerprint') or ''),
             file_digests=dict(payload.get('file_digests') or {}),
+            material_identity=dict(payload.get('material_identity') or {}),
         )
 
 
@@ -1612,8 +1624,10 @@ def build_translation_plan(
     chunk_policy = chunk_policy or ChunkPolicy()
     context_policy = context_policy or ContextPolicy()
     identity = source_identity if isinstance(source_identity, SourceIdentity) else SourceIdentity.from_dict(source_identity)
-    if identity.engine not in ('renpy', 'tyrano'):
+    if identity.engine not in ('renpy', 'tyrano', 'rpgmaker_mv'):
         raise ValueError('protection.unsupported_engine')
+    if identity.engine == 'rpgmaker_mv' and strategy != STRATEGY_SYNC:
+        raise ValueError('RPG Maker MV currently requires durable Sync.')
     profile_snapshot = _resolve_profile_snapshot(model_profile_snapshot)
     config_fingerprint = short_fingerprint(
         canonical_json(redact_sensitive(dict(config_snapshot or {})))
@@ -1735,6 +1749,7 @@ def build_translation_plan(
         system_instruction = translation_core.build_canonical_translation_system_instruction(
             preserve_terms,
             macro_setting=str(macro_setting or ''),
+            engine=identity.engine,
         )
         # Retrieval/analysis layer texts are embedded verbatim (budgeted by
         # the assembly); required/local/project are canonical renderings the

@@ -512,6 +512,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         original_game_exists = None
 
     parsed: dict[str, object] = {
+        'engine_status': report.get('engine_status') or {},
         "base_dir": str(report.get("base_dir") or ""),
         "tl_dir": str(report.get("tl_dir") or ""),
         "tl_subdir": str(report.get("tl_subdir") or ""),
@@ -546,7 +547,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
 
     if (
         report.get("tl_exists")
-        and int(counts.get("rpy_files") or 0) > 0
+        and (int(counts.get("rpy_files") or 0) > 0 or report.get('mode') == 'mv_narrative')
         and (
             "pending_task_count" in report
             or "pending_file_count" in report
@@ -611,6 +612,20 @@ def _summarize_doctor_parsed(
     pending_value = parsed.get("pending")
     pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
+    if mode == 'mv_narrative':
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        engine = parsed.get('engine_status') or {}
+        issues = engine.get('issues') or []
+        blocked = exit_code != 0 or engine.get('status') != 'ready'
+        return DoctorSummary(
+            status='blocked' if blocked else ('warning' if api_key_count == 0 or warnings else 'ready'),
+            heading='MV 项目检查未通过' if blocked else 'MV 叙事范围检查完成',
+            message=(str(issues[0].get('message')) if issues else '请检查 MV 源、目标与支持窗口配置。')
+                    if blocked else MV_PROJECT_COPY['scope_empty' if (pending or {}).get('task_count') == 0 else 'scope_ready'],
+            facts=[f"引擎：RPG Maker MV；数据 JSON：{counts.get('json_files', '未知')}",
+                   '当前支持：耐久 Sync；原生验收：未完成'],
+            findings=[str(issue.get('message') or '') for issue in issues] + warnings, mode=mode,
+            detail_facts=format_coverage_detail_facts(parsed.get('coverage')))
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     workflow_state = (

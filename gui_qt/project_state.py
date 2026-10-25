@@ -406,6 +406,11 @@ class ProjectState:
     def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
         """Resolve project-root selections to nested work/ when that directory exists."""
         original = self._path_without_resolve(path)
+        if self.load_translator_config().get('engine') == 'rpgmaker_mv':
+            candidate = Path(path).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.config_path.parent / candidate
+            return candidate.resolve(), False
         effective = Path(canonical_abs_path(resolve_effective_game_root(str(original))))
         adjusted = self._normalized_path_text(original) != self._normalized_path_text(effective)
         return effective, adjusted

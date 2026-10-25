@@ -339,7 +339,7 @@ _TRANSLATION_KEYS = {
 
 def unit_from_translation_item(item, file_rel_path='', file_path='', mode=MODE_TRANSLATION):
     item = dict(item or {})
-    line = _coerce_line(item)
+    line = -1 if isinstance(item.get('mv_context'), dict) else _coerce_line(item)
     text = str(item.get('text') if item.get('text') is not None else item.get('source') or '')
     source = str(item.get('source') or text)
     speaker_id = str(item.get('speaker_id') or item.get('speaker') or '')
@@ -462,6 +462,11 @@ def unit_to_translation_item(unit):
         item['speaker_name'] = unit.speaker_name
     if 'tyrano_literal_brackets' in unit.metadata:
         item['tyrano_literal_brackets'] = unit.metadata['tyrano_literal_brackets']
+    for key in ('mv_message_styles', 'mv_context'):
+        if key in unit.metadata:
+            item[key] = unit.metadata[key]
+    if 'mv_context' in unit.metadata:
+        item['current_translation'] = unit.current_translation
     if 'live_catalog_text' in unit.metadata:
         item['live_catalog_text'] = unit.metadata['live_catalog_text']
     return item
@@ -651,6 +656,8 @@ def build_reference_blocks(
 
 def translation_target_payload_item(unit):
     item = {'id': unit.id, 'text': unit.text}
+    if 'mv_context' in unit.metadata:
+        item['mv_context'] = unit.metadata['mv_context']
     if unit.speaker_id:
         item['speaker_id'] = unit.speaker_id
     if unit.speaker_name:
@@ -861,9 +868,9 @@ def iter_translation_chunk_ranges(tasks, max_items=CANONICAL_CHUNK_MAX_ITEMS, ma
         start = end
 
 
-def build_canonical_translation_system_instruction(preserve_terms, macro_setting=''):
+def build_canonical_translation_system_instruction(preserve_terms, macro_setting='', *, engine='renpy'):
     glossary = ', '.join(str(term) for term in preserve_terms or [])
-    return (
+    instruction = (
         'Setting:\n'
         f'{macro_setting or ""}\n\n'
         'Task:\n'
@@ -881,6 +888,15 @@ def build_canonical_translation_system_instruction(preserve_terms, macro_setting
         'Return one JSON object with a translations array. Preserve every id exactly. Item count must match. '
         'translation must contain only the translated Chinese text.'
     )
+    if engine == 'rpgmaker_mv':
+        instruction = instruction.replace("names, Ren'Py tags, placeholders", 'names, RPG Maker MV control codes, placeholders')
+        instruction = instruction.replace(
+            "Every bracketed Ren'Py interpolation such as [CharacterA_name!t], [Main], or [CharacterB_last!t] "
+            'must be copied exactly; never replace it with a literal visible name.',
+            'Preserve every RPG Maker MV control token, its case, arguments, order and message-line position. '
+            'Each TARGET is one JSON string leaf; do not add line breaks or merge messages. '
+            'mv_context identifies its message block or choice branch; linked choice labels are updated by the tool.')
+    return instruction
 
 
 def build_canonical_translation_user_prompt(

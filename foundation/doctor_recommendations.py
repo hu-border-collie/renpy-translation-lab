@@ -25,6 +25,8 @@ SUBSTANTIALLY_COMPLETE = "substantially_complete"
 ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT = "enable_source_index_for_new_project"
 START_INCREMENTAL_BATCH = "start_incremental_batch"
 START_PENDING_BATCH = "start_pending_batch"
+START_PENDING_SYNC = "start_pending_sync"
+MV_SCOPE_NO_PENDING = "mv_scope_no_pending"
 NO_PENDING_LINES = "no_pending_lines"
 COVERAGE_UNCONFIRMED = "coverage_unconfirmed"
 UNKNOWN = "unknown"
@@ -51,6 +53,8 @@ ALL_CODES = frozenset(
         ENABLE_SOURCE_INDEX_FOR_NEW_PROJECT,
         START_INCREMENTAL_BATCH,
         START_PENDING_BATCH,
+        START_PENDING_SYNC,
+        MV_SCOPE_NO_PENDING,
         NO_PENDING_LINES,
         COVERAGE_UNCONFIRMED,
     }
@@ -60,6 +64,8 @@ WORKFLOW_STATE_CODES = frozenset(
         SUBSTANTIALLY_COMPLETE,
         START_INCREMENTAL_BATCH,
         START_PENDING_BATCH,
+        START_PENDING_SYNC,
+        MV_SCOPE_NO_PENDING,
         NO_PENDING_LINES,
         COVERAGE_UNCONFIRMED,
     }
