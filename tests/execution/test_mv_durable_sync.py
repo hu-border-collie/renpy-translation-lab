@@ -15,7 +15,7 @@ import translator_runtime as runtime
 from execution.sync_run_service import build_production_sync_run_service
 from execution.sync_run_store import SyncRunStore
 from execution.sync_run_contracts import build_run_id
-from engine_adapters.coverage import default_coverage_review_path
+from engine_adapters.coverage import build_review_template, default_coverage_review_path
 from foundation import atomic_io
 from foundation import cli_contract
 from quality_review import structure_protection, translation_plan
@@ -91,6 +91,44 @@ class MvDurableSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'durable Sync'):
             translation_plan.build_translation_plan(self.context.pending_jobs,
                 execution_strategy='gemini_batch', source_identity=self.context.plan_build.plan.source_identity)
+
+    def test_mv_bracketed_message_survives_renpy_filtering_through_apply(self):
+        self.assertTrue(runtime.is_non_translatable('[Continue]'))
+        position = next(row for row in self.positions if row['source'] == 'The door is open.')
+        position.update(source='[Continue]', translation='[继续]')
+        for root in (self.source, self.target):
+            path = root / position['file']
+            content = path.read_bytes()
+            self.assertEqual(content.count(b'"The door is open."'), 1)
+            path.write_bytes(content.replace(b'"The door is open."', b'"[Continue]"'))
+        snapshot = runtime.current_mv_sync_snapshot(require_review=False)
+        review_file = Path(default_coverage_review_path(self.target))
+        previous_review = json.loads(review_file.read_text(encoding='utf-8'))
+        review = build_review_template(snapshot.report)
+        review.update({key: previous_review[key] for key in ('status', 'confirmed_at', 'reviewer')})
+        review_file.write_text(json.dumps(review), encoding='utf-8')
+
+        self.context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+        self.service = build_production_sync_run_service(self.runs, self.context)
+        self.assertEqual(self.context.adapter_snapshot.pending_task_count, 14)
+        self.assertEqual(batch.collect_doctor_report()['pending_task_count'], 14)
+        self.assertEqual(len(self.context.items_by_id), 14)
+        self.assertEqual(sum(item['text'] == '[Continue]' for item in self.context.items_by_id.values()), 1)
+        with mock.patch('providers.model_capability_probe.default_credential_loader', return_value='test-only'):
+            preflight = batch.run_translate_preflight(SimpleNamespace(strategy='sync', profile=''))
+        self.assertEqual(preflight['counts']['pending_items'], 14)
+
+        before = {path: path.read_bytes() for path in self.source.rglob('*') if path.is_file()}
+        store = self.completed()
+        checked = batch.check_durable_sync_results(store)
+        self.assertEqual(checked['last_check_summary']['writeback_gate']['decision'], 'allow')
+        self.assertEqual(batch.apply_durable_sync_results(store)['state'], 'applied')
+        translated = json.loads((self.target / position['file']).read_text(encoding='utf-8'))
+        for component in position['path']:
+            translated = translated[component]
+        self.assertEqual(translated, '[继续]')
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertEqual(batch.collect_doctor_report()['pending_task_count'], 0)
 
     def test_all_material_changes_block_apply_including_untouched_data_and_review(self):
         store = self.checked()

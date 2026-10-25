@@ -5861,7 +5861,9 @@ def prepare_sync_translation_execution_context(
         tasks = []
         for raw_task in adapter_snapshot.pending_tasks_by_file.get(progress_key, ()):
             task = dict(raw_task)
-            if is_non_translatable(task['text']):
+            # MV occurrences are already classified by its Adapter; bracketed
+            # labels are literal MV text, not Ren'Py interpolation fields.
+            if mv_snapshot is None and is_non_translatable(task['text']):
                 continue
             progress_entry = task.get('progress_entry') or _progress_entry_for_task(task)
             if (
