@@ -2,7 +2,8 @@
   "engine": "renpy",
   "rpgmaker_mv": {
     "source_root": "",
-    "support_window_file": ""
+    "support_window_file": "",
+    "occurrence_scope_file": ""
   },
   "workspace_root": "",
   "game_root": "C:/games/Game_Example/work",

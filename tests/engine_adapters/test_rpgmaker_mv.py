@@ -144,6 +144,32 @@ class MvAdapterTests(unittest.TestCase):
         self.submissions(occurrences)
         self.assertEqual(project.catalog_provenance["runtime_acceptance"], "unverified")
 
+    def test_runtime_normalized_cancel_index_preserves_raw_choice_settings(self):
+        self.alter_both('data/Map001.json', lambda data: self.commands(data)[3]['parameters'].__setitem__(1, 2))
+        project, inventory, report, occurrences = self.snapshot()
+        self.assertNotEqual(report.coverage_status, 'block')
+        self.assertEqual(len(occurrences), 14)
+        choice = next(row for row in occurrences if row.locator.locator.get('choice_index') == 0)
+        self.assertEqual(choice.locator.locator['choice_settings'][0], 2)
+        rendered = render_writeback_plan(self.plan(project, occurrences), project.source_documents,
+            live_targets=project.target_documents)
+        self.assertEqual(self.commands(json.loads(''.join(rendered['data/Map001.json'])))[3]['parameters'][1], 2)
+
+    def test_normalized_cancel_can_have_no_403_without_weakening_other_choice_checks(self):
+        def mutate(data):
+            commands = self.commands(data)
+            commands[3]['parameters'][1] = 2
+            del commands[10:13]
+        self.alter_both('data/Map001.json', mutate)
+        project, inventory, report, occurrences = self.snapshot()
+        self.assertNotEqual(report.coverage_status, 'block')
+        self.assertEqual(len(occurrences), 13)
+        for invalid in (-3, True, 1.5):
+            self.alter_both('data/Map001.json', lambda data: self.commands(data)[3]['parameters'].__setitem__(1, invalid))
+            project = self.adapter.discover_project(self.request)
+            inventory = self.adapter.inventory_candidates(project, InventoryPolicy())
+            self.assertEqual(self.report(project, inventory).coverage_status, 'block')
+
     def test_handwritten_output_twenty_physical_targets_and_other_bytes(self):
         project, _, _, occurrences = self.snapshot()
         plan = self.plan(project, occurrences)
@@ -436,7 +462,7 @@ class MvAdapterTests(unittest.TestCase):
             lambda rows: rows[4]["parameters"].__setitem__(1, "Wrong mirror"),
             lambda rows: rows[4]["parameters"].__setitem__(0, 7),
             lambda rows: rows[7]["parameters"].__setitem__(0, 0),
-            lambda rows: rows[3]["parameters"].__setitem__(1, 2),
+            lambda rows: rows[3]["parameters"].__setitem__(1, -3),
             lambda rows: rows[3]["parameters"].__setitem__(2, True),
             lambda rows: rows.__delitem__(10),
             lambda rows: rows.__delitem__(13),
@@ -468,7 +494,7 @@ class MvAdapterTests(unittest.TestCase):
     def test_unknown_controls_and_popup_on_continuation_cannot_be_extracted(self):
         path = self.source / "data/Map001.json"
         original = path.read_bytes()
-        for text in (r"\Unknown[1]Word", r"\c[bad]Word", r"\ C",
+        for text in (r"\Unknown[1]Word", r"\c[bad]Word", r"\Ctext",
                      r"\pop[0]Wrong continuation"):
             with self.subTest(text=text):
                 path.write_bytes(original)
@@ -665,10 +691,21 @@ class MvProtectionTests(unittest.TestCase):
 
     def test_unknown_malformed_and_unregistered_popup_forms_are_rejected(self):
         for source in (r"\Unknown[1]", r"\V[x]", r"\V[\V[1]]", r"\pop[a1]",
-                       r"\pop[1,2]", r"\C[1", "\\", r"\ q"):
+                       r"\pop[1,2]", r"\C[1", "\\", r"\q", "\\\u00a0q"):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 structure_protection.protect(source, engine="rpgmaker_mv", request_id="r",
                                              item_id="i", mv_message_styles=True)
+
+    def test_backslash_ascii_space_is_preserved_as_an_exact_token(self):
+        source = 'Hello\\ world.'
+        args = dict(engine='rpgmaker_mv', request_id='original-fixture', item_id='line')
+        view, mapping = structure_protection.protect(source, **args)
+        self.assertEqual([entry['value'] for entry in mapping['entries']], ['\\ '])
+        translated = view.replace('Hello', '你好').replace('world.', '世界。')
+        self.assertEqual(structure_protection.restore(translated, mapping, source=source, **args), '你好\\ 世界。')
+        with self.assertRaises(ValueError):
+            structure_protection.restore(translated.replace(mapping['entries'][0]['marker'], ''),
+                                         mapping, source=source, **args)
 
 
 if __name__ == "__main__":

@@ -45,3 +45,14 @@ def make_mv_project(root: Path):
     review_file.parent.mkdir(parents=True)
     review_file.write_text(json.dumps(review), encoding='utf-8')
     return config_file, config, json.loads((fixture / 'positions.json').read_text(encoding='utf-8'))
+
+
+def write_mv_scope(path: Path, source: Path, positions):
+    payload = {'schema_version': 1, 'source_files': {}, 'occurrences': []}
+    for row in positions:
+        relative = row['file']
+        payload['source_files'][relative] = hashlib.sha256((source / relative).read_bytes()).hexdigest()
+        payload['occurrences'].append({'file_rel_path': relative, 'json_path': row['path'],
+            'source_sha256': hashlib.sha256(row['source'].encode('utf-8')).hexdigest()})
+    path.write_text(json.dumps(payload), encoding='utf-8')
+    return payload

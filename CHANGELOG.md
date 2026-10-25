@@ -8,7 +8,9 @@
 
 ### 新增
 
+- MV 耐久 Sync 新增可选的精确 occurrence 范围文件，可将地图内小样本绑定到原始文件／字串摘要；CLI 与 GUI 共用，仍审计完整材料并拒绝范围文件漂移，见[MV 配置](docs/rpgmaker_mv_sync.md#精确位置范围可选)。
 - 新增 #570 的 RPG Maker MV 叙事 Adapter 共享核心：显式 core / 插件摘要窗口、独立源 / 目标、物理 occurrence 与独立 coverage，保护消息续行、控制码及 102 / 402 关联，并通过公共 schema 2 输出计划。原创离线材料验证字节保护、漂移拒绝及既有事务恢复，见[核心边界](docs/engine_adapter.md#rpgmaker-mv-a2)。
+- MV Adapter 0.2 兼容 core 对越界整数取消索引的 -2 解释，并明确保护反斜杠加 ASCII 空格；保留原参数和控制 token，其他未知语法及结构阻断继续拒绝。旧 MV 范围审阅与计划需按新 Adapter 重新生成。
 - #572 接通限定 MV 叙事范围的耐久 Sync、CLI / GUI、引擎与源目标配置、独立覆盖审阅、doctor 和双快照安全写回。新增 `coverage-status --export-dir` 与 GUI 覆盖材料导出；材料／配置漂移拒绝派发和写回。Batch / 外部工作包等入口仍不支持 MV，真实 101 + 7 试点及原生验收仍待完成，见 [MV 操作手册](docs/rpgmaker_mv_sync.md)。
 - 新增源 JSON 字符串节点写回的 schema 2 核心合同：分开绑定冻结原文和当前目标副本，支持类型化数组路径，只替换选中的字符串 token，并保留未选字节；Sync 计划 reader 支持对应持久化格式，schema 1 输出保持兼容。原创对白 / 选项 / 402 夹具覆盖漂移拒绝、原子回滚与恢复；本阶段未新增 RPG Maker Adapter 或 CLI / GUI 游戏入口，见[核心合同](docs/engine_adapter.md#source-json-writeback-p1)。
 - #508 新增 [外部初译工作包（实验 CLI）](docs/external_translation_work.md)：宿主提供译文，工具导出材料、接收部分成果与订正，记录冲突和剩余项，并复用现有 check、预览及事务写回。无需项目模型调用，GUI 提供诊断命令参考；已用原创 fixture 验证串行与独立子代理成果，真实章节质量对照仍待授权样本和预算。

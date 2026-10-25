@@ -16,6 +16,7 @@ from engine_adapters.contracts import InventoryPolicy, ProjectDiscoveryRequest, 
 from engine_adapters.coverage import (build_coverage_report, default_coverage_review_path,
                                      digest_json, load_review_record, validate_review_record)
 from engine_adapters.project_config import read_mv_project_config
+from engine_adapters.mv_scope import MvOccurrenceScope, bind_occurrence_scope, read_occurrence_scope
 from engine_adapters.rpgmaker_mv import RpgMakerMvAdapter
 from engine_adapters.writeback import source_snapshot_fingerprint
 from quality_review import translation_core, translation_plan
@@ -33,13 +34,15 @@ class MvSyncSnapshot:
     config_digest: str = ""
     include_files: tuple[str, ...] = ()
     include_prefixes: tuple[str, ...] = ()
+    occurrence_scope: MvOccurrenceScope | None = None
 
     @cached_property
     def selected_occurrences(self):
         return tuple(row for row in self.occurrences if (
             (not self.include_files and not self.include_prefixes)
             or row.unit.file_rel_path in self.include_files
-            or any(row.unit.file_rel_path.startswith(prefix) for prefix in self.include_prefixes)))
+            or any(row.unit.file_rel_path.startswith(prefix) for prefix in self.include_prefixes))
+            and (self.occurrence_scope is None or row.unit.id in self.occurrence_scope.item_ids))
 
     @cached_property
     def pending_tasks_by_file(self):
@@ -117,14 +120,19 @@ def build_snapshot(config: Mapping[str, Any], config_file: str | Path, *,
     if (set(include_files) - narrative_files
             or any(not any(path.startswith(prefix) for path in narrative_files) for prefix in include_prefixes)):
         raise ValueError('MV include filters must select existing narrative data files.')
-    return MvSyncSnapshot(project, inventory, report, occurrences, adapter, review_error, digest_json(config),
-                          include_files, include_prefixes)
+    scope = (bind_occurrence_scope(settings.occurrence_scope_file, project, occurrences)
+             if settings.occurrence_scope_file is not None else None)
+    snapshot = MvSyncSnapshot(project, inventory, report, occurrences, adapter, review_error, digest_json(config),
+                              include_files, include_prefixes, scope)
+    if scope is not None and len(snapshot.selected_occurrences) != len(scope.item_ids):
+        raise ValueError('MV file filters conflict with the explicit occurrence scope.')
+    return snapshot
 
 
 def material_identity(snapshot: MvSyncSnapshot) -> dict:
     """Return non-secret digests and roots bound into every MV durable plan."""
     project = snapshot.project
-    return {
+    identity = {
         "engine": project.engine,
         "adapter_version": project.adapter_version,
         "source_root": project.project_root,
@@ -136,6 +144,9 @@ def material_identity(snapshot: MvSyncSnapshot) -> dict:
         "source_files": {doc.file_rel_path: doc.sha256 for doc in project.source_documents},
         "target_files": {doc.file_rel_path: doc.sha256 for doc in project.target_documents},
     }
+    if snapshot.occurrence_scope is not None:
+        identity['occurrence_scope_digest'] = snapshot.occurrence_scope.digest
+    return identity
 
 
 def source_identity(snapshot: MvSyncSnapshot) -> translation_plan.SourceIdentity:
@@ -155,6 +166,9 @@ def live_material_identity(snapshot: MvSyncSnapshot, config: Mapping[str, Any], 
     current = material_identity(snapshot)
     current.update(source_root=str(settings.source_root), target_root=str(settings.target_root),
                    support_window_digest=settings.window.digest, config_digest=digest_json(config))
+    current.pop('occurrence_scope_digest', None)
+    if settings.occurrence_scope_file is not None:
+        current['occurrence_scope_digest'] = read_occurrence_scope(settings.occurrence_scope_file)[0]
     review = validate_review_record(load_review_record(default_coverage_review_path(settings.target_root)),
                                     snapshot.report, snapshot.inventory)
     current['coverage_review_digest'] = review.coverage_review_digest
@@ -173,7 +187,7 @@ def require_material_fresh(expected: Mapping[str, Any], current: Mapping[str, An
     including unmodified data, JS and the path set, still has to match exactly.
     """
     for key in ("source_root", "target_root", "support_window_digest", "source_files",
-                "config_digest", "coverage_review_digest", "engine", "adapter_version"):
+                "config_digest", "coverage_review_digest", "engine", "adapter_version", "occurrence_scope_digest"):
         if expected.get(key) != current.get(key):
             raise ValueError(f"MV frozen material changed: {key}.")
     before, live = dict(expected.get("target_files") or {}), dict(current.get("target_files") or {})

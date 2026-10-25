@@ -2,6 +2,8 @@
 
 This is a mechanical preservation policy, not a JavaScript interpreter. Unknown
 escapes are rejected, including extensions to otherwise recognized commands.
+The core's backslash followed by one ASCII space is preserved as an exact
+escape token; it is never normalized away or inferred from other whitespace.
 Popup targets support the numeric form used by the frozen first window; actor
 targets and screen coordinates require a separately evidenced extension.
 """
@@ -28,6 +30,9 @@ def control_spans(text: str, *, message_styles: bool = False) -> list[tuple[int,
             result.append((start, index, "boundary"))
         elif character == "\\":
             if text.startswith("\\\\", index):
+                index += 2
+                kind = "escape"
+            elif text.startswith("\\ ", index):
                 index += 2
                 kind = "escape"
             elif match := _ARGUMENT.match(text, index):

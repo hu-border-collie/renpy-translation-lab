@@ -3,19 +3,18 @@
 本目录保存技术合同、方向研究和有日期的实验记录。用户操作从[文档地图](../README.md)
 进入现行手册；本页集中维护任务状态和证据入口。
 
-**状态核对：2026-10-25，合并基线 `main@6ceabe2`；A3 开发由 #572 跟踪。**
-已读回相关 GitHub issue 并核对主线合并历史；A2 已由 PR #571 合并，当前 A3 增量尚未合并。报告自己的日期、代码基线和原始结果
+**状态核对：2026-10-25，合并基线 `main@2803284`；A3 已合并，A4 离线试点通过，兼容增量待评审／合并。**
+已读回 MV 相关 GitHub issue 并核对合并历史；A3 已由 PR #573 合并，#572 随之关闭。报告自己的日期、代码基线和原始结果
 保持原样；旧报告里的 OPEN、待验或本地草稿描述属于当时状态。
 
 ## 当前开放工作
 
-当前开放 issue 为 #147、#272、#565、#567、#572。工程合并、离线 fixture、原生运行和译文质量
+本页跟踪的开放工作为 #147、#272、#565、#567。工程合并、离线 fixture、原生运行和译文质量
 分别验收，不能相互代替。
 
 | 跟踪 | 当前交付与下一步 |
 | --- | --- |
-| [#567 RPG Maker MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | 统领 MV 首期正式支持与完整游戏汉化两个里程碑。A1 / A2 已由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/568) 和 [PR #571](https://github.com/hu-border-collie/renpy-translation-lab/pull/571) 合并；A3 由 #572 承接，A0 / A4 原生补证与真实游戏验收仍待完成。 |
-| [#572 A3 MV 耐久 Sync 与产品接线](https://github.com/hu-border-collie/renpy-translation-lab/issues/572) | [产品路线](../rpgmaker_mv_sync.md)接通 TranslationPlan、耐久结果、独立覆盖审阅、双快照检查／预览／事务写回，以及 CLI / GUI、配置与 doctor。当前分支工程验证与主线合并分别记录；Batch / 外部 Agent 工作包不支持 MV，A4 真实小样本不在本子任务。 |
+| [#567 RPG Maker MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | 统领 MV 首期正式支持与完整游戏汉化。A1–A3 已由 PR #568、#571、[#573](https://github.com/hu-border-collie/renpy-translation-lab/pull/573) 合并；[A4 离线 101＋7 试点](issue-567-a4-offline-pilot-2026-10-25.md)及 Adapter 0.2 兼容修复在本地通过，兼容增量待评审／合并。A0／A4 原生补证与正式验收仍待完成。 |
 | [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) | [离线报告](issue-565-komorebi-survey-2026-10-23.md)与[公开材料说明](issue-565-materials/README.md)已入主线：205 份 JSON、101 个试点 occurrence 和 7 个镜像目标；core 版本声明冲突仍保留。原生可达性、字体显示、存读档及 issue 验收回填尚未完成。 |
 | [#272 多引擎研究与选型](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) | [有限研究与调查衔接](issue-272-research-closeout-2026-10-22.md)保留研究范围；#565 提供真实 MV 需求，#567 承接生产实现。其他引擎未全量重查，不按旧评级自动排期或承诺支持。 |
 | [#147 Story Graph 试点](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) | 保持低优先级；仅在实际关系、称呼或场景问题超出现有 glossary / source index 能力时评估，不作为 #567 前置条件。 |
@@ -31,6 +30,7 @@
 
 | 任务 | 已核对结果与证据 |
 | --- | --- |
+| [#572 A3 MV 耐久 Sync 与产品接线](https://github.com/hu-border-collie/renpy-translation-lab/issues/572) | PR #573 已合并（`2803284`），按 completed 关闭。[产品路线](../rpgmaker_mv_sync.md)接通共享计划、耐久结果、双快照检查／写回及 CLI／GUI；真实小样本与原生验收继续归 #567。 |
 | [#344 多 Provider 主路径](https://github.com/hu-border-collie/renpy-translation-lab/issues/344)、[#431 直连协议](https://github.com/hu-border-collie/renpy-translation-lab/issues/431) | 均按 completed 关闭。四类固定版本矩阵、五阶段直连、真实中断 / 请求费用和上下文实验分别留档；修复 PR #556 / #557 / #558 已合并。现有数据不支持默认开启高级上下文。操作见 [Provider Smoke Matrix](../provider_smoke_matrix.md)。 |
 | [#508 外部初译工作包](https://github.com/hu-border-collie/renpy-translation-lab/issues/508) | 按 completed 关闭，核心 PR #516 与恢复修复 PR #559 已合并。B1/B2、C 混合恢复、独立匿名 Agent 审阅及 552 项交付见[章节续验](issue-508-parallel-acceptance-2026-10-17.md)。结论收缩到范围核验、持久候选、恢复与安全交付；不据此宣称质量或效率优势。 |
 | [#509 Translator++ 往返](https://github.com/hu-border-collie/renpy-translation-lab/issues/509) | PR #562 已合并，按 completed 关闭；单版本限定实测完成，保留独立工具使用，生产 bridge 暂缓。 |
@@ -65,6 +65,7 @@
 
 | 文档 | 证据范围 |
 | --- | --- |
+| [#567 MV 真实小样本离线验收（10-25）](issue-567-a4-offline-pilot-2026-10-25.md) | 本地 Adapter 0.2 修复、真实 DeepSeek 101＋7、Agent 审阅与定点派生、预算门禁、共享 check／apply 和独立字节核对；未合并，原生运行未验，语义审阅者为 Agent。 |
 | [#509 Translator++ 单版本往返（10-21～22）](issue-509-translatorpp-roundtrip-2026-10-21.md) · [原创材料](issue-509-materials/README.md) | MV 编辑器 / core 1.5.1、TPP 8.8.9、实际 RMMVJS 2.19；19 处限定译文、25 参数对账、漂移丢译与非目标副作用。不能沿用为 Komorebi 版本或支持证明。 |
 | [#520 OpenRouter Batch 首轮（10-20）](issue-520-openrouter-batch-spike-2026-10-20.md) · [合同 v1](issue-520-openrouter-batch-contract-v1.md) · [DeepSeek 续验](issue-520-openrouter-batch-deepseek-2026-10-20.md) | 首轮负结果与后续 Batch 2/2 请求、6/6 item 成功分开；保留费用 / 清理和完整同口径比较缺口。 |
 | [#508 串行 / 并行章节续验（10-17～20）](issue-508-parallel-acceptance-2026-10-17.md) | 新 B1/B2、C 各来源批次与混合交付分别审阅；552 项原生重放、恢复修复、未知费用和结论限制。 |

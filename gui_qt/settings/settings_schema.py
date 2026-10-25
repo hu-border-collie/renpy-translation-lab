@@ -113,6 +113,8 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
                  MV_PROJECT_COPY['source_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField('mv_support_window_file', ('rpgmaker_mv', 'support_window_file'), MV_PROJECT_COPY['window_label'],
                  MV_PROJECT_COPY['window_description'], 'str', '', '项目与资源', allow_empty=True),
+    SettingField('mv_occurrence_scope_file', ('rpgmaker_mv', 'occurrence_scope_file'), MV_PROJECT_COPY['occurrence_scope_label'],
+                 MV_PROJECT_COPY['occurrence_scope_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField(
         "catalog_gemini_models",
         ("model_catalog", "gemini"),
