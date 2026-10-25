@@ -47,7 +47,7 @@ from . import structure_rules
 from .writeback import WritebackPlanError, source_snapshot_fingerprint, validate_writeback_plan
 
 
-ADAPTER_VERSION = "0.1.0"
+ADAPTER_VERSION = "0.2.0"
 ENGINE = "rpgmaker_mv"
 LOCATOR_SCHEMA_VERSION = 1
 CORE_FILES = tuple(
@@ -286,14 +286,19 @@ def _scan(document: SourceDocument) -> tuple[list[_Slot], list[dict[str, Any]]]:
                         len(params) != 5 or not isinstance(params[0], list)
                         or not 1 <= len(params[0]) <= 6
                         or not all(isinstance(text, str) for text in params[0])
-                        or not _integer(params[1], -2, len(params[0]) - 1)
+                        or not _integer(params[1], -2)
                         or not _integer(params[2], -1, len(params[0]) - 1)
                         or not _integer(params[3], 0, 2) or not _integer(params[4], 0, 2)
                         or indent in choices
                     ):
                         raise ValueError("choice.parameters")
                     frame = {
-                        "slots": [], "seen": set(), "cancel": params[1], "cancel_seen": False,
+                        "slots": [], "seen": set(),
+                        # MV setupChoices normalizes an out-of-range cancel
+                        # index to -2. Keep the original JSON settings intact.
+                        "cancel": -2 if params[1] >= len(params[0]) else params[1],
+                        "normalized_cancel": params[1] >= len(params[0]),
+                        "cancel_seen": False,
                     }
                     choices[indent] = frame
                     for choice_index, text in enumerate(params[0]):
@@ -330,7 +335,8 @@ def _scan(document: SourceDocument) -> tuple[list[_Slot], list[dict[str, Any]]]:
                     frame = choices.pop(indent, None)
                     if (
                         frame is None or params or len(frame["seen"]) != len(frame["slots"])
-                        or (frame["cancel"] == -2) != frame["cancel_seen"]
+                        or (frame["cancel"] == -2 and not frame["cancel_seen"]
+                            and not frame["normalized_cancel"])
                     ):
                         raise ValueError("choice.end")
                 elif code in _DEFERRED_CODES:

@@ -16,7 +16,8 @@
   "game_root": "C:/Games/ChineseCopy/www",
   "rpgmaker_mv": {
     "source_root": "C:/Games/Original/www",
-    "support_window_file": "C:/TranslationProject/approved-window.json"
+    "support_window_file": "C:/TranslationProject/approved-window.json",
+    "occurrence_scope_file": ""
   },
   "prepare": {"enabled": false},
   "include_files": ["data/Map001.json", "data/CommonEvents.json"],
@@ -38,6 +39,28 @@
 - `message_styles`：布尔值；只有在该窗口明确批准并启用 GALV_MessageStyles 时设为 `true`，仅开放 Adapter 已实现的数值 popup 语法。
 
 未知核心／插件字节、缺失文件、MV/MZ 混用和结构变化会阻断。`include_files` / `include_prefixes` 只筛选本轮请求，使用内容根内的相对路径；覆盖审计和漂移检查仍扫描完整材料。目标中已有非空、结构通过且镜像一致的不同文本视为现译；空白、结构失败或选项镜像不一致仍进入待处理，不能据现译计数推断语义质量。
+
+### 精确位置范围（可选）
+
+小样本只包含地图中的部分事件页或对白时，可在 CLI 配置或 GUI「设置 → 项目」的
+「MV 精确位置范围文件」填写 `rpgmaker_mv.occurrence_scope_file`。路径相对于配置文件；
+留空继续沿用文件筛选。独立清单必须来自原始源核对，格式如下（SHA-256 须换成实际值）：
+
+```json
+{
+  "schema_version": 1,
+  "source_files": {"data/Map001.json": "完整原始文件的64位SHA-256"},
+  "occurrences": [
+    {"file_rel_path": "data/Map001.json", "json_path": ["events", 1, "pages", 0, "list", 1, "parameters", 0], "source_sha256": "原始字符串UTF-8字节的64位SHA-256"}
+  ]
+}
+```
+
+只列主要 401 / 102 位置，402 镜像由同一 Adapter 自动关联。重复、空清单、布尔下标、
+未知／镜像位置、源文件或字串摘要不符及与文件筛选冲突均拒绝执行。清单字节摘要绑定
+耐久计划；改动清单会使派发、检查和写回失效，GUI 旧检查结果也会失效。
+该清单仅缩小请求，全部源／目标和核心／插件仍参加覆盖审计及漂移校验；样本外的
+未知控制码或结构阻断仍会阻止执行，不能用清单隐藏问题。
 
 ## 独立覆盖审阅
 

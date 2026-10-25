@@ -19,7 +19,7 @@ from engine_adapters.coverage import build_review_template, default_coverage_rev
 from foundation import atomic_io
 from foundation import cli_contract
 from quality_review import structure_protection, translation_plan
-from tests.support.mv_project import make_mv_project
+from tests.support.mv_project import make_mv_project, write_mv_scope
 
 
 class MvDurableSyncTests(unittest.TestCase):
@@ -91,6 +91,51 @@ class MvDurableSyncTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'durable Sync'):
             translation_plan.build_translation_plan(self.context.pending_jobs,
                 execution_strategy='gemini_batch', source_identity=self.context.plan_build.plan.source_identity)
+
+    def configure_occurrence_scope(self):
+        self.scope_file = self.root / 'pilot-scope.json'
+        self.scope_rows = self.positions[:3]
+        write_mv_scope(self.scope_file, self.source, self.scope_rows)
+        self.config['rpgmaker_mv']['occurrence_scope_file'] = str(self.scope_file)
+        self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
+        self.context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+        self.service = build_production_sync_run_service(self.runs, self.context)
+
+    def test_exact_scope_check_apply_changes_only_selected_positions_and_mirrors(self):
+        self.configure_occurrence_scope()
+        self.assertEqual(len(self.context.items_by_id), 3)
+        self.assertEqual(batch.collect_doctor_report()['pending_task_count'], 3)
+        before = {path: path.read_bytes() for path in self.source.rglob('*') if path.is_file()}
+        store = self.checked()
+        self.assertEqual(batch.apply_durable_sync_results(store)['state'], 'applied')
+        selected = {(row['file'], tuple(row['path'])) for row in self.scope_rows}
+        mirrors = {(row['file'], tuple(path)): row['translation'] for row in self.scope_rows for path in row['mirrors']}
+        for row in self.positions:
+            actual = json.loads((self.target / row['file']).read_text(encoding='utf-8'))
+            for part in row['path']:
+                actual = actual[part]
+            self.assertEqual(actual, row['translation'] if (row['file'], tuple(row['path'])) in selected else row['source'])
+        for (relative, path), expected in mirrors.items():
+            actual = json.loads((self.target / relative).read_text(encoding='utf-8'))
+            for part in path:
+                actual = actual[part]
+            self.assertEqual(actual, expected)
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+        self.assertEqual(batch.collect_doctor_report()['pending_task_count'], 0)
+
+    def test_scope_change_blocks_dispatch_and_already_checked_apply(self):
+        self.configure_occurrence_scope()
+        original = self.scope_file.read_bytes()
+        self.scope_file.write_bytes(original + b' ')
+        with mock.patch('execution.sync_request.run_sync_request') as provider:
+            with self.assertRaisesRegex(Exception, 'freshness'):
+                self.service.start(self.context.plan_build)
+        provider.assert_not_called()
+        self.scope_file.write_bytes(original)
+        store = self.checked()
+        self.scope_file.write_bytes(original + b' ')
+        with self.assertRaises(ValueError):
+            batch.apply_durable_sync_results(store)
 
     def test_mv_bracketed_message_survives_renpy_filtering_through_apply(self):
         self.assertTrue(runtime.is_non_translatable('[Continue]'))

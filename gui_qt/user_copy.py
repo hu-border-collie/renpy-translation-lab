@@ -28,6 +28,8 @@ MV_PROJECT_COPY = {
     'source_description': '可信原始内容根目录（含 data / js）；须与项目列表中的目标副本分离且不互相嵌套。',
     'window_label': 'MV 支持窗口文件',
     'window_description': '经审计的 schema 1 核心／插件摘要文件；另需导入当前覆盖审阅，原生验收仍单列。',
+    'occurrence_scope_label': 'MV 精确位置范围文件（可选）',
+    'occurrence_scope_description': 'schema 1 独立位置清单，绑定原始文件与原文字串摘要；只缩小请求范围，仍审计完整材料。留空沿用文件筛选。',
     'unsupported': 'MV 叙事模式当前仅支持耐久 Sync；请前往同步翻译。',
     'scope_ready': 'MV 已审阅叙事范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
     'scope_empty': 'MV 当前已审阅叙事范围没有待译条目；全游戏覆盖与原生验收仍单列。',

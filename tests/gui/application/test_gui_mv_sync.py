@@ -60,11 +60,12 @@ class GuiMvSyncTests(unittest.TestCase):
         page = ProjectSettingsPage()
         self.addCleanup(page.widget.deleteLater)
         page.load({'engine': 'rpgmaker_mv', 'mv_source_root': 'original/www',
-                   'mv_support_window_file': 'approved.json'})
+                   'mv_support_window_file': 'approved.json', 'mv_occurrence_scope_file': 'pilot.json'})
         values = page.collect()
         self.assertEqual(values['engine'], 'rpgmaker_mv')
         self.assertEqual(values['mv_source_root'], 'original/www')
         self.assertEqual(values['mv_support_window_file'], 'approved.json')
+        self.assertEqual(values['mv_occurrence_scope_file'], 'pilot.json')
         self.assertTrue(self.window._engine_allows_work_mode(WorkMode.SYNC_TRANSLATION))
         for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.KEYWORD_EXTRACTION, WorkMode.REVISION):
             self.assertFalse(self.window._engine_allows_work_mode(mode))

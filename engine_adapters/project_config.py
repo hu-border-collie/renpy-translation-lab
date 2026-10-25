@@ -66,6 +66,7 @@ class MvProjectConfig:
     target_root: Path
     window_file: Path
     window: MvSupportWindow
+    occurrence_scope_file: Path | None = None
 
 
 def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -> MvProjectConfig:
@@ -79,6 +80,10 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
     source = _path(section.get("source_root"), base, "rpgmaker_mv.source_root")
     target = _path(config.get("game_root"), base, "game_root")
     window_file = _path(section.get("support_window_file"), base, "rpgmaker_mv.support_window_file")
+    scope_value = section.get('occurrence_scope_file', '')
+    if not isinstance(scope_value, str):
+        raise ValueError('rpgmaker_mv.occurrence_scope_file must be a path string or empty.')
+    scope_file = _path(scope_value, base, 'rpgmaker_mv.occurrence_scope_file') if scope_value.strip() else None
     try:
         payload = _load_json(window_file)
     except (OSError, UnicodeError, ValueError) as exc:
@@ -89,7 +94,7 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
             or type(payload.get("message_styles", False)) is not bool):
         raise ValueError("Invalid MV support window schema; expected version 1, material_sha256 and boolean message_styles.")
     return MvProjectConfig(source, target, window_file, MvSupportWindow(
-        payload["material_sha256"], message_styles=payload.get("message_styles", False)))
+        payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file)
 
 
 def require_engine_operation(config: Mapping[str, Any], operation: str) -> None:
@@ -116,6 +121,8 @@ def mv_material_revision(config: Mapping[str, Any], config_file: str | Path) -> 
         settings = read_mv_project_config(config, config_file)
         paths = {settings.window_file,
                  settings.target_root / 'translation_context' / 'coverage_review.json'}
+        if settings.occurrence_scope_file is not None:
+            paths.add(settings.occurrence_scope_file)
         for root in (settings.source_root, settings.target_root):
             paths.update((root / 'data').rglob('*.json'))
             paths.update(root / relative for relative in settings.window.material_sha256)
