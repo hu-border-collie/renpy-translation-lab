@@ -212,6 +212,8 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'build-keywords',
         'export-keywords',
         'sync-keywords',
+        'bootstrap-rag',
+        'bootstrap-source-index',
         'merge-keywords-to-glossary',
         'final-review-build',
         'final-review-status',
@@ -7915,6 +7917,9 @@ def keyword_source_line_number(entry):
 
 
 def collect_keyword_file_jobs():
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_preprocessing import keyword_jobs
+        return keyword_jobs(legacy.current_mv_sync_snapshot())
     jobs = []
     for rel_path, file_path in collect_files_to_process():
         with open(file_path, 'r', encoding='utf-8-sig') as handle:
@@ -7971,7 +7976,7 @@ def build_keyword_chunks(file_jobs, chunk_size=None):
                     'file_rel_path': job['file_rel_path'],
                     'file_path': job['file_path'],
                     'chunk_index': chunk_number,
-                    'line_numbers': [unit.display_line_number for unit in target_units],
+                    'line_numbers': [unit.display_line_number for unit in target_units if unit.display_line_number > 0],
                     'items': [
                         translation_core.legacy_item_from_unit(
                             unit,
@@ -7993,13 +7998,17 @@ def format_keyword_glossary_block():
 
 
 def build_keyword_system_instruction(max_candidates_per_chunk=None):
-    return translation_core.build_keyword_system_instruction(
+    mv_mode = legacy.current_project_engine() == 'rpgmaker_mv'
+    instruction = translation_core.build_keyword_system_instruction(
         legacy.PRESERVE_TERMS,
         legacy.NORMALIZE_TRANSLATION_MAP,
         getattr(legacy, 'NON_TRANSLATABLE_EXACT', set()),
-        macro_setting=BATCH_MACRO_SETTING,
+        macro_setting=legacy.SYNC_MACRO_SETTING if mv_mode else BATCH_MACRO_SETTING,
         max_candidates_per_chunk=max_candidates_per_chunk or KEYWORD_MAX_CANDIDATES_PER_CHUNK,
     )
+    if mv_mode:
+        return instruction.replace("Ren'Py TL source text", 'RPG Maker MV source occurrences with typed JSON paths')
+    return instruction
 
 
 def build_keyword_user_prompt(target_items):
@@ -10221,7 +10230,10 @@ def keyword_candidate_key(candidate):
 
 def merge_keyword_candidate(existing, incoming):
     existing['confidence'] = max(existing.get('confidence', 0.0), incoming.get('confidence', 0.0))
-    for field in ('source_files', 'source_item_ids', 'source_lines'):
+    fields = ('source_files', 'source_item_ids', 'source_lines')
+    if 'source_locations' in existing or 'source_locations' in incoming:
+        fields += ('source_locations',)
+    for field in fields:
         values = list(existing.get(field) or [])
         for value in incoming.get(field) or []:
             if value not in values:
@@ -10345,6 +10357,19 @@ def collect_keyword_history_corpus(manifest):
     than an apparently safe match.
     """
 
+    if manifest.get('mv_preprocessing_identity') is not None:
+        from execution.mv_preprocessing import read_reviewed_history, history_paths, require_keyword_material
+        try:
+            require_keyword_material(legacy, manifest)
+            snapshot = legacy.current_mv_sync_snapshot()
+            records, summary = read_reviewed_history(snapshot, history_paths(legacy))
+            return {'items': [{**row, 'source': row['source_text'], 'current_translation': row['translated_text'],
+                              'line_number': 0, 'identity_v2': row['occurrence_id']} for row in records],
+                    'status': summary['status'], 'reason': '' if summary['status'] == 'ready' else summary['reason'],
+                    'file_count': len(summary['input_files']), 'source_changed_during_scan': False, 'diagnostics': []}
+        except (OSError, ValueError) as exc:
+            return {'items': [], 'status': 'unavailable', 'reason': 'history_scan_unavailable',
+                    'file_count': 0, 'source_changed_during_scan': True, 'diagnostics': [str(exc)]}
     file_paths = _keyword_history_file_paths(manifest)
     if not file_paths:
         return {
@@ -10436,7 +10461,8 @@ def format_keyword_history_markdown(evidence):
     status = str(evidence.get('status') or keyword_history.STATUS_UNAVAILABLE)
     first = evidence.get('first_occurrence') or {}
     if first:
-        location = f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0}"
+        from foundation.source_location import json_source_location
+        location = json_source_location(first) or f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0}"
         identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
         translation = str(first.get('current_translation') or '(空)')
         text = f"{location} [{identity}] → {translation} [{status}]"
@@ -10463,6 +10489,10 @@ def write_keyword_markdown(path, candidates, summary):
     ]
     for candidate in candidates:
         files = ', '.join(candidate.get('source_files') or [])
+        if candidate.get('source_locations'):
+            from foundation.source_location import json_source_location
+            files = ', '.join(json_source_location({'source_locator': locator}) or ''
+                              for locator in candidate['source_locations'])
         lines.append(
             '| '
             + ' | '.join(
@@ -10485,6 +10515,12 @@ def write_keyword_markdown(path, candidates, summary):
 
 
 def write_keyword_summary_markdown(path, summaries, summary):
+    from foundation.source_location import json_source_location
+    def positions(item, location_key, line_key):
+        if location_key in item:
+            return ', '.join(json_source_location({'source_locator': locator}) or ''
+                             for locator in item[location_key])
+        return ', '.join(str(value) for value in item.get(line_key) or [])
     lines = [
         '# Keyword Chunk Summaries',
         '',
@@ -10492,7 +10528,9 @@ def write_keyword_summary_markdown(path, summaries, summary):
         f"- Parsed chunks: {summary.get('parsed_chunks', 0)}/{summary.get('expected_chunks', summary.get('result_rows', 0))}",
         f"- Ambiguous summary provenance chunks: {summary.get('ambiguous_summary_chunks', 0)}",
         '',
-        '| File | Chunk lines | Evidence lines | Summary | Evidence item ids |',
+        ('| File | Chunk positions | Evidence positions | Summary | Evidence item ids |'
+         if any('source_locations' in item for item in summaries)
+         else '| File | Chunk lines | Evidence lines | Summary | Evidence item ids |'),
         '| --- | ---: | ---: | --- | --- |',
     ]
     for item in summaries:
@@ -10501,8 +10539,8 @@ def write_keyword_summary_markdown(path, summaries, summary):
             + ' | '.join(
                 [
                     markdown_escape_cell(item.get('file_rel_path')),
-                    markdown_escape_cell(', '.join(str(value) for value in item.get('line_numbers') or [])),
-                    markdown_escape_cell(', '.join(str(value) for value in item.get('source_lines') or [])),
+                    markdown_escape_cell(positions(item, 'source_locations', 'line_numbers')),
+                    markdown_escape_cell(positions(item, 'evidence_locations', 'source_lines')),
                     markdown_escape_cell(item.get('chunk_summary')),
                     markdown_escape_cell(', '.join(item.get('summary_evidence_item_ids') or [])),
                 ]
@@ -10522,6 +10560,8 @@ def export_keyword_candidates(
 ):
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_KEYWORD_EXTRACTION, 'export-keywords')
+    from execution.mv_preprocessing import require_keyword_material
+    require_keyword_material(legacy, manifest)
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
         raise SystemExit('Result JSONL not found. Run download first.')
@@ -10622,11 +10662,15 @@ def export_keyword_candidates(
                         'source_lines': sorted(
                             {item.get('line_number', 0) for item in matched_summary_items if item.get('line_number')}
                         ),
+                        **({'source_locations': [item['source_locator'] for item in chunk.get('items', [])],
+                            'evidence_locations': [item['source_locator'] for item in matched_summary_items]}
+                           if manifest.get('mv_preprocessing_identity') else {}),
                     }
                 )
             summary['candidate_count_raw'] += len(candidates)
             for candidate in candidates:
-                matched_items = match_keyword_candidate_items(candidate, chunk)
+                matched_items = (match_keyword_items_by_ids(candidate.get('source_item_ids'), chunk)
+                                 if manifest.get('mv_preprocessing_identity') else match_keyword_candidate_items(candidate, chunk))
                 if not matched_items:
                     summary['ambiguous_provenance_candidates'] += 1
                     bump_counter(summary['reason_counts'], 'ambiguous_candidate_provenance')
@@ -10640,6 +10684,8 @@ def export_keyword_candidates(
                 ]
                 enriched['evidence_items'] = [candidate['evidence']] if candidate.get('evidence') else []
                 enriched['occurrences'] = 1
+                if manifest.get('mv_preprocessing_identity'):
+                    enriched['source_locations'] = [item['source_locator'] for item in matched_items]
                 key_tuple = keyword_candidate_key(enriched)
                 if key_tuple in merged_candidates:
                     merge_keyword_candidate(merged_candidates[key_tuple], enriched)
@@ -16802,11 +16848,15 @@ def prepare_rag_store(file_jobs):
 
 def print_rag_bootstrap_summary(summary):
     if not summary.get('enabled'):
-        print('RAG is disabled. Enable batch.rag.enabled=true before bootstrapping.')
+        section = 'sync' if legacy.current_project_engine() == 'rpgmaker_mv' else 'batch'
+        print(f'RAG is disabled. Enable {section}.rag.enabled=true before bootstrapping.')
+        if 'prepared' in summary:
+            print('- status: disabled\n- prepared: False')
         return
 
     print('RAG bootstrap summary:')
     for key in (
+        'status', 'prepared', 'reason', 'reviewed_records', 'unreviewed_records',
         'store_dir',
         'scan_scope',
         'files_scanned',
@@ -16871,6 +16921,7 @@ def source_segment_has_current_embedding(existing, record):
 def print_source_index_bootstrap_summary(summary):
     print('Source Index bootstrap final summary:')
     for key in (
+        'enabled', 'status', 'prepared', 'reason',
         'store_dir',
         'files_scanned',
         'scanned',
@@ -16891,6 +16942,9 @@ def print_source_index_bootstrap_summary(summary):
 
 
 def bootstrap_source_index(skip_prepare=False, prune=True):
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_preprocessing import bootstrap
+        return bootstrap(legacy, 'source', prune=prune)
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -17030,6 +17084,11 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
 
 
 def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_preprocessing import bootstrap
+        summary = bootstrap(legacy, 'history', seed_jsonl=seed_jsonl_paths or ())
+        print_rag_bootstrap_summary(summary)
+        return summary
     if not RAG_ENABLED:
         summary = {'enabled': False}
         print_rag_bootstrap_summary(summary)
@@ -17838,6 +17897,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
     for index, row in enumerate(request_rows, start=1):
         key = row.get('key', f'sync-{index}')
         chunk = requested_chunks[index - 1]
+        from execution.mv_preprocessing import require_keyword_material
+        require_keyword_material(legacy, manifest)
         print(f'[{index}/{len(request_rows)}] {key}')
         result_row = {'key': key}
         try:
@@ -17936,6 +17997,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
                 print(
                     f"  targeted retry: {len(retry_chunk.get('items') or [])} items"
                 )
+                require_keyword_material(legacy, manifest)
                 try:
                     retry_result = run_sync_request(
                         retry_row.get('request') or {},
@@ -18206,6 +18268,10 @@ def sync_keyword_candidates(
     output_summary_markdown='',
     api_key_index=None,
 ):
+    from execution.mv_sync import material_identity as mv_material_identity
+    mv_snapshot = legacy.current_mv_sync_snapshot() if legacy.current_project_engine() == 'rpgmaker_mv' else None
+    if mv_snapshot is not None and not skip_prepare:
+        raise ValueError('MV keywords do not support Ren\'Py prepare.')
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.SYNC,
         required_stages={model_profile.STAGE_KEYWORD},
@@ -18253,6 +18319,8 @@ def sync_keyword_candidates(
             'thinking_level': BATCH_THINKING_LEVEL,
         },
         extra_fields={
+            **({'mv_preprocessing_identity': mv_material_identity(mv_snapshot)}
+               if mv_snapshot is not None else {}),
             'keyword_settings': {
                 'chunk_size': chunk_size,
                 'max_candidates_per_chunk': max_candidates,
@@ -20738,10 +20806,9 @@ def collect_mv_doctor_report():
         if snapshot.review_error:
             issues.append(_engine_status_issue('engine.mv.scope_review_required', 'error',
                 snapshot.review_error, suggested_action='coverage-review-import'))
-        if (legacy.SYNC_RAG_ENABLED or legacy.SYNC_SOURCE_INDEX_ENABLED
-                or legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF):
+        if legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
             issues.append(_engine_status_issue('engine.mv.context_unsupported', 'error',
-                'Disable Ren\'Py retrieval, source index, story memory and project analysis injection for MV.',
+                'MV does not support Story Memory or Project Analysis injection; disable these layers.',
                 suggested_action='configure_context'))
     except (ValueError, OSError) as exc:
         issues.append(_engine_status_issue('engine.mv.material_invalid', 'error', str(exc),
@@ -20768,12 +20835,16 @@ def collect_mv_doctor_report():
         'engine_status': {'engine': 'rpgmaker_mv',
             'adapter_version': snapshot.adapter.adapter_version if snapshot is not None else '',
             'status': 'blocked' if blocked else 'ready', 'issues': issues,
-            'supported_routes': ['durable_sync'],
-            'unsupported_routes': ['gemini_batch', 'legacy_sync', 'external_work', 'revision', 'keywords'],
+            'supported_routes': ['durable_sync', 'sync_keywords', 'bootstrap_source_index', 'bootstrap_rag'],
+            'unsupported_routes': ['gemini_batch', 'legacy_sync', 'external_work', 'revision', 'batch_keywords', 'story_memory', 'project_analysis'],
             'runtime_acceptance': 'unverified'},
         'warnings': routing_warnings, 'workflow_state': '',
     }
     if snapshot is not None:
+        from execution.mv_preprocessing import context_status
+        from engine_adapters.project_config import read_project_configuration
+        report['mv_preparation'] = context_status(read_project_configuration(legacy.TRANSLATOR_CONFIG),
+                                                 legacy.TRANSLATOR_CONFIG, snapshot=snapshot)
         total = len(snapshot.selected_occurrences)
         pending = snapshot.pending_task_count
         report.update(pending_task_count=pending,
@@ -20812,7 +20883,10 @@ def print_doctor_report(report):
         print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
         print(f"- Mode: {report['mode']}")
         print(f"- Engine: rpgmaker_mv (status: {report['engine_status']['status']})")
-        print('- Route: durable Sync; Batch / external work / legacy Sync / revisions / keywords unsupported')
+        print('- Routes: durable Sync / sync-keywords / context bootstrap; Batch / external work / legacy Sync / revisions unsupported')
+        for name, state in (report.get('mv_preparation') or {}).items():
+            if name in {'source_index', 'history'}:
+                print(f"- MV context {name}: status={state.get('status')}, prepared={state.get('prepared')}, records={state.get('record_count')}")
         print('- Runtime acceptance: unverified (A0 / A4 pending)')
         if report.get('coverage_evidence_available'):
             print(f"- Pending translation: task_count={report['pending_task_count']}, file_count={report['pending_file_count']}, translated_count={report['translated_task_count']}, total_count={report['total_task_count']}")
@@ -21754,8 +21828,9 @@ def build_arg_parser():
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
         help=(
-            'Prebuild or refresh the Batch RAG history store from all allowed '
-            'TL files. Missing or incompatible embedding identity rebuilds the '
+            'Prebuild Batch history from TL files, or MV Sync history from explicit reviewed JSONL. '
+            'MV uses sync.rag embedding/profile settings and never infers history from target text. '
+            'Missing or incompatible embedding identity rebuilds the '
             'store and does not reuse existing vectors.'
         ),
     )
@@ -21768,12 +21843,13 @@ def build_arg_parser():
         '--seed-jsonl',
         action='append',
         default=None,
-        help='Import external parallel corpus JSONL rows as additional RAG seed records. Can be repeated.',
+        help='Additional corpus JSONL. MV requires reviewed, source/window-bound typed JSON positions; generic parallel rows are not accepted. Can be repeated.',
     )
+    add_machine_output_argument(bootstrap_rag_parser)
 
     bootstrap_source_index_parser = subparsers.add_parser(
         'bootstrap-source-index',
-        help='Prebuild or refresh the Batch source-only index store from all allowed TL files.',
+        help='Prebuild source-only index: Batch TL originals or MV audited source occurrences using sync embedding settings.',
     )
     bootstrap_source_index_parser.add_argument(
         '--skip-prepare',
@@ -21785,6 +21861,7 @@ def build_arg_parser():
         action='store_true',
         help='Do not prune stale segments from the index store after indexing.',
     )
+    add_machine_output_argument(bootstrap_source_index_parser)
 
     final_review_build_parser = subparsers.add_parser(
         'final-review-build',
@@ -22677,7 +22754,7 @@ def build_arg_parser():
         '--chunk-size',
         type=int,
         default=0,
-        help='Source line count per sync keyword request. Defaults to batch.keyword_extraction.chunk_size.',
+        help='Source occurrences per request (Ren\'Py lines or MV JSON positions). Defaults to batch.keyword_extraction.chunk_size.',
     )
     sync_keyword_parser.add_argument(
         '--max-candidates-per-chunk',
@@ -24017,6 +24094,16 @@ def _run_translate_preflight(args):
             'platform': os.name,
         },
     }
+    if mv_mode and context is not None:
+        from execution.mv_preprocessing import context_status
+        from engine_adapters.project_config import read_project_configuration
+        payload['context_preparation'] = context_status(read_project_configuration(legacy.TRANSLATOR_CONFIG),
+            legacy.TRANSLATOR_CONFIG, snapshot=context.adapter_snapshot)
+        for name in ('source_index', 'history'):
+            state = payload['context_preparation'][name]
+            if state.get('enabled') and not state.get('prepared'):
+                risks.append(_preflight_risk('MV_CONTEXT_NOT_PREPARED', 'warning',
+                    f"MV {name}: {state.get('status')} ({state.get('reason')}); 本次将降级为空检索上下文。"))
     if str(getattr(args, 'output', '') or '') != 'json':
         print(
             f"Preflight {status}: strategy={strategy} "
@@ -24680,6 +24767,7 @@ def dispatch_command(parser, args):
         load_batch_settings()
         if (
             embedding_bootstrap
+            and legacy.current_project_engine() != 'rpgmaker_mv'
             and current_batch_embedding_settings().backend == embedding_runtime.BACKEND_GEMINI
         ):
             legacy._require_gemini_api_key()
@@ -24738,13 +24826,12 @@ def dispatch_command(parser, args):
         )
 
     if command == 'bootstrap-rag':
-        bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
-        return
+        return bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
 
     if command == 'bootstrap-source-index':
         summary = bootstrap_source_index(skip_prepare=args.skip_prepare, prune=(not args.no_prune))
         print_source_index_bootstrap_summary(summary)
-        return
+        return summary
 
     if command == 'estimate-cost':
         manifest = load_manifest(args.target or None)
@@ -25027,6 +25114,14 @@ def _load_machine_manifest(command, value, args):
 
 def build_machine_success_envelope(command, value, args):
     """Translate existing command return values into the versioned CLI contract."""
+
+    if command in {'bootstrap-rag', 'bootstrap-source-index'}:
+        payload = dict(value or {})
+        status = payload.get('status') or ('failed' if payload.get('error') else
+            ('ready' if payload.get('enabled', True) else 'disabled'))
+        payload.setdefault('prepared', status == 'ready')
+        return cli_contract.success_envelope(command, status=status, result=payload,
+            artifacts=_nonempty_artifacts(store=payload.get('store_dir')))
 
     if command in external_translation_work.COMMANDS or (
         command == 'apply' and isinstance(value, dict) and 'receipt' in value

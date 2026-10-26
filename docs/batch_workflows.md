@@ -539,6 +539,14 @@ python gemini_translate_batch.py sync-keywords --limit 3
 
 `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告。
 
+[MV 路线](rpgmaker_mv_sync.md#同步关键词原文索引与已审阅历史)仅开放同步关键词，使用
+冻结的 Sync keyword 阶段路由与 Sync Macro；`build-keywords` Batch 不支持 MV。
+来源是选中范围的独立原始源，候选 `source_locations` 和概要 `source_locations` /
+`evidence_locations` 保留真实文件与类型化 JSON 路径。历史证据仅来自显式独立审阅的
+MV 双语 JSONL，缺失／未审阅时标记无可用证据，绝不扫描目标现译或按 Ren'Py 解析 JSON。
+同文异处不合并历史 occurrence；字面量方括号按 MV 控制码规则处理。
+四份报告、证据约束、去重和下述 glossary 合并审核规则沿用共享实现。
+
 人工确认后，可用 `merge-keywords-to-glossary` 把 `keyword_candidates.jsonl` 中的候选追加进 `glossary.json`（默认写入 `normalize_map`；`source` 与 `suggested_target` 相同时写入 `preserve_terms`）。合并预览会再次展示首次历史译法；有冲突或没有证据的候选默认不勾选/不会被静默自动接受，仍需人工明确确认：
 
 ```bash

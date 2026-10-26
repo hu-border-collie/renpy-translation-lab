@@ -99,6 +99,11 @@ translation validation 和声明式 writeback plan。公共层复核材料 / 结
 `execution/mv_sync.py` 将其接入共享 TranslationPlan、耐久 Sync 和现有双快照原子写回；
 `engine_adapters/project_config.py` 负责显式引擎／源目标／支持窗口解析，
 `engine_adapters/rpgmaker_mv_fields.py` 管理默认关闭的系统术语与地图显示名白名单。
+`execution/mv_preprocessing.py` 把同一源 occurrence 投影为关键词材料和既有 Source Index
+记录，只将显式独立审阅的双语输入投影为既有 history 记录。它复用两种 JSON store 的
+多步写锁／原子替换、embedding 身份和排名；当前材料／输入／数据摘要决定是否已准备。
+耐久 Sync 继续由 ContextAssembler 裁剪并冻结检索；目标现译与 apply 不自动成为审阅批准。
+CLI、GUI、doctor 和 preflight 消费同一准备状态；StoryMemory / Project Analysis 注入未开放。
 字段角色与选择绑定同一 Adapter、审阅和任务身份。CLI、GUI 和 doctor
 复用同一合同，Batch / 外部工作包保持未支持，真实原生验收仍单列。产品操作见
 [MV 耐久 Sync](rpgmaker_mv_sync.md)，核心边界见

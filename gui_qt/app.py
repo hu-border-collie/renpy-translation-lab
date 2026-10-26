@@ -1595,7 +1595,7 @@ class MainWindow(QMainWindow):
         self.bootstrap_work_btn.setToolTip(
             "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
         )
-        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+        if not self._engine_allows_renpy_prepare():
             from gui_qt.user_copy import MV_PROJECT_COPY
             self.bootstrap_work_btn.setEnabled(False)
             self.bootstrap_work_btn.setToolTip(MV_PROJECT_COPY['prepare_unsupported'])
@@ -2992,7 +2992,8 @@ class MainWindow(QMainWindow):
         base_dir = str(game_root or "")
         config = self.state.load_translator_config()
         self._context_library_config_snapshot = copy.deepcopy(config)
-        result = collect_context_library_status(base_dir, config)
+        result = collect_context_library_status(base_dir, config, **(
+            {'config_file': str(self.state.config_path)} if config.get('engine') == 'rpgmaker_mv' else {}))
         flags = result.context_flags
         self._context_library_flags_cache = (base_dir, dict(flags))
         analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
@@ -3052,6 +3053,8 @@ class MainWindow(QMainWindow):
         job = ContextLibraryStatusJob(
             base_dir,
             self._context_library_config_snapshot,
+            **({'config_file': str(self.state.config_path)} if
+               (self._context_library_config_snapshot or {}).get('engine') == 'rpgmaker_mv' else {}),
         )
         job.signals.completed.connect(self._on_context_library_status_ready)
         self._context_library_status_job = job
@@ -3072,6 +3075,8 @@ class MainWindow(QMainWindow):
             context_flags=self._context_library_live_flags(
                 self._game_root_str_for_flags() or ""
             ),
+            **({'config_file': str(self.state.config_path)} if
+               (getattr(self, '_context_library_config_snapshot', {}) or {}).get('engine') == 'rpgmaker_mv' else {}),
         )
 
     def _on_context_library_status_ready(self, result: object) -> None:
@@ -8298,8 +8303,18 @@ class MainWindow(QMainWindow):
         config = config if isinstance(config, dict) else {}
         try:
             from engine_adapters.project_config import project_engine
-            return project_engine(config) != 'rpgmaker_mv' or mode == WorkMode.SYNC_TRANSLATION
+            return project_engine(config) != 'rpgmaker_mv' or mode in {
+                WorkMode.SYNC_TRANSLATION, WorkMode.SYNC_KEYWORD_EXTRACTION,
+                WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX}
         except (OSError, ValueError, TypeError):
+            return False
+
+    def _engine_allows_renpy_prepare(self) -> bool:
+        """Keep native preparation separate from supported context bootstrap tasks."""
+        from engine_adapters.project_config import project_engine
+        try:
+            return project_engine(getattr(self, '_context_library_config_snapshot', {}) or {}) == 'renpy'
+        except (ValueError, TypeError):
             return False
 
     def _update_translate_button_label(self) -> None:
@@ -11418,7 +11433,7 @@ class MainWindow(QMainWindow):
     def _on_bootstrap_work(self):
         if not self._confirm_unsaved_config_before_workflow():
             return
-        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+        if not self._engine_allows_renpy_prepare():
             from gui_qt.user_copy import MV_PROJECT_COPY
             message_box_information(self, '准备流程不可用', MV_PROJECT_COPY['prepare_unsupported'])
             return
@@ -11459,7 +11474,7 @@ class MainWindow(QMainWindow):
     def _on_generate_template(self):
         if not self._confirm_unsaved_config_before_workflow():
             return
-        if not self._engine_allows_work_mode(WorkMode.BOOTSTRAP_RAG):
+        if not self._engine_allows_renpy_prepare():
             from gui_qt.user_copy import MV_PROJECT_COPY
             message_box_information(self, '准备流程不可用', MV_PROJECT_COPY['prepare_unsupported'])
             return

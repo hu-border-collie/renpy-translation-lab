@@ -17,6 +17,14 @@ CLI 是自动化操作的事实来源。必要时可以使用 GUI 做可视验�
 
 ## 操作原则
 
+MV 使用[独立源／目标与支持窗口](rpgmaker_mv_sync.md)，先做覆盖审阅，按需运行
+`sync-keywords --output json`、`bootstrap-source-index --skip-prepare --output json`、
+`bootstrap-rag --skip-prepare --output json`。两种 bootstrap 使用 Sync embedding 设置，
+返回的 `result.prepared` 与 `status` 才表示实际准备结果；关闭、缺失或失败不等于 ready。
+历史必须是显式独立审阅的双语输入；目标现译不会自动采用。关键词报告含 JSON 路径，不能
+`check/apply`；真实翻译仍走 `sync-start → check → apply`。MV Batch、外部工作包、
+StoryMemory / Project Analysis 注入与 Ren'Py prepare 保持未开放。
+
 - 使用 Python 3.11 或更高版本，在仓库根目录运行命令。
 - 先检查当前项目、配置和 Git 状态；只在游戏副本或已有备份的目录中工作。
 - 先运行只读的 `doctor`，不要直接提交任务。

@@ -212,6 +212,12 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
 
     command = str(envelope.get("command") or "")
     status = str(envelope.get("status") or "").strip().lower()
+    if command in {'bootstrap-rag', 'bootstrap-source-index'}:
+        if status == 'ready':
+            return EXIT_OK
+        if status == 'failed':
+            return EXIT_BLOCKED
+        return EXIT_NEEDS_ACTION
     if command.startswith('work-'):
         if status == 'stale':
             return EXIT_INVALID_STATE

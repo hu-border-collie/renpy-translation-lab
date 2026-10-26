@@ -17,8 +17,11 @@ GUI 摘要另有呈现生命周期：未检查、检查中、失败、过期均�
 | --- | --- | --- |
 | 源／目标／窗口缺失、漂移或不可读 | `engine.mv.material_invalid`；blocked | 扫描失败计数为未知，不补零。 |
 | 覆盖审阅缺失、pending、stale 或不满足 policy | `engine.mv.scope_review_required`；blocked | 可展示已测得的候选数，禁止启动。 |
-| 开启未接入 MV 的 Ren'Py 检索／分析注入 | `engine.mv.context_unsupported`；blocked | 关闭相关源后重新检查。 |
-| 材料和独立审阅有效，存在待处理叙事条目 | `start_pending_sync` | 只开放耐久 Sync。 |
+| 开启 MV StoryMemory／Project Analysis 注入 | `engine.mv.context_unsupported`；blocked | 关闭相关层后重新检查。 |
+| 原文索引／历史库禁用或缺失 | `mv_preparation.*.status=disabled/missing`；`prepared=false`，计数 null | 已启用但未准备时 preflight warning；耐久 Sync 降级为空检索。 |
+| 源、范围或审阅输入漂移（含 `reviewed_history_file` 切换／清空）／embedding 身份不兼容／准备失败 | `stale/incompatible/failed`；`prepared=false`，计数 null | 显式重新 bootstrap；不能显示为 ready。 |
+| 当前身份的库实际准备完成 | `ready`；`prepared=true`，实际计数（含 0） | 实际检索零命中另记 `zero_hits`；空库为 `prepared_empty_store`。 |
+| 材料和独立审阅有效，存在待处理叙事条目 | `start_pending_sync` | 翻译开放耐久 Sync；预处理另有同步关键词及两种 bootstrap。 |
 | 当前已审阅叙事范围无待处理条目 | `mv_scope_no_pending` | 全游戏覆盖和原生验收仍未确认。 |
 
 这是环境检查的最底层，决定项目所处的物理阶段，也是判定是否存在“阻断级”异常的基础。

@@ -22,8 +22,17 @@ Analysis brief；两者默认关闭，draft/stale/missing brief 不会静默注�
 
 ## 如何选择上下文层
 
+MV 的限定路线见 [MV 预处理](rpgmaker_mv_sync.md#同步关键词原文索引与已审阅历史)。
+它复用相同 ContextAssembler、两种 JSON store、embedding 身份、锁、预算与冻结请求，
+输入改为真实 JSON occurrence：Source Index 仅取独立原始源，history 仅取显式且独立审阅的
+双语 JSONL。`bootstrap-source-index` / `bootstrap-rag` 读取 **Sync** embedding 绑定与开关，
+不扫描目标中文或 Ren'Py 模板；`sync-keywords` 生成带真实路径的候选和概要报告。
+`doctor` / preflight 与 GUI 上下文库分别显示 disabled、missing、stale、incompatible、failed、
+ready，未知计数保持未知，真实空库才是 0。未准备不会冒充准备完成。
+StoryMemory / Project Analysis 注入仍不支持 MV。下文的 TL 扫描与 Batch 默认说明针对 Ren'Py。
+
 - RAG history store：使用“已有原文 + 已有译文”保持术语、称呼和风格一致。
-- Batch source-only index：只使用全文原文，为新项目或译文很少的项目提供远距离剧情上下文。
+- Source-only index：只使用原文，为新项目或译文很少的项目提供远距离剧情上下文。
 - Structured Story Memory：人工维护的结构化角色、关系、术语和场景图谱。
 - Project Analysis：从带 evidence 的 chunk / label / route 摘要聚合为可审核的项目理解（路线感知 brief）；**只有已发布且 fingerprint 未陈旧的产物**才允许注入后续翻译/审校（生成与发布见后续阶段）。
 

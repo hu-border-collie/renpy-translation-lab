@@ -74,6 +74,12 @@
 - `execution/mv_sync.py`：MV 完整材料审计、独立 review 绑定、耐久 Sync 源／目标身份、
   occurrence 到共享结果与 schema 2 plan 的桥接；产品回归见 `tests/execution/test_mv_durable_sync.py`，
   操作与真实验收边界见 [MV Sync](rpgmaker_mv_sync.md)。
+- `execution/mv_preprocessing.py`：MV 关键词真实位置、source-only 记录、独立审阅历史输入、
+  准备状态和受控检索；复用 `context_engine/rag_memory.py` 的两种 store、写 session、
+  `advanced_context.py` 排名及共享 ContextAssembler，不扫描 Ren'Py JSON 或推断目标批准。
+  `foundation/source_location.py` 在 prompt／报告中展示类型化 JSON 路径。
+  回归见 `tests/execution/test_mv_preprocessing.py`、
+  `tests/context_engine/test_store_write_session.py`、`tests/gui/application/test_gui_mv_sync.py`。
 - `quality_review/translation_core.py`：共享 TranslationUnit/ModelResult/WritebackAction 与结果规范化。
 - Batch 与 durable Sync 的 check/preview/apply 测试是写回安全事实；新增入口必须复用，
   不得仅凭模型任务完成状态授权写回。

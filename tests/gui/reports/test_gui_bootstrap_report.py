@@ -19,6 +19,20 @@ from gui_qt.reports.bootstrap_report import (
 
 
 class GuiBootstrapReportTests(unittest.TestCase):
+    def test_mv_preparation_result_preserves_empty_missing_and_failed(self):
+        for parser, header in ((summarize_rag_bootstrap_output, 'RAG bootstrap summary:'),
+                               (summarize_source_index_bootstrap_output, 'Source Index bootstrap final summary:')):
+            with self.subTest(parser=parser.__name__):
+                ready = parser(header + '\n- status: ready\n- prepared: True\n- scanned: 0', 0)
+                self.assertEqual(ready.status, 'ready')
+                self.assertIn('0 条', ready.message)
+                self.assertNotIn('模板', ready.message)
+                missing = parser(header + '\n- status: missing\n- prepared: False\n- reason: no_reviewed_history', 0)
+                self.assertEqual(missing.status, 'warning')
+                self.assertIn('独立审阅', missing.message)
+                failed = parser(header + '\n- status: failed\n- prepared: False', 0)
+                self.assertEqual(failed.status, 'failed')
+
     def test_coerce_bool_accepts_common_literals(self):
         self.assertTrue(coerce_bool("true", False))
         self.assertTrue(coerce_bool("ON", False))

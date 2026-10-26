@@ -21,11 +21,13 @@ class ProjectConfigTests(unittest.TestCase):
 
     def test_routes_refuse_unsupported_mv_operations(self):
         for operation in ('build', 'work-export', 'generate-template', 'prepare', 'legacy-sync',
-                          'sync-keywords', 'preview-revisions', 'bootstrap-rag'):
+                          'build-keywords', 'preview-revisions', 'project-analysis-build-structure'):
             with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, 'durable Sync'):
                 require_engine_operation({'engine': 'rpgmaker_mv'}, operation)
         for operation in ('sync-start', 'sync-status', 'sync-resume', 'sync-derive',
-                          'sync-cancel', 'check', 'apply', 'doctor', 'coverage-status'):
+                          'sync-cancel', 'check', 'apply', 'doctor', 'coverage-status',
+                          'sync-keywords', 'export-keywords', 'merge-keywords-to-glossary',
+                          'bootstrap-rag', 'bootstrap-source-index'):
             require_engine_operation({'engine': 'rpgmaker_mv'}, operation)
 
     def test_malformed_configuration_is_not_interpreted_as_default_renpy(self):
@@ -46,6 +48,12 @@ class ProjectConfigTests(unittest.TestCase):
             settings = read_mv_project_config(config, file)
             self.assertEqual(settings.target_root, root / 'target')
             self.assertEqual(settings.source_root, root / 'source')
+            config['rpgmaker_mv']['reviewed_history_file'] = 'reviewed.jsonl'
+            self.assertEqual(read_mv_project_config(config, file).reviewed_history_file, root / 'reviewed.jsonl')
+            config['rpgmaker_mv']['reviewed_history_file'] = False
+            with self.assertRaisesRegex(ValueError, 'reviewed_history_file'):
+                read_mv_project_config(config, file)
+            config['rpgmaker_mv']['reviewed_history_file'] = ''
             revision = mv_material_revision(config, file)
             path = root / 'source/data/Map001.json'
             path.write_bytes(path.read_bytes() + b' ')

@@ -1,4 +1,4 @@
-# RPG Maker MV 叙事模式：耐久 Sync
+# RPG Maker MV：耐久 Sync 与预处理
 
 这是 #567 / #572 的耐久 Sync 产品路线，限定在[MV Adapter](engine_adapter.md#rpgmaker-mv-a2)声明的核心／插件窗口。默认支持地图和公共事件的 401 消息、102 选项及其 402 镜像；可显式启用下述系统术语与地图显示名。数据库、角色名修改、MapInfos 名称回退、插件 UI、动态脚本、滚动文本及图片仍留在后续范围；MZ 不在此路线。
 
@@ -18,12 +18,13 @@
     "source_root": "C:/Games/Original/www",
     "support_window_file": "C:/TranslationProject/approved-window.json",
     "occurrence_scope_file": "",
-    "display_fields": []
+    "display_fields": [],
+    "reviewed_history_file": ""
   },
   "prepare": {"enabled": false},
   "include_files": ["data/Map001.json", "data/CommonEvents.json"],
   "sync": {
-    "rag_enabled": false,
+    "rag": {"enabled": false},
     "source_index": {"enabled": false},
     "story_memory": {"enabled": false},
     "project_analysis": {"inject_published_brief": false}
@@ -124,6 +125,72 @@ python gemini_translate_batch.py translate-preflight --strategy sync
 
 记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。当前文本范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅文本范围；材料不可读时计数为未知。
 
+## 同步关键词、原文索引与已审阅历史
+
+三个预处理入口复用现有关键词及上下文核心。它们使用当前已审阅范围中的真实源 occurrence，
+包含显式启用的显示字段；同文异处保留不同 occurrence ID 和类型化 JSON 路径，不伪造 `.rpy` 行号。
+原始源、支持窗口、字段选择、范围或覆盖审阅变化后，先重新审计／审阅，再重建预处理。
+
+```powershell
+python gemini_translate_batch.py sync-keywords --limit 3 --output json
+python gemini_translate_batch.py bootstrap-source-index --skip-prepare --output json
+python gemini_translate_batch.py bootstrap-rag --skip-prepare --output json
+```
+
+`sync-keywords` 使用冻结的 Sync keyword 阶段路由、Sync Macro 与本地词表，复用既有 prompt、
+schema、候选去重、证据校验和四份 JSONL / Markdown 报告。候选的 `source_locations`、
+概要的 `source_locations` / `evidence_locations` 指向实际文件与 JSON 路径。它只生成报告，
+`check/apply` 拒绝关键词 manifest；要改词表，仍须显式使用
+[`merge-keywords-to-glossary`](batch_workflows.md#关键词提取流程) 的审核与备份流程。
+MV 关键词不运行 Ren'Py prepare，也不开放 `build-keywords` Batch 路线。
+
+`bootstrap-source-index` 每个选中源位置建立一条 source-only 记录，绝不把目标中文存入原文索引。
+`bootstrap-rag` 只读显式提供的已审阅双语 JSONL：可在 `rpgmaker_mv.reviewed_history_file`
+填写路径（相对配置文件），或用 `--seed-jsonl <FILE>` 补充输入（相对当前目录）。
+历史库还绑定解析后的配置语料路径，包括未选择语料的状态。切换或清空
+`reviewed_history_file` 后，旧库会标为 stale，重新 bootstrap 前不再注入旧译文；
+原文索引不因这项选择变化失效。显式 seed 输入继续独立按路径和摘要核验，
+未配置语料时仍可用 `--seed-jsonl` 建库。缺少这项绑定的旧历史库须显式重新 bootstrap。
+没有输入、文件缺失、仅有 pending/rejected 记录时返回 `prepared=false`，不会把目标中的现译、
+UI／图片草稿、结构检查通过或 apply 成功推断为语义批准。apply 不会自动将 MV 现译加入历史库。
+
+历史输入每行是独立 JSON 对象，下例仅示意待审阅材料，不能直接当作已批准输入：
+
+```json
+{"schema_version":1,"engine":"rpgmaker_mv","adapter_version":"0.3.0","support_window_digest":"<当前支持窗口摘要>","file_rel_path":"data/Map001.json","json_path":["events",1,"pages",0,"list",1,"parameters",0],"source":"Keep walking.","source_file_sha256":"<完整源文件SHA-256>","translation":"继续前行。","review":{"status":"pending","reviewed_at":"","reviewer":{"type":"human","id":""}}}
+```
+
+真正纳入历史库时，`review.status` 必须为 `approved`，记录实际审阅者的 `type=human|agent`、
+非空 `id` 及带时区的 ISO `reviewed_at`；保留其他实际审阅信息也可。每条绑定当前 adapter、
+支持窗口、完整源文件摘要、精确源文本与类型化路径，译文还须通过相同结构保护。
+已批准但过期、越界、重复或结构不符的记录会拒绝 bootstrap；未批准记录只计数，不采用。
+空输入文件可以明确生成 0 条的已准备库，与未配置、缺失和未准备分开报告。
+
+两种库沿用 `JsonSourceIndexStore` / `JsonRagStore` 的文件格式、锁和原子替换，目录独立且不能
+互相嵌套，也不能放入冻结原始源或目标 `data/`、`js/`。路径遵循 `context_storage`；
+可用 `sync.source_index.store_dir` 与 `sync.rag.store_dir` 显式覆盖（相对目标内容根）。
+只有 bootstrap 会建立或重建向量。源记录带 occurrence 身份、源摘要和路径；历史记录另带
+独立 review 与输入摘要。默认 prune；`--no-prune` 留下的旧范围记录不会进入新范围检索。
+
+启用 `sync.source_index.enabled` / `sync.rag.enabled` 后再建立相应库；原文索引另遵循现有
+项目级同步索引开关，历史使用既有的「启用同步 RAG」开关。
+Embedding 使用 **Sync 的 embedding 绑定**；v1 配置由 Sync 所用 ModelProfile 引用 embedding
+profile，旧配置读取 `sync.rag` 的 embedding 字段。来源、模型、endpoint、维度与 document/query
+task 身份必须兼容；修改身份需要显式重新 bootstrap，不会静默混用旧向量。
+准备和非空库检索会调用 embedding Provider，`sync-keywords` 会调用生成 Provider。
+
+耐久 Sync 通过相同 ContextAssembler 消费已准备的库，保留既有 top-k、相似度、单条字符与
+Source Index 独立总预算，并把命中、诊断及最终 prompt 冻结进请求；恢复不重新检索旧请求。
+Macro 和词法 glossary 不依赖 embedding。禁用、缺失、过期、身份不兼容、失败、
+真正的 0 条库及检索零命中分别报告；可选库不可用时降级为空上下文，不把它们显示为 ready。
+`doctor` 和 `translate-preflight` 只读准备状态，不发翻译或 embedding 请求。
+bootstrap 的 JSON `status` 与 `result.prepared` 描述实际结果；加 `--strict-exit-codes` 时，
+ready 为 0，disabled／missing／stale／incompatible 为 3（需处理），failed 为 4（阻断）。
+StoryMemory 与 Project Analysis 注入仍未接入 MV，开启会阻断，不能按 Ren'Py 扫描 JSON。
+
+预处理输入也进入新任务材料身份；升级前的旧任务仍可查看，但缺少该身份的旧检查／计划
+不能在新版下继续授权写回，应重建计划。该工程能力不表示任何真实游戏已经完成预处理或验收。
+
 ## 运行、恢复和写回
 
 使用现有[耐久 Sync](sync_workflow.md)流程：
@@ -148,6 +215,9 @@ python gemini_translate_batch.py apply <RUN>
 
 1. 在「项目列表」选择独立目标内容目录；在「设置 → 项目」填写 `rpgmaker_mv`、原始源目录和支持窗口文件。需要时填写「MV 附加显示字段」与精确位置文件，再保存。
 2. 在「项目与环境」使用「导出覆盖材料」，完成独立审阅后用「导入覆盖核对」导入，再运行环境检查。
-3. 进入「同步翻译」，选择可用模型并启动；运行、继续、检查和应用均调用上述 CLI 合同。
+3. 需要历史时，在「设置 → 项目 → MV 已审阅双语历史文件」选择上述独立审阅 JSONL。
+   在「上下文库」启用所需层，使用「初始化记忆库」「初始化原文索引」调用同一 bootstrap，
+   按实际状态确认是否准备完成；「关键词 / 术语 → 同步」生成候选与概要报告。
+4. 进入「同步翻译」，选择可用模型并启动；运行、继续、检查和应用均调用上述 CLI 合同。
 
-项目／配置／材料／模型／任务代次变化会使旧环境检查或预检回调失效。GUI 不会重新实现 MV 翻译语义。Batch、外部 Agent 工作包、旧 `gemini_translate.py` 同步入口、关键词、修订和 Ren'Py prepare 当前不支持 MV，会在准备／付费派发前拒绝；不支持的 GUI 模式不能启动。
+项目／配置／材料／模型／库制品／任务代次变化会使相应旧状态回调失效。GUI 不会重新实现 MV 翻译语义。Batch、外部 Agent 工作包、旧 `gemini_translate.py` 同步入口、修订和 Ren'Py prepare 当前不支持 MV，会在准备／付费派发前拒绝；不支持的 GUI 模式不能启动。

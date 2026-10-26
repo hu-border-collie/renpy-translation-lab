@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 
 from gui_qt.reports.duration_format import format_remaining_duration_zh
 from gui_qt.reports.summary_helpers import extend_facts_with_notices
-from gui_qt.user_copy import format_bootstrap_fact
+from gui_qt.user_copy import format_bootstrap_fact, MV_PREPARATION_COPY
 from typing import Any
 
 
@@ -80,7 +80,13 @@ def read_batch_context_flags(
     """Effective batch context flags (global defaults + per-project overrides)."""
     from foundation.project_context_settings import resolve_batch_context_flags
 
-    return resolve_batch_context_flags(config, game_root)
+    flags = resolve_batch_context_flags(config, game_root)
+    if config.get('engine') == 'rpgmaker_mv':
+        sync = config.get('sync') or {}
+        flags.update(rag_enabled=coerce_bool((sync.get('rag') or {}).get('enabled')),
+                     source_index_enabled=bool(flags.get('sync_source_index_enabled')),
+                     project_analysis_enabled=False, project_analysis_inject_enabled=False)
+    return flags
 
 
 def _parse_summary_values(output: str, header: str) -> dict[str, str]:
@@ -360,6 +366,20 @@ def stale_bootstrap_summary() -> BootstrapSummary:
     )
 
 
+def _mv_preparation_summary(values, kind, exit_code):
+    if 'prepared' not in values:
+        return None
+    name = '历史记忆库' if kind == 'rag' else '原文索引'
+    ready = values.get('prepared') == 'True' and values.get('status') == 'ready' and exit_code == 0
+    failed = exit_code != 0 or values.get('status') == 'failed'
+    message_key = ('empty' if _parse_int_field(values, 'scanned') == 0 else 'ready') if ready else (
+        'failed' if failed else values.get('reason') or values.get('status') or 'missing')
+    return BootstrapSummary(kind, 'ready' if ready else ('failed' if failed else 'warning'),
+        f"MV {name}{'已准备' if ready else '尚未准备'}",
+        MV_PREPARATION_COPY.get(message_key, MV_PREPARATION_COPY['missing']),
+        _format_fact_values(values, ('store_dir', 'scanned', 'embedded', 'reused_embeddings', 'upserted')), [])
+
+
 def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSummary:
     if "RAG is disabled" in output:
         return BootstrapSummary(
@@ -375,6 +395,9 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
         )
 
     values = _parse_summary_values(output, RAG_SUMMARY_HEADER)
+    preparation = _mv_preparation_summary(values, 'rag', exit_code)
+    if preparation is not None:
+        return preparation
     facts = _format_fact_values(
         values,
         (
@@ -449,6 +472,9 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
 
 def summarize_source_index_bootstrap_output(output: str, exit_code: int) -> BootstrapSummary:
     values = _parse_summary_values(output, SOURCE_INDEX_SUMMARY_HEADER)
+    preparation = _mv_preparation_summary(values, 'source_index', exit_code)
+    if preparation is not None:
+        return preparation
     facts = _format_fact_values(
         values,
         (

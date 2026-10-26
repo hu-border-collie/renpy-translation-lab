@@ -11,6 +11,11 @@ from datetime import datetime
 from typing import Callable, Iterable
 
 from quality_review import keyword_history
+from foundation.source_location import json_source_location
+
+
+def _history_position(first):
+    return json_source_location(first) or f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0}"
 
 GLOSSARY_SECTION_PRESERVE = 'preserve_terms'
 GLOSSARY_SECTION_NON_TRANSLATABLE = 'non_translatable_exact'
@@ -454,7 +459,7 @@ def format_candidate_preview(candidate: dict, action: MergeAction) -> str:
             identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
             lines.append(
                 'history_first: '
-                f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+                f"{_history_position(first)} "
                 f"[{identity}] "
                 f"-> {first.get('current_translation') or '(empty)'} [{status}]"
             )
@@ -497,7 +502,7 @@ def format_history_evidence_preview(candidate: dict) -> str:
     if isinstance(first, dict) and first:
         identity = first.get('identity_v2') or first.get('occurrence_id') or '?'
         text = (
-            f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+            f"{_history_position(first)} "
             f"[{identity}] "
             f"→ {first.get('current_translation') or '(空)'} [{status}]"
         )
@@ -689,7 +694,7 @@ def detect_candidate_warnings(
             if isinstance(first, dict) and first:
                 warnings.append(
                     '历史首次译法需人工确认：'
-                    f"{first.get('file_rel_path') or '?'}:L{first.get('line_number') or 0} "
+                    f"{_history_position(first)} "
                     f"→ {first.get('current_translation') or '(空)'}"
                 )
             else:

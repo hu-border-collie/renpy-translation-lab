@@ -8,7 +8,7 @@
 
 ## 前置条件
 
-RPG Maker MV 使用[限定窗口叙事模式](rpgmaker_mv_sync.md)，只开放本页的耐久命令。它的 `game_root` 是独立目标内容根，另配原始源与支持窗口文件；不使用 Ren'Py 模板、`tl_subdir`、旧 Sync 或 Ren'Py 检索上下文。下列模板与 SDK 前置只适用于 Ren'Py。
+RPG Maker MV 使用[限定窗口模式](rpgmaker_mv_sync.md)：耐久命令之外还支持 `sync-keywords`、`bootstrap-source-index`、`bootstrap-rag`。它的 `game_root` 是独立目标内容根，另配原始源与支持窗口文件；不使用 Ren'Py 模板、`tl_subdir` 或旧 Sync。检索复用共享核心，原文与独立审阅历史的输入合同见 [MV 预处理](rpgmaker_mv_sync.md#同步关键词原文索引与已审阅历史)；StoryMemory / Project Analysis 注入仍不支持。下列模板与 SDK 前置只适用于 Ren'Py。
 
 1. 使用 Python 3.11+ 安装主依赖；使用 GUI 或 LiteLLM 时再安装对应可选依赖。
 2. 在 `translator_config.json` 明确设置当前 `game_root` 与 `tl_subdir`，并用只读环境检查确认项目。同步初译的生成目标当前只支持简体中文；`prepare.language` 只影响 Ren'Py 模板目录：

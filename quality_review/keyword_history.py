@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from typing import Any, Mapping, Sequence
+from foundation.source_location import json_source_location
 
 
 HISTORY_EVIDENCE_SCHEMA_VERSION = 1
@@ -283,6 +284,7 @@ def _matches_for_specs(
     source_text: Any,
     normalized_term: str,
     specs: Sequence[dict[str, Any]],
+    *, mv_locator=None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Run prepared specs against one source line.
 
@@ -295,7 +297,17 @@ def _matches_for_specs(
     if not source or not normalized_term or not specs:
         return [], False
 
-    interpolation_spans = _interpolation_spans(source)
+    is_mv = isinstance(mv_locator, Mapping) and mv_locator.get('engine') == 'rpgmaker_mv'
+    if is_mv:
+        from engine_adapters.rpgmaker_mv_controls import control_spans
+        from engine_adapters.rpgmaker_mv_fields import DISPLAY_ROLES
+        address = mv_locator.get('locator') or {}
+        role = address.get('kind')
+        interpolation_spans = [(start, end) for start, end, _ in control_spans(
+            source, message_styles=address.get('mv_message_styles', False),
+            text_role=role if role in DISPLAY_ROLES else '')]
+    else:
+        interpolation_spans = _interpolation_spans(source)
     matches: list[dict[str, Any]] = []
     skipped_interpolation = False
     seen_spans: set[tuple[int, int]] = set()
@@ -309,7 +321,7 @@ def _matches_for_specs(
                 continue
             seen_spans.add(span)
             inside_interpolation = _span_is_inside_interpolation(span, interpolation_spans)
-            if inside_interpolation and not spec["interpolation"]:
+            if inside_interpolation and (is_mv or not spec["interpolation"]):
                 skipped_interpolation = True
                 continue
             matched_text = match.group(0)
@@ -318,7 +330,7 @@ def _matches_for_specs(
                 match_kind = "case_variant"
             elif spec["kind"] == "exact" and source[span[1]:].casefold().startswith(("'s", "’s")):
                 match_kind = "possessive_variant"
-            if spec["interpolation"]:
+            if spec["interpolation"] and not is_mv:
                 match_kind = "interpolation_exact"
             matches.append(
                 {
@@ -353,12 +365,22 @@ def match_keyword_in_source(source_text: str, term: str) -> dict[str, Any]:
     }
 
 
+def _typed_path_key(row):
+    locator = row.get('locator') if isinstance(row.get('locator'), Mapping) else {}
+    address = locator.get('locator') or {}
+    path = address.get('json_path') if isinstance(address, Mapping) else None
+    if locator.get('engine') != 'rpgmaker_mv' or not isinstance(path, list):
+        return ()
+    return tuple((0, part) if type(part) is int else (1, str(part)) for part in path)
+
+
 def _row_sort_key(row: Mapping[str, Any]) -> tuple[Any, ...]:
     locator = row.get("locator") if isinstance(row.get("locator"), Mapping) else {}
     return (
         _compact_text(row.get("file_rel_path")),
         _coerce_int(row.get("display_line") or row.get("line_number") or locator.get("line_number") or locator.get("line")),
         _coerce_int(locator.get("start") or row.get("start")),
+        _typed_path_key(row),
         _compact_text(row.get("identity_v2") or row.get("occurrence_id") or row.get("id")),
     )
 
@@ -413,6 +435,7 @@ def _collect_matches_for_source(
             row_source,
             normalized_source,
             specs,
+            mv_locator=row.get('locator'),
         )
         if matches:
             if skipped_interpolation:
@@ -428,6 +451,7 @@ def _collect_matches_for_source(
         key=lambda item: (
             item.get("file_rel_path", ""),
             _coerce_int(item.get("line_number")),
+            _typed_path_key(item),
             _coerce_int(item.get("match_start")),
             item.get("occurrence_id", ""),
         )
@@ -507,6 +531,7 @@ def _collect_matches_for_candidates(
                 row_source,
                 normalized_source,
                 specs,
+                mv_locator=row.get('locator'),
             )
             if matches:
                 if skipped_interpolation:
@@ -523,6 +548,7 @@ def _collect_matches_for_candidates(
             key=lambda item: (
                 item.get("file_rel_path", ""),
                 _coerce_int(item.get("line_number")),
+                _typed_path_key(item),
                 _coerce_int(item.get("match_start")),
                 item.get("occurrence_id", ""),
             )
@@ -556,7 +582,9 @@ def _is_complete_history_occurrence(value: object) -> bool:
     if (
         not isinstance(line_number, int)
         or isinstance(line_number, bool)
-        or line_number < 1
+        or (line_number < 1 and not (
+            line_number == 0 and value['locator'].get('engine') == 'rpgmaker_mv'
+            and json_source_location(value)))
         or not isinstance(match_start, int)
         or isinstance(match_start, bool)
         or match_start < 0

@@ -8,7 +8,7 @@
 
 ## 定位
 
-[MV 叙事模式](rpgmaker_mv_sync.md)在「设置 → 项目」配置引擎、独立原始源与支持窗口，在「项目列表」选目标副本；「项目与环境」提供覆盖材料导出和审阅导入，之后使用同一「同步翻译」耐久流程。Batch、关键词和修订等未支持模式不能启动；材料修改后须重新检查。A0 / A4 原生验收保持单列。
+[MV 路线](rpgmaker_mv_sync.md)在「设置 → 项目」配置引擎、独立原始源与支持窗口，在「项目列表」选目标副本；「项目与环境」提供覆盖材料导出和审阅导入，之后使用同一「同步翻译」耐久流程。还可使用同步关键词与上下文库的两种 bootstrap；Batch、修订及外部工作包未开放。材料修改后须重新检查，A0 / A4 原生验收保持单列。
 
 「MV 附加显示字段」默认留空，可逐行启用 `system_terms`、`map_display_name`；
 使用同一核心白名单与精确位置文件，选择变化后旧审阅、预检及任务不可沿用。
@@ -478,6 +478,10 @@ build-keywords -> submit -> status -> download -> export-keywords
 
 ### 同步关键词
 
+MV 使用同一入口，扫描独立源 occurrence，报告展示实际文件与 JSON 路径；历史证据只来自
+「设置 → 项目 → MV 已审阅双语历史文件」。无独立批准记录时显示无可用历史证据，
+目标现译不会被推断成批准。关键词任务只生成报告，不能检查／应用到游戏文件。
+
 选择模式「同步」后点击「提取关键词」，GUI 会调用 `gemini_translate_batch.py sync-keywords`（无额外参数）。适合小范围即时生成报告；完成后同样会把关键词报告复制到 `extracted_keywords/`。关键词没有固定的预期候选数，因此 GUI 显示请求块完整率、定点重试和不完整请求数；若模型结果合同不完整，任务显示部分完成，通过校验的候选仍会进入报告。不支持从任务记录恢复。运行前需已配置 API Key。
 
 ### 合并候选到 glossary
@@ -515,6 +519,12 @@ build-keywords -> submit -> status -> download -> export-keywords
 使用 `model_routing` 时，预建读取批量入口绑定的 embedding profile；旧配置仍读取
 `batch.rag.embedding_*`。选择 OpenAI-compatible / LiteLLM embedding 时，只需该连接的
 有效凭据；不会额外要求 Gemini Key。选择 Gemini embedding 时仍须提供 Gemini Key。
+MV 上下文库读取 Sync 开关与 embedding 绑定，调用相同 `bootstrap-rag` /
+`bootstrap-source-index`。原文索引只取选中原始源位置，记忆库只取独立审阅的双语 JSONL；
+开关启用并不表示已经准备。状态行区分未准备、缺失、过期、不兼容、失败和已准备，
+未知条数显示未知，真实空库才显示 0；项目、配置、材料或库制品变化会使旧回调失效。
+MV 项目分析明确显示不支持，不能触发 Ren'Py 扫描。该状态不表示真实游戏已完成预处理。
+
 GUI 与 CLI 共用 `bootstrap-rag` / `bootstrap-source-index`，不会绕过 store 的模型、
 Provider、维度及文档 / 查询任务身份校验。
 

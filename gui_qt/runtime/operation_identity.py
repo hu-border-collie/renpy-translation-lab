@@ -72,12 +72,14 @@ def context_library_config_digest(
     config: object = None,
     *,
     context_flags: Mapping[str, object] | None = None,
+    config_file: str = 'translator_config.json',
 ) -> str:
-    """Digest the enablement flags a context-library scan used.
+    """Digest the inputs a context-library scan used.
 
     Project switches live in ``project_context_settings.json``, not the raw
     translator config, so the digest is the effective flag set. Unrelated
-    global keys (theme, models) must not change it.
+    global keys (theme, models) must not change it for Ren'Py. MV also pins its
+    material and store revisions, since readiness depends on actual preparation.
     """
     flags = default_context_flags_from_config(
         config if isinstance(config, dict) else None
@@ -86,6 +88,12 @@ def context_library_config_digest(
         flags.update(
             {str(key): bool(value) for key, value in dict(context_flags).items()}
         )
+    if isinstance(config, dict) and config.get('engine') == 'rpgmaker_mv':
+        from engine_adapters.project_config import mv_material_revision
+        from execution.mv_preprocessing import preparation_revision
+        return canonical_digest({'context_flags': flags, 'config': config,
+                                 'mv_material': mv_material_revision(config, config_file),
+                                 'mv_preparation': preparation_revision(config, config_file)})
     return canonical_digest({"context_flags": flags})
 
 

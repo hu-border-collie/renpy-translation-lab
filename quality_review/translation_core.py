@@ -507,6 +507,11 @@ def unit_to_keyword_item(unit):
         item['speaker_id'] = unit.speaker_id
     if unit.speaker_name:
         item['speaker_name'] = unit.speaker_name
+    for key in ('source_locator', 'occurrence_id', 'mv_context'):
+        if key in unit.metadata:
+            item[key] = unit.metadata[key]
+    if 'source_locator' in unit.metadata:
+        item.pop('line_number', None)
     return item
 
 
@@ -1067,6 +1072,10 @@ def build_keyword_user_prompt(units):
         }
         if unit.speaker_name:
             item['speaker_name'] = unit.speaker_name
+        if 'source_locator' in unit.metadata:
+            item.pop('line', None)
+            item['source_locator'] = unit.metadata['source_locator']
+            item['occurrence_id'] = unit.metadata.get('occurrence_id', '')
         payload_items.append(item)
     target_payload = json.dumps(
         payload_items,

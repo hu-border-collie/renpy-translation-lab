@@ -70,6 +70,7 @@ class MvProjectConfig:
     window: MvSupportWindow
     occurrence_scope_file: Path | None = None
     display_fields: tuple[str, ...] = ()
+    reviewed_history_file: Path | None = None
 
 
 def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -> MvProjectConfig:
@@ -91,6 +92,10 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
     if not isinstance(fields_value, list):
         raise ValueError('rpgmaker_mv.display_fields must be a list.')
     display_fields = parse_display_fields(fields_value)
+    history_value = section.get('reviewed_history_file', '')
+    if not isinstance(history_value, str):
+        raise ValueError('rpgmaker_mv.reviewed_history_file must be a path string or empty.')
+    history_file = _path(history_value, base, 'rpgmaker_mv.reviewed_history_file') if history_value.strip() else None
     try:
         payload = _load_json(window_file)
     except (OSError, UnicodeError, ValueError) as exc:
@@ -101,7 +106,7 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
             or type(payload.get("message_styles", False)) is not bool):
         raise ValueError("Invalid MV support window schema; expected version 1, material_sha256 and boolean message_styles.")
     return MvProjectConfig(source, target, window_file, MvSupportWindow(
-        payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file, display_fields)
+        payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file, display_fields, history_file)
 
 
 def require_engine_operation(config: Mapping[str, Any], operation: str) -> None:
@@ -110,6 +115,8 @@ def require_engine_operation(config: Mapping[str, Any], operation: str) -> None:
         return
     allowed = {"doctor", "translate-preflight", "coverage-status", "coverage-review-import",
                "sync-start", "sync-resume", "sync-status", "sync-cancel", "sync-derive",
+               "sync-keywords", "export-keywords", "merge-keywords-to-glossary",
+               "bootstrap-source-index", "bootstrap-rag",
                "check", "apply", "quality-report", "usage-report", "usage-import"}
     if operation not in allowed:
         raise ValueError(f"RPG Maker MV narrative mode does not support {operation}; use durable Sync (sync-start -> check -> apply).")
@@ -130,6 +137,8 @@ def mv_material_revision(config: Mapping[str, Any], config_file: str | Path) -> 
                  settings.target_root / 'translation_context' / 'coverage_review.json'}
         if settings.occurrence_scope_file is not None:
             paths.add(settings.occurrence_scope_file)
+        if settings.reviewed_history_file is not None:
+            paths.add(settings.reviewed_history_file)
         for root in (settings.source_root, settings.target_root):
             paths.update((root / 'data').rglob('*.json'))
             paths.update(root / relative for relative in settings.window.material_sha256)
