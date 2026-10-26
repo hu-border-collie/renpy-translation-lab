@@ -115,6 +115,8 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
                  MV_PROJECT_COPY['window_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField('mv_occurrence_scope_file', ('rpgmaker_mv', 'occurrence_scope_file'), MV_PROJECT_COPY['occurrence_scope_label'],
                  MV_PROJECT_COPY['occurrence_scope_description'], 'str', '', '项目与资源', allow_empty=True),
+    SettingField('mv_display_fields', ('rpgmaker_mv', 'display_fields'), MV_PROJECT_COPY['display_fields_label'],
+                 MV_PROJECT_COPY['display_fields_description'], 'list', [], '项目与资源', allow_empty=True),
     SettingField(
         "catalog_gemini_models",
         ("model_catalog", "gemini"),
@@ -1494,7 +1496,14 @@ def normalize_for_write(
         return value.strip() if isinstance(value, str) else str(value).strip()
 
     if field.kind == "list":
-        return normalize_list_value(field, value)
+        normalized = normalize_list_value(field, value)
+        if field.key == 'mv_display_fields':
+            from engine_adapters.rpgmaker_mv_fields import parse_display_fields
+            try:
+                return list(parse_display_fields(normalized))
+            except ValueError:
+                raise ValueError(MV_PROJECT_COPY['display_fields_invalid']) from None
+        return normalized
 
     if field.kind == "gemini_catalog_list":
         normalized = normalize_list_value(field, value)

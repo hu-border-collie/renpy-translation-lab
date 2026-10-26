@@ -77,14 +77,14 @@ class MvSyncSnapshot:
 
 def build_snapshot(config: Mapping[str, Any], config_file: str | Path, *,
                    language: str = "schinese", require_review: bool = True) -> MvSyncSnapshot:
-    """Audit the full material set before filtering requested narrative files.
+    """Audit full material before filtering files and enabled display positions.
 
     Unsupported structures remain visible as coverage attention. A current
-    independent review authorizes this limited narrative scope; it never
+    independent review authorizes only the selected text scope; it never
     turns that report into a whole-game coverage or runtime acceptance claim.
     """
     settings = read_mv_project_config(config, config_file)
-    adapter = RpgMakerMvAdapter(settings.window)
+    adapter = RpgMakerMvAdapter(settings.window, display_fields=settings.display_fields)
     project = adapter.discover_project(ProjectDiscoveryRequest(
         str(settings.source_root), str(settings.target_root), language))
     inventory = adapter.inventory_candidates(project, InventoryPolicy())
@@ -115,11 +115,11 @@ def build_snapshot(config: Mapping[str, Any], config_file: str | Path, *,
             raise ValueError(f'MV {key} must stay within the content root.')
         return normalized
     include_files, include_prefixes = filters('include_files'), filters('include_prefixes')
-    narrative_files = {doc.file_rel_path for doc in project.source_documents
-                       if adapter._narrative_file(doc.file_rel_path)}
-    if (set(include_files) - narrative_files
-            or any(not any(path.startswith(prefix) for path in narrative_files) for prefix in include_prefixes)):
-        raise ValueError('MV include filters must select existing narrative data files.')
+    text_files = {doc.file_rel_path for doc in project.source_documents
+                  if adapter.supports_text_file(doc.file_rel_path)}
+    if (set(include_files) - text_files
+            or any(not any(path.startswith(prefix) for path in text_files) for prefix in include_prefixes)):
+        raise ValueError('MV include filters must select existing files with enabled text fields.')
     scope = (bind_occurrence_scope(settings.occurrence_scope_file, project, occurrences)
              if settings.occurrence_scope_file is not None else None)
     snapshot = MvSyncSnapshot(project, inventory, report, occurrences, adapter, review_error, digest_json(config),
@@ -135,6 +135,8 @@ def material_identity(snapshot: MvSyncSnapshot) -> dict:
     identity = {
         "engine": project.engine,
         "adapter_version": project.adapter_version,
+        "adapter_behavior_digest": snapshot.adapter.behavior_digest(),
+        "display_fields": list(snapshot.adapter.display_fields),
         "source_root": project.project_root,
         "target_root": project.localization_root,
         "support_window_digest": project.support_window_digest,
@@ -165,7 +167,11 @@ def live_material_identity(snapshot: MvSyncSnapshot, config: Mapping[str, Any], 
     settings = read_mv_project_config(config, config_file)
     current = material_identity(snapshot)
     current.update(source_root=str(settings.source_root), target_root=str(settings.target_root),
-                   support_window_digest=settings.window.digest, config_digest=digest_json(config))
+                   support_window_digest=settings.window.digest, config_digest=digest_json(config),
+                   display_fields=list(settings.display_fields),
+                   adapter_version=RpgMakerMvAdapter.adapter_version,
+                   adapter_behavior_digest=RpgMakerMvAdapter(
+                       settings.window, display_fields=settings.display_fields).behavior_digest())
     current.pop('occurrence_scope_digest', None)
     if settings.occurrence_scope_file is not None:
         current['occurrence_scope_digest'] = read_occurrence_scope(settings.occurrence_scope_file)[0]
@@ -187,7 +193,8 @@ def require_material_fresh(expected: Mapping[str, Any], current: Mapping[str, An
     including unmodified data, JS and the path set, still has to match exactly.
     """
     for key in ("source_root", "target_root", "support_window_digest", "source_files",
-                "config_digest", "coverage_review_digest", "engine", "adapter_version", "occurrence_scope_digest"):
+                "config_digest", "coverage_review_digest", "engine", "adapter_version", "occurrence_scope_digest",
+                "adapter_behavior_digest", "display_fields"):
         if expected.get(key) != current.get(key):
             raise ValueError(f"MV frozen material changed: {key}.")
     before, live = dict(expected.get("target_files") or {}), dict(current.get("target_files") or {})

@@ -1,4 +1,4 @@
-"""Frozen-window MV narrative extraction and declarative source-copy plans.
+"""Frozen-window MV narrative/display extraction and declarative source-copy plans.
 
 This core API has no model calls or filesystem write authority. A support
 window is explicit, content-addressed evidence supplied by the caller, not a
@@ -43,13 +43,16 @@ from .contracts import (
 )
 from .coverage import REVIEW_POLICIES, build_coverage_report, digest_json, stable_json_dumps
 from .rpgmaker_mv_controls import validate_message_position
+from .rpgmaker_mv_fields import (
+    DISPLAY_ROLES, FIELD_POLICY_VERSION, display_role, display_slots, parse_display_fields,
+)
 from . import structure_rules
 from .writeback import WritebackPlanError, source_snapshot_fingerprint, validate_writeback_plan
 
 
-ADAPTER_VERSION = "0.2.0"
+ADAPTER_VERSION = "0.3.0"
 ENGINE = "rpgmaker_mv"
-LOCATOR_SCHEMA_VERSION = 1
+LOCATOR_SCHEMA_VERSION = 2
 CORE_FILES = tuple(
     f"js/rpg_{name}.js"
     for name in ("core", "managers", "objects", "scenes", "sprites", "windows")
@@ -109,6 +112,7 @@ class MvProjectDiscovery(ProjectDiscovery):
 
     target_documents: tuple[SourceDocument, ...] = ()
     support_window_digest: str = ""
+    display_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -185,6 +189,18 @@ def _raw_slots(data: Any) -> dict[_JSON_PATH, tuple[str, str]]:
                 if isinstance(text, str):
                     slots[(*path, "parameters", 0, index)] = (text, "choice")
     return slots
+
+
+def _raw_display_slots(data: Any, relative: str, fields: tuple[str, ...], path: _JSON_PATH = ()):
+    """Audit raw string leaves separately from the typed field extractor."""
+    if isinstance(data, dict):
+        for key, child in data.items():
+            yield from _raw_display_slots(child, relative, fields, (*path, key))
+    elif isinstance(data, list):
+        for index, child in enumerate(data):
+            yield from _raw_display_slots(child, relative, fields, (*path, index))
+    elif isinstance(data, str) and (role := display_role(relative, path, fields)):
+        yield path, (data, role)
 
 
 def _integer(value: Any, minimum: int = 0, maximum: int | None = None) -> TypeGuard[int]:
@@ -434,19 +450,23 @@ def _same_structure(source: Any, target: Any, allowed: set[_JSON_PATH],
 
 
 class RpgMakerMvAdapter:
-    """Implement the shared Adapter protocol for an explicit MV narrative window.
+    """Implement the shared Adapter protocol for an explicit MV text window.
 
     Discovery roots are content roots containing data/ and js/. localization_root
     names the independent target content root, not a catalog beneath the source.
     All methods are read-only or return in-memory declarative objects.
+    ``display_fields`` opts into fixed system_terms/map_display_name roles;
+    omission retains narrative-only selection. It participates in snapshot and
+    behavior identity so another selection cannot reuse this project's approval.
     """
 
     protocol_version = ENGINE_ADAPTER_PROTOCOL_VERSION
     engine = ENGINE
     adapter_version = ADAPTER_VERSION
 
-    def __init__(self, support_window: MvSupportWindow):
+    def __init__(self, support_window: MvSupportWindow, *, display_fields: Sequence[str] = ()):
         self.support_window = support_window
+        self.display_fields = parse_display_fields(display_fields)
 
     def capabilities(self) -> EngineCapabilities:
         return EngineCapabilities(
@@ -458,13 +478,17 @@ class RpgMakerMvAdapter:
 
     def behavior_digest(self) -> str:
         return digest_json({"engine": self.engine, "adapter_version": self.adapter_version,
-                            "window": self.support_window.digest, "locator_schema_version": 1})
+                            "window": self.support_window.digest,
+                            "locator_schema_version": LOCATOR_SCHEMA_VERSION,
+                            "field_policy_version": FIELD_POLICY_VERSION,
+                            "display_fields": self.display_fields})
 
     def _identity(self, source_root: str, target_root: str, language: str, fingerprint: str) -> str:
         return digest_json({"engine": self.engine, "adapter_version": self.adapter_version,
                             "source_root": source_root, "target_root": target_root,
                             "target_language": language, "source_fingerprint": fingerprint,
-                            "support_window": self.support_window.digest})
+                            "support_window": self.support_window.digest,
+                            "behavior_digest": self.behavior_digest()})
 
     def discover_project(self, request: ProjectDiscoveryRequest) -> MvProjectDiscovery:
         """Freeze separate source/current-target snapshots and exact runtime material."""
@@ -479,6 +503,8 @@ class RpgMakerMvAdapter:
         sources, targets = (_documents(source_root, self.support_window),
                             _documents(target_root, self.support_window))
         target_by_path = {doc.file_rel_path: doc for doc in targets}
+        if "system_terms" in self.display_fields and "data/System.json" not in target_by_path:
+            _fail("discovery.incomplete", "Selected system_terms requires data/System.json.")
         if set(target_by_path) != {doc.file_rel_path for doc in sources}:
             _fail("target.structure", "Source and target material sets differ.")
         for source in sources:
@@ -492,8 +518,11 @@ class RpgMakerMvAdapter:
                     continue  # Inventory reports the invalid input as a blocker.
                 _fail("target.structure", "Source and target JSON cannot be compared.")
             allowed = set(_raw_slots(source_data)) if self._narrative_file(source.file_rel_path) else set()
+            if self.display_fields:
+                allowed.update(path for path, _ in _raw_display_slots(
+                    source_data, source.file_rel_path, self.display_fields))
             if not _same_structure(source_data, target_data, allowed):
-                _fail("target.structure", f"Non-narrative target structure changed: {source.file_rel_path}")
+                _fail("target.structure", f"Target structure changed outside approved fields: {source.file_rel_path}")
         fingerprint = source_snapshot_fingerprint(sources)
         return MvProjectDiscovery(
             engine=self.engine, adapter_version=self.adapter_version,
@@ -505,19 +534,29 @@ class RpgMakerMvAdapter:
             localization_mode=LocalizationMode.SOURCE_EXTRACTION,
             catalog_provenance={"support_window_digest": self.support_window.digest,
                                 "target_snapshot_fingerprint": source_snapshot_fingerprint(targets),
+                                "display_fields": list(self.display_fields),
+                                "adapter_behavior_digest": self.behavior_digest(),
                                 "runtime_acceptance": "unverified"},
             target_documents=targets, support_window_digest=self.support_window.digest,
+            display_fields=self.display_fields,
         )
 
     @staticmethod
     def _narrative_file(relative: str) -> bool:
         return bool(_MAP.fullmatch(relative)) or relative == "data/CommonEvents.json"
 
+    def supports_text_file(self, relative: str) -> bool:
+        """Expose request-filter eligibility under the same explicit field policy."""
+        return self._narrative_file(relative) or (
+            relative == "data/System.json" and "system_terms" in self.display_fields)
+
     def _verify_project(self, project: ProjectDiscovery) -> MvProjectDiscovery:
         if (
             not isinstance(project, MvProjectDiscovery) or project.engine != self.engine
             or project.adapter_version != self.adapter_version
             or project.support_window_digest != self.support_window.digest
+            or project.display_fields != self.display_fields
+            or project.catalog_provenance.get("adapter_behavior_digest") != self.behavior_digest()
             or project.localization_mode != LocalizationMode.SOURCE_EXTRACTION
         ):
             _fail("snapshot.project", "Wrong project, adapter or support window.")
@@ -546,6 +585,7 @@ class RpgMakerMvAdapter:
             validate_message_position(
                 slot.text, message_styles=self.support_window.message_styles,
                 first_line=slot.kind == "message" and slot.context["message_line_index"] == 0,
+                text_role=slot.kind if slot.kind in DISPLAY_ROLES else "",
             )
         except ValueError as exc:
             return str(exc)
@@ -553,14 +593,15 @@ class RpgMakerMvAdapter:
 
     def _candidate(self, project: MvProjectDiscovery, document: SourceDocument,
                    slot: _Slot) -> Candidate:
-        problem = self._source_problem(slot) if slot.kind in {"message", "choice"} else ""
+        problem = self._source_problem(slot) if slot.kind in {"message", "choice", *DISPLAY_ROLES} else ""
         classification, reason = "translatable", f"rpgmaker_mv.{slot.kind}"
         if slot.kind == "mirror":
             classification, reason = "explicitly_excluded", "rpgmaker_mv.choice_mirror"
         elif slot.kind == "deferred":
             classification, reason = "unsupported", "rpgmaker_mv.deferred_text"
         elif not slot.text.strip():
-            classification, reason = "explicitly_excluded", "rpgmaker_mv.empty_message"
+            classification, reason = "explicitly_excluded", (
+                "rpgmaker_mv.empty_display" if slot.kind in DISPLAY_ROLES else "rpgmaker_mv.empty_message")
         elif problem:
             classification, reason = "unknown", "rpgmaker_mv.unknown_control"
         locator = OpaqueLocator(self.engine, LOCATOR_SCHEMA_VERSION, {
@@ -604,8 +645,14 @@ class RpgMakerMvAdapter:
                 pass  # The document scan below produces the blocking candidate.
         for document in project.source_documents:
             rel = document.file_rel_path
-            if self._narrative_file(rel):
-                slots, issues = _scan(document)
+            if self.supports_text_file(rel):
+                slots, issues = _scan(document) if self._narrative_file(rel) else ([], [])
+                if self.display_fields:
+                    try:
+                        slots.extend(_Slot(path, text, role) for path, text, role in display_slots(
+                            _json(document), rel, self.display_fields))
+                    except (ValueError, UnicodeError, RecursionError) as exc:
+                        issues.append({"reason": str(exc), "file_rel_path": rel})
                 for slot in slots:
                     if "common_event_id" in slot.context:
                         slot.context["common_event_call_sites"] = call_sites.get(
@@ -618,7 +665,7 @@ class RpgMakerMvAdapter:
                     candidate.translation_scope = candidate.analysis_scope = "unknown"
                     candidate.evidence = issue
                     candidates.append(candidate)
-            elif rel.endswith(".json"):
+            if rel.endswith(".json") and not self._narrative_file(rel):
                 candidate = self._candidate(project, document, _Slot((), "", "outside_scope"))
                 candidate.reason_codes = ("rpgmaker_mv.outside_narrative_scope",)
                 try:
@@ -636,32 +683,36 @@ class RpgMakerMvAdapter:
 
     def audit_extraction(self, project: ProjectDiscovery,
                          inventory: CandidateInventory) -> CoverageReportDraft:
-        """Account for raw 401/102/402 leaves independently of extracted messages."""
+        """Account for narrative and enabled display leaves with an independent walk."""
         project = self._verify_project(project)
         expected: dict[tuple[str, _JSON_PATH], tuple[str, str]] = {}
         expected_classes: dict[tuple[str, _JSON_PATH], str] = {}
         reasons = []
         for document in project.source_documents:
-            if not self._narrative_file(document.file_rel_path):
+            if not self.supports_text_file(document.file_rel_path):
                 continue
             try:
                 data = _json(document)
-                for path, row in _raw_slots(data).items():
+                raw = _raw_slots(data) if self._narrative_file(document.file_rel_path) else {}
+                if self.display_fields:
+                    raw.update(_raw_display_slots(data, document.file_rel_path, self.display_fields))
+                for path, row in raw.items():
                     key = (document.file_rel_path, path)
                     expected[key] = row
                     classification = "explicitly_excluded"
                     if row[0].strip() and row[1] != "mirror":
                         classification = "translatable"
                         try:
-                            commands, index = _at(data, path[:-3]), path[-3]
-                            first_line = (
-                                row[1] == "message" and type(index) is int and index > 0
-                                and isinstance(commands[index - 1], dict)
-                                and commands[index - 1].get("code") == 101
-                            )
+                            first_line = False
+                            if row[1] == "message":
+                                commands, index = _at(data, path[:-3]), path[-3]
+                                first_line = (type(index) is int and index > 0
+                                              and isinstance(commands[index - 1], dict)
+                                              and commands[index - 1].get("code") == 101)
                             validate_message_position(
                                 row[0], message_styles=self.support_window.message_styles,
                                 first_line=first_line,
+                                text_role=row[1] if row[1] in DISPLAY_ROLES else "",
                             )
                         except ValueError:
                             classification = "unknown"
@@ -671,7 +722,7 @@ class RpgMakerMvAdapter:
         actual: Counter = Counter()
         for candidate in inventory.candidates:
             locator = candidate.locator.locator
-            if locator.get("kind") not in {"message", "choice", "mirror"}:
+            if locator.get("kind") not in {"message", "choice", "mirror", *DISPLAY_ROLES}:
                 continue
             path = locator.get("json_path")
             if not isinstance(path, (list, tuple)) or any(
@@ -698,8 +749,10 @@ class RpgMakerMvAdapter:
             changed = True
         return CoverageReportDraft(
             project.source_fingerprint, tuple(sorted(set(reasons))),
-            {**project.catalog_provenance, "scope": "401/102 narrative; 402 linked physical targets",
-             "narrative_physical_positions": len(expected)},
+            {**project.catalog_provenance,
+             "scope": "401/102 narrative; 402 linked physical targets; explicit display_fields opt-ins",
+             "narrative_physical_positions": sum(row[1] not in DISPLAY_ROLES for row in expected.values()),
+             "display_physical_positions": sum(row[1] in DISPLAY_ROLES for row in expected.values())},
             "current", changed,
         )
 
@@ -725,7 +778,7 @@ class RpgMakerMvAdapter:
         by_id = canonical.by_id()
         targets = {doc.file_rel_path: doc for doc in project.target_documents}
         parsed_targets = {relative: _json(document) for relative, document in targets.items()
-                          if self._narrative_file(relative)}
+                          if self.supports_text_file(relative)}
         sources = project.document_by_path()
         occurrences = []
         for candidate_id in approved_candidate_ids:
@@ -738,12 +791,14 @@ class RpgMakerMvAdapter:
             text = address["source_text"]
             unit = TranslationUnit(
                 id="mv1:" + digest_json({"file": relative, "path": address["json_path"],
-                                         "source": text, "window": self.support_window.digest}),
+                                         "source": text, "window": self.support_window.digest,
+                                         "adapter_version": self.adapter_version, "field_role": address["kind"]}),
                 mode=MODE_TRANSLATION, text=text, source=text,
                 current_translation=_at(parsed_targets[relative], tuple(address["json_path"])),
                 file_rel_path=relative, file_path=sources[relative].file_path,
                 line=-1, line_number=0, start=0, end=len(text),
                 metadata={"mv_message_styles": self.support_window.message_styles,
+                          **({"mv_text_role": address["kind"]} if address["kind"] in DISPLAY_ROLES else {}),
                           "mv_context": dict(address)},
             )
             occurrences.append(Occurrence(
@@ -810,10 +865,12 @@ class RpgMakerMvAdapter:
                         text, message_styles=self.support_window.message_styles,
                         first_line=address.get("kind") == "message"
                         and address.get("message_line_index") == 0,
+                        text_role=address["kind"] if address.get("kind") in DISPLAY_ROLES else "",
                     )
                 structure_rules.validate(
                     occurrence.unit.text, translated_text, self.engine,
                     mv_message_styles=self.support_window.message_styles,
+                    mv_text_role=address["kind"] if address.get("kind") in DISPLAY_ROLES else "",
                 )
             except (ValueError, UnicodeError) as exc:
                 reasons.append(str(exc) if not isinstance(exc, UnicodeError)

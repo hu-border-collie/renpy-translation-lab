@@ -56,3 +56,22 @@ def write_mv_scope(path: Path, source: Path, positions):
             'source_sha256': hashlib.sha256(row['source'].encode('utf-8')).hexdigest()})
     path.write_text(json.dumps(payload), encoding='utf-8')
     return payload
+
+
+def add_mv_display_material(root: Path):
+    """Overlay original display fields on both copies and return fixed positions."""
+    fixture = Path(__file__).resolve().parents[1] / 'fixtures' / 'rpgmaker_mv_display'
+    for name in ('source', 'target'):
+        for path in (fixture / 'source').rglob('*.json'):
+            shutil.copyfile(path, root / name / path.relative_to(fixture / 'source'))
+    return json.loads((fixture / 'positions.json').read_text(encoding='utf-8'))
+
+
+def review_mv_project(config, config_file):
+    """Create an honestly labelled fixture review of the current material identity."""
+    snapshot = build_snapshot(config, config_file, require_review=False)
+    review = build_review_template(snapshot.report)
+    review.update(status='agent_reviewed', confirmed_at='2026-10-25T00:00:00Z',
+                  reviewer={'type': 'agent', 'id': 'original-fixture-test-review', 'tool': 'unittest'})
+    Path(default_coverage_review_path(config['game_root'])).write_text(json.dumps(review), encoding='utf-8')
+    return snapshot

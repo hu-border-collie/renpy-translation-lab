@@ -476,7 +476,7 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
   不能只按一个声明版本泛化支持。core、注册表、启用状态或插件文件变化后须重新调查窗口。
 - `MvProjectDiscovery.source_documents` 和 `target_documents` 分别冻结原文与当前目标。
   目标已有中文也不改变原文身份。缺失 `CommonEvents.json` 不按零条公共事件处理。
-  目标可以更改获准的非空叙事字符串；其他 JSON 结构、空消息、资源名和事件参数须与源一致。
+  目标可以更改获准的非空叙事字符串和显式启用的显示字段；其他 JSON 结构、空字符串、资源名和事件参数须与源一致。
 - `read_live_documents(project, target=...)` 重新读取完整材料集，包括新出现的数据 JSON；
   任何源材料变化都会使旧位置失效。重定位只验证同一快照，不按重复原文自动追踪移动。
 
@@ -490,6 +490,7 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
 | 取消行为 | 保留禁用取消、映射到已有选项、独立 403 取消分支及默认 / 位置 / 背景参数。与 MV `setupChoices` 一致，非负且超出选项数的整数取消索引按 -2 理解，可没有独立 403；原始参数字节不改写。非法类型、低于 -2 或不一致分支仍拒绝。 |
 | MV 控制码 | 保留 `\V[n]` / `\N[n]` / `\P[n]` / `\I[n]` / `\C[n]` 的大小写变体、货币、等待 / 暂停 / 快显 / 字号、字面反斜杠及反斜杠后一个 ASCII 空格；参数拼写、数量和顺序必须一致，ASCII 空格转义不得被清洗或换成其他空白。其余未知、嵌套参数或畸形转义阻断，不猜测修复。 |
 | GALV_MessageStyles | 仅在窗口显式设置 `message_styles=True` 且注册表启用该插件时支持 `\pop[整数]`，只允许一处且在消息块第一条 401 的开头。actor / 坐标等其他 popup 形式尚不支持。 |
+| 系统术语／地图显示名（0.3） | 默认关闭；显式 `display_fields` 启用固定 System terms 白名单与地图顶层 displayName，复用原 occurrence 范围、schema 2 和耐久 Sync。编号格式参数允许调序但保持原拼写和次数；core 转义保持相对顺序，显示字段禁止 popup。完整字段与升级规则见[MV 配置](rpgmaker_mv_sync.md#系统术语与地图显示名显式启用)。 |
 | 其他文本 | 角色名修改、滚动文本、脚本和插件命令显式记录为 unsupported；数据库等 JSON 标记在叙事范围之外。它们及插件 UI、图片、动态文本仍归 B0 核查，不计为全游戏已覆盖。 |
 
 [控制规则](../engine_adapters/rpgmaker_mv_controls.py)供 Adapter 和共享
@@ -500,7 +501,8 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
 ### Coverage、计划与验证
 
 inventory 与 audit 分别遍历语义事件和原始 JSON 的 401 / 102 / 402 位置；原始位置分母包含
-空消息与 402 镜像。公共 coverage 层继续验证分类、文件和摘要；删掉候选、错分类、重复
+空消息与 402 镜像。启用的显示字段另按类型化字段提取与 raw string-leaf 遍历对账，
+`display_physical_positions` 单列含空字符串的位置。公共 coverage 层继续验证分类、文件和摘要；删掉候选、错分类、重复
 位置或材料漂移会阻断。审阅记录仍由上层按现行 policy 独立核验，不能由 Adapter 自报通过。
 
 `build_writeback_plan(project, validated, live_sources, live_targets=...)` 必须同时收到完整
@@ -523,6 +525,12 @@ inventory 与 audit 分别遍历语义事件和原始 JSON 的 401 / 102 / 402 �
 [MV 官方文字转义实现](https://github.com/rpgtkoolmv/corescript/blob/master/js/rpg_windows/Window_Base.js)及
 [GALV Message Styles 作者说明](https://galvs-scripts.com/2016/03/31/mv-message-styles/)；
 这些资料不是 Komorebi 实际 core 的版本等价证明。
+
+[显示字段原创材料](../tests/fixtures/rpgmaker_mv_display/README.md)与
+[Adapter 回归](../tests/engine_adapters/test_mv_display_fields.py)、
+[耐久 Sync 回归](../tests/execution/test_mv_display_sync.py)覆盖默认关闭、独立启用、固定位置、
+参数保护、范围外字段保留、旧版本拒绝、恢复和重复 apply。Adapter 0.3.0 / locator 2 的
+行为摘要绑定字段策略与选择；旧批准须重审和新建计划，不自动扩展至新字段。
 
 ## P6 离线端到端回归与边界
 

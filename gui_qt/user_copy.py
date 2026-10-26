@@ -30,9 +30,13 @@ MV_PROJECT_COPY = {
     'window_description': '经审计的 schema 1 核心／插件摘要文件；另需导入当前覆盖审阅，原生验收仍单列。',
     'occurrence_scope_label': 'MV 精确位置范围文件（可选）',
     'occurrence_scope_description': 'schema 1 独立位置清单，绑定原始文件与原文字串摘要；只缩小请求范围，仍审计完整材料。留空沿用文件筛选。',
+    'display_fields_label': 'MV 附加显示字段（可选）',
+    'display_fields_description': '留空仅处理叙事。逐行填写 system_terms（System.json 固定术语白名单）、map_display_name（地图顶层 displayName）；精确位置文件可进一步缩小。改动后须重新审阅与建计划。',
+    'display_fields_invalid': 'MV 附加显示字段只能填写不重复的 system_terms、map_display_name。',
     'unsupported': 'MV 叙事模式当前仅支持耐久 Sync；请前往同步翻译。',
-    'scope_ready': 'MV 已审阅叙事范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
-    'scope_empty': 'MV 当前已审阅叙事范围没有待译条目；全游戏覆盖与原生验收仍单列。',
+    'scope_ready': 'MV 当前已审阅文本范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
+    'scope_empty': 'MV 当前已审阅文本范围没有待译条目；全游戏覆盖与原生验收仍单列。',
+    'checked_heading': 'MV 文本范围检查完成',
 }
 
 EXTERNAL_WORK_COPY = {

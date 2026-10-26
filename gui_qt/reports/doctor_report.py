@@ -619,7 +619,7 @@ def _summarize_doctor_parsed(
         blocked = exit_code != 0 or engine.get('status') != 'ready'
         return DoctorSummary(
             status='blocked' if blocked else ('warning' if api_key_count == 0 or warnings else 'ready'),
-            heading='MV 项目检查未通过' if blocked else 'MV 叙事范围检查完成',
+            heading='MV 项目检查未通过' if blocked else MV_PROJECT_COPY['checked_heading'],
             message=(str(issues[0].get('message')) if issues else '请检查 MV 源、目标与支持窗口配置。')
                     if blocked else MV_PROJECT_COPY['scope_empty' if (pending or {}).get('task_count') == 0 else 'scope_ready'],
             facts=[f"引擎：RPG Maker MV；数据 JSON：{counts.get('json_files', '未知')}",

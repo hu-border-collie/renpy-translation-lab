@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .rpgmaker_mv import MvSupportWindow
+from .rpgmaker_mv_fields import parse_display_fields
 
 
 def _unique_object(pairs):
@@ -62,15 +63,17 @@ def _path(value: Any, base: Path, label: str) -> Path:
 
 @dataclass(frozen=True)
 class MvProjectConfig:
+    """Resolved material paths and the strict opt-in display field selection."""
     source_root: Path
     target_root: Path
     window_file: Path
     window: MvSupportWindow
     occurrence_scope_file: Path | None = None
+    display_fields: tuple[str, ...] = ()
 
 
 def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -> MvProjectConfig:
-    """Read an explicit schema-1 hash window; do not approve live bytes for users."""
+    """Resolve a schema-1 window and strict display opt-ins without approving bytes."""
     if project_engine(config) != "rpgmaker_mv":
         raise ValueError("MV configuration requires engine=rpgmaker_mv.")
     section = config.get("rpgmaker_mv")
@@ -84,6 +87,10 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
     if not isinstance(scope_value, str):
         raise ValueError('rpgmaker_mv.occurrence_scope_file must be a path string or empty.')
     scope_file = _path(scope_value, base, 'rpgmaker_mv.occurrence_scope_file') if scope_value.strip() else None
+    fields_value = section.get('display_fields', [])
+    if not isinstance(fields_value, list):
+        raise ValueError('rpgmaker_mv.display_fields must be a list.')
+    display_fields = parse_display_fields(fields_value)
     try:
         payload = _load_json(window_file)
     except (OSError, UnicodeError, ValueError) as exc:
@@ -94,7 +101,7 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
             or type(payload.get("message_styles", False)) is not bool):
         raise ValueError("Invalid MV support window schema; expected version 1, material_sha256 and boolean message_styles.")
     return MvProjectConfig(source, target, window_file, MvSupportWindow(
-        payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file)
+        payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file, display_fields)
 
 
 def require_engine_operation(config: Mapping[str, Any], operation: str) -> None:

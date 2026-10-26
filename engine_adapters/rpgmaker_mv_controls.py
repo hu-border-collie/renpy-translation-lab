@@ -12,14 +12,25 @@ from __future__ import annotations
 
 import re
 
+from .rpgmaker_mv_fields import DISPLAY_ROLES
+
 
 _ARGUMENT = re.compile(r"\\[VvNnPpIiCc]\[[0-9]+\]")
 _POPUP = re.compile(r"\\pop\[-?[0-9]+\]")
 _SINGLE = frozenset("Gg$.|!><^{}")
+_FORMAT = re.compile(r"%[0-9]+")
 
 
-def control_spans(text: str, *, message_styles: bool = False) -> list[tuple[int, int, str]]:
-    """Locate exact control spellings; never normalize case, indices or order."""
+def control_spans(text: str, *, message_styles: bool = False,
+                  text_role: str = "") -> list[tuple[int, int, str]]:
+    """Preserve core controls and numbered display parameters with exact spelling.
+
+    Numbered parameters may move with language order. Display roles never use
+    the narrative popup extension, even when that plugin is approved globally.
+    An absent role retains the legacy narrative rules.
+    """
+    if text_role and text_role not in DISPLAY_ROLES:
+        raise ValueError("rpgmaker_mv.control.role")
     result: list[tuple[int, int, str]] = []
     index = 0
     while index < len(text):
@@ -38,7 +49,7 @@ def control_spans(text: str, *, message_styles: bool = False) -> list[tuple[int,
             elif match := _ARGUMENT.match(text, index):
                 index = match.end()
                 kind = "control"
-            elif message_styles and (match := _POPUP.match(text, index)):
+            elif message_styles and not text_role and (match := _POPUP.match(text, index)):
                 index = match.end()
                 kind = "popup"
             elif index + 1 < len(text) and text[index + 1] in _SINGLE:
@@ -53,6 +64,9 @@ def control_spans(text: str, *, message_styles: bool = False) -> list[tuple[int,
             else:
                 raise ValueError("rpgmaker_mv.control.unknown")
             result.append((start, index, kind))
+        elif text_role and (match := _FORMAT.match(text, index)):
+            index = match.end()
+            result.append((start, index, "variable"))
         else:
             if ord(character) < 32 or ord(character) == 127:
                 raise ValueError("rpgmaker_mv.control.character")
@@ -60,9 +74,10 @@ def control_spans(text: str, *, message_styles: bool = False) -> list[tuple[int,
     return result
 
 
-def validate_message_position(text: str, *, message_styles: bool, first_line: bool) -> None:
-    """Keep popup ownership at the start of the first 401 of its message block."""
-    spans = control_spans(text, message_styles=message_styles)
+def validate_message_position(text: str, *, message_styles: bool, first_line: bool,
+                              text_role: str = "") -> None:
+    """Keep physical lines and popup ownership; display fields forbid popups."""
+    spans = control_spans(text, message_styles=message_styles, text_role=text_role)
     popups = [(start, end) for start, end, kind in spans if kind == "popup"]
     if popups and (not first_line or len(popups) != 1 or popups[0][0] != 0):
         raise ValueError("rpgmaker_mv.control.popup_position")
