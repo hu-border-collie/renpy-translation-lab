@@ -10,6 +10,13 @@ GUI 呈现层（#541 A）先显示现有 doctor 结论、已知计数与必需�
 
 MV 模式有独立的[材料、显示字段选择与审阅前置](rpgmaker_mv_sync.md)，不生成 Ren'Py 模板／SDK 建议。`engine.mv.material_invalid`、`engine.mv.scope_review_required`、`engine.mv.context_unsupported` 为阻断；`start_pending_sync` 和 `mv_scope_no_pending` 仅描述已审阅文本范围，不能表示全游戏覆盖或原生验收完成。默认仍为叙事；显式启用的系统术语／地图显示名计入同一待译统计，选择改变须重新审阅。扫描失败时不产生待译 0 或 ready。
 
+MV 的 `engine.mv.context_unsupported` 目前只针对 StoryMemory／Project Analysis 注入。
+同步关键词与 Source Index／已审阅 history bootstrap 已接入。`mv_preparation.source_index` /
+`history` 含 `enabled`、`prepared`、`status`、`record_count` 与 `reason`：disabled、missing、
+stale、incompatible、failed 均不标 ready，未知记录数是 null；实际准备的空库为 ready / 0。
+这些是可选检索层，未准备时 Sync 降级为空上下文，preflight 发 `MV_CONTEXT_NOT_PREPARED`
+warning；不取消材料或覆盖审阅阻断。doctor／preflight 只读状态，不调用 embedding 或翻译模型。
+
 环境检查只在用户确实需要处理某件事时显示建议：
 
 - 阻断问题应说明为什么不能继续，以及首先要做什么。

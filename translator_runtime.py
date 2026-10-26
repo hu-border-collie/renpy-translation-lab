@@ -3690,7 +3690,10 @@ def retrieve_sync_story_hits(target_items):
     )
 
 
-def retrieve_sync_history_hits(target_items):
+def retrieve_sync_history_hits(target_items, *, material_snapshot=None):
+    if current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_preprocessing import retrieve
+        return retrieve(sys.modules[__name__], material_snapshot or current_mv_sync_snapshot(), target_items, 'history')
     if not SYNC_RAG_ENABLED:
         return [], {"enabled": False}
     store = get_sync_rag_store()
@@ -3733,7 +3736,10 @@ def retrieve_sync_history_hits(target_items):
         return [], {"enabled": True, **diagnostics}
 
 
-def retrieve_sync_source_hits(target_items):
+def retrieve_sync_source_hits(target_items, *, material_snapshot=None):
+    if current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_preprocessing import retrieve
+        return retrieve(sys.modules[__name__], material_snapshot or current_mv_sync_snapshot(), target_items, 'source')
     if not SYNC_SOURCE_INDEX_ENABLED:
         return [], {"enabled": False}
     query_text = advanced_context.build_source_only_query_text(target_items)
@@ -5001,6 +5007,10 @@ def sync_rag_store_for_file(file_path, quality_state=None):
 
 
 def maybe_update_sync_rag_store(file_path, tasks=None, full_file=False):
+    if current_project_engine() == 'rpgmaker_mv':
+        # Structural writeback approval is not an independent semantic review.
+        # MV history is refreshed only by explicit reviewed-corpus bootstrap.
+        return
     if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
         return
     if full_file:
@@ -5459,12 +5469,14 @@ def build_sync_translation_plan(
             })
             return {'text': '', 'diagnostics': {'reason': 'preflight_skipped'}}
         history_hits, rag_stats = (
-            retrieve_sync_history_hits(chunk_input.target_items)
+            retrieve_sync_history_hits(chunk_input.target_items, **(
+                {'material_snapshot': adapter_snapshot} if adapter_snapshot.project.engine == 'rpgmaker_mv' else {}))
             if SYNC_RAG_ENABLED
             else ([], {'enabled': False})
         )
         source_hits, source_index_stats = (
-            retrieve_sync_source_hits(chunk_input.target_items)
+            retrieve_sync_source_hits(chunk_input.target_items, **(
+                {'material_snapshot': adapter_snapshot} if adapter_snapshot.project.engine == 'rpgmaker_mv' else {}))
             if SYNC_SOURCE_INDEX_ENABLED
             else ([], {'enabled': False})
         )
@@ -5810,9 +5822,8 @@ def prepare_sync_translation_execution_context(
     if current_project_engine() == 'rpgmaker_mv':
         if prepare:
             raise ValueError('RPG Maker MV does not support Ren\'Py prepare commands.')
-        if (SYNC_RAG_ENABLED or SYNC_SOURCE_INDEX_ENABLED or SYNC_STORY_MEMORY_ENABLED
-                or SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF):
-            raise ValueError('MV durable Sync currently requires Ren\'Py retrieval, source index, story memory and project analysis injection to be disabled.')
+        if SYNC_STORY_MEMORY_ENABLED or SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+            raise ValueError('MV does not support Story Memory or Project Analysis injection; disable these layers.')
         mv_snapshot = current_mv_sync_snapshot()
     if require_provider and SYNC_BACKEND == 'gemini':
         _require_gemini_api_key()

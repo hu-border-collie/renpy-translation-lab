@@ -350,6 +350,14 @@ class CliContractTests(unittest.TestCase):
 
         self.assertEqual(parsed, envelope)
 
+    def test_bootstrap_strict_exit_distinguishes_preparation_from_need_for_action(self):
+        for command in ('bootstrap-rag', 'bootstrap-source-index'):
+            for status, expected in (('ready', 0), ('disabled', 3), ('missing', 3),
+                                     ('stale', 3), ('incompatible', 3), ('failed', 4)):
+                with self.subTest(command=command, status=status):
+                    self.assertEqual(cli_contract.strict_exit_code(
+                        cli_contract.success_envelope(command, status=status)), expected)
+
     def test_parse_result_envelope_rejects_unknown_or_incomplete_schema(self):
         with self.assertRaises(ValueError):
             cli_contract.parse_result_envelope('{"schema_version": 999}')

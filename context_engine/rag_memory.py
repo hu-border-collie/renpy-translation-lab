@@ -6,6 +6,7 @@ import math
 import os
 import socket
 import stat
+import threading
 from datetime import datetime
 
 from context_engine.embedding_backend import (
@@ -81,6 +82,26 @@ class EmbeddingStoreIdentityError(RuntimeError):
 
 
 class _EmbeddingIdentityStoreMixin:
+    @contextmanager
+    def write_session(self, operation):
+        """Keep one existing store lock across a multi-step preparation.
+
+        Writes on this instance and thread reuse that lock; other instances or
+        threads still fail with the normal store-lock diagnostic. Each data or
+        metadata replacement retains the existing atomic-write implementation.
+        """
+        with self._locked(operation) as lock_info:
+            previous = getattr(self, '_write_session', None)
+            self._write_session = (threading.get_ident(), lock_info)
+            try:
+                yield self
+            finally:
+                self._write_session = previous
+
+    def _session_lock_info(self):
+        session = getattr(self, '_write_session', None)
+        return session[1] if session and session[0] == threading.get_ident() else None
+
     def _embedding_record_count(self):
         raise NotImplementedError
 
@@ -463,6 +484,10 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
 
     @contextmanager
     def _locked(self, operation):
+        session = self._session_lock_info()
+        if session is not None:
+            yield session
+            return
         os.makedirs(self.store_dir, exist_ok=True)
         lock_info = self._lock_owner(operation)
         try:
@@ -948,6 +973,10 @@ class JsonSourceIndexStore(_EmbeddingIdentityStoreMixin, object):
 
     @contextmanager
     def _locked(self, operation):
+        session = self._session_lock_info()
+        if session is not None:
+            yield session
+            return
         os.makedirs(self.store_dir, exist_ok=True)
         lock_info = self._lock_owner(operation)
         try:

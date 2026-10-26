@@ -512,6 +512,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         original_game_exists = None
 
     parsed: dict[str, object] = {
+        'mv_preparation': report.get('mv_preparation') or {},
         'engine_status': report.get('engine_status') or {},
         "base_dir": str(report.get("base_dir") or ""),
         "tl_dir": str(report.get("tl_dir") or ""),
@@ -614,6 +615,7 @@ def _summarize_doctor_parsed(
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
     if mode == 'mv_narrative':
         from gui_qt.user_copy import MV_PROJECT_COPY
+        from gui_qt.user_copy import mv_context_status_label
         engine = parsed.get('engine_status') or {}
         issues = engine.get('issues') or []
         blocked = exit_code != 0 or engine.get('status') != 'ready'
@@ -623,7 +625,9 @@ def _summarize_doctor_parsed(
             message=(str(issues[0].get('message')) if issues else '请检查 MV 源、目标与支持窗口配置。')
                     if blocked else MV_PROJECT_COPY['scope_empty' if (pending or {}).get('task_count') == 0 else 'scope_ready'],
             facts=[f"引擎：RPG Maker MV；数据 JSON：{counts.get('json_files', '未知')}",
-                   '当前支持：耐久 Sync；原生验收：未完成'],
+                   '当前支持：耐久 Sync 与同步预处理；原生验收：未完成',
+                   *[f"{'原文索引' if key == 'source_index' else '历史记忆'}：{mv_context_status_label(value)}"
+                     for key, value in (parsed.get('mv_preparation') or {}).items() if key in {'source_index', 'history'}]],
             findings=[str(issue.get('message') or '') for issue in issues] + warnings, mode=mode,
             detail_facts=format_coverage_detail_facts(parsed.get('coverage')))
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""

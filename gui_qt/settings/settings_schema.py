@@ -117,6 +117,8 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
                  MV_PROJECT_COPY['occurrence_scope_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField('mv_display_fields', ('rpgmaker_mv', 'display_fields'), MV_PROJECT_COPY['display_fields_label'],
                  MV_PROJECT_COPY['display_fields_description'], 'list', [], '项目与资源', allow_empty=True),
+    SettingField('mv_reviewed_history_file', ('rpgmaker_mv', 'reviewed_history_file'), MV_PROJECT_COPY['history_label'],
+                 MV_PROJECT_COPY['history_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField(
         "catalog_gemini_models",
         ("model_catalog", "gemini"),

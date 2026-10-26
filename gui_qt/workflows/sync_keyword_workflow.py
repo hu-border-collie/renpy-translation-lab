@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from gui_qt.reports.keyword_report import summarize_sync_keyword_output
+from gui_qt.user_copy import SYNC_KEYWORD_SCAN_MESSAGE
 from gui_qt.workflows.translation_workflow import WorkflowStep, WorkflowUpdate
 
 
@@ -21,7 +22,7 @@ class SyncKeywordWorkflow:
             key="sync-keywords",
             args=["sync-keywords"],
             heading="正在同步提取关键词",
-            message="正在扫描翻译文本并生成术语与剧情报告。",
+            message=SYNC_KEYWORD_SCAN_MESSAGE,
             script_basename="gemini_translate_batch.py",
         )
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from context_engine.rag_memory import truncate_text
 from context_engine import story_memory
+from foundation.source_location import json_source_location
 
 
 def format_glossary_hits_block(hits, empty_label="(none)"):
@@ -38,7 +39,8 @@ def format_history_hits_block(
         raw_translated_text = hit.get("translated_text", "") or raw_source_text
         source_text = truncate_text(raw_source_text, char_limit)
         translated_text = truncate_text(raw_translated_text, char_limit)
-        prefix = f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f} quality={quality}]"
+        location = json_source_location(hit) or f"{file_rel_path}:{line_start}-{line_end}"
+        prefix = f"- [{location} score={score:.3f} quality={quality}]"
         if include_source_text and source_text and translated_text and raw_source_text != raw_translated_text:
             lines.append(f"{prefix} Source: {source_text} -> Translation: {translated_text}")
         else:
@@ -56,7 +58,8 @@ def format_source_hits_block(hits, empty_label="(none)"):
         line_end = hit.get("line_end", "")
         score = float(hit.get("score", 0.0))
         source_text = hit.get("source_text", "")
-        prefix = f"- [{file_rel_path}:{line_start}-{line_end} score={score:.3f}]"
+        location = json_source_location(hit) or f"{file_rel_path}:{line_start}-{line_end}"
+        prefix = f"- [{location} score={score:.3f}]"
         lines.append(f"{prefix} Source excerpt: {source_text}")
     return "\n".join(lines) if lines else empty_label
 

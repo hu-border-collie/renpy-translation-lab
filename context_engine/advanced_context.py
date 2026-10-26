@@ -100,6 +100,8 @@ def shape_history_hits(matches: Sequence[Mapping[str, Any]] | None, char_limit: 
                 'translated_text': truncate_text(match.get('translated_text', ''), char_limit),
                 'quality_state': match.get('quality_state', ''),
                 'score': float(match.get('score', 0.0)),
+                **({key: match[key] for key in ('engine', 'json_path', 'occurrence_id', 'source_id') if key in match}
+                   if match.get('engine') == 'rpgmaker_mv' else {}),
             }
         )
     return hits
@@ -154,6 +156,8 @@ def shape_source_hits(
                 'source_text': truncated_source_text,
                 'source_text_truncated': was_truncated,
                 'score': float(match.get('score', 0.0)),
+                **({key: match[key] for key in ('engine', 'json_path', 'occurrence_id', 'source_id') if key in match}
+                   if match.get('engine') == 'rpgmaker_mv' else {}),
             }
         )
     return hits, truncated_count, source_context_chars

@@ -7,6 +7,18 @@
 """
 from __future__ import annotations
 
+SYNC_KEYWORD_SCAN_MESSAGE = '正在扫描原文并生成术语候选与段落概要报告。'
+MV_PREPARATION_COPY = {
+    'ready': '当前范围的库已准备，可用于同步检索；这不表示真实游戏验收完成。',
+    'empty': '当前范围已准备为 0 条记录；本次检索将为空。',
+    'missing': '尚无有效语料或已准备的库，请核对输入并重新预建。',
+    'disabled': '请先启用对应的同步上下文开关并保存。',
+    'reviewed_history_not_configured': '请先配置独立审阅的双语历史文件。',
+    'reviewed_history_missing': '找不到独立审阅的历史文件，请核对路径。',
+    'no_reviewed_history': '输入尚无已批准的历史记录，请完成独立审阅。',
+    'failed': '预建未成功完成，请查看诊断与运行日志。',
+}
+
 from typing import Any
 
 from foundation import doctor_recommendations as doctor_rec
@@ -33,11 +45,24 @@ MV_PROJECT_COPY = {
     'display_fields_label': 'MV 附加显示字段（可选）',
     'display_fields_description': '留空仅处理叙事。逐行填写 system_terms（System.json 固定术语白名单）、map_display_name（地图顶层 displayName）；精确位置文件可进一步缩小。改动后须重新审阅与建计划。',
     'display_fields_invalid': 'MV 附加显示字段只能填写不重复的 system_terms、map_display_name。',
-    'unsupported': 'MV 叙事模式当前仅支持耐久 Sync；请前往同步翻译。',
+    'history_label': 'MV 已审阅双语历史文件（可选）',
+    'history_description': '带 typed JSON path、源文件／支持窗口摘要及真实审阅者的 MV JSONL；仅 approved 行可入库。目标中文和 UI／图片初稿不会自动成为历史语料。',
+    'unsupported': 'MV 支持耐久 Sync、同步关键词与原文／已审阅历史预建；Batch、外部工作包、订正、Story Memory 和项目分析暂未支持。',
     'scope_ready': 'MV 当前已审阅文本范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
     'scope_empty': 'MV 当前已审阅文本范围没有待译条目；全游戏覆盖与原生验收仍单列。',
     'checked_heading': 'MV 文本范围检查完成',
 }
+
+
+def mv_context_status_label(status):
+    """Display enablement and verified preparation separately, preserving unknown counts."""
+    status = status or {}
+    labels = {'disabled': '未启用（尚未准备）', 'missing': '尚未准备（缺少有效库或语料）', 'stale': '材料或审阅输入已变化，需重新预建',
+              'incompatible': '向量身份不兼容，需重建', 'failed': '准备失败', 'ready': '已准备'}
+    text = labels.get(status.get('status'), '准备状态：未知')
+    if status.get('record_count') is not None:
+        text += f" · 当前记录 {status['record_count']}"
+    return text
 
 EXTERNAL_WORK_COPY = {
     'work-export': '外部初译：导出工作包（实验）',

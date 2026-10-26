@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import cached_property
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -35,6 +36,7 @@ class MvSyncSnapshot:
     include_files: tuple[str, ...] = ()
     include_prefixes: tuple[str, ...] = ()
     occurrence_scope: MvOccurrenceScope | None = None
+    reviewed_history_digest: str = ''
 
     @cached_property
     def selected_occurrences(self):
@@ -122,11 +124,22 @@ def build_snapshot(config: Mapping[str, Any], config_file: str | Path, *,
         raise ValueError('MV include filters must select existing files with enabled text fields.')
     scope = (bind_occurrence_scope(settings.occurrence_scope_file, project, occurrences)
              if settings.occurrence_scope_file is not None else None)
+    history_digest = reviewed_history_digest(settings.reviewed_history_file)
     snapshot = MvSyncSnapshot(project, inventory, report, occurrences, adapter, review_error, digest_json(config),
-                              include_files, include_prefixes, scope)
+                              include_files, include_prefixes, scope, history_digest)
     if scope is not None and len(snapshot.selected_occurrences) != len(scope.item_ids):
         raise ValueError('MV file filters conflict with the explicit occurrence scope.')
     return snapshot
+
+
+def reviewed_history_digest(path: Path | None) -> str:
+    """Bind an optional corpus including its missing state, without approving it."""
+    if path is None:
+        return ''
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return 'missing'
 
 
 def material_identity(snapshot: MvSyncSnapshot) -> dict:
@@ -137,6 +150,8 @@ def material_identity(snapshot: MvSyncSnapshot) -> dict:
         "adapter_version": project.adapter_version,
         "adapter_behavior_digest": snapshot.adapter.behavior_digest(),
         "display_fields": list(snapshot.adapter.display_fields),
+        "reviewed_history_digest": snapshot.reviewed_history_digest,
+        "preprocessing_contract_version": 1,
         "source_root": project.project_root,
         "target_root": project.localization_root,
         "support_window_digest": project.support_window_digest,
@@ -169,6 +184,7 @@ def live_material_identity(snapshot: MvSyncSnapshot, config: Mapping[str, Any], 
     current.update(source_root=str(settings.source_root), target_root=str(settings.target_root),
                    support_window_digest=settings.window.digest, config_digest=digest_json(config),
                    display_fields=list(settings.display_fields),
+                   reviewed_history_digest=reviewed_history_digest(settings.reviewed_history_file),
                    adapter_version=RpgMakerMvAdapter.adapter_version,
                    adapter_behavior_digest=RpgMakerMvAdapter(
                        settings.window, display_fields=settings.display_fields).behavior_digest())
@@ -194,7 +210,7 @@ def require_material_fresh(expected: Mapping[str, Any], current: Mapping[str, An
     """
     for key in ("source_root", "target_root", "support_window_digest", "source_files",
                 "config_digest", "coverage_review_digest", "engine", "adapter_version", "occurrence_scope_digest",
-                "adapter_behavior_digest", "display_fields"):
+                "adapter_behavior_digest", "display_fields", "reviewed_history_digest", "preprocessing_contract_version"):
         if expected.get(key) != current.get(key):
             raise ValueError(f"MV frozen material changed: {key}.")
     before, live = dict(expected.get("target_files") or {}), dict(current.get("target_files") or {})
