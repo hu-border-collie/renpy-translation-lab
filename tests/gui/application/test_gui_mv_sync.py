@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 from tests.support import gui_test_support
-from tests.support.mv_project import make_mv_project
+from tests.support.mv_project import make_mv_project, add_mv_display_material
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -18,6 +18,7 @@ try:
     from gui_qt.reports.doctor_report import summarize_doctor_report
     from gui_qt.reports.readiness_display import count_line
     from gui_qt.settings.project_page import ProjectSettingsPage
+    from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELD_BY_KEY, normalize_for_write, set_nested_value, validate_value
     from gui_qt.work_modes import WorkMode
     from gui_qt.workers.doctor_worker import DoctorWorkerResult
     from gui_qt import diagnostics_context
@@ -60,12 +61,20 @@ class GuiMvSyncTests(unittest.TestCase):
         page = ProjectSettingsPage()
         self.addCleanup(page.widget.deleteLater)
         page.load({'engine': 'rpgmaker_mv', 'mv_source_root': 'original/www',
-                   'mv_support_window_file': 'approved.json', 'mv_occurrence_scope_file': 'pilot.json'})
+                   'mv_support_window_file': 'approved.json', 'mv_occurrence_scope_file': 'pilot.json',
+                   'mv_display_fields': ['system_terms', 'map_display_name']})
         values = page.collect()
         self.assertEqual(values['engine'], 'rpgmaker_mv')
         self.assertEqual(values['mv_source_root'], 'original/www')
         self.assertEqual(values['mv_support_window_file'], 'approved.json')
         self.assertEqual(values['mv_occurrence_scope_file'], 'pilot.json')
+        self.assertEqual(values['mv_display_fields'], 'system_terms\nmap_display_name')
+        field = ADVANCED_SETTING_FIELD_BY_KEY['mv_display_fields']
+        configured = {}
+        set_nested_value(configured, field.path, normalize_for_write(field, values['mv_display_fields']))
+        self.assertEqual(configured['rpgmaker_mv']['display_fields'], ['map_display_name', 'system_terms'])
+        self.assertTrue(validate_value(field, 'database'))
+        self.assertTrue(validate_value(field, 'system_terms\nsystem_terms'))
         self.assertTrue(self.window._engine_allows_work_mode(WorkMode.SYNC_TRANSLATION))
         for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.KEYWORD_EXTRACTION, WorkMode.REVISION):
             self.assertFalse(self.window._engine_allows_work_mode(mode))
@@ -75,6 +84,28 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertFalse(self.window._resume_task_available()[0])
         self.window._sync_bootstrap_prep_button_chrome()
         self.assertFalse(self.window.bootstrap_work_btn.isEnabled())
+
+    def test_display_selection_change_rejects_late_doctor_and_uses_shared_counts(self):
+        add_mv_display_material(self.root)
+        self.window._on_run_doctor()
+        worker = self.window._doctor_worker
+        self.config['rpgmaker_mv']['display_fields'] = ['system_terms', 'map_display_name']
+        self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
+        report = {'mode': 'mv_narrative', 'layout_status': 'ready', 'tl_exists': True,
+                  'counts': {'json_files': 7}, 'pending_task_count': 14, 'pending_file_count': 3,
+                  'engine_status': {'engine': 'rpgmaker_mv', 'status': 'ready', 'issues': []}}
+        worker.finish(DoctorWorkerResult(True, report, ''))
+        self.assertIsNone(self.window._readiness_doctor_report)
+        from execution.mv_sync import build_snapshot
+        snapshot = build_snapshot(self.config, self.config_file, require_review=False)
+        self.assertEqual(snapshot.pending_task_count, 25)
+        self.assertTrue(snapshot.review_error)
+        self.window._on_run_doctor()
+        report['pending_task_count'] = snapshot.pending_task_count
+        report['layout_status'] = 'failed'
+        report['engine_status'].update(status='blocked', issues=[{'message': snapshot.review_error}])
+        self.window._doctor_worker.finish(DoctorWorkerResult(True, report, ''))
+        self.assertIn('待译：25', self.window.doctor_facts_label.text())
 
     def test_material_edit_rejects_late_doctor_and_invalidates_display(self):
         report = {'mode': 'mv_narrative', 'layout_status': 'ready', 'tl_exists': True,

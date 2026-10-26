@@ -8,6 +8,7 @@
 
 ### 新增
 
+- MV Adapter 0.3 新增默认关闭的系统术语／地图显示名支持：通过 `rpgmaker_mv.display_fields` 在 CLI 与 GUI 显式启用，复用耐久 Sync、精确位置范围及安全写回，保护编号参数的原拼写与数量。字段选择和角色绑定材料／检查身份，旧 MV 审阅和计划需重新生成；见[字段配置与范围](docs/rpgmaker_mv_sync.md#系统术语与地图显示名显式启用)。
 - MV 耐久 Sync 新增可选的精确 occurrence 范围文件，可将地图内小样本绑定到原始文件／字串摘要；CLI 与 GUI 共用，仍审计完整材料并拒绝范围文件漂移，见[MV 配置](docs/rpgmaker_mv_sync.md#精确位置范围可选)。
 - 新增 #570 的 RPG Maker MV 叙事 Adapter 共享核心：显式 core / 插件摘要窗口、独立源 / 目标、物理 occurrence 与独立 coverage，保护消息续行、控制码及 102 / 402 关联，并通过公共 schema 2 输出计划。原创离线材料验证字节保护、漂移拒绝及既有事务恢复，见[核心边界](docs/engine_adapter.md#rpgmaker-mv-a2)。
 - MV Adapter 0.2 兼容 core 对越界整数取消索引的 -2 解释，并明确保护反斜杠加 ASCII 空格；保留原参数和控制 token，其他未知语法及结构阻断继续拒绝。旧 MV 范围审阅与计划需按新 Adapter 重新生成。

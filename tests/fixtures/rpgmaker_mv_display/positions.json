@@ -1,0 +1,13 @@
+[
+  {"file":"data/System.json","path":["terms","basic",0],"source":"Rank","translation":"阶位","mirrors":[]},
+  {"file":"data/System.json","path":["terms","params",0],"source":"Vitality","translation":"活力","mirrors":[]},
+  {"file":"data/System.json","path":["terms","commands",9],"source":"Record","translation":"记录","mirrors":[]},
+  {"file":"data/System.json","path":["terms","commands",25],"source":"Trade","translation":"交易","mirrors":[]},
+  {"file":"data/System.json","path":["terms","messages","alwaysDash"],"source":"Quick walking","translation":"快速行走","mirrors":[]},
+  {"file":"data/System.json","path":["terms","messages","saveMessage"],"source":"Select record %1.","translation":"选择记录%1。","mirrors":[]},
+  {"file":"data/System.json","path":["terms","messages","loadMessage"],"source":"Load \\V[2] from %1 / %2.","translation":"从%2／%1读取\\V[2]。","mirrors":[]},
+  {"file":"data/System.json","path":["terms","messages","actorDamage"],"source":"%1 loses %2. %1 remains.","translation":"%1损失%2。%1仍在。","mirrors":[]},
+  {"file":"data/Map001.json","path":["displayName"],"source":"Old Harbor","translation":"旧港","mirrors":[]},
+  {"file":"data/Map002.json","path":["displayName"],"source":"Hill","translation":"山丘","mirrors":[]},
+  {"file":"data/Map003.json","path":["displayName"],"source":"Beacon Square","translation":"灯塔广场","mirrors":[]}
+]

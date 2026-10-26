@@ -462,7 +462,7 @@ def unit_to_translation_item(unit):
         item['speaker_name'] = unit.speaker_name
     if 'tyrano_literal_brackets' in unit.metadata:
         item['tyrano_literal_brackets'] = unit.metadata['tyrano_literal_brackets']
-    for key in ('mv_message_styles', 'mv_context'):
+    for key in ('mv_message_styles', 'mv_text_role', 'mv_context'):
         if key in unit.metadata:
             item[key] = unit.metadata[key]
     if 'mv_context' in unit.metadata:
@@ -895,7 +895,11 @@ def build_canonical_translation_system_instruction(preserve_terms, macro_setting
             'must be copied exactly; never replace it with a literal visible name.',
             'Preserve every RPG Maker MV control token, its case, arguments, order and message-line position. '
             'Each TARGET is one JSON string leaf; do not add line breaks or merge messages. '
-            'mv_context identifies its message block or choice branch; linked choice labels are updated by the tool.')
+            'mv_context identifies its message block, choice branch or display field role; '
+            'linked choice labels are updated by the tool. '
+            'Display fields are UI labels or map display names, not dialogue. '
+            'Numbered display parameters such as %1 must keep their exact spelling and multiplicity, '
+            'but may move with language order.')
     return instruction
 
 

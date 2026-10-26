@@ -1,0 +1,16 @@
+{
+  "gameTitle":"Original fixture title", "currencyUnit":"Coin", "ratio":1.234567890123456789,
+  "terms": {
+    "basic":["阶位", ""], "params":["活力"],
+    "commands":[null,null,null,null,null,null,null,null,null,"记录",null,null,null,null,null,null,null,null,null,null,"Reserved twenty",null,null,"Reserved twenty-three",null,"交易","Plugin reserve"],
+    "messages":{
+      "alwaysDash":"快速行走",
+      "saveMessage":"选择记录%1。",
+      "loadMessage":"从%2／%1读取\\V[2]。",
+      "actorDamage":"%1损失%2。%1仍在。",
+      "pluginLabel":"Preserve unknown member"
+    },
+    "pluginTerms":["Preserve plugin term"]
+  },
+  "switches":["", "Internal switch"], "variables":["", "Internal variable"]
+}

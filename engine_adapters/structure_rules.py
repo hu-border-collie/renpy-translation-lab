@@ -14,7 +14,7 @@ PERCENT = re.compile(
 PAIRED = frozenset('a alpha b color cps font i k outlinecolor plain s size u'.split())
 
 
-def spans(text, engine, *, literal_brackets=False, mv_message_styles=False):
+def spans(text, engine, *, literal_brackets=False, mv_message_styles=False, mv_text_role=''):
     """Return non-overlapping spans under explicit engine rules.
 
     ``literal_brackets`` is parser provenance for Tyrano dialogue nodes, where
@@ -23,7 +23,7 @@ def spans(text, engine, *, literal_brackets=False, mv_message_styles=False):
     """
     if engine == 'rpgmaker_mv':
         from .rpgmaker_mv_controls import control_spans
-        return control_spans(text, message_styles=mv_message_styles)
+        return control_spans(text, message_styles=mv_message_styles, text_role=mv_text_role)
     if engine not in ('renpy', 'tyrano'):
         raise ValueError('protection.unsupported_engine')
     result = []
@@ -85,14 +85,14 @@ def spans(text, engine, *, literal_brackets=False, mv_message_styles=False):
     return result
 
 
-def validate(text, translated, engine, *, literal_brackets=False, mv_message_styles=False):
+def validate(text, translated, engine, *, literal_brackets=False, mv_message_styles=False, mv_text_role=''):
     """Check exact token multiplicity, structural order and tag nesting.
 
     Named variables may move with language order. Positional formats, engine
     commands, escapes, tags and line boundaries retain their relative order.
     """
-    original = [(text[a:b], kind) for a, b, kind in spans(text, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)]
-    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles)]
+    original = [(text[a:b], kind) for a, b, kind in spans(text, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles, mv_text_role=mv_text_role)]
+    current = [(translated[a:b], kind) for a, b, kind in spans(translated, engine, literal_brackets=literal_brackets, mv_message_styles=mv_message_styles, mv_text_role=mv_text_role)]
     if engine == 'rpgmaker_mv' and any(kind == 'popup' for _, kind in original):
         from .rpgmaker_mv_controls import validate_message_position
         validate_message_position(text, message_styles=mv_message_styles, first_line=True)

@@ -92,6 +92,10 @@ CANDIDATE_REASON_CODES = frozenset(
         "rpgmaker_mv.invalid_event",
         "rpgmaker_mv.invalid_json",
         "rpgmaker_mv.unknown_control",
+        "rpgmaker_mv.system_term",
+        "rpgmaker_mv.system_message",
+        "rpgmaker_mv.map_display_name",
+        "rpgmaker_mv.empty_display",
         # TyranoScript V600+ P5 (#399 / #265 P5)
         "tyrano.comment",
         "tyrano.engine_control_structure",

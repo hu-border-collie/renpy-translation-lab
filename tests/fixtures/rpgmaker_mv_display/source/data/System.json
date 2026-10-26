@@ -1,0 +1,16 @@
+{
+  "gameTitle":"Original fixture title", "currencyUnit":"Coin", "ratio":1.234567890123456789,
+  "terms": {
+    "basic":["Rank", ""], "params":["Vitality"],
+    "commands":[null,null,null,null,null,null,null,null,null,"Record",null,null,null,null,null,null,null,null,null,null,"Reserved twenty",null,null,"Reserved twenty-three",null,"Trade","Plugin reserve"],
+    "messages":{
+      "alwaysDash":"Quick walking",
+      "saveMessage":"Select record %1.",
+      "loadMessage":"Load \\V[2] from %1 / %2.",
+      "actorDamage":"%1 loses %2. %1 remains.",
+      "pluginLabel":"Preserve unknown member"
+    },
+    "pluginTerms":["Preserve plugin term"]
+  },
+  "switches":["", "Internal switch"], "variables":["", "Internal variable"]
+}

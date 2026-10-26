@@ -1,6 +1,6 @@
 # RPG Maker MV 叙事模式：耐久 Sync
 
-这是 #567 / #572 的 A3 产品路线，限定在[MV Adapter](engine_adapter.md#rpgmaker-mv-a2)声明的核心／插件窗口与叙事事件范围。支持地图和公共事件的 401 消息、102 选项及其 402 镜像。数据库、角色名修改、插件 UI、动态脚本、滚动文本及图片等范围仍由 B0 核查；MZ 不在此路线。
+这是 #567 / #572 的耐久 Sync 产品路线，限定在[MV Adapter](engine_adapter.md#rpgmaker-mv-a2)声明的核心／插件窗口。默认支持地图和公共事件的 401 消息、102 选项及其 402 镜像；可显式启用下述系统术语与地图显示名。数据库、角色名修改、MapInfos 名称回退、插件 UI、动态脚本、滚动文本及图片仍留在后续范围；MZ 不在此路线。
 
 工程回归使用原创固定响应材料。A0 原生补证、A4 的真实 101 + 7 试点、人类／Agent 独立语义审阅、字体、显示、分支与存读档分别验收，不能从本页的产品接线推断“正式支持已验收”或“游戏已汉化完成”。
 
@@ -17,7 +17,8 @@
   "rpgmaker_mv": {
     "source_root": "C:/Games/Original/www",
     "support_window_file": "C:/TranslationProject/approved-window.json",
-    "occurrence_scope_file": ""
+    "occurrence_scope_file": "",
+    "display_fields": []
   },
   "prepare": {"enabled": false},
   "include_files": ["data/Map001.json", "data/CommonEvents.json"],
@@ -56,11 +57,54 @@
 }
 ```
 
-只列主要 401 / 102 位置，402 镜像由同一 Adapter 自动关联。重复、空清单、布尔下标、
+可列主要 401 / 102 及已显式启用的显示字段位置，402 镜像由同一 Adapter 自动关联。重复、空清单、布尔下标、
 未知／镜像位置、源文件或字串摘要不符及与文件筛选冲突均拒绝执行。清单字节摘要绑定
 耐久计划；改动清单会使派发、检查和写回失效，GUI 旧检查结果也会失效。
 该清单仅缩小请求，全部源／目标和核心／插件仍参加覆盖审计及漂移校验；样本外的
 未知控制码或结构阻断仍会阻止执行，不能用清单隐藏问题。
+
+### 系统术语与地图显示名（显式启用）
+
+`rpgmaker_mv.display_fields` 默认为 `[]`，保持原叙事范围。可填写
+`["system_terms", "map_display_name"]`，也可只启用其中一项；未知值、重复值和错误类型会拒绝。
+CLI 读取该配置；GUI「设置 → 项目 → MV 附加显示字段」逐行填写相同标识。
+两个入口使用同一字段规则，不按游戏名称、原文或数量推断范围。
+
+| 配置值 | 允许的既有字符串叶子 | 保留边界 |
+| --- | --- | --- |
+| `system_terms` | `data/System.json` 的 `terms.basic[0..9]`、`terms.params[0..7]`、`terms.commands[0..19,21,22,24,25]`，以及 `terms.messages` 的固定 core 消费键 | 20 / 23 等保留或扩展索引、未知 message 键、其他 terms 成员、游戏标题、货币和类型名不开放 |
+| `map_display_name` | `data/Map数字.json` 顶层 `displayName` | 不修改地图事件名、note、资源引用或 `MapInfos.json`；空显示名不填补，也不自动翻译编辑器名称回退 |
+
+固定 messages 键为：`alwaysDash commandRemember bgmVolume bgsVolume meVolume seVolume possession
+expTotal expNext saveMessage loadMessage file partyName emerge preemptive surprise escapeStart escapeFailure
+victory defeat obtainExp obtainGold obtainItem levelUp obtainSkill useItem criticalToEnemy criticalToActor
+actorDamage actorRecovery actorGain actorLoss actorDrain actorNoDamage actorNoHit enemyDamage enemyRecovery
+enemyGain enemyLoss enemyDrain enemyNoDamage enemyNoHit evasion magicEvasion magicReflection counterAttack
+substitute buffAdd debuffAdd buffRemove actionFailure`。
+权威规则在[字段模块](../engine_adapters/rpgmaker_mv_fields.py)，对应
+[MV TextManager](https://github.com/rpgtkoolmv/corescript/blob/master/js/rpg_managers/TextManager.js) 的消费路径；
+这不是任意 core／插件版本兼容的证明，仍需原支持窗口。
+
+启用系统术语要求 `System.json` 和 `terms` 对象存在。缺失的可选成员或 null 叶子保留，
+已存在的所选容器／叶子类型不符会阻断。空字符串保持原样，不创建键或数组成员。
+新增字段仍参加完整 inventory 和独立 raw-leaf audit，未开放的 System 内容仍显示为范围外。
+
+若只翻译特定存读档词或地点名，继续使用 schema 1 occurrence 范围文件。例如位置可以是
+`["terms", "messages", "saveMessage"]`、`["terms", "commands", 9]` 或 `["displayName"]`，
+绑定各自完整源文件与原文字串摘要。`include_files` 可选择已启用的 `data/System.json`；
+它与精确位置文件必须一致。没有精确位置文件时，启用组内全部非空字段都可能进入待译，
+不要把它当作“只选择当前可见 UI”的自动判断。
+
+显示字段的 `%1`、`%2` 等参数按
+[MV format 规则](https://github.com/rpgtkoolmv/corescript/blob/master/js/rpg_core/JsExtensions.js)
+保护：编号原拼写与次数不变，可随中文语序移动；缺失、重复或新增参数阻断。
+已识别 core 控制码的大小写、参数与相对顺序不变，未知转义、物理换行和 popup 均拒绝。
+模型只见绑定请求／词条／字段角色的保护标记；恢复后 Adapter 再检查一次。
+
+Adapter 0.3.0 / locator 2 将字段策略、启用组、角色、源／目标、支持窗口、配置、范围及结果身份
+纳入现有绑定。0.2 的任务和预览可留作查询，但旧检查或审阅不能在新版本下继续授权写回；
+升级或修改字段选择后须重新导出覆盖材料、独立审阅并建新计划，不能编辑旧制品解除 stale。
+先前翻译的显示字段须继续启用，关闭后它们与源的差异会被识别为范围外目标变化。
 
 ## 独立覆盖审阅
 
@@ -78,7 +122,7 @@ python gemini_translate_batch.py doctor
 python gemini_translate_batch.py translate-preflight --strategy sync
 ```
 
-记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。叙事范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅叙事范围；材料不可读时计数为未知。
+记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。当前文本范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅文本范围；材料不可读时计数为未知。
 
 ## 运行、恢复和写回
 
@@ -102,7 +146,7 @@ python gemini_translate_batch.py apply <RUN>
 
 ## GUI
 
-1. 在「项目列表」选择独立目标内容目录；在「设置 → 项目」填写 `rpgmaker_mv`、原始源目录和支持窗口文件，保存。
+1. 在「项目列表」选择独立目标内容目录；在「设置 → 项目」填写 `rpgmaker_mv`、原始源目录和支持窗口文件。需要时填写「MV 附加显示字段」与精确位置文件，再保存。
 2. 在「项目与环境」使用「导出覆盖材料」，完成独立审阅后用「导入覆盖核对」导入，再运行环境检查。
 3. 进入「同步翻译」，选择可用模型并启动；运行、继续、检查和应用均调用上述 CLI 合同。
 
