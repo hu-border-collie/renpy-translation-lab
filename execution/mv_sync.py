@@ -37,6 +37,7 @@ class MvSyncSnapshot:
     include_prefixes: tuple[str, ...] = ()
     occurrence_scope: MvOccurrenceScope | None = None
     reviewed_history_digest: str = ''
+    reviewed_history_selection: str = ''
 
     @cached_property
     def selected_occurrences(self):
@@ -126,7 +127,8 @@ def build_snapshot(config: Mapping[str, Any], config_file: str | Path, *,
              if settings.occurrence_scope_file is not None else None)
     history_digest = reviewed_history_digest(settings.reviewed_history_file)
     snapshot = MvSyncSnapshot(project, inventory, report, occurrences, adapter, review_error, digest_json(config),
-                              include_files, include_prefixes, scope, history_digest)
+                              include_files, include_prefixes, scope, history_digest,
+                              str(settings.reviewed_history_file) if settings.reviewed_history_file is not None else '')
     if scope is not None and len(snapshot.selected_occurrences) != len(scope.item_ids):
         raise ValueError('MV file filters conflict with the explicit occurrence scope.')
     return snapshot

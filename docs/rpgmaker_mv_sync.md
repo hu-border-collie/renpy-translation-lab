@@ -147,6 +147,10 @@ MV 关键词不运行 Ren'Py prepare，也不开放 `build-keywords` Batch 路�
 `bootstrap-source-index` 每个选中源位置建立一条 source-only 记录，绝不把目标中文存入原文索引。
 `bootstrap-rag` 只读显式提供的已审阅双语 JSONL：可在 `rpgmaker_mv.reviewed_history_file`
 填写路径（相对配置文件），或用 `--seed-jsonl <FILE>` 补充输入（相对当前目录）。
+历史库还绑定解析后的配置语料路径，包括未选择语料的状态。切换或清空
+`reviewed_history_file` 后，旧库会标为 stale，重新 bootstrap 前不再注入旧译文；
+原文索引不因这项选择变化失效。显式 seed 输入继续独立按路径和摘要核验，
+未配置语料时仍可用 `--seed-jsonl` 建库。缺少这项绑定的旧历史库须显式重新 bootstrap。
 没有输入、文件缺失、仅有 pending/rejected 记录时返回 `prepared=false`，不会把目标中的现译、
 UI／图片草稿、结构检查通过或 apply 成功推断为语义批准。apply 不会自动将 MV 现译加入历史库。
 

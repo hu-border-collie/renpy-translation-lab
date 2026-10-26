@@ -325,7 +325,8 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
         preparation = {'status': 'ready', 'kind': kind, 'binding': binding,
             'binding_digest': digest_json(binding), 'record_count': len(records),
             'data_sha256': hashlib.sha256(data_file.read_bytes()).hexdigest(),
-            'history_inputs': summary.get('input_files', {})}
+            'history_inputs': summary.get('input_files', {}),
+            **({'history_selection': snapshot.reviewed_history_selection} if kind == 'history' else {})}
         store.set_metadata(mv_preparation=preparation)
         summary.update(prepared=True, status='ready', current_records=len(records),
             history_records_after=len(store.history if kind == 'history' else store.segments))
@@ -337,7 +338,12 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
 
 
 def inspect_store(snapshot, directory, settings, kind: str, *, enabled=True) -> dict:
-    """Read preparation/embedding status without creating stores or querying providers."""
+    """Read preparation status without writes or provider calls.
+
+    History pins the configured corpus selection separately from its explicit
+    seed inputs. A missing selection binding is stale, including seed-only
+    stores, rather than inferring approval from the previous input file list.
+    """
     result = {'enabled': bool(enabled), 'prepared': False, 'store_dir': str(directory), 'record_count': None}
     if not enabled:
         return {**result, 'status': 'disabled', 'reason': 'disabled'}
@@ -355,6 +361,8 @@ def inspect_store(snapshot, directory, settings, kind: str, *, enabled=True) -> 
             return {**result, 'status': 'failed', 'reason': 'store_binding_changed'}
         if state.get('kind') != kind or state.get('binding') != source_binding(snapshot):
             return {**result, 'status': 'stale', 'reason': 'source_material_changed'}
+        if kind == 'history' and state.get('history_selection') != snapshot.reviewed_history_selection:
+            return {**result, 'status': 'stale', 'reason': 'reviewed_history_selection_changed'}
         for path, digest in state.get('history_inputs', {}).items():
             if not Path(path).is_file() or hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest:
                 return {**result, 'status': 'stale', 'reason': 'reviewed_history_changed'}

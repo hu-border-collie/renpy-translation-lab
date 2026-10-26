@@ -14,6 +14,7 @@ MV 的 `engine.mv.context_unsupported` 目前只针对 StoryMemory／Project Ana
 同步关键词与 Source Index／已审阅 history bootstrap 已接入。`mv_preparation.source_index` /
 `history` 含 `enabled`、`prepared`、`status`、`record_count` 与 `reason`：disabled、missing、
 stale、incompatible、failed 均不标 ready，未知记录数是 null；实际准备的空库为 ready / 0。
+历史库的配置语料切换／清空也会使旧库 stale；显式 seed 输入仍独立按摘要核验，原文索引不受这项选择变化影响。
 这些是可选检索层，未准备时 Sync 降级为空上下文，preflight 发 `MV_CONTEXT_NOT_PREPARED`
 warning；不取消材料或覆盖审阅阻断。doctor／preflight 只读状态，不调用 embedding 或翻译模型。
 

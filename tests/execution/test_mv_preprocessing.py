@@ -48,8 +48,8 @@ class MvPreprocessingTests(unittest.TestCase):
         batch.load_batch_settings()
         self.snapshot = review_mv_project(self.config, self.file)
 
-    def write_history(self, *, status='approved'):
-        row = self.snapshot.selected_occurrences[0]
+    def write_history(self, *, status='approved', occurrence=None, path=None):
+        row = occurrence or self.snapshot.selected_occurrences[0]
         position = next(item for item in self.positions if item['source'] == row.unit.source_text)
         payload = {'schema_version': 1, 'engine': 'rpgmaker_mv',
             'adapter_version': self.snapshot.project.adapter_version,
@@ -59,7 +59,7 @@ class MvPreprocessingTests(unittest.TestCase):
             'source_file_sha256': self.snapshot.project.document_by_path()[row.unit.file_rel_path].sha256,
             'review': {'status': status, 'reviewed_at': '2026-10-26T00:00:00Z',
                        'reviewer': {'type': 'agent', 'id': 'original-unittest-review'}}}
-        self.history.write_text(json.dumps(payload, ensure_ascii=False) + '\n', encoding='utf-8')
+        (path or self.history).write_text(json.dumps(payload, ensure_ascii=False) + '\n', encoding='utf-8')
         return payload
 
     def prepare_stores(self):
@@ -128,6 +128,135 @@ class MvPreprocessingTests(unittest.TestCase):
         self.assertFalse(result['prepared'])
         self.assertEqual(result['reason'], 'no_reviewed_history')
         self.assertFalse((self.root / 'history').exists())
+        self.embed.assert_not_called()
+
+    def test_history_selection_changes_are_stale_before_query(self):
+        for selection in ('empty_file', 'same_bytes_file', 'unset'):
+            with self.subTest(selection=selection):
+                self.config['rpgmaker_mv']['reviewed_history_file'] = str(self.history)
+                self.configure()
+                self.prepare_stores()
+                source_bytes = (self.root / 'source-index/source_segments.jsonl').read_bytes()
+                replacement = self.root / 'replacement-history.jsonl'
+                replacement.write_bytes(self.history.read_bytes() if selection == 'same_bytes_file' else b'')
+                self.config['rpgmaker_mv']['reviewed_history_file'] = str(replacement) if selection != 'unset' else ''
+                self.configure()
+                self.embed.reset_mock()
+                status = mv.context_status(self.config, self.file)
+                self.assertFalse(status['history']['prepared'], status)
+                self.assertEqual(status['history']['status'], 'stale')
+                self.assertEqual(status['history']['reason'], 'reviewed_history_selection_changed')
+                self.assertIsNone(status['history']['record_count'])
+                self.assertTrue(status['source_index']['prepared'])
+                hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+                self.assertFalse(hits)
+                self.assertEqual(diagnostics['reason'], 'reviewed_history_selection_changed')
+                self.embed.assert_not_called()
+                self.assertEqual((self.root / 'source-index/source_segments.jsonl').read_bytes(), source_bytes)
+
+    def test_new_requests_omit_previous_history_after_corpus_switch(self):
+        self.config['sync']['source_index']['enabled'] = False
+        self.configure()
+        batch.bootstrap_rag_store(skip_prepare=True)
+        old_translation = json.loads(self.history.read_text(encoding='utf-8'))['translation']
+        before = runtime.prepare_sync_translation_execution_context(require_provider=False)
+        self.assertIn(old_translation, '\n'.join(request.user_prompt for request in before.plan_build.requests))
+        replacement = self.root / 'empty-history.jsonl'
+        replacement.write_text('', encoding='utf-8')
+        self.config['rpgmaker_mv']['reviewed_history_file'] = str(replacement)
+        self.configure()
+        self.embed.reset_mock()
+        with mock.patch('execution.sync_request.run_sync_request') as provider:
+            context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+        self.assertTrue(context.plan_build.requests)
+        self.assertFalse(old_translation in '\n'.join(request.user_prompt for request in context.plan_build.requests),
+                         'Old corpus translation leaked into a new frozen request')
+        self.embed.assert_not_called()
+        provider.assert_not_called()
+
+    def test_explicit_rebuild_after_history_switch_prepares_known_empty_corpus(self):
+        self.prepare_stores()
+        replacement = self.root / 'empty-history.jsonl'
+        replacement.write_text('', encoding='utf-8')
+        self.config['rpgmaker_mv']['reviewed_history_file'] = str(replacement)
+        self.configure()
+        self.embed.reset_mock()
+        summary = batch.bootstrap_rag_store(skip_prepare=True)
+        self.assertTrue(summary['prepared'])
+        self.assertEqual(summary['pruned'], 1)
+        self.assertEqual(summary['current_records'], 0)
+        status = mv.context_status(self.config, self.file)
+        self.assertTrue(status['history']['prepared'])
+        self.assertEqual(status['history']['record_count'], 0)
+        hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+        self.assertFalse(hits)
+        self.assertEqual(diagnostics['reason'], 'prepared_empty_store')
+        self.embed.assert_not_called()
+
+    def test_seed_only_history_remains_valid_and_tracks_seed_changes(self):
+        self.config['rpgmaker_mv']['reviewed_history_file'] = ''
+        self.configure()
+        summary = batch.bootstrap_rag_store(skip_prepare=True, seed_jsonl_paths=[str(self.history)])
+        self.assertTrue(summary['prepared'])
+        status = mv.context_status(self.config, self.file)
+        self.assertTrue(status['history']['prepared'], status)
+        self.assertEqual(status['history']['record_count'], 1)
+        hits, _diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+        self.assertEqual(len(hits), 1)
+        self.history.write_bytes(self.history.read_bytes() + b'\n')
+        self.embed.reset_mock()
+        hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+        self.assertFalse(hits)
+        self.assertEqual(diagnostics['status'], 'stale')
+        self.assertEqual(diagnostics['reason'], 'reviewed_history_changed')
+        self.embed.assert_not_called()
+
+    def test_configured_and_seed_history_are_both_bound_to_the_selection(self):
+        seed = self.root / 'extra-reviewed.jsonl'
+        self.write_history(occurrence=self.snapshot.selected_occurrences[1], path=seed)
+        summary = batch.bootstrap_rag_store(skip_prepare=True, seed_jsonl_paths=[str(seed)])
+        self.assertTrue(summary['prepared'])
+        self.assertEqual(summary['current_records'], 2)
+        metadata = json.loads((self.root / 'history/metadata.json').read_text(encoding='utf-8'))
+        self.assertEqual(set(metadata['mv_preparation']['history_inputs']), {str(self.history), str(seed)})
+        self.assertTrue(mv.context_status(self.config, self.file)['history']['prepared'])
+        self.config['rpgmaker_mv']['reviewed_history_file'] = ''
+        self.configure()
+        self.embed.reset_mock()
+        hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+        self.assertFalse(hits)
+        self.assertEqual(diagnostics['reason'], 'reviewed_history_selection_changed')
+        self.embed.assert_not_called()
+
+    def test_history_without_selection_metadata_requires_explicit_rebuild(self):
+        for selection in (str(self.history), ''):
+            with self.subTest(selection=selection):
+                self.config['rpgmaker_mv']['reviewed_history_file'] = selection
+                self.configure()
+                summary = batch.bootstrap_rag_store(skip_prepare=True, seed_jsonl_paths=[str(self.history)])
+                self.assertTrue(summary['prepared'])
+                path = self.root / 'history/metadata.json'
+                metadata = json.loads(path.read_text(encoding='utf-8'))
+                metadata['mv_preparation'].pop('history_selection', None)
+                path.write_text(json.dumps(metadata), encoding='utf-8')
+                self.embed.reset_mock()
+                hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Shared help'}], 'history')
+                self.assertFalse(hits)
+                self.assertFalse(diagnostics['prepared'])
+                self.assertEqual(diagnostics['status'], 'stale')
+                self.assertEqual(diagnostics['reason'], 'reviewed_history_selection_changed')
+                self.embed.assert_not_called()
+
+    def test_equivalent_relative_history_path_keeps_preparation_current(self):
+        self.prepare_stores()
+        metadata = (self.root / 'history/metadata.json').read_bytes()
+        self.config['rpgmaker_mv']['reviewed_history_file'] = self.history.name
+        self.configure()
+        self.embed.reset_mock()
+        status = mv.context_status(self.config, self.file)
+        self.assertTrue(status['history']['prepared'], status)
+        self.assertEqual(status['history']['record_count'], 1)
+        self.assertEqual((self.root / 'history/metadata.json').read_bytes(), metadata)
         self.embed.assert_not_called()
 
     def test_zero_hits_failed_store_and_disabled_are_distinct(self):
