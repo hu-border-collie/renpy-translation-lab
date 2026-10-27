@@ -1,15 +1,17 @@
 # 项目说明
 
-文档地图：[docs/README.md](README.md)
+> 历史项目说明：保留归档前的状态与实验摘要；当前支持范围见[项目首页](../../README.md#支持范围)，操作入口见[文档地图](../README.md)。
+
+文档地图：[docs/README.md](../README.md)
 
 本文档记录仓库状态、边界、安全注意事项和适用人群。日常使用入口见根目录 `README.md`。
 
 ## 环境要求
 
 - Python 3.11+
-- 按所用 checkout 的[依赖说明](dependencies.md)安装；GUI 另装可选依赖
+- 按所用 checkout 的[依赖说明](../dependencies.md)安装；GUI 另装可选依赖
 - 所选 Provider 的有效凭据；Gemini 路径需要 Gemini Key，直连 OpenAI-compatible 可独立配置，外部初译工作包不要求项目模型调用
-- 受支持的项目结构；Ren'Py 使用 `game/tl/<language>/`（默认 `schinese`，可通过配置修改），引擎边界见[Engine Adapter](engine_adapter.md)
+- 受支持的项目结构；Ren'Py 使用 `game/tl/<language>/`（默认 `schinese`，可通过配置修改），引擎边界见[Engine Adapter](../engine_adapter.md)
 
 ## 稳定版范围与边界
 
@@ -25,7 +27,7 @@
 
 ## 项目状态
 
-最新稳定发行版为 **v1.0.0**；`main` 同时包含下一版本尚未发布的维护和改进，详见 [变更日志](../CHANGELOG.md)。核心 Batch 翻译链路已经在十万词量级的私有 Ren'Py 项目副本上完整跑通，可以按现行文档用于有备份的真实项目。
+最新稳定发行版为 **v1.0.0**；`main` 同时包含下一版本尚未发布的维护和改进，详见 [变更日志](../../CHANGELOG.md)。核心 Batch 翻译链路已经在十万词量级的私有 Ren'Py 项目副本上完整跑通，可以按现行文档用于有备份的真实项目。
 
 - 日常实验和更新会先在作者本地工作区中进行；这个公开仓库只同步已经跑通、适合公开发布的版本。
 - 稳定版以文档所列 Python 环境、Ren'Py 项目结构和受支持工作流为边界；未覆盖环境仍可能需要自行排查。
@@ -33,22 +35,22 @@
 - 它既可作为 Ren'Py 翻译工作台直接使用，也可作为进一步改造的基础。
 - 项目开发过程中使用了 AI 辅助生成代码，整体方向、功能取舍、测试验证与集成决策由作者负责。
 - 目前不承诺及时处理 issue、兼容性问题或长期更新。
-- 当前 `main` 支持按 ModelProfile 选择同步或 Gemini Batch；新的同步任务使用耐久 `sync-start`，`gemini_translate.py` 保留为兼容入口。默认策略不因多 Provider 支持而自动改变，见[同步工作流](sync_workflow.md)。
+- 当前 `main` 支持按 ModelProfile 选择同步或 Gemini Batch；新的同步任务使用耐久 `sync-start`，`gemini_translate.py` 保留为兼容入口。默认策略不因多 Provider 支持而自动改变，见[同步工作流](../sync_workflow.md)。
 - **早期 GUI 烟测记录**：批量翻译主路径已在数千待译行的私有项目副本上跑通原文索引预建、提交 / 继续、下载、检查、允许后写回和启动验证；首次检查为「需处理」时正确禁用写回，修正并重新检查为「可写回」后才写入副本。兼容 Provider 的同步路径也完成隔离最小副本的真实调用、JSON 与占位符 / 标签保留烟测；当时关键词和订正只有自动化证据。后续记录见下一项，不能把早期缺口当作当前全部能力边界。
-- 后续已补四类 Provider / 策略矩阵、直连五阶段和真实中断恢复，并按限定验收关闭 #344 / #431，见[Provider Smoke Matrix](provider_smoke_matrix.md)。这些证据不表示所有模型、引擎或 GUI 操作均已实测；各日期报告保留原边界。
+- 后续已补四类 Provider / 策略矩阵、直连五阶段和真实中断恢复，并按限定验收关闭 #344 / #431，见[Provider Smoke Matrix](../provider_smoke_matrix.md)。这些证据不表示所有模型、引擎或 GUI 操作均已实测；各日期报告保留原边界。
 - 当前的 RAG 能力更适合“小包验证 + 逐步扩展”，还不应被表述为已经完成的大项目生产级方案。
 - Structured Story Memory 目前是可选 MVP，适合作为人工维护剧情上下文的 prompt 增强，不是完整自动图谱系统。
 - Project Analysis（项目分析）目前已具备完整工程链路：导入关键词 chunk、结构构建、LLM 精炼、人工审查/发布与翻译注入门禁。私有项目副本上的首轮实战表明：开箱自动生成的 brief / label / route 摘要更像“路线与菜单目录”，对**初译**的边际收益有限；真正稳住术语与口吻的仍是 `glossary.json`、`macro_setting.md` 与 Source Index。PA 更适合作为可人工修订的弱背景层，或进入多波次/终审后再依赖，不应被表述为开翻前的必需质量跃迁。
 - 核心 Batch 链路已在两万行量级的私有 Ren'Py 项目副本上完成首轮初译实战：`doctor -> build -> submit -> status -> download -> check -> apply` 全流程跑通，最终 `check=safe` 且无失败项。过程中修复了两个工具层问题：一是 `check` 的 v2 重定位校验会对同一大文件按 chunk 重复全量扫描，按 source fingerprint 缓存 live inventory / occurrences 后单文件只扫一次，检查时间从分钟级降到秒级；二是首轮结果存在大量结构失败，重试到瓶颈后改用本地确定性修复补回 `{w=...}`、保留词/专名与强调标签，并修复说话人名字参与整句对白校验的误判。结论：大包初译的写回门禁真实可用；对标签类失败，先重试、后本地确定性修复效率明显更高。
 - 同一私有项目的数千块章节进入人工/LLM 审校后，暴露出**初译直出的内容质量问题**：`check=safe` 与“译文质量合格”之间存在明显差距。机械扫描发现数百处插词和排版问题，另有少量已知机器错乱词与标签词缀问题；语义层问题（错译、反讽丢失、术语失控）仍需逐块通读。结论：直出仅可作草稿，交付前必须经过机械质量门禁，再进入语义审校；详见 `docs/batch_workflows.md` 的“校验的语义边界”。
-- #265 P1–P4 已在两个不同规模的私有 Ren'Py 项目**副本**上完成门禁实测（不写生产 `work/` / `build/`，不调用翻译模型）。较小项目验证了 coverage、独立 review、润色后源文本不匹配阻断、路径逃逸拒绝以及 `apply --force` 不能绕过 `deny`；较大项目验证了相邻版本对账、历史包不兼容拒绝、现场译文冻结、复用候选审查、`export-reuse-results` 到副本写回，以及改源后普通与强制写回均拒绝。结论：P5 开工前的真实项目门禁已满足；说话人标签分类偏严和大项目 coverage `block` 是后续独立问题，不构成直写通道。详情见 [Engine Adapter 与覆盖审计](engine_adapter.md#真实项目门禁实测)。
+- #265 P1–P4 已在两个不同规模的私有 Ren'Py 项目**副本**上完成门禁实测（不写生产 `work/` / `build/`，不调用翻译模型）。较小项目验证了 coverage、独立 review、润色后源文本不匹配阻断、路径逃逸拒绝以及 `apply --force` 不能绕过 `deny`；较大项目验证了相邻版本对账、历史包不兼容拒绝、现场译文冻结、复用候选审查、`export-reuse-results` 到副本写回，以及改源后普通与强制写回均拒绝。结论：P5 开工前的真实项目门禁已满足；说话人标签分类偏严和大项目 coverage `block` 是后续独立问题，不构成直写通道。详情见 [Engine Adapter 与覆盖审计](../engine_adapter.md#真实项目门禁实测)。
 - #265 P5 已完成 TyranoScript V600+ 验证 adapter：严格 parser/candidate 分类、原生语言 JSON 对账、唯一语义重定位、译文校验、声明式 catalog 写回，以及 `lang_set`/多 catalog/运行时结构完整性检查均有离线正负路径覆盖。该能力验证公共 adapter 边界，不代表 P6 的 CLI、GUI、doctor 或发布门禁产品化已经完成。
 
 ## 安全说明
 
 执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。推荐先跑 `doctor`，再走 `build -> submit -> status -> download -> check -> apply`；只有 `check` 输出 `writeback_gate.decision=allow` 时才继续 `apply`。如果写回门禁为 `deny`，先查看失败报告并通过 retry / repair / revision 等流程处理；`quality_gate` 报警默认不阻止写回，但交付前仍须处理机械报警并做人工/LLM 语义审校。
 
-本地保存 API Key 不代表待译文本留在本机。Gemini 与 LiteLLM 调用会把认证信息、待译文本、提示词和启用上下文发送给对应供应商；免费/付费账号的数据使用与保留政策可能不同。完整说明见 [安装与本地配置 · 数据与凭据边界](setup.md#数据与凭据边界)。
+本地保存 API Key 不代表待译文本留在本机。Gemini 与 LiteLLM 调用会把认证信息、待译文本、提示词和启用上下文发送给对应供应商；免费/付费账号的数据使用与保留政策可能不同。完整说明见 [安装与本地配置 · 数据与凭据边界](../setup.md#数据与凭据边界)。
 
 不要把以下内容提交到公开仓库：
 
@@ -65,7 +67,7 @@
 
 ## 开发约定
 
-本仓库的正式贡献规则见根目录 [CONTRIBUTING.md](../CONTRIBUTING.md)。
+本仓库的正式贡献规则见根目录 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 其中最重要的一条：**CLI 与 GUI 必须同步**。新功能、新配置、新诊断项、新安全闸门，应同时在命令行和图形工作台可用；核心逻辑只实现一次，GUI 通过共用模块或同一 CLI 参数接入。仅有意的例外（纯主题、调试命令等）才允许只改一侧，且须在 PR 中说明。
 

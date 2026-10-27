@@ -1,5 +1,7 @@
 # #520 现代模型续验：DeepSeek V4.1 Flash（2026-10-20）
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 最终结论（2026-10-21）：**DeepSeek / DeepInfra 的 Sync 与 Batch 均已真实完成；Batch 两条结果、6 个 item 的精确关联及结构保护通过。生产接入暂缓。**
 首轮 GPT-4.1 Mini 的 400 只说明当时该路线失败，不能推广为整个 OpenRouter Batch 不可用。
 本页追加新条件及终态证据，不改写[首轮负结果](issue-520-openrouter-batch-spike-2026-10-20.md)。

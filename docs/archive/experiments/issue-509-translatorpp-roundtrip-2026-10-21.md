@@ -1,12 +1,14 @@
 # #509 Translator++ 单版本往返：实测结果与接入决定
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态（2026-10-22 完成补测）**：已完成真实 GUI 导入、保存 `.trans`、无修改/人工译文导出、独立 null 保存/重开/导出、staging 缺失与恢复重试、一次命令位置漂移及畸形/缺失源文件测试。固定 **TPP 8.8.9 → RMMVJS parser 2.19 → MV 编辑器/core 1.5.1**。限定译文与 null 补测均精确命中 19 个字符串位置，部分原生和 HTML5 运行有证据；无修改全资源导出改写插件文件生成注释，前插注释后的 context 译文迁移缺一处。**本轮 spike 的验收证据已齐，决定保留 TPP 独立使用，生产 bridge 暂缓；记录交付与合并状态另行跟踪，不将上游缺陷写成通过。**
 > **仓库基线**：`main@d7c9763d9fa8fd004d0527c937a591ce6499a97a`，开始时工作区干净、远端 main 同值；开始时读取的 [#509](https://github.com/hu-border-collie/renpy-translation-lab/issues/509) 为 OPEN、无评论。未修改线上 issue。
 > **范围**：原创夹具、独立核对和限定往返实验；未开发 bridge、`.trans` reader/writer、Adapter、服务或产品 GUI，未调用翻译 Provider。交付仅包含本报告、原创数据覆盖层和研究更新。
 
 ## 1. 版本、来源和许可
 
-现行入口为[接入评估](translatorpp_integration_assessment.md)、[能力矩阵](visual_novel_localization_matrix.md)、[生态研究](multi_engine_localization_ecosystem_research.md)。只读核对过未合并的 #272 提交 `7e2cbd8a7f190ea300a5caf85c930644370cbbbc`，没有合并或 cherry-pick。
+现行入口为[接入评估](../research/translatorpp_integration_assessment.md)、[能力矩阵](../research/visual_novel_localization_matrix.md)、[生态研究](../research/multi_engine_localization_ecosystem_research.md)。只读核对过未合并的 #272 提交 `7e2cbd8a7f190ea300a5caf85c930644370cbbbc`，没有合并或 cherry-pick。
 
 | 对象 | 本次实际证据 | 边界 |
 | --- | --- | --- |
@@ -79,7 +81,7 @@ Windows 对低完整性可执行文件的进程创建规则见 [Microsoft MIC �
 
 使用 MV New Project 正常创建《The Night Signal》，关闭工程后写入六份本轮原创数据/配置，再由编辑器复开确认。完整原件有 **1,100 文件、403,838,024 字节**，均留本地；随后建立独立 `input-copy` 和 `runtime-original`，并为各导出建立专用 `runtime-*` 副本。TPP 处理 input-copy，运行只用专用 runtime 副本，导出分别到新目录，原件不参与运行或导出。
 
-公开的[原创数据覆盖层](issue-509-materials/README.md)提供 [Map001.json](issue-509-materials/Map001.json)、[CommonEvents.json](issue-509-materials/CommonEvents.json)、[制作材料](issue-509-materials/storyboard.json)和[实际 occurrence 清单](issue-509-materials/occurrences.json)。复现需合法 MV 1.5.1 安装提供引擎/素材；不是可独立启动的完整游戏包。System、Actors、Items 和无插件设置的复现步骤在覆盖层说明中，不提交默认第三方数据库。
+公开的[原创数据覆盖层](../../plans/issue-509-materials/README.md)提供 [Map001.json](../../plans/issue-509-materials/Map001.json)、[CommonEvents.json](../../plans/issue-509-materials/CommonEvents.json)、[制作材料](../../plans/issue-509-materials/storyboard.json)和[实际 occurrence 清单](../../plans/issue-509-materials/occurrences.json)。复现需合法 MV 1.5.1 安装提供引擎/素材；不是可独立启动的完整游戏包。System、Actors、Items 和无插件设置的复现步骤在覆盖层说明中，不提交默认第三方数据库。
 
 两份游戏 JSON 使用同目录、精确文件名的 Git `-text` 属性保留原件 CRLF，文件 hash 不受 checkout 换行设置影响。核对范围包括 Git blob 和 LF/CRLF 配置下的独立 checkout，不仅是 Windows 工作区中尚未经过 Git 规范化的文件；根属性文件及依赖锁不变。
 

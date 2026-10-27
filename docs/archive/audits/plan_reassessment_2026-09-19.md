@@ -1,5 +1,7 @@
 # 七类规划方向重新评估
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态（2026-09-19 评估；2026-09-20 更新）：评估已完成，两项后续实现已登记为 [#512](https://github.com/hu-border-collie/renpy-translation-lab/issues/512) / [#513](https://github.com/hu-border-collie/renpy-translation-lab/issues/513)，尚未交付；字体只读 spike PR [#511](https://github.com/hu-border-collie/renpy-translation-lab/pull/511) 已合并为 [main@a107ca4](https://github.com/hu-border-collie/renpy-translation-lab/commit/a107ca4e04d1e31c1cc84c83ad1e50a9eda92157)，[#487](https://github.com/hu-border-collie/renpy-translation-lab/issues/487) 已关闭，生产接入范围待评估。** 其他方向按已有任务或本文触发条件推进。全量计划状态整理仍由 [#510](https://github.com/hu-border-collie/renpy-translation-lab/issues/510) 跟踪。
 
 > **后续交付状态（2026-09-27；不改变下方 9 月 19 日研究结论与固定基线）**：#512 复用候选 GUI 已由 PR [#524](https://github.com/hu-border-collie/renpy-translation-lab/pull/524) 合并；#513 由 PR [#527](https://github.com/hu-border-collie/renpy-translation-lab/pull/527) 分离 `language_allowed_latin_tokens` 与 `typography_exempt_latin_tokens`，并保留 `allowed_latin_tokens` 的全局旧语义及冻结策略 / 指纹兼容。两个 issue 仍 OPEN，正文验收清单未回填；合并事实不代表自动关闭。字体生产接入仍待评估，真实实验继续按本目录索引所列原 issue 跟踪。

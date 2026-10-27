@@ -60,7 +60,7 @@ S2 在 S1 直连生成后端之上补齐四块：
 
 ## 5. LiteLLM 迁移矩阵
 
-详见 [issue-431-litellm-migration-matrix.md](issue-431-litellm-migration-matrix.md)。
+详见 [issue-431-litellm-migration-matrix.md](../archive/research/issue-431-litellm-migration-matrix.md)。
 S2 只完成清点与文档，不删除依赖、不改默认路径、不迁移旧配置。
 
 ## 6. 测试

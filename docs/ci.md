@@ -29,6 +29,28 @@ Linux 的 GUI 用例只在 `gui` job 运行一次，Windows 在 `unittest` job �
 
 本地修改先运行受影响的模块。纯文案、颜色、间距等低影响改动按已有覆盖验证；新增用例应对应独立失败场景，已有场景优先扩充现有测试。规则判断优先使用轻量夹具，真实窗口测试用于验证控件接线、状态交互和布局。不要为了减少测试数量删掉写回闸门、源快照、解析身份或恢复流程的独有回归覆盖。
 
+## 沙箱与临时目录
+
+GUI 测试已隔离开发者配置和用户级模型缓存；真实 GUI 的默认缓存目录不可写时也有临时目录回退。
+历史故障与修复过程见[2026-08 调查](archive/gui_tests_sandbox_notes.md)，旧报告中的“必然卡住”不适用于当前测试隔离。
+
+若测试启动时仍在创建临时配置或缓存处出现 `PermissionError`，先确认 TEMP／TMP 实际可写。
+可在单独的 PowerShell 测试会话中使用工作区的忽略目录：
+
+```powershell
+$testTemp = Join-Path (Get-Location) 'logs\test-temp'
+New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
+$env:TEMP = $testTemp
+$env:TMP = $testTemp
+$env:QT_QPA_PLATFORM = 'offscreen'
+python -B tests/run_gui_tests.py -q
+```
+
+这些环境设置只作用于当前终端及其子进程。CLI 源文件扫描所用的完整验证副本应放在仓库外；
+配置与缓存临时目录无需混入源码副本。Linux／WSL 的只读 home 同样先检查临时与缓存路径。
+命令超时后先核对对应测试进程是否已经结束，避免重复启动残留套件；
+不要据权限失败改产品逻辑、放宽断言或将未知结果记为通过。
+
 ## PR-Agent 自动审查（非测试门禁）
 
 `.github/workflows/pr-agent.yml` 在 pull request 的 opened / reopened / ready_for_review / synchronize 事件上运行 PR-Agent，并允许仓库 OWNER / MEMBER / COLLABORATOR 在开放 PR 评论区用 `/review` 手动触发。外部用户评论、Bot 评论、普通 issue 评论和已关闭 PR 不会触发，以免评论注入或消耗供应商额度。
