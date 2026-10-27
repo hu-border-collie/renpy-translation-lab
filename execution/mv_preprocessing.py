@@ -296,10 +296,13 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
             else:
                 pending.append(record)
         summary['embedding_pending'] = len(pending)
+        print(f"MV context preparation: {len(records)} segments, "
+              f"{summary['reused_embeddings']} reused, {len(pending)} pending.", flush=True)
         for start in range(0, len(pending), 16):
             batch = pending[start:start + 16]
             require_material_fresh(expected, live_material_identity(snapshot,
                 _load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG))
+            print(f"MV context embedding request: {start + 1}-{start + len(batch)}/{len(pending)}.", flush=True)
             vectors = runtime.embed_texts([row['source_text'] for row in batch], settings.native_document_task_type)
             if len(vectors) != len(batch):
                 raise ValueError('MV document embedding count mismatch.')
@@ -311,11 +314,13 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
                     'embedding_dim': settings.output_dimension}})
             summary['embedded'] += len(batch)
             print(f"MV context embedding progress: {summary['embedded']}/{len(pending)}", flush=True)
+        print('MV context validation started.', flush=True)
         require_material_fresh(expected, live_material_identity(snapshot,
             _load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG))
         for path, digest in summary.get('input_files', {}).items():
             if hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest:
                 raise ValueError('MV reviewed history changed during bootstrap.')
+        print('MV context persistence started.', flush=True)
         summary['upserted'] = upsert(ready)
         stale = set(previous) - {row[id_key] for row in ready}
         summary['stale_count'] = len(stale)
@@ -330,6 +335,7 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
         store.set_metadata(mv_preparation=preparation)
         summary.update(prepared=True, status='ready', current_records=len(records),
             history_records_after=len(store.history if kind == 'history' else store.segments))
+        print(f'MV context preparation complete: {len(records)} segments.', flush=True)
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
         store.set_metadata(mv_preparation={'status': 'failed', **diagnostics})

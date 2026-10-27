@@ -1528,6 +1528,84 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(self.window.doctor_btn.isHidden())
         self.assertFalse(self.window.bootstrap_work_btn.isHidden())
 
+    def test_context_bootstrap_starts_cli_with_real_progress_state(self) -> None:
+        from gui_qt.reports.bootstrap_report import BootstrapSummary
+
+        for kind, mode in (
+            ("source_index", WorkMode.BOOTSTRAP_SOURCE_INDEX),
+            ("rag", WorkMode.BOOTSTRAP_RAG),
+        ):
+            with self.subTest(kind=kind):
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                with (
+                    mock.patch.object(self.window.state, "get_game_root", return_value="C:/original-fixture/work"),
+                    mock.patch.object(self.window, "_confirm_unsaved_config_before_workflow", return_value=True),
+                    mock.patch.object(self.window, "_saved_batch_context_flags", return_value={
+                        "rag_enabled": True, "source_index_enabled": True,
+                    }),
+                    mock.patch.object(self.window.runner, "run", return_value=True) as run,
+                ):
+                    self.assertTrue(self.window._start_bootstrap_task(kind))
+                    run.assert_called_once_with(
+                        self.window.state.get_batch_script_path(),
+                        ["bootstrap-" + kind.replace("_", "-"), "--skip-prepare"],
+                    )
+                    self.assertEqual(self.window._bootstrap_progress.kind, kind)
+                    self.assertEqual(self.window._active_command, "bootstrap_" + kind)
+                    self.assertTrue(self.window._task_running)
+                    self.assertEqual(self.window._bootstrap_progress_eta_timer.isActive(), kind == "source_index")
+                    section = self.window.context_library_page.bootstrap_status_section
+                    self.assertFalse(section.progress_bar.isHidden())
+                    self.assertIn("记忆库" if kind == "rag" else "原文索引", section.status_badge.text())
+                self.window._active_command = ""
+                self.window._set_workflow_from_bootstrap_summary(
+                    BootstrapSummary(kind, "ready", "预建已完成", "已保存上下文库。", [], [])
+                )
+                self.window._set_task_running(False)
+                self.assertIsNone(self.window._bootstrap_progress)
+                self.assertFalse(self.window._bootstrap_progress_eta_timer.isActive())
+                self.assertTrue(section.progress_bar.isHidden())
+                self.assertIn("预建已完成", section.status_badge.text())
+
+    def test_context_bootstrap_rejected_start_clears_running_progress(self) -> None:
+        self.window._set_work_mode(WorkMode.BOOTSTRAP_SOURCE_INDEX, refresh_manifest_writeback=False)
+        with (
+            mock.patch.object(self.window.state, "get_game_root", return_value="C:/original-fixture/work"),
+            mock.patch.object(self.window, "_confirm_unsaved_config_before_workflow", return_value=True),
+            mock.patch.object(self.window, "_saved_batch_context_flags", return_value={
+                "rag_enabled": True, "source_index_enabled": True,
+            }),
+            mock.patch.object(self.window.runner, "run", return_value=False),
+        ):
+            self.assertFalse(self.window._start_bootstrap_task("source_index"))
+        self.assertIsNone(self.window._bootstrap_progress)
+        self.assertFalse(self.window._bootstrap_progress_eta_timer.isActive())
+        self.assertFalse(self.window._task_running)
+        self.assertTrue(self.window.context_library_page.bootstrap_status_section.progress_bar.isHidden())
+
+    def test_context_mv_bootstrap_renders_generation_and_persistence(self) -> None:
+        from gui_qt.reports.bootstrap_report import create_bootstrap_progress_state
+
+        self.window._set_work_mode(WorkMode.BOOTSTRAP_SOURCE_INDEX, refresh_manifest_writeback=False)
+        self.window._active_command = "bootstrap_source_index"
+        self.window._bootstrap_progress = create_bootstrap_progress_state("source_index")
+        self.window._on_cli_line_ready("MV context preparation: 20 segments, 4 reused, 16 pending.\n")
+        self.window._on_cli_line_ready("MV context embedding progress: 16/16\n")
+        self.window._flush_throttled_progress_ui()
+        section = self.window.context_library_page.bootstrap_status_section
+        self.assertIn("16/16", section.message_label.text())
+        self.assertEqual(section.progress_bar.maximum(), 0)
+        self.assertEqual(self.window._bootstrap_progress.stored_segments, 0)
+        self.window._on_cli_line_ready("MV context persistence started.\n")
+        self.window._flush_throttled_progress_ui()
+        self.assertIn("正在保存", section.message_label.text())
+        self.window._on_cli_line_ready("MV context preparation complete: 20 segments.\n")
+        self.window._flush_throttled_progress_ui()
+        self.assertEqual(section.progress_bar.maximum(), 20)
+        self.assertEqual(section.progress_bar.value(), 20)
+        self.window._active_command = ""
+        self.window._clear_bootstrap_progress_ui()
+
     def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,

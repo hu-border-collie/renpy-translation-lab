@@ -9638,6 +9638,9 @@ class MainWindow(QMainWindow):
             self._bootstrap_progress_eta_timer.stop()
         if hasattr(self, "workflow_progress_bar"):
             self.workflow_progress_bar.setVisible(False)
+        page = getattr(self, "context_library_page", None)
+        if page is not None:
+            page.set_bootstrap_progress(None)
 
     def _clear_workflow_progress_ui(self) -> None:
         self._workflow_progress = None
@@ -9711,9 +9714,9 @@ class MainWindow(QMainWindow):
         from types import SimpleNamespace
 
         state = self._bootstrap_progress
-        if state is None or not state.visible:
+        if state is None:
             return None
-        if self._active_command == "bootstrap_rag":
+        if state.kind == "rag":
             return SimpleNamespace(
                 visible=True,
                 indeterminate=True,
@@ -9726,13 +9729,13 @@ class MainWindow(QMainWindow):
         if tracker is not None:
             tracker.observe(state)
         facts = format_bootstrap_progress_facts(state)
-        if state.total_segments <= 0 and state.stored_segments <= 0:
+        if state.phase.startswith("mv_") or (state.total_segments <= 0 and state.stored_segments <= 0):
             return SimpleNamespace(
                 visible=True,
                 indeterminate=True,
                 total=0,
                 current=0,
-                label="正在扫描原文…",
+                label=format_bootstrap_progress_bar_label(state),
                 facts=facts,
             )
         total = max(int(state.total_segments), 1)
@@ -9757,7 +9760,7 @@ class MainWindow(QMainWindow):
 
         page = self._workflow_status_page()
         if page is not None and callable(getattr(page, "set_bootstrap_progress", None)):
-            kind = "rag" if self._active_command == "bootstrap_rag" else "source_index"
+            kind = self._bootstrap_progress.kind if self._bootstrap_progress is not None else ""
             page.set_bootstrap_progress(
                 self._adapt_bootstrap_progress_for_page(),
                 kind=kind,
@@ -9783,9 +9786,9 @@ class MainWindow(QMainWindow):
         if tracker is not None:
             tracker.observe(state)
 
-        if state.total_segments <= 0 and state.stored_segments <= 0:
+        if state.phase.startswith("mv_") or (state.total_segments <= 0 and state.stored_segments <= 0):
             self.workflow_progress_bar.setRange(0, 0)
-            self.workflow_progress_bar.setFormat("正在扫描原文…")
+            self.workflow_progress_bar.setFormat(format_bootstrap_progress_bar_label(state))
             self.workflow_progress_bar.setVisible(True)
         else:
             total = max(state.total_segments, 1)
@@ -11617,7 +11620,8 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._bootstrap_output_lines = []
-        self._bootstrap_progress = create_bootstrap_progress_state(kind)
+        progress = create_bootstrap_progress_state(kind)
+        self._bootstrap_progress = progress
         self._bootstrap_progress_tracker = (
             create_bootstrap_progress_tracker()
             if kind == "source_index"
@@ -11637,11 +11641,18 @@ class MainWindow(QMainWindow):
         self._set_workflow_from_bootstrap_summary(running_summary)
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._apply_bootstrap_progress_ui()
-        return self._start_cli_command(
+        started = self._start_cli_command(
             command,
             self.state.get_batch_script_path(),
             args,
         )
+        if not started and self._bootstrap_progress is progress and not self._task_running:
+            summarize = (
+                summarize_rag_bootstrap_output if kind == "rag"
+                else summarize_source_index_bootstrap_output
+            )
+            self._set_workflow_from_bootstrap_summary(summarize("", 1))
+        return started
 
     def _on_start_translation(self):
         spec = work_mode_spec(self._current_work_mode())

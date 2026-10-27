@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 
 from gui_qt.reports.duration_format import format_remaining_duration_zh
 from gui_qt.reports.summary_helpers import extend_facts_with_notices
-from gui_qt.user_copy import format_bootstrap_fact, MV_PREPARATION_COPY
+from gui_qt.user_copy import BOOTSTRAP_PROGRESS_COPY, format_bootstrap_fact, MV_PREPARATION_COPY
 from typing import Any
 
 
@@ -23,6 +23,8 @@ class BootstrapSummary:
 
 @dataclass(frozen=True)
 class BootstrapProgressState:
+    """Source-index counters; MV vectors remain buffered until validated persistence."""
+
     kind: str = "source_index"
     phase: str = "starting"
     total_segments: int = 0
@@ -50,6 +52,12 @@ _SOURCE_INDEX_EMBEDDING_TOTAL_RE = re.compile(
 _SOURCE_INDEX_EMBEDDING_PROGRESS_RE = re.compile(
     r"Source index embedding progress:\s*(\d+)/(\d+)\s*scanned,\s*(\d+)\s*embedded,\s*(\d+)\s*stored"
 )
+_MV_PREPARATION_RE = re.compile(
+    r"MV context preparation:\s*(\d+) segments,\s*(\d+) reused,\s*(\d+) pending\."
+)
+_MV_EMBEDDING_REQUEST_RE = re.compile(r"MV context embedding request:\s*\d+-\d+/(\d+)")
+_MV_EMBEDDING_PROGRESS_RE = re.compile(r"MV context embedding progress:\s*(\d+)/(\d+)")
+_MV_PREPARATION_COMPLETE_RE = re.compile(r"MV context preparation complete:\s*(\d+) segments\.")
 
 
 RAG_SUMMARY_HEADER = "RAG bootstrap summary:"
@@ -150,6 +158,32 @@ def update_bootstrap_progress_from_line(
     text = line.strip()
     if not text:
         return state
+
+    match = _MV_PREPARATION_RE.search(text)
+    if match:
+        pending = int(match.group(3))
+        return replace(state, phase="mv_embedding" if pending else "mv_validating",
+                       total_segments=int(match.group(1)), reused_embeddings=int(match.group(2)),
+                       embedding_total=pending)
+
+    match = _MV_EMBEDDING_REQUEST_RE.search(text)
+    if match:
+        return replace(state, phase="mv_embedding", embedding_total=int(match.group(1)))
+
+    match = _MV_EMBEDDING_PROGRESS_RE.search(text)
+    if match:
+        return replace(state, phase="mv_embedding", embedding_done=int(match.group(1)),
+                       embedding_total=int(match.group(2)))
+
+    if text == "MV context validation started.":
+        return replace(state, phase="mv_validating")
+    if text == "MV context persistence started.":
+        return replace(state, phase="mv_persisting")
+
+    match = _MV_PREPARATION_COMPLETE_RE.search(text)
+    if match:
+        total = int(match.group(1))
+        return replace(state, phase="done", total_segments=total, stored_segments=total)
 
     match = _SOURCE_INDEX_PRE_RUN_TOTAL_RE.search(text)
     if match:
@@ -297,8 +331,10 @@ def format_bootstrap_progress_bar_label(
     state: BootstrapProgressState,
     remaining_seconds: int | None = None,
 ) -> str:
+    if state.phase.startswith("mv_"):
+        return BOOTSTRAP_PROGRESS_COPY[state.phase].format(done=state.embedding_done, total=state.embedding_total)
     if state.total_segments <= 0 and state.stored_segments <= 0:
-        return "正在扫描原文…"
+        return BOOTSTRAP_PROGRESS_COPY["empty_done" if state.phase == "done" else "scanning"]
 
     total = max(state.total_segments, 1)
     stored = min(max(state.stored_segments, 0), total)
@@ -318,7 +354,9 @@ def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
         return []
 
     facts: list[str] = []
-    if state.total_segments > 0:
+    if state.phase.startswith("mv_"):
+        facts.append(BOOTSTRAP_PROGRESS_COPY["mv_total"].format(total=state.total_segments))
+    elif state.total_segments > 0:
         percent = (state.stored_segments * 100) // state.total_segments
         facts.append(
             f"入库进度：{state.stored_segments}/{state.total_segments} 片段（{percent}%）"
@@ -327,7 +365,10 @@ def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
         facts.append(
             f"本轮向量生成：{state.embedding_done}/{state.embedding_total}"
         )
-    elif state.reused_embeddings > 0 and state.phase in {"reusing", "embedding", "starting"}:
+    if state.reused_embeddings > 0 and (
+        state.phase.startswith("mv_")
+        or (state.embedding_total <= 0 and state.phase in {"reusing", "embedding", "starting"})
+    ):
         facts.append(f"已复用向量：{state.reused_embeddings} 片段")
 
     if state.phase == "pruning":
