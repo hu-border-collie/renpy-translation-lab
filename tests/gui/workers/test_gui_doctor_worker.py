@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 import unittest
+from queue import Empty
 from unittest import mock
 
 try:
     from PySide6.QtWidgets import QApplication
 
-    from gui_qt.workers.doctor_worker import DoctorWorker, DoctorWorkerResult, run_doctor_check
+    from gui_qt.workers.doctor_worker import (
+        DoctorWorker, DoctorWorkerResult, run_doctor_check,
+        run_doctor_check_in_subprocess,
+    )
 except ImportError as exc:
     DoctorWorker = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
@@ -152,6 +156,64 @@ class GuiDoctorWorkerTests(unittest.TestCase):
         run_mock.assert_called_once()
         self.assertIs(run_mock.call_args.args[0], cfg)
         inproc_mock.assert_not_called()
+
+    def test_subprocess_drains_large_report_before_waiting_for_child_exit(self):
+        payload = DoctorWorkerResult(True, {"mode": "fixture"}, "x" * 500_000)
+        process, queue, context = mock.Mock(), mock.Mock(), mock.Mock()
+        alive = [True]
+        process.is_alive.side_effect = lambda: alive[0]
+        process.join.side_effect = AssertionError("Child cannot exit until its report is drained")
+
+        def receive(*, timeout):
+            self.assertTrue(alive[0])
+            alive[0] = False
+            return payload
+
+        queue.get.side_effect = receive
+        context.Queue.return_value = queue
+        context.Process.return_value = process
+        with mock.patch("gui_qt.workers.doctor_worker.mp.get_context", return_value=context):
+            result = run_doctor_check_in_subprocess()
+
+        self.assertIs(result, payload)
+        queue.get.assert_called_once_with(timeout=0.05)
+        process.join.assert_not_called()
+        process.terminate.assert_not_called()
+        queue.close.assert_called_once()
+        queue.join_thread.assert_called_once()
+
+    def test_subprocess_cancel_while_waiting_still_terminates_child(self):
+        process, queue, context = mock.Mock(), mock.Mock(), mock.Mock()
+        alive = [True]
+        process.is_alive.side_effect = lambda: alive[0]
+        process.terminate.side_effect = lambda: alive.__setitem__(0, False)
+        queue.get.side_effect = Empty
+        context.Queue.return_value = queue
+        context.Process.return_value = process
+        cancelled = mock.Mock(side_effect=[False, True])
+        with mock.patch("gui_qt.workers.doctor_worker.mp.get_context", return_value=context):
+            result = run_doctor_check_in_subprocess(should_cancel=cancelled)
+
+        self.assertFalse(result.ok)
+        self.assertIn("已取消", result.error)
+        process.terminate.assert_called_once()
+        queue.close.assert_called_once()
+        queue.join_thread.assert_called_once()
+
+    def test_subprocess_exit_without_report_still_returns_error(self):
+        process, queue, context = mock.Mock(), mock.Mock(), mock.Mock()
+        process.is_alive.return_value = False
+        process.exitcode = 7
+        queue.get.side_effect = Empty
+        context.Queue.return_value = queue
+        context.Process.return_value = process
+        with mock.patch("gui_qt.workers.doctor_worker.mp.get_context", return_value=context):
+            result = run_doctor_check_in_subprocess()
+
+        self.assertFalse(result.ok)
+        self.assertIn("code=7", result.error)
+        queue.close.assert_called_once()
+        queue.join_thread.assert_called_once()
 
     def test_worker_falls_back_to_inprocess_when_isolation_fails(self):
         import translator_runtime as runtime

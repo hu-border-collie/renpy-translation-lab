@@ -11146,7 +11146,8 @@ class MainWindow(QMainWindow):
         try:
             with legacy.locked_runtime_state():
                 legacy.load_translator_settings(
-                    persist_corrected_game_root=persist_corrected_game_root
+                    persist_corrected_game_root=persist_corrected_game_root,
+                    allow_litellm_import=False,
                 )
                 return legacy.snapshot_runtime_config()
         except SystemExit:
