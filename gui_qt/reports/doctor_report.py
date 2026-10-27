@@ -427,6 +427,20 @@ def parse_doctor_output(output: str) -> dict[str, object]:
             parsed["mode"] = line.split(":", 1)[1].strip()
             continue
 
+        if line.startswith(('- Detected engine:', '- Detected content root:')):
+            engine = parsed.setdefault('engine_status', {'status': 'blocked', 'issues': [{'details': {}}]})
+            key = 'detected_engine' if line.startswith('- Detected engine:') else 'content_root'
+            engine['issues'][0]['details'][key] = line.split(':', 1)[1].strip()
+            continue
+
+        if line.startswith('- MV setup:'):
+            import json
+            try:
+                parsed['mv_setup'] = json.loads(line.split(':', 1)[1].strip())
+            except ValueError:
+                pass
+            continue
+
         if line.startswith("- Is work root:"):
             parsed["is_work_root"] = _parse_bool(line.split(":", 1)[1].strip())
             continue
@@ -512,6 +526,7 @@ def doctor_report_to_parsed(report: dict[str, Any]) -> dict[str, object]:
         original_game_exists = None
 
     parsed: dict[str, object] = {
+        'mv_setup': report.get('mv_setup') or {},
         'mv_preparation': report.get('mv_preparation') or {},
         'engine_status': report.get('engine_status') or {},
         "base_dir": str(report.get("base_dir") or ""),
@@ -613,23 +628,56 @@ def _summarize_doctor_parsed(
     pending_value = parsed.get("pending")
     pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
+    if mode == 'mv_setup_required':
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        setup = parsed.get('mv_setup') or {}
+        missing = setup.get('missing') or []
+        facts = [f"游戏内容目录：{setup.get('target_root') or parsed.get('base_dir') or ''}"]
+        facts.extend(MV_PROJECT_COPY['setup_source_missing' if key == 'source_root' else 'setup_window_missing']
+                     for key in missing)
+        facts.append(MV_PROJECT_COPY['setup_selected_scope' if setup.get('scope') == 'selected' else 'setup_full_scope'])
+        return DoctorSummary(status='warning', heading=MV_PROJECT_COPY['setup_heading'],
+            message=MV_PROJECT_COPY['setup_message'], facts=facts, findings=[], mode=mode)
+    if mode == 'engine_mismatch':
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        issues = (parsed.get('engine_status') or {}).get('issues') or []
+        details = (issues[0].get('details') or {}) if issues else {}
+        is_mv = details.get('detected_engine') == 'rpgmaker_mv'
+        message = MV_PROJECT_COPY['engine_mismatch'].format(engine='MV' if is_mv else 'MZ')
+        action = MV_PROJECT_COPY['engine_mismatch_mv_action' if is_mv else 'engine_mismatch_mz_action']
+        return DoctorSummary(
+            status='blocked', heading=MV_PROJECT_COPY['engine_mismatch_heading'], message=message,
+            facts=[action.format(content_root=details.get('content_root') or '')],
+            findings=[], mode=mode,
+        )
     if mode == 'mv_narrative':
         from gui_qt.user_copy import MV_PROJECT_COPY
         from gui_qt.user_copy import mv_context_status_label
         engine = parsed.get('engine_status') or {}
         issues = engine.get('issues') or []
         blocked = exit_code != 0 or engine.get('status') != 'ready'
+        review_only = bool(issues) and all(
+            issue.get('code') == 'engine.mv.scope_review_required' for issue in issues)
+        coverage = parsed.get('coverage') or {}
+        review_details = [str((issue.get('details') or {}).get('review_error') or '')
+                          for issue in issues if issue.get('details')]
         return DoctorSummary(
-            status='blocked' if blocked else ('warning' if api_key_count == 0 or warnings else 'ready'),
-            heading='MV 项目检查未通过' if blocked else MV_PROJECT_COPY['checked_heading'],
+            status='blocked' if blocked else (
+                'warning' if api_key_count == 0 or warnings or coverage.get('unsupported_count') else 'ready'),
+            heading=(MV_PROJECT_COPY['review_required_heading'] if review_only else 'MV 项目检查未通过')
+                    if blocked else MV_PROJECT_COPY['checked_heading'],
             message=(str(issues[0].get('message')) if issues else '请检查 MV 源、目标与支持窗口配置。')
                     if blocked else MV_PROJECT_COPY['scope_empty' if (pending or {}).get('task_count') == 0 else 'scope_ready'],
             facts=[f"引擎：RPG Maker MV；数据 JSON：{counts.get('json_files', '未知')}",
+                   *([MV_PROJECT_COPY['review_required_steps']] if review_only else []),
+                   *([MV_PROJECT_COPY['unsupported_count'].format(count=coverage['unsupported_count'])]
+                     if coverage.get('unsupported_count') else []),
                    '当前支持：耐久 Sync 与同步预处理；原生验收：未完成',
                    *[f"{'原文索引' if key == 'source_index' else '历史记忆'}：{mv_context_status_label(value)}"
                      for key, value in (parsed.get('mv_preparation') or {}).items() if key in {'source_index', 'history'}]],
-            findings=[str(issue.get('message') or '') for issue in issues] + warnings, mode=mode,
-            detail_facts=format_coverage_detail_facts(parsed.get('coverage')))
+            findings=[] if review_only and not warnings else [str(issue.get('message') or '') for issue in issues] + warnings,
+            mode=mode,
+            detail_facts=[*format_coverage_detail_facts(coverage), *filter(None, review_details)])
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     workflow_state = (

@@ -69,7 +69,9 @@
   `engine_adapters/rpgmaker_mv_fields.py` 管理显式系统术语／地图显示名路径与角色；
   `tests/engine_adapters/test_mv_display_fields.py`、`tests/execution/test_mv_display_sync.py`
   及 `tests/fixtures/rpgmaker_mv_display/` 验证提取、参数保护和同一耐久事务链路。
-- `engine_adapters/project_config.py`：显式引擎选择、MV 支持窗口读取与产品入口限制。
+- `engine_adapters/project_config.py`：目录标记识别、缺省引擎／MV 内容根解析、显式选择、支持窗口读取与产品入口限制。
+- `engine_adapters/project_setup.py`：CLI / GUI 共用的准备缺项、原始源建议及保留范围的配置编辑；
+  `gui_qt/dialogs/mv_project_setup_dialog.py` 提供浏览表单，保存后由 doctor 检查材料和覆盖审阅。
 - `engine_adapters/mv_scope.py`：可选的 MV 精确位置清单，校验文件／原文字串摘要与类型化路径；只缩小请求范围，不隐藏完整材料的覆盖阻断。
 - `execution/mv_sync.py`：MV 完整材料审计、独立 review 绑定、耐久 Sync 源／目标身份、
   occurrence 到共享结果与 schema 2 plan 的桥接；产品回归见 `tests/execution/test_mv_durable_sync.py`，

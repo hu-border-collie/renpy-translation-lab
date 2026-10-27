@@ -92,6 +92,20 @@ class MvDurableSyncTests(unittest.TestCase):
             translation_plan.build_translation_plan(self.context.pending_jobs,
                 execution_strategy='gemini_batch', source_identity=self.context.plan_build.plan.source_identity)
 
+    def test_omitted_engine_uses_the_same_review_and_durable_writeback_contract(self):
+        self.config.pop('engine')
+        self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
+        runtime.load_translator_settings(persist_corrected_game_root=False)
+        self.context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+        self.service = build_production_sync_run_service(self.runs, self.context)
+        self.assertEqual(runtime.current_project_engine(), 'rpgmaker_mv')
+        self.assertEqual(runtime.BASE_DIR, str(self.target))
+        self.assertEqual(len(self.context.items_by_id), 14)
+        before = {path: path.read_bytes() for path in self.source.rglob('*') if path.is_file()}
+        store = self.checked()
+        self.assertEqual(batch.apply_durable_sync_results(store)['state'], 'applied')
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+
     def configure_occurrence_scope(self):
         self.scope_file = self.root / 'pilot-scope.json'
         self.scope_rows = self.positions[:3]

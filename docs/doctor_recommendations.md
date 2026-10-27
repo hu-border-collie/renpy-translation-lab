@@ -8,7 +8,25 @@ GUI 呈现层（#541 A）先显示现有 doctor 结论、已知计数与必需�
 
 ## 目标
 
+缺少 `engine` 时，根据所选目录、其 `www/` 或标准 `original/work` 布局的 MV
+`data/` 与 `js/rpg_core.js` 自动识别引擎及内容根；没有匹配材料时保持 Ren'Py 行为。
+doctor 的解析只在内存中完成，原配置不改写。GUI 选择目录或纠正启动路径时保存识别结果。
+独立原始源或支持窗口尚未配置时返回 `mode=mv_setup_required`、
+`engine.mv.setup_required`，计数未知，CLI 状态 blocked；GUI 显示「已识别 RPG Maker MV」
+和可操作的「准备 MV 项目」。准备表单显式选择原始源与已核对清单，保存后重新检查材料和覆盖审阅。
+普通 `work/www` 布局可建议同项目的 `original/www`，但不自动采用；不扫描历史制品寻找项目或缩小范围。
+
+目录识别不会批准兼容性或文本覆盖。未设置文件／位置筛选时保持完整游戏当前支持文本范围；
+既有筛选、模型、费用及密钥设置保留。缺少准备材料时执行入口在 Provider 派发前以
+`MV_PROJECT_SETUP_REQUIRED` 拒绝。显式 `engine=renpy` 与 MV 材料冲突，或发现 MZ 时，
+仍报告 `engine.project_mismatch`；MZ 不受支持。doctor、任务查询及独立工作包／索引操作仍可用。
+
 MV 模式有独立的[材料、显示字段选择与审阅前置](rpgmaker_mv_sync.md)，不生成 Ren'Py 模板／SDK 建议。`engine.mv.material_invalid`、`engine.mv.scope_review_required`、`engine.mv.context_unsupported` 为阻断；`start_pending_sync` 和 `mv_scope_no_pending` 仅描述已审阅文本范围，不能表示全游戏覆盖或原生验收完成。默认仍为叙事；显式启用的系统术语／地图显示名计入同一待译统计，选择改变须重新审阅。扫描失败时不产生待译 0 或 ready。
+
+覆盖核对缺失是扫描后的准备阶段：doctor 保留真实计数，输出中文下一步，
+`engine.mv.scope_review_required.details` 保留 `review_status`、`review_path` 和底层 `review_error`。
+GUI 显示「MV 文本已扫描，待覆盖核对」，在完整详情前提供导出／导入入口；仍禁止启动翻译。
+pending、stale、非法记录分别提示完成、重新核对或修正记录，不把缺失文件直接当成扫描失败。
 
 MV 的 `engine.mv.context_unsupported` 目前只针对 StoryMemory／Project Analysis 注入。
 同步关键词与 Source Index／已审阅 history bootstrap 已接入。`mv_preparation.source_index` /

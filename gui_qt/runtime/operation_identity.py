@@ -81,6 +81,9 @@ def context_library_config_digest(
     global keys (theme, models) must not change it for Ren'Py. MV also pins its
     material and store revisions, since readiness depends on actual preparation.
     """
+    if isinstance(config, dict):
+        from engine_adapters.project_config import resolve_project_configuration
+        config = resolve_project_configuration(config, config_file)
     flags = default_context_flags_from_config(
         config if isinstance(config, dict) else None
     )

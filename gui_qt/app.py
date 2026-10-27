@@ -585,6 +585,11 @@ class MainWindow(QMainWindow):
         self._context_library_status_pending_base = ""
         if bootstrap_config is None:
             bootstrap_config = self.state.load_translator_config()
+        from engine_adapters.project_config import resolve_project_configuration
+        try:
+            bootstrap_config = resolve_project_configuration(bootstrap_config, self.state.config_path)
+        except (ValueError, OSError, TypeError):
+            pass
         self._context_library_config_snapshot = copy.deepcopy(bootstrap_config)
         self._context_library_flags_cache: tuple[str, dict[str, bool]] | None = None
         self._diagnostics_refresh_input_key: tuple[object, ...] | None = None
@@ -618,7 +623,7 @@ class MainWindow(QMainWindow):
         self._split_status_selected_manifest_path = ""
         self._completed_manifest_snapshot: dict[str, object] | None = None
         self._viewing_completed_manifest = False
-        self._work_mode = WorkMode.BATCH_TRANSLATION
+        self._work_mode = WorkMode.SYNC_TRANSLATION if self._mv_project_setup_available() else WorkMode.BATCH_TRANSLATION
         self._mode_sessions: dict[WorkMode, WorkbenchModeSession] = {}
         self._workbench_nav_item = WorkbenchNavItem.TRANSLATION
         # Session emptiness is not navigation state: a user can choose 同步
@@ -626,6 +631,7 @@ class MainWindow(QMainWindow):
         self._last_mode_by_nav: dict[WorkbenchNavItem, WorkMode] = {
             item: default_work_mode_for_nav(item) for item in WORKBENCH_NAV_ORDER
         }
+        self._last_mode_by_nav[self._workbench_nav_item] = self._work_mode
         # Unified translation entry state (#348 P3): profile/strategy are
         # resolved from model_routing when present; legacy configs keep the
         # empty selection so defaults behave exactly as before.
@@ -1425,7 +1431,7 @@ class MainWindow(QMainWindow):
             _SHELL_ROUTE_PROJECT_PREPARE: (
                 "工作流 / 项目与环境",
                 "项目与环境",
-                "选择项目、检查环境并准备 work/game 工作目录。",
+                "选择项目、检查环境并准备翻译所需材料。",
             ),
             f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.TRANSLATION.value}": (
                 "工作流 / 翻译",
@@ -1595,7 +1601,11 @@ class MainWindow(QMainWindow):
         self.bootstrap_work_btn.setToolTip(
             "从 original/game 复制到 work/game（若已存在则按 CLI 规则跳过或更新）。"
         )
-        if not self._engine_allows_renpy_prepare():
+        if self._mv_project_setup_available():
+            from gui_qt.user_copy import MV_PROJECT_COPY
+            self.bootstrap_work_btn.setText(MV_PROJECT_COPY['setup_title'])
+            self.bootstrap_work_btn.setToolTip(MV_PROJECT_COPY['setup_tip'])
+        elif not self._engine_allows_renpy_prepare():
             from gui_qt.user_copy import MV_PROJECT_COPY
             self.bootstrap_work_btn.setEnabled(False)
             self.bootstrap_work_btn.setToolTip(MV_PROJECT_COPY['prepare_unsupported'])
@@ -2262,7 +2272,10 @@ class MainWindow(QMainWindow):
         self._doctor_settings_buttons = {}
         for key, label in READINESS_COPY["settings"].items():
             button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, page=key: self._focus_settings_section(page))
+            if key == 'mv_project':
+                button.clicked.connect(self._on_mv_project_setup)
+            else:
+                button.clicked.connect(lambda _checked=False, page=key: self._focus_settings_section(page))
             doctor_settings_layout.addWidget(button)
             self._doctor_settings_buttons[key] = button
         doctor_settings_layout.addStretch(1)
@@ -2310,6 +2323,7 @@ class MainWindow(QMainWindow):
         # read-only rescan and review-import contract as the CLI.
         doctor_action_row = QWidget()
         doctor_action_row.setObjectName("doctor_coverage_action_row")
+        self.doctor_coverage_action_row = doctor_action_row
         doctor_action_layout = QHBoxLayout(doctor_action_row)
         doctor_action_layout.setContentsMargins(0, 0, 0, 0)
         doctor_action_layout.setSpacing(8)
@@ -2330,7 +2344,8 @@ class MainWindow(QMainWindow):
         doctor_action_layout.addWidget(self.coverage_export_btn)
         self._coverage_export_worker = None
         doctor_action_layout.addStretch(1)
-        doctor_content_layout.addWidget(doctor_action_row)
+        doctor_content_layout.insertWidget(
+            doctor_content_layout.indexOf(self.doctor_details_toggle), doctor_action_row)
         self._coverage_import_worker: CoverageReviewImportWorker | None = None
         self._coverage_import_game_root = ""
         self._sync_doctor_coverage_buttons()
@@ -8265,6 +8280,8 @@ class MainWindow(QMainWindow):
     def _doctor_allows_translate_action(self) -> bool:
         if not self._doctor_check_completed:
             return False
+        if self._doctor_summary_mode == 'mv_setup_required':
+            return False
         if self._should_generate_template_only():
             return True
         return self._doctor_summary_status in {"ready", "warning"}
@@ -8276,11 +8293,11 @@ class MainWindow(QMainWindow):
         bootstrap_ready: bool,
         running: bool,
     ) -> bool:
-        if not self._engine_allows_work_mode(spec.mode):
-            return False
         if self._litellm_install_blocks_mode(spec.mode):
             return False
         if running or not spec.implemented or not bootstrap_ready:
+            return False
+        if not self._engine_allows_work_mode(spec.mode):
             return False
         if spec.mode == WorkMode.KEYWORD_EXTRACTION:
             status_page = self._workflow_status_page()
@@ -8302,19 +8319,46 @@ class MainWindow(QMainWindow):
         config = getattr(self, '_context_library_config_snapshot', None)
         config = config if isinstance(config, dict) else {}
         try:
-            from engine_adapters.project_config import project_engine
+            from engine_adapters.project_config import detect_project_engine_mismatch, project_engine
+            if detect_project_engine_mismatch(
+                config, self.state.config_path, game_root=self.state.get_game_root(),
+            ) is not None:
+                return False
+            if project_engine(config, config_file=self.state.config_path) == 'rpgmaker_mv':
+                from engine_adapters.project_setup import mv_project_setup_status
+                if mv_project_setup_status(config, self.state.config_path)['missing']:
+                    return False
             return project_engine(config) != 'rpgmaker_mv' or mode in {
                 WorkMode.SYNC_TRANSLATION, WorkMode.SYNC_KEYWORD_EXTRACTION,
                 WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX}
         except (OSError, ValueError, TypeError):
             return False
 
+    def _mv_project_setup_available(self) -> bool:
+        """Offer MV preparation for detected materials, including old explicit defaults."""
+        state = getattr(self, 'state', None)
+        if state is None:
+            return False
+        from engine_adapters.project_config import detect_project_material, project_engine
+        config = getattr(self, '_context_library_config_snapshot', {}) or {}
+        try:
+            material = detect_project_material(state.get_game_root(), state.config_path)
+            if material and material['engine'] == 'rpgmaker_mv':
+                return True
+            return project_engine(config, config_file=state.config_path) == 'rpgmaker_mv'
+        except (OSError, ValueError, TypeError):
+            return False
+
     def _engine_allows_renpy_prepare(self) -> bool:
         """Keep native preparation separate from supported context bootstrap tasks."""
-        from engine_adapters.project_config import project_engine
+        from engine_adapters.project_config import require_engine_operation
         try:
-            return project_engine(getattr(self, '_context_library_config_snapshot', {}) or {}) == 'renpy'
-        except (ValueError, TypeError):
+            require_engine_operation(
+                getattr(self, '_context_library_config_snapshot', {}) or {}, 'prepare',
+                config_file=self.state.config_path, game_root=self.state.get_game_root(),
+            )
+            return True
+        except (OSError, ValueError, TypeError):
             return False
 
     def _update_translate_button_label(self) -> None:
@@ -10016,6 +10060,10 @@ class MainWindow(QMainWindow):
         self._workbench_nav_item = workbench_nav_for_work_mode(previous_mode)
         self._reset_last_mode_by_nav()
         self._work_mode = default_work_mode_for_nav(self._workbench_nav_item)
+        if self._mv_project_setup_available():
+            self._workbench_nav_item = workbench_nav_for_work_mode(WorkMode.SYNC_TRANSLATION)
+            self._work_mode = WorkMode.SYNC_TRANSLATION
+            self._last_mode_by_nav[self._workbench_nav_item] = self._work_mode
         context_page = getattr(self, "context_library_page", None)
         if context_page is not None:
             context_page.reset_project()
@@ -11042,6 +11090,8 @@ class MainWindow(QMainWindow):
         self._append_log(f"API Key 已保存（当前数量：{len(new_keys)}）。")
 
     def _format_game_root_redirect_notice(self, original: Path, effective: Path) -> str:
+        if self._mv_project_setup_available():
+            return f"已识别 RPG Maker MV，游戏内容目录：{effective}"
         return (
             f"提示：检测到 work 目录，已从 {original} 自动切换到 {effective}。"
         )
@@ -11051,7 +11101,7 @@ class MainWindow(QMainWindow):
         self.project_redirect_label.setText(notice)
         self.project_redirect_label.setVisible(True)
         self.statusBar().showMessage(
-            f"已自动切换到 work 目录：{effective}",
+            notice,
             8000,
         )
 
@@ -11431,6 +11481,9 @@ class MainWindow(QMainWindow):
         self._on_run_doctor()
 
     def _on_bootstrap_work(self):
+        if self._mv_project_setup_available():
+            self._on_mv_project_setup()
+            return
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self._engine_allows_renpy_prepare():
@@ -11470,6 +11523,30 @@ class MainWindow(QMainWindow):
             self.state.get_batch_script_path(),
             ["bootstrap-work"],
         )
+
+    def _on_mv_project_setup(self):
+        """Save explicit MV material choices, then run the shared offline doctor."""
+        if self._task_running or not self._confirm_unsaved_config_before_workflow():
+            return
+        from gui_qt.dialogs.mv_project_setup_dialog import MvProjectSetupDialog
+        identity = self._readiness_project_identity()
+        dialog = MvProjectSetupDialog(self, config=self.state.load_translator_config(),
+            config_file=self.state.config_path, target_root=str(self.state.get_game_root() or ''))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        config = dialog.result_config()
+        if config is None:
+            return
+        if identity != self._readiness_project_identity():
+            message_box_warning(self, '项目设置已变化', '请重新打开 MV 项目准备，核对当前目录后再保存。')
+            return
+        try:
+            self.state.save_translator_config(config)
+        except ValueError as exc:
+            message_box_warning(self, '无法保存项目设置', str(exc))
+            return
+        if self._switch_game_root(config['game_root']):
+            self._on_run_doctor()
 
     def _on_generate_template(self):
         if not self._confirm_unsaved_config_before_workflow():
@@ -14009,6 +14086,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "_readiness_doctor_error", ""):
             details.append(self._readiness_doctor_error)
         self._set_doctor_detail_facts(details)
+        if hasattr(self, 'doctor_coverage_action_row'):
+            self.doctor_coverage_action_row.setVisible(
+                summary.mode not in {'mv_setup_required', 'engine_mismatch'})
         for key, button in getattr(self, "_doctor_settings_buttons", {}).items():
             button.setVisible(key in overview.settings)
             button.setEnabled(not getattr(self, "_task_running", False))

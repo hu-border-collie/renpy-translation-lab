@@ -404,9 +404,14 @@ class ProjectState:
         return self._game_root
 
     def normalize_game_root(self, path: str | Path) -> tuple[Path, bool]:
-        """Resolve project-root selections to nested work/ when that directory exists."""
+        """Resolve detected MV packages to content roots, or Ren'Py work layouts."""
+        from engine_adapters.project_config import detect_project_material
         original = self._path_without_resolve(path)
-        if self.load_translator_config().get('engine') == 'rpgmaker_mv':
+        material = detect_project_material(path, self.config_path)
+        if material and material['engine'] == 'rpgmaker_mv':
+            effective = Path(material['content_root'])
+            return effective, self._normalized_path_text(original) != self._normalized_path_text(effective)
+        if not material and self.load_translator_config().get('engine') == 'rpgmaker_mv':
             candidate = Path(path).expanduser()
             if not candidate.is_absolute():
                 candidate = self.config_path.parent / candidate
@@ -455,10 +460,23 @@ class ProjectState:
 
     def _save_game_root_to_config(self, game_root: Path) -> None:
         """Update game_root and sync per-project asset paths, preserve everything else."""
+        from engine_adapters.project_config import detect_project_material, resolve_project_configuration
         data = self._read_json_object(self.config_path, "translator_config.json")
         normalized_root = canonical_abs_path(str(game_root))
+        previous = resolve_project_configuration(data, self.config_path)
+        same_project = self._normalized_path_text(previous.get('game_root') or '') == self._normalized_path_text(normalized_root)
+        material = detect_project_material(game_root, self.config_path)
+        if material and material['engine'] in {'renpy', 'rpgmaker_mv'}:
+            data['engine'] = material['engine']
+        if same_project and material and material['engine'] == 'rpgmaker_mv':
+            data = previous
+        else:
+            sync_project_asset_paths_in_config(data, normalized_root)
+        if material and material['engine'] in {'renpy', 'rpgmaker_mv'}:
+            data['engine'] = material['engine']
         data["game_root"] = normalized_root
-        sync_project_asset_paths_in_config(data, normalized_root)
+        if data.get('engine') == 'rpgmaker_mv' and isinstance(data.get('prepare'), dict):
+            data['prepare']['enabled'] = False
         self._write_json_object(self.config_path, data)
 
     # --- Config helpers (api_keys + translator_config) ---
@@ -530,7 +548,15 @@ class ProjectState:
             if not raw.strip():
                 return {}
             data = json.loads(raw)
-            return data if isinstance(data, dict) else {}
+            from engine_adapters.project_config import resolve_project_configuration
+            if not isinstance(data, dict):
+                return {}
+            try:
+                return resolve_project_configuration(data, self.config_path)
+            except ValueError:
+                # Keep editable raw fields when an explicit engine value is
+                # invalid; opening settings must not discard unrelated keys.
+                return data
         except Exception:
             return {}
 

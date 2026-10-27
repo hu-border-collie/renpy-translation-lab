@@ -97,7 +97,8 @@ translation validation 和声明式 writeback plan。公共层复核材料 / 结
 公共源 JSON schema 2 由 PR #568 合并，支持独立源 / 目标快照与数组路径。
 `RpgMakerMvAdapter` 在显式材料窗口上提供 MV 叙事共享核心，复用该计划消费者与结构保护；
 `execution/mv_sync.py` 将其接入共享 TranslationPlan、耐久 Sync 和现有双快照原子写回；
-`engine_adapters/project_config.py` 负责显式引擎／源目标／支持窗口解析，
+`engine_adapters/project_config.py` 负责自动识别、显式引擎／源目标／支持窗口解析，
+`engine_adapters/project_setup.py` 提供 CLI / GUI 共用的准备状态与配置编辑，GUI 浏览表单调用后仍走同一 doctor，
 `engine_adapters/rpgmaker_mv_fields.py` 管理默认关闭的系统术语与地图显示名白名单。
 `execution/mv_preprocessing.py` 把同一源 occurrence 投影为关键词材料和既有 Source Index
 记录，只将显式独立审阅的双语输入投影为既有 history 记录。它复用两种 JSON store 的

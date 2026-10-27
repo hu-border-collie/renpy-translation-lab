@@ -11,6 +11,28 @@ import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def test_select_mv_package_detects_engine_and_content_root_without_narrowing_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            package = root / 'Game/work'
+            content = package / 'www'
+            (content / 'data').mkdir(parents=True)
+            (content / 'js').mkdir()
+            (content / 'js/rpg_core.js').write_text('// Original inert marker.\n')
+            state.config_path.write_text(json.dumps({'engine': 'renpy', 'include_files': [],
+                'include_prefixes': [], 'unknown': {'keep': True}}), encoding='utf-8')
+            effective, adjusted = state.set_game_root(package)
+            self.assertEqual(effective, content)
+            self.assertTrue(adjusted)
+            saved = json.loads(state.config_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['engine'], 'rpgmaker_mv')
+            self.assertEqual(saved['game_root'], str(content))
+            self.assertEqual(saved['include_files'], [])
+            self.assertEqual(saved['include_prefixes'], [])
+            self.assertNotIn('rpgmaker_mv', saved)
+            self.assertEqual(saved['unknown'], {'keep': True})
+
     def assert_same_path(self, left, right) -> None:
         self.assertEqual(
             runtime.canonical_abs_path(left),

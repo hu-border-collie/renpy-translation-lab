@@ -33,6 +33,8 @@ def collect_context_library_status(
     context_flags: dict[str, bool] = {}
     config_digest = ''
     try:
+        from engine_adapters.project_config import resolve_project_configuration
+        config = resolve_project_configuration(config or {}, config_file)
         from gui_qt.reports.bootstrap_report import read_batch_context_flags
 
         context_flags = read_batch_context_flags(

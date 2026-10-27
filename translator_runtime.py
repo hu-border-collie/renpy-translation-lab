@@ -1991,7 +1991,8 @@ def load_translator_settings(
     _reset_project_settings_to_defaults()
 
     config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
-    from engine_adapters.project_config import project_engine
+    from engine_adapters.project_config import project_engine, resolve_project_configuration
+    config = resolve_project_configuration(config, TRANSLATOR_CONFIG)
     engine = project_engine(config)
     if "model_routing" in config:
         from providers.model_routing_reader import runtime_settings_view
@@ -3158,7 +3159,8 @@ def _describe_template_unavailable(template_info):
 
 def run_prepare_steps():
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
-    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'prepare')
+    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'prepare',
+                             config_file=TRANSLATOR_CONFIG, game_root=BASE_DIR)
     if not PREP_ENABLED:
         print("[Prepare] Disabled by translator_config.")
         return
@@ -7609,7 +7611,8 @@ def run_translation(*, prepare=False):
         ) from exc
     load_translator_settings()
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
-    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'legacy-sync')
+    require_engine_operation(read_project_configuration(TRANSLATOR_CONFIG), 'legacy-sync',
+                             config_file=TRANSLATOR_CONFIG, game_root=BASE_DIR)
     require_supported_generation_target()
     if SYNC_BACKEND == "gemini":
         _require_gemini_api_key()

@@ -305,7 +305,7 @@ def build_cli_commands(
     commands: list[DiagnosticsCommand] = [
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
         DiagnosticsCommand(
-            label="项目检查",
+            label="项目检查（自动识别引擎并列出准备项）",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
         ),
     ]
@@ -1356,7 +1356,7 @@ def _usage_report_command(
 def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[DiagnosticsCommand]:
     """Only advertise the actual MV product routes."""
     commands = [
-        ('MV 项目检查', ['doctor']),
+        ('MV 自动识别与项目准备检查', ['doctor']),
         ('MV 启动预检', ['translate-preflight', '--strategy', 'sync']),
         ('导出覆盖材料', ['coverage-status', '--export-dir', '<OUTPUT_DIR>']),
         ('导入覆盖审阅', ['coverage-review-import', '--file', '<REVIEW.json>']),
