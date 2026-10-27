@@ -1,9 +1,10 @@
 import unittest
+from unittest import mock
 
 try:
     from PySide6.QtWidgets import QApplication, QPushButton
 
-    from gui_qt.widgets.responsive_layout import ResponsiveActionPanel
+    from gui_qt.widgets.responsive_layout import FlowButtonBar, ResponsiveActionPanel
 except ImportError as exc:
     ResponsiveActionPanel = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
@@ -119,6 +120,88 @@ class ResponsiveActionPanelTests(unittest.TestCase):
             for _ in range(5):
                 self._app.processEvents()
         self.assertIn(panel._is_wide, (True, False))
+
+    def test_unchanged_reflow_keeps_layout_and_detects_hidden_buttons(self):
+        panel = self._build_panel()
+        panel.setProperty("flowWidthHint", 1400)
+        panel.reflow()
+        row = panel._root.itemAt(0).layout()
+        with mock.patch.object(panel, "_rebuild_layout", wraps=panel._rebuild_layout) as rebuild:
+            panel.reflow()
+            rebuild.assert_not_called()
+            panel._prep_buttons[0].hide()
+            panel.reflow()
+            rebuild.assert_called_once()
+        self.assertTrue(panel._is_wide)
+        new_row = panel._root.itemAt(0).layout()
+        self.assertIsNot(new_row, row)
+        self.assertNotIn(
+            panel._prep_buttons[0],
+            [new_row.itemAt(index).widget() for index in range(new_row.count())],
+        )
+
+
+@unittest.skipIf(ResponsiveActionPanel is None, f"GUI unavailable: {IMPORT_ERROR}")
+class FlowButtonBarPerfTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        self.bar = FlowButtonBar()
+        self.bar.setProperty("flowWidthHint", 400)
+        self.buttons = [QPushButton(str(index)) for index in range(3)]
+        for button in self.buttons:
+            self.bar.add_widget(button, min_width=100)
+        self.bar.finish_setup()
+        self.bar.reflow()
+
+    def tearDown(self):
+        self.bar.close()
+        self.bar.deleteLater()
+        self._app.processEvents()
+
+    def test_unchanged_refresh_preserves_layout(self):
+        row = self.bar._root.itemAt(0).layout()
+        with mock.patch.object(self.bar, "_rebuild", wraps=self.bar._rebuild) as rebuild:
+            for _ in range(10):
+                self.bar.reflow()
+            rebuild.assert_not_called()
+        self.assertIs(self.bar._root.itemAt(0).layout(), row)
+
+    def test_visibility_width_height_and_alignment_changes_update_layout(self):
+        self.buttons[0].hide()
+        self.bar.reflow()
+        row = self.bar._root.itemAt(0).layout()
+        self.assertEqual(row.itemAt(0).widget(), self.buttons[1])
+
+        self.bar.setProperty("flowWidthHint", 150)
+        self.bar.reflow()
+        self.assertEqual(self.bar._row_count, 2)
+        self.assertEqual(self.bar.minimumHeight(), 84)
+
+        self.buttons[1].setMinimumHeight(52)
+        self.bar.reflow()
+        self.assertEqual(self.bar.minimumHeight(), 112)
+
+        self.bar.add_stretch_end(False)
+        self.bar.reflow()
+        for index in range(self.bar._root.count()):
+            row = self.bar._root.itemAt(index).layout()
+            self.assertIsNotNone(row.itemAt(row.count() - 1).widget())
+
+    def test_deferred_refreshes_coalesce_and_skip_unchanged_layout(self):
+        with mock.patch.object(self.bar, "_rebuild", wraps=self.bar._rebuild) as rebuild:
+            self.bar._schedule_reflow()
+            self.bar._schedule_reflow()
+            self._app.processEvents()
+            rebuild.assert_not_called()
+        self.assertFalse(self.bar._reflow_scheduled)
+        with mock.patch.object(self.bar, "reflow", wraps=self.bar.reflow) as reflow:
+            self.bar._schedule_reflow()
+            self.bar._schedule_reflow()
+            self._app.processEvents()
+            reflow.assert_called_once()
 
 
 if __name__ == "__main__":

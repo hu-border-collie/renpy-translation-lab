@@ -69,7 +69,7 @@ class TaskControlSection(QFrame):
         self.action_bar.finish_setup()
 
     def reflow(self) -> None:
-        self.action_bar.reflow(force=True)
+        self.action_bar.reflow()
 
 
 class TaskStatusSection(QFrame):

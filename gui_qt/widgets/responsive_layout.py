@@ -174,6 +174,7 @@ class ResponsiveActionPanel(QFrame):
         super().__init__(parent)
         self._compact_width = compact_width
         self._is_wide: bool | None = None
+        self._signature: tuple[object, ...] | None = None
         self._prep_buttons: list[QWidget] = []
         self._translate_buttons: list[QWidget] = []
         self._translate_trailing: list[QWidget] = []
@@ -211,8 +212,8 @@ class ResponsiveActionPanel(QFrame):
         self._is_wide = None
         self._apply_layout_mode(self._should_use_wide_layout(), force=True)
 
-    def reflow(self, *, force: bool = True) -> None:
-        """Re-evaluate wide/stacked mode (e.g. after button visibility changes)."""
+    def reflow(self, *, force: bool = False) -> None:
+        """Update rows when mode or controls change; force bypasses that cache."""
         self._apply_layout_mode(self._should_use_wide_layout(), force=force)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
@@ -255,8 +256,20 @@ class ResponsiveActionPanel(QFrame):
         return available >= needed
 
     def _apply_layout_mode(self, wide: bool, *, force: bool = False) -> None:
-        if not force and wide == self._is_wide:
+        signature = (
+            wide,
+            tuple(
+                (id(widget), widget.isHidden(), widget_layout_width(widget), widget.minimumHeight())
+                for widget in (
+                    *self._prep_buttons,
+                    *self._translate_buttons,
+                    *self._translate_trailing,
+                )
+            ),
+        )
+        if not force and signature == self._signature:
             return
+        self._signature = signature
         self._is_wide = wide
         self._rebuild_layout()
 
@@ -344,10 +357,11 @@ class ResponsiveActionPanel(QFrame):
                 height = max(height, 96)
             else:
                 height = max(height, 44)
-        self.setMinimumHeight(height)
-        self.updateGeometry()
-        # Bubble size change so siblings (e.g. batch advanced tools) reflow below us.
-        _activate_ancestor_layouts(self, max_depth=4)
+        if height != self.minimumHeight():
+            self.setMinimumHeight(height)
+            self.updateGeometry()
+            # Bubble changed height so siblings reflow below us.
+            _activate_ancestor_layouts(self, max_depth=4)
 
 
 class FlowButtonBar(QFrame):
@@ -384,6 +398,7 @@ class FlowButtonBar(QFrame):
         self._reflowing = False
         self._reflow_pending = False
         self._reflow_pending_force = False
+        self._reflow_scheduled = False
 
         self._root = QVBoxLayout(self)
         self._root.setContentsMargins(0, 0, 0, 0)
@@ -417,6 +432,7 @@ class FlowButtonBar(QFrame):
         self.reflow(force=True)
 
     def reflow(self, *, force: bool = False) -> None:
+        """Wrap changed controls or width without rebuilding an unchanged row."""
         if self._reflowing:
             self._reflow_pending = True
             self._reflow_pending_force = self._reflow_pending_force or force
@@ -451,8 +467,15 @@ class FlowButtonBar(QFrame):
 
     def _schedule_reflow(self) -> None:
         """Reflow after the current event so parent/tab geometry is final."""
+        if self._reflow_scheduled:
+            return
+        self._reflow_scheduled = True
         # Bind to self so the timer is cancelled if this bar is destroyed.
-        QTimer.singleShot(0, self, lambda: self.reflow(force=True))
+        QTimer.singleShot(0, self, self._run_scheduled_reflow)
+
+    def _run_scheduled_reflow(self) -> None:
+        self._reflow_scheduled = False
+        self.reflow()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -460,15 +483,16 @@ class FlowButtonBar(QFrame):
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
-        self.reflow(force=True)
+        self.reflow()
         self._schedule_reflow()
 
     def _layout_signature(self) -> tuple[object, ...]:
         available = effective_widget_width(self, fallback=800)
         visible = tuple(
-            (id(w), w.isHidden(), widget_layout_width(w)) for w in self._items
+            (id(w), w.isHidden(), widget_layout_width(w), w.minimumHeight())
+            for w in self._items
         )
-        return (available, self._align, visible)
+        return (available, self._align, self._trailing_stretch, visible)
 
     def _visible_items(self) -> list[QWidget]:
         # Prefer explicitly non-hidden widgets; before first show treat all as visible.
@@ -542,9 +566,10 @@ class FlowButtonBar(QFrame):
             row_h = max(row_h, int(widget.minimumHeight() or 0))
         rows = max(1, self._row_count)
         height = rows * row_h + max(0, rows - 1) * self._row_spacing
-        self.setMinimumHeight(height)
-        self.updateGeometry()
-        _activate_ancestor_layouts(self, max_depth=6, invalidate=True)
+        if height != self.minimumHeight():
+            self.setMinimumHeight(height)
+            self.updateGeometry()
+            _activate_ancestor_layouts(self, max_depth=6, invalidate=True)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         hint = super().sizeHint()

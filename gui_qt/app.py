@@ -1882,6 +1882,8 @@ class MainWindow(QMainWindow):
 
     def _set_project_bar_compact(self, compact: bool) -> None:
         """Toggle a true single-row task identity strip vs full prep controls."""
+        if self.global_project_bar.property("compact") == compact:
+            return
         self.global_browse_project_btn.setVisible(not compact)
         self.doctor_btn.setVisible(not compact)
         self.bootstrap_work_btn.setVisible(not compact)
@@ -1916,7 +1918,7 @@ class MainWindow(QMainWindow):
                 QSizePolicy.Policy.Minimum,
             )
         self.global_project_bar.setProperty("compact", compact)
-        self.global_project_actions.reflow(force=True)
+        self.global_project_actions.reflow()
         self.global_project_bar.updateGeometry()
 
     def _build_workbench_tab(self) -> None:
@@ -5220,7 +5222,7 @@ class MainWindow(QMainWindow):
         if show and hasattr(self, "batch_advanced_bar"):
             reflow = getattr(self.batch_advanced_bar, "reflow", None)
             if callable(reflow):
-                reflow(force=True)
+                reflow(force=False)
         if is_batch and refresh_readiness:
             # Keep readiness fresh even while the advanced tools are hidden by
             # the first-use gate (#316): switching back after 环境检查 must
@@ -5865,7 +5867,7 @@ class MainWindow(QMainWindow):
         self.split_submit_btn.setText("提交剩余包")
         self.split_submit_btn.setEnabled(has_split_group and needs_submit and not running)
         if hasattr(self, "action_panel"):
-            self.action_panel.reflow(force=True)
+            self.action_panel.reflow()
 
     def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
         spec = work_mode_spec(self._current_work_mode())
@@ -6002,7 +6004,7 @@ class MainWindow(QMainWindow):
             self.writeback_issues_panel.setVisible(expanded)
             reflow = getattr(self.writeback_issues_panel, "reflow", None)
             if callable(reflow) and expanded:
-                reflow(force=True)
+                reflow(force=False)
         if hasattr(self, "writeback_issues_toggle_btn"):
             self.writeback_issues_toggle_btn.setText(
                 "问题处理 ▾" if expanded else "问题处理 ▸"
@@ -6086,14 +6088,17 @@ class MainWindow(QMainWindow):
             panel = getattr(self, name, None)
             reflow = getattr(panel, "reflow", None) if panel is not None else None
             if callable(reflow):
-                reflow(force=True)
+                reflow(force=False)
         self._sync_action_frame_min_height()
         # Deferred second pass: parent widths settle after min-height changes.
         # Use the 2-arg form: helper tests construct MainWindow via __new__ without
         # QObject init, and the 3-arg context overload requires a live C++ base.
-        QTimer.singleShot(0, self._reflow_button_bars_deferred)
+        if not self.__dict__.get("_button_bars_reflow_pending", False):
+            self._button_bars_reflow_pending = True
+            QTimer.singleShot(0, self._reflow_button_bars_deferred)
 
     def _reflow_button_bars_deferred(self) -> None:
+        self._button_bars_reflow_pending = False
         if getattr(self, "_shutdown_requested", False):
             return
         for name in (
@@ -6106,7 +6111,7 @@ class MainWindow(QMainWindow):
             panel = getattr(self, name, None)
             reflow = getattr(panel, "reflow", None) if panel is not None else None
             if callable(reflow):
-                reflow(force=True)
+                reflow(force=False)
         self._sync_action_frame_min_height()
 
     def _sync_writeback_issues_panel_visibility(
@@ -6413,11 +6418,11 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "writeback_issues_badge"):
                     self.writeback_issues_badge.setVisible(False)
         if hasattr(self, "writeback_primary_bar"):
-            self.writeback_primary_bar.reflow(force=True)
+            self.writeback_primary_bar.reflow()
         if hasattr(self, "writeback_issues_panel"):
             reflow = getattr(self.writeback_issues_panel, "reflow", None)
             if callable(reflow) and self.writeback_issues_panel.isVisible():
-                reflow(force=True)
+                reflow(force=False)
 
     def _show_retry_preview(
         self,
@@ -6742,18 +6747,16 @@ class MainWindow(QMainWindow):
         if spec.manifest_mode is None:
             return "", None
 
-        game_root = self.state.get_game_root()
-        latest_manifest = None
-        if game_root is not None:
-            latest_manifest = self.state.get_latest_manifest_path_for_mode(
-                game_root,
-                spec.mode,
-            )
         if self._workflow is not None and self._workflow.manifest_path:
             manifest_path = self._workflow.manifest_path
         elif self._writeback_manifest_path:
             manifest_path = self._writeback_manifest_path
         else:
+            game_root = self.state.get_game_root()
+            latest_manifest = (
+                self.state.get_latest_manifest_path_for_mode(game_root, spec.mode)
+                if game_root is not None else None
+            )
             manifest_path = str(latest_manifest) if latest_manifest is not None else ""
         manifest = self._load_diagnostics_manifest(manifest_path or None)
         return manifest_path, manifest
@@ -7308,6 +7311,16 @@ class MainWindow(QMainWindow):
         except OSError:
             return -1
 
+    def _diagnostics_file_signature(self, path: str) -> tuple[int, int, int, int] | None:
+        """Identify an unchanged UI preview, including atomic file replacement."""
+        if not path:
+            return None
+        try:
+            stat = Path(path).stat()
+        except OSError:
+            return None
+        return stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns, stat.st_ino
+
     def _refresh_diagnostics_context(
         self,
         *,
@@ -7330,9 +7343,21 @@ class MainWindow(QMainWindow):
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             sync_preview_path = self.sync_translation_page.preview_manifest_path()
             diagnostics_engine = str(self._context_library_config_snapshot.get('engine', 'renpy'))
-            sync_preview_mtime = self._diagnostics_manifest_mtime_ns(
-                sync_preview_path or None
+            sync_preview_signature = self._diagnostics_file_signature(sync_preview_path)
+            input_key = (
+                "sync",
+                str(self.state.get_sync_script_path()),
+                str(self.state.get_batch_script_path()),
+                sync_preview_path,
+                sync_preview_signature,
+                sys.executable,
+                str(game_root or ""),
+                usage_ledger_mtime,
+                running,
+                diagnostics_engine,
             )
+            if not force and self._diagnostics_refresh_input_key == input_key:
+                return
             sync_preview_manifest = None
             if sync_preview_path:
                 try:
@@ -7343,19 +7368,6 @@ class MainWindow(QMainWindow):
                         sync_preview_manifest = loaded_preview
                 except (OSError, UnicodeError, json.JSONDecodeError):
                     sync_preview_manifest = None
-            input_key = (
-                "sync",
-                str(self.state.get_sync_script_path()),
-                sync_preview_path,
-                sync_preview_mtime,
-                sys.executable,
-                str(game_root or ""),
-                usage_ledger_mtime,
-                running,
-                diagnostics_engine,
-            )
-            if not force and self._diagnostics_refresh_input_key == input_key:
-                return
             context = sync_diagnostics_context(
                 engine=diagnostics_engine,
                 sync_script_path=str(self.state.get_sync_script_path()),

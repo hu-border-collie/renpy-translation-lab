@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -32,6 +31,9 @@ from providers.litellm_sync_backend import LiteLLMBackendError
 from providers import model_profile
 from providers.sync_model_backend import SyncGenerationRequest, sync_error_category
 from gui_qt.user_copy import CUSTOM_LITELLM_PROVIDER_COPY, LITELLM_CONNECTION_TEST_COPY
+
+if TYPE_CHECKING:
+    import asyncio
 
 
 CONNECTION_TEST_TIMEOUT_SECONDS = 30
@@ -561,6 +563,10 @@ class LiteLLMConnectionTestWorker(_CancellableNetworkWorker):
                 self.operation_identity,
             )
             return
+        # Only connection tests need an event loop; importing asyncio during
+        # GUI startup loads its network/process stack on the UI thread.
+        import asyncio
+
         loop = asyncio.new_event_loop()
         self._async_loop = loop
         asyncio.set_event_loop(loop)
