@@ -205,7 +205,7 @@ class BatchTranslationPage(QWidget):
         self.split_frame.setVisible(split_visible)
 
         for bar in (self.main_bar, self.split_bar):
-            bar.reflow(force=True)
+            bar.reflow()
         self.updateGeometry()
 
     def reset_project(self) -> None:

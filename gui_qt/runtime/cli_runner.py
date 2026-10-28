@@ -8,10 +8,13 @@ This keeps the GUI as a pure shell layer per the first version plan in #42.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
+
+_LINE_BREAK_RE = re.compile(br"\r\n|[\r\n]")
 
 
 class CliRunner(QObject):
@@ -223,18 +226,17 @@ class CliRunner(QObject):
         )
 
     def _emit_complete_lines(self, buffer: bytes, channel_signal) -> bytes:
-        while True:
-            indexes = [idx for idx in (buffer.find(b"\n"), buffer.find(b"\r")) if idx != -1]
-            if not indexes:
-                break
-            pos = min(indexes)
-            line_bytes = buffer[:pos]
-            buffer = buffer[pos + (2 if buffer[pos : pos + 2] == b"\r\n" else 1) :]
+        # Scan once: repeatedly searching and slicing the remaining buffer is
+        # quadratic when a child sends many progress lines in one Qt event.
+        start = 0
+        for match in _LINE_BREAK_RE.finditer(buffer):
+            line_bytes = buffer[start:match.start()]
+            start = match.end()
             line = line_bytes.decode("utf-8", errors="replace")
             if line:
                 channel_signal.emit(line)
                 self.line_ready.emit(line)
-        return buffer
+        return buffer[start:]
 
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         process = self._proc

@@ -140,6 +140,30 @@ class CliRunnerChannelTests(unittest.TestCase):
         self.assertEqual(self.stderr_lines, [marker])
         self.assertEqual(self.all_lines, [marker])
 
+    def test_large_burst_preserves_lines_and_partial_utf8_across_reads(self):
+        rows = [f"进度 {index}: 中文输出" for index in range(5000)]
+        separators = (b"\n", b"\r", b"\r\n")
+        stream = b"".join(
+            row.encode("utf-8") + separators[index % 3]
+            for index, row in enumerate(rows)
+        ) + "最后一行".encode("utf-8")
+        self.runner._proc = _FakeProcess(
+            stdout=(stream[:1], stream[1:2], stream[2:50001], stream[50001:]),
+        )
+        for _ in range(4):
+            self.runner._on_stdout_ready()
+        self.assertEqual(self.stdout_lines, rows)
+        self.assertEqual(self.runner._stdout_pending_buffer, "最后一行".encode("utf-8"))
+        self.runner._on_finished(0, QProcess.ExitStatus.NormalExit)
+        self.assertEqual(self.stdout_lines, [*rows, "最后一行"])
+        self.assertEqual(self.all_lines, self.stdout_lines)
+
+    def test_only_cr_and_lf_are_line_boundaries(self):
+        self.runner._proc = _FakeProcess(stdout=(b"first\vpart\fstill\nsecond\r\nthird\rpartial",))
+        self.runner._on_stdout_ready()
+        self.assertEqual(self.stdout_lines, ["first\vpart\fstill", "second", "third"])
+        self.assertEqual(self.runner._stdout_pending_buffer, b"partial")
+
     def test_finished_drains_unread_process_bytes_before_flushing(self):
         self.runner._proc = _FakeProcess(
             stdout=(b'{"status":"completed"}',),

@@ -183,6 +183,37 @@ class ReadinessSummaryTests(unittest.TestCase):
         self.assertIn("翻译文件：1 个", self.window.doctor_facts_label.text())
         self.provider.assert_not_called()
 
+    def test_doctor_start_snapshot_does_not_import_litellm_for_custom_registry(self):
+        import translator_runtime as runtime
+
+        previous = runtime.snapshot_runtime_config()
+        config = dict(self.config, sync={
+            "backend": "litellm", "model": "fixture_vendor/model",
+            "custom_litellm_providers": [{
+                "id": "fixture_vendor", "base_url": "https://fixture.invalid/v1",
+            }],
+        })
+        self.window.state.config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.window._snapshot_runtime_config_for_job = (
+            MainWindow._snapshot_runtime_config_for_job.__get__(self.window)
+        )
+        try:
+            with (
+                mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(self.window.state.config_path)),
+                mock.patch(
+                    "providers.litellm_provider_config._installed_litellm_module",
+                    side_effect=AssertionError("GUI must not warm LiteLLM before starting doctor"),
+                ) as probe,
+            ):
+                worker = self.start_doctor()
+            self.assertEqual(Path(worker.config.base_dir).resolve(), self.root.resolve())
+            self.assertEqual(worker.config.sync_backend, "litellm")
+            self.assertIn("fixture_vendor", worker.config.custom_litellm_providers)
+            probe.assert_not_called()
+        finally:
+            runtime.apply_runtime_config(previous)
+        self.provider.assert_not_called()
+
     def test_empty_unchecked_running_block_warning_ready_failure_stale(self):
         self.window.state._game_root = None
         self.window._sync_readiness_display()

@@ -952,6 +952,19 @@ GAMES_REGISTRY_SOURCE_URL_COPY = {
     "save_tooltip": "保存当前选中项目的名称、发布地址、游玩/翻译状态及备注。",
 }
 
+BOOTSTRAP_PROGRESS_COPY = {
+    "source_command": "MV 预建原文索引（含阶段进度）",
+    "history_command": "MV 预建已审阅历史（含阶段进度）",
+    "scanning": "正在扫描原文…",
+    "mv_embedding": "正在生成向量：{done}/{total}（等待服务响应…）",
+    "mv_validating": "正在校验原文与索引输入…",
+    "mv_persisting": "正在保存索引…",
+    "mv_total": "原文片段：{total}（完成校验后保存）",
+    "mv_history_total": "历史语料：{total}（完成校验后保存）",
+    "empty_done": "已完成（0 片段）",
+}
+
+
 BOOTSTRAP_FIELD_LABELS = {
     "store_dir": "存储目录",
     "scan_scope": "扫描范围",

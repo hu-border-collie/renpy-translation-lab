@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import unittest
+import subprocess
+import sys
+from pathlib import Path
 from unittest import mock
 
 try:
@@ -131,6 +134,39 @@ class GuiStartupPerfTests(unittest.TestCase):
         toggle = self.window.doctor_details_toggle
         self.assertGreaterEqual(toggle.minimumWidth(), 96)
         self.assertEqual(toggle.minimumWidth(), toggle.maximumWidth())
+
+    def test_import_does_not_load_connection_test_event_loop(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-B", "-c", "import gui_qt.app, sys; assert 'asyncio' not in sys.modules"],
+            cwd=Path(__file__).resolve().parents[3],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_same_project_bar_mode_keeps_layout(self) -> None:
+        self.window = MainWindow()
+        layout = self.window.global_project_bar_layout
+        with mock.patch.object(layout, "removeWidget", wraps=layout.removeWidget) as remove:
+            self.window._set_project_bar_compact(True)
+            self.window._set_project_bar_compact(True)
+            remove.assert_not_called()
+            self.window._set_project_bar_compact(False)
+            self.assertEqual(remove.call_count, 3)
+            self.window._set_project_bar_compact(False)
+            self.assertEqual(remove.call_count, 3)
+
+    def test_repeated_shell_refresh_queues_one_layout_followup(self) -> None:
+        self.window = MainWindow()
+        self.window._reflow_button_bars_deferred()
+        with mock.patch("gui_qt.app.QTimer.singleShot") as schedule:
+            for _ in range(4):
+                self.window._reflow_button_bars()
+            self.assertEqual(schedule.call_count, 1)
+            self.window._reflow_button_bars_deferred()
+            self.window._reflow_button_bars()
+            self.assertEqual(schedule.call_count, 2)
 
     def test_status_tab_change_still_refreshes_readiness(self) -> None:
         self.window = MainWindow()

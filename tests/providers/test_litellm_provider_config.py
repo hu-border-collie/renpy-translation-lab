@@ -508,6 +508,33 @@ class LiteLLMProviderConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_custom_litellm_providers({"id": "x", "base_url": "https://x"})
 
+    def test_empty_registry_never_probes_or_imports_litellm(self):
+        with (
+            mock.patch(
+                "providers.litellm_provider_config._installed_litellm_module",
+                side_effect=AssertionError("No provider ids need validation"),
+            ),
+            mock.patch(
+                "providers.litellm_provider_config.cached_litellm_module",
+                side_effect=AssertionError("Empty registry needs no module"),
+            ),
+        ):
+            self.assertEqual(parse_custom_litellm_providers([]), ())
+            self.assertEqual(parse_custom_litellm_providers([], allow_import=False), ())
+            self.assertEqual(custom_provider_registry([]), {})
+
+    def test_nonempty_registry_still_checks_installed_provider_collisions(self):
+        installed = SimpleNamespace(models_by_provider={"installed_prefix": ()})
+        with mock.patch(
+            "providers.litellm_provider_config._installed_litellm_module",
+            return_value=installed,
+        ) as probe:
+            with self.assertRaisesRegex(ValueError, "冲突"):
+                parse_custom_litellm_providers([
+                    {"id": "installed_prefix", "base_url": "https://fixture.invalid/v1"},
+                ])
+            probe.assert_called_once()
+
     def test_custom_provider_env_name_must_be_valid(self):
         with self.assertRaises(ValueError):
             custom_provider_from_mapping(

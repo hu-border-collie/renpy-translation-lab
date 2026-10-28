@@ -70,10 +70,24 @@ def _terminate_process(exit_code: int) -> None:
     """Exit after flushing output without running unstable Qt finalizers."""
     sys.stdout.flush()
     sys.stderr.flush()
+    if os.name == "nt":
+        import ctypes
+
+        # os._exit can still enter Windows DLL shutdown and fault in Qt after
+        # a successful suite. End only this test process without DLL callbacks;
+        # the completed suite's status remains the process exit code.
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.argtypes = ()
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        kernel32.TerminateProcess.argtypes = (ctypes.c_void_p, ctypes.c_uint)
+        kernel32.TerminateProcess.restype = ctypes.c_int
+        if not kernel32.TerminateProcess(kernel32.GetCurrentProcess(), int(exit_code)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return  # Terminating the calling process does not return on Windows.
     os._exit(int(exit_code))
 
 
 if __name__ == "__main__":
-    # Verify that the global pool stopped, but skip widget finalization before
-    # the hard exit to avoid the offscreen-platform teardown crash on Linux.
+    # Skip Qt finalization before the hard exit; the suite and modal guard
+    # already determined the status, including any test or unexpected dialog.
     _terminate_process(main(shutdown_runtime=False))

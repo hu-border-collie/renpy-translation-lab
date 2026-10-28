@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from queue import Empty
 from unittest import mock
 
 try:
@@ -22,14 +23,26 @@ else:
 from tests.support import gui_test_support
 
 
+def _emit_large_font_install_result(_destination, result_queue):
+    result_queue.put(FontInstallResult(False, error="original fixture error " * 25000))
+
+
 class _FakeResultQueue:
     def __init__(self, payload=None):
         self._payload = payload
+        self.closed = False
+        self.joined = False
 
     def get(self, timeout=None):
         if self._payload is None:
-            raise TimeoutError("no payload")
+            raise Empty
         return self._payload
+
+    def close(self):
+        self.closed = True
+
+    def join_thread(self):
+        self.joined = True
 
 
 class _FakeProcess:
@@ -220,6 +233,13 @@ class FontWorkerTests(unittest.TestCase):
 
 @unittest.skipIf(FontInstallResult is None, f"GUI dependencies are unavailable: {IMPORT_ERROR}")
 class FontSubprocessCancelTests(unittest.TestCase):
+    def test_large_child_result_is_drained_before_process_exit(self):
+        with mock.patch(
+            "gui_qt.workers.font_worker._font_install_process_entry", _emit_large_font_install_result,
+        ):
+            result = run_font_install_in_subprocess(poll_interval_s=0.01, total_timeout_s=15.0)
+        self.assertEqual(result.error, "original fixture error " * 25000)
+
     def _run(self, proc, queue, **kwargs):
         with mock.patch(
             "gui_qt.workers.font_worker.mp.get_context",
@@ -255,12 +275,24 @@ class FontSubprocessCancelTests(unittest.TestCase):
         self.assertIn("超时", result.error)
         self.assertTrue(proc.terminated)
 
+    def test_spawn_failure_closes_result_queue(self):
+        proc = _FakeProcess()
+        proc.start = mock.Mock(side_effect=RuntimeError("original fixture spawn failure"))
+        queue = _FakeResultQueue()
+        with self.assertRaisesRegex(RuntimeError, "spawn failure"):
+            self._run(proc, queue)
+        self.assertTrue(queue.closed)
+        self.assertTrue(queue.joined)
+
     def test_completed_child_returns_payload_without_termination(self):
         proc = _FakeProcess(exit_after_joins=1)
         payload = FontInstallResult(True, (Path("a.ttf"),))
-        result = self._run(proc, _FakeResultQueue(payload), poll_interval_s=0.001)
+        queue = _FakeResultQueue(payload)
+        result = self._run(proc, queue, poll_interval_s=0.001)
         self.assertEqual(result, payload)
         self.assertFalse(proc.terminated)
+        self.assertTrue(queue.closed)
+        self.assertTrue(queue.joined)
 
     def test_exited_child_without_payload_reports_crash(self):
         proc = _FakeProcess(exit_after_joins=1)

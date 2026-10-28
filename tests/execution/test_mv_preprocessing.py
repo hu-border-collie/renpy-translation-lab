@@ -69,6 +69,40 @@ class MvPreprocessingTests(unittest.TestCase):
         self.assertTrue(history['prepared'], history)
         return source, history
 
+    def test_source_bootstrap_reports_waiting_before_provider_and_ready_after_persistence(self):
+        output = io.StringIO()
+
+        def embed(texts, *_args):
+            self.assertIn('MV context preparation: 14 segments, 0 reused, 14 pending.', output.getvalue())
+            self.assertIn('MV context embedding request: 1-14/14.', output.getvalue())
+            self.assertNotIn('MV context preparation complete:', output.getvalue())
+            data = self.root / 'source-index/source_segments.jsonl'
+            self.assertFalse(data.exists() and data.read_text(encoding='utf-8').strip())
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+        self.embed.side_effect = embed
+        with redirect_stdout(output):
+            result = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(result['prepared'], result)
+        progress = [line for line in output.getvalue().splitlines() if line.startswith('MV context')]
+        self.assertEqual(progress[-3:], [
+            'MV context validation started.', 'MV context persistence started.',
+            'MV context preparation complete: 14 segments.',
+        ])
+        metadata = json.loads((self.root / 'source-index/source_metadata.json').read_text(encoding='utf-8'))
+        self.assertEqual(metadata['mv_preparation']['status'], 'ready')
+
+    def test_source_bootstrap_provider_failure_never_reports_complete(self):
+        output = io.StringIO()
+        self.embed.side_effect = TimeoutError('original fixture timeout')
+        with redirect_stdout(output):
+            result = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertFalse(result['prepared'], result)
+        self.assertEqual(result['status'], 'failed')
+        self.assertIn('MV context embedding request: 1-14/14.', output.getvalue())
+        self.assertNotIn('MV context persistence started.', output.getvalue())
+        self.assertNotIn('MV context preparation complete:', output.getvalue())
+
     def test_actual_source_occurrences_and_reviewed_history_are_separate_and_reusable(self):
         source, history = self.prepare_stores()
         self.assertEqual(source['scanned'], 14)

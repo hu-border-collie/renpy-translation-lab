@@ -12,6 +12,7 @@ import io
 import multiprocessing as mp
 from contextlib import redirect_stdout
 from dataclasses import dataclass
+from queue import Empty
 from typing import Any, TYPE_CHECKING
 
 from PySide6.QtCore import QThread, Signal
@@ -90,6 +91,8 @@ def run_doctor_check_in_subprocess(
 
     ``should_cancel`` is an optional zero-arg callable polled while waiting; when
     it returns true the child is terminated and a cancelled result is returned.
+    Results are drained while the child is alive so large reports cannot block
+    its queue feeder and prevent process exit.
     """
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue(1)
@@ -99,12 +102,25 @@ def run_doctor_check_in_subprocess(
         daemon=True,
     )
     proc.start()
+    result = None
+    result_received = False
     try:
         while proc.is_alive():
             if should_cancel is not None and should_cancel():
                 _terminate_process(proc)
                 return DoctorWorkerResult(False, None, "", "环境检查已取消。")
-            proc.join(timeout=join_timeout_s)
+            if result_received:
+                proc.join(timeout=join_timeout_s)
+            else:
+                try:
+                    # Drain before joining: a child's queue feeder cannot
+                    # finish/exit while a large report fills the pipe.
+                    result = result_queue.get(timeout=join_timeout_s)
+                    result_received = True
+                except Empty:
+                    pass
+        if result_received:
+            return result
         try:
             return result_queue.get(timeout=1.0)
         except Exception:
@@ -118,6 +134,8 @@ def run_doctor_check_in_subprocess(
     finally:
         if proc.is_alive():
             _terminate_process(proc)
+        result_queue.close()
+        result_queue.join_thread()
 
 
 def _terminate_process(proc: mp.Process) -> None:

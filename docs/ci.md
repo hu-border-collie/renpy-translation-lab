@@ -19,7 +19,7 @@
 CLI/core 与 GUI 套件共同覆盖全部 `test_*.py` 用例，且两套之间不重复：
 
 - `python -B tests/run_cli_tests.py -q`：CLI/core，以及不依赖 Qt 控件的设置协议、注册表、协调器和保存逻辑。
-- `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。
+- `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。Windows CI 使用逐项、无缓冲输出和 faulthandler；完整测试与弹窗守卫确定退出码后，脚本直接终止自身进程，避开 Qt 的 DLL 退出回调，成功与失败的退出码都会保留。
 
 测试按模块存放在子包中，两套入口递归发现并以 `tests.<分组>.<模块>` 加载，夹具目录不参与发现。
 同一测试模块只使用完整包名导入；复用其他测试的 fixture 时优先导入模块，避免把其 `TestCase`
