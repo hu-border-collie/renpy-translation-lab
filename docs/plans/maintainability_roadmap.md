@@ -1,5 +1,7 @@
 # 维护复杂度治理路线
 
+> 2026-10-27 重评：已完成的两轮不重开；不再将全面生命周期统一、所有反向依赖或全局状态清零列为默认待办。后续仅按具体缺陷或维护成本选择切片，当前工作见[计划索引](README.md)。
+
 > 状态：2026-09-29；第一、二轮工程均已合并并完成关闭，后续仅为候选。
 > 第二轮实现基线：[`main@585d608`](https://github.com/hu-border-collie/renpy-translation-lab/commit/585d60829736b4686ed977303c92c87639cba157)。
 > 第二轮交付：[PR #534](https://github.com/hu-border-collie/renpy-translation-lab/pull/534)，合并提交 [`e792a03`](https://github.com/hu-border-collie/renpy-translation-lab/commit/e792a03366c3606e3cd92b7eade6444b0a8e81f9)。
@@ -67,5 +69,5 @@ custom providers 深复制；LiteLLM 内部同 attempt 限流换 key 已关闭�
 - 依照 [AGENTS.md](../../AGENTS.md) 与 [CONTRIBUTING.md](../../CONTRIBUTING.md) 做受影响行为回归；保留断言意义，避免测试迫使生产代码长期模拟旧结构。
 - 不改变公开 CLI、配置与产物合同，不削弱 `check -> apply`、源快照或事务写回保证。必要外部兼容集中在边界，并记录调用者。
 - 真实 Provider/项目验证继续由 [#344](https://github.com/hu-border-collie/renpy-translation-lab/issues/344)、[#431](https://github.com/hu-border-collie/renpy-translation-lab/issues/431) 等既有任务承接；本路线的离线验证不能代替它们。
-- [#510](https://github.com/hu-border-collie/renpy-translation-lab/issues/510) 负责全量计划状态整理；本文只管理维护性路线，不重新安排其他功能队列。
+- 既往计划整理 [#510](https://github.com/hu-border-collie/renpy-translation-lab/issues/510) 已完成；当前状态由[计划索引](README.md)维护，本文只保留维护性路线的取舍与停止条件。
 - 一轮验收通过即可关闭，后续扩展不自动成为关闭条件。没有足够收益证据时暂停下一轮；不以“项目所有复杂度消失”为无限期完成标准。

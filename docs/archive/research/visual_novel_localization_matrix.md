@@ -1,12 +1,14 @@
 # 视觉小说引擎本地化能力矩阵与后续 Adapter 路线
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态**：#272 研究与路线决策基准文档。
 > **关联 Issue**：[#265（引擎适配边界与版本化翻译资产）](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) · [#272（能力矩阵与后续路线）](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)
-> **当前路线（2026-10-24）**：#265 P5/P6 已交付；[#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)已形成离线版本 / 范围证据，[P1 公共数组路径核心](../engine_adapter.md#source-json-writeback-p1)已由 PR #568 合并。[#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接后续 MV Adapter、产品接入与游戏交付，尚未完成，原生验收仍待做。#272 保持 open；§6.1 与下文研究数据保留原日期，最新映射见[计划索引](README.md)。真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../engine_adapter.md#p6-离线端到端回归与边界)。
+> **当前路线（2026-10-24）**：#265 P5/P6 已交付；[#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)已形成离线版本 / 范围证据，[P1 公共数组路径核心](../../engine_adapter.md#source-json-writeback-p1)已由 PR #568 合并。[#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接后续 MV Adapter、产品接入与游戏交付，尚未完成，原生验收仍待做。#272 保持 open；§6.1 与下文研究数据保留原日期，最新映射见[计划索引](../../plans/README.md)。真实 Ren'Py 运行时语言切换 / fallback 边界见 [Engine Adapter 文档](../../engine_adapter.md#p6-离线端到端回归与边界)。
 > **核对日期**：2026-09-13（官方版本与语法）。P6 收口与立项暂缓状态更新于 2026-09-14（#272）；官方版本与语法以各引擎现行文档为准，刷新本表时同步更新日期。
 > **有限复核（2026-10-22）**：修正 Naninovel 身份/工具链、MV/MZ 版本与候选排名表述，并纳入 #509；未全量刷新六引擎资料。下表“版本/输入/排除”均为研究窗口，不是本项目支持范围；其他候选的评级只作历史假设。#272 全体 P0/P1/P2 尚未完成。
-> **#509 续验补记（2026-10-22）**：[单版本往返报告](issue-509-translatorpp-roundtrip-2026-10-21.md)提供 MV 编辑器/core **1.5.1** 原创覆盖层及25参数清单。TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）限定译文导出精确19处，部分原生/HTML5运行有证据；独立null保存/重开/导出补测通过，混合空值回退原文；无修改导出存在插件注释副作用，前插命令后缺一处context译文，staging恢复重试成功。限定spike证据已齐，生产bridge暂缓，D12/已支持范围不提升；其他引擎未刷新。
-> **#565 离线调查（2026-10-23）**：[实际样本报告](issue-565-komorebi-survey-2026-10-23.md)确认 MV 家族，但 core 文件头 1.6.2 与常量 1.6.1 冲突，准确上游版 unknown，暂以材料摘要固定。已分类 205 份 JSON / 191 张地图、建立 101 项主要 occurrence 加 7 个镜像的三场景清单；原生可达性、显示和存读档按用户指示暂缓。公共数组路径已进入 P1 核心实现，生产 Adapter 未实现，#565 / #272 全部验收未完成。
+> **#509 续验补记（2026-10-22）**：[单版本往返报告](../experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)提供 MV 编辑器/core **1.5.1** 原创覆盖层及25参数清单。TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）限定译文导出精确19处，部分原生/HTML5运行有证据；独立null保存/重开/导出补测通过，混合空值回退原文；无修改导出存在插件注释副作用，前插命令后缺一处context译文，staging恢复重试成功。限定spike证据已齐，生产bridge暂缓，D12/已支持范围不提升；其他引擎未刷新。
+> **#565 离线调查（2026-10-23）**：[实际样本报告](../../plans/issue-565-komorebi-survey-2026-10-23.md)确认 MV 家族，但 core 文件头 1.6.2 与常量 1.6.1 冲突，准确上游版 unknown，暂以材料摘要固定。已分类 205 份 JSON / 191 张地图、建立 101 项主要 occurrence 加 7 个镜像的三场景清单；原生可达性、显示和存读档按用户指示暂缓。公共数组路径已进入 P1 核心实现，生产 Adapter 未实现，#565 / #272 全部验收未完成。
 
 ---
 
@@ -14,7 +16,7 @@
 
 ### 1.1 研发背景
 在 [#265](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) 中，近期工作范围已被明确收窄：
-1. **Ren'Py** 作为主生产引擎，率先完成了 `EngineAdapter`、`CoverageAudit`、`ProjectSnapshot`、`Reconciliation` 与 `ReuseCandidate`（P0–P4 已落地，见 [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)）；
+1. **Ren'Py** 作为主生产引擎，率先完成了 `EngineAdapter`、`CoverageAudit`、`ProjectSnapshot`、`Reconciliation` 与 `ReuseCandidate`（P0–P4 已落地，见 [Engine Adapter、覆盖审计与安全写回](../../engine_adapter.md)）；
 2. **TyranoScript V600+** 作为第二个验证架构边界的 Adapter（P5），用于验证多引擎在 `hybrid` 本地化模式下的抽象通用性与安全写回合同；
 3. 其他引擎不进入 #265 的实现范围。
 
@@ -475,4 +477,4 @@ flowchart TD
 - **RPG Maker MZ Official Help**: <https://rpgmakerofficial.com/product/MZ_help-en/index.html>
 - **多引擎本地化适配与候选引擎开源生态研究**: [multi_engine_localization_ecosystem_research.md](multi_engine_localization_ecosystem_research.md)
 - **Translator++ 多引擎接入评估**: [translatorpp_integration_assessment.md](translatorpp_integration_assessment.md)
-- **本仓库 Adapter 合同**: [engine_adapter.md](../engine_adapter.md)
+- **本仓库 Adapter 合同**: [engine_adapter.md](../../engine_adapter.md)

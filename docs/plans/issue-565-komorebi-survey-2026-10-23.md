@@ -5,7 +5,7 @@
 > **状态：离线调查已形成交付；原生运行、场景实际可达性和存读档按用户指示暂缓。#565 尚未完成全部验收，不能关闭。**
 > **后续 P1 本地实施**：用户随后授权开始公共数组路径合同，已增加独立源 / 目标快照和 schema 2 字符串 token 渲染，见[核心 API](../engine_adapter.md#source-json-writeback-p1)与[原创夹具](../../tests/fixtures/source_json_writeback/README.md)。这是调查之后的代码增量，不改变本报告的原生未验状态，也不表示 P2 / P3 已实现。
 > **状态补记（2026-10-24）**：上述公共核心已由 [PR #568](https://github.com/hu-border-collie/renpy-translation-lab/pull/568) 合入 main；后续产品与游戏交付由 [#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接。下文调查数据与原生未验状态保持原样，最新任务映射见[计划索引](README.md)。
-> 关联：[#565](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)、[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[#509 实测](issue-509-translatorpp-roundtrip-2026-10-21.md)、[#272 研究归档](issue-272-research-closeout-2026-10-22.md)。
+> 关联：[#565](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)、[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[#509 实测](../archive/experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)、[#272 研究归档](../archive/research/issue-272-research-closeout-2026-10-22.md)。
 
 ## 1. 路线决定与证据边界
 

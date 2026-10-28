@@ -1,9 +1,11 @@
 # #272 有限研究归档、#565 调查衔接与 #147 暂缓
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > 决策日期：**2026-10-22**。本轮只归档研究与路线判断，不启动新实验或实现。
-> 后续（2026-10-24）：#565 离线调查与 PR #568 公共 JSON 核心已进入 main；[#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接 MV 产品与 Komorebi 交付。下文保留 10-22 研究决定及草案，不视为当前实现状态；最新映射见[计划索引](README.md)。
+> 后续（2026-10-24）：#565 离线调查与 PR #568 公共 JSON 核心已进入 main；[#567](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) 承接 MV 产品与 Komorebi 交付。下文保留 10-22 研究决定及草案，不视为当前实现状态；最新映射见[计划索引](../../plans/README.md)。
 > 首次复核基线：`09de6dcfd25ea8e21fe00d22251bb590a917b88e`；发布前按 `main@1a220214072e2fc44632c43cc0459cdb149287a1` 与新 issue #565 更新，在独立文档分支交付，保留原工作区。
-> 关联：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) · [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) · [#147](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) · [#509 实测报告](issue-509-translatorpp-roundtrip-2026-10-21.md) · [能力矩阵](visual_novel_localization_matrix.md)
+> 关联：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) · [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) · [#147](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) · [#509 实测报告](../experiments/issue-509-translatorpp-roundtrip-2026-10-21.md) · [能力矩阵](visual_novel_localization_matrix.md)
 
 ## 1. 当前决定与历史材料
 
@@ -37,7 +39,7 @@
 
 ## 3. #509 已交付证据与失败
 
-固定窗口是 **MV 编辑器/core 1.5.1 → TPP 8.8.9 → RMMVJS parser 2.19**；新建项目入口的 rmrgss **3.3** 不是实际委派 parser 版本。下表均为 `[实测]`，细节和本地证据目录以[报告](issue-509-translatorpp-roundtrip-2026-10-21.md)为准。
+固定窗口是 **MV 编辑器/core 1.5.1 → TPP 8.8.9 → RMMVJS parser 2.19**；新建项目入口的 rmrgss **3.3** 不是实际委派 parser 版本。下表均为 `[实测]`，细节和本地证据目录以[报告](../experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)为准。
 
 | 项目 | 保留的结果与限制 |
 | --- | --- |
@@ -54,10 +56,10 @@
 
 | 当前事实 `[仓库]` | 尚待候选实验解决的问题 |
 | --- | --- |
-| [contracts.py](../../engine_adapters/contracts.py)、[coverage.py](../../engine_adapters/coverage.py)、[versioning.py](../../engine_adapters/versioning.py)、[reuse.py](../../engine_adapters/reuse.py) 已有 occurrence、候选清单、快照/对账与复用。 | Naninovel ID/source、joined 片段和 RPG 事件/页/context 如何持久化并绑定摘要；同文不合并 occurrence。数组坐标只在冻结快照内有效。 |
-| [writeback.py](../../engine_adapters/writeback.py) 的 `json_catalog_set` 限 `localization_catalog`，只遍历非空字符串字典键，要求已有字符串叶子与非空替换；已有非空单行/跨行 span 操作。 | 不能直接写 RPG 源树或 `.trans` 数组/null；首次空目标、受限根与重复目标等需定义和验证公共合同。不得用私有 JSON writer 绕过。 |
-| [structure_rules.py](../../engine_adapters/structure_rules.py) 只认 `renpy` / `tyrano`；[外部初译工作包](../external_translation_work.md) 仍限 Ren'Py。 | 新引擎规则、覆盖分母及 CLI/GUI 接线尚不存在，通用对象或离线 corpus 不构成产品支持。 |
-| [Batch 合同](../batch_workflows.md) 要求与当前 manifest/results 匹配的最近一次 `writeback_gate.decision=allow`。 | 第三引擎仍须绑定源快照、结构和写前复核；普通质量报警默认不阻断，配置提升为 blocker 时阻断，force 不豁免 stale/源快照/结构。外部工具导出、官方导入/构建与本项目许可分别验收。 |
+| [contracts.py](../../../engine_adapters/contracts.py)、[coverage.py](../../../engine_adapters/coverage.py)、[versioning.py](../../../engine_adapters/versioning.py)、[reuse.py](../../../engine_adapters/reuse.py) 已有 occurrence、候选清单、快照/对账与复用。 | Naninovel ID/source、joined 片段和 RPG 事件/页/context 如何持久化并绑定摘要；同文不合并 occurrence。数组坐标只在冻结快照内有效。 |
+| [writeback.py](../../../engine_adapters/writeback.py) 的 `json_catalog_set` 限 `localization_catalog`，只遍历非空字符串字典键，要求已有字符串叶子与非空替换；已有非空单行/跨行 span 操作。 | 不能直接写 RPG 源树或 `.trans` 数组/null；首次空目标、受限根与重复目标等需定义和验证公共合同。不得用私有 JSON writer 绕过。 |
+| [structure_rules.py](../../../engine_adapters/structure_rules.py) 只认 `renpy` / `tyrano`；[外部初译工作包](../../external_translation_work.md) 仍限 Ren'Py。 | 新引擎规则、覆盖分母及 CLI/GUI 接线尚不存在，通用对象或离线 corpus 不构成产品支持。 |
+| [Batch 合同](../../batch_workflows.md) 要求与当前 manifest/results 匹配的最近一次 `writeback_gate.decision=allow`。 | 第三引擎仍须绑定源快照、结构和写前复核；普通质量报警默认不阻断，配置提升为 blocker 时阻断，force 不豁免 stale/源快照/结构。外部工具导出、官方导入/构建与本项目许可分别验收。 |
 
 #272 原 P0/P1/P2 未完成项保持未完成：其余候选的一手资料/版本/许可、所有候选的实际制品与集成对照、跨版本重复/移动关联、唯一候选及实现范围选择，均未被本次有限复核代替。本轮不勾选原清单，不以关闭研究 issue 表示全部研究完成。
 
@@ -72,7 +74,7 @@
 
 #565 先确认版本、范围与未知项，选择 2–3 个可到达场景，独立核对 10–20 个文本位置，并界定后续约 100–300 occurrence 的小样本；未取得样本时如实记录缺口。游戏文件、对白、存档和商业资源留在本地，公开只提交脱敏结论和许可明确的原创 fixture。调查回填 #272 后再决定生产实现，不因队列清空或文档合并而直接开工；不为选出唯一候选虚构已验证排名。
 
-#147 的 [Story Memory MVP](../context_systems.md#结构化剧情记忆) 与 [示例配置](../../translator_config.example.json) 仍在，batch/sync 默认关闭。本次不生成图谱、不启用配置、不虚构人工确认关系。issue 正文“没有生产项目启用”是 2026-07 快照，[2026-08-08 评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/147#issuecomment-5220024353)已指出其验证边界；本轮不审计所有私人项目。
+#147 的 [Story Memory MVP](../../context_systems.md#结构化剧情记忆) 与 [示例配置](../../../translator_config.example.json) 仍在，batch/sync 默认关闭。本次不生成图谱、不启用配置、不虚构人工确认关系。issue 正文“没有生产项目启用”是 2026-07 快照，[2026-08-08 评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/147#issuecomment-5220024353)已指出其验证边界；本轮不审计所有私人项目。
 
 只有真实翻译反复出现 glossary/source_index 难解决的关系、称呼或口吻错误，才重新启动：由人工确认 **至少 5 角色、10 条关系**，保留来源与确认记录；选小文件/片段作同条件开关对照，manifest `story_memory_summary` 必须非零命中，并记录质量、额外费用/时间、图谱整理与更新维护成本。候选 seed 不等于确认关系，命中不等于质量收益；没有收益就保持关闭。原试点验收仍未完成，不先做维护工具。
 

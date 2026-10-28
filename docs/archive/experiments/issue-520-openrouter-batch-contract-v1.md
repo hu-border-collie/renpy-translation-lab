@@ -1,5 +1,7 @@
 # #520 OpenRouter Batch 研究合同 v1
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 日期：2026-10-20。基线：`main@b964723f8f0e81ffdc7f6abaf3b5cd951b6fe482`。
 这是研究草案，**未增加生产策略、配置或 CLI/GUI**。实测结论为
 [暂缓接入](issue-520-openrouter-batch-spike-2026-10-20.md)。
@@ -138,9 +140,9 @@ python -B -m unittest tests.tooling.test_openrouter_batch_spike -q
 python -B scripts/openrouter_batch_spike.py inspect --help
 ```
 
-fixture 位于 [source.json](../../tests/fixtures/openrouter_batch_spike/source.json)，
-[harness](../../scripts/openrouter_batch_spike.py) 不含 HTTP 或凭据访问；
-[测试](../../tests/tooling/test_openrouter_batch_spike.py) 的合成回执显式标记为离线，不构成 Provider smoke。
+fixture 位于 [source.json](../../../tests/fixtures/openrouter_batch_spike/source.json)，
+[harness](../../../scripts/openrouter_batch_spike.py) 不含 HTTP 或凭据访问；
+[测试](../../../tests/tooling/test_openrouter_batch_spike.py) 的合成回执显式标记为离线，不构成 Provider smoke。
 研究 harness 没有产品 GUI，这是范围内的有意例外，不是一个未同步的生产功能。
 
 若未来有明确需求并补齐保留/质量与完整对照缺口，再独立拆最小生产范围：能力/配置与 runtime reader、现有
@@ -155,4 +157,4 @@ Gemini/LiteLLM 的保留/迁移另按既有合同处理。本次 PR 只发布研
 - [OpenRouter Batch](https://openrouter.ai/docs/batch-quickstart)：请求形状、route、状态、inline results、保留与删除。
 - [实际 variant 目录](https://openrouter.ai/api/v1/models/openai/gpt-4.1-mini:batch/endpoints)：目标 endpoint、参数和价格声明。
 - [OpenRouter BYOK](https://openrouter.ai/docs/guides/overview/auth/byok) 与[现行价格政策](https://openrouter.ai/pricing)：账号路由与 fee 口径。
-- 现有生产行为参考 [Batch 工作流](../batch_workflows.md)、[Provider smoke](../provider_smoke_matrix.md)及 [#431 迁移矩阵](issue-431-litellm-migration-matrix.md)。
+- 现有生产行为参考 [Batch 工作流](../../batch_workflows.md)、[Provider smoke](../../provider_smoke_matrix.md)及 [#431 迁移矩阵](../research/issue-431-litellm-migration-matrix.md)。

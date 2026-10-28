@@ -1,5 +1,7 @@
 # GUI 测试在 Codex 沙箱环境卡住：调查报告
 
+> 历史调查：下面的故障与测试数字对应当时版本。当前隔离与临时目录处理见[CI 手册](../ci.md#沙箱与临时目录)。
+
 > 结论先行：历史根因是 **Codex 沙箱的写限制**，不是测试代码逻辑或机器负载问题。
 > 在 issue #370 的测试隔离落地前，GUI 测试会真实写入
 > `%LOCALAPPDATA%\renpy-translation-lab\litellm_catalog_cache.json`

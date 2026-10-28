@@ -1,11 +1,13 @@
 # Agent 翻译工具包：方向评估与最小验证提案
 
-> 状态（2026-10-24）：#508 已按原验收 completed 关闭；工作包核心 PR #516、恢复修复 PR #559 和真实章节证据均已合并。结论收缩到范围核验、持久候选、恢复与安全交付，未完成 GUI 产品化，也未证明质量或效率优势。见[章节续验](issue-508-parallel-acceptance-2026-10-17.md)及[当前操作](../external_translation_work.md)；下文仍是原提案。
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
+> 状态（2026-10-24）：#508 已按原验收 completed 关闭；工作包核心 PR #516、恢复修复 PR #559 和真实章节证据均已合并。结论收缩到范围核验、持久候选、恢复与安全交付，未完成 GUI 产品化，也未证明质量或效率优势。见[章节续验](../experiments/issue-508-parallel-acceptance-2026-10-17.md)及[当前操作](../../external_translation_work.md)；下文仍是原提案。
 > 日期：2026-09-15。
 > 评估基线：本地 `main@c690e10`，并核对远端 `main@1ddd0be` 的相关增量。
-> 当前操作方式仍以 [Agent / CLI 快速开始](../quickstart_agent.md) 为准。
+> 当前操作方式仍以 [Agent / CLI 快速开始](../../quickstart_agent.md) 为准。
 > 文中的工具名称、数据对象和阶段安排均为建议，尚未冻结为公共 API 或实施承诺。
-> 已实现子集的操作合同与证据缺口见 [外部初译工作包](../external_translation_work.md)。
+> 已实现子集的操作合同与证据缺口见 [外部初译工作包](../../external_translation_work.md)。
 
 ## 1. 方向判断
 
@@ -45,22 +47,22 @@ Agent 可以决定译法、翻译顺序、是否返工和怎样组织审校。�
 
 | 能力 | 当前代码 / 文档 | 复用判断 |
 |---|---|---|
-| 发现、候选清单、occurrence、结构验证 | [EngineAdapter 合同](../../engine_adapters/contracts.py)、[现行边界](../engine_adapter.md) | 适合作为核心，保留引擎能力差异 |
-| 声明式写回与事务 | [writeback.py](../../engine_adapters/writeback.py)、[atomic_io.py](../../foundation/atomic_io.py) | 复用计划校验与事务能力，完整门禁仍须接入 workflow/common 层 |
-| 源快照、版本对账、译文复用 | [versioning.py](../../engine_adapters/versioning.py)、[reuse.py](../../engine_adapters/reuse.py) | 支撑任务身份、源变更检测与跨版本资产 |
-| 外部订正提案 | [revision_corpus.py](../../quality_review/revision_corpus.py)、[revision_proposals.py](../../quality_review/revision_proposals.py)、[订正工作流](../batch_workflows.md) | 已有语料导出、Agent 提案、身份及快照校验，是初译入口的参考 |
-| 初译手工导入 | [import_manual_translations.py](../../execution/import_manual_translations.py) | 可验证桥接，但尚不是正式的外部成果合同 |
-| 上下文材料 | [advanced_context.py](../../context_engine/advanced_context.py)、[rag_memory.py](../../context_engine/rag_memory.py)、[上下文系统](../context_systems.md) | 整理为可查询材料，让按需读取与自动装配能分开使用 |
-| 机器接口 | [cli_contract.py](../../foundation/cli_contract.py)、[cli_discovery.py](../../foundation/cli_discovery.py) | 复用 JSON envelope、稳定错误分类、输出裁剪与机器发现 |
+| 发现、候选清单、occurrence、结构验证 | [EngineAdapter 合同](../../../engine_adapters/contracts.py)、[现行边界](../../engine_adapter.md) | 适合作为核心，保留引擎能力差异 |
+| 声明式写回与事务 | [writeback.py](../../../engine_adapters/writeback.py)、[atomic_io.py](../../../foundation/atomic_io.py) | 复用计划校验与事务能力，完整门禁仍须接入 workflow/common 层 |
+| 源快照、版本对账、译文复用 | [versioning.py](../../../engine_adapters/versioning.py)、[reuse.py](../../../engine_adapters/reuse.py) | 支撑任务身份、源变更检测与跨版本资产 |
+| 外部订正提案 | [revision_corpus.py](../../../quality_review/revision_corpus.py)、[revision_proposals.py](../../../quality_review/revision_proposals.py)、[订正工作流](../../batch_workflows.md) | 已有语料导出、Agent 提案、身份及快照校验，是初译入口的参考 |
+| 初译手工导入 | [import_manual_translations.py](../../../execution/import_manual_translations.py) | 可验证桥接，但尚不是正式的外部成果合同 |
+| 上下文材料 | [advanced_context.py](../../../context_engine/advanced_context.py)、[rag_memory.py](../../../context_engine/rag_memory.py)、[上下文系统](../../context_systems.md) | 整理为可查询材料，让按需读取与自动装配能分开使用 |
+| 机器接口 | [cli_contract.py](../../../foundation/cli_contract.py)、[cli_discovery.py](../../../foundation/cli_discovery.py) | 复用 JSON envelope、稳定错误分类、输出裁剪与机器发现 |
 
 目前有四处需要实质调整：
 
-- [TranslationPlan](../../quality_review/translation_plan.py) 同时冻结源身份、模型快照、执行策略、
+- [TranslationPlan](../../../quality_review/translation_plan.py) 同时冻结源身份、模型快照、执行策略、
   chunk、上下文和请求。它适合当前执行器，外部 Agent 工作包需要更独立的输入合同。
 - 初译手工导入把译文包装为 Batch response，并设置 `JOB_STATE_SUCCEEDED`。正式入口需要
   表达外部来源、部分提交和接收状态，不能把包装状态当成 Provider 执行证据。
-- [SyncRunStore](../../execution/sync_run_store.py) 的租约围绕单个 run 的调度器设计，
-  [SyncRunService](../../execution/sync_run_service.py) 消费冻结的执行计划。耐久化经验可以复用，
+- [SyncRunStore](../../../execution/sync_run_store.py) 的租约围绕单个 run 的调度器设计，
+  [SyncRunService](../../../execution/sync_run_service.py) 消费冻结的执行计划。耐久化经验可以复用，
   但不能直接视作多个宿主 Agent 的任务领取协议。
 - 当前同步路径在计划构建阶段集中检索，历史回灌主要发生在 apply 后。串行 Agent 需要
   读取尚未写回的中间成果，不能依赖修改游戏文件来共享最新译文。
@@ -87,7 +89,7 @@ Agent 可以决定译法、翻译顺序、是否返工和怎样组织审校。�
 翻译状态和 Agent 调度仍需要明确的业务边界。
 
 GUI 可继续承担候选选择、质量报告、问题定位和写回预览。新增共同能力须遵循
-[CLI / GUI 同步约定](../../CONTRIBUTING.md)；纯 Agent 工作包交换等高级入口若先仅提供
+[CLI / GUI 同步约定](../../../CONTRIBUTING.md)；纯 Agent 工作包交换等高级入口若先仅提供
 CLI，应在实施范围中明确例外及原因，不能静默形成两套翻译行为。
 
 ## 5. 工作包、成果与进度合同
@@ -278,7 +280,7 @@ RAG 可以索引这些成果，但不成为成果是否存在或是否通过审�
 
 记录人工介入时间、总耗时、失败与重试、实际成本或额度、遗漏与运行问题，以及匿名
 译文审阅结果。重点抽查人物口吻、反讽、术语、跨章节指代和上下文依赖。
-使用既有 [A/B 实验能力](../../execution/translation_ab_experiment.py) 时，应明确其覆盖的请求或
+使用既有 [A/B 实验能力](../../../execution/translation_ab_experiment.py) 时，应明确其覆盖的请求或
 上下文变体，不能把局部比较视为完整 Agent 路线实验。
 
 带着验证目的完成实际翻译，交付质量优先。章节结果值得继续时，再运行完整作品，观察

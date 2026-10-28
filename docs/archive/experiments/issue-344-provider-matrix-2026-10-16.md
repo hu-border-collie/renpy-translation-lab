@@ -1,5 +1,7 @@
 # #344 固定版本 Provider 矩阵实测（2026-10-16）
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 本轮限定为四类 Provider 的 CLI 真实 smoke。首次结果为 2 类通过、2 类受环境阻断；
 连接恢复后的 Gemini 重试已完成，当前为 **4 类执行、检查与隔离写回全部通过**。
 #344 仍保持开放：生产 Project Analysis、非 Gemini embedding、扩大上下文 A/B 与新的
@@ -67,7 +69,7 @@ USD 1.765823772，累计保守预留 **USD 1.826405123664**，仍低于原 USD 2
 实际账单未核对，不将未知用量改成零。
 
 本轮还观察到用量展示差异：成功 Sync 的 SQLite 与原始回执都完整保存 515 total tokens，
-但状态摘要显示 unknown。[状态汇总](../../execution/sync_run_store.py)读取 `total_tokens` /
+但状态摘要显示 unknown。[状态汇总](../../../execution/sync_run_store.py)读取 `total_tokens` /
 `totalTokenCount`，遗漏 SDK 的 `total_token_count`。底层数据没有丢失；本次未修改产品代码
 或历史 run，保留为后续修复项，不把四类执行链路通过扩大成所有展示行为已通过。
 
@@ -130,7 +132,7 @@ OpenAI-compatible 计数字段。没有新增配置、命令、GUI 入口或文�
   生产 fresh PA、非 Gemini embedding 和原生高级上下文扩大 A/B 仍独立待验收。
 - #508 的路线实验、视觉 / 交互验收，以及 #147 / #272 / #509 / #520 均未在本轮启动。
 
-现行命令与安全边界见 [Provider Smoke Matrix](../provider_smoke_matrix.md)。
+现行命令与安全边界见 [Provider Smoke Matrix](../../provider_smoke_matrix.md)。
 
 10-17 的真实章节 PA / 非 Gemini embedding / 扩大上下文 A/B 与新的恢复费用续验，
 见[独立续验报告](issue-344-context-acceptance-2026-10-17.md)。该报告使用含本地修复的冻结副本，

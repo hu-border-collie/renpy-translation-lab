@@ -81,7 +81,7 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 
 - **配置向后兼容**：改 `translator_config.json` 结构时更新 `translator_config.example.json` 与 `gui_qt/settings/settings_schema.py`。
 - **写回安全**：不得绕过 `check -> apply` 合约；GUI 写回按钮仍须服从 `safe` / `warn` / `block` 语义。
-- **不要提交私有文件**：见 [docs/project_notes.md](docs/project_notes.md) 安全说明。
+- **不要提交私有文件**：见[首页安全提示](README.md#安全提示)与[数据及凭据边界](docs/setup.md#数据与凭据边界)。
 - **测试**：改动后按[测试目录说明](tests/README.md)运行相关完整模块名，例如 `python -m unittest tests.providers.test_model_profile`；GUI 改动优先跑 `tests.gui` 下对应模块。
 - **依赖**：直接版本只在对应的 `requirements-*.txt` 权威输入中维护；依赖升级应单独成 PR，并按[依赖输入与哈希锁](docs/dependencies.md)重生成全部锁。不要手改 `requirements-lock/`。
 - **质量门禁**：PR 会跑 `scripts/run_quality_gates.py all`（lint / 类型检查 / 依赖审计）。工具版本在 `requirements-dev.txt`，配置在 `pyproject.toml`，漏洞例外在 `quality/pip-audit-exceptions.json`。blocking 范围刻意收窄；扩大范围前先测量基线并单独 PR。说明见 [CI 与定时集成检查](docs/ci.md)。
@@ -91,14 +91,15 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 - 根目录 `README.md` 保留项目定位、安装和角色入口；专题导航集中在[文档地图](docs/README.md)。
 - 当前行为更新对应用户手册；包分层与所有权更新[架构概览](docs/architecture.md)，调用链、路径和测试模块更新[代码路径索引](docs/code_paths.md)。
 - issue 状态、合并证据和剩余任务集中在[计划索引](docs/plans/README.md)，核对 GitHub 后注明日期，避免在多个入口重复维护待办。
-- 新增计划或公开材料说明时登记到计划索引；有日期的报告保留原始基线与结果，后续变化用注明日期的补记衔接。
-- 只归档仅具历史回顾价值的过程稿；仍被现行实现、测试或决策引用的合同保持路径稳定。关闭 issue 不自动触发归档。
+- 新合同或有独立数据的实验才单列文稿；日常讨论、进度、状态核对和小范围决策优先更新已有手册或计划条目，避免每轮工作再生成一份报告。
+- 当前工作与有效合同登记到计划索引；已收口实验、旧研究和历次盘点按用途归入 `docs/archive/`，由归档索引保留证据入口。有日期的报告保留原始基线、失败与未知项，不改写成当前手册。
+- 仍被实现、测试或复现使用的技术合同与冻结材料保持路径稳定；归档报告时同步相对链接和指向 `main` 的路径，固定提交链接保持原样。关闭 issue 本身不是归档或删除资料的充分理由。
 - 纯文档修改至少检查所有 tracked 本地 Markdown 路径、锚点和 `git diff --check`；源码与测试路径也应按当前 checkout 核对。
 
 ## 相关文档
 
 - [架构概览](docs/architecture.md)
 - [代码路径索引](docs/code_paths.md)
-- [项目说明](docs/project_notes.md)
+- [支持范围与安全提示](README.md#支持范围)
 - [GUI 工作台](docs/gui_workbench.md)
 - [Batch 工作流与安全检查](docs/batch_workflows.md)

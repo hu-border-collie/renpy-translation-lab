@@ -1,5 +1,7 @@
 # #520 OpenRouter Batch 有界可行性验证（2026-10-20）
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 后续：用户要求更现代模型并排除 GPT/Claude 后，已启动
 [DeepSeek V4.1 Flash 续验](issue-520-openrouter-batch-deepseek-2026-10-20.md)。
 10-21 已读回该路线的 Sync 与 Batch 成功结果（Batch 2/2 请求、6/6 item）；最终仍暂缓
@@ -12,8 +14,8 @@ HTTP 400 拒绝，目录声明与实际提交冲突；同模型 Sync 首条又�
 已有架构足以复用语义层，但不足以证明新增策略有实际收益。
 
 本次已交付[版本化合同 v1](issue-520-openrouter-batch-contract-v1.md)、
-[原创 fixture](../../tests/fixtures/openrouter_batch_spike/source.json)、
-[离线 harness](../../scripts/openrouter_batch_spike.py)及负例测试；真实调用也已执行。
+[原创 fixture](../../../tests/fixtures/openrouter_batch_spike/source.json)、
+[离线 harness](../../../scripts/openrouter_batch_spike.py)及负例测试；真实调用也已执行。
 没有修改生产 CLI/GUI、策略枚举、默认配置、依赖或写回事务。没有重跑 #508 或使用其预算/材料。
 
 ## 基线、材料与实验条件
