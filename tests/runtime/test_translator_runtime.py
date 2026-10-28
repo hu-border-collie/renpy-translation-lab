@@ -3233,6 +3233,51 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
         finally:
             _restore_translator_runtime_state(snapshot)
 
+    def test_mv_root_correction_keeps_package_macro_loadable(self):
+        from engine_adapters.project_config import resolve_project_configuration
+
+        snapshot = _snapshot_translator_runtime_state()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp).resolve()
+                project = workspace / 'Game'
+                content = project / 'work' / 'www'
+                (content / 'data').mkdir(parents=True)
+                (content / 'js').mkdir()
+                (content / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+                (project / 'original').mkdir()
+                config_path = workspace / 'translator_config.json'
+                outside = workspace / 'outside.md'
+                outside.write_text('Unrelated style.', encoding='utf-8')
+                with (
+                    mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(config_path)),
+                    mock.patch.object(runtime, 'ROOT_DIR', str(workspace / 'tool')),
+                    mock.patch.object(runtime, 'TOOL_DIR', str(workspace / 'tool')),
+                    mock.patch.dict(os.environ, {}, clear=True),
+                    mock.patch('sys.stdout', io.StringIO()),
+                ):
+                    for selected in (project / 'work', project):
+                        macro = selected / 'macro_setting.md'
+                        macro.write_text('Keep the tone warm.\n', encoding='utf-8')
+                        raw = {'game_root': str(selected),
+                               'sync': {'macro_setting_file': 'macro_setting.md'}}
+                        resolved = resolve_project_configuration(raw, config_path)
+                        for config in (raw, resolved):
+                            with self.subTest(selected=selected, saved=config is resolved):
+                                config_path.write_text(json.dumps(config), encoding='utf-8')
+                                runtime.load_translator_settings(persist_corrected_game_root=False)
+                                self.assertEqual(Path(runtime.BASE_DIR), content)
+                                self.assertEqual(runtime.SYNC_MACRO_SETTING, 'Keep the tone warm.')
+                                self.assertEqual(runtime.SYNC_MACRO_FINGERPRINT,
+                                    hashlib.sha256(b'Keep the tone warm.').hexdigest())
+                        resolved['sync']['macro_setting_file'] = str(outside)
+                        config_path.write_text(json.dumps(resolved), encoding='utf-8')
+                        runtime.load_translator_settings(persist_corrected_game_root=False)
+                        self.assertEqual(runtime.SYNC_MACRO_SETTING, '')
+                        self.assertEqual(runtime.SYNC_MACRO_FINGERPRINT, '')
+        finally:
+            _restore_translator_runtime_state(snapshot)
+
     def test_sync_rag_prompt_includes_retrieved_memory_when_enabled(self):
         old_enabled = runtime.SYNC_RAG_ENABLED
         try:

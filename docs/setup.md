@@ -1,6 +1,6 @@
 # 安装与本地配置
 
-RPG Maker MV 的引擎选择、独立源／目标和显式核心／插件窗口配置见 [MV 耐久 Sync](rpgmaker_mv_sync.md)。缺省 `engine=renpy` 保持现有行为；MV 当前仅支持耐久 Sync，不能套用下面的 Ren'Py prepare / TL 模板步骤。
+RPG Maker MV 的自动识别、独立源／目标和核心／插件窗口配置见 [MV 耐久 Sync](rpgmaker_mv_sync.md)。GUI 选目录会识别 MV 并打开相应准备入口；CLI 缺少 `engine` 时也可按 `game_root` 识别，无 MV 标记时保持 Ren'Py 行为。MV 翻译使用耐久 Sync，不适用下面的 Ren'Py prepare / TL 模板步骤。
 
 文档地图：[docs/README.md](README.md)
 

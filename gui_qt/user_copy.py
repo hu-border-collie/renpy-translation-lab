@@ -31,11 +31,29 @@ SAFETY_LEVEL_LABELS = {
 }
 
 MV_PROJECT_COPY = {
+    'setup_title': '准备 MV 项目',
+    'setup_heading': '已识别 RPG Maker MV，接下来准备项目',
+    'setup_message': '已自动识别引擎并定位游戏内容目录。补齐下面的材料后，继续检查文本范围。',
+    'setup_target': '目标游戏内容目录',
+    'setup_source': '原版游戏目录',
+    'setup_window': '已核对的兼容性清单',
+    'setup_window_hint': '选择已经核对的 MV 核心／插件清单（支持窗口 JSON）。此清单用于兼容性核对，文本范围沿用当前项目；保存后继续检查文件身份和覆盖审阅。',
+    'setup_source_hint': '选择可信原版副本，可选择游戏外壳目录或 www；须与目标副本分离。',
+    'setup_full_scope': '检查范围：完整游戏，按当前启用的文本字段检查；覆盖审阅通过后才能开始翻译。',
+    'setup_selected_scope': '检查范围：沿用已保存的文件／精确位置选择。',
+    'setup_source_missing': '需要选择可信原版游戏目录。',
+    'setup_window_missing': '需要选择已核对的兼容性清单。',
+    'setup_save': '保存并检查文本范围',
+    'setup_tip': '补齐原版目录与兼容性清单，再检查游戏文本范围。',
+    'engine_mismatch_heading': '游戏引擎与项目目录不匹配',
+    'engine_mismatch': '当前按 Ren\'Py 配置，但所选目录包含 RPG Maker {engine} 游戏材料。',
+    'engine_mismatch_mv_action': '点击「准备 MV 项目」，使用检测结果并选择原版目录与已核对的兼容性清单。游戏内容目录：{content_root}。',
+    'engine_mismatch_mz_action': '当前不支持 RPG Maker MZ；请切换到受支持的项目。',
     'prepare_unsupported': '当前引擎不使用 Ren\'Py 准备流程；请配置可信原始源与独立目标副本。',
     'coverage_export': '导出覆盖材料',
     'coverage_export_tip': '导出当前候选清单、独立覆盖报告和待填写审阅模板；不会批准范围或写入游戏。',
     'engine_label': '游戏引擎',
-    'engine_description': 'renpy 或 rpgmaker_mv。MV 叙事模式当前仅支持耐久 Sync。',
+    'engine_description': '选择游戏目录时自动识别并更新。缺省配置可识别 MV；可显式填写 renpy 或 rpgmaker_mv。MV 翻译使用耐久 Sync。',
     'source_label': 'MV 原始源目录',
     'source_description': '可信原始内容根目录（含 data / js）；须与项目列表中的目标副本分离且不互相嵌套。',
     'window_label': 'MV 支持窗口文件',
@@ -51,6 +69,9 @@ MV_PROJECT_COPY = {
     'scope_ready': 'MV 当前已审阅文本范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
     'scope_empty': 'MV 当前已审阅文本范围没有待译条目；全游戏覆盖与原生验收仍单列。',
     'checked_heading': 'MV 文本范围检查完成',
+    'review_required_heading': 'MV 文本已扫描，待覆盖核对',
+    'review_required_steps': '下一步：导出覆盖材料 → 独立核对原文与候选清单 → 导入核对结果。',
+    'unsupported_count': '另有 {count} 个未支持候选，详情与导出材料中保留定位；不计入待译条数。',
 }
 
 
@@ -111,6 +132,8 @@ DIAGNOSTICS_LOG_COPY = {
 }
 
 DOCTOR_MODE_LABELS = {
+    'mv_setup_required': 'MV 项目准备',
+    'engine_mismatch': '引擎与项目目录不匹配',
     'mv_narrative': 'MV 叙事模式',
     "can_generate_template": "可生成翻译模板",
     "existing_tl_only": "已有翻译模板",
@@ -1476,7 +1499,7 @@ READINESS_COPY = {
     "required": "需要处理：",
     "attention": "注意事项：",
     "details": "完整检查详情与次要建议",
-    "settings": {"api_keys": "设置 · 密钥", "project": "设置 · 项目", "context": "设置 · 上下文", "profiles": "设置 · 模型与供应商"},
+    "settings": {"api_keys": "设置 · 密钥", "project": "设置 · 项目", "mv_project": "准备 MV 项目", "context": "设置 · 上下文", "profiles": "设置 · 模型与供应商"},
 }
 
 TRANSLATION_TARGET_COPY = {

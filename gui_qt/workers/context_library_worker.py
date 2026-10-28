@@ -33,12 +33,17 @@ def collect_context_library_status(
     context_flags: dict[str, bool] = {}
     config_digest = ''
     try:
+        from engine_adapters.project_config import resolve_project_configuration
         from gui_qt.reports.bootstrap_report import read_batch_context_flags
 
-        context_flags = read_batch_context_flags(
-            config or {},
-            game_root=base_dir or None,
-        )
+        try:
+            config = resolve_project_configuration(config or {}, config_file)
+        finally:
+            # Error results need the same effective flags as the live window.
+            context_flags = read_batch_context_flags(
+                config or {},
+                game_root=base_dir or None,
+            )
         if (config or {}).get('engine') == 'rpgmaker_mv':
             from execution.mv_preprocessing import context_status
             config_digest = context_library_config_digest(config, context_flags=context_flags, config_file=config_file)
@@ -118,6 +123,6 @@ class ContextLibraryStatusJob(QRunnable):
         if self._cancel_requested:
             self.signals.completed.emit(None)
             return
-        result = collect_context_library_status(self.base_dir, self.config, **(
-            {'config_file': self.config_file} if self.config.get('engine') == 'rpgmaker_mv' else {}))
+        result = collect_context_library_status(
+            self.base_dir, self.config, config_file=self.config_file)
         self.signals.completed.emit(result)

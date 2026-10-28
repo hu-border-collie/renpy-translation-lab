@@ -57,6 +57,67 @@ class GuiMvSyncTests(unittest.TestCase):
         gui_test_support.close_main_window(self.window)
         self.window.deleteLater()
 
+    def test_missing_engine_auto_detects_mv_and_offers_project_preparation(self):
+        from gui_qt.workers.doctor_worker import run_doctor_check
+        import translator_runtime as runtime
+        self.config.pop('engine')
+        self.config.pop('rpgmaker_mv')
+        self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
+        before = self.config_file.read_bytes()
+        self.window._context_library_config_snapshot = self.config
+        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
+            result = run_doctor_check()
+        self.assertTrue(result.ok, result.error)
+        summary = summarize_doctor_report(result.report)
+        self.assertEqual(summary.status, 'warning')
+        self.assertEqual(result.report['mode'], 'mv_setup_required')
+        self.assertIn('MV', summary.heading)
+        self.assertIn('完整游戏', '\n'.join(summary.facts))
+        from gui_qt.reports.doctor_report import summarize_doctor_output
+        self.assertEqual(summarize_doctor_output(result.log_text, exit_code=0), summary)
+        self.assertFalse(self.window._engine_allows_renpy_prepare())
+        for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION,
+                     WorkMode.BOOTSTRAP_SOURCE_INDEX):
+            self.assertFalse(self.window._engine_allows_work_mode(mode))
+        self.window._sync_bootstrap_prep_button_chrome()
+        self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
+        self.assertEqual(self.window.bootstrap_work_btn.text(), '准备 MV 项目')
+        self.window._on_run_doctor()
+        self.window._doctor_worker.finish(result)
+        self.assertIn('已识别 RPG Maker MV', self.window.doctor_status_label.text())
+        self.assertIn('待译：未知', self.window.doctor_facts_label.text())
+        self.assertNotIn('生成翻译模板', self.window.doctor_facts_label.text())
+        self.assertFalse(self.window._doctor_settings_buttons['mv_project'].isHidden())
+        self.assertTrue(self.window.doctor_coverage_action_row.isHidden())
+        self.assertFalse(self.window._doctor_allows_translate_action())
+        with mock.patch('gui_qt.dialogs.mv_project_setup_dialog.MvProjectSetupDialog') as dialog, \
+                mock.patch.object(self.window, '_confirm_unsaved_config_before_workflow', return_value=True):
+            dialog.return_value.exec.return_value = 0
+            self.window._doctor_settings_buttons['mv_project'].click()
+        dialog.assert_called_once()
+        self.assertEqual(self.config_file.read_bytes(), before)
+
+    def test_mv_setup_saves_material_choices_and_runs_doctor_without_dispatch(self):
+        from engine_adapters.project_setup import build_mv_setup_config
+        candidate = build_mv_setup_config(self.config, self.config_file,
+            target_root=self.config['game_root'], source_root=self.config['rpgmaker_mv']['source_root'],
+            support_window_file=self.config['rpgmaker_mv']['support_window_file'])
+        before = {path: path.read_bytes() for path in (self.root / 'target/data').glob('*.json')}
+        with mock.patch('gui_qt.dialogs.mv_project_setup_dialog.MvProjectSetupDialog') as dialog, \
+                mock.patch.object(self.window, '_confirm_unsaved_config_before_workflow', return_value=True), \
+                mock.patch.object(self.window, '_start_cli_command') as dispatch:
+            dialog.return_value.exec.return_value = 1
+            dialog.return_value.result_config.return_value = candidate
+            self.window._on_bootstrap_work()
+        dispatch.assert_not_called()
+        self.assertTrue(self.window._doctor_worker.isRunning())
+        self.assertEqual(self.window._current_work_mode(), WorkMode.SYNC_TRANSLATION)
+        saved = json.loads(self.config_file.read_text(encoding='utf-8'))
+        self.assertEqual(saved['engine'], 'rpgmaker_mv')
+        self.assertEqual(saved.get('include_files'), self.config.get('include_files'))
+        self.assertEqual(saved['rpgmaker_mv'], candidate['rpgmaker_mv'])
+        self.assertEqual(before, {path: path.read_bytes() for path in before})
+
     def test_mv_settings_round_trip_and_unsupported_modes_cannot_start(self):
         page = ProjectSettingsPage()
         self.addCleanup(page.widget.deleteLater)
@@ -84,7 +145,8 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertIn('Batch、外部工作包', self.window.work_mode_hint_label.text())
         self.assertFalse(self.window._resume_task_available()[0])
         self.window._sync_bootstrap_prep_button_chrome()
-        self.assertFalse(self.window.bootstrap_work_btn.isEnabled())
+        self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
+        self.assertEqual(self.window.bootstrap_work_btn.text(), '准备 MV 项目')
 
     def test_display_selection_change_rejects_late_doctor_and_uses_shared_counts(self):
         add_mv_display_material(self.root)
@@ -150,8 +212,48 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertIn('待译：未知', count_line(report))
         self.assertNotIn('待译：0', count_line(report))
 
+    def test_missing_coverage_review_is_actionable_and_keeps_translation_blocked(self):
+        from engine_adapters.coverage import default_coverage_review_path
+        from gui_qt.workers.doctor_worker import run_doctor_check
+        import translator_runtime as runtime
+
+        Path(default_coverage_review_path(self.config['game_root'])).unlink()
+        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
+            result = run_doctor_check()
+        self.assertTrue(result.ok, result.error)
+        self.window._on_run_doctor()
+        self.window._doctor_worker.finish(result)
+        self.assertIn('待覆盖核对', self.window.doctor_status_label.text())
+        primary = self.window.doctor_message_label.text() + self.window.doctor_facts_label.text()
+        self.assertIn('文本扫描已完成', primary)
+        self.assertIn('导出覆盖材料', primary)
+        self.assertIn('待译：14', primary)
+        self.assertNotIn('Could not read', primary)
+        self.assertNotIn('No such file', primary)
+        self.assertIn('No such file', self.window.doctor_details_label.text())
+        self.assertFalse(self.window._doctor_allows_translate_action())
+        self.assertTrue(self.window.coverage_export_btn.isEnabled())
+        self.assertTrue(self.window.coverage_import_btn.isEnabled())
+        layout = self.window.doctor_coverage_action_row.parentWidget().layout()
+        self.assertLess(layout.indexOf(self.window.doctor_coverage_action_row),
+                        layout.indexOf(self.window.doctor_details_toggle))
+
+    def test_reviewed_narrative_scope_keeps_unsupported_gaps_visible(self):
+        report = {'mode': 'mv_narrative', 'counts': {'json_files': 205},
+            'pending_task_count': 27212, 'pending_file_count': 165,
+            'coverage': {'unsupported_count': 21956},
+            'engine_status': {'engine': 'rpgmaker_mv', 'status': 'ready', 'issues': []}}
+        summary = summarize_doctor_report(report)
+        from gui_qt.reports.readiness_display import doctor_overview
+        overview = doctor_overview(summary, report, completed=True)
+        self.assertEqual(summary.status, 'warning')
+        self.assertIn('已审阅文本范围', overview.message)
+        self.assertIn('21956', '\n'.join(overview.attention))
+        self.assertIn('不计入待译', '\n'.join(overview.attention))
+
     def test_mv_context_worker_uses_source_status_and_project_switch_rejects_late_result(self):
         from gui_qt.workers.context_library_worker import collect_context_library_status
+        self.config.pop('engine')
         self.config['sync']['source_index']['enabled'] = True
         self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
         with mock.patch('gemini_translate_batch.compute_current_project_analysis_fingerprint') as renpy_scan:

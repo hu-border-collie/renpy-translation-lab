@@ -13,6 +13,7 @@ from foundation import doctor_recommendations as doctor_rec
 
 from gui_qt.reports.doctor_report import DoctorSummary, doctor_report_to_parsed
 from gui_qt.user_copy import (
+    MV_PROJECT_COPY,
     READINESS_COPY,
     format_doctor_recommendation_fact,
     findings_require_attention,
@@ -66,6 +67,23 @@ def doctor_overview(
     attention: list[str] = []
     settings: list[str] = []
     if completed and report is not None:
+        if summary.mode == 'engine_mismatch':
+            issues = (report.get('engine_status') or {}).get('issues') or []
+            details = (issues[0].get('details') or {}) if issues else {}
+            settings.append('mv_project' if details.get('detected_engine') == 'rpgmaker_mv' else 'project')
+            attention.extend(summary.facts)
+        if summary.mode == 'mv_setup_required':
+            settings.append('mv_project')
+            attention.extend(summary.facts)
+        mv_issues = (report.get('engine_status') or {}).get('issues') or []
+        review_only = summary.mode == 'mv_narrative' and bool(mv_issues) and all(
+            issue.get('code') == 'engine.mv.scope_review_required' for issue in mv_issues)
+        if review_only:
+            attention.extend(summary.facts[1:])
+        elif summary.mode == 'mv_narrative':
+            unsupported = (report.get('coverage') or {}).get('unsupported_count')
+            if unsupported:
+                attention.append(MV_PROJECT_COPY['unsupported_count'].format(count=unsupported))
         parsed = doctor_report_to_parsed(report)
         for rec in parsed.get("recommendations", []):
             code = doctor_rec.normalize_doctor_recommendation(rec)["code"]
@@ -103,10 +121,11 @@ def doctor_overview(
             ):
                 settings.append("project")
         message = READINESS_COPY.get(summary.status, summary.message)
-        if summary.mode == "can_generate_template":
+        if summary.mode in {"can_generate_template", 'mv_setup_required', 'mv_narrative'}:
             message = summary.message
         if summary.status == "blocked":
-            attention.insert(0, summary.message)
+            if not review_only:
+                attention.insert(0, summary.message)
         counts = count_line(report)
     else:
         message = (

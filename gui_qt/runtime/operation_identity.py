@@ -80,6 +80,8 @@ def context_library_config_digest(
     translator config, so the digest is the effective flag set. Unrelated
     global keys (theme, models) must not change it for Ren'Py. MV also pins its
     material and store revisions, since readiness depends on actual preparation.
+    Invalid configuration retains a stable error identity so workers can
+    complete and a subsequent settings correction invalidates that result.
     """
     flags = default_context_flags_from_config(
         config if isinstance(config, dict) else None
@@ -88,6 +90,14 @@ def context_library_config_digest(
         flags.update(
             {str(key): bool(value) for key, value in dict(context_flags).items()}
         )
+    if isinstance(config, dict):
+        from engine_adapters.project_config import resolve_project_configuration
+        try:
+            config = resolve_project_configuration(config, config_file)
+        except (ValueError, TypeError, OSError) as exc:
+            return canonical_digest({'context_flags': flags,
+                                     'invalid_project_config': config,
+                                     'project_configuration_error': str(exc)})
     if isinstance(config, dict) and config.get('engine') == 'rpgmaker_mv':
         from engine_adapters.project_config import mv_material_revision
         from execution.mv_preprocessing import preparation_revision

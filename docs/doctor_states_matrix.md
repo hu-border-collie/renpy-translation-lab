@@ -15,8 +15,11 @@ GUI 摘要另有呈现生命周期：未检查、检查中、失败、过期均�
 
 | MV 事实 | 输出 | 计数与启动 |
 | --- | --- | --- |
+| 缺少 engine，但所选目录／`www/`／标准 work 布局具有 MV 标记 | 自动识别 MV 并解析内容根 | 不添加文件或位置筛选；CLI 只读解析，GUI 选目录时保存。 |
+| MV 独立原始源／已核对支持窗口尚未配置或路径不存在 | `mv_setup_required`、`engine.mv.setup_required`；CLI blocked | 计数未知；GUI 显示准备引导，翻译仍不可启动。 |
+| 显式 Ren'Py 与 MV 材料冲突，或检测到 MZ | `engine.project_mismatch`；blocked | MV 可通过「准备 MV 项目」保存识别结果及必要材料；MZ 仍不支持。 |
 | 源／目标／窗口缺失、漂移或不可读 | `engine.mv.material_invalid`；blocked | 扫描失败计数为未知，不补零。 |
-| 覆盖审阅缺失、pending、stale 或不满足 policy | `engine.mv.scope_review_required`；blocked | 可展示已测得的候选数，禁止启动。 |
+| 覆盖审阅缺失、pending、stale 或不满足 policy | `engine.mv.scope_review_required`；blocked；`details.review_status` 区分状态 | 保留已测计数，禁止启动；GUI 提示待覆盖核对，导出／导入入口位于完整详情之前，底层读取错误仅放详情。 |
 | 开启 MV StoryMemory／Project Analysis 注入 | `engine.mv.context_unsupported`；blocked | 关闭相关层后重新检查。 |
 | 原文索引／历史库禁用或缺失 | `mv_preparation.*.status=disabled/missing`；`prepared=false`，计数 null | 已启用但未准备时 preflight warning；耐久 Sync 降级为空检索。 |
 | 源、范围或审阅输入漂移（含 `reviewed_history_file` 切换／清空）／embedding 身份不兼容／准备失败 | `stale/incompatible/failed`；`prepared=false`，计数 null | 显式重新 bootstrap；不能显示为 ready。 |

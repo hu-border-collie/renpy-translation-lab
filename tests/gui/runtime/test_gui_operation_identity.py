@@ -88,6 +88,19 @@ class OperationIdentityTests(unittest.TestCase):
             ),
         )
 
+    def test_invalid_engine_has_a_stable_digest_distinct_from_corrected_config(self) -> None:
+        digests = []
+        for engine in ('rpgmaker_mz', 'typo', None, [], {}):
+            config = {'engine': engine, 'batch': {'rag': {'enabled': True}}}
+            with self.subTest(engine=engine):
+                digest = context_library_config_digest(config)
+                self.assertEqual(digest, context_library_config_digest(dict(config)))
+                self.assertNotEqual(digest, context_library_config_digest({**config, 'engine': 'renpy'}))
+                self.assertNotEqual(digest, context_library_config_digest(
+                    config, context_flags={'rag_enabled': False}))
+                digests.append(digest)
+        self.assertEqual(len(set(digests)), len(digests))
+
     def test_connection_identity_binds_provider_model_and_selected_endpoint(self) -> None:
         first = litellm_connection_identity(
             provider="go",

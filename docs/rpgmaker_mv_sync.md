@@ -6,7 +6,8 @@
 
 ## 配置源、目标和支持窗口
 
-原始源与目标必须是不同且不互相嵌套的内容目录，均直接包含 `data/` 和 `js/`。发布包有 `www/` 时选择各自的 `www/`。先自行建立可信原始材料和受控目标副本；工具不会执行 Ren'Py prepare 来生成 MV 副本。
+原始源与目标必须是不同且不互相嵌套的内容目录，均直接包含 `data/` 和 `js/`。发布包有 `www/` 时工具会解析到其内容根；GUI 也可选择标准 `original/work` 项目根，自动定位目标 `work/www`。
+先建立可信原始材料和受控目标副本；「准备 MV 项目」引导选择原始源与已核对的兼容性清单，保存后运行同一 doctor。它不执行 Ren'Py prepare，也不批准支持窗口或覆盖审阅。
 
 在现有 `translator_config.json` 中设置：
 
@@ -32,7 +33,9 @@
 }
 ```
 
-这是配置片段，保留已配置的 Provider、ModelProfile、Sync 超时、分块、术语和风格设置。模型凭据继续使用现行安全存储／环境变量。缺少 `engine` 时保持 Ren'Py 行为；未知、空或非法值会拒绝执行。MV 的 `game_root` 就是受控目标内容根，`tl_subdir` 不参与 MV 路径解析；相对源、目标及窗口路径均相对于配置文件。
+这是配置片段，保留已配置的 Provider、ModelProfile、Sync 超时、分块、术语和风格设置。模型凭据继续使用现行安全存储／环境变量。缺少 `engine` 时可由配置的 `game_root` 自动识别 MV；无 MV 标记时保持 Ren'Py 行为。显式未知、空或非法值会拒绝执行。CLI doctor 解析不改写文件，GUI 选择目录时保存识别结果。MV 的 `game_root` 解析为受控目标内容根，`tl_subdir` 不参与 MV 路径解析；相对源、目标及窗口路径均相对于配置文件。原外壳目录下显式配置的相对 glossary／Macro 路径会保留原锚点。
+
+Sync 风格文件可位于目标内容目录，或可识别为同一目标的游戏外壳／标准 `original/work` 项目根。自动定位 `www/` 后仍会加载这些既有文件；其他项目或无关目录中的文件继续拒绝加载，符号链接也按实际路径检查。
 
 支持窗口文件必须由可信调查明确批准，工具不会把现场摘要自动当成兼容性批准。格式为：
 
@@ -123,7 +126,7 @@ python gemini_translate_batch.py doctor
 python gemini_translate_batch.py translate-preflight --strategy sync
 ```
 
-记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。当前文本范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅文本范围；材料不可读时计数为未知。
+记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。缺失记录时 GUI 显示待覆盖核对并提供导出／导入入口，保留真实计数；底层读取错误留在完整详情。当前文本范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed；GUI 仍在摘要中单列未支持候选，不计入待译数。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅文本范围；材料不可读时计数为未知。
 
 ## 同步关键词、原文索引与已审阅历史
 

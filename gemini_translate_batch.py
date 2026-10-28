@@ -4761,7 +4761,8 @@ def get_batch_risk_warnings():
 
 def create_batch_package(display_name_override='', skip_prepare=False):
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
-    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build')
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build',
+                             config_file=legacy.TRANSLATOR_CONFIG, game_root=legacy.BASE_DIR)
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -6080,7 +6081,8 @@ def build_revision_request(chunk, model=None):
 
 def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
-    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-revisions')
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-revisions',
+                             config_file=legacy.TRANSLATOR_CONFIG, game_root=legacy.BASE_DIR)
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -8060,7 +8062,8 @@ def build_keyword_request(chunk, max_candidates_per_chunk=None, model=None):
 
 def create_keyword_package(display_name_override='', skip_prepare=True, chunk_size=None, max_candidates_per_chunk=None):
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
-    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-keywords')
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'build-keywords',
+                             config_file=legacy.TRANSLATOR_CONFIG, game_root=legacy.BASE_DIR)
     legacy.require_supported_generation_target()
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
@@ -20576,6 +20579,21 @@ def collect_doctor_engine_status(adapter_snapshot=None, *, has_tl_files=None):
 
 
 def collect_doctor_report():
+    """Check engine selection before scanning text or suggesting preparation."""
+    from engine_adapters.project_config import detect_project_engine_mismatch, read_project_configuration
+    mismatch = detect_project_engine_mismatch(
+        read_project_configuration(legacy.TRANSLATOR_CONFIG), legacy.TRANSLATOR_CONFIG,
+        game_root=legacy.BASE_DIR)
+    if mismatch is not None:
+        return {
+            'base_dir': legacy.BASE_DIR, 'tl_dir': legacy.TL_DIR, 'tl_exists': False,
+            'mode': 'engine_mismatch', 'layout_status': 'failed', 'counts': {},
+            'prepare_enabled': legacy.PREP_ENABLED, 'can_generate_template': False,
+            'coverage_evidence_available': False, 'coverage': None,
+            'engine_status': {'engine': 'renpy', 'status': 'blocked', 'issues': [mismatch],
+                              'issue_counts': {'error': 1, 'warning': 0, 'info': 0}},
+            'recommendations': [], 'workflow_state': '', 'warnings': [],
+        }
     if legacy.current_project_engine() == 'rpgmaker_mv':
         return collect_mv_doctor_report()
     source_game_dir = legacy._guess_source_game_dir()
@@ -20821,13 +20839,45 @@ def collect_doctor_report():
 
 def collect_mv_doctor_report():
     """Diagnose the scoped MV Sync route without Ren'Py prepare or retrieval."""
+    from engine_adapters.project_config import read_project_configuration
+    from engine_adapters.project_setup import mv_project_setup_status
+    config = read_project_configuration(legacy.TRANSLATOR_CONFIG)
+    setup = mv_project_setup_status(config, legacy.TRANSLATOR_CONFIG)
+    if setup['missing']:
+        issue = _engine_status_issue(
+            'engine.mv.setup_required', 'error',
+            'MV project preparation requires: ' + ', '.join(setup['missing']),
+            suggested_action='configure_mv_project', details={'missing': setup['missing']})
+        return {
+            'base_dir': setup['target_root'], 'tl_dir': setup['target_root'], 'tl_exists': False,
+            'mode': 'mv_setup_required', 'layout_status': 'attention', 'counts': {},
+            'can_generate_template': False, 'mv_setup': setup,
+            'coverage_evidence_available': False, 'coverage': None,
+            'engine_status': {'engine': 'rpgmaker_mv', 'status': 'blocked', 'issues': [issue],
+                              'runtime_acceptance': 'unverified'},
+            'recommendations': [], 'workflow_state': '', 'warnings': [],
+        }
     issues = []
     snapshot = None
+    coverage = None
     try:
         snapshot = legacy.current_mv_sync_snapshot(require_review=False)
+        coverage = summarize_coverage_for_doctor(snapshot, review_path=resolve_coverage_review_path())
         if snapshot.review_error:
+            review_status = coverage.get('review_status', 'invalid')
+            messages = {
+                'missing': '文本扫描已完成，尚未核对覆盖范围。先导出覆盖材料，完成独立核对后导入核对结果。',
+                'pending': '覆盖核对尚未完成。请完成独立核对，再导入核对结果。',
+                'stale': '覆盖核对结果已过期。请重新导出当前材料、核对后再导入。',
+                'changes_requested': '覆盖核对发现待处理事项。请处理核对意见后重新导入结果。',
+            }
             issues.append(_engine_status_issue('engine.mv.scope_review_required', 'error',
-                snapshot.review_error, suggested_action='coverage-review-import'))
+                messages.get(review_status, '覆盖核对结果未通过校验。请查看详情，修正后重新导入。'),
+                suggested_action='coverage-status --export-dir <DIR>' if review_status == 'missing'
+                                 else 'coverage-review-import',
+                details={'review_status': review_status,
+                         'review_path': resolve_coverage_review_path(),
+                         'review_error': snapshot.review_error}))
         if legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
             issues.append(_engine_status_issue('engine.mv.context_unsupported', 'error',
                 'MV does not support Story Memory or Project Analysis injection; disable these layers.',
@@ -20851,8 +20901,7 @@ def collect_mv_doctor_report():
         'counts': {'json_files': (sum(doc.file_rel_path.endswith('.json') for doc in snapshot.project.source_documents)
                                   if snapshot is not None else None)},
         'coverage_evidence_available': snapshot is not None,
-        'coverage': (summarize_coverage_for_doctor(snapshot, review_path=resolve_coverage_review_path())
-                     if snapshot is not None else None),
+        'coverage': coverage,
         'model_routing': routing, 'recommendations': [],
         'engine_status': {'engine': 'rpgmaker_mv',
             'adapter_version': snapshot.adapter.adapter_version if snapshot is not None else '',
@@ -20860,7 +20909,7 @@ def collect_mv_doctor_report():
             'supported_routes': ['durable_sync', 'sync_keywords', 'bootstrap_source_index', 'bootstrap_rag'],
             'unsupported_routes': ['gemini_batch', 'legacy_sync', 'external_work', 'revision', 'batch_keywords', 'story_memory', 'project_analysis'],
             'runtime_acceptance': 'unverified'},
-        'warnings': routing_warnings, 'workflow_state': '',
+        'warnings': routing_warnings, 'workflow_state': '', 'mv_setup': setup,
     }
     if snapshot is not None:
         from execution.mv_preprocessing import context_status
@@ -20899,6 +20948,27 @@ def finalize_doctor_actionable_signals(report):
 
 
 def print_doctor_report(report):
+    if report.get('mode') == 'mv_setup_required':
+        print('Doctor report:')
+        print(f"- Base dir: {report['base_dir']}")
+        print('- Mode: mv_setup_required')
+        print('- Engine: rpgmaker_mv (status: blocked; project preparation required)')
+        print('- MV setup: ' + json.dumps(report['mv_setup'], ensure_ascii=True))
+        print('- Pending translation: unknown (project preparation required)')
+        print('- Next: configure the independent source and audited support window, then rerun doctor.')
+        return
+    if report.get('mode') == 'engine_mismatch':
+        print('Doctor report:')
+        print(f"- Base dir: {report['base_dir']}")
+        print('- Mode: engine_mismatch')
+        print('- Engine: renpy (status: blocked)')
+        details = report['engine_status']['issues'][0]['details']
+        print(f"- Detected engine: {details['detected_engine']}")
+        print(f"- Detected content root: {details['content_root']}")
+        print('- Pending translation: unknown (engine selection must be corrected)')
+        for issue in report['engine_status']['issues']:
+            print(f"  - [{issue['severity']}] {issue['code']}: {issue['message']}")
+        return
     if report.get('mode') == 'mv_narrative':
         print('Doctor report:')
         print(f"- Base dir: {report['base_dir']}")
@@ -21321,7 +21391,7 @@ def build_arg_parser():
     subparsers = parser.add_subparsers(dest='command', required=True)
     external_translation_work.add_cli(subparsers, add_machine_output_argument)
 
-    doctor_parser = subparsers.add_parser('doctor', help='Inspect prepare, SDK, and TL template compatibility without writing files.')
+    doctor_parser = subparsers.add_parser('doctor', help='Inspect engine selection, project materials, prepare, SDK, and TL compatibility without writing files.')
     add_machine_output_argument(doctor_parser)
 
     coverage_status_parser = subparsers.add_parser(
@@ -24180,9 +24250,21 @@ def dispatch_command(parser, args):
         validate_machine_invocation(args)
 
     if command not in PROFILE_COMMANDS and command not in {'init', 'config'}:
-        from engine_adapters.project_config import read_project_configuration, require_engine_operation
+        from engine_adapters.project_config import (
+            ProjectEngineMismatchError, MvProjectSetupRequiredError,
+            read_project_configuration, require_engine_operation,
+        )
         try:
-            require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), command)
+            require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), command,
+                                     config_file=legacy.TRANSLATOR_CONFIG)
+        except ProjectEngineMismatchError as exc:
+            raise cli_contract.MachineContractError(str(exc), code_name='ENGINE_PROJECT_MISMATCH',
+                suggested_action='configure_project_engine',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED) from exc
+        except MvProjectSetupRequiredError as exc:
+            raise cli_contract.MachineContractError(str(exc), code_name='MV_PROJECT_SETUP_REQUIRED',
+                suggested_action='configure_mv_project',
+                semantic_exit_code=cli_contract.EXIT_BLOCKED) from exc
         except ValueError as exc:
             raise cli_contract.MachineContractError(str(exc), code_name='ENGINE_ROUTE_UNSUPPORTED',
                 suggested_action='configure_mv_project_or_use_durable_sync',

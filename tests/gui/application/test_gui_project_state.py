@@ -11,6 +11,100 @@ import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def test_switching_from_mv_back_to_renpy_layout_restores_engine_and_work_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            mv = root / 'MV/www'
+            (mv / 'data').mkdir(parents=True)
+            (mv / 'js').mkdir()
+            (mv / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+            for populated in (True, False):
+                with self.subTest(populated=populated):
+                    project = root / f'RenPy-{populated}'
+                    original = project / 'original/game'
+                    work = project / 'work'
+                    original.mkdir(parents=True)
+                    work.mkdir()
+                    (original / 'script.rpy').write_text('label start:\n    return\n')
+                    if populated:
+                        (work / 'game').mkdir()
+                        (work / 'game/script.rpy').write_text('label start:\n    return\n')
+                    state.config_path.write_text(json.dumps({'engine': 'renpy', 'unknown': 'keep'}))
+                    state.set_game_root(project)
+                    state.set_game_root(mv.parent)
+                    self.assertEqual(state.load_translator_config()['engine'], 'rpgmaker_mv')
+                    effective, adjusted = state.set_game_root(project)
+                    saved = state.load_translator_config()
+                    self.assertTrue(adjusted)
+                    self.assert_same_path(effective, work)
+                    self.assertEqual(saved['engine'], 'renpy')
+                    self.assert_same_path(saved['game_root'], work)
+                    self.assert_same_path(saved['glossary_file'], work / 'glossary.json')
+                    self.assertEqual(saved['unknown'], 'keep')
+
+    def test_startup_mv_root_correction_preserves_custom_assets_and_filters(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            package = root / 'Game/work'
+            content = package / 'www'
+            (content / 'data').mkdir(parents=True)
+            (content / 'js').mkdir()
+            (content / 'js/rpg_core.js').write_text('// Original inert marker.\n')
+            shared = root / 'shared/custom-glossary.json'
+            sync_macro = root / 'shared/sync-style.md'
+            config = {'engine': 'renpy', 'game_root': 'Game/work',
+                'glossary_file': str(shared),
+                'batch': {'macro_setting_file': 'style/batch-style.md'},
+                'sync': {'macro_setting_file': str(sync_macro)},
+                'include_files': ['data/Map001.json'],
+                'include_prefixes': ['data/Map02'], 'unknown': {'keep': True}}
+            state.config_path.write_text(json.dumps(config), encoding='utf-8')
+            state._load_game_root_from_config()
+            saved = json.loads(state.config_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['engine'], 'rpgmaker_mv')
+            self.assert_same_path(state.get_game_root(), content)
+            self.assert_same_path(saved['glossary_file'], shared)
+            self.assert_same_path(saved['batch']['macro_setting_file'], package / 'style/batch-style.md')
+            self.assert_same_path(saved['sync']['macro_setting_file'], sync_macro)
+            self.assertEqual(saved['include_files'], config['include_files'])
+            self.assertEqual(saved['include_prefixes'], config['include_prefixes'])
+            self.assertEqual(saved['unknown'], config['unknown'])
+            self.assertIsNotNone(state.take_game_root_redirect_from())
+
+            other = root / 'Other/www'
+            (other / 'data').mkdir(parents=True)
+            (other / 'js').mkdir()
+            (other / 'js/rpg_core.js').write_text('// Another inert marker.\n')
+            state.set_game_root(other)
+            switched = json.loads(state.config_path.read_text(encoding='utf-8'))
+            self.assert_same_path(switched['glossary_file'], other / 'glossary.json')
+            self.assert_same_path(switched['batch']['macro_setting_file'], other / 'macro_setting.md')
+            self.assert_same_path(switched['sync']['macro_setting_file'], other / 'macro_setting.md')
+
+    def test_select_mv_package_detects_engine_and_content_root_without_narrowing_scope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            package = root / 'Game/work'
+            content = package / 'www'
+            (content / 'data').mkdir(parents=True)
+            (content / 'js').mkdir()
+            (content / 'js/rpg_core.js').write_text('// Original inert marker.\n')
+            state.config_path.write_text(json.dumps({'engine': 'renpy', 'include_files': [],
+                'include_prefixes': [], 'unknown': {'keep': True}}), encoding='utf-8')
+            effective, adjusted = state.set_game_root(package)
+            self.assertEqual(effective, content)
+            self.assertTrue(adjusted)
+            saved = json.loads(state.config_path.read_text(encoding='utf-8'))
+            self.assertEqual(saved['engine'], 'rpgmaker_mv')
+            self.assertEqual(saved['game_root'], str(content))
+            self.assertEqual(saved['include_files'], [])
+            self.assertEqual(saved['include_prefixes'], [])
+            self.assertNotIn('rpgmaker_mv', saved)
+            self.assertEqual(saved['unknown'], {'keep': True})
+
     def assert_same_path(self, left, right) -> None:
         self.assertEqual(
             runtime.canonical_abs_path(left),

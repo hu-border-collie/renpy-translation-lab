@@ -8,11 +8,139 @@ import tempfile
 import unittest
 
 from engine_adapters.project_config import (project_engine, read_mv_project_config,
-                                            read_project_configuration, require_engine_operation, mv_material_revision)
+                                            read_project_configuration, require_engine_operation, mv_material_revision,
+                                            detect_project_engine_mismatch, ProjectEngineMismatchError)
 from tests.support.mv_project import make_mv_project
 
 
 class ProjectConfigTests(unittest.TestCase):
+    def test_detects_renpy_work_layout_with_full_or_unprepared_work(self):
+        from engine_adapters.project_config import detect_project_material
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            file = root / 'translator_config.json'
+            for populated in (True, False):
+                project = root / f'RenPy-{populated}'
+                original = project / 'original/game'
+                work = project / 'work'
+                original.mkdir(parents=True)
+                work.mkdir()
+                self.assertIsNone(detect_project_material(project))
+                (original / 'script.rpyc').write_bytes(b'Original inert compiled marker')
+                if populated:
+                    (work / 'game').mkdir()
+                    (work / 'game/archive.rpa').write_bytes(b'Original inert archive marker')
+                with self.subTest(populated=populated):
+                    self.assertEqual(detect_project_material(project.name, file),
+                                     {'engine': 'renpy', 'content_root': str(work)})
+
+    def test_mv_asset_roots_admit_only_ancestors_resolving_to_the_same_content(self):
+        from engine_adapters.project_config import mv_project_asset_roots
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project = root / 'Game'
+            content = project / 'work' / 'www'
+            direct = root / 'direct-content'
+            for path in (content, direct):
+                (path / 'data').mkdir(parents=True)
+                (path / 'js').mkdir()
+                (path / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+            (project / 'original').mkdir()
+            self.assertEqual(mv_project_asset_roots(content),
+                             (content, project / 'work', project))
+            self.assertEqual(mv_project_asset_roots(direct), (direct,))
+            # A different content root in the package takes precedence over www.
+            (project / 'work' / 'data').mkdir()
+            (project / 'work' / 'js').mkdir()
+            (project / 'work' / 'js/rpg_core.js').write_text('// Other inert MV marker.\n')
+            self.assertEqual(mv_project_asset_roots(content), (content,))
+
+    def test_auto_detection_keeps_full_game_scope_assets_and_unapproved_source_distinct(self):
+        from engine_adapters.project_setup import mv_project_setup_status
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            for name in ('work', 'original'):
+                content = root / 'Game' / name / 'www'
+                (content / 'data').mkdir(parents=True)
+                (content / 'js').mkdir()
+                (content / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+            file = root / 'translator_config.json'
+            config = {'game_root': 'Game/work', 'glossary_file': 'glossary.json',
+                      'sync': {'macro_setting_file': 'macro_setting.md'},
+                      'include_files': [], 'include_prefixes': [], 'unknown': {'keep': True}}
+            file.write_text(json.dumps(config), encoding='utf-8')
+            before = file.read_bytes()
+            resolved = read_project_configuration(file)
+            self.assertEqual(resolved['engine'], 'rpgmaker_mv')
+            self.assertEqual(Path(resolved['game_root']), root / 'Game/work/www')
+            self.assertEqual(Path(resolved['glossary_file']), root / 'Game/work/glossary.json')
+            self.assertEqual(Path(resolved['sync']['macro_setting_file']), root / 'Game/work/macro_setting.md')
+            self.assertNotIn('rpgmaker_mv', resolved)
+            self.assertEqual(resolved['include_files'], [])
+            self.assertEqual(resolved['unknown'], config['unknown'])
+            setup = mv_project_setup_status(resolved, file)
+            self.assertEqual(setup['scope'], 'full_project')
+            self.assertEqual(Path(setup['source_suggestion']), root / 'Game/original/www')
+            self.assertEqual(setup['missing'], ['source_root', 'support_window_file'])
+            self.assertEqual(file.read_bytes(), before)
+            self.assertEqual(config['sync']['macro_setting_file'], 'macro_setting.md')
+
+    def test_renpy_selection_reports_mv_content_root_without_changing_config(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            file = root / 'translator_config.json'
+            for packaged in (False, True):
+                target = root / ('packaged' if packaged else 'direct')
+                content = target / 'www' if packaged else target
+                (content / 'data').mkdir(parents=True)
+                (content / 'js').mkdir()
+                (content / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+                for explicit in (False, True):
+                    config = {'game_root': str(target.relative_to(root))}
+                    if explicit:
+                        config['engine'] = 'renpy'
+                    file.write_text(json.dumps(config), encoding='utf-8')
+                    before = file.read_bytes()
+                    with self.subTest(packaged=packaged, explicit=explicit):
+                        issue = detect_project_engine_mismatch(config, file)
+                        if not explicit:
+                            self.assertIsNone(issue)
+                            resolved = read_project_configuration(file)
+                            self.assertEqual(resolved['engine'], 'rpgmaker_mv')
+                            self.assertEqual(resolved['game_root'], str(content))
+                            self.assertEqual(file.read_bytes(), before)
+                            continue
+                        self.assertEqual(issue['details']['detected_engine'], 'rpgmaker_mv')
+                        self.assertEqual(issue['details']['content_root'], str(content))
+                        self.assertIn('support window', issue['message'])
+                        self.assertEqual(file.read_bytes(), before)
+                        for operation in ('doctor', 'sync-status', 'sync-cancel', 'usage-report',
+                                          'review-index-build', 'review-index-status', 'quality-report'):
+                            require_engine_operation(config, operation, config_file=file)
+                        config['engine'] = 'rpgmaker_mv'
+                        self.assertIsNone(detect_project_engine_mismatch(config, file))
+
+    def test_detection_requires_data_and_core_and_never_treats_mz_as_mv(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            config = {'game_root': str(root)}
+            file = root / 'translator_config.json'
+            self.assertIsNone(detect_project_engine_mismatch(config, file))
+            (root / 'js').mkdir()
+            (root / 'js/rpg_core.js').write_text('// Original inert marker.\n')
+            self.assertIsNone(detect_project_engine_mismatch(config, file))
+            (root / 'js/rpg_core.js').unlink()
+            (root / 'data').mkdir()
+            self.assertIsNone(detect_project_engine_mismatch(config, file))
+            (root / 'js/rmmz_core.js').write_text('// Original inert MZ marker.\n')
+            issue = detect_project_engine_mismatch(config, file)
+            self.assertEqual(issue['details']['detected_engine'], 'rpgmaker_mz')
+            self.assertIn('MZ is unsupported', issue['message'])
+            with self.assertRaises(ProjectEngineMismatchError):
+                require_engine_operation(config, 'prepare', config_file=file)
+
     def test_default_and_invalid_engine_are_distinct(self):
         self.assertEqual(project_engine({}), 'renpy')
         for value in ('', 'rpgmaker_mz', None, False, [], {}):
