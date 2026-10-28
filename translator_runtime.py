@@ -1166,9 +1166,10 @@ def load_sync_translation_settings(
     """Load sync translation settings and project-bound Macro content.
 
     Context limits accept non-negative integers and default to 30/10 when
-    omitted. Macro files must resolve under ``BASE_DIR``; missing, unreadable,
-    or rejected files clear the Macro text and its fingerprint while keeping
-    the configured file name for diagnostics.
+    omitted. Macro files must resolve under ``BASE_DIR`` or its recognized MV
+    package/project root, preserving paths anchored before content-root
+    correction. Missing, unreadable, or rejected files clear the Macro text
+    and its fingerprint while keeping the configured name for diagnostics.
     GUI snapshots pass ``allow_litellm_import=False`` to validate against the
     static/cached provider ids without importing the optional SDK. Execution
     loaders keep the default full installed-provider validation.
@@ -1299,10 +1300,16 @@ def load_sync_translation_settings(
         SYNC_MACRO_SETTING_FILE = DEFAULT_SYNC_MACRO_SETTING_FILE
     resolved_macro = _resolve_path(BASE_DIR, SYNC_MACRO_SETTING_FILE)
     macro_text = ''
-    if resolved_macro and not _canonical_path_within(BASE_DIR, resolved_macro):
+    macro_roots = [BASE_DIR]
+    if BASE_DIR:
+        from engine_adapters.project_config import mv_project_asset_roots, project_engine
+        if project_engine(config, config_file=TRANSLATOR_CONFIG) == 'rpgmaker_mv':
+            macro_roots = mv_project_asset_roots(BASE_DIR)
+    if resolved_macro and not any(_canonical_path_within(root, resolved_macro) for root in macro_roots):
         print(
             f"Warning: Sync macro setting file {resolved_macro} is outside the "
-            "project; ignoring it (macro_setting.md must live under game_root).",
+            "project; ignoring it (macro_setting.md must live under game_root "
+            "or its recognized MV package/project root).",
             flush=True,
         )
         resolved_macro = ''

@@ -75,6 +75,24 @@ def detect_project_material(game_root: Any, config_file: str | Path | None = Non
     return None
 
 
+def mv_project_asset_roots(content_root: str | Path) -> tuple[Path, ...]:
+    """Bound assets to the content copy and its recognized MV package/project.
+
+    Root correction preserves assets in the former package or original/work
+    project root. Admit at most two ancestors, and only when bounded material
+    detection resolves each ancestor back to this exact target content root.
+    Callers must still enforce canonical containment for the actual asset.
+    """
+    content = Path(content_root).resolve()
+    roots = [content]
+    for parent in tuple(content.parents)[:2]:
+        material = detect_project_material(parent)
+        if (material and material['engine'] == 'rpgmaker_mv'
+                and Path(material['content_root']) == content):
+            roots.append(parent)
+    return tuple(roots)
+
+
 def project_engine(config: Mapping[str, Any], *, config_file: str | Path | None = None) -> str:
     """Honor explicit engines; infer MV when an older config omits the field."""
     if 'engine' not in config:

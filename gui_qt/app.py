@@ -3009,8 +3009,8 @@ class MainWindow(QMainWindow):
         base_dir = str(game_root or "")
         config = self.state.load_translator_config()
         self._context_library_config_snapshot = copy.deepcopy(config)
-        result = collect_context_library_status(base_dir, config, **(
-            {'config_file': str(self.state.config_path)} if config.get('engine') == 'rpgmaker_mv' else {}))
+        result = collect_context_library_status(
+            base_dir, config, config_file=str(self.state.config_path))
         flags = result.context_flags
         self._context_library_flags_cache = (base_dir, dict(flags))
         analysis_flags = self._saved_project_analysis_flags(context_flags=flags)
@@ -3070,8 +3070,7 @@ class MainWindow(QMainWindow):
         job = ContextLibraryStatusJob(
             base_dir,
             self._context_library_config_snapshot,
-            **({'config_file': str(self.state.config_path)} if
-               (self._context_library_config_snapshot or {}).get('engine') == 'rpgmaker_mv' else {}),
+            config_file=str(self.state.config_path),
         )
         job.signals.completed.connect(self._on_context_library_status_ready)
         self._context_library_status_job = job
@@ -3092,8 +3091,7 @@ class MainWindow(QMainWindow):
             context_flags=self._context_library_live_flags(
                 self._game_root_str_for_flags() or ""
             ),
-            **({'config_file': str(self.state.config_path)} if
-               (getattr(self, '_context_library_config_snapshot', {}) or {}).get('engine') == 'rpgmaker_mv' else {}),
+            config_file=str(self.state.config_path),
         )
 
     def _on_context_library_status_ready(self, result: object) -> None:

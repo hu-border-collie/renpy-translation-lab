@@ -14,6 +14,28 @@ from tests.support.mv_project import make_mv_project
 
 
 class ProjectConfigTests(unittest.TestCase):
+    def test_mv_asset_roots_admit_only_ancestors_resolving_to_the_same_content(self):
+        from engine_adapters.project_config import mv_project_asset_roots
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            project = root / 'Game'
+            content = project / 'work' / 'www'
+            direct = root / 'direct-content'
+            for path in (content, direct):
+                (path / 'data').mkdir(parents=True)
+                (path / 'js').mkdir()
+                (path / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+            (project / 'original').mkdir()
+            self.assertEqual(mv_project_asset_roots(content),
+                             (content, project / 'work', project))
+            self.assertEqual(mv_project_asset_roots(direct), (direct,))
+            # A different content root in the package takes precedence over www.
+            (project / 'work' / 'data').mkdir()
+            (project / 'work' / 'js').mkdir()
+            (project / 'work' / 'js/rpg_core.js').write_text('// Other inert MV marker.\n')
+            self.assertEqual(mv_project_asset_roots(content), (content,))
+
     def test_auto_detection_keeps_full_game_scope_assets_and_unapproved_source_distinct(self):
         from engine_adapters.project_setup import mv_project_setup_status
         with tempfile.TemporaryDirectory() as temporary:

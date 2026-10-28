@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -1692,6 +1693,45 @@ class GuiTaskPageTests(unittest.TestCase):
             self.assertTrue(self.window.context_bootstrap_rag_btn.isEnabled())
             self.assertFalse(self.window.context_library_page.stop_btn.isHidden())
             self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
+
+    def test_context_invalid_engine_completes_and_refreshes_after_correction(self) -> None:
+        from foundation.project_context_settings import save_project_context_settings
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            save_project_context_settings(root, {'rag_enabled': True})
+            self.window._context_library_config_snapshot = {
+                'engine': 'rpgmaker_mz', 'game_root': str(root)}
+            self.window._context_library_status_cache = None
+            self.window._context_library_status_job = None
+            with (
+                mock.patch.object(self.window.state, 'get_game_root', return_value=root),
+                mock.patch.object(self.window, '_render_context_library_panel'),
+                mock.patch('gui_qt.app.QThreadPool.globalInstance'),
+                mock.patch('gui_qt.app.QTimer.singleShot') as schedule,
+                mock.patch('gemini_translate_batch.compute_current_project_analysis_fingerprint',
+                           return_value='fixed-fingerprint'),
+                mock.patch('quality_review.project_analysis.collect_project_analysis_status',
+                           return_value={'overall_status': 'missing'}),
+            ):
+                self.window._refresh_context_library_panel_async(force=True)
+                self.window._context_library_status_job.run()
+                self.assertIsNone(self.window._context_library_status_job)
+                failed = self.window._context_library_status_cache
+                self.assertIn('engine', failed.error)
+                self.assertTrue(failed.context_flags['rag_enabled'])
+                self.assertEqual(failed.config_digest, self.window._context_library_config_digest())
+                schedule.assert_not_called()
+
+                self.window._context_library_config_snapshot['engine'] = 'renpy'
+                self.window._refresh_context_library_panel_async(force=True)
+                self.window._context_library_status_job.run()
+                self.assertIsNone(self.window._context_library_status_job)
+                fixed = self.window._context_library_status_cache
+                self.assertEqual(fixed.error, '')
+                self.assertEqual(fixed.live_fingerprint, 'fixed-fingerprint')
+                self.assertNotEqual(failed.config_digest, fixed.config_digest)
+                schedule.assert_not_called()
 
     def test_context_status_ready_ignores_stale_config_digest(self) -> None:
         from gui_qt.workers.context_library_worker import ContextLibraryStatusResult
