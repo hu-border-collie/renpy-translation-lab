@@ -84,12 +84,3 @@ CI 覆盖锁文件的方式如下；完整任务映射见 `docs/ci.md`：
 ## 依赖漏洞审计
 
 PR 的 `quality` 任务会对全部提交的哈希锁运行 `pip-audit`（见 [CI 与定时集成检查](ci.md)）。已知、已接受的例外写在 `quality/pip-audit-exceptions.json`；每条需说明原因与复查日期。清除例外的正确方式是在独立依赖升级 PR 中抬高 pin 并重生成锁，而不是在应用功能 PR 里顺手改版本。
-
-2026-10-28 核对 [GHSA-g5ff-637f-6q2m](https://github.com/advisories/GHSA-g5ff-637f-6q2m)
-及[上游修复](https://github.com/BerriAI/litellm/commit/065faf6e695be64a1a367601271839914e4a6621)：
-该项针对经过身份认证的 LiteLLM Proxy 用户通过 `/utils/transform_request` 提交
-`vertex_ai_credentials` 的文件读取路径。当前产品仅在 `providers/litellm_sync_backend.py`
-调用客户端库的 `completion` / `acompletion`，不启动或导入 Proxy 服务，也不暴露该端点或 SSO 用户角色。
-据此登记至 2026-11-11 复查的短期适用性例外，锁版本保持不变；引入 Proxy 服务前须移除例外并升级，
-独立 LiteLLM 升级 PR 也应清除此条。此判断仅针对本工具的当前调用路径，不表示受影响的 Proxy 部署已修复；
-自行部署 Proxy 时仍需采用公告中的修复版本。

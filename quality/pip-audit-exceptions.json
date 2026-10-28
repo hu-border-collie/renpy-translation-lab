@@ -21,15 +21,6 @@
       "review_by": "2026-08-20"
     },
     {
-      "id": "GHSA-g5ff-637f-6q2m",
-      "package": "litellm",
-      "fix_versions": [
-        "1.95.0"
-      ],
-      "reason": "Reviewed 2026-10-28 against https://github.com/advisories/GHSA-g5ff-637f-6q2m and upstream commit 065faf6e695be64a1a367601271839914e4a6621. The affected surface is an authenticated LiteLLM Proxy /utils/transform_request request accepting vertex_ai_credentials. This product invokes only the optional client library completion/acompletion APIs (providers/litellm_sync_backend.py); it does not start/import the Proxy server or expose that endpoint or its SSO/user roles. This short-lived applicability exception is limited to the current client-only deployment, not a fix for affected Proxy deployments. Remove it if a Proxy surface is added or in the dedicated LiteLLM dependency upgrade PR.",
-      "review_by": "2026-11-11"
-    },
-    {
       "id": "GHSA-g6cj-pr64-35w5",
       "package": "cryptography",
       "fix_versions": [
