@@ -14,6 +14,27 @@ from tests.support.mv_project import make_mv_project
 
 
 class ProjectConfigTests(unittest.TestCase):
+    def test_detects_renpy_work_layout_with_full_or_unprepared_work(self):
+        from engine_adapters.project_config import detect_project_material
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            file = root / 'translator_config.json'
+            for populated in (True, False):
+                project = root / f'RenPy-{populated}'
+                original = project / 'original/game'
+                work = project / 'work'
+                original.mkdir(parents=True)
+                work.mkdir()
+                self.assertIsNone(detect_project_material(project))
+                (original / 'script.rpyc').write_bytes(b'Original inert compiled marker')
+                if populated:
+                    (work / 'game').mkdir()
+                    (work / 'game/archive.rpa').write_bytes(b'Original inert archive marker')
+                with self.subTest(populated=populated):
+                    self.assertEqual(detect_project_material(project.name, file),
+                                     {'engine': 'renpy', 'content_root': str(work)})
+
     def test_mv_asset_roots_admit_only_ancestors_resolving_to_the_same_content(self):
         from engine_adapters.project_config import mv_project_asset_roots
 

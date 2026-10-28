@@ -52,8 +52,8 @@ def detect_project_material(game_root: Any, config_file: str | Path | None = Non
     """Recognize bounded on-disk engine markers, without approving compatibility.
 
     Inspect the selected root, its packaged ``www`` and a conventional
-    original/work layout. No artifact tree, sibling project, translation
-    scope or support window is selected.
+    original/work layout, including Ren'Py's original/game + work/game. No
+    artifact tree, sibling project, translation scope or support window is selected.
     """
     if not isinstance(game_root, (str, Path)) or not str(game_root).strip():
         return None
@@ -69,9 +69,14 @@ def detect_project_material(game_root: Any, config_file: str | Path | None = Non
         for engine, core in (('rpgmaker_mz', 'rmmz_core.js'), ('rpgmaker_mv', 'rpg_core.js')):
             if (content / 'js' / core).is_file():
                 return {'engine': engine, 'content_root': str(content.resolve())}
-    game = root / 'game'
-    if game.is_dir() and any(any(game.glob(pattern)) for pattern in ('*.rpy', '*.rpyc', '*.rpa')):
-        return {'engine': 'renpy', 'content_root': str(root.resolve())}
+    renpy_root = root
+    games = [root / 'game']
+    if (root / 'original' / 'game').is_dir() and (root / 'work').is_dir():
+        renpy_root = root / 'work'
+        games = [renpy_root / 'game', root / 'original' / 'game', *games]
+    for game in games:
+        if game.is_dir() and any(any(game.glob(pattern)) for pattern in ('*.rpy', '*.rpyc', '*.rpa')):
+            return {'engine': 'renpy', 'content_root': str(renpy_root.resolve())}
     return None
 
 

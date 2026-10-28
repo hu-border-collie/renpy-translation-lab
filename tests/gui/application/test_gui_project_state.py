@@ -11,6 +11,38 @@ import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def test_switching_from_mv_back_to_renpy_layout_restores_engine_and_work_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            mv = root / 'MV/www'
+            (mv / 'data').mkdir(parents=True)
+            (mv / 'js').mkdir()
+            (mv / 'js/rpg_core.js').write_text('// Original inert MV marker.\n')
+            for populated in (True, False):
+                with self.subTest(populated=populated):
+                    project = root / f'RenPy-{populated}'
+                    original = project / 'original/game'
+                    work = project / 'work'
+                    original.mkdir(parents=True)
+                    work.mkdir()
+                    (original / 'script.rpy').write_text('label start:\n    return\n')
+                    if populated:
+                        (work / 'game').mkdir()
+                        (work / 'game/script.rpy').write_text('label start:\n    return\n')
+                    state.config_path.write_text(json.dumps({'engine': 'renpy', 'unknown': 'keep'}))
+                    state.set_game_root(project)
+                    state.set_game_root(mv.parent)
+                    self.assertEqual(state.load_translator_config()['engine'], 'rpgmaker_mv')
+                    effective, adjusted = state.set_game_root(project)
+                    saved = state.load_translator_config()
+                    self.assertTrue(adjusted)
+                    self.assert_same_path(effective, work)
+                    self.assertEqual(saved['engine'], 'renpy')
+                    self.assert_same_path(saved['game_root'], work)
+                    self.assert_same_path(saved['glossary_file'], work / 'glossary.json')
+                    self.assertEqual(saved['unknown'], 'keep')
+
     def test_startup_mv_root_correction_preserves_custom_assets_and_filters(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

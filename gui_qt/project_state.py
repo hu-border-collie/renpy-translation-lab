@@ -408,7 +408,7 @@ class ProjectState:
         from engine_adapters.project_config import detect_project_material
         original = self._path_without_resolve(path)
         material = detect_project_material(path, self.config_path)
-        if material and material['engine'] == 'rpgmaker_mv':
+        if material and material['engine'] in {'renpy', 'rpgmaker_mv'}:
             effective = Path(material['content_root'])
             return effective, self._normalized_path_text(original) != self._normalized_path_text(effective)
         if not material and self.load_translator_config().get('engine') == 'rpgmaker_mv':
@@ -427,7 +427,7 @@ class ProjectState:
         if not p.exists():
             # Still allow setting even if not exist yet (user may create later)
             pass
-        self._save_game_root_to_config(p)
+        self._save_game_root_to_config(p, selected_root=path)
         self._game_root = p
         if adjusted:
             self._game_root_redirect_from = original
@@ -453,19 +453,25 @@ class ProjectState:
                 self._game_root = effective
                 if adjusted:
                     self._game_root_redirect_from = original
-                    self._save_game_root_to_config(effective)
+                    self._save_game_root_to_config(effective, selected_root=game_root)
         except Exception:
             # Non-fatal for GUI
             pass
 
-    def _save_game_root_to_config(self, game_root: Path) -> None:
-        """Update game_root and sync per-project asset paths, preserve everything else."""
+    def _save_game_root_to_config(self, game_root: Path, *, selected_root: str | Path | None = None) -> None:
+        """Save the effective root and assets, retaining selected layout evidence.
+
+        An empty Ren'Py work copy can be identified by its selected project's
+        original/game markers even before preparation populates work/game.
+        """
         from engine_adapters.project_config import detect_project_material, resolve_project_configuration
         data = self._read_json_object(self.config_path, "translator_config.json")
         normalized_root = canonical_abs_path(str(game_root))
         previous = resolve_project_configuration(data, self.config_path)
         same_project = self._normalized_path_text(previous.get('game_root') or '') == self._normalized_path_text(normalized_root)
         material = detect_project_material(game_root, self.config_path)
+        if material is None and selected_root is not None:
+            material = detect_project_material(selected_root, self.config_path)
         previous_material = detect_project_material(data.get('game_root'), self.config_path)
         if (material and material['engine'] == 'rpgmaker_mv' and previous_material
                 and previous_material['engine'] == 'rpgmaker_mv'
