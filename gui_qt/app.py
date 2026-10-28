@@ -9716,7 +9716,10 @@ class MainWindow(QMainWindow):
         state = self._bootstrap_progress
         if state is None:
             return None
-        if state.kind == "rag":
+        if state.kind == "rag" and not (state.phase.startswith("mv_") or state.phase == "done"):
+            progress = self._workflow_progress
+            if progress is not None and progress.visible:
+                return progress
             return SimpleNamespace(
                 visible=True,
                 indeterminate=True,
@@ -13365,21 +13368,17 @@ class MainWindow(QMainWindow):
             self._build_retry_output_lines.append(text)
         elif self._active_command in {"bootstrap_rag", "bootstrap_source_index"}:
             self._bootstrap_output_lines.append(text)
-            if (
-                self._active_command == "bootstrap_source_index"
-                and self._bootstrap_progress is not None
-            ):
+            if self._bootstrap_progress is not None:
                 self._bootstrap_progress = update_bootstrap_progress_from_line(
                     text,
                     self._bootstrap_progress,
                 )
-                self._schedule_progress_ui_flush()
-            elif self._active_command == "bootstrap_rag":
+            if self._active_command == "bootstrap_rag":
                 self._workflow_progress = update_workflow_progress_from_line(
                     text,
                     self._workflow_progress,
                 )
-                self._schedule_progress_ui_flush()
+            self._schedule_progress_ui_flush()
         elif self._active_command == "bootstrap_work":
             self._work_bootstrap_output_lines.append(text)
             self._workflow_progress = update_workflow_progress_from_line(

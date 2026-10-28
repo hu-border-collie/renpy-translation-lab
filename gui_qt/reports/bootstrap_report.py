@@ -23,7 +23,7 @@ class BootstrapSummary:
 
 @dataclass(frozen=True)
 class BootstrapProgressState:
-    """Source-index counters; MV vectors remain buffered until validated persistence."""
+    """Bootstrap counters; MV vectors stay buffered until validated persistence."""
 
     kind: str = "source_index"
     phase: str = "starting"
@@ -152,7 +152,7 @@ def update_bootstrap_progress_from_line(
     line: str,
     state: BootstrapProgressState,
 ) -> BootstrapProgressState:
-    if state.kind != "source_index":
+    if state.kind not in {"source_index", "rag"}:
         return state
 
     text = line.strip()
@@ -350,12 +350,13 @@ def format_bootstrap_progress_bar_label(
 
 
 def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
-    if state.kind != "source_index":
+    if state.kind not in {"source_index", "rag"}:
         return []
 
     facts: list[str] = []
     if state.phase.startswith("mv_"):
-        facts.append(BOOTSTRAP_PROGRESS_COPY["mv_total"].format(total=state.total_segments))
+        key = "mv_history_total" if state.kind == "rag" else "mv_total"
+        facts.append(BOOTSTRAP_PROGRESS_COPY[key].format(total=state.total_segments))
     elif state.total_segments > 0:
         percent = (state.stored_segments * 100) // state.total_segments
         facts.append(

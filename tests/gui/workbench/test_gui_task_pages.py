@@ -1606,6 +1606,43 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._active_command = ""
         self.window._clear_bootstrap_progress_ui()
 
+    def test_context_rag_progress_reaches_the_page(self) -> None:
+        from gui_qt.reports.bootstrap_report import create_bootstrap_progress_state
+        from gui_qt.reports.workflow_progress import create_workflow_progress_state
+
+        self.window._set_work_mode(WorkMode.BOOTSTRAP_RAG, refresh_manifest_writeback=False)
+        self.window._active_command = "bootstrap_rag"
+        self.window._bootstrap_progress = create_bootstrap_progress_state("rag")
+        self.window._workflow_progress = create_workflow_progress_state("rag_bootstrap")
+        self.window._on_cli_line_ready("RAG scan progress: 40 records scanned from 3 files, 20 pending.")
+        self.window._on_cli_line_ready("RAG update progress: 16/20 records.")
+        self.window._flush_throttled_progress_ui()
+        section = self.window.context_library_page.bootstrap_status_section
+        self.assertEqual(section.progress_bar.maximum(), 20)
+        self.assertEqual(section.progress_bar.value(), 16)
+        self.assertIn("16/20", section.message_label.text())
+        self.assertIn("扫描记录：40", section.facts_label.text())
+        self.window._active_command = ""
+        self.window._clear_bootstrap_progress_ui()
+
+    def test_context_mv_history_progress_reaches_the_page(self) -> None:
+        from gui_qt.reports.bootstrap_report import create_bootstrap_progress_state
+
+        self.window._set_work_mode(WorkMode.BOOTSTRAP_RAG, refresh_manifest_writeback=False)
+        self.window._active_command = "bootstrap_rag"
+        self.window._bootstrap_progress = create_bootstrap_progress_state("rag")
+        self.window._on_cli_line_ready("MV context preparation: 20 segments, 4 reused, 16 pending.")
+        self.window._on_cli_line_ready("MV context embedding progress: 16/16")
+        self.window._flush_throttled_progress_ui()
+        section = self.window.context_library_page.bootstrap_status_section
+        self.assertIn("16/16", section.message_label.text())
+        self.assertEqual(self.window._bootstrap_progress.stored_segments, 0)
+        self.window._on_cli_line_ready("MV context persistence started.")
+        self.window._flush_throttled_progress_ui()
+        self.assertIn("正在保存", section.message_label.text())
+        self.window._active_command = ""
+        self.window._clear_bootstrap_progress_ui()
+
     def test_context_bootstrap_buttons_disabled_while_running(self) -> None:
         self.window._set_work_mode(
             WorkMode.BOOTSTRAP_RAG,

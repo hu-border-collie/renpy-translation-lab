@@ -206,7 +206,7 @@ class ReadinessSummaryTests(unittest.TestCase):
                 ) as probe,
             ):
                 worker = self.start_doctor()
-            self.assertEqual(worker.config.base_dir, str(self.root))
+            self.assertEqual(Path(worker.config.base_dir).resolve(), self.root.resolve())
             self.assertEqual(worker.config.sync_backend, "litellm")
             self.assertIn("fixture_vendor", worker.config.custom_litellm_providers)
             probe.assert_not_called()

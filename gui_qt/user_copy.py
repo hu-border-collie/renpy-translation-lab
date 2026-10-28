@@ -960,6 +960,7 @@ BOOTSTRAP_PROGRESS_COPY = {
     "mv_validating": "正在校验原文与索引输入…",
     "mv_persisting": "正在保存索引…",
     "mv_total": "原文片段：{total}（完成校验后保存）",
+    "mv_history_total": "历史语料：{total}（完成校验后保存）",
     "empty_done": "已完成（0 片段）",
 }
 
