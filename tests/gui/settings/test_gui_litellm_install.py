@@ -1,3 +1,5 @@
+from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -167,19 +169,25 @@ class GuiLiteLLMInstallTests(unittest.TestCase):
             return_value=WorkMode.SYNC_KEYWORD_EXTRACTION
         )
         self.window.state = mock.Mock()
-        self.window.state.get_game_root.return_value = "C:/Game/work"
-        self.window._confirm_unsaved_config_before_workflow = mock.Mock(
-            return_value=True
-        )
-        self.window._litellm_install_blocks_mode = mock.Mock(return_value=True)
-        with mock.patch("gui_qt.app.message_box_information") as information:
-            self.window._on_start_translation()
-        self.window._confirm_unsaved_config_before_workflow.assert_called_once()
-        self.window._litellm_install_blocks_mode.assert_called_once_with(
-            WorkMode.SYNC_KEYWORD_EXTRACTION
-        )
-        information.assert_called_once()
-        self.assertIn("正在安装", information.call_args.args[1])
+        with tempfile.TemporaryDirectory() as directory:
+            self.window.state.config_path = Path(directory) / "translator_config.json"
+            for game_root in (str(Path(directory) / "work"), "relative/work"):
+                with self.subTest(game_root=game_root):
+                    self.window.state.get_game_root.return_value = game_root
+                    self.window._confirm_unsaved_config_before_workflow = mock.Mock(
+                        return_value=True
+                    )
+                    self.window._litellm_install_blocks_mode = mock.Mock(return_value=True)
+                    order = mock.Mock()
+                    order.attach_mock(self.window._confirm_unsaved_config_before_workflow, "resolve")
+                    order.attach_mock(self.window._litellm_install_blocks_mode, "install")
+                    with mock.patch("gui_qt.app.message_box_information") as information:
+                        self.window._on_start_translation()
+                    self.assertEqual(order.mock_calls, [
+                        mock.call.resolve(), mock.call.install(WorkMode.SYNC_KEYWORD_EXTRACTION)
+                    ])
+                    information.assert_called_once()
+                    self.assertIn("正在安装", information.call_args.args[1])
 
     def test_installed_dependency_offers_update_button(self):
         with (
