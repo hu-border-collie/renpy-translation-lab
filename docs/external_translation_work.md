@@ -246,7 +246,7 @@ python -B scripts/run_external_work_fixture.py --output-dir outputs/external-par
 
 **当前决定：继续保留实验 CLI，暂不扩大产品化范围。** 工程证据支持可持久化、可恢复并
 复用现有安全门禁；尚不能证明减少真实章节遗漏、返工或改善翻译质量。
-[设计 §9.2](plans/agent_translation_toolkit.md#92-产品实验) 的真实样本与 B1/B2 章节实验
+[设计 §9.2](archive/research/agent_translation_toolkit.md#92-产品实验) 的真实样本与 B1/B2 章节实验
 已按下面的续验记录推进；不同模型、恢复变体和不完整的端到端计量限制可得结论。
 独立清单、匿名译文审阅、原生执行、视觉交互和可得用量分别报告，不能互相替代。
 模型不一致时只能比较整条路线；宿主费用不可得时继续写 `unknown`。原创 fixture 不替代
@@ -257,9 +257,9 @@ Computer Use 是可选的取证手段；字号、全屏、听音等扩展检查�
 2026-10-13 补证（历史状态）：09-30 已完成 552 项章节与跨章
 背景的真实 A/B1 和匿名 Agent 审阅，10-08/09 又补齐原生范围、安全交付、字体覆盖及整章
 引擎执行；修订后独立审阅、剩余视觉 / 交互与 B2/C 仍缺。宿主费用保持 unknown，不能
-以修订后 B1 和原 A 的冻结分数宣称路线优势。见[验收补证](plans/provider-acceptance-reassessment-2026-10-13.md)。
+以修订后 B1 和原 A 的冻结分数宣称路线优势。见[验收补证](archive/experiments/provider-acceptance-reassessment-2026-10-13.md)。
 
-2026-10-17～20 的[同条件串行 / 并行续验](plans/issue-508-parallel-acceptance-2026-10-17.md)
+2026-10-17～20 的[同条件串行 / 并行续验](archive/experiments/issue-508-parallel-acceptance-2026-10-17.md)
 已完成新 B1 与双 worker B2 各 552 项真实候选、独立匿名审阅、明确订正及隔离写回；原始
 候选和评分单独冻结。B2 同因原子拒收与跨分工一致性调整另有记录，不以订正覆盖原始分数。
 用户于 10-18 恢复游戏操作后，新 B2 已完成 552 项原生执行、字体覆盖和有限截图检查；

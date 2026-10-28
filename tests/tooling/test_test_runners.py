@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import pathlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -219,6 +221,7 @@ class TestDiscoveryRunners(unittest.TestCase):
         with (
             mock.patch.object(run_gui_tests.sys, "stdout", stdout),
             mock.patch.object(run_gui_tests.sys, "stderr", stderr),
+            mock.patch.object(run_gui_tests.os, "name", "posix"),
             mock.patch.object(run_gui_tests.os, "_exit") as exit_process,
         ):
             run_gui_tests._terminate_process(7)
@@ -226,6 +229,34 @@ class TestDiscoveryRunners(unittest.TestCase):
         stdout.flush.assert_called_once_with()
         stderr.flush.assert_called_once_with()
         exit_process.assert_called_once_with(7)
+
+    def test_gui_process_exit_preserves_success_failure_and_output(self):
+        script = """
+import importlib.util
+import os
+import sys
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+if importlib.util.find_spec('PySide6') is not None:
+    from PySide6.QtWidgets import QApplication, QWidget
+    app = QApplication([])
+    window = QWidget()
+    window.show()
+    app.processEvents()
+from tests.run_gui_tests import _terminate_process
+sys.stdout.write('completed stdout\\n')
+sys.stderr.write('completed stderr\\n')
+_terminate_process(int(sys.argv[1]))
+"""
+        for code in (0, 7):
+            with self.subTest(exit_code=code):
+                result = subprocess.run(
+                    [sys.executable, "-X", "faulthandler", "-B", "-c", script, str(code)],
+                    cwd=_TESTS_DIR.parent, capture_output=True, text=True, encoding="utf-8", timeout=20,
+                )
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertIn("completed stdout\n", result.stdout)
+                self.assertIn("completed stderr\n", result.stderr)
+                self.assertNotIn("fatal exception", result.stderr.lower())
 
 
 class GuiTestModalGuardTests(unittest.TestCase):

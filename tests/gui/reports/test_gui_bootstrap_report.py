@@ -19,6 +19,44 @@ from gui_qt.reports.bootstrap_report import (
 
 
 class GuiBootstrapReportTests(unittest.TestCase):
+    def test_mv_progress_separates_embeddings_from_persisted_records(self):
+        state = create_bootstrap_progress_state("source_index")
+        state = update_bootstrap_progress_from_line(
+            "MV context preparation: 20 segments, 4 reused, 16 pending.", state,
+        )
+        self.assertEqual(state.total_segments, 20)
+        self.assertEqual(state.reused_embeddings, 4)
+        state = update_bootstrap_progress_from_line("MV context embedding request: 1-16/16.", state)
+        self.assertIn("0/16", format_bootstrap_progress_bar_label(state))
+        self.assertIn("等待服务响应", format_bootstrap_progress_bar_label(state))
+        state = update_bootstrap_progress_from_line("MV context embedding progress: 16/16", state)
+        self.assertEqual(state.embedding_done, 16)
+        self.assertEqual(state.stored_segments, 0)
+        self.assertIn("本轮向量生成：16/16", format_bootstrap_progress_facts(state))
+        state = update_bootstrap_progress_from_line("MV context validation started.", state)
+        self.assertIn("正在校验", format_bootstrap_progress_bar_label(state))
+        state = update_bootstrap_progress_from_line("MV context persistence started.", state)
+        self.assertIn("正在保存", format_bootstrap_progress_bar_label(state))
+        self.assertEqual(state.stored_segments, 0)
+        state = update_bootstrap_progress_from_line("MV context preparation complete: 20 segments.", state)
+        self.assertEqual(state.stored_segments, 20)
+        self.assertEqual(state.phase, "done")
+        self.assertEqual(format_bootstrap_progress_bar_label(state), "100%（20/20）")
+
+    def test_mv_empty_or_fully_reused_index_does_not_stay_in_scanning(self):
+        for total in (0, 20):
+            with self.subTest(total=total):
+                state = create_bootstrap_progress_state("source_index")
+                state = update_bootstrap_progress_from_line(
+                    f"MV context preparation: {total} segments, {total} reused, 0 pending.", state,
+                )
+                self.assertIn("正在校验", format_bootstrap_progress_bar_label(state))
+                state = update_bootstrap_progress_from_line(
+                    f"MV context preparation complete: {total} segments.", state,
+                )
+                self.assertNotIn("扫描", format_bootstrap_progress_bar_label(state))
+                self.assertEqual(state.stored_segments, total)
+
     def test_mv_preparation_result_preserves_empty_missing_and_failed(self):
         for parser, header in ((summarize_rag_bootstrap_output, 'RAG bootstrap summary:'),
                                (summarize_source_index_bootstrap_output, 'Source Index bootstrap final summary:')):

@@ -3,7 +3,7 @@
 这里是《The Night Signal》的原创事件/地图数据，适用仓库 [MIT 许可](../../../LICENSE)。
 它需要用户自有的合法 **RPG Maker MV 1.5.1** 环境组装，不能单独启动；不包含编辑器、core、NW.js、默认数据库、字体、图像或音频。不要拿 MZ 或其他 MV 版本组装后继承本轮版本结论。
 
-本轮已在官方日文 Windows 试用编辑器 About 及实际 core 中分别确认 1.5.1，使用 New Project 创建工程，再关闭工程并写入原创事件数据。修正版已完成 TPP 8.8.9 / 实际 RMMVJS parser 2.19 的真实 GUI 导入及无修改/限定译文导出，部分原生 NW.js 和 HTML5 运行有证据；前插命令后的 context 迁移出现一处译文丢失，生产 bridge 仍暂缓。具体覆盖与未测项见[实验报告](../issue-509-translatorpp-roundtrip-2026-10-21.md)。
+本轮已在官方日文 Windows 试用编辑器 About 及实际 core 中分别确认 1.5.1，使用 New Project 创建工程，再关闭工程并写入原创事件数据。修正版已完成 TPP 8.8.9 / 实际 RMMVJS parser 2.19 的真实 GUI 导入及无修改/限定译文导出，部分原生 NW.js 和 HTML5 运行有证据；前插命令后的 context 迁移出现一处译文丢失，生产 bridge 仍暂缓。具体覆盖与未测项见[实验报告](../../archive/experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)。
 
 ## 内容与分母
 

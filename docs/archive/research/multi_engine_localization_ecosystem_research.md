@@ -1,11 +1,13 @@
 # 多引擎本地化适配与候选引擎开源生态研究
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态**：公开仓库源码与工具生态级研究记录，对接 [#265](https://github.com/hu-border-collie/renpy-translation-lab/issues/265) 与 [#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)。
 > **核对日期**：2026-09-06（原生态研究）；2026-09-16 专项刷新 Translator++ 接口、接入边界及 #265 / #272 状态，其余工具与引擎未做全量重新审计。
 > **研究对象**：跨引擎本地化抽象框架（VNTextPatch、Translator++、translate-toolkit / Weblate）以及候选目标引擎（Naninovel、Godot+Dialogic 2、RPG Maker MV/MZ、KiriKiri）的原生生态与工具链。
 > **当前路线（2026-10-22）**：新 [#565](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)以 Komorebi 真实需求启动只读调查，#272 保持 open 等待版本/文本范围与选型回填；生产实现待调查后另拆。见[研究归档与调查衔接](issue-272-research-closeout-2026-10-22.md)。本轮仅复核 Naninovel 关键合同、MV/MZ 版本与 #509；其他工具/引擎仍为历史研究，不改变既有安全门禁，也不把目标游戏当可再分发 fixture。
 > **专项评估**：[Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)记录当前 issues、官方证据、公共合同缺口与最小实验；接入尚未实现。
-> **#509 续验补记（2026-10-22）**：[单版本往返报告](issue-509-translatorpp-roundtrip-2026-10-21.md)固定 TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）和 MV 编辑器/core **1.5.1**。已有实际GUI工程、限定19处译文导出、独立null保存/重开/导出、部分原生/HTML5运行及staging失败恢复；无修改全资源导出改写插件注释，源前插命令后缺一处context译文，畸形/缺失源文件被排除。限定spike证据已齐，决定保留独立工具使用、生产bridge暂缓。下方其他工具/引擎仍按原研究日期解释。
+> **#509 续验补记（2026-10-22）**：[单版本往返报告](../experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)固定 TPP **8.8.9** / 实际 RMMVJS **2.19**（新建入口3.3）和 MV 编辑器/core **1.5.1**。已有实际GUI工程、限定19处译文导出、独立null保存/重开/导出、部分原生/HTML5运行及staging失败恢复；无修改全资源导出改写插件注释，源前插命令后缺一处context译文，畸形/缺失源文件被排除。限定spike证据已齐，决定保留独立工具使用、生产bridge暂缓。下方其他工具/引擎仍按原研究日期解释。
 
 ---
 
@@ -195,7 +197,7 @@
 
 ### 6.1 Issue #265 已交付边界
 
-#265 P5/P6 已交付，Epic 已于 2026-09-13 关闭，不再把旧研究建议列作 P6 待办。当前 Ren'Py 产品化、coverage、版本对账/复用、CLI/GUI 与 Tyrano 离线 corpus 的边界，以 [Engine Adapter 现行说明](../engine_adapter.md)为准。
+#265 P5/P6 已交付，Epic 已于 2026-09-13 关闭，不再把旧研究建议列作 P6 待办。当前 Ren'Py 产品化、coverage、版本对账/复用、CLI/GUI 与 Tyrano 离线 corpus 的边界，以 [Engine Adapter 现行说明](../../engine_adapter.md)为准。
 
 后续借用外部编辑界面仍须保持复用决定、质量确认、审校状态与写回许可分离。自动折行、字体或新引擎结构规则须单独定义适用范围，不能作为格式 bridge 的隐式副作用。
 
@@ -216,7 +218,7 @@ Naninovel 保留为原生目录条件候选；#565 因具体需求优先调查 R
 
 将“自行实现引擎 parser”与“接入外部格式后端”分开决策。#509 已给出单版本位置映射、选列和 staging 的有限证据及失败，当前保留独立工具使用，生产 bridge 暂缓；未来满足重启条件才评估公共工作包的净收益。生成 `.trans`、最终游戏导出与本项目写回许可须分别验收。
 
-历史 issue 影响、格式合同缺口与停止条件见 [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)。[现有外部初译工作包](../external_translation_work.md)限 Ren'Py，不自动接通第三引擎。
+历史 issue 影响、格式合同缺口与停止条件见 [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)。[现有外部初译工作包](../../external_translation_work.md)限 Ren'Py，不自动接通第三引擎。
 
 ---
 
@@ -237,10 +239,10 @@ Naninovel 保留为原生目录条件候选；#565 因具体需求优先调查 R
 
 - [视觉小说引擎本地化能力矩阵与后续 Adapter 路线](visual_novel_localization_matrix.md)（#272 决策文档）
 - [Translator++ 多引擎接入评估](translatorpp_integration_assessment.md)（2026-09-16 官方接口、issue 影响与待实验接入合同）
-- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](engine_adapter_contract.md)（#265 P0 契约文档）
+- [Engine Adapter P0：Ren'Py 当前调用链与合同设计](../../plans/engine_adapter_contract.md)（#265 P0 契约文档）
 - [GitHub 视觉小说本地化工具源码研究](github_localization_projects_research.md)（跨项目对比与迁移规范）
-- [Engine Adapter、覆盖审计与安全写回](../engine_adapter.md)（P1–P6 现行实现与验证边界）
-- [engine_adapters/writeback.py](../../engine_adapters/writeback.py)（声明式原子写回内核）
-- [engine_adapters/versioning.py](../../engine_adapters/versioning.py)（项目版本快照与对账）
-- [engine_adapters/reuse.py](../../engine_adapters/reuse.py)（版本化翻译记录与复用）
-- [engine_adapters/tyrano.py](../../engine_adapters/tyrano.py)（第二引擎 TyranoScript V600+ 验证 Adapter）
+- [Engine Adapter、覆盖审计与安全写回](../../engine_adapter.md)（P1–P6 现行实现与验证边界）
+- [engine_adapters/writeback.py](../../../engine_adapters/writeback.py)（声明式原子写回内核）
+- [engine_adapters/versioning.py](../../../engine_adapters/versioning.py)（项目版本快照与对账）
+- [engine_adapters/reuse.py](../../../engine_adapters/reuse.py)（版本化翻译记录与复用）
+- [engine_adapters/tyrano.py](../../../engine_adapters/tyrano.py)（第二引擎 TyranoScript V600+ 验证 Adapter）

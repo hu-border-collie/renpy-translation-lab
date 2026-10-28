@@ -19,7 +19,7 @@
 CLI/core 与 GUI 套件共同覆盖全部 `test_*.py` 用例，且两套之间不重复：
 
 - `python -B tests/run_cli_tests.py -q`：CLI/core，以及不依赖 Qt 控件的设置协议、注册表、协调器和保存逻辑。
-- `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。
+- `python -B tests/run_gui_tests.py -q`：`test_gui_*.py` 与 `test_settings_*_page.py`，后者是历史命名的 Qt 设置页测试。GUI runner 保留模态弹窗守卫和 Qt 退出保护。Windows CI 使用逐项、无缓冲输出和 faulthandler；完整测试与弹窗守卫确定退出码后，脚本直接终止自身进程，避开 Qt 的 DLL 退出回调，成功与失败的退出码都会保留。
 
 测试按模块存放在子包中，两套入口递归发现并以 `tests.<分组>.<模块>` 加载，夹具目录不参与发现。
 同一测试模块只使用完整包名导入；复用其他测试的 fixture 时优先导入模块，避免把其 `TestCase`
@@ -28,6 +28,28 @@ CLI/core 与 GUI 套件共同覆盖全部 `test_*.py` 用例，且两套之间�
 Linux 的 GUI 用例只在 `gui` job 运行一次，Windows 在 `unittest` job 中分进程运行两套测试。`cli-without-gui` 仍运行完整 CLI/core 套件，以验证缺少 GUI 和分析器依赖时的行为；这是不同安装环境的兼容性检查。
 
 本地修改先运行受影响的模块。纯文案、颜色、间距等低影响改动按已有覆盖验证；新增用例应对应独立失败场景，已有场景优先扩充现有测试。规则判断优先使用轻量夹具，真实窗口测试用于验证控件接线、状态交互和布局。不要为了减少测试数量删掉写回闸门、源快照、解析身份或恢复流程的独有回归覆盖。
+
+## 沙箱与临时目录
+
+GUI 测试已隔离开发者配置和用户级模型缓存；真实 GUI 的默认缓存目录不可写时也有临时目录回退。
+历史故障与修复过程见[2026-08 调查](archive/gui_tests_sandbox_notes.md)，旧报告中的“必然卡住”不适用于当前测试隔离。
+
+若测试启动时仍在创建临时配置或缓存处出现 `PermissionError`，先确认 TEMP／TMP 实际可写。
+可在单独的 PowerShell 测试会话中使用工作区的忽略目录：
+
+```powershell
+$testTemp = Join-Path (Get-Location) 'logs\test-temp'
+New-Item -ItemType Directory -Path $testTemp -Force | Out-Null
+$env:TEMP = $testTemp
+$env:TMP = $testTemp
+$env:QT_QPA_PLATFORM = 'offscreen'
+python -B tests/run_gui_tests.py -q
+```
+
+这些环境设置只作用于当前终端及其子进程。CLI 源文件扫描所用的完整验证副本应放在仓库外；
+配置与缓存临时目录无需混入源码副本。Linux／WSL 的只读 home 同样先检查临时与缓存路径。
+命令超时后先核对对应测试进程是否已经结束，避免重复启动残留套件；
+不要据权限失败改产品逻辑、放宽断言或将未知结果记为通过。
 
 ## PR-Agent 自动审查（非测试门禁）
 

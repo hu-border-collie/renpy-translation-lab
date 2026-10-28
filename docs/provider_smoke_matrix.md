@@ -12,17 +12,17 @@
 - [#431 S2 目录发现、诊断与迁移矩阵合同](plans/issue-431-openai-compatible-s2-contract.md)
 - [#431 S3 最终审校 Sync 执行合同](plans/issue-431-final-review-sync-contract.md)
 
-独立研究：[#520 OpenRouter Batch 有界验证（2026-10-20）](plans/issue-520-openrouter-batch-spike-2026-10-20.md)
+独立研究：[#520 OpenRouter Batch 有界验证（2026-10-20）](archive/experiments/issue-520-openrouter-batch-spike-2026-10-20.md)
 首轮决定暂缓生产接入；GPT/OpenAI 的实际提交被拒，未取得该路线的 Batch 成功回执。该研究不增加下表的生产
-策略或改变 #344 / #431 的既有验收，恢复边界见[研究合同 v1](plans/issue-520-openrouter-batch-contract-v1.md)。
-后续 [DeepSeek V4.1 Flash 续验](plans/issue-520-openrouter-batch-deepseek-2026-10-20.md)的同账号
+策略或改变 #344 / #431 的既有验收，恢复边界见[研究合同 v1](archive/experiments/issue-520-openrouter-batch-contract-v1.md)。
+后续 [DeepSeek V4.1 Flash 续验](archive/experiments/issue-520-openrouter-batch-deepseek-2026-10-20.md)的同账号
 Sync 与 Batch 已真实完成；10-21 读回 Batch 2/2 请求、6/6 item 的精确关联及结构检查通过，
 最终仍暂缓生产接入，保留上游保留/清理和完整对照缺口。不能将首轮 GPT 路线拒绝推广为全局不可用。
 
 截至 2026-10-24，#344 / #431 均已按限定验收 completed 关闭。#344 在固定 `main@4612d8dd` 上的四类执行链路
 已补齐：LiteLLM 内置 / 自定义及 Gemini Sync / Batch 均完成检查与隔离写回。
-首次地区失败与恢复后的成功分别保留，见[固定版本报告](plans/issue-344-provider-matrix-2026-10-16.md)。
-[10-17 续验](plans/issue-344-context-acceptance-2026-10-17.md)补了两个真实中断边界的请求级费用、
+首次地区失败与恢复后的成功分别保留，见[固定版本报告](archive/experiments/issue-344-provider-matrix-2026-10-16.md)。
+[10-17 续验](archive/experiments/issue-344-context-acceptance-2026-10-17.md)补了两个真实中断边界的请求级费用、
 真实章节 fresh PA、Qwen3 embedding 预建 / 查询和两组各 128 条的原生上下文对照及隔离写回。
 语义收益未得到支持，默认开关保持不变。Token 摘要、bootstrap 凭据和向量编码修复已随
 PR #558 合并；状态与证据入口见[计划索引](plans/README.md)。自动化、单 Agent 复核和
@@ -205,7 +205,7 @@ Gemini Batch 已于 2026-10-11 完成真实 build → submit → status → down
 本轮又用原创 fixture 完成 Gemini Sync 和无 LiteLLM 环境的 DeepSeek `openai_compatible`
 初译、术语、订正、项目分析与最终审校。GUI 通过 offscreen 的真实 Qt CliRunner / QProcess
 运行同一五阶段；并验证成功入库后中断不重复派发、T3 前中断保留 outcome_unknown。
-详情、预算、失败及本地修复边界见[补证报告](plans/provider-acceptance-reassessment-2026-10-13.md)。
+详情、预算、失败及本地修复边界见[补证报告](archive/experiments/provider-acceptance-reassessment-2026-10-13.md)。
 
 实测基于 HEAD `7e2cbd8` 加有内容摘要的本地修复；2026-10-14 代码整理为提交 `a66426e`，
 内容与已测试 Python 一致，待 PR 合并；不替代固定发布提交上的完整矩阵。
@@ -219,7 +219,7 @@ DeepSeek 与 OpenRouter 两个地址的目录、probe、初译、含斜杠模型
 不相关凭据检查；术语 JSON object 提示补齐数值置信度合同。修复后生产 GUI workflow
 五阶段实测完成，仍属 offscreen Qt/QProcess 验证。本轮修复待合入 main。
 完整失败记录、费用、代码基线和 #508 独立审阅见
-[续验记录](plans/issue-431-508-acceptance-2026-10-15.md)。
+[续验记录](archive/experiments/issue-431-508-acceptance-2026-10-15.md)。
 
 ## 剩余实测清单（2026-10-13 历史快照）
 

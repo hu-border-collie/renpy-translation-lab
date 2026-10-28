@@ -1,0 +1,224 @@
+{
+  "audit_schema_version": 1,
+  "date": "2026-10-25",
+  "repository_head": "1d44863cdf612d97360713201098ea6eff859fda",
+  "scope": "read-only static package inventory and first-unit proposal; runtime release scope remains unverified",
+  "source_material_manifest_sha256": "363f42f980f2c1002a4bfdcbcd391386df95780e03aaf01241ef59e74573cc55",
+  "source_baseline": {
+    "files": 8190,
+    "bytes": 1906811365,
+    "frozen_material_files": 266,
+    "before_after_content_equal": true,
+    "original_work_frozen_materials_unchanged": true
+  },
+  "narrative": {
+    "json_files": 205,
+    "maps": 191,
+    "primary_all": 27782,
+    "primary_nonempty": 27212,
+    "empty_primary": 570,
+    "mirrors": 3149
+  },
+  "groups": [
+    {
+      "group": "entry",
+      "map_count": 2,
+      "primary_nonempty": 83,
+      "empty_primary": 0,
+      "mirrors": 50,
+      "statically_connected_maps": 2
+    },
+    {
+      "group": "prologue",
+      "map_count": 6,
+      "primary_nonempty": 2705,
+      "empty_primary": 0,
+      "mirrors": 5,
+      "statically_connected_maps": 5
+    },
+    {
+      "group": "act1",
+      "map_count": 40,
+      "primary_nonempty": 5842,
+      "empty_primary": 135,
+      "mirrors": 639,
+      "statically_connected_maps": 34
+    },
+    {
+      "group": "act2",
+      "map_count": 36,
+      "primary_nonempty": 5788,
+      "empty_primary": 135,
+      "mirrors": 704,
+      "statically_connected_maps": 34
+    },
+    {
+      "group": "act3",
+      "map_count": 41,
+      "primary_nonempty": 5091,
+      "empty_primary": 135,
+      "mirrors": 684,
+      "statically_connected_maps": 36
+    },
+    {
+      "group": "act4",
+      "map_count": 51,
+      "primary_nonempty": 6683,
+      "empty_primary": 135,
+      "mirrors": 831,
+      "statically_connected_maps": 45
+    },
+    {
+      "group": "test_ambiguous",
+      "map_count": 11,
+      "primary_nonempty": 552,
+      "empty_primary": 0,
+      "mirrors": 84,
+      "statically_connected_maps": 0
+    },
+    {
+      "group": "template_ambiguous",
+      "map_count": 3,
+      "primary_nonempty": 468,
+      "empty_primary": 30,
+      "mirrors": 152,
+      "statically_connected_maps": 0
+    },
+    {
+      "group": "console_ambiguous",
+      "map_count": 1,
+      "primary_nonempty": 0,
+      "empty_primary": 0,
+      "mirrors": 0,
+      "statically_connected_maps": 0
+    }
+  ],
+  "direct_transfer_graph": {
+    "connected_maps": 156,
+    "unconnected_maps": 35,
+    "transfer_commands": 1193,
+    "indirect_transfer_commands": 0,
+    "reachable_primary_nonempty": 26183,
+    "semantics": "all pages and branches overapproximation; no variable, click or runtime feasibility proof"
+  },
+  "candidate_C0": {
+    "candidate_unit_primary": 2788,
+    "candidate_unit_mirrors": 55,
+    "candidate_unit_maps": 7,
+    "candidate_unit_pages": 413,
+    "candidate_unit_json_unique_text": 240,
+    "candidate_unit_scope_sha256": "7ab72786f96ab8e4df4e88a7afbc195bdbf410be517f616d0718e67b7ea365e7",
+    "candidate_unit_picture_assets": 40,
+    "candidate_unit_confirmed_text_picture_assets": 15,
+    "candidate_unit_text_picture_roles": {
+      "hotspot_background_labels": 1,
+      "date_cards": 2,
+      "hotspot_overlay_labels": 4,
+      "chapter_or_scene_title_cards": 2,
+      "quotation_or_poem_cards": 1,
+      "startup_notice": 1,
+      "startup_buttons": 2,
+      "creator_or_engine_branding": 2
+    },
+    "candidate_unit_map_display_fields": 7
+  },
+  "candidate_C0_status": "proposed entry/tutorial/prologue package up to next-act transfer; not a runtime chapter acceptance",
+  "non_narrative": {
+    "json_display_candidates": {
+      "database_display_candidate": 90,
+      "map_display_candidate": 162,
+      "runtime_name_candidate": 1,
+      "save_location_fallback_candidate": 29,
+      "system_display_candidate": 131
+    },
+    "plugin_notetag_fields": 3,
+    "plugin_parameter_leaves": 164,
+    "plugin_parameter_roles": {
+      "technical_configuration": 162,
+      "ui_label": 1,
+      "dormant_ui_label": 1
+    },
+    "database_breakdown": {
+      "Actors.json": 10,
+      "Armors.json": 4,
+      "Classes.json": 6,
+      "Enemies.json": 4,
+      "Items.json": 7,
+      "Skills.json": 20,
+      "States.json": 35,
+      "Weapons.json": 4
+    },
+    "system_breakdown": {
+      "armorTypes": 6,
+      "currencyUnit": 1,
+      "elements": 9,
+      "equipTypes": 5,
+      "gameTitle": 1,
+      "skillTypes": 2,
+      "terms": 95,
+      "weaponTypes": 12
+    },
+    "direct_novel_style_ui_literals_lower_bound": 4,
+    "script_command_roles": {
+      "load_scene_call": 24,
+      "achievement_identifier_call": 722
+    },
+    "plugin_command_count": 21209,
+    "plugin_command_distinct_prefixes": 15,
+    "unresolved_json_leaf_roles": 0,
+    "all_dynamic_visible_strings_exhaustively_enumerated": false
+  },
+  "images": {
+    "all_image_assets": 501,
+    "confirmed_text_assets_lower_bound": 154,
+    "image_first_pass_other_assets": 347,
+    "text_image_roles": {
+      "character_face_atlas_letters": 1,
+      "hotspot_background_labels": 3,
+      "credits": 18,
+      "diary_prose": 21,
+      "music_attribution": 9,
+      "date_cards": 23,
+      "hotspot_overlay_labels": 9,
+      "quotation_or_poem_cards": 28,
+      "chapter_or_scene_title_cards": 26,
+      "startup_notice": 1,
+      "startup_buttons": 2,
+      "creator_or_engine_branding": 4,
+      "message_ui_buttons": 6,
+      "battle_or_icon_atlas_letters": 3
+    },
+    "standard_picture_calls": 8709,
+    "resolved_picture_calls": 8688,
+    "virtual_or_unresolved_picture_calls": 21
+  },
+  "fonts": {
+    "bundled_font_files": 13,
+    "bundled_fonts_with_basic_han": 0,
+    "candidate_family": "Noto Sans SC",
+    "candidate_tested_pilot_non_ascii_codepoints": 536,
+    "candidate_missing_pilot_codepoints": 0,
+    "candidate_status": "installed non-release file inspected, not packaged",
+    "official_metadata": "https://github.com/google/fonts/blob/main/ofl/notosanssc/METADATA.pb",
+    "official_license": "https://github.com/google/fonts/blob/main/ofl/notosanssc/OFL.txt",
+    "runtime_rendering_verified": false
+  },
+  "boundaries": {
+    "provider_calls": 0,
+    "game_writes": 0,
+    "native_launches": 0,
+    "human_review": false,
+    "first_chapter_accepted": false,
+    "milestone_A_accepted": false,
+    "milestone_B_accepted": false,
+    "release_denominator_frozen": false
+  },
+  "candidate_C0_readonly_validation": {
+    "scope_sha256": "7ab72786f96ab8e4df4e88a7afbc195bdbf410be517f616d0718e67b7ea365e7",
+    "canonical_selected_positions": 2788,
+    "canonical_linked_mirrors": 55,
+    "full_coverage_status": "attention",
+    "production_review_imported": false,
+    "runtime_config_saved": false
+  }
+}

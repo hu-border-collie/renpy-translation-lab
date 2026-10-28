@@ -265,8 +265,8 @@ def parse_custom_litellm_providers(
 ) -> tuple[CustomLiteLLMProvider, ...]:
     """Parse ``sync.custom_litellm_providers`` into validated provider entries.
 
-    A missing value (``None``) is treated as an empty registry so older configs
-    keep working; any other non-list value raises ValueError. Raises ValueError
+    Missing or empty registries return without probing/importing LiteLLM.
+    Any other non-list value raises ValueError. Raises ValueError
     on structural errors, invalid ids/URLs, non-boolean ``requires_key`` or
     duplicate ids. When *litellm_module* is omitted but the optional litellm
     dependency is installed, its provider table is merged into the reserved-id
@@ -278,6 +278,11 @@ def parse_custom_litellm_providers(
         return ()
     if not isinstance(raw, list):
         raise ValueError("custom_litellm_providers 必须是列表。")
+    # ModelProfile projection explicitly emits an empty legacy registry.
+    # With no ids to validate, probing LiteLLM only adds an expensive import
+    # (and its catalog I/O) to settings loads, doctor and offline preflight.
+    if not raw:
+        return ()
     if litellm_module is None:
         litellm_module = (
             _installed_litellm_module() if allow_import else cached_litellm_module()

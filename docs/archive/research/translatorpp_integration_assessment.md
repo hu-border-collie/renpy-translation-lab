@@ -1,12 +1,14 @@
 # Translator++ 多引擎接入评估
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态**：研究与接入设计；原始研究快照后已补单版本真实往返，仍未实现 Translator++ bridge；不是安装或使用手册。
 > **核对日期与基线**：2026-09-16；本仓库 `main@f5cec70`、GitHub issue 正文及最新状态评论、Translator++ 官方文档与发行说明。
-> **#509 续验补记（2026-10-22）**：[本轮报告与原创数据](issue-509-translatorpp-roundtrip-2026-10-21.md)固定 MV 编辑器/core **1.5.1**、TPP **8.8.9**，实际由前端 parser 3.3 委派 RMMVJS **2.19**。已完成真实 `.trans` 保存与导出：限定译文精确命中19处；独立null保存/重开/导出补测通过，混合空值回退原文；无修改全资源导出改写插件注释/换行；staging恢复重试成功，源前插注释后丢失一处context译文。部分原生/HTML5运行及负例另列，限定spike证据已齐；决定保留TPP独立使用、bridge暂缓。下方9月版本表仍是历史快照，其余引擎未刷新。
+> **#509 续验补记（2026-10-22）**：[本轮报告与原创数据](../experiments/issue-509-translatorpp-roundtrip-2026-10-21.md)固定 MV 编辑器/core **1.5.1**、TPP **8.8.9**，实际由前端 parser 3.3 委派 RMMVJS **2.19**。已完成真实 `.trans` 保存与导出：限定译文精确命中19处；独立null保存/重开/导出补测通过，混合空值回退原文；无修改全资源导出改写插件注释/换行；staging恢复重试成功，源前插注释后丢失一处context译文。部分原生/HTML5运行及负例另列，限定spike证据已齐；决定保留TPP独立使用、bridge暂缓。下方9月版本表仍是历史快照，其余引擎未刷新。
 > **关联**：[#272](https://github.com/hu-border-collie/renpy-translation-lab/issues/272)、[多引擎能力矩阵](visual_novel_localization_matrix.md)、[生态研究](multi_engine_localization_ecosystem_research.md)。
 > **排期边界**：本文补充外部工具路线，不自动解除第三 Adapter 生产实现的暂缓，不把其他引擎标为已支持，也不扩大 [Agent 工具包提案 PR #499](https://github.com/hu-border-collie/renpy-translation-lab/pull/499) 的首轮 Ren'Py 实验范围；当前研究由 #565 承接，见下条。
 > **当前决定（2026-10-22）**：#509 已随 PR #562 合并关闭，保留独立工具使用、生产 bridge 暂缓；新 [#565](https://github.com/hu-border-collie/renpy-translation-lab/issues/565)启动 Komorebi 只读调查，#272 保持 open 等待选型回填，生产 Adapter 待调查后另拆。下方 9 月表格与 bridge/MCP 设计为历史记录，不因 #565 自动恢复；见[研究归档与调查衔接](issue-272-research-closeout-2026-10-22.md)。
-> **当前状态对照（2026-09-27；保留下方 9 月 16 日快照）**：#457 已于 9 月 16 日关闭并维持原默认值；#488 已于 9 月 17 日关闭；字体 spike #487 由 PR #511 交付并于 9 月 20 日关闭。#427 S1/S2 后续由 PR #515 / #517 / #523 合并；#431 S1–S3 由 PR #504–#506 合并，真实 smoke 仍待 #431 / #344。Translator++ 往返仍由 #509 决定是否继续，未创建生产 bridge。全量当前映射见[计划状态索引](README.md)。
+> **当前状态对照（2026-09-27；保留下方 9 月 16 日快照）**：#457 已于 9 月 16 日关闭并维持原默认值；#488 已于 9 月 17 日关闭；字体 spike #487 由 PR #511 交付并于 9 月 20 日关闭。#427 S1/S2 后续由 PR #515 / #517 / #523 合并；#431 S1–S3 由 PR #504–#506 合并，真实 smoke 仍待 #431 / #344。Translator++ 往返仍由 #509 决定是否继续，未创建生产 bridge。全量当前映射见[计划状态索引](../../plans/README.md)。
 
 ## 1. 结论与帮助范围
 
@@ -49,7 +51,7 @@ Translator++ 已有 [LiteLLM add-on](https://dreamsavior.net/docs/add-on/litellm
 
 官方公开的 [Translator API 页面](https://dreamsavior.net/files/docs/tpp/Translator.html) 和 [trans.js 源码文档](https://dreamsavior.net/files/docs/tpp/trans.js.html) 提供接口/实现线索，并标注 GPL-3.0-or-later；这不证明当前 8.9.x 完整源码、所有 parser 与捆绑组件均可从同一公开仓库取得。下载页虽指向源码归档，本次未取得并审计与上述 Beta 版本匹配的完整源码包。
 
-本仓库采用 [MIT 许可](../../LICENSE)。首版优先以独立程序和文件接口协作；若以后复制、修改或分发上游 parser，须逐组件核对实际源码、许可证及分发要求，不能根据产品名称统一判断。
+本仓库采用 [MIT 许可](../../../LICENSE)。首版优先以独立程序和文件接口协作；若以后复制、修改或分发上游 parser，须逐组件核对实际源码、许可证及分发要求，不能根据产品名称统一判断。
 
 当前未验证：最新 `.trans` 字段全集、有效译文列的实际选择规则、上下文译文存储布局、无 GUI 的运行条件、MCP 端口/认证/错误恢复、staging 完整依赖清单，以及任一第三引擎的真实导出结果。旧公开 `trans.js` 中存在从右侧取非空译文的逻辑，只能作为测试线索，不能当作当前版本合同。
 
@@ -64,7 +66,7 @@ Translator++ 已有 [LiteLLM add-on](https://dreamsavior.net/docs/add-on/litellm
 | [PR #499 Agent 工具包提案](https://github.com/hu-border-collie/renpy-translation-lab/pull/499)，open，head `ed90d5c` | **接入方向最契合**：Agent 自主翻译，工具管理工作包、耐久结果和安全写回。共用外部结果合同；先保留该提案的 Ren'Py 首轮实验，再单独验证 Translator++ bridge。提案不等于已实现工具。 |
 | [#431 直连 OpenAI-compatible](https://github.com/hu-border-collie/renpy-translation-lab/issues/431)，open | **不能替代**本项目协议后端、配置和 GUI 接线。宿主 Agent 产出译文的文件实验在技术上不依赖此后端，但不据此取消 #272 现有排期条件。 |
 | [#344 Sync / 多 Provider](https://github.com/hu-border-collie/renpy-translation-lab/issues/344)，open | [9 月 15 日评论](https://github.com/hu-border-collie/renpy-translation-lab/issues/344#issuecomment-5682093066)已确认离线路由/状态暴露收口；余项是真实计费中断、Gemini smoke 和外部验收。Translator++ 不补这些证据；final_review 仍要求 `gemini_batch`，解绑另归 #431。 |
-| [#488 预检摘要](https://github.com/hu-border-collie/renpy-translation-lab/issues/488)，open | bridge 将来应给现有预检提供制品范围、coverage 和 freshness，不能另建授权门禁。[字段合同](issue-488-preflight-summary-contract.md)已由 #498 合并；[PR #500](https://github.com/hu-border-collie/renpy-translation-lab/pull/500) 的 S1 核心实现仍 open（head `1cc3d99`），不能当作已发布。宿主 Agent 成本不可取得时为 unknown。 |
+| [#488 预检摘要](https://github.com/hu-border-collie/renpy-translation-lab/issues/488)，open | bridge 将来应给现有预检提供制品范围、coverage 和 freshness，不能另建授权门禁。[字段合同](../../plans/issue-488-preflight-summary-contract.md)已由 #498 合并；[PR #500](https://github.com/hu-border-collie/renpy-translation-lab/pull/500) 的 S1 核心实现仍 open（head `1cc3d99`），不能当作已发布。宿主 Agent 成本不可取得时为 unknown。 |
 | [#427 普通译文审校](https://github.com/hu-border-collie/renpy-translation-lab/issues/427)，open | **可部分借用界面**，仍缺本项目的可重建索引、决定溯源、stale 和 proposal 衔接。Translator++ 编辑/审核标签不能直接等价为本项目写回许可。 |
 | [#470 真实 Ren'Py coverage 样本](https://github.com/hu-border-collie/renpy-translation-lab/issues/470)，open | **可作差分提取对照**，不能替代授权样本与独立覆盖证据。去重行数、出现次数、源 `.rpy` 与 TL 范围不同，不能直接比较总行数并把任一方当真值。 |
 | [#487 字形覆盖 spike](https://github.com/hu-border-collie/renpy-translation-lab/issues/487)，open | 字体替换能力不满足只读 `checked / missing / unknown` 检查；仍须区分静态字形覆盖、动态 fallback 和运行时排版。 |
@@ -108,14 +110,14 @@ flowchart TD
 
 | 当前代码事实 `[仓库]` | bridge 的工作 `[推断 / 待实测]` |
 | --- | --- |
-| [translation_core.py](../../quality_review/translation_core.py) 已有 `TranslationUnit`；[contracts.py](../../engine_adapters/contracts.py) 已有 `Occurrence`、opaque locator 与声明式 plan | 沿用现有核心对象。区分**交换格式** `.trans`、**真实源引擎**及其规则版本，不把所有输入伪装成 `renpy` 或一种通用文本引擎。 |
+| [translation_core.py](../../../quality_review/translation_core.py) 已有 `TranslationUnit`；[contracts.py](../../../engine_adapters/contracts.py) 已有 `Occurrence`、opaque locator 与声明式 plan | 沿用现有核心对象。区分**交换格式** `.trans`、**真实源引擎**及其规则版本，不把所有输入伪装成 `renpy` 或一种通用文本引擎。 |
 | `Occurrence.to_dict()` 只序列化固定 TU 字段，不会自动保存任意 `metadata` | 位置映射、parser/列策略、context 证据必须进入明确序列化并参与摘要的 locator/绑定记录，不能只藏在内存 metadata。 |
-| [versioning.py](../../engine_adapters/versioning.py)、[reuse.py](../../engine_adapters/reuse.py)、[coverage.py](../../engine_adapters/coverage.py) 已有快照、对账和覆盖机制 | 为外部制品定义快照范围与 coverage 分母；文本相同不足以确认跨版本 lineage。 |
-| [writeback.py](../../engine_adapters/writeback.py) 只接受 `localization_catalog` 目标根；`json_catalog_set` 仅遍历非空字符串字典键、替换已有字符串 | `.trans` 的 `data[row][column]` 需要公共合同支持类型化数组路径及 `null`/空值语义，并明确受限的外部制品输出根。现有操作不能直接使用。该扩展不等于允许改写 RPG Maker 源地图。 |
-| [structure_rules.py](../../engine_adapters/structure_rules.py) 只支持 `renpy` / `tyrano`；未知引擎会拒绝 | 为首个源引擎添加有版本和 fixture 的规则，覆盖官方控制码、已登记插件扩展及未知语法处理，不能复用错误规则或关闭结构检查。 |
-| [gemini_translate_batch.py](../../gemini_translate_batch.py) 的 `collect_pending_file_jobs()`、`_build_adapter_writeback_plan()` 仍显式构造 `RenPyAdapter` | 仅添加 adapter 类不会接通产品链路。需要公共服务/dispatch、CLI 与 GUI 表面；首轮若只提供离线研究脚本，必须明确例外，不宣称生产支持。 |
-| [translation_plan.py](../../quality_review/translation_plan.py) 的计划绑定源身份、ModelProfile、执行策略、上下文与请求 | 外部 Agent 工作包应复用身份机制，区分“持久化译文结果”和“本项目执行过模型请求”，不虚构 Profile 或 Provider 成功。 |
-| [revision_proposals.py](../../quality_review/revision_proposals.py) 已校验 identity、当前译文和 producer；[import_manual_translations.py](../../execution/import_manual_translations.py) 会生成 Batch 结果并设 `JOB_STATE_SUCCEEDED` | 前者可供公共结果校验复用，后者仅是兼容导入实现，不能直接当作支持 partial、幂等、冲突和完整 provenance 的通用外部结果协议。 |
+| [versioning.py](../../../engine_adapters/versioning.py)、[reuse.py](../../../engine_adapters/reuse.py)、[coverage.py](../../../engine_adapters/coverage.py) 已有快照、对账和覆盖机制 | 为外部制品定义快照范围与 coverage 分母；文本相同不足以确认跨版本 lineage。 |
+| [writeback.py](../../../engine_adapters/writeback.py) 只接受 `localization_catalog` 目标根；`json_catalog_set` 仅遍历非空字符串字典键、替换已有字符串 | `.trans` 的 `data[row][column]` 需要公共合同支持类型化数组路径及 `null`/空值语义，并明确受限的外部制品输出根。现有操作不能直接使用。该扩展不等于允许改写 RPG Maker 源地图。 |
+| [structure_rules.py](../../../engine_adapters/structure_rules.py) 只支持 `renpy` / `tyrano`；未知引擎会拒绝 | 为首个源引擎添加有版本和 fixture 的规则，覆盖官方控制码、已登记插件扩展及未知语法处理，不能复用错误规则或关闭结构检查。 |
+| [gemini_translate_batch.py](../../../gemini_translate_batch.py) 的 `collect_pending_file_jobs()`、`_build_adapter_writeback_plan()` 仍显式构造 `RenPyAdapter` | 仅添加 adapter 类不会接通产品链路。需要公共服务/dispatch、CLI 与 GUI 表面；首轮若只提供离线研究脚本，必须明确例外，不宣称生产支持。 |
+| [translation_plan.py](../../../quality_review/translation_plan.py) 的计划绑定源身份、ModelProfile、执行策略、上下文与请求 | 外部 Agent 工作包应复用身份机制，区分“持久化译文结果”和“本项目执行过模型请求”，不虚构 Profile 或 Provider 成功。 |
+| [revision_proposals.py](../../../quality_review/revision_proposals.py) 已校验 identity、当前译文和 producer；[import_manual_translations.py](../../../execution/import_manual_translations.py) 会生成 Batch 结果并设 `JOB_STATE_SUCCEEDED` | 前者可供公共结果校验复用，后者仅是兼容导入实现，不能直接当作支持 partial、幂等、冲突和完整 provenance 的通用外部结果协议。 |
 
 ### 4.2 身份、上下文与工作包
 
@@ -135,7 +137,7 @@ Translator++ 中的人工修改可作为新的结果或 revision proposal 导入
 
 **第一阶段仅生成新的 `.trans` 制品。** 公共写回操作应限定到声明的目标单元格或已验证的上下文译文字段；保留源列、其他译文列、`context`、`parameters`、`tags`、`comments`、`cellInfo` 及未知字段。数组越界、节点类型变化、重复目标和非法路径必须拒绝，不能由私有 `json.dump()` 绕过公共消费者。
 
-须复用完整的检查与事务服务，而非仅调用 plan renderer：最近一次检查必须匹配当前输入、结果和计划，`writeback_gate.decision=allow` 才能写回；项目配置提升为 blocker 的质量规则仍阻止写回，普通质量报警保持既有策略。`--force` 不能绕过 stale、源快照或结构阻断。预览、写前复核、原子落盘、备份/恢复和收据均须覆盖此新制品路径。[现行 Batch 合同](../batch_workflows.md) · [Adapter 写回边界](../engine_adapter.md)
+须复用完整的检查与事务服务，而非仅调用 plan renderer：最近一次检查必须匹配当前输入、结果和计划，`writeback_gate.decision=allow` 才能写回；项目配置提升为 blocker 的质量规则仍阻止写回，普通质量报警保持既有策略。`--force` 不能绕过 stale、源快照或结构阻断。预览、写前复核、原子落盘、备份/恢复和收据均须覆盖此新制品路径。[现行 Batch 合同](../../batch_workflows.md) · [Adapter 写回边界](../../engine_adapter.md)
 
 当前 `apply --export-only` 只导出既有 translation manifest 经验证渲染的文件，可参考其门禁与回执机制；它不是现成的 `.trans` writer，也不是任意引擎的游戏封装器。
 
@@ -160,7 +162,7 @@ Translator++ 中的人工修改可作为新的结果或 revision proposal 导入
 3. **只接一个外部格式窗口**：复用公共合同，补 `.trans` reader、身份映射、源引擎结构规则和受控制品 writer；先通过离线正反例，再经 Translator++ 导出到新游戏副本。
 4. **比较实际收益后决定产品化**：成立则再拆 CLI/GUI、doctor/preflight 和可选 MCP 自动化；收益不足则保留 Translator++ 独立使用或差分检查，不扩大 Adapter 支持声明。
 
-这是 2026-09-16 的实验依赖顺序，不是已排期实现单；步骤 1 的限定结果见 #509，步骤 2 的[现有外部工作包](../external_translation_work.md)仍限 Ren'Py，步骤 3/4 未启动。#565 已登记具体游戏需求，先调查实际版本和文本范围、优先评估原生路线；只有实际缺口才另比较外部 bridge。生产实现仍须合法素材/再分发边界、输入/覆盖和安全写回验收，不以队列清空或本轮文档合并触发。
+这是 2026-09-16 的实验依赖顺序，不是已排期实现单；步骤 1 的限定结果见 #509，步骤 2 的[现有外部工作包](../../external_translation_work.md)仍限 Ren'Py，步骤 3/4 未启动。#565 已登记具体游戏需求，先调查实际版本和文本范围、优先评估原生路线；只有实际缺口才另比较外部 bridge。生产实现仍须合法素材/再分发边界、输入/覆盖和安全写回验收，不以队列清空或本轮文档合并触发。
 
 ### 5.2 必须通过的检查
 
@@ -192,4 +194,4 @@ Translator++ 中的人工修改可作为新的结果或 revision proposal 导入
 
 本评估替代旧生态研究中关于 Translator++“仅供 GUI 借鉴”“必然缺乏哈希门禁”“频繁静默错位”的无充分证据断言。公开接口尚未证明与本项目门禁等价，也不能据此断言上游完全没有相应保护。
 
-后续更新应同时维护本文件、[多引擎矩阵](visual_novel_localization_matrix.md)与[生态研究](multi_engine_localization_ecosystem_research.md)：分别记录上游公告、仓库实现、离线测试和真实游戏验收。实现落地后再更新 [Engine Adapter 现行手册](../engine_adapter.md)及 CLI/GUI 文档，不能仅凭研究文档或通用合同测试把新引擎标为生产可用。
+后续更新应同时维护本文件、[多引擎矩阵](visual_novel_localization_matrix.md)与[生态研究](multi_engine_localization_ecosystem_research.md)：分别记录上游公告、仓库实现、离线测试和真实游戏验收。实现落地后再更新 [Engine Adapter 现行手册](../../engine_adapter.md)及 CLI/GUI 文档，不能仅凭研究文档或通用合同测试把新引擎标为生产可用。

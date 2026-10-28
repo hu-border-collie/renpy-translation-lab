@@ -1,8 +1,10 @@
 # #431 LiteLLM 调用点清点与迁移矩阵
 
+> 归档于 2026-10-27：保留原日期、基线、结果与未验边界。现行操作见[文档地图](../../README.md)，当前工作见[计划索引](../../plans/README.md)。
+
 > **状态（2026-09-27）**：LiteLLM 调用点矩阵随 S2 的 PR #505 合并；矩阵所用代码快照仍是 S1 基线 `main@dbbe18a`。S1–S3 及 smoke 准备均已合并（PR #504–#507）；本文只记录调用点与路线，不删除依赖、不改默认执行路径、不迁移旧配置。
 > **关联**：#431、#344、#341、#348。
-> **口径**：代码 / 测试证据优先；生产 workspace 与真实 Provider smoke 不在本表，后者仍归 #431 / #344，当前步骤见 [Provider Smoke Matrix](../provider_smoke_matrix.md)。
+> **口径**：代码 / 测试证据优先；生产 workspace 与真实 Provider smoke 不在本表，后者仍归 #431 / #344，当前步骤见 [Provider Smoke Matrix](../../provider_smoke_matrix.md)。
 
 ## 1. 当前调用点
 
@@ -45,7 +47,7 @@
   按真实需求另开切片。
 - 真实 Provider smoke 矩阵：直连 adapter 至少覆盖 OpenAI / OpenRouter / DeepSeek /
   xAI / Ollama 中可获得的连接；结果记录环境与日期，不把 mocked 测试当作兼容性证明。
-  路径与记录模板见 [Provider / 执行策略 / 最终审校 Smoke Matrix](../provider_smoke_matrix.md)。
+  路径与记录模板见 [Provider / 执行策略 / 最终审校 Smoke Matrix](../../provider_smoke_matrix.md)。
 
 ## 3. 迁移与回滚原则（后续切片沿用）
 

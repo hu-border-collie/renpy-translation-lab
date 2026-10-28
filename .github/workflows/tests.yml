@@ -123,7 +123,7 @@ jobs:
         if: runner.os == 'Windows'
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -B tests/run_gui_tests.py -q
+        run: python -X faulthandler -B -u tests/run_gui_tests.py -v
 
   cli-without-gui:
     runs-on: ubuntu-latest

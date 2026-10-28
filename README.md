@@ -15,7 +15,7 @@
 - **可选分析**（`extract_relations.py` / `relation_analyzer/`）：关系与语义分析。
 - **可独立使用的 CLI**：不安装 GUI 依赖时，Agent、脚本和高级用户仍可完成全部核心工作流。
 
-稳定范围是翻译工作台本身；一键安装、游戏解包/重打包与面向普通用户的零配置发行不在当前支持范围内。边界与烟测记录见 [项目说明](docs/project_notes.md)。
+使用前请了解下方[支持范围](#支持范围)；实测证据按 [Provider Smoke Matrix](docs/provider_smoke_matrix.md)列明的环境和日期解释。
 
 首次使用请按角色选择 [GUI 快速开始](docs/quickstart_gui.md) 或 [Agent / CLI 快速开始](docs/quickstart_agent.md)。完整 GUI 说明与写回安全边界见 [GUI 工作台](docs/gui_workbench.md)；修改仓库前请阅读 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
@@ -68,12 +68,25 @@ python -m gui_qt
 
 可复现安装与哈希锁见 [依赖输入与哈希锁](docs/dependencies.md)。无论使用 GUI 还是 CLI，都应先运行环境检查；Batch 只有最近一次 `check` 对当前结果给出 `writeback_gate.decision=allow` 时才允许 `apply`。
 
+## 支持范围
+
+本项目面向熟悉游戏目录、能够准备独立工作副本并按检查结果处理问题的使用者，正式交付方式是源码安装运行。
+稳定 tag 的能力以该 tag 的手册为准；`main` 的引擎、入口和未验边界以[Engine Adapter](docs/engine_adapter.md)及专题手册为准。
+
+- 一键安装、零配置发行、完整游戏解包／重打包和 Excel／HTML 协作流不在当前交付范围。
+- RAG、Story Memory 与 Project Analysis 是按需使用的上下文能力；现有工具和实验不等于完整自动图谱或超大项目多波次生产方案。
+- 写回前的结构检查与译文语义、字体／排版、原生游玩分别验收。初译输出应经过机械检查和语义审阅后再交付。
+- 开发中使用 AI 辅助；功能取舍、验证与集成由维护者负责，目前不承诺及时处理所有 issue 或长期兼容维护。
+
+具体安装、凭据与数据发送边界见[安装与配置](docs/setup.md#数据与凭据边界)。
+早期项目状态和烟测摘要保留在[历史项目说明](docs/archive/project_notes.md)，不作为当前支持清单。
+
 ## 文档
 
 - [文档地图](docs/README.md)：按使用任务查安装、配置、GUI、翻译、上下文与用量手册。
 - [架构概览](docs/architecture.md)与[代码路径索引](docs/code_paths.md)：修改代码时定位核心包、GUI 所有权和测试入口。
-- [规划、合同与研究索引](docs/plans/README.md)：查已交付证据、开放任务与实验边界；过程稿见[历史归档](docs/archive/README.md)。
+- [当前工作与技术合同](docs/plans/README.md)：查开放任务、条件候选和稳定合同；已收口实验与旧研究见[历史资料](docs/archive/README.md)。
 
 ## 安全提示
 
-执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。Batch 的 `writeback_gate.decision=allow` 只表示当前结果满足结构性写回合同，不代表译文已经达到交付质量；`quality_gate` 会给出机械质量报警，写回后仍须处理报警并做人工/LLM 语义审校。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。详见 [项目说明 · 安全](docs/project_notes.md#安全说明)。
+执行任何会修改项目文件的操作前，请先备份，并优先在副本上测试。Batch 的 `writeback_gate.decision=allow` 只表示当前结果满足结构性写回合同，不代表译文已经达到交付质量；`quality_gate` 会给出机械质量报警，写回后仍须处理报警并做人工/LLM 语义审校。不要把 API key、本地配置、私有游戏脚本、batch 结果或日志提交到公开仓库。数据与凭据细节见[安装与配置](docs/setup.md#数据与凭据边界)。

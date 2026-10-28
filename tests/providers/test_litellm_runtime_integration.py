@@ -1,4 +1,5 @@
 import io
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -9,6 +10,52 @@ import translator_runtime as runtime
 
 
 class LiteLLMRuntimeIntegrationTests(unittest.TestCase):
+    def test_loading_empty_custom_registry_keeps_litellm_unloaded(self):
+        previous = runtime.snapshot_runtime_config()
+        try:
+            with (
+                mock.patch(
+                    "providers.litellm_provider_config._installed_litellm_module",
+                    side_effect=AssertionError("Offline settings must not warm LiteLLM"),
+                ) as probe,
+                mock.patch("sys.stdout", io.StringIO()),
+            ):
+                runtime.load_sync_translation_settings({
+                    "sync": {
+                        "backend": "litellm", "model": "openai/fixture",
+                        "custom_litellm_providers": [],
+                    },
+                })
+            self.assertEqual(runtime.SYNC_BACKEND, "litellm")
+            self.assertEqual(runtime.CUSTOM_LITELLM_PROVIDERS, {})
+            probe.assert_not_called()
+        finally:
+            runtime.apply_runtime_config(previous)
+
+    def test_runtime_default_still_checks_installed_custom_prefixes(self):
+        previous = runtime.snapshot_runtime_config()
+        installed = SimpleNamespace(models_by_provider={"runtime_reserved": ()})
+        try:
+            with (
+                mock.patch(
+                    "providers.litellm_provider_config._installed_litellm_module",
+                    return_value=installed,
+                ) as probe,
+                mock.patch("sys.stdout", io.StringIO()),
+            ):
+                runtime.load_sync_translation_settings({
+                    "sync": {
+                        "backend": "litellm", "model": "runtime_reserved/fixture",
+                        "custom_litellm_providers": [{
+                            "id": "runtime_reserved", "base_url": "https://fixture.invalid/v1",
+                        }],
+                    },
+                })
+            self.assertEqual(runtime.CUSTOM_LITELLM_PROVIDERS, {})
+            probe.assert_called_once()
+        finally:
+            runtime.apply_runtime_config(previous)
+
     def test_sync_runner_does_not_require_gemini_key_for_litellm(self):
         previous_backend = runtime.SYNC_BACKEND
         previous_keys = runtime.API_KEYS

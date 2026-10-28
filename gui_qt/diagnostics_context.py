@@ -22,6 +22,7 @@ from gui_qt.workflows.batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    BOOTSTRAP_PROGRESS_COPY,
     EXTERNAL_WORK_COPY,
     EXTERNAL_WORK_PRESERVED_COPY,
     MODEL_CONFIG_MIGRATION_COPY,
@@ -1361,8 +1362,8 @@ def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[Diagnostics
         ('导出覆盖材料', ['coverage-status', '--export-dir', '<OUTPUT_DIR>']),
         ('导入覆盖审阅', ['coverage-review-import', '--file', '<REVIEW.json>']),
         ('MV 同步关键词与概要', ['sync-keywords']),
-        ('MV 预建原文索引', ['bootstrap-source-index', '--skip-prepare', '--output', 'json']),
-        ('MV 预建已审阅历史', ['bootstrap-rag', '--skip-prepare', '--output', 'json']),
+        (BOOTSTRAP_PROGRESS_COPY['source_command'], ['bootstrap-source-index', '--skip-prepare', '--output', 'json']),
+        (BOOTSTRAP_PROGRESS_COPY['history_command'], ['bootstrap-rag', '--skip-prepare', '--output', 'json']),
     ]
     for name in ('sync-start', 'sync-status', 'sync-resume', 'sync-cancel', 'sync-derive', 'check', 'apply'):
         args = [name, *(['--latest'] if name == 'sync-status' else ([] if name == 'sync-start' else ['<RUN>']))]

@@ -21,7 +21,7 @@ Source Index 是独立的原文检索开关，新项目按需启用，关闭 RAG
 索引设置。Story Memory、Project Analysis 和已发布简报自动注入默认关闭，有可靠
 制品时再启用。明确保存的全局配置及项目级上下文开关优先，不会因默认值更新而迁移。
 
-这些是[模型、上下文与分块实验](plans/translation_model_context_reassessment_2026-10-11.md)
+这些是[模型、上下文与分块实验](archive/experiments/translation_model_context_reassessment_2026-10-11.md)
 之后的初译起点，不是所有模型的最佳预设。Sync 默认输出上限仍为 24,576，避免将
 Batch 的经济上限套到其他 Provider 的思考输出；其余已保存的 Sync 设置保持有效。
 

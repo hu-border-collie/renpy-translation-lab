@@ -165,6 +165,57 @@ class SourceIndexStoreTests(unittest.TestCase):
             self.assertEqual(segments[0]['line_end'], 4)
             self.assertEqual(segments[0]['line_span'], [4, 4])
 
+    def test_bootstrap_shifted_source_ids_use_linear_embedding_lookup(self):
+        size = 80
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JsonSourceIndexStore(str(Path(tmp) / 'store'))
+            previous = [self.make_segment(f'old-{i}', source=f'Original fixture {i}') for i in range(size)]
+            for row in previous:
+                row['embedding_metadata'].update(embedding_model=batch_mod.RAG_EMBEDDING_MODEL,
+                                                embedding_task_type=batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            scanned = [{**row, 'source_id': f'new-{i}'} for i, row in enumerate(previous)]
+            direct_invalid = {**previous[-1], 'source_id': scanned[-1]['source_id'],
+                              'embedding_metadata': {**previous[-1]['embedding_metadata'], 'embedding_model': 'outdated'}}
+            with mock.patch.object(batch_mod, 'RAG_OUTPUT_DIMENSIONALITY', 3):
+                seed_source_index_identity(store, dim=3)
+            store.upsert_segments([*previous, direct_invalid])
+            with (
+                mock.patch.object(batch_mod.legacy, 'TL_DIR', tmp),
+                mock.patch.object(batch_mod, 'get_source_index_store', return_value=store),
+                mock.patch.object(batch_mod, 'all_rag_file_jobs', return_value=[]),
+                mock.patch.object(batch_mod, 'collect_source_segments_for_jobs', return_value=scanned),
+                mock.patch.object(batch_mod, 'RAG_OUTPUT_DIMENSIONALITY', 3),
+                mock.patch.object(batch_mod, 'embed_texts', return_value=[[0.8, 0.8, 0.8]]) as embed,
+                mock.patch.object(batch_mod, 'source_segment_has_current_embedding',
+                                  wraps=batch_mod.source_segment_has_current_embedding) as validate,
+            ):
+                summary = batch_mod.bootstrap_source_index(skip_prepare=True)
+            self.assertEqual(summary['reused_embeddings'], size - 1)
+            self.assertEqual(summary['embedded'], 1)
+            embed.assert_called_once_with([previous[-1]['source_text']], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertLessEqual(validate.call_count, size * 3)
+            store.load()
+            self.assertEqual(set(store.segments), {row['source_id'] for row in scanned})
+            self.assertEqual(store.segments['new-0']['embedding'], previous[0]['embedding'])
+            self.assertEqual(store.segments['new-0']['created_at'], previous[0]['created_at'])
+            self.assertEqual(store.segments[f'new-{size - 1}']['embedding'], [0.8, 0.8, 0.8])
+
+    def test_embedding_lookup_preserves_first_matching_vector_and_identity(self):
+        good = self.make_segment('first')
+        good['embedding_metadata'].update(embedding_model=batch_mod.RAG_EMBEDDING_MODEL,
+                                         embedding_task_type=batch_mod.RAG_DOCUMENT_TASK_TYPE)
+        mismatches = [('embedding_model', 'outdated'), ('embedding_task_type', 'query'),
+                      ('embedding_dim', 2), ('embedding_text_checksum', 'other text')]
+        invalid = [{**good, 'embedding_metadata': {**good['embedding_metadata'], key: value}}
+                   for key, value in mismatches]
+        invalid.append({**good, 'source_checksum': 'other source'})
+        invalid.append({**good, 'embedding': [0.1, 0.2]})
+        duplicate = {**good, 'source_id': 'duplicate', 'embedding': [0.9, 0.9, 0.9]}
+        with mock.patch.object(batch_mod, 'RAG_OUTPUT_DIMENSIONALITY', 3):
+            lookup = batch_mod._source_segments_by_embedding_checksum([*invalid, good, duplicate])
+        key = (good['source_checksum'], batch_mod.hash_text(good['source_text']))
+        self.assertIs(lookup[key], good)
+
     def test_bootstrap_source_index_sync_and_pruning(self):
         with tempfile.TemporaryDirectory() as tmp:
             store_dir = Path(tmp) / 'store'

@@ -16921,6 +16921,28 @@ def source_segment_has_current_embedding(existing, record):
     )
 
 
+def _source_segments_by_embedding_checksum(segments):
+    """Index reusable vectors once, keeping the first match for shifted IDs.
+
+    The key includes both source and embedded-text checksums. Model, task and
+    vector dimensions must match before a candidate enters the lookup; callers
+    still validate the selected candidate against the current source record.
+    """
+    lookup = {}
+    for segment in segments:
+        embedding = segment.get('embedding')
+        if not isinstance(embedding, list) or not embedding or len(embedding) != RAG_OUTPUT_DIMENSIONALITY:
+            continue
+        metadata = segment.get('embedding_metadata') or {}
+        if (metadata.get('embedding_model') != RAG_EMBEDDING_MODEL
+                or metadata.get('embedding_task_type') != RAG_DOCUMENT_TASK_TYPE
+                or metadata.get('embedding_dim') != RAG_OUTPUT_DIMENSIONALITY):
+            continue
+        key = (segment.get('source_checksum'), metadata.get('embedding_text_checksum'))
+        lookup.setdefault(key, segment)
+    return lookup
+
+
 def print_source_index_bootstrap_summary(summary):
     print('Source Index bootstrap final summary:')
     for key in (
@@ -16974,14 +16996,14 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
 
     records_to_embed = []
     records_with_reused_embedding = []
+    reusable_by_checksum = None
 
     for record in scanned_segments:
         existing = store.get_segment(record['source_id'])
         if not existing:
-            for seg in store.segments.values():
-                if source_segment_has_current_embedding(seg, record):
-                    existing = seg
-                    break
+            if reusable_by_checksum is None:
+                reusable_by_checksum = _source_segments_by_embedding_checksum(store.segments.values())
+            existing = reusable_by_checksum.get((record.get('source_checksum'), hash_text(record.get('source_text', ''))))
 
         if source_segment_has_current_embedding(existing, record):
             enriched = dict(record)
@@ -21897,6 +21919,7 @@ def build_arg_parser():
 
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
+        description='Prebuild the history store. MV reports embedding requests, validation and persistence stages.',
         help=(
             'Prebuild Batch history from TL files, or MV Sync history from explicit reviewed JSONL. '
             'MV uses sync.rag embedding/profile settings and never infers history from target text. '
@@ -21920,6 +21943,7 @@ def build_arg_parser():
     bootstrap_source_index_parser = subparsers.add_parser(
         'bootstrap-source-index',
         help='Prebuild source-only index: Batch TL originals or MV audited source occurrences using sync embedding settings.',
+        description='Prebuild the source-only index. MV reports embedding requests, validation and persistence stages.',
     )
     bootstrap_source_index_parser.add_argument(
         '--skip-prepare',

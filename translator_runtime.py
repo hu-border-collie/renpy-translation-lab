@@ -1160,13 +1160,18 @@ def load_rotation_settings(config):
             print("Model rotation: disabled")
 
 
-def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
+def load_sync_translation_settings(
+    config, *, tolerate_routing_errors=False, allow_litellm_import=True,
+):
     """Load sync translation settings and project-bound Macro content.
 
     Context limits accept non-negative integers and default to 30/10 when
     omitted. Macro files must resolve under ``BASE_DIR``; missing, unreadable,
     or rejected files clear the Macro text and its fingerprint while keeping
     the configured file name for diagnostics.
+    GUI snapshots pass ``allow_litellm_import=False`` to validate against the
+    static/cached provider ids without importing the optional SDK. Execution
+    loaders keep the default full installed-provider validation.
     """
     global MAX_ITEMS, MAX_CHARS, SYNC_MAX_OUTPUT_TOKENS, SYNC_TIMEOUT_SECONDS
     global SYNC_BACKEND
@@ -1206,7 +1211,7 @@ def load_sync_translation_settings(config, *, tolerate_routing_errors=False):
 
     try:
         CUSTOM_LITELLM_PROVIDERS = custom_provider_registry(
-            sync.get("custom_litellm_providers")
+            sync.get("custom_litellm_providers"), allow_import=allow_litellm_import,
         )
     except ValueError as exc:
         # Same degrade-and-warn contract as the GUI: an invalid custom-provider
@@ -1968,6 +1973,7 @@ def load_translator_settings(
     *,
     persist_corrected_game_root: bool = True,
     tolerate_routing_errors: bool = False,
+    allow_litellm_import: bool = True,
 ):
     """Loads per-game settings (game root, tl subdir) from translator_config.json or env.
 
@@ -1979,6 +1985,8 @@ def load_translator_settings(
     memory only and ``translator_config.json`` is not rewritten.
     When *tolerate_routing_errors* is True, an invalid ``model_routing`` section
     is kept for doctor reporting instead of refusing the load.
+    ``allow_litellm_import=False`` keeps GUI-only snapshots off the SDK import
+    path; worker and CLI execution retain full validation by default.
     """
     global BASE_DIR, TL_DIR, TL_SUBDIR, ENV_GAME_ROOT, WORK_GAME_DIR, SOURCE_GAME_DIR, GLOSSARY_FILE
     global PREP_ENABLED, PREP_UNPACK_RPA, PREP_GENERATE_TEMPLATE, PREP_REFRESH_EXISTING_TEMPLATE, PREP_LANGUAGE
@@ -2182,6 +2190,7 @@ def load_translator_settings(
     load_sync_translation_settings(
         config,
         tolerate_routing_errors=tolerate_routing_errors,
+        allow_litellm_import=allow_litellm_import,
     )
     from providers.model_routing_reader import runtime_settings_view
     try:

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from queue import Empty
 
 from PySide6.QtCore import QThread, Signal
 
@@ -15,7 +16,7 @@ from scripts.download_gui_fonts import install_fonts
 
 # Whole-subprocess budget; the GUI offers cancellation long before this fires.
 FONT_INSTALL_TOTAL_TIMEOUT_S = 1800.0
-# Poll granularity between child-process joins so cancel stays responsive.
+# Poll granularity while waiting for child results or exit; keeps cancel responsive.
 FONT_INSTALL_JOIN_POLL_S = 0.2
 
 
@@ -66,10 +67,11 @@ def run_font_install_in_subprocess(
 ) -> FontInstallResult:
     """Install fonts in a child process so extraction work does not freeze the GUI GIL.
 
-    ``should_cancel`` is polled between short joins: a cancel requested on the
+    ``should_cancel`` is polled between short waits: a cancel requested on the
     GUI thread terminates the child promptly instead of blocking for the whole
     budget.  The child is a daemon process, so a hard interpreter exit also
-    takes it down.
+    takes it down. Drain results before joining so a large error or path list
+    cannot block the child's queue feeder and prevent process exit.
     """
     ctx = mp.get_context("spawn")
     result_queue = ctx.Queue(1)
@@ -78,12 +80,20 @@ def run_font_install_in_subprocess(
         args=(str(destination) if destination is not None else None, result_queue),
         daemon=True,
     )
-    proc.start()
     try:
+        proc.start()
         deadline = time.monotonic() + max(0.0, float(total_timeout_s))
         poll_s = max(0.01, float(poll_interval_s))
+        payload = None
+        payload_received = False
         while True:
-            proc.join(timeout=poll_s)
+            if not payload_received:
+                try:
+                    payload = result_queue.get(timeout=poll_s)
+                    payload_received = True
+                except Empty:
+                    pass
+            proc.join(timeout=poll_s if payload_received else 0)
             if not proc.is_alive():
                 break
             if should_cancel is not None and should_cancel():
@@ -97,7 +107,8 @@ def run_font_install_in_subprocess(
                 _stop_child_process(proc)
                 return FontInstallResult(False, error="字体下载超时或被中断。")
         try:
-            payload = result_queue.get(timeout=1.0)
+            if not payload_received:
+                payload = result_queue.get(timeout=1.0)
         except Exception:
             return FontInstallResult(
                 False,
@@ -108,8 +119,9 @@ def run_font_install_in_subprocess(
         return FontInstallResult(False, error="字体安装返回了未知结果。")
     finally:
         if proc.is_alive():
-            proc.terminate()
-            proc.join(timeout=1)
+            _stop_child_process(proc)
+        result_queue.close()
+        result_queue.join_thread()
 
 
 class FontInstallWorker(QThread):
