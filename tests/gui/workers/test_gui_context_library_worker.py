@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import unittest
+import os
+from queue import Empty
 from unittest import mock
 
 try:
     from gui_qt.workers.context_library_worker import (
         ContextLibraryStatusJob,
+        ContextLibraryStatusResult,
         collect_context_library_status,
+        run_context_library_status_in_subprocess,
     )
     from gui_qt.runtime.operation_identity import context_library_config_digest
 except ImportError as exc:
@@ -16,6 +20,12 @@ except ImportError as exc:
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
+
+
+def _emit_large_context_result(base_dir, _config, _config_file, result_queue):
+    result_queue.put(ContextLibraryStatusResult(
+        base_dir, '', {'pid': os.getpid(), 'padding': 'x' * 500_000}, 'fixture',
+    ))
 
 
 @unittest.skipIf(
@@ -93,6 +103,115 @@ class ContextLibraryStatusCollectionTests(unittest.TestCase):
 
         collect.assert_not_called()
         self.assertEqual(completed, [None])
+
+    def test_job_uses_isolated_collector_with_frozen_config(self) -> None:
+        config = {'batch': {'rag': {'enabled': True}}}
+        job = ContextLibraryStatusJob('project', config, config_file='chosen.json')
+        config['batch']['rag']['enabled'] = False
+        result = ContextLibraryStatusResult('project', '', None, 'fixture')
+        completed = []
+        job.signals.completed.connect(completed.append)
+        with mock.patch(
+            'gui_qt.workers.context_library_worker.run_context_library_status_in_subprocess',
+            return_value=result,
+        ) as isolated, mock.patch(
+            'gui_qt.workers.context_library_worker.collect_context_library_status',
+        ) as in_process:
+            job.run()
+        in_process.assert_not_called()
+        self.assertEqual(completed, [result])
+        self.assertTrue(isolated.call_args.args[1]['batch']['rag']['enabled'])
+        self.assertEqual(isolated.call_args.kwargs['config_file'], 'chosen.json')
+        self.assertFalse(isolated.call_args.kwargs['should_cancel']())
+        job.request_cancel()
+        self.assertTrue(isolated.call_args.kwargs['should_cancel']())
+
+    def test_large_result_is_drained_from_a_real_separate_process(self) -> None:
+        with mock.patch(
+            'gui_qt.workers.context_library_worker._context_status_process_entry',
+            _emit_large_context_result,
+        ):
+            result = run_context_library_status_in_subprocess('', timeout_s=20)
+        self.assertIsNotNone(result)
+        self.assertNotEqual(result.status['pid'], os.getpid())
+        self.assertEqual(len(result.status['padding']), 500_000)
+
+    def _process_context(self):
+        ctx, process, result_queue = mock.Mock(), mock.Mock(), mock.Mock()
+        ctx.Process.return_value = process
+        ctx.Queue.return_value = result_queue
+        process.is_alive.return_value = False
+        return ctx, process, result_queue
+
+    def test_spawn_failure_closes_resources_without_inprocess_scan(self) -> None:
+        ctx, process, result_queue = self._process_context()
+        process.start.side_effect = OSError('spawn failed')
+        with mock.patch(
+            'gui_qt.workers.context_library_worker.mp.get_context', return_value=ctx,
+        ), mock.patch(
+            'gui_qt.workers.context_library_worker.collect_context_library_status',
+        ) as in_process:
+            result = run_context_library_status_in_subprocess('')
+        self.assertIn('无法启动', result.error)
+        in_process.assert_not_called()
+        result_queue.close.assert_called_once()
+        result_queue.join_thread.assert_called_once()
+        process.close.assert_called_once()
+
+    def test_running_cancellation_terminates_child_and_closes_queue(self) -> None:
+        ctx, process, result_queue = self._process_context()
+        process.is_alive.side_effect = (True, True, False)
+        result_queue.get.side_effect = Empty
+        cancelled = iter((False, False, True))
+        with mock.patch(
+            'gui_qt.workers.context_library_worker.mp.get_context', return_value=ctx,
+        ):
+            result = run_context_library_status_in_subprocess('', should_cancel=lambda: next(cancelled))
+        self.assertIsNone(result)
+        process.terminate.assert_called_once()
+        result_queue.close.assert_called_once()
+        result_queue.join_thread.assert_called_once()
+        process.close.assert_called_once()
+
+    def test_timeout_returns_error_and_reclaims_child(self) -> None:
+        ctx, process, result_queue = self._process_context()
+        process.is_alive.side_effect = (True, False)
+        with mock.patch(
+            'gui_qt.workers.context_library_worker.mp.get_context', return_value=ctx,
+        ), mock.patch(
+            'gui_qt.workers.context_library_worker.time.monotonic', side_effect=(0, 2),
+        ):
+            result = run_context_library_status_in_subprocess('', timeout_s=1)
+        self.assertIn('超时', result.error)
+        process.terminate.assert_called_once()
+        result_queue.close.assert_called_once()
+        process.close.assert_called_once()
+
+    def test_child_exit_without_result_and_broken_pipe_complete_with_error(self) -> None:
+        for queue_error in (Empty, EOFError):
+            with self.subTest(error=queue_error):
+                ctx, process, result_queue = self._process_context()
+                process.exitcode = 7
+                result_queue.get.side_effect = queue_error
+                with mock.patch(
+                    'gui_qt.workers.context_library_worker.mp.get_context', return_value=ctx,
+                ):
+                    result = run_context_library_status_in_subprocess('')
+                self.assertIn('code=7', result.error)
+                result_queue.close.assert_called_once()
+                process.close.assert_called_once()
+
+    def test_unexpected_process_failure_still_completes_job(self) -> None:
+        job = ContextLibraryStatusJob('')
+        completed = []
+        job.signals.completed.connect(completed.append)
+        with mock.patch(
+            'gui_qt.workers.context_library_worker.run_context_library_status_in_subprocess',
+            side_effect=OSError('IPC unavailable'),
+        ):
+            job.run()
+        self.assertEqual(len(completed), 1)
+        self.assertIn('无法启动', completed[0].error)
 
 
 if __name__ == "__main__":

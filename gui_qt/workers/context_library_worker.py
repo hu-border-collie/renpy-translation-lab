@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import copy
+import multiprocessing as mp
+from queue import Empty
+import time
 from typing import Any
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
 from gui_qt.runtime.operation_identity import context_library_config_digest
+from gui_qt.user_copy import CONTEXT_LIBRARY_COPY
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,99 @@ def collect_context_library_status(
         )
 
 
+def _status_failure(base_dir, config, config_file, error) -> ContextLibraryStatusResult:
+    from gui_qt.reports.bootstrap_report import read_batch_context_flags
+
+    flags = read_batch_context_flags(config or {}, game_root=base_dir or None)
+    return ContextLibraryStatusResult(
+        base_dir, "", None, f"读取失败 · {error}", context_flags=flags, error=error,
+        config_digest=context_library_config_digest(
+            config, context_flags=flags, config_file=config_file),
+    )
+
+
+def _context_status_process_entry(base_dir, config, config_file, result_queue) -> None:
+    """Collect a read-only status in a spawn-safe, independent Python heap."""
+    try:
+        result = collect_context_library_status(base_dir, config, config_file=config_file)
+    except BaseException as exc:  # defensive process boundary, including SystemExit
+        result = _status_failure(base_dir, config, config_file, str(exc))
+    result_queue.put(result)
+
+
+def run_context_library_status_in_subprocess(
+    base_dir: str,
+    config: dict[str, Any] | None = None,
+    *,
+    config_file: str = 'translator_config.json',
+    should_cancel=None,
+    poll_s: float = .05,
+    timeout_s: float = 120,
+) -> ContextLibraryStatusResult | None:
+    """Isolate full material scans and their GC pauses from the Qt process.
+
+    Drain the result while the child is alive, including reports larger than a
+    pipe buffer. Cancellation, timeout, startup failure and crashes all reclaim
+    the owned process/queue. A failed spawn never falls back to a GUI-heap scan.
+    The host still validates the returned project/material identity before use.
+    """
+    if should_cancel is not None and should_cancel():
+        return None
+    ctx = mp.get_context('spawn')
+    result_queue = ctx.Queue(1)
+    proc = ctx.Process(
+        target=_context_status_process_entry,
+        args=(base_dir, config, config_file, result_queue),
+        daemon=True,
+    )
+    started = False
+    try:
+        try:
+            proc.start()
+            started = True
+        except Exception:
+            return _status_failure(base_dir, config, config_file,
+                                   CONTEXT_LIBRARY_COPY['status_process_start_failed'])
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if should_cancel is not None and should_cancel():
+                return None
+            if time.monotonic() >= deadline:
+                return _status_failure(base_dir, config, config_file,
+                                       CONTEXT_LIBRARY_COPY['status_timeout'])
+            try:
+                result = result_queue.get(timeout=poll_s)
+            except (EOFError, OSError):
+                return _status_failure(
+                    base_dir, config, config_file,
+                    CONTEXT_LIBRARY_COPY['status_process_failed'].format(code=proc.exitcode))
+            except Empty:
+                if proc.is_alive():
+                    continue
+                return _status_failure(
+                    base_dir, config, config_file,
+                    CONTEXT_LIBRARY_COPY['status_process_failed'].format(code=proc.exitcode))
+            if isinstance(result, ContextLibraryStatusResult):
+                return result
+            return _status_failure(
+                base_dir, config, config_file,
+                CONTEXT_LIBRARY_COPY['status_process_failed'].format(code=proc.exitcode))
+    finally:
+        if started:
+            # A result is already fully drained. Give the read-only collector a
+            # short grace period, then avoid waiting for large-heap finalization.
+            proc.join(timeout=poll_s)
+            if proc.is_alive():
+                proc.terminate()
+                proc.join(timeout=1)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=1)
+        result_queue.close()
+        result_queue.join_thread()
+        proc.close()
+
+
 class ContextLibraryStatusSignals(QObject):
     """Signals owned by a thread-pool job."""
 
@@ -100,7 +197,7 @@ class ContextLibraryStatusSignals(QObject):
 
 
 class ContextLibraryStatusJob(QRunnable):
-    """Collect context status in Qt's shared pool without blocking shutdown."""
+    """Wait for an isolated status scan from Qt's pool without sharing its heap."""
 
     def __init__(
         self,
@@ -116,13 +213,19 @@ class ContextLibraryStatusJob(QRunnable):
         self._cancel_requested = False
 
     def request_cancel(self) -> None:
-        """Cancel a queued job; an already-running scan finishes cooperatively."""
+        """Cancel queued collection or stop its running read-only child process."""
         self._cancel_requested = True
 
     def run(self) -> None:
         if self._cancel_requested:
             self.signals.completed.emit(None)
             return
-        result = collect_context_library_status(
-            self.base_dir, self.config, config_file=self.config_file)
+        try:
+            result = run_context_library_status_in_subprocess(
+                self.base_dir, self.config, config_file=self.config_file,
+                should_cancel=lambda: self._cancel_requested)
+        except Exception:
+            result = _status_failure(
+                self.base_dir, self.config, self.config_file,
+                CONTEXT_LIBRARY_COPY['status_process_start_failed'])
         self.signals.completed.emit(result)

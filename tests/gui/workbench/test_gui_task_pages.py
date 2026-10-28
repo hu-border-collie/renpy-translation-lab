@@ -1696,6 +1696,7 @@ class GuiTaskPageTests(unittest.TestCase):
 
     def test_context_invalid_engine_completes_and_refreshes_after_correction(self) -> None:
         from foundation.project_context_settings import save_project_context_settings
+        from gui_qt.workers.context_library_worker import collect_context_library_status
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
@@ -1709,6 +1710,13 @@ class GuiTaskPageTests(unittest.TestCase):
                 mock.patch.object(self.window, '_render_context_library_panel'),
                 mock.patch('gui_qt.app.QThreadPool.globalInstance'),
                 mock.patch('gui_qt.app.QTimer.singleShot') as schedule,
+                # Exercise host callbacks with local fingerprint/status fixtures;
+                # separate worker tests cover the actual spawn boundary.
+                mock.patch(
+                    'gui_qt.workers.context_library_worker.run_context_library_status_in_subprocess',
+                    side_effect=lambda base, config, **kwargs: collect_context_library_status(
+                        base, config, config_file=kwargs['config_file']),
+                ),
                 mock.patch('gemini_translate_batch.compute_current_project_analysis_fingerprint',
                            return_value='fixed-fingerprint'),
                 mock.patch('quality_review.project_analysis.collect_project_analysis_status',

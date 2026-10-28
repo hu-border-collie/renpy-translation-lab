@@ -34,6 +34,29 @@ class ShutdownCoordinatorTests(unittest.TestCase):
             )
         )
 
+    def test_automatic_status_skips_confirmation_but_must_really_stop(self):
+        status = {"active": True, "requests": 0}
+        manual = {"active": True, "requests": 0}
+        self.coordinator.register_callbacks(
+            "status", "上下文状态扫描",
+            is_active=lambda: bool(status["active"]),
+            request_shutdown=lambda: status.__setitem__("requests", status["requests"] + 1),
+            confirm_on_close=False,
+        )
+        self._register("manual", "当前任务", manual)
+        self.assertEqual(self.coordinator.active_labels(), ("上下文状态扫描", "当前任务"))
+        self.assertEqual(self.coordinator.active_labels(for_confirmation=True), ("当前任务",))
+        self.coordinator.begin()
+        self.assertEqual(status["requests"], 1)
+        self.assertEqual(manual["requests"], 1)
+        manual["active"] = False
+        self.coordinator.check_now()
+        self.assertTrue(self.coordinator.in_progress)
+        self.assertEqual(self.coordinator.active_labels(for_confirmation=True), ())
+        status["active"] = False
+        self.coordinator.check_now()
+        self.assertFalse(self.coordinator.in_progress)
+
     def test_begin_requests_each_active_participant_and_settles_after_real_finish(self):
         first = {"active": True, "requests": 0}
         second = {"active": False, "requests": 0}

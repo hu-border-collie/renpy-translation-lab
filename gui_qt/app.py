@@ -3034,6 +3034,8 @@ class MainWindow(QMainWindow):
         force: bool = False,
     ) -> None:
         """Paint cached context status immediately and refresh it off the UI thread."""
+        if getattr(self, "_shutdown_requested", False):
+            return
         page = getattr(self, "context_library_page", None)
         if page is None:
             return
@@ -4328,6 +4330,7 @@ class MainWindow(QMainWindow):
             is_active=lambda: getattr(self, "_context_library_status_job", None)
             is not None,
             request_shutdown=self._request_context_status_shutdown,
+            confirm_on_close=False,
         )
         coordinator.register_callbacks(
             "optional_feature_install",
@@ -4549,7 +4552,10 @@ class MainWindow(QMainWindow):
             super().closeEvent(event)
             return
         active_labels = coordinator.active_labels()
-        if active_labels and not self._confirm_active_tasks_before_close(active_labels):
+        confirmation_labels = (
+            coordinator.active_labels(for_confirmation=True) if active_labels else ()
+        )
+        if confirmation_labels and not self._confirm_active_tasks_before_close(confirmation_labels):
             event.ignore()
             return
         self._shutdown_requested = True
