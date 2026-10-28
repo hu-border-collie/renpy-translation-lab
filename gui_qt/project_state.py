@@ -466,6 +466,15 @@ class ProjectState:
         previous = resolve_project_configuration(data, self.config_path)
         same_project = self._normalized_path_text(previous.get('game_root') or '') == self._normalized_path_text(normalized_root)
         material = detect_project_material(game_root, self.config_path)
+        previous_material = detect_project_material(data.get('game_root'), self.config_path)
+        if (material and material['engine'] == 'rpgmaker_mv' and previous_material
+                and previous_material['engine'] == 'rpgmaker_mv'
+                and self._normalized_path_text(previous_material['content_root'])
+                    == self._normalized_path_text(normalized_root)):
+            # Correcting the old explicit Ren'Py default still selects the
+            # same MV package. Preserve custom assets and their old anchors.
+            same_project = True
+            previous = resolve_project_configuration({**data, 'engine': 'rpgmaker_mv'}, self.config_path)
         if material and material['engine'] in {'renpy', 'rpgmaker_mv'}:
             data['engine'] = material['engine']
         if same_project and material and material['engine'] == 'rpgmaker_mv':
