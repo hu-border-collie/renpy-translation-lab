@@ -1372,15 +1372,11 @@ class MainWindow(QMainWindow):
             if self.tab_widget.currentWidget() is not self._config_tab:
                 self._sync_shell_nav_selection()
                 return
-            self._set_shell_special_route(None)
-            self.workbench_stack.show()
         elif route == _SHELL_ROUTE_DIAGNOSTICS:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
             if self.tab_widget.currentWidget() is not self._diagnostics_tab:
                 self._sync_shell_nav_selection()
                 return
-            self._set_shell_special_route(None)
-            self.workbench_stack.show()
         self._sync_shell_nav_selection()
 
     def _current_shell_route(self) -> str:
@@ -1713,6 +1709,11 @@ class MainWindow(QMainWindow):
             current_route == _SHELL_ROUTE_PROJECT_PREPARE
             or current_route.startswith(_SHELL_WORKBENCH_PREFIX)
         )
+        # Keep the hidden workbench intact while visiting settings/logs. Hiding
+        # its tabs switches Qt's current tab and triggers manifest reads through
+        # currentChanged, then repeats that work when the workbench is restored.
+        if not on_workbench:
+            return
         project_route = current_route == _SHELL_ROUTE_PROJECT_PREPARE
         batch_route = (
             current_route.startswith(_SHELL_WORKBENCH_PREFIX)

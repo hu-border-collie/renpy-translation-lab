@@ -197,3 +197,57 @@ class GuiStartupPerfTests(unittest.TestCase):
             self.window._sync_workbench_status_chrome(refresh_readiness=False)
             probe.assert_not_called()
             split.assert_not_called()
+
+    def test_repeated_settings_navigation_does_not_read_task_manifests(self) -> None:
+        self.window = MainWindow()
+        self.window._focus_settings_section("workspace")
+        self._app.processEvents()
+        for route in ("project_prepare", "workbench:translation"):
+            with self.subTest(route=route):
+                self.window._activate_shell_route(route)
+                self._app.processEvents()
+                with mock.patch.object(
+                    self.window,
+                    "_current_diagnostics_manifest",
+                    return_value=("", None),
+                ) as read_manifest:
+                    for _ in range(3):
+                        for target in ("settings", route):
+                            self.window.shell_nav.setCurrentRow(
+                                self.window._shell_nav_rows[target]
+                            )
+                            self._app.processEvents()
+                            self.assertEqual(self.window._current_shell_route(), target)
+                    read_manifest.assert_not_called()
+
+    def test_settings_keeps_hidden_project_preparation_layout(self) -> None:
+        self.window = MainWindow()
+        self.window._activate_shell_route("project_prepare")
+        tabs = self.window.workbench_status_tabs
+        visibility = [tabs.isTabVisible(i) for i in range(tabs.count())]
+        layout = self.window.global_project_bar_layout
+        with mock.patch.object(layout, "removeWidget", wraps=layout.removeWidget) as remove:
+            for _ in range(3):
+                self.window._activate_shell_route("settings")
+                self._app.processEvents()
+                self.assertEqual(tabs.currentIndex(), 0)
+                self.assertEqual(
+                    [tabs.isTabVisible(i) for i in range(tabs.count())], visibility
+                )
+                self.window._activate_shell_route("project_prepare")
+                self._app.processEvents()
+            remove.assert_not_called()
+
+    def test_settings_keeps_batch_result_tab_selected(self) -> None:
+        self.window = MainWindow()
+        self.window._workflow = mock.Mock(manifest_path="")
+        route = "workbench:translation"
+        self.window._sync_workbench_status_surface(route)
+        self.window.workbench_status_tabs.setCurrentIndex(2)
+        for _ in range(3):
+            self.window._activate_shell_route("settings")
+            self._app.processEvents()
+            self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
+            self.window._activate_shell_route(route)
+            self._app.processEvents()
+            self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
