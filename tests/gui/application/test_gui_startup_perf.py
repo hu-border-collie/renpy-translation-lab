@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 try:
+    from PySide6.QtGui import QCloseEvent
     from PySide6.QtWidgets import QApplication
 
     from gui_qt.app import (
@@ -197,3 +198,107 @@ class GuiStartupPerfTests(unittest.TestCase):
             self.window._sync_workbench_status_chrome(refresh_readiness=False)
             probe.assert_not_called()
             split.assert_not_called()
+
+    def test_repeated_settings_navigation_does_not_read_task_manifests(self) -> None:
+        self.window = MainWindow()
+        self.window._focus_settings_section("workspace")
+        self._app.processEvents()
+        for route in ("project_prepare", "workbench:translation"):
+            with self.subTest(route=route):
+                self.window._activate_shell_route(route)
+                self._app.processEvents()
+                with mock.patch.object(
+                    self.window,
+                    "_current_diagnostics_manifest",
+                    return_value=("", None),
+                ) as read_manifest:
+                    for _ in range(3):
+                        for target in ("settings", route):
+                            self.window.shell_nav.setCurrentRow(
+                                self.window._shell_nav_rows[target]
+                            )
+                            self._app.processEvents()
+                            self.assertEqual(self.window._current_shell_route(), target)
+                    read_manifest.assert_not_called()
+
+    def test_settings_keeps_hidden_project_preparation_layout(self) -> None:
+        self.window = MainWindow()
+        self.window._activate_shell_route("project_prepare")
+        tabs = self.window.workbench_status_tabs
+        visibility = [tabs.isTabVisible(i) for i in range(tabs.count())]
+        layout = self.window.global_project_bar_layout
+        with mock.patch.object(layout, "removeWidget", wraps=layout.removeWidget) as remove:
+            for _ in range(3):
+                self.window._activate_shell_route("settings")
+                self._app.processEvents()
+                self.assertEqual(tabs.currentIndex(), 0)
+                self.assertEqual(
+                    [tabs.isTabVisible(i) for i in range(tabs.count())], visibility
+                )
+                self.window._activate_shell_route("project_prepare")
+                self._app.processEvents()
+            remove.assert_not_called()
+
+    def test_settings_keeps_batch_result_tab_selected(self) -> None:
+        self.window = MainWindow()
+        self.window._workflow = mock.Mock(manifest_path="")
+        route = "workbench:translation"
+        self.window._sync_workbench_status_surface(route)
+        self.window.workbench_status_tabs.setCurrentIndex(2)
+        for _ in range(3):
+            self.window._activate_shell_route("settings")
+            self._app.processEvents()
+            self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
+            self.window._activate_shell_route(route)
+            self._app.processEvents()
+            self.assertEqual(self.window.workbench_status_tabs.currentIndex(), 2)
+
+    def test_deferred_context_refresh_does_not_restart_during_shutdown(self) -> None:
+        self.window = MainWindow()
+        self.window._shutdown_requested = True
+        with mock.patch('gui_qt.app.ContextLibraryStatusJob') as job, mock.patch.object(
+            self.window, '_render_context_library_panel',
+        ) as render:
+            self.window._refresh_context_library_panel_async(force=True)
+        job.assert_not_called()
+        render.assert_not_called()
+
+    def test_automatic_status_scan_exits_without_task_confirmation(self) -> None:
+        self.window = MainWindow()
+        job = mock.Mock()
+        self.window._context_library_status_job = job
+        with mock.patch.object(
+            self.window, '_confirm_active_tasks_before_close',
+        ) as confirm, mock.patch('gui_qt.app.QTimer.singleShot'):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+            self.assertFalse(event.isAccepted())
+            confirm.assert_not_called()
+            job.request_cancel.assert_called_once()
+            self.assertTrue(self.window._shutdown_requested)
+            self.assertTrue(self.window._shutdown_coordinator.in_progress)
+            self.window._on_context_library_status_ready(None)
+            self.window._shutdown_coordinator.check_now()
+            self.assertTrue(self.window._shutdown_close_ready)
+            final_event = QCloseEvent()
+            self.window.closeEvent(final_event)
+            self.assertTrue(final_event.isAccepted())
+
+    def test_manual_task_still_confirms_without_automatic_scan_label(self) -> None:
+        self.window = MainWindow()
+        job = mock.Mock()
+        self.window._context_library_status_job = job
+        self.window._task_running = True
+        try:
+            with mock.patch.object(
+                self.window, '_confirm_active_tasks_before_close', return_value=False,
+            ) as confirm:
+                event = QCloseEvent()
+                self.window.closeEvent(event)
+            self.assertFalse(event.isAccepted())
+            confirm.assert_called_once_with(('当前工作台任务',))
+            job.request_cancel.assert_not_called()
+            self.assertFalse(self.window._shutdown_requested)
+        finally:
+            self.window._task_running = False
+            self.window._context_library_status_job = None

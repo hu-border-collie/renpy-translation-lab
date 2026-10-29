@@ -1372,15 +1372,11 @@ class MainWindow(QMainWindow):
             if self.tab_widget.currentWidget() is not self._config_tab:
                 self._sync_shell_nav_selection()
                 return
-            self._set_shell_special_route(None)
-            self.workbench_stack.show()
         elif route == _SHELL_ROUTE_DIAGNOSTICS:
             self.tab_widget.setCurrentWidget(self._diagnostics_tab)
             if self.tab_widget.currentWidget() is not self._diagnostics_tab:
                 self._sync_shell_nav_selection()
                 return
-            self._set_shell_special_route(None)
-            self.workbench_stack.show()
         self._sync_shell_nav_selection()
 
     def _current_shell_route(self) -> str:
@@ -1713,6 +1709,11 @@ class MainWindow(QMainWindow):
             current_route == _SHELL_ROUTE_PROJECT_PREPARE
             or current_route.startswith(_SHELL_WORKBENCH_PREFIX)
         )
+        # Keep the hidden workbench intact while visiting settings/logs. Hiding
+        # its tabs switches Qt's current tab and triggers manifest reads through
+        # currentChanged, then repeats that work when the workbench is restored.
+        if not on_workbench:
+            return
         project_route = current_route == _SHELL_ROUTE_PROJECT_PREPARE
         batch_route = (
             current_route.startswith(_SHELL_WORKBENCH_PREFIX)
@@ -3033,6 +3034,8 @@ class MainWindow(QMainWindow):
         force: bool = False,
     ) -> None:
         """Paint cached context status immediately and refresh it off the UI thread."""
+        if getattr(self, "_shutdown_requested", False):
+            return
         page = getattr(self, "context_library_page", None)
         if page is None:
             return
@@ -4327,6 +4330,7 @@ class MainWindow(QMainWindow):
             is_active=lambda: getattr(self, "_context_library_status_job", None)
             is not None,
             request_shutdown=self._request_context_status_shutdown,
+            confirm_on_close=False,
         )
         coordinator.register_callbacks(
             "optional_feature_install",
@@ -4548,7 +4552,10 @@ class MainWindow(QMainWindow):
             super().closeEvent(event)
             return
         active_labels = coordinator.active_labels()
-        if active_labels and not self._confirm_active_tasks_before_close(active_labels):
+        confirmation_labels = (
+            coordinator.active_labels(for_confirmation=True) if active_labels else ()
+        )
+        if confirmation_labels and not self._confirm_active_tasks_before_close(confirmation_labels):
             event.ignore()
             return
         self._shutdown_requested = True

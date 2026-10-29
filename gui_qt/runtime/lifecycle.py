@@ -36,6 +36,7 @@ class CallbackShutdownParticipant:
     label: str
     active_callback: Callable[[], bool]
     shutdown_callback: Callable[[], None]
+    confirm_on_close: bool = True
 
     def is_active(self) -> bool:
         return bool(self.active_callback())
@@ -93,6 +94,7 @@ class ShutdownCoordinator(QObject):
         *,
         is_active: Callable[[], bool],
         request_shutdown: Callable[[], None],
+        confirm_on_close: bool = True,
     ) -> None:
         self.register(
             CallbackShutdownParticipant(
@@ -100,12 +102,21 @@ class ShutdownCoordinator(QObject):
                 label=label,
                 active_callback=is_active,
                 shutdown_callback=request_shutdown,
+                confirm_on_close=confirm_on_close,
             )
         )
 
-    def active_labels(self) -> tuple[str, ...]:
-        """Return active participant labels in stable registration order."""
-        return tuple(participant.label for participant in self._active_participants())
+    def active_labels(self, *, for_confirmation: bool = False) -> tuple[str, ...]:
+        """List active work, optionally excluding automatic work from the prompt.
+
+        Automatic participants still require cancellation and real termination;
+        only the user confirmation omits them. Legacy participants confirm by
+        default unless they explicitly declare ``confirm_on_close=False``.
+        """
+        return tuple(
+            participant.label for participant in self._active_participants()
+            if not for_confirmation or getattr(participant, 'confirm_on_close', True)
+        )
 
     def _active_participants(self) -> tuple[ShutdownParticipant, ...]:
         active_participants: list[ShutdownParticipant] = []

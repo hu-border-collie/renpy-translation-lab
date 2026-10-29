@@ -230,6 +230,9 @@ CONTEXT_LIBRARY_COPY = {
         "然后回到这里开始准备。"
     ),
     "project_gate_body": "选择项目并运行环境检查后，才能预建记忆库、原文索引或开始项目分析。",
+    "status_process_start_failed": "无法启动上下文库状态读取进程。",
+    "status_process_failed": "上下文库状态读取进程异常退出（code={code}）。",
+    "status_timeout": "上下文库状态读取超时，请稍后重试。",
 }
 
 TASK_PROJECT_GATE_COPY = {
