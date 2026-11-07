@@ -4,3 +4,7 @@ google-genai==1.57.0
 # Reject the compromised emSign trust root (PYSEC-2026-4320 / GHSA-6q48-6c7w-9gw2).
 # Keep this floor shared by core, LiteLLM, and direct semantic installs.
 certifi>=2026.10.19
+# Security floor for quadratic ASN.1 decode DoS fixed in pyasn1 0.6.5:
+# GHSA-2qm8-x737-gmw5, GHSA-fm9c-5rcf-2q5p, GHSA-mm57-4v3p-rchx, GHSA-9m75-vc3g-4x39.
+# google-auth brings pyasn1 in transitively; this shared input covers CLI, GUI, and LiteLLM.
+pyasn1>=0.6.5
