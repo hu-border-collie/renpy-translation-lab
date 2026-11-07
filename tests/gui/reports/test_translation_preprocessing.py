@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from foundation.project_asset_paths import canonical_abs_path
 from foundation.project_context_settings import save_project_context_settings
 from gui_qt.reports.translation_preprocessing import summarize_translation_preprocessing
 
@@ -34,8 +35,10 @@ class TranslationPreprocessingTests(unittest.TestCase):
         self.assertEqual(sync.text.splitlines()[0], "已开启：历史译文检索（RAG）、剧情记忆")
         self.assertIn("术语表：已找到文件（按命中使用）", batch.text)
         self.assertIn("风格设定：已找到文件", batch.text)
-        self.assertIn(str(self.root / "glossary.json"), batch.details)
-        self.assertIn(str(self.root / "macro_setting.md"), sync.details)
+        # Display uses canonical long paths. Windows temp dirs are often 8.3
+        # short names (RUNNER~1) until resolution expands them.
+        self.assertIn(canonical_abs_path(self.root / "glossary.json"), batch.details)
+        self.assertIn(canonical_abs_path(self.root / "macro_setting.md"), sync.details)
         self.assertIn("开启不代表已完成预建或本次已命中", batch.details)
         self.assertEqual(config, original)
 
