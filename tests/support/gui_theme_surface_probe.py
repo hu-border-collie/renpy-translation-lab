@@ -11,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
     from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtGui import QColor, QImage, QPalette
+    from PySide6.QtGui import QColor, QFontDatabase, QImage, QPalette
     from PySide6.QtWidgets import (
         QApplication,
         QLabel,
@@ -133,6 +133,14 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
                     candidates_path="original-candidates.jsonl", glossary_path="original-glossary.json",
                 )
                 self._root = dialog
+                # GitHub-hosted Ubuntu images have no CJK face. Fully Chinese
+                # header labels then draw no ink, so the explicit header color
+                # is absent. Registering this subset makes those glyphs fall
+                # back to a face that still takes the stylesheet color.
+                self._register_keyword_header_font()
+                dialog.resize(960, 640)
+                if dialog.layout() is not None:
+                    dialog.layout().activate()
                 dialog.show()
                 self._app.processEvents()
                 tokens = tokens_for_theme(theme)
@@ -608,6 +616,17 @@ class GuiThemeControlSurfaceTests(unittest.TestCase):
             self._pixel(provider_table, self._blank_table_point(provider_table)),
             QColor(tokens["bg_table"]).name(),
         )
+
+    def _register_keyword_header_font(self) -> None:
+        font_path = (
+            Path(__file__).resolve().parents[1]
+            / "fixtures"
+            / "fonts"
+            / "noto_sans_cjk_sc_bold_header_subset.ttf"
+        )
+        font_id = QFontDatabase.addApplicationFont(str(font_path))
+        if font_id < 0:
+            self.fail(f"keyword header fixture font failed to load: {font_path}")
 
     def _pixel(self, widget: QWidget, point: QPoint) -> str:
         image = widget.grab().toImage().convertToFormat(
