@@ -5,6 +5,13 @@ from providers import gemini_model_catalog as catalog
 
 
 class GeminiModelCatalogTests(unittest.TestCase):
+    def test_catalog_includes_current_text_models_without_changing_defaults(self):
+        self.assertEqual(catalog.BUILTIN_GEMINI_TRANSLATION_MODELS[:2], (
+            "gemini-4-argon", "gemini-3.8-flash",
+        ))
+        self.assertEqual(catalog.DEFAULT_GEMINI_TRANSLATION_MODEL, "gemini-3.1-flash-lite")
+        self.assertEqual(catalog.DEFAULT_GEMINI_EMBEDDING_MODEL, "gemini-embedding-001")
+
     def test_normalize_model_names_dedupes_and_strips(self):
         self.assertEqual(
             catalog.normalize_model_names(

@@ -3589,6 +3589,8 @@ def _require_sync_embedding_binding_for_retrieval():
 
 
 def embed_texts(contents, task_type):
+    """Embed a batch with bounded Gemini retries and the Batch backoff schedule."""
+
     if not contents:
         return []
     _require_sync_embedding_binding_for_retrieval()
@@ -3611,8 +3613,10 @@ def embed_texts(contents, task_type):
             )
         except EmbeddingBackendError as exc:
             last_error = exc
+            exc.attempt_count = attempt
             if exc.retryable and attempt < attempts and settings.backend == embedding_runtime.BACKEND_GEMINI:
                 rotate_api_key()
+                time.sleep(min(attempt, 2))
                 continue
             raise
         except embedding_runtime.EmbeddingRuntimeError:

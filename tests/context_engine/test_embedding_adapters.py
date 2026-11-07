@@ -469,7 +469,43 @@ class EmbeddingAdapterTests(unittest.TestCase):
                     adapter.embed(self.request(adapter))
                 self.assertEqual(raised.exception.category, category)
                 self.assertEqual(raised.exception.retryable, retryable)
+                self.assertEqual(raised.exception.diagnostics['http_status'], code)
+                self.assertEqual(raised.exception.diagnostics['provider_status'], status)
+                self.assertEqual(raised.exception.diagnostics['exception_type'], '_GoogleAPIError')
+                self.assertNotIn('private.example.test', json.dumps(dict(raised.exception.diagnostics)))
                 self.assertNotIn("private.example.test", str(raised.exception))
+
+    def test_unknown_transport_error_keeps_exception_type_and_cause(self):
+        class RemoteProtocolError(Exception):
+            pass
+
+        def transport(**_kwargs):
+            try:
+                raise OSError('private network and key')
+            except OSError as cause:
+                raise RemoteProtocolError('private response') from cause
+
+        adapter = OpenAICompatibleEmbeddingAdapter(transport=transport, model='sample',
+            output_dimension=2, provider='local', endpoint='https://example.test/v1')
+        with self.assertRaises(EmbeddingBackendError) as raised:
+            adapter.embed(self.request(adapter))
+        facts = raised.exception.diagnostics
+        self.assertEqual(facts['exception_type'], 'RemoteProtocolError')
+        self.assertEqual(facts['exception_chain'], 'RemoteProtocolError -> OSError')
+        self.assertIn('test_embedding_adapters.py:transport:', facts['traceback_location'])
+        self.assertNotIn('private', json.dumps(dict(facts)))
+
+    def test_http_status_from_response_is_retained_and_classified(self):
+        error = RuntimeError('private-body')
+        error.response = SimpleNamespace(status_code=503, text='private-response')
+        adapter = OpenAICompatibleEmbeddingAdapter(
+            transport=mock.Mock(side_effect=error), model='sample', output_dimension=2,
+            provider='local', endpoint='https://example.test/v1')
+        with self.assertRaises(EmbeddingBackendError) as raised:
+            adapter.embed(self.request(adapter))
+        self.assertEqual(raised.exception.category, EmbeddingErrorCategory.UNAVAILABLE)
+        self.assertEqual(raised.exception.diagnostics['http_status'], 503)
+        self.assertNotIn('private', json.dumps(dict(raised.exception.diagnostics)))
 
     def test_provider_identity_is_stable_endpoint_specific_and_credential_free(self):
         first = build_provider_identity(

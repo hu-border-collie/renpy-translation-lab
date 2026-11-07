@@ -2,6 +2,12 @@
 
 文档地图：[docs/README.md](README.md)
 
+RPG Maker MV 的翻译 Batch 入口、材料／审阅前置和拆包恢复约束见
+[MV Batch](rpgmaker_mv_sync.md#gemini-batch)。它复用本页的提交、下载、检查、补译与普通写回；
+MV 不运行 Ren'Py prepare，另目录导出、Batch 关键词与订正不在 MV 支持范围。
+MV 的上下文预建可用 `bootstrap-rag --strategy gemini_batch` /
+`bootstrap-source-index --strategy gemini_batch` 指定 Batch 的库与 embedding 绑定。
+
 本文档记录 Batch 流程中偏内部或高级的部分。日常入口见根目录 `README.md`。
 
 宿主生成译文的 [外部初译工作包（实验 CLI）](external_translation_work.md) 使用
@@ -531,6 +537,7 @@ python gemini_translate_batch.py export-keywords logs/batch_jobs/<package>/manif
 
 ```bash
 python gemini_translate_batch.py sync-keywords --limit 3
+python gemini_translate_batch.py sync-keywords --resume <MANIFEST>
 ```
 
 `build-keywords` 会复用 include 过滤和 Batch manifest，默认不运行 prepare，按较大 chunk 扫描 TL 文本并要求模型输出 `candidates`、`chunk_summary`、`summary_evidence_item_ids`。构建时作业模型取冻结的 keyword 阶段路由（未配置 `model_routing` 时继承旧 Batch 入口），`--profile` 与阶段路由覆盖会写入 manifest 与请求生成配置。候选项里包含 `source`、`suggested_target`、`category`、`confidence`、`evidence`、`source_item_ids`。如果确实要先刷新 TL 模板，可显式传 `--prepare`。
@@ -538,6 +545,17 @@ python gemini_translate_batch.py sync-keywords --limit 3
 `export-keywords` 会导出去重后的 `keyword_candidates.jsonl` / `keyword_candidates.md`，并额外导出 chunk 级剧情概要 `keyword_chunk_summaries.jsonl` / `keyword_chunk_summaries.md`。报告会标出缺失 chunk row 或无法精确定位的候选 / 概要来源，并从现有 revision corpus 扫描投影中附上术语的首次历史 occurrence、文件/行号、现译和冲突原因。该历史证据只做人工作提示；大小写/复数变体、Ren'Py 插值、多个不同现译、保留不译（原文=译文）、无证据和无法对齐的项目不会被自动锁入 glossary。中文译法只有与整句历史现译完全相等时才作为安全对齐，中文子串命中仍需人工确认。
 
 `sync-keywords` 复用关键词 prompt、schema、候选去重、chunk 概要和 JSONL / Markdown 导出逻辑，适合小范围即时跑报告。
+
+同步关键词在包内 `keyword_checkpoint/` 原子保存每个服务响应，然后校验候选与概要；
+最终仍按原请求顺序导出完整 canonical `results.jsonl` 与四份报告。停止后用 `--resume <MANIFEST>`
+读取同一冻结包，先恢复有效结果，只把缺失、失败和不完整块放进本轮队列；有效结果不重新请求或校验。
+CLI 输出 `Sync keyword queue: total=...; reused=...; pending=...; failed=...; incomplete=...`，
+并在待补块保存后输出 `Sync keyword progress: N/M pending blocks processed.`，其中 M 只统计本轮待补块。
+已保存记录总数单独输出，可能包含失败记录。每次显式续跑允许不完整块新增一轮修复
+（初次请求加至多一次定点重试），保留旧响应；中断后复用未完成修复轮次已保存的响应。
+请求发出后中断且没有保存响应时默认阻止恢复；明确核对后可追加
+`--retry-unknown` 允许重发，可能重复计费。恢复拒绝请求、路由、原文或 MV 材料身份漂移。
+修复前没有检查点的旧包不能恢复尚未保存的结果；`--resume` 不接受 prepare 或范围覆盖参数。
 
 [MV 路线](rpgmaker_mv_sync.md#同步关键词原文索引与已审阅历史)仅开放同步关键词，使用
 冻结的 Sync keyword 阶段路由与 Sync Macro；`build-keywords` Batch 不支持 MV。

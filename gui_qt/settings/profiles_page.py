@@ -19,6 +19,8 @@ from typing import Any
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QCompleter,
+    QFormLayout,
     QGroupBox,
     QGridLayout,
     QHBoxLayout,
@@ -28,19 +30,20 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
 
 from providers import model_profiles_editor as editor
+from providers import profile_model_catalog
 from providers import openai_compatible_provider_config as openai_compatible_presets
-from providers.model_profile import ADAPTER_OPENAI_COMPATIBLE
 from providers.openai_compatible_contract import STRUCTURED_OUTPUT_MODE_ORDER
 from ..user_copy import MODEL_PROFILES_PAGE_COPY
-from gui_qt.widgets.widget_helpers import NoWheelComboBox
+from gui_qt.widgets.widget_helpers import NoWheelComboBox, add_editable_combo_popup_action
 from .page_chrome import (
     SettingsMasterDetail, add_model_navigation, build_settings_scroll_page,
-    limit_short_field, settings_group,
+    limit_short_field, settings_form, settings_group,
 )
 from .page_contract import SettingsIssue, SettingsPageActions
 from .registry import SETTINGS_PAGE_SPEC_OBJECTS
@@ -115,6 +118,8 @@ class ProfilesSettingsPage(QObject):
         self._capability_combos: dict[str, NoWheelComboBox] = {}
         self._context_edits: dict[str, QLineEdit] = {}
         self._route_widgets: dict[str, dict[str, Any]] = {}
+        self._catalog_config: dict[str, Any] = {}
+        self._catalog_values: dict[str, tuple[str, ...]] = {}
         self.widget, self.body = self._build_widgets()
         self._refresh_all()
 
@@ -148,6 +153,8 @@ class ProfilesSettingsPage(QObject):
         an ordinary disk load of a missing/null section remains an empty state.
         """
         raw = snapshot.get("model_routing") if isinstance(snapshot, Mapping) else None
+        if "model_catalog" in snapshot:
+            self._catalog_config = {"model_catalog": copy.deepcopy(snapshot["model_catalog"])}
         if raw is None:
             # Missing key and explicit ``null`` both mean "no section"; this is
             # the legitimate legacy/empty state, not an invalid one.
@@ -233,9 +240,16 @@ class ProfilesSettingsPage(QObject):
         attr = _FIELD_WIDGETS.get(issue.field_key)
         widget = getattr(self, attr, None) if attr else None
         if widget is not None and hasattr(widget, "setFocus"):
+            self.section_tabs.setCurrentIndex(1)
             widget.setFocus()
             return True
         return False
+
+    def focus_defaults(self) -> None:
+        """Reveal the default route when another page opens the model editor."""
+        self.section_tabs.setCurrentIndex(0)
+        self.widget.verticalScrollBar().setValue(0)
+        self.default_profile_combo.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def set_task_running(self, running: bool) -> None:
         self._task_running = bool(running)
@@ -250,6 +264,39 @@ class ProfilesSettingsPage(QObject):
         self.hint_label.setWordWrap(True)
         self.hint_label.setObjectName("config_hint_label")
         layout.addWidget(self.hint_label)
+
+        self.section_tabs = QTabBar()
+        self.section_tabs.setObjectName("profiles_section_tabs")
+        self.section_tabs.setAccessibleName(MODEL_PROFILES_PAGE_COPY["sections_label"])
+        self.section_tabs.setExpanding(False)
+        self.section_tabs.setDrawBase(False)
+        self.section_tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.section_tabs.setUsesScrollButtons(True)
+        self._sections: list[QWidget] = []
+        section_layouts = []
+        for key in ("routes_tab", "profiles_tab", "providers_tab"):
+            self.section_tabs.addTab(MODEL_PROFILES_PAGE_COPY[key])
+            section = QWidget()
+            section.setObjectName(f"profiles_{key}_page")
+            section_layout = QVBoxLayout(section)
+            section_layout.setContentsMargins(0, 0, 0, 0)
+            section_layout.setSpacing(14)
+            self._sections.append(section)
+            section_layouts.append(section_layout)
+        routes_section, profiles_section, providers_section = section_layouts
+        layout.addWidget(self.section_tabs)
+        for section in self._sections:
+            layout.addWidget(section)
+        self.section_tabs.currentChanged.connect(self._on_section_changed)
+
+        self.management_toggle = QPushButton(MODEL_PROFILES_PAGE_COPY["management_show"])
+        self.management_toggle.setObjectName("secondary_btn")
+        self.management_toggle.setCheckable(True)
+        self.management_toggle.toggled.connect(self._toggle_management)
+        management_row = QHBoxLayout()
+        management_row.addWidget(self.management_toggle)
+        management_row.addStretch(1)
+        layout.addLayout(management_row)
 
         self.notice_group, notice_layout = settings_group("")
         self.notice_group.setObjectName("profiles_notice_group")
@@ -297,9 +344,11 @@ class ProfilesSettingsPage(QObject):
         self.profiles_list = QListWidget()
         self.profiles_list.setMaximumHeight(240)
         self.profiles_list.setObjectName("profiles_list")
+        self.profiles_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.profiles_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.profiles_list.currentRowChanged.connect(self._on_profile_row_changed)
         profiles_layout.addWidget(self.profiles_list)
-        profiles_buttons = QGridLayout()
+        profiles_buttons = QHBoxLayout()
         self.profiles_add_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["add_profile"])
         self.profiles_add_btn.clicked.connect(self._on_add_profile)
         self.profiles_copy_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["copy_profile"])
@@ -314,21 +363,20 @@ class ProfilesSettingsPage(QObject):
         self.profiles_probe_btn.setObjectName("profiles_probe_btn")
         self.profiles_probe_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["probe_tooltip"])
         self.profiles_probe_btn.clicked.connect(self._on_probe_profile)
-        for index, button in enumerate((
+        for button in (
             self.profiles_add_btn,
             self.profiles_copy_btn,
             self.profiles_delete_btn,
-            self.profiles_diagnose_btn,
-            self.profiles_probe_btn,
-        )):
-            profiles_buttons.addWidget(button, index // 2, index % 2)
+        ):
+            profiles_buttons.addWidget(button)
         profiles_layout.addLayout(profiles_buttons)
-        self.profile_editor_group, self._profile_form = settings_group(
+        self.profile_editor_group = QGroupBox(
             MODEL_PROFILES_PAGE_COPY["profile_editor_group"]
         )
+        self._profile_form = settings_form(self.profile_editor_group)
         self._build_profile_editor(self._profile_form)
         self.profile_panels = SettingsMasterDetail(self.profiles_group, self.profile_editor_group)
-        layout.addWidget(self.profile_panels)
+        profiles_section.addWidget(self.profile_panels)
 
         self.providers_group, providers_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["providers_group"]
@@ -336,6 +384,8 @@ class ProfilesSettingsPage(QObject):
         self.providers_list = QListWidget()
         self.providers_list.setMaximumHeight(240)
         self.providers_list.setObjectName("providers_list")
+        self.providers_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.providers_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.providers_list.currentRowChanged.connect(self._on_provider_row_changed)
         providers_layout.addWidget(self.providers_list)
         provider_buttons = QHBoxLayout()
@@ -347,16 +397,18 @@ class ProfilesSettingsPage(QObject):
         provider_buttons.addWidget(self.provider_delete_btn)
         provider_buttons.addStretch(1)
         providers_layout.addLayout(provider_buttons)
-        self.provider_editor_group, self._provider_form = settings_group(
+        self.provider_editor_group = QGroupBox(
             MODEL_PROFILES_PAGE_COPY["provider_editor_group"]
         )
+        self._provider_form = settings_form(self.provider_editor_group)
         self._build_provider_editor(self._provider_form)
         self.provider_panels = SettingsMasterDetail(self.providers_group, self.provider_editor_group)
-        layout.addWidget(self.provider_panels)
+        providers_section.addWidget(self.provider_panels)
 
-        self.defaults_group, defaults_layout = settings_group(
+        self.defaults_group = QGroupBox(
             MODEL_PROFILES_PAGE_COPY["defaults_group"]
         )
+        defaults_layout = settings_form(self.defaults_group)
         self.default_profile_combo = NoWheelComboBox()
         limit_short_field(self.default_profile_combo)
         self.default_profile_combo.setObjectName("profiles_default_profile_combo")
@@ -365,21 +417,19 @@ class ProfilesSettingsPage(QObject):
         limit_short_field(self.default_strategy_combo)
         self.default_strategy_combo.setObjectName("profiles_default_strategy_combo")
         self.default_strategy_combo.currentIndexChanged.connect(self._on_defaults_changed)
-        defaults_layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["default_profile_label"]))
-        defaults_layout.addWidget(self.default_profile_combo)
-        defaults_layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["default_strategy_label"]))
-        defaults_layout.addWidget(self.default_strategy_combo)
+        defaults_layout.addRow(MODEL_PROFILES_PAGE_COPY["default_profile_label"], self.default_profile_combo)
+        defaults_layout.addRow(MODEL_PROFILES_PAGE_COPY["default_strategy_label"], self.default_strategy_combo)
         self.readiness_label = QLabel()
         self.readiness_label.setObjectName("profiles_readiness_label")
         self.readiness_label.setWordWrap(True)
-        defaults_layout.addWidget(self.readiness_label)
-        layout.insertWidget(1, self.defaults_group)
+        defaults_layout.addRow(self.readiness_label)
+        routes_section.addWidget(self.defaults_group)
 
         self.routes_group, routes_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["routes_group"]
         )
         self._build_routes_editor(routes_layout)
-        layout.addWidget(self.routes_group)
+        routes_section.addWidget(self.routes_group)
 
         self.diagnostics_group, diagnostics_layout = settings_group(
             MODEL_PROFILES_PAGE_COPY["diagnostics_group"]
@@ -388,18 +438,21 @@ class ProfilesSettingsPage(QObject):
         self.diagnostics_label.setObjectName("profiles_diagnostics_label")
         self.diagnostics_label.setWordWrap(True)
         diagnostics_layout.addWidget(self.diagnostics_label)
-        layout.addWidget(self.diagnostics_group)
+        profiles_section.addWidget(self.diagnostics_group)
+        for group in body.findChildren(QGroupBox):
+            group.setProperty("compactModelSettings", True)
         layout.addStretch(1)
+
+        self._on_section_changed(0)
 
         return page, body
 
-    def _build_profile_editor(self, layout: QVBoxLayout) -> None:
+    def _build_profile_editor(self, layout: QFormLayout) -> None:
         self.profile_label_edit = QLineEdit()
         limit_short_field(self.profile_label_edit)
         self.profile_label_edit.setObjectName("profiles_profile_label_edit")
         self.profile_label_edit.editingFinished.connect(self._on_profile_fields_changed)
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["profile_label"]))
-        layout.addWidget(self.profile_label_edit)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["profile_label"], self.profile_label_edit)
 
         self.profile_provider_combo = NoWheelComboBox()
         limit_short_field(self.profile_provider_combo)
@@ -407,14 +460,46 @@ class ProfilesSettingsPage(QObject):
         self.profile_provider_combo.currentIndexChanged.connect(
             self._on_profile_fields_changed
         )
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["provider_label"]))
-        layout.addWidget(self.profile_provider_combo)
+        provider_row = QHBoxLayout()
+        provider_row.addWidget(self.profile_provider_combo, 1)
+        self.edit_provider_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["edit_provider"])
+        self.edit_provider_btn.setObjectName("secondary_btn")
+        self.edit_provider_btn.clicked.connect(self._on_edit_provider)
+        provider_row.addWidget(self.edit_provider_btn)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["provider_label"], provider_row)
 
-        self.profile_model_edit = QLineEdit()
+        self.profile_model_combo = NoWheelComboBox()
+        self.profile_model_combo.setObjectName("profiles_profile_model_combo")
+        self.profile_model_combo.setAccessibleName(MODEL_PROFILES_PAGE_COPY["model_label"])
+        self.profile_model_combo.setEditable(True)
+        self.profile_model_combo.setInsertPolicy(NoWheelComboBox.InsertPolicy.NoInsert)
+        self.profile_model_combo.setSizeAdjustPolicy(
+            NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.profile_model_combo.setMinimumContentsLength(12)
+        self.profile_model_combo.completer().setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.profile_model_combo.completer().setFilterMode(Qt.MatchFlag.MatchContains)
+        self.profile_model_combo.completer().setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.profile_model_combo.completer().popup().setObjectName("profiles_model_completions")
+        self.profile_model_combo.completer().activated[str].connect(self._on_model_completed)
+        add_editable_combo_popup_action(self.profile_model_combo)
+        self.profile_model_combo.currentIndexChanged.connect(self._on_profile_fields_changed)
+        self.profile_model_edit = self.profile_model_combo.lineEdit()
         self.profile_model_edit.setObjectName("profiles_profile_model_edit")
+        self.profile_model_edit.setPlaceholderText(MODEL_PROFILES_PAGE_COPY["model_placeholder"])
         self.profile_model_edit.editingFinished.connect(self._on_profile_fields_changed)
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["model_label"]))
-        layout.addWidget(self.profile_model_edit)
+
+        self.profile_model_catalog_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["model_catalog_button"])
+        self.profile_model_catalog_btn.setObjectName("profiles_profile_model_catalog_btn")
+        self.profile_model_catalog_btn.clicked.connect(self._on_fetch_model_catalog)
+        model_row = QHBoxLayout()
+        model_row.addWidget(self.profile_model_combo, 1)
+        model_row.addWidget(self.profile_model_catalog_btn)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["model_label"], model_row)
+        self.model_catalog_hint = QLabel(MODEL_PROFILES_PAGE_COPY["model_choices_hint"])
+        self.model_catalog_hint.setObjectName("settings_description_label")
+        self.model_catalog_hint.setWordWrap(True)
+        layout.addRow(self.model_catalog_hint)
 
         self.profile_models_edit = QLineEdit()
         self.profile_models_edit.setObjectName("profiles_profile_models_edit")
@@ -422,42 +507,20 @@ class ProfilesSettingsPage(QObject):
             MODEL_PROFILES_PAGE_COPY["models_placeholder"]
         )
         self.profile_models_edit.editingFinished.connect(self._on_profile_fields_changed)
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["models_label"]))
-        layout.addWidget(self.profile_models_edit)
-
-        self.profile_model_catalog_combo = NoWheelComboBox()
-        self.profile_model_catalog_combo.setObjectName(
-            "profiles_profile_model_catalog_combo"
-        )
-        self.profile_model_catalog_combo.addItem(
-            MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"], ""
-        )
-        self.profile_model_catalog_combo.currentIndexChanged.connect(
-            self._on_model_catalog_selected
-        )
-        self.profile_model_catalog_btn = QPushButton(
-            MODEL_PROFILES_PAGE_COPY["model_catalog_button"]
-        )
-        self.profile_model_catalog_btn.setObjectName(
-            "profiles_profile_model_catalog_btn"
-        )
-        self.profile_model_catalog_btn.setToolTip(
-            MODEL_PROFILES_PAGE_COPY["model_catalog_tooltip"]
-        )
-        self.profile_model_catalog_btn.clicked.connect(self._on_fetch_model_catalog)
-        catalog_row = QHBoxLayout()
-        catalog_row.addWidget(self.profile_model_catalog_combo, 1)
-        catalog_row.addWidget(self.profile_model_catalog_btn)
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["model_catalog_label"]))
-        layout.addLayout(catalog_row)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["models_label"], self.profile_models_edit)
 
         self.profile_embedding_combo = NoWheelComboBox()
         self.profile_embedding_combo.setObjectName("profiles_profile_embedding_combo")
         self.profile_embedding_combo.currentIndexChanged.connect(
             self._on_profile_fields_changed
         )
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["embedding_label"]))
-        layout.addWidget(self.profile_embedding_combo)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["embedding_label"], self.profile_embedding_combo)
+
+        tools_row = QHBoxLayout()
+        tools_row.addWidget(self.profiles_diagnose_btn)
+        tools_row.addWidget(self.profiles_probe_btn)
+        tools_row.addStretch(1)
+        layout.addRow(tools_row)
 
         capabilities = QGroupBox(MODEL_PROFILES_PAGE_COPY["capabilities_group"])
         self.capabilities_toggle = QPushButton(MODEL_PROFILES_PAGE_COPY["capabilities_show"])
@@ -469,7 +532,7 @@ class ProfilesSettingsPage(QObject):
                 "capabilities_hide" if expanded else "capabilities_show"
             ])
         )
-        layout.addWidget(self.capabilities_toggle)
+        layout.addRow(self.capabilities_toggle)
         capabilities_layout = QVBoxLayout(capabilities)
         for key, label in _CAPABILITY_LABELS.items():
             row = QHBoxLayout()
@@ -518,11 +581,11 @@ class ProfilesSettingsPage(QObject):
         risk = QLabel(MODEL_PROFILES_PAGE_COPY["capability_risk"])
         risk.setWordWrap(True)
         risk.setObjectName("config_hint_label")
-        layout.addWidget(risk)
-        layout.addWidget(capabilities)
+        layout.addRow(risk)
+        layout.addRow(capabilities)
         capabilities.hide()
 
-    def _build_provider_editor(self, layout: QVBoxLayout) -> None:
+    def _build_provider_editor(self, layout: QFormLayout) -> None:
         self.provider_preset_combo = NoWheelComboBox()
         limit_short_field(self.provider_preset_combo)
         self.provider_preset_combo.setObjectName("profiles_provider_preset_combo")
@@ -535,10 +598,7 @@ class ProfilesSettingsPage(QObject):
         self.provider_preset_combo.currentIndexChanged.connect(
             self._on_provider_preset_selected
         )
-        layout.addWidget(
-            QLabel(MODEL_PROFILES_PAGE_COPY["provider_fields"]["preset"])
-        )
-        layout.addWidget(self.provider_preset_combo)
+        layout.addRow(MODEL_PROFILES_PAGE_COPY["provider_fields"]["preset"], self.provider_preset_combo)
 
         fields = (
             ("provider_label_edit", "label", QLineEdit),
@@ -556,8 +616,6 @@ class ProfilesSettingsPage(QObject):
             edit.setObjectName(f"profiles_{attr}")
             edit.editingFinished.connect(self._on_provider_fields_changed)
             setattr(self, attr, edit)
-            layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["provider_fields"][key]))
-            layout.addWidget(edit)
 
         self.provider_adapter_combo = NoWheelComboBox()
         limit_short_field(self.provider_adapter_combo)
@@ -567,8 +625,6 @@ class ProfilesSettingsPage(QObject):
         self.provider_adapter_combo.currentIndexChanged.connect(
             self._on_provider_fields_changed
         )
-        layout.addWidget(QLabel(MODEL_PROFILES_PAGE_COPY["provider_fields"]["adapter"]))
-        layout.addWidget(self.provider_adapter_combo)
 
         self.provider_credential_kind_combo = NoWheelComboBox()
         limit_short_field(self.provider_credential_kind_combo)
@@ -581,14 +637,34 @@ class ProfilesSettingsPage(QObject):
         self.provider_credential_kind_combo.currentIndexChanged.connect(
             self._on_provider_fields_changed
         )
-        layout.addWidget(
-            QLabel(MODEL_PROFILES_PAGE_COPY["provider_fields"]["credential_kind"])
-        )
-        layout.addWidget(self.provider_credential_kind_combo)
+        for key, widget in (
+            ("label", self.provider_label_edit),
+            ("adapter", self.provider_adapter_combo),
+            ("upstream", self.provider_upstream_edit),
+            ("base_url", self.provider_base_url_edit),
+            ("models_url", self.provider_models_url_edit),
+            ("credential_kind", self.provider_credential_kind_combo),
+            ("credential_name", self.provider_credential_name_edit),
+            ("credential_env", self.provider_credential_env_edit),
+            ("extra_headers", self.provider_extra_headers_edit),
+        ):
+            layout.addRow(MODEL_PROFILES_PAGE_COPY["provider_fields"][key], widget)
 
     def _build_routes_editor(self, layout: QVBoxLayout) -> None:
-        for stage in editor.STAGE_ORDER:
-            row = QHBoxLayout()
+        hint = QLabel(MODEL_PROFILES_PAGE_COPY["routes_hint"])
+        hint.setWordWrap(True)
+        hint.setObjectName("settings_description_label")
+        layout.addWidget(hint)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        for column, key in enumerate(("route_override", "route_profile", "route_strategy")):
+            label = QLabel(MODEL_PROFILES_PAGE_COPY[key])
+            label.setObjectName("settings_description_label")
+            grid.addWidget(label, 0, column)
+        grid.setColumnStretch(1, 2)
+        grid.setColumnStretch(2, 1)
+        for index, stage in enumerate(editor.STAGE_ORDER, start=1):
             checkbox = QCheckBox(
                 MODEL_PROFILES_PAGE_COPY["route_stage_labels"].get(stage, stage)
             )
@@ -602,17 +678,43 @@ class ProfilesSettingsPage(QObject):
                     lambda _index, stage=stage: self._on_route_changed(stage)
                 )
             checkbox.toggled.connect(lambda _checked, stage=stage: self._on_route_changed(stage))
-            row.addWidget(checkbox)
-            row.addWidget(profile_combo, 2)
-            row.addWidget(strategy_combo, 1)
-            layout.addLayout(row)
+            for column, widget in enumerate((checkbox, profile_combo, strategy_combo)):
+                grid.addWidget(widget, index, column)
+            stage_label = MODEL_PROFILES_PAGE_COPY["route_stage_labels"].get(stage, stage)
+            checkbox.setToolTip(MODEL_PROFILES_PAGE_COPY["routes_hint"])
+            profile_combo.setAccessibleName(f"{stage_label} · {MODEL_PROFILES_PAGE_COPY['route_profile']}")
+            strategy_combo.setAccessibleName(f"{stage_label} · {MODEL_PROFILES_PAGE_COPY['route_strategy']}")
             self._route_widgets[stage] = {
                 "override": checkbox,
                 "profile": profile_combo,
                 "strategy": strategy_combo,
             }
+        layout.addLayout(grid)
 
     # -- state refresh ---------------------------------------------------
+
+    def _on_section_changed(self, index: int) -> None:
+        # Hidden sections leave the outer layout, so a tall advanced form does
+        # not impose its height on the default route or the other editor.
+        for section_index, section in enumerate(self._sections):
+            section.setVisible(self._section is not None and section_index == index)
+        if hasattr(self, "widget"):
+            self.widget.verticalScrollBar().setValue(0)
+
+    def _toggle_management(self, expanded: bool) -> None:
+        self.management_toggle.setText(MODEL_PROFILES_PAGE_COPY[
+            "management_hide" if expanded else "management_show"
+        ])
+        self.notice_group.setVisible(expanded or self._section is None)
+
+    def _on_edit_provider(self) -> None:
+        provider_id = self.profile_provider_combo.currentData()
+        for row in range(self.providers_list.count()):
+            if self.providers_list.item(row).data(256) == provider_id:
+                self.providers_list.setCurrentRow(row)
+                self.section_tabs.setCurrentIndex(2)
+                self.provider_label_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+                return
 
     def _section_or_none(self) -> dict[str, Any] | None:
         return self._section
@@ -681,13 +783,11 @@ class ProfilesSettingsPage(QObject):
         else:
             title = MODEL_PROFILES_PAGE_COPY["empty_title"]
         self.notice_group.setTitle(title)
-        # Keep invalid-raw removal and legacy guidance at the top. For an
-        # editable section, configuration removal is a low-frequency action.
-        layout = self.body.layout()
-        target_index = layout.count() - 2 if has_section else 2
-        if layout.indexOf(self.notice_group) != target_index:
-            layout.removeWidget(self.notice_group)
-            layout.insertWidget(target_index, self.notice_group)
+        self.section_tabs.setVisible(has_section)
+        self.management_toggle.setVisible(has_section)
+        self.notice_group.setVisible(not has_section or self.management_toggle.isChecked())
+        for index, section in enumerate(self._sections):
+            section.setVisible(has_section and index == self.section_tabs.currentIndex())
 
         self.legacy_fields_label.setText("、".join(self._legacy_fields))
         self.legacy_fields_toggle.setVisible(legacy)
@@ -756,38 +856,25 @@ class ProfilesSettingsPage(QObject):
         )
         catalog_supported = self._model_catalog_supported()
         self.profile_model_catalog_btn.setEnabled(editable and catalog_supported)
-        self.profile_model_catalog_combo.setEnabled(editable and catalog_supported)
+        self.profile_model_catalog_btn.setToolTip(MODEL_PROFILES_PAGE_COPY[
+            "model_catalog_tooltip" if catalog_supported else "model_catalog_unsupported"
+        ])
+        self.model_catalog_hint.setText(MODEL_PROFILES_PAGE_COPY[
+            "model_choices_hint" if catalog_supported else "model_catalog_unsupported"
+        ])
 
     def _model_catalog_supported(self) -> bool:
-        """Return whether the selected profile uses the direct adapter."""
+        """Keep catalog availability aligned with the shared CLI discovery core."""
 
         if self._section is None or not self._selected_profile_id:
             return False
-        view = editor.editor_view(self._section)
-        profile = next(
-            (
-                item
-                for item in view["profiles"]
-                if item["id"] == self._selected_profile_id
-            ),
-            None,
-        )
-        if profile is None:
+        from providers.sync_model_backend import SyncBackendError
+
+        try:
+            profile_model_catalog.connection_for_profile(self._section, self._selected_profile_id)
+        except SyncBackendError:
             return False
-        # The adapter lives on the provider (S1 contract); keep this predicate
-        # identical to openai_compatible_model_catalog.connection_for_profile.
-        provider = next(
-            (
-                item
-                for item in view["providers"]
-                if item["id"] == profile.get("provider_id")
-            ),
-            None,
-        )
-        return bool(
-            provider
-            and str(provider.get("adapter") or "") == ADAPTER_OPENAI_COMPATIBLE
-        )
+        return True
 
     def _refresh_profiles_list(self) -> None:
         self._loading = True
@@ -796,6 +883,7 @@ class ProfilesSettingsPage(QObject):
             for profile in editor.editor_view(self._section)["profiles"]:
                 label = f"{profile['label']}（{profile['model'] or '未设置模型'}）"
                 item = QListWidgetItem(label)
+                item.setToolTip(label)
                 item.setData(256, profile["id"])
                 self.profiles_list.addItem(item)
             self._selected_profile_id = self._select_by_id(
@@ -813,6 +901,7 @@ class ProfilesSettingsPage(QObject):
                 item = QListWidgetItem(
                     f"{provider['label']}（{provider['adapter']}）"
                 )
+                item.setToolTip(item.text())
                 item.setData(256, provider["id"])
                 self.providers_list.addItem(item)
             self._selected_provider_id = self._select_by_id(
@@ -919,13 +1008,27 @@ class ProfilesSettingsPage(QObject):
         index = combo.findData(value) if value else -1
         combo.setCurrentIndex(index if index >= 0 else (0 if combo.count() else -1))
 
-    def _reset_model_catalog_combo(self) -> None:
-        """Drop a previously fetched provider catalog when the profile changes."""
-
-        self.profile_model_catalog_combo.clear()
-        self.profile_model_catalog_combo.addItem(
-            MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"], ""
-        )
+    def _refresh_model_choices(self) -> None:
+        """Refresh offline and fetched choices without changing the typed model."""
+        section = self._section or {}
+        current = self.profile_model_edit.text()
+        identity = profile_model_catalog.connection_identity(section, self._selected_profile_id)
+        choices = dict.fromkeys((
+            *self._catalog_values.get(identity, ()),
+            *profile_model_catalog.suggested_models(section, self._selected_profile_id, self._catalog_config),
+        ))
+        if current:
+            choices.setdefault(current, None)
+        was_loading = self._loading
+        self._loading = True
+        try:
+            self.profile_model_combo.clear()
+            for model_id in choices:
+                self.profile_model_combo.addItem(model_id, model_id)
+            self.profile_model_combo.setCurrentIndex(self.profile_model_combo.findText(current))
+            self.profile_model_combo.setEditText(current)
+        finally:
+            self._loading = was_loading
 
     def _populate_profile_editor(self) -> None:
         if self._section is None:
@@ -947,7 +1050,7 @@ class ProfilesSettingsPage(QObject):
                 self.profile_model_edit.clear()
                 self.profile_models_edit.clear()
                 self.profile_structured_output_combo.setCurrentIndex(0)
-                self._reset_model_catalog_combo()
+                self._refresh_model_choices()
                 return
             self.profile_label_edit.setText(profile["label"])
             self.profile_provider_combo.clear()
@@ -961,7 +1064,7 @@ class ProfilesSettingsPage(QObject):
             self.profile_models_edit.setText(
                 "，".join(profile.get("rotation_extras") or ())
             )
-            self._reset_model_catalog_combo()
+            self._refresh_model_choices()
             self.profile_embedding_combo.clear()
             self.profile_embedding_combo.addItem(
                 MODEL_PROFILES_PAGE_COPY["embedding_none_option"],
@@ -1262,14 +1365,18 @@ class ProfilesSettingsPage(QObject):
                 MODEL_PROFILES_PAGE_COPY["model_catalog_button"]
             )
 
-    def _catalog_profile_matches(self, profile_id: str) -> bool:
+    def _catalog_profile_matches(self, profile_id: str, connection_id: str = "") -> bool:
         """Return whether a catalog result belongs to the visible profile.
 
         Callers must pass the profile id that produced the result; a missing or
         mismatched id never writes into the currently selected profile.
         """
 
-        return profile_id == self._selected_profile_id
+        return profile_id == self._selected_profile_id and (
+            not connection_id or connection_id == profile_model_catalog.connection_identity(
+                self._section or {}, profile_id,
+            )
+        )
 
     def set_model_catalog(
         self,
@@ -1277,14 +1384,15 @@ class ProfilesSettingsPage(QObject):
         *,
         profile_id: str,
         source: str = "",
+        connection_id: str = "",
     ) -> None:
-        """Populate the read-only catalog combo; manual model entry stays valid.
+        """Merge fetched choices into the editable selector without choosing one.
 
         A late result for a profile the user has already switched away from is
         ignored so one provider's models cannot be written into another one.
         """
 
-        if not self._catalog_profile_matches(profile_id):
+        if not self._catalog_profile_matches(profile_id, connection_id):
             self._show_status(
                 MODEL_PROFILES_PAGE_COPY["model_catalog_stale"].format(
                     profile_id=profile_id
@@ -1296,17 +1404,9 @@ class ProfilesSettingsPage(QObject):
             for item in (models or ())
             if str(item).strip()
         ]
-        self._loading = True
-        try:
-            self.profile_model_catalog_combo.clear()
-            self.profile_model_catalog_combo.addItem(
-                MODEL_PROFILES_PAGE_COPY["model_catalog_placeholder"],
-                "",
-            )
-            for model_id in values:
-                self.profile_model_catalog_combo.addItem(model_id, model_id)
-        finally:
-            self._loading = False
+        identity = profile_model_catalog.connection_identity(self._section or {}, profile_id)
+        self._catalog_values[identity] = tuple(values)
+        self._refresh_model_choices()
         self._show_status(
             MODEL_PROFILES_PAGE_COPY["model_catalog_loaded"].format(
                 count=len(values),
@@ -1314,25 +1414,16 @@ class ProfilesSettingsPage(QObject):
             )
         )
 
-    def set_model_catalog_error(self, code: str, *, profile_id: str) -> None:
+    def set_model_catalog_error(self, code: str, *, profile_id: str, connection_id: str = "") -> None:
         """Show a stable catalog failure code without provider response text."""
 
-        if not self._catalog_profile_matches(profile_id):
+        if not self._catalog_profile_matches(profile_id, connection_id):
             return
         self._show_status(
             MODEL_PROFILES_PAGE_COPY["model_catalog_failed"].format(
                 code=str(code or "unknown")
             )
         )
-
-    def _on_model_catalog_selected(self, _index: int) -> None:
-        if self._loading:
-            return
-        model_id = str(self.profile_model_catalog_combo.currentData() or "")
-        if not model_id:
-            return
-        self.profile_model_edit.setText(model_id)
-        self._on_profile_fields_changed()
 
     def set_probe_running(self, running: bool) -> None:
         """Reflect the host's probe worker without owning the task lock."""
@@ -1410,6 +1501,12 @@ class ProfilesSettingsPage(QObject):
 
     # -- write-through handlers ------------------------------------------
 
+    def _on_model_completed(self, model_id: str) -> None:
+        if self._loading:
+            return
+        self.profile_model_edit.setText(model_id)
+        self._on_profile_fields_changed()
+
     def _on_profile_row_changed(self, _row: int) -> None:
         if self._loading:
             return
@@ -1427,6 +1524,7 @@ class ProfilesSettingsPage(QObject):
     def _on_profile_fields_changed(self, *_args: object) -> None:
         if self._loading or self._section is None or not self._selected_profile_id:
             return
+        old_connection = profile_model_catalog.connection_identity(self._section, self._selected_profile_id)
         models = [
             part.strip()
             for part in self.profile_models_edit.text().replace("，", ",").split(",")
@@ -1449,6 +1547,10 @@ class ProfilesSettingsPage(QObject):
             return
         self._refresh_profiles_list()
         self._refresh_defaults()
+        # Keep the completion model stable while accepting a search result.
+        if old_connection != profile_model_catalog.connection_identity(self._section, self._selected_profile_id):
+            self._refresh_model_choices()
+        self._refresh_enabled()
 
     def _on_profile_capabilities_changed(self, *_args: object) -> None:
         if self._loading or self._section is None or not self._selected_profile_id:
@@ -1535,6 +1637,8 @@ class ProfilesSettingsPage(QObject):
         self._refresh_profiles_list()
         self._refresh_defaults()
         self._refresh_routes()
+        self._refresh_model_choices()
+        self._refresh_enabled()
 
     def _parse_extra_headers(self) -> dict[str, str] | None:
         """Parse the provider extra-headers JSON field or show a local error."""

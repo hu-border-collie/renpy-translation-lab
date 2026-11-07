@@ -25,7 +25,12 @@ from PySide6.QtWidgets import (
 
 from gui_qt.reports.keyword_merge_report import format_merge_preview_text
 from gui_qt.appearance.theme_tokens import tokens_for_theme
-from gui_qt.user_copy import KEYWORD_CANDIDATE_COPY
+from gui_qt.user_copy import (
+    KEYWORD_CANDIDATE_COPY,
+    KEYWORD_CATEGORY_LABELS,
+    KEYWORD_GLOSSARY_SECTION_LABELS,
+    KEYWORD_MERGE_TABLE_HEADERS,
+)
 from gui_qt.widgets.widget_helpers import message_box_information, message_box_question, message_box_warning
 
 
@@ -101,18 +106,7 @@ class KeywordMergeDialog(QDialog):
 
         self.table = QTableWidget(0, 8)
         self.table.setObjectName("keyword_merge_table")
-        self.table.setHorizontalHeaderLabels(
-            [
-                "写入",
-                "source",
-                "suggested_target",
-                "category",
-                "confidence",
-                "分区",
-                "历史首次译法",
-                "提示",
-            ]
-        )
+        self.table.setHorizontalHeaderLabels(KEYWORD_MERGE_TABLE_HEADERS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = self.table.horizontalHeader()
@@ -120,6 +114,8 @@ class KeywordMergeDialog(QDialog):
             header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+            for column in (3, 4, 5):
+                header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
             header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
             header.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         self._populate_table()
@@ -182,9 +178,9 @@ class KeywordMergeDialog(QDialog):
                 (
                     source,
                     target,
-                    category,
+                    KEYWORD_CATEGORY_LABELS.get(category, category),
                     f"{confidence:.2f}",
-                    section,
+                    KEYWORD_GLOSSARY_SECTION_LABELS.get(section, section),
                     history_text,
                     warning_text,
                 ),

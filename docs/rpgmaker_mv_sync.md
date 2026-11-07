@@ -1,6 +1,6 @@
-# RPG Maker MV：耐久 Sync 与预处理
+# RPG Maker MV：Gemini Batch、耐久 Sync 与预处理
 
-这是 #567 / #572 的耐久 Sync 产品路线，限定在[MV Adapter](engine_adapter.md#rpgmaker-mv-a2)声明的核心／插件窗口。默认支持地图和公共事件的 401 消息、102 选项及其 402 镜像；可显式启用下述系统术语与地图显示名。数据库、角色名修改、MapInfos 名称回退、插件 UI、动态脚本、滚动文本及图片仍留在后续范围；MZ 不在此路线。
+这是 #567 / #572 建立的 MV 产品路线，翻译入口支持 Gemini Batch 与耐久 Sync，限定在[MV Adapter](engine_adapter.md#rpgmaker-mv-a2)声明的核心／插件窗口。默认支持地图和公共事件的 401 消息、102 选项及其 402 镜像；可显式启用下述系统术语与地图显示名。数据库、角色名修改、MapInfos 名称回退、插件 UI、动态脚本、滚动文本及图片仍留在后续范围；MZ 不在此路线。
 
 工程回归使用原创固定响应材料。A0 原生补证、A4 的真实 101 + 7 试点、人类／Agent 独立语义审阅、字体、显示、分支与存读档分别验收，不能从本页的产品接线推断“正式支持已验收”或“游戏已汉化完成”。
 
@@ -128,6 +128,41 @@ python gemini_translate_batch.py translate-preflight --strategy sync
 
 记录保存在目标内容根的 `translation_context/coverage_review.json`。缺失、pending、非法、过期、policy 不满足或存在未解决 findings 均阻止生成执行计划。缺失记录时 GUI 显示待覆盖核对并提供导出／导入入口，保留真实计数；底层读取错误留在完整详情。当前文本范围内审阅通过不会消除报告中其他 unsupported 范围，也不会使全游戏 coverage 变成 confirmed；GUI 仍在摘要中单列未支持候选，不计入待译数。doctor 的 `start_pending_sync` / `mv_scope_no_pending` 只描述当前已审阅文本范围；材料不可读时计数为未知。
 
+## Gemini Batch
+
+完成上述独立源／目标配置与覆盖审阅后，可使用现有 Batch 翻译链路。
+主模型必须是支持 `gemini_batch` 的 Gemini 直连 ModelProfile；模型名称与执行方式分别选择。
+DeepSeek 等同步 profile 不会因为项目开放 Batch 而获得 Gemini Batch 能力。
+
+```powershell
+python gemini_translate_batch.py translate-preflight --strategy gemini_batch --profile <GEMINI_PROFILE>
+python gemini_translate_batch.py build --profile <GEMINI_PROFILE> --skip-prepare
+python gemini_translate_batch.py submit <MANIFEST>
+python gemini_translate_batch.py status <MANIFEST>
+python gemini_translate_batch.py download <MANIFEST>
+python gemini_translate_batch.py check <MANIFEST>
+python gemini_translate_batch.py apply <MANIFEST>
+```
+
+`build` 从已审阅 MV occurrence 构造共享 TranslationPlan，冻结完整源／目标、核心／插件、
+配置、范围与审阅身份；不会解析 `.rpy` 或运行 Ren'Py prepare。模型只见带保护标记的字段；
+检查时恢复并验证控制码、显示字段参数与 102 / 402 镜像，写回使用同一 schema 2 JSON 计划和原子 writer。
+`submit` 及上传后创建远端作业前均复查材料。结果／请求／质量策略或材料变化会使旧检查失效，
+`--force` 不能跳过当前 `writeback_gate.decision=allow`、结构阻断或配置升级为 blocker 的质量规则。
+
+失败项使用现有 `build-retry` → 提交／下载补译 → `merge-retry <PARENT> <RETRY>`，
+合并后须重新检查父任务再应用。`split` 保留相同材料身份，按 part 顺序检查和应用；
+前序包的 `mv_apply_receipt.json` 与目标 JSON 在同一事务中保存，后序包只接受这些已检查的精确输出。
+写入后若 manifest／进度保存中断，再次应用会核验凭据并恢复簿记；不会重复写 JSON。
+不要删除前序包、凭据或其请求／结果，也不要在多个派生包之间同时写回同一目标。
+
+Macro、词表、原文索引与已审阅历史可用于 Batch。启用的历史／索引使用 **Batch** 的开关、
+embedding 绑定和 store 路径；先显式准备，缺失／过期／不兼容时预检会说明，不会从当前中文目标自动入库。
+例如 `bootstrap-source-index --strategy gemini_batch` 和 `bootstrap-rag --strategy gemini_batch`；
+这些预建及非空库检索会请求 embedding Provider。翻译提交也会产生 Provider 请求。
+Story Memory、Project Analysis 注入、Batch 关键词、修订和外部 Agent 工作包仍不支持 MV。
+`apply --export-only` / `--export-dir` 的另目录导出仍限 Ren'Py；MV 已绑定独立目标副本，使用普通 `apply`。
+
 ## 同步关键词、原文索引与已审阅历史
 
 三个预处理入口复用现有关键词及上下文核心。它们使用当前已审阅范围中的真实源 occurrence，
@@ -136,9 +171,18 @@ python gemini_translate_batch.py translate-preflight --strategy sync
 
 ```powershell
 python gemini_translate_batch.py sync-keywords --limit 3 --output json
+python gemini_translate_batch.py sync-keywords --resume <MANIFEST> --output json
 python gemini_translate_batch.py bootstrap-source-index --skip-prepare --output json
 python gemini_translate_batch.py bootstrap-rag --skip-prepare --output json
 ```
+
+`sync-keywords` 每个响应返回后即保存检查点，停止后可通过 `--resume <MANIFEST>` 继续；
+先恢复有效结果，只把缺失、失败和不完整块列入待补队列，进度分母只统计待补块。
+每次显式续跑最多为不完整块新增一轮修复，并保留旧响应；修复中断时复用该轮已保存响应。
+结果未知的中断请求须显式 `--retry-unknown` 才会重发。
+恢复与实际发送前保留原文、目标、窗口、审阅、配置和适配器身份复核；
+派发阶段复用完整事件审计，后续请求以完整字节校验代替重复事件提取；
+导出前仍重新核对材料。
 
 `sync-keywords` 使用冻结的 Sync keyword 阶段路由、Sync Macro 与本地词表，复用既有 prompt、
 schema、候选去重、证据校验和四份 JSONL / Markdown 报告。候选的 `source_locations`、
@@ -171,14 +215,35 @@ UI／图片草稿、结构检查通过或 apply 成功推断为语义批准。ap
 
 两种库沿用 `JsonSourceIndexStore` / `JsonRagStore` 的文件格式、锁和原子替换，目录独立且不能
 互相嵌套，也不能放入冻结原始源或目标 `data/`、`js/`。路径遵循 `context_storage`；
-可用 `sync.source_index.store_dir` 与 `sync.rag.store_dir` 显式覆盖（相对目标内容根）。
+可用 `sync.source_index.store_dir` 与 `sync.rag.store_dir` 显式覆盖（相对目标内容根）；Batch 对应 `batch.source_index.store_dir` 与 `batch.rag.store_dir`。
 只有 bootstrap 会建立或重建向量。源记录带 occurrence 身份、源摘要和路径；历史记录另带
 独立 review 与输入摘要。默认 prune；`--no-prune` 留下的旧范围记录不会进入新范围检索。
 
-启用 `sync.source_index.enabled` / `sync.rag.enabled` 后再建立相应库；原文索引另遵循现有
-项目级同步索引开关，历史使用既有的「启用同步 RAG」开关。
-Embedding 使用 **Sync 的 embedding 绑定**；v1 配置由 Sync 所用 ModelProfile 引用 embedding
-profile，旧配置读取 `sync.rag` 的 embedding 字段。来源、模型、endpoint、维度与 document/query
+两种 MV bootstrap 每批向量成功后都会刷新并保存独立进度文件；接口失败或任务停止后，
+再次运行同一命令（GUI 再点预建）会核对项目、原始源、范围、Embedding 身份和历史输入，
+恢复匹配的向量，只请求缺失部分。损坏或未写完整的批次从最近有效进度继续；输入变化后
+不会沿用不匹配的进度。`checkpointed_embeddings` 表示已保存的向量进度，
+`resumed_embeddings` 表示本次从进度恢复的数量，计入 `reused_embeddings`。
+暂存进度不能检索，`upserted` 仍表示最终入库数量；全部输入复核与入库完成后才返回
+`prepared=true`，随后清理进度文件。升级前未保存到磁盘的向量无法补救。
+
+失败结果在文本／JSON、索引 metadata 和 GUI 摘要中保留白名单诊断：`failure_stage`、
+`exception_type`、异常类型原因链、可获取的 `http_status`／`provider_status`、失败批次范围、
+请求尝试次数和耗时。调用栈只保留文件名、函数与行号；异常消息、正文、密钥及局部变量不落盘。
+保存进度或完整索引的本地错误分别标记，不作为 Provider 错误。缺失状态和未分类原因仍为未知；
+`retryable=false` 只描述自动重试策略，不表示再次预建必然失败。诊断落盘失败不会遮盖原始异常，
+结果仍返回原始诊断并提示保留运行日志。
+
+Gemini 向量请求遇到连接失败（包括 HTTPX/httpcore 的 `ConnectError`）、超时、429 或
+5xx 时，会在现有次数上限内自动重试。单 Key 默认最多尝试 3 次，多 Key 沿用既有的
+轮换次数预算；首次重试前等待 1 秒，之后每次最多等待 2 秒。次数耗尽后仍保留失败诊断和
+已保存的向量进度，再次预建可续建；401/403、无效请求及未分类错误不会因此自动重试。
+
+预建默认跟随保存的 `model_routing.defaults.execution_strategy`，旧 MV 配置缺省为 Sync；
+CLI 可用 `--strategy sync` / `--strategy gemini_batch` 显式选择。先启用对应 `sync` / `batch`
+的 `source_index.enabled` / `rag.enabled`，并遵循现有项目级开关。
+Embedding 使用对应执行方式的绑定；v1 配置由该方式所用 ModelProfile 引用 embedding
+profile，旧配置读取对应 `sync.rag` / `batch.rag` 的 embedding 字段。来源、模型、endpoint、维度与 document/query
 task 身份必须兼容；修改身份需要显式重新 bootstrap，不会静默混用旧向量。
 准备和非空库检索会调用 embedding Provider，`sync-keywords` 会调用生成 Provider。
 
@@ -221,6 +286,8 @@ python gemini_translate_batch.py apply <RUN>
 3. 需要历史时，在「设置 → 项目 → MV 已审阅双语历史文件」选择上述独立审阅 JSONL。
    在「上下文库」启用所需层，使用「初始化记忆库」「初始化原文索引」调用同一 bootstrap，
    按实际状态确认是否准备完成；「关键词 / 术语 → 同步」生成候选与概要报告。
-4. 进入「同步翻译」，选择可用模型并启动；运行、继续、检查和应用均调用上述 CLI 合同。
+4. 进入「翻译」，选择可用主模型与「同步」或「Gemini Batch」再启动；预检、运行、继续、检查和应用均调用上述 CLI 合同。
 
-项目／配置／材料／模型／库制品／任务代次变化会使相应旧状态回调失效。GUI 不会重新实现 MV 翻译语义。Batch、外部 Agent 工作包、旧 `gemini_translate.py` 同步入口、修订和 Ren'Py prepare 当前不支持 MV，会在准备／付费派发前拒绝；不支持的 GUI 模式不能启动。
+上下文库的状态和预建跟随模型设置中保存的默认执行方式；翻译页临时选择其他方式不会迁移或重建向量库。GUI 标明库的执行范围，诊断命令提供两种策略的预建参考。
+
+项目／配置／材料／模型／库制品／任务代次变化会使相应旧状态回调失效。GUI 不会重新实现 MV 翻译语义。外部 Agent 工作包、旧 `gemini_translate.py` 同步入口、修订和 Ren'Py prepare 当前不支持 MV，会在准备／付费派发前拒绝；不支持的 GUI 模式不能启动。

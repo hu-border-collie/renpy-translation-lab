@@ -495,8 +495,8 @@ Sync apply 路径不能执行它。后续产品 workflow 仍须验证源 / 目�
 
 [控制规则](../engine_adapters/rpgmaker_mv_controls.py)供 Adapter 和共享
 [结构保护](../quality_review/structure_protection.py)复用。popup profile 参与占位符映射的身份
-绑定；Ren'Py / Tyrano 的既有映射格式保持不变。共享 TranslationPlan 接受 MV Sync，
-产品入口限定为耐久 Sync；Batch 和外部 Agent 工作包继续拒绝 MV。
+绑定；Ren'Py / Tyrano 的既有映射格式保持不变。共享 TranslationPlan 接受 MV Sync 与 Gemini Batch；
+Batch 复用双快照 JSON 检查和原子写回，支持补译、按序拆包及写后簿记恢复。外部 Agent 工作包继续拒绝 MV。
 
 ### Coverage、计划与验证
 

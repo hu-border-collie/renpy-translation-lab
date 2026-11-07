@@ -4,6 +4,10 @@ from unittest import mock
 
 from gui_qt.appearance.font_helpers import (
     GuiFontFamilies,
+    UI_FONT_SIZE_BODY_PX,
+    UI_FONT_SIZE_HINT_PX,
+    UI_FONT_SIZE_MONO_BODY_PX,
+    UI_FONT_SIZE_SECTION_PX,
     build_font_stylesheet,
     bundled_fonts_dir,
     load_gui_fonts,
@@ -22,6 +26,11 @@ class GuiFontHelpersTests(unittest.TestCase):
         fonts_dir = bundled_fonts_dir(self.resources_dir)
         self.assertTrue((fonts_dir / "HarmonyOS_Sans_LICENSE.txt").is_file())
         self.assertTrue((fonts_dir / "LXGW_WenKai_OFL.txt").is_file())
+
+    def test_font_size_hierarchy_is_monotonic(self):
+        self.assertGreater(UI_FONT_SIZE_SECTION_PX, UI_FONT_SIZE_BODY_PX)
+        self.assertGreater(UI_FONT_SIZE_BODY_PX, UI_FONT_SIZE_HINT_PX)
+        self.assertEqual(UI_FONT_SIZE_MONO_BODY_PX, 12)
 
     def test_user_fonts_dir_honors_override(self):
         with mock.patch.dict(

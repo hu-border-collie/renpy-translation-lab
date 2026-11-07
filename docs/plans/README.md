@@ -10,7 +10,7 @@
 
 | 跟踪 | 已有基础与剩余工作 |
 | --- | --- |
-| [#567 MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | A1–A3、A4 离线增量及限定显示字段／预处理已由 #568、#571、#573–#576 合并；当前路线是[MV 耐久 Sync](../rpgmaker_mv_sync.md)。原生补证、完整章节与全游戏交付仍未验收。 |
+| [#567 MV 与 Komorebi 交付](https://github.com/hu-border-collie/renpy-translation-lab/issues/567) | A1–A3、A4 离线增量及限定显示字段／预处理已由 #568、#571、#573–#576 合并；产品路线及新增 Batch 合同见[MV Batch / 耐久 Sync](../rpgmaker_mv_sync.md)。原生补证、完整章节与全游戏交付仍未验收。 |
 | [#565 Komorebi 调查](https://github.com/hu-border-collie/renpy-translation-lab/issues/565) | 离线调查与独立 101＋7 试点已交付；原生可达、显示、存读档和验收回填待完成。core 版本声明冲突继续保留，以实际材料摘要固定窗口。 |
 | [#272 引擎研究与选型](https://github.com/hu-border-collie/renpy-translation-lab/issues/272) | 具体 MV 实施已归 #567；研究收口与线上选型回填仍待处理。其他引擎没有全量重查，不按旧评级自动立项。 |
 | [#147 Story Graph 试点](https://github.com/hu-border-collie/renpy-translation-lab/issues/147) | 保持低优先级。出现现有 glossary／原文索引难解决的关系、称呼或口吻问题后，再做最小确认图谱对照；不是 #567 的前置。 |
@@ -20,6 +20,12 @@
 - [#565 调查](issue-565-komorebi-survey-2026-10-23.md)及[脱敏元数据](issue-565-materials/README.md)：已合并的离线范围与独立清单。
 - [#567 A4 离线试点](issue-567-a4-offline-pilot-2026-10-25.md)：101＋7 真实结果、Agent 审阅和安全写回；原生部分后置。
 - [#567 B0 范围盘点](issue-567-b0-scope-audit-2026-10-25.md)及[材料说明](issue-567-b0-materials/README.md)：只读范围与脱敏汇总；C0 为候选范围，发行与完整章节分母尚未验收。
+
+## 本地设计方案
+
+| 方案 | 状态与实施顺序 |
+| --- | --- |
+| [GUI 进度展示统一方案](gui-progress-unification.md) | 2026-10-31 拟定，尚未全量实施。先统一计数、状态、恢复与主题合同，再迁移同步关键词、耐久 Sync 和上下文预建，最后覆盖批量任务与安装／扫描等其余入口。 |
 
 ## 已重评的旧建议
 

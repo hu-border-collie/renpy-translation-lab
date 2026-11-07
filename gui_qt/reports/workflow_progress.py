@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, replace
 
 from gui_qt.reports.duration_format import format_remaining_duration_zh
+from gui_qt.user_copy import SYNC_KEYWORD_COPY
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,14 @@ class WorkflowProgressState:
     last_sample_current: int = 0
     seconds_per_unit: float | None = None
     remaining_seconds: int | None = None
+    keyword_request_index: int = 0
+    keyword_saved_records: int = 0
+    keyword_loaded_records: int = 0
+    keyword_task_total: int = 0
+    keyword_restored_records: int = 0
+    keyword_queue_known: bool = False
+    keyword_queue_failed: int = 0
+    keyword_queue_incomplete: int = 0
 
 
 _SOURCE_INDEX_BUILD_TOTAL_RE = re.compile(
@@ -39,6 +48,15 @@ _SOURCE_INDEX_BUILD_COMPLETE_RE = re.compile(
     r"Source index retrieval complete:\s*(\d+)/(\d+)\s*chunks queried\."
 )
 _SYNC_REQUEST_PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+(.+?)\s*$")
+_KEYWORD_SAVED_RE = re.compile(r"^Sync keyword saved: (\d+)/(\d+) requests; resumed=(\d+)\.$")
+_KEYWORD_PHASE_RE = re.compile(r"^Sync keyword phase: (validating|waiting)\s+(.+)$")
+_KEYWORD_QUEUE_RE = re.compile(
+    r"^Sync keyword queue: total=(\d+); reused=(\d+); pending=(\d+); "
+    r"failed=(\d+); incomplete=(\d+)\.$"
+)
+_KEYWORD_PENDING_PROGRESS_RE = re.compile(
+    r"^Sync keyword progress: (\d+)/(\d+) pending blocks processed\.$"
+)
 _SYNC_FILES_TOTAL_RE = re.compile(r"Found\s+(\d+)\s+files\.")
 _SYNC_PROCESSING_FILE_RE = re.compile(r"Processing:\s*(.+?)\s*$")
 _SYNC_FOUND_LINES_RE = re.compile(r"Found\s+(\d+)\s+lines to translate\.")
@@ -59,6 +77,9 @@ _WORKFLOW_ETA_MIN_PROGRESS_UNITS = 2
 
 
 def create_workflow_progress_state(kind: str) -> WorkflowProgressState | None:
+    if kind == "sync_keywords":
+        return WorkflowProgressState(kind=kind, label=SYNC_KEYWORD_COPY['scanning'],
+                                     visible=True, indeterminate=True)
     if kind == "work_bootstrap":
         return WorkflowProgressState(
             kind=kind,
@@ -91,6 +112,8 @@ def update_workflow_progress_from_line(
         return _with_progress_timing(state, _update_sync_translation_progress(text, state), now=now)
     if state.kind == "sync_requests":
         return _with_progress_timing(state, _update_sync_request_progress(text, state), now=now)
+    if state.kind == "sync_keywords":
+        return _update_keyword_progress(text, state)
     if state.kind == "rag_bootstrap":
         return _with_progress_timing(state, _update_rag_bootstrap_progress(text, state), now=now)
     if state.kind == "work_bootstrap":
@@ -142,6 +165,86 @@ def _update_source_index_build_progress(
             visible=True,
         )
     return state
+
+
+def _update_keyword_progress(text: str, state: WorkflowProgressState) -> WorkflowProgressState:
+    match = _KEYWORD_QUEUE_RE.match(text)
+    if match:
+        total, reused, pending, failed, incomplete = map(int, match.groups())
+        updated = replace(
+            state, current=0, total=pending, visible=True, indeterminate=pending == 0,
+            keyword_queue_known=True, keyword_task_total=total,
+            keyword_restored_records=reused, keyword_queue_failed=failed,
+            keyword_queue_incomplete=incomplete,
+            label=_keyword_pending_label(0, pending),
+        )
+        return replace(updated, facts=_keyword_record_facts(updated))
+    match = _KEYWORD_PENDING_PROGRESS_RE.match(text)
+    if match and state.keyword_queue_known:
+        current, total = map(int, match.groups())
+        if total != state.total:
+            return state
+        current = min(max(current, state.current), total)
+        updated = replace(state, current=current, label=_keyword_pending_label(current, total))
+        return replace(updated, facts=_keyword_record_facts(updated))
+    match = _KEYWORD_SAVED_RE.match(text)
+    if match:
+        saved, total, loaded = map(int, match.groups())
+        if state.keyword_queue_known:
+            updated = replace(state, keyword_saved_records=saved, keyword_loaded_records=loaded)
+            return replace(updated, facts=_keyword_record_facts(updated))
+        # Historical rows include failures. Advance this pass only when the
+        # active request has finished and its replacement record is durable.
+        current = min(state.keyword_request_index, total)
+        updated = replace(
+            state, current=current, total=total, visible=True, indeterminate=False,
+            keyword_saved_records=saved, keyword_loaded_records=loaded,
+            label=SYNC_KEYWORD_COPY['processed'].format(current=current, total=total),
+        )
+        return replace(updated, facts=_keyword_record_facts(updated))
+    match = _SYNC_REQUEST_PROGRESS_RE.match(text)
+    if match:
+        index, total, key = match.groups()
+        updated = replace(
+            state, keyword_request_index=int(index), total=int(total),
+            visible=True, indeterminate=False,
+            label=(_keyword_pending_label(state.current, state.total) if state.keyword_queue_known
+                   else SYNC_KEYWORD_COPY['processed'].format(current=state.current, total=total)),
+        )
+        return replace(updated, facts=(
+            *_keyword_record_facts(updated), SYNC_KEYWORD_COPY['current_request'].format(key=key),
+        ))
+    match = _KEYWORD_PHASE_RE.match(text)
+    if match:
+        phase, key = match.groups()
+        return replace(state, facts=(*_keyword_record_facts(state), f"{SYNC_KEYWORD_COPY[phase]}：{key}"))
+    return state
+
+
+def _keyword_pending_label(current: int, total: int) -> str:
+    if not total:
+        return SYNC_KEYWORD_COPY['exporting_restored']
+    return SYNC_KEYWORD_COPY['pending_processed'].format(
+        current=current, total=total, percent=100 * current / total)
+
+
+def _keyword_record_facts(state: WorkflowProgressState) -> tuple[str, ...]:
+    facts: list[str] = []
+    total = state.keyword_task_total if state.keyword_queue_known else state.total
+    if state.keyword_queue_known:
+        facts.extend((
+            SYNC_KEYWORD_COPY['task_total'].format(count=total),
+            SYNC_KEYWORD_COPY['restored_valid'].format(count=state.keyword_restored_records),
+            SYNC_KEYWORD_COPY['queue_composition'].format(
+                failed=state.keyword_queue_failed, incomplete=state.keyword_queue_incomplete,
+                missing=max(0, state.total - state.keyword_queue_failed - state.keyword_queue_incomplete)),
+        ))
+    if total:
+        facts.append(SYNC_KEYWORD_COPY['saved_records'].format(
+            current=state.keyword_saved_records, total=total))
+    if state.keyword_loaded_records:
+        facts.append(SYNC_KEYWORD_COPY['resumed'].format(count=state.keyword_loaded_records))
+    return tuple(facts)
 
 
 def _update_sync_request_progress(

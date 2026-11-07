@@ -97,6 +97,35 @@ class _LifecycleFakeProcess(_FakeProcess):
 
 @gui_test_support.skip_unless_gui(CliRunner is None, IMPORT_ERROR)
 class CliRunnerChannelTests(unittest.TestCase):
+    def test_child_progress_arrives_while_process_is_still_running(self):
+        import tempfile
+        from PySide6.QtCore import QCoreApplication, QEvent, QEventLoop, QTimer
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'buffered_fixture.py'
+            script.write_text('import sys\nprint("fixture ready")\nsys.stdin.readline()\n',
+                              encoding='utf-8')
+            loop = QEventLoop()
+            timeout = QTimer()
+            timeout.setSingleShot(True)
+            timeout.timeout.connect(loop.quit)
+            self.runner.stdout_line_ready.connect(
+                lambda line: loop.quit() if line == 'fixture ready' else None)
+            self.runner.run(script, [])
+            process = self.runner._proc
+            try:
+                timeout.start(5000)
+                loop.exec()
+                self.assertIn('fixture ready', self.stdout_lines)
+                self.assertEqual(process.state(), QProcess.ProcessState.Running)
+            finally:
+                timeout.stop()
+                process.kill()
+                process.waitForFinished(3000)
+                app.processEvents()
+                QCoreApplication.sendPostedEvents(process, QEvent.Type.DeferredDelete)
+
     def setUp(self):
         self.runner = CliRunner()
         self.stdout_lines = []

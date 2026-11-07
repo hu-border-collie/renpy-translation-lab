@@ -35,7 +35,7 @@ class SettingsMasterDetail(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         # Account for translated button labels and larger fonts in both panes.
-        threshold = max(1000, self.fontMetrics().horizontalAdvance("宽") * 65)
+        threshold = max(760, self.fontMetrics().horizontalAdvance("宽") * 52)
         self._reflow(self.width() >= threshold)
 
     def _reflow(self, wide: bool) -> None:
@@ -46,8 +46,8 @@ class SettingsMasterDetail(QWidget):
         self._grid.removeWidget(self._detail)
         self._grid.addWidget(self._master, 0, 0, Qt.AlignmentFlag.AlignTop)
         self._grid.addWidget(self._detail, 0 if wide else 1, 1 if wide else 0)
-        self._grid.setColumnStretch(0, 2 if wide else 1)
-        self._grid.setColumnStretch(1, 3 if wide else 0)
+        self._grid.setColumnStretch(0, 1)
+        self._grid.setColumnStretch(1, 2 if wide else 0)
 
 
 def limit_short_field(widget: QWidget, *, numeric: bool = False) -> None:

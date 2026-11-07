@@ -87,10 +87,11 @@ class MvDurableSyncTests(unittest.TestCase):
         self.assertEqual(before, {path.relative_to(self.source): path.read_bytes() for path in self.source.rglob('*') if path.is_file()})
         self.assertEqual(batch.apply_durable_sync_results(store)['last_apply_result'], 'already_applied')
 
-    def test_mv_batch_plan_is_explicitly_refused(self):
-        with self.assertRaisesRegex(ValueError, 'durable Sync'):
-            translation_plan.build_translation_plan(self.context.pending_jobs,
-                execution_strategy='gemini_batch', source_identity=self.context.plan_build.plan.source_identity)
+    def test_mv_plan_material_can_be_used_by_batch(self):
+        build = translation_plan.build_translation_plan(self.context.pending_jobs,
+            execution_strategy='gemini_batch', source_identity=self.context.plan_build.plan.source_identity)
+        self.assertEqual(build.plan.source_identity, self.context.plan_build.plan.source_identity)
+        self.assertEqual(sum(len(request.expected_ids) for request in build.requests), 14)
 
     def test_omitted_engine_uses_the_same_review_and_durable_writeback_contract(self):
         self.config.pop('engine')
@@ -298,7 +299,7 @@ class MvDurableSyncTests(unittest.TestCase):
         with self.assertRaises(cli_contract.MachineContractError):
             batch.apply_durable_sync_results(store)
 
-    def test_preflight_and_coverage_export_are_offline_and_routes_fail_before_prepare(self):
+    def test_preflight_and_coverage_export_are_offline(self):
         with mock.patch('execution.sync_request.run_sync_request') as provider:
             output = self.root / 'coverage-export'
             batch.export_live_coverage_package(output)
@@ -307,12 +308,6 @@ class MvDurableSyncTests(unittest.TestCase):
                 payload = batch.run_translate_preflight(SimpleNamespace(strategy='sync', profile=''))
             self.assertEqual(payload['project']['engine'], 'rpgmaker_mv')
             self.assertEqual(payload['counts']['pending_items'], 14)
-            with self.assertRaises(cli_contract.MachineContractError):
-                batch.run_translate_preflight(SimpleNamespace(strategy='gemini_batch', profile=''))
-            with mock.patch.object(runtime, 'run_prepare_steps') as prepare:
-                with self.assertRaisesRegex(ValueError, 'durable Sync'):
-                    batch.create_batch_package()
-            prepare.assert_not_called()
         provider.assert_not_called()
 
     def test_crash_mid_apply_recovers_before_retry(self):

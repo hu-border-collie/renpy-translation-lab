@@ -30,6 +30,7 @@ from context_engine.embedding_backend import (
     check_persisted_store_query_compatibility,
 )
 from context_engine.rag_memory import EmbeddingStoreIdentityError
+from context_engine.embedding_diagnostics import capture_exception_diagnostics, safe_exception_diagnostics
 
 
 BACKEND_GEMINI = 'gemini'
@@ -396,18 +397,21 @@ def public_error_diagnostics(exc: BaseException) -> dict[str, object]:
             'failure_reason': 'retrieval_error',
             'error_category': exc.category.value,
             'retryable': bool(exc.retryable),
+            **safe_exception_diagnostics({**exc.diagnostics, 'attempt_count': exc.attempt_count}),
         }
     if isinstance(exc, EmbeddingContractError):
         return {
             'failure_reason': 'invalid_embedding_request',
             'error_category': EmbeddingErrorCategory.INVALID_REQUEST.value,
             'retryable': False,
+            **capture_exception_diagnostics(exc),
         }
     if isinstance(exc, EmbeddingRuntimeError):
         return {
             'failure_reason': exc.reason,
             'error_category': EmbeddingErrorCategory.INVALID_REQUEST.value,
             'retryable': False,
+            **capture_exception_diagnostics(exc),
         }
     if isinstance(exc, EmbeddingStoreIdentityError):
         return {
@@ -415,11 +419,20 @@ def public_error_diagnostics(exc: BaseException) -> dict[str, object]:
             'error_category': EmbeddingErrorCategory.INVALID_REQUEST.value,
             'retryable': False,
             'action': 'rebuild_store',
+            **capture_exception_diagnostics(exc),
+        }
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return {
+            'failure_reason': 'retrieval_error',
+            'error_category': 'timeout' if isinstance(exc, TimeoutError) else 'unavailable',
+            'retryable': True,
+            **capture_exception_diagnostics(exc),
         }
     return {
         'failure_reason': 'retrieval_error',
-        'error_category': EmbeddingErrorCategory.PROVIDER_ERROR.value,
+        'error_category': 'local_error' if isinstance(exc, OSError) else 'internal_error',
         'retryable': False,
+        **capture_exception_diagnostics(exc),
     }
 
 

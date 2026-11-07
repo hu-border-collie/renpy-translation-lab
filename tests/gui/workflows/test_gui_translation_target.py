@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -25,6 +26,7 @@ else:
 
 from providers.model_routing_migration import preview_migration
 from tests.support import gui_test_support
+from tests.support.mv_project import make_mv_project
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "model_routing_legacy"
 
@@ -143,6 +145,16 @@ class TranslationTargetSectionTests(unittest.TestCase):
         self.assertFalse(self.section.strategy_combo.isEnabled())
         self.assertEqual(self.section.hint_label.text(), "旧配置提示")
 
+    def test_empty_profiles_do_not_claim_the_strategy_is_unsupported(self) -> None:
+        self.section.set_target_choices({
+            "profiles": [],
+            "selected_strategy": "sync",
+            "disabled": True,
+        })
+
+        self.assertEqual(self.section.strategy_combo.currentText(), "同步")
+        self.assertEqual(self.selections, [])
+
 
 @gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
 class TranslationTargetAppTests(unittest.TestCase):
@@ -156,6 +168,7 @@ class TranslationTargetAppTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.window = MainWindow()
+        self.output_runner = self.window.runner
         self.runner = _FakeRunner()
         self.window.runner = self.runner
         self.window.state.load_translator_config = lambda: routing_config()  # type: ignore[method-assign]
@@ -218,6 +231,94 @@ class TranslationTargetAppTests(unittest.TestCase):
             self.window._on_finished(0)
             QApplication.processEvents()
 
+    def _emit_cli_output(self, text: str, *, stderr: bool = False) -> None:
+        runner = self.output_runner
+        channel = runner.stderr_line_ready if stderr else runner.stdout_line_ready
+        runner._emit_complete_lines((text + "\n").encode("utf-8"), channel)
+
+    def test_preflight_json_ignores_startup_and_interleaved_diagnostics(self) -> None:
+        self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
+        log_lines = []
+        self.window._append_log = log_lines.append
+        for mode in (
+            WorkMode.BATCH_TRANSLATION,
+            WorkMode.SYNC_TRANSLATION,
+            WorkMode.SYNC_KEYWORD_EXTRACTION,
+        ):
+            with self.subTest(mode=mode):
+                log_lines.clear()
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                self.window._on_start_translation()
+                calls_before_finish = len(self.runner.calls)
+                self.output_runner.line_ready.emit("[GUI] 正在启动：预检命令")
+                self._emit_cli_output("Loaded 1 API keys from config file.", stderr=True)
+                envelope = json.dumps(json.loads(self._preflight_envelope()), indent=2)
+                first_line, remaining_lines = envelope.split("\n", 1)
+                self._emit_cli_output(first_line)
+                self._emit_cli_output("Using sync chunk size: 40", stderr=True)
+                self._emit_cli_output(remaining_lines)
+                self._emit_cli_output("预检诊断已完成。", stderr=True)
+
+                with (
+                    mock.patch("gui_qt.app.message_box_question", return_value="no") as question,
+                    mock.patch("gui_qt.app.message_box_information") as info,
+                ):
+                    self.window._on_finished(0)
+
+                question.assert_called_once()
+                info.assert_not_called()
+                self.assertEqual(self.window._readiness_preflight_status, "ready")
+                self.assertEqual(len(self.runner.calls), calls_before_finish)
+                self.assertIsNone(self.window._pending_translation_start)
+                self.assertIn("[GUI] 正在启动：预检命令", log_lines)
+                self.assertIn("Using sync chunk size: 40", log_lines)
+                self.assertIn("预检诊断已完成。", log_lines)
+
+    def test_blocked_preflight_with_diagnostics_preserves_blocker(self) -> None:
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._on_start_translation()
+        self.output_runner.line_ready.emit("[GUI] 正在启动：预检命令")
+        self._emit_cli_output("Inspect credential configuration.", stderr=True)
+        self._emit_cli_output(self._preflight_envelope(
+            status="blocked",
+            risks=[{
+                "code": "CREDENTIAL_UNAVAILABLE",
+                "severity": "error",
+                "message": "missing",
+            }],
+        ))
+
+        with (
+            mock.patch("gui_qt.app.message_box_question") as question,
+            mock.patch("gui_qt.app.message_box_information") as info,
+        ):
+            self.window._on_finished(0)
+
+        question.assert_not_called()
+        info.assert_called_once()
+        self.assertIn("CREDENTIAL_UNAVAILABLE", info.call_args[0][2])
+        self.assertEqual(self.window._readiness_preflight_status, "blocked")
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIsNone(self.window._pending_translation_start)
+
+    def test_preflight_never_accepts_json_from_stderr(self) -> None:
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._on_start_translation()
+        self._emit_cli_output(self._preflight_envelope(), stderr=True)
+
+        with (
+            mock.patch("gui_qt.app.message_box_question", return_value="no") as question,
+            mock.patch("gui_qt.app.message_box_information") as info,
+        ):
+            self.window._on_finished(0)
+
+        question.assert_not_called()
+        info.assert_called_once()
+        self.assertIn("没有返回可用的机器结果", info.call_args[0][2])
+        self.assertEqual(self.window._readiness_preflight_status, "failed")
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertIsNone(self.window._pending_translation_start)
+
     def test_preflight_envelope_hoists_status_out_of_result(self) -> None:
         envelope = json.loads(self._preflight_envelope(status="blocked"))
 
@@ -237,6 +338,108 @@ class TranslationTargetAppTests(unittest.TestCase):
             self.window._selected_translation_profile_id(),
             "legacy-batch",
         )
+
+    def test_migrated_gemini_name_stays_the_same_when_switching_execution(self) -> None:
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        section = self.window._translation_target_sections[WorkMode.SYNC_TRANSLATION]
+        self.assertEqual(section.profile_combo.currentText(), "Gemini（gemini-3.5-flash）")
+        self.assertEqual(section.strategy_combo.currentText(), "同步")
+        self.assertIn("实际执行方式由右侧选择", section.profile_combo.toolTip())
+        section.strategy_combo.setCurrentIndex(
+            section._index_for(section.strategy_combo, "gemini_batch")
+        )
+
+        self.assertEqual(self.window._current_work_mode(), WorkMode.BATCH_TRANSLATION)
+        batch_section = self.window._translation_target_sections[WorkMode.BATCH_TRANSLATION]
+        self.assertEqual(batch_section.profile_combo.currentText(), "Gemini（gemini-3.5-flash）")
+        self.assertEqual(batch_section.strategy_combo.currentText(), "Gemini Batch")
+        self.assertEqual(self.window._selected_translation_profile_id(), "legacy-batch")
+        self.assertEqual(self.runner.calls, [])
+
+    def test_legacy_config_displays_current_model_without_changing_the_target(self) -> None:
+        for name in ("gemini_sync", "litellm_builtin", "litellm_custom"):
+            config = json.loads((FIXTURES / (name + ".json")).read_text(encoding="utf-8"))
+            original = json.dumps(config, sort_keys=True)
+            self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
+            for mode, expected_model, expected_strategy in (
+                (WorkMode.SYNC_TRANSLATION, config["sync"]["model"], "同步"),
+                (WorkMode.BATCH_TRANSLATION, config["batch"]["model"], "Gemini Batch"),
+            ):
+                with self.subTest(config=name, mode=mode.value), mock.patch.object(
+                    self.window.state, "save_translator_config"
+                ) as save:
+                    self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                    section = self.window._translation_target_sections[mode]
+
+                    self.assertIn(expected_model, section.profile_combo.currentText())
+                    self.assertIn("旧配置", section.profile_combo.currentText())
+                    self.assertEqual(section.strategy_combo.currentText(), expected_strategy)
+                    self.assertFalse(section.profile_combo.isEnabled())
+                    self.assertFalse(section.strategy_combo.isEnabled())
+                    self.assertIn("可按现有设置运行", section.hint_label.text())
+                    self.assertFalse(self.window._translation_routing_active)
+                    self.assertEqual(self.window._selected_translation_profile_id(), "")
+                    self.assertTrue(self.window._translation_target_is_runnable())
+                    self.assertEqual(self.window._translation_target["profile_id"], "")
+                    self.assertEqual(self.runner.calls, [])
+                    self.assertEqual(json.dumps(config, sort_keys=True), original)
+                    save.assert_not_called()
+
+    def test_legacy_sync_display_uses_the_shared_model_fallback(self) -> None:
+        config = {"batch": {"model": "gemini-test-fallback"}}
+        self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+
+        section = self.window._translation_target_sections[WorkMode.SYNC_TRANSLATION]
+        self.assertIn("gemini-test-fallback", section.profile_combo.currentText())
+        self.assertEqual(section.strategy_combo.currentText(), "同步")
+
+    def test_unresolved_legacy_model_has_an_actionable_hint_without_exception_values(self) -> None:
+        for sync in ({"backend": "invalid-private-value"}, "invalid-private-value", ["invalid-private-value"]):
+            with self.subTest(sync_type=type(sync).__name__):
+                self.window.state.load_translator_config = lambda: {"sync": sync}  # type: ignore[method-assign]
+                self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+
+                section = self.window._translation_target_sections[WorkMode.SYNC_TRANSLATION]
+                self.assertEqual(section.profile_combo.placeholderText(), "无法解析当前模型")
+                self.assertEqual(section.profile_combo.currentText(), "")
+                self.assertEqual(section.strategy_combo.currentText(), "同步")
+                self.assertIn("模型设置", section.hint_label.text())
+                self.assertNotIn("invalid-private-value", section.hint_label.text())
+                self.assertEqual(section.hint_label.toolTip(), section.hint_label.text())
+
+    def test_model_settings_button_opens_the_editor_that_owns_the_current_model(self) -> None:
+        for config, mode, expected_page in (
+            ({"sync": {"backend": "litellm", "model": "deepseek/model"}}, WorkMode.SYNC_TRANSLATION, "litellm"),
+            ({"sync": {"backend": "gemini", "model": "gemini-test"}}, WorkMode.SYNC_TRANSLATION, "models"),
+            ({"sync": {"backend": "litellm"}}, WorkMode.BATCH_TRANSLATION, "models"),
+            (routing_config(), WorkMode.SYNC_TRANSLATION, "profiles"),
+        ):
+            with self.subTest(page=expected_page, mode=mode.value):
+                self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                section = self.window._translation_target_sections[mode]
+                with mock.patch.object(self.window, "_focus_settings_section") as focus:
+                    section.open_settings_btn.click()
+                focus.assert_called_once_with(expected_page)
+                self.assertEqual(self.runner.calls, [])
+
+    def test_switching_between_legacy_and_migrated_config_refreshes_the_model_display(self) -> None:
+        legacy = json.loads((FIXTURES / "litellm_custom.json").read_text(encoding="utf-8"))
+        for config, expected_model, editable in (
+            (legacy, "acme-compatible/model-a", False),
+            (routing_config(), "gemini-3.5-flash", True),
+            ({"sync": {"model": "gemini-another-project"}}, "gemini-another-project", False),
+        ):
+            with self.subTest(model=expected_model):
+                self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
+                self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+                section = self.window._translation_target_sections[WorkMode.SYNC_TRANSLATION]
+
+                self.assertIn(expected_model, section.profile_combo.currentText())
+                self.assertEqual(section.strategy_combo.currentText(), "同步")
+                self.assertEqual(section.profile_combo.isEnabled(), editable)
+                self.assertEqual(section.strategy_combo.isEnabled(), editable)
 
     def test_translation_selector_and_task_controls_are_not_clipped(self) -> None:
         # The legacy-config hint in the reported screen is long enough to
@@ -295,6 +498,42 @@ class TranslationTargetAppTests(unittest.TestCase):
         info.assert_called_once()
         self.assertEqual(self.runner.calls, [])
         self.assertIsNone(self.window._pending_translation_start)
+
+    def test_prepared_mv_project_can_select_gemini_batch_and_start_preflight(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        config_file, config, _positions = make_mv_project(root)
+        config['model_routing'] = routing_config()['model_routing']
+        self.window.state.config_path = config_file
+        self.window.state.get_game_root = lambda: str(root / 'target')
+        self.window.state.load_translator_config = lambda: config
+        self.window._context_library_config_snapshot = config
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._sync_readiness_display()
+        section = self.window._translation_target_sections[WorkMode.BATCH_TRANSLATION]
+        self.assertIn("gemini_batch", self.window._translation_supported_strategies["legacy-batch"])
+        index = section._index_for(section.strategy_combo, "gemini_batch")
+        self.assertTrue(section.strategy_combo.model().item(index).isEnabled())
+        self.assertEqual(section.strategy_combo.currentText(), "Gemini Batch")
+        self.assertTrue(self.window._translation_target_is_runnable())
+        self.assertNotIn("当前模型不支持", section.readiness_label.text())
+        self.window._on_start_translation()
+        self.assertEqual(self.runner.calls[0][1], [
+            'translate-preflight', '--strategy', 'gemini_batch', '--profile', 'legacy-batch',
+            '--output', 'json', '--non-interactive'])
+
+    def test_incomplete_mv_project_does_not_report_a_model_capability_failure(self) -> None:
+        self.window._context_library_config_snapshot = {"engine": "rpgmaker_mv"}
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._sync_readiness_display()
+        section = self.window._translation_target_sections[WorkMode.SYNC_TRANSLATION]
+
+        self.assertFalse(self.window._translation_target_is_runnable())
+        self.assertIn("当前项目尚未满足", section.readiness_label.text())
+        self.assertNotIn("当前模型不支持", section.readiness_label.text())
+        self.assertEqual(section.strategy_combo.currentText(), "同步")
+        self.assertEqual(self.runner.calls, [])
 
     def test_switching_to_sync_makes_litellm_profile_runnable(self) -> None:
         self.window.state.load_translator_config = lambda: litellm_primary_config()  # type: ignore[method-assign]
@@ -492,20 +731,26 @@ class TranslationTargetAppTests(unittest.TestCase):
         )
 
     def test_legacy_config_keeps_default_behavior_without_profile_flag(self) -> None:
-        self.window.state.load_translator_config = lambda: {}  # type: ignore[method-assign]
-        self.window._set_work_mode(
-            WorkMode.SYNC_TRANSLATION,
-            refresh_manifest_writeback=False,
-        )
+        config = json.loads((FIXTURES / "litellm_custom.json").read_text(encoding="utf-8"))
+        self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
+        for mode, strategy, command in (
+            (WorkMode.SYNC_TRANSLATION, "sync", "sync-start"),
+            (WorkMode.BATCH_TRANSLATION, "gemini_batch", "build"),
+        ):
+            with self.subTest(mode=mode.value):
+                self.runner.calls.clear()
+                self.window._set_work_mode(mode, refresh_manifest_writeback=False)
+                self.assertFalse(self.window._translation_routing_active)
+                self.window._on_start_translation()
+                self._finish_preflight()
 
-        self.assertFalse(self.window._translation_routing_active)
-        self.window._on_start_translation()
-        self._finish_preflight()
-
-        self.assertEqual(
-            self.runner.calls[1][1],
-            ["sync-start", "--output", "json", "--non-interactive"],
-        )
+                self.assertEqual(self.runner.calls[0][1], [
+                    "translate-preflight", "--strategy", strategy,
+                    "--output", "json", "--non-interactive",
+                ])
+                self.assertEqual(self.runner.calls[1][1], [
+                    command, "--output", "json", "--non-interactive",
+                ])
 
 
 if __name__ == "__main__":

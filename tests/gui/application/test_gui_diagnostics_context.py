@@ -26,6 +26,19 @@ from gui_qt.diagnostics_context import (
 
 
 class GuiDiagnosticsContextTests(unittest.TestCase):
+    def test_model_catalog_command_is_available_for_idle_sync_and_mv(self):
+        contexts = (
+            idle_diagnostics_context(batch_script_path="batch.py"),
+            sync_diagnostics_context(sync_script_path="sync.py", batch_script_path="batch.py"),
+            idle_diagnostics_context(batch_script_path="batch.py", engine="rpgmaker_mv"),
+        )
+        for context in contexts:
+            with self.subTest(context=context.heading):
+                commands = [item.command for item in context.commands if "profiles-list-models" in item.command]
+                self.assertEqual(len(commands), 1)
+                self.assertIn("--profile", commands[0])
+                self.assertIn("--output json", commands[0])
+
     def test_snapshot_error_details_command_uses_machine_envelope(self):
         commands = build_cli_commands(
             python_exe="python",

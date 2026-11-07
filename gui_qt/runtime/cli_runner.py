@@ -86,6 +86,7 @@ class CliRunner(QObject):
         env = QProcessEnvironment.systemEnvironment()
         env.insert("PYTHONIOENCODING", "utf-8")
         env.insert("PYTHONUTF8", "1")
+        env.insert("PYTHONUNBUFFERED", "1")
         self._proc.setProcessEnvironment(env)
 
         process = self._proc

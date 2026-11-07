@@ -94,7 +94,9 @@ class ProjectState:
         game_root: Path,
         work_mode: Any,
     ) -> Path | None:
-        from .work_modes import manifest_mode_for_work_mode
+        from .work_modes import WorkMode, manifest_mode_for_work_mode, normalize_work_mode
+        if normalize_work_mode(work_mode) == WorkMode.SYNC_KEYWORD_EXTRACTION:
+            return self._latest_sync_keyword_manifest(game_root)
         expected_mode = manifest_mode_for_work_mode(work_mode)
         if expected_mode is None:
             return None
@@ -120,6 +122,22 @@ class ProjectState:
                 return path
 
         return None
+
+    def _latest_sync_keyword_manifest(self, game_root: Path) -> Path | None:
+        """Find same-project sync keyword runs without disturbing Batch latest."""
+        directory = self.get_logs_dir().parent / "sync_runs"
+        normalized = self._normalized_path_text(game_root)
+        candidates = []
+        for path in directory.glob("*/manifest.json"):
+            fields = read_manifest_index_fields(path)
+            if (fields.get("mode") == "keyword_extraction"
+                    and isinstance(fields.get("base_dir"), str)
+                    and self._normalized_path_text(fields["base_dir"]) == normalized):
+                try:
+                    candidates.append((path.stat().st_mtime_ns, path))
+                except OSError:
+                    continue
+        return max(candidates, default=(0, None), key=lambda item: item[0])[1]
 
     def get_latest_submitted_manifest_path_for_mode(
         self,
@@ -313,17 +331,34 @@ class ProjectState:
         *,
         work_mode=None,
     ) -> dict[str, Any]:
+        """Validate recovery ownership and attach a display-only saved-record count.
+
+        Interrupted keyword runs may not have a final summary. Count their
+        completed records without loading responses; CLI recovery still validates
+        every checkpoint before reuse or dispatch.
+        """
         from .work_modes import WorkMode, normalize_work_mode
         from gui_qt.workflows.workflow_factory import validate_resume_manifest
 
         manifest = self.load_manifest_file(manifest_path)
         game_root = self.get_game_root()
+        mode = normalize_work_mode(work_mode or WorkMode.BATCH_TRANSLATION)
         validate_resume_manifest(
-            normalize_work_mode(work_mode or WorkMode.BATCH_TRANSLATION),
+            mode,
             manifest,
             game_root=str(game_root) if game_root is not None else None,
             normalized_path_text=self._normalized_path_text,
         )
+        if mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+            summary = manifest.get('sync_summary')
+            if not isinstance(summary, dict) or 'checkpointed_request_count' not in summary:
+                completed = Path(manifest_path).parent / 'keyword_checkpoint' / 'completed'
+                try:
+                    count = sum(1 for path in completed.glob('*.json') if path.is_file())
+                except OSError:
+                    pass
+                else:
+                    manifest = {**manifest, '_keyword_saved_request_count': count}
         return manifest
 
     def _manifest_cache_key(self, path: Path, *, lite: bool) -> str:

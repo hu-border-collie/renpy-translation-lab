@@ -249,6 +249,7 @@ from gui_qt.reports.doctor_report import (
 )
 from gui_qt.workers.doctor_worker import DoctorWorker, DoctorWorkerResult
 from gui_qt.reports.readiness_display import doctor_overview, preflight_line
+from gui_qt.reports.translation_preprocessing import summarize_translation_preprocessing
 from .user_copy import READINESS_COPY
 from gui_qt.appearance.font_helpers import optional_fonts_installed, user_fonts_dir
 from gui_qt.workers.font_worker import FontInstallResult, FontInstallWorker
@@ -325,6 +326,7 @@ from gui_qt.runtime.optional_feature_install import (
 )
 from .project_state import ProjectState
 from gui_qt.appearance.theme import apply_theme, system_prefers_dark
+from gui_qt.appearance.app_identity import application_icon, set_windows_app_id
 from gui_qt.appearance.icon_provider import set_tabler_button_icon
 from gui_qt.appearance.theme_helpers import (
     DEFAULT_THEME_PREFERENCE,
@@ -396,6 +398,8 @@ from gui_qt.widgets.widget_helpers import (
     message_box_warning,
 )
 from .user_copy import (
+    APP_BRAND_COPY,
+    SHELL_WRITEBACK_STATUS_COPY,
     DURABLE_SYNC_RUN_COPY,
     DIAGNOSTICS_LOG_COPY,
     TRANSLATION_PREFLIGHT_COPY,
@@ -551,6 +555,43 @@ def _workflow_output_updates_writeback(step_key: str, output: str) -> bool:
         or step_key == "check-parent"
     )
 
+class _SettingsNavListWidget(QListWidget):
+    """Horizontal settings category bar with pixel scrolling and full right-edge visibility."""
+
+    def updateGeometries(self) -> None:
+        bar = self.horizontalScrollBar()
+        prev_val = bar.value()
+        super().updateGeometries()
+        if bar.maximum() > 0:
+            bar.setMaximum(bar.maximum() + 2)
+            if prev_val > bar.value():
+                bar.setValue(min(bar.maximum(), prev_val))
+
+    def _ensure_index_within_viewport(self, index) -> None:
+        rect = self.visualRect(index)
+        viewport_right = self.viewport().rect().right()
+        if rect.isValid() and rect.right() > viewport_right:
+            bar = self.horizontalScrollBar()
+            bar.setValue(min(bar.maximum(), bar.value() + (rect.right() - viewport_right)))
+
+    def scrollTo(
+        self,
+        index,
+        hint: QAbstractItemView.ScrollHint = QAbstractItemView.ScrollHint.EnsureVisible,
+    ) -> None:
+        super().scrollTo(index, hint)
+        self._ensure_index_within_viewport(index)
+
+    def scrollToItem(
+        self,
+        item: QListWidgetItem | None,
+        hint: QAbstractItemView.ScrollHint = QAbstractItemView.ScrollHint.EnsureVisible,
+    ) -> None:
+        super().scrollToItem(item, hint)
+        if item is not None:
+            self._ensure_index_within_viewport(self.indexFromItem(item))
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -565,7 +606,7 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._ensure_focused_widget_visible)
-        self.setWindowTitle("Ren'Py Translation Lab - 图形工作台")
+        self.setWindowTitle(APP_BRAND_COPY["window_title"])
         self.setMinimumSize(960, 640)
         self.resize(1180, 780)
 
@@ -611,6 +652,7 @@ class MainWindow(QMainWindow):
         self._layout_sync_timer.timeout.connect(self._sync_layout_sizes)
         self._qt_app = qt_app
         self._resources_dir = resources_dir or Path(__file__).resolve().parent / "resources"
+        self.setWindowIcon(application_icon(self._resources_dir))
         self._theme_preference = DEFAULT_THEME_PREFERENCE
         self.runner = CliRunner(self)
         self._runner_terminal_generation = 0
@@ -652,6 +694,7 @@ class MainWindow(QMainWindow):
         self._profile_probe_output_lines: list[str] = []
         self._profile_models_output_lines: list[str] = []
         self._profile_models_profile_id = ""
+        self._profile_models_connection_id = ""
         self._translate_preflight_output_lines: list[str] = []
         self._pending_translation_start: dict[str, object] | None = None
         self._readiness_doctor_summary = idle_summary()
@@ -802,11 +845,6 @@ class MainWindow(QMainWindow):
 
         # Keyboard shortcuts
         self._setup_shortcuts()
-
-        # Status
-        self.statusBar().showMessage(
-            "图形界面是可选组件；核心命令行不受影响。"
-        )
 
     def _shell_nav_shortcut_entries(self) -> list[tuple[str, str]]:
         """Canonical sidebar destinations for navigation shortcuts.
@@ -1069,7 +1107,7 @@ class MainWindow(QMainWindow):
     def _sync_layout_sizes(self) -> None:
         for section in (getattr(self, "_translation_target_sections", {}) or {}).values():
             if section.isVisible():
-                for label in (section.hint_label, section.readiness_label):
+                for label in (section.hint_label, section.readiness_label, section.preprocessing_label):
                     label.setMinimumHeight(max(0, label.heightForWidth(label.width())))
         coordinator = getattr(self, "_workbench_coordinator", None)
         if coordinator is not None:
@@ -1146,9 +1184,18 @@ class MainWindow(QMainWindow):
         brand_copy_layout = QVBoxLayout(brand)
         brand_copy_layout.setContentsMargins(0, 0, 0, 0)
         brand_copy_layout.setSpacing(0)
-        self.sidebar_brand_title = QLabel("Ren'Py Translation Lab")
+        self.sidebar_brand_icon = QLabel()
+        self.sidebar_brand_icon.setObjectName("sidebar_brand_icon")
+        self.sidebar_brand_icon.setFixedSize(40, 40)
+        self.sidebar_brand_icon.setAccessibleName(APP_BRAND_COPY["icon_accessible_name"])
+        self.sidebar_brand_icon.setPixmap(
+            self.windowIcon().pixmap(QSize(40, 40), self.devicePixelRatioF())
+        )
+        brand_copy_layout.addWidget(self.sidebar_brand_icon)
+        brand_copy_layout.addSpacing(8)
+        self.sidebar_brand_title = QLabel(APP_BRAND_COPY["name"])
         self.sidebar_brand_title.setObjectName("sidebar_brand_title")
-        self.sidebar_brand_subtitle = QLabel("TRANSLATION WORKBENCH")
+        self.sidebar_brand_subtitle = QLabel(APP_BRAND_COPY["subtitle"])
         self.sidebar_brand_subtitle.setObjectName("sidebar_brand_subtitle")
         brand_copy_layout.addWidget(self.sidebar_brand_title)
         brand_copy_layout.addWidget(self.sidebar_brand_subtitle)
@@ -1437,7 +1484,7 @@ class MainWindow(QMainWindow):
             f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.KEYWORDS.value}": (
                 "翻译资产 / 关键词与术语",
                 "关键词 / 术语",
-                "提取与合并关键词资产，保留批量和同步两种执行方式。",
+                "提取术语与剧情候选，人工审核后合并到项目术语表。",
             ),
             f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.REVISION.value}": (
                 "翻译资产 / 订正",
@@ -1447,7 +1494,7 @@ class MainWindow(QMainWindow):
             f"{_SHELL_WORKBENCH_PREFIX}{WorkbenchNavItem.CONTEXT.value}": (
                 "翻译资产 / 上下文库",
                 "上下文库",
-                "管理 RAG 与源码索引，为翻译任务提供项目语境。",
+                "管理记忆库、原文索引与项目分析，为翻译任务提供上下文。",
             ),
             _SHELL_ROUTE_SETTINGS: (
                 "系统 / 设置",
@@ -1765,6 +1812,8 @@ class MainWindow(QMainWindow):
         self.safety_status_label = QLabel()
         self.safety_status_label.setObjectName("safety_status_badge")
         status_bar.addPermanentWidget(self.safety_status_label)
+        status_bar.setSizeGripEnabled(False)
+        status_bar.hide()
         self._refresh_shell_status()
 
     @staticmethod
@@ -1805,19 +1854,19 @@ class MainWindow(QMainWindow):
         status = summary.status
         if status == "safe":
             if summary.can_apply:
-                kind, text = "safe", "写回门禁 · 可安全写回"
+                kind, text = "safe", SHELL_WRITEBACK_STATUS_COPY["safe"]
             else:
-                kind, text = "safe", "写回门禁 · 安全完成，无需写回"
+                kind, text = "safe", SHELL_WRITEBACK_STATUS_COPY["no_apply"]
         elif status == "applied":
-            kind, text = "safe", "写回门禁 · 已完成写回"
+            kind, text = "safe", SHELL_WRITEBACK_STATUS_COPY["applied"]
         elif status == "running":
-            kind, text = "running", "写回门禁 · 检查中"
+            kind, text = "running", SHELL_WRITEBACK_STATUS_COPY["running"]
         elif status in {"warn", "stale"}:
-            kind, text = "warning", "写回门禁 · 需要处理或重查"
+            kind, text = "warning", SHELL_WRITEBACK_STATUS_COPY["warning"]
         elif status in {"block", "failed", "unknown"}:
-            kind, text = "danger", "写回门禁 · 禁止写回"
+            kind, text = "danger", SHELL_WRITEBACK_STATUS_COPY["blocked"]
         else:
-            kind, text = "idle", "写回门禁 · 尚未检查"
+            kind, text = "idle", SHELL_WRITEBACK_STATUS_COPY["idle"]
         badge.setText(text)
         badge.setProperty("status", kind)
         self._repolish_widget(badge)
@@ -2012,6 +2061,8 @@ class MainWindow(QMainWindow):
                 ):
                     section = TranslationTargetSection(child)
                     section.set_select_callback(self._on_translation_target_selected)
+                    section.set_open_settings_callback(self._on_open_translation_model_settings)
+                    section.set_open_context_settings_callback(self._on_open_context_settings)
                     child.layout().insertWidget(0, section)
                     self._translation_target_sections[mode] = section
                 # One nav item owns both execution pages; the stack still holds
@@ -3180,7 +3231,7 @@ class MainWindow(QMainWindow):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        self.settings_nav = QListWidget()
+        self.settings_nav = _SettingsNavListWidget()
         self.settings_nav.setObjectName("settings_nav")
         self.settings_nav.setAccessibleName(SETTINGS_MODEL_ENTRY_COPY["category_navigation"])
         self.settings_nav.setToolTip(SETTINGS_MODEL_ENTRY_COPY["category_tooltip"])
@@ -3191,6 +3242,9 @@ class MainWindow(QMainWindow):
         self.settings_nav.setMovement(QListView.Movement.Static)
         self.settings_nav.setResizeMode(QListView.ResizeMode.Adjust)
         self.settings_nav.setWrapping(False)
+        self.settings_nav.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel
+        )
         self.settings_nav.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
@@ -3217,6 +3271,10 @@ class MainWindow(QMainWindow):
         for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
             self._settings_nav_rows[key] = index
             self.settings_nav.addItem(label)
+            if not self._settings_registry.get(key).primary_nav:
+                nav_item = self.settings_nav.item(index)
+                if nav_item is not None:
+                    nav_item.setHidden(True)
             placeholder = QWidget()
             placeholder.setObjectName(f"settings_{key}_placeholder")
             self._style_themed_surface(placeholder)
@@ -3957,17 +4015,29 @@ class MainWindow(QMainWindow):
         return False
 
     def _on_profile_models(self, payload) -> bool:
-        """Fetch one direct-adapter provider model list through the CLI."""
+        """Fetch the saved connection through CLI without querying a stale draft."""
 
         profile_id = str((payload or {}).get("profile_id") or "")
         if not profile_id:
             message_box_information(self, "无法拉取模型", "请先选择一个 ModelProfile。")
             return True
         page = self._profiles_page()
+        from providers import profile_model_catalog
+        from gui_qt.user_copy import MODEL_PROFILES_PAGE_COPY
+
+        saved = self.state.load_translator_config().get("model_routing") or {}
+        current = (page.collect().get("model_routing") or {}) if page is not None else saved
+        identity = profile_model_catalog.connection_identity(current, profile_id)
+        if identity != profile_model_catalog.connection_identity(saved, profile_id):
+            message_box_information(
+                self, "请先保存连接", MODEL_PROFILES_PAGE_COPY["model_catalog_save_connection"],
+            )
+            return True
         if page is not None:
             page.set_model_catalog_running(True)
         self._profile_models_output_lines = []
         self._profile_models_profile_id = profile_id
+        self._profile_models_connection_id = identity
         self._append_log(f"=== 正在拉取模型目录：{profile_id} ===\n")
         self._start_cli_command(
             "profile_models",
@@ -5457,8 +5527,8 @@ class MainWindow(QMainWindow):
         if context_page is not None:
             specs.extend(
                 (
-                    (context_page.bootstrap_rag_btn, "folder-cog", "on_accent"),
-                    (context_page.bootstrap_source_index_btn, "folder-cog", "on_accent"),
+                    (context_page.bootstrap_rag_btn, "folder-cog", "default"),
+                    (context_page.bootstrap_source_index_btn, "folder-cog", "default"),
                     (context_page.project_analysis_generate_btn, "file-text", "on_accent"),
                     (context_page.open_settings_btn, "folder-cog", "default"),
                     (context_page.stop_btn, "player-stop", "danger"),
@@ -6366,6 +6436,8 @@ class MainWindow(QMainWindow):
             if issues_ready and manifest is not None
             else False
         )
+        if (getattr(self, '_context_library_config_snapshot', {}) or {}).get('engine') == 'rpgmaker_mv':
+            repair_ready = False
         if hasattr(self, "repair_btn"):
             self.repair_btn.setVisible(spec.supports_translation_writeback and repair_ready)
             self.repair_btn.setEnabled(not running and repair_ready)
@@ -6382,12 +6454,19 @@ class MainWindow(QMainWindow):
         if hasattr(self, "apply_btn"):
             self.apply_btn.setVisible(spec.supports_translation_writeback)
         if hasattr(self, "export_writeback_btn"):
+            config = getattr(self, '_context_library_config_snapshot', {}) or {}
+            from engine_adapters.project_config import project_engine
+            try:
+                export_supported = project_engine(config) != 'rpgmaker_mv'
+            except (ValueError, TypeError):
+                export_supported = False
             export_ready = (
                 spec.supports_translation_writeback
+                and export_supported
                 and not uses_revision_writeback
                 and bool(summary.can_apply)
             )
-            self.export_writeback_btn.setVisible(spec.supports_translation_writeback)
+            self.export_writeback_btn.setVisible(spec.supports_translation_writeback and export_supported)
             self.export_writeback_btn.setEnabled(not running and export_ready)
         if hasattr(self, "apply_revision_btn"):
             self.apply_revision_btn.setVisible(
@@ -6859,7 +6938,9 @@ class MainWindow(QMainWindow):
             return "", None
         latest_manifest = state.get_latest_manifest_path_for_mode(
             game_root,
-            WorkMode.KEYWORD_EXTRACTION,
+            WorkMode.SYNC_KEYWORD_EXTRACTION
+            if self._current_work_mode() == WorkMode.SYNC_KEYWORD_EXTRACTION
+            else WorkMode.KEYWORD_EXTRACTION,
         )
         if latest_manifest is None:
             return "", None
@@ -7291,7 +7372,8 @@ class MainWindow(QMainWindow):
         *,
         refresh_writeback: bool = False,
         refresh_diagnostics: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Refresh manifest views and report whether a current task was loaded."""
         spec = work_mode_spec(self._current_work_mode())
         game_root = self.state.get_game_root()
         latest_manifest = None
@@ -7302,7 +7384,9 @@ class MainWindow(QMainWindow):
             or refresh_writeback
             or refresh_diagnostics
         )
-        if needs_manifest and game_root is not None and spec.manifest_mode is not None:
+        if needs_manifest and game_root is not None and (
+            spec.manifest_mode is not None or spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION
+        ):
             latest_manifest, manifest = self.state.load_latest_resume_manifest_for_mode(
                 game_root,
                 spec.mode,
@@ -7322,6 +7406,7 @@ class MainWindow(QMainWindow):
                 latest_manifest_path=latest_manifest,
                 manifest=manifest,
             )
+        return manifest is not None
 
     def _diagnostics_manifest_mtime_ns(self, manifest_path: str | None) -> int:
         if not manifest_path:
@@ -8157,7 +8242,11 @@ class MainWindow(QMainWindow):
             available, reason = resume_available
         self.resume_btn.setEnabled(available)
         if available:
-            self.resume_btn.setToolTip("从最近任务记录继续未完成的步骤，或查询云端状态。")
+            if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+                from gui_qt.user_copy import SYNC_KEYWORD_COPY
+                self.resume_btn.setToolTip(SYNC_KEYWORD_COPY['resume_tooltip'])
+            else:
+                self.resume_btn.setToolTip("从最近任务记录继续未完成的步骤，或查询云端状态。")
         else:
             self.resume_btn.setToolTip(reason or "当前没有可继续的任务。")
 
@@ -8346,7 +8435,7 @@ class MainWindow(QMainWindow):
                 if mv_project_setup_status(config, self.state.config_path)['missing']:
                     return False
             return project_engine(config) != 'rpgmaker_mv' or mode in {
-                WorkMode.SYNC_TRANSLATION, WorkMode.SYNC_KEYWORD_EXTRACTION,
+                WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION, WorkMode.SYNC_KEYWORD_EXTRACTION,
                 WorkMode.BOOTSTRAP_RAG, WorkMode.BOOTSTRAP_SOURCE_INDEX}
         except (OSError, ValueError, TypeError):
             return False
@@ -8486,7 +8575,9 @@ class MainWindow(QMainWindow):
             candidates_path=candidates_path,
             glossary_path=glossary_path,
         )
-        if merge_ready:
+        if running:
+            result_hint = KEYWORD_CANDIDATE_COPY['running_hint']
+        elif merge_ready:
             result_hint = "关键词候选已就绪；可审核并合并到术语表（glossary.json）。"
         elif merge_message:
             result_hint = f"关键词结果：{merge_message}"
@@ -9114,6 +9205,36 @@ class MainWindow(QMainWindow):
             )
         sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
+    def _on_open_translation_model_settings(self) -> None:
+        """Open the editor that owns the saved translation model configuration."""
+        config = self.state.load_translator_config()
+        if "model_routing" in config:
+            key = "profiles"
+        elif (
+            self._current_work_mode() == WorkMode.SYNC_TRANSLATION
+            and self._saved_sync_backend() == "litellm"
+        ):
+            key = "litellm"
+        else:
+            key = "models"
+        self._focus_settings_section(key)
+
+    def _refresh_translation_preprocessing_summary(
+        self, config: dict[str, Any] | None, *, strategy: str = "",
+    ) -> None:
+        """Reuse a saved config read; unrelated navigation does no extra I/O."""
+        sections = getattr(self, "_translation_target_sections", {}) or {}
+        if not sections:
+            return
+        strategy = strategy or str(
+            (getattr(self, "_translation_target", {}) or {}).get("strategy") or "gemini_batch"
+        )
+        summary = summarize_translation_preprocessing(
+            config, game_root=str(self.state.get_game_root() or ""), strategy=strategy,
+        )
+        for section in sections.values():
+            section.set_preprocessing_summary(summary.text, details=summary.details)
+
     def _refresh_translation_target_choices(self) -> None:
         """Sync the unified translation selector with the routing config."""
         sections = getattr(self, "_translation_target_sections", None)
@@ -9131,21 +9252,43 @@ class MainWindow(QMainWindow):
         except Exception:
             config = None
 
+        self._refresh_translation_preprocessing_summary(config, strategy=mode_strategy)
         if not isinstance(config, dict) or "model_routing" not in config:
             self._translation_routing_active = False
             self._translation_supported_strategies = {}
             self._translation_profile_models = {}
             self._translation_target = {"profile_id": "", "strategy": mode_strategy}
-            for section in sections.values():
-                section.set_target_choices(
-                    {
-                        "profiles": [],
+            payload: dict[str, Any] = {
+                "profiles": [],
+                "hint": TRANSLATION_TARGET_COPY["legacy_unresolved_hint"],
+                "selected_profile_id": "",
+                "selected_strategy": mode_strategy,
+                "disabled": True,
+            }
+            if isinstance(config, dict):
+                from providers.model_routing_reader import read_routing_plan
+
+                try:
+                    plan = read_routing_plan(config, legacy_execution=mode_strategy)
+                    route = plan.routes["translation"]
+                    profile = plan.profiles[route.profile_id]
+                except (ValueError, TypeError, KeyError, AttributeError):
+                    pass
+                else:
+                    # Display the resolved legacy target, but never send its
+                    # internal profile id as an explicit --profile override.
+                    payload.update({
+                        "profiles": [{
+                            "id": profile.id,
+                            "label": TRANSLATION_TARGET_COPY["legacy_profile"],
+                            "model": profile.model,
+                            "strategies": (route.strategy.value,),
+                        }],
                         "hint": TRANSLATION_TARGET_COPY["legacy_hint"],
-                        "selected_profile_id": "",
-                        "selected_strategy": mode_strategy,
-                        "disabled": True,
-                    }
-                )
+                        "selected_profile_id": profile.id,
+                    })
+            for section in sections.values():
+                section.set_target_choices(payload)
             return
 
         from providers.model_routing_reader import profile_strategy_choices
@@ -9356,18 +9499,22 @@ class MainWindow(QMainWindow):
                 if refresh_diagnostics:
                     self._refresh_diagnostics_context(force=True)
             else:
-                self._refresh_manifest_derived_ui(
+                loaded_manifest = self._refresh_manifest_derived_ui(
                     refresh_writeback=refresh_manifest_writeback,
                     refresh_diagnostics=refresh_diagnostics,
                 )
                 # Non-resume modes have no disk manifest; re-apply progress snapshot.
-                if not restored_workflow_ui:
+                if not restored_workflow_ui and not (
+                    spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION and loaded_manifest
+                ):
                     restored_workflow_ui = _try_restore_workflow_snapshot()
                 if refresh_manifest_writeback and not restored_writeback_ui:
                     restored_writeback_ui = _try_restore_writeback_snapshot()
         else:
             if session_manifest and spec.supports_resume:
                 self._refresh_workflow_from_latest_manifest(latest_manifest=session_manifest)
+            elif spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+                self._refresh_manifest_derived_ui()
             else:
                 restored_workflow_ui = _try_restore_workflow_snapshot()
                 if not restored_workflow_ui:
@@ -9552,6 +9699,10 @@ class MainWindow(QMainWindow):
             display.message,
             list(display.facts),
         )
+        if display.progress is not None:
+            self._workflow_progress = display.progress
+            self._workflow_progress_base_facts = list(display.facts)
+            self._apply_workflow_progress_ui()
         self._sync_timeline_from_workflow_status(
             display.status,
             display.workflow,
@@ -9742,7 +9893,9 @@ class MainWindow(QMainWindow):
             return "source_index_build"
         if spec.mode == WorkMode.SYNC_TRANSLATION and step.key in {"preview", "apply"}:
             return "sync_translation"
-        if spec.mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
+        if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+            return "sync_keywords"
+        if spec.mode == WorkMode.SYNC_REVISION:
             return "sync_requests"
         return ""
 
@@ -10220,9 +10373,7 @@ class MainWindow(QMainWindow):
         if key == "profiles":
             page = self._profiles_page()
             if page.default_profile_combo.isEnabled():
-                # The first-created removal button now lives at the bottom.
-                # Direct navigation should reveal the defaults, not scroll to it.
-                page.default_profile_combo.setFocus(Qt.FocusReason.OtherFocusReason)
+                page.focus_defaults()
 
     def _on_go_to_workspace_for_project_switch(self) -> None:
         self._focus_settings_section("workspace")
@@ -11702,6 +11853,9 @@ class MainWindow(QMainWindow):
             log_heading = "gemini_translate_batch.py bootstrap-source-index --skip-prepare"
             running_summary = running_bootstrap_summary("source_index")
 
+        if flags.get('mv_batch_context'):
+            args.extend(['--strategy', 'gemini_batch'])
+            log_heading += ' --strategy gemini_batch'
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._bootstrap_output_lines = []
@@ -12183,11 +12337,27 @@ class MainWindow(QMainWindow):
                 self._run_workflow_current_step()
                 return
 
+        retry_unknown = False
+        if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+            from execution.keyword_checkpoint import unknown_keyword_requests, KeywordCheckpointError
+            from gui_qt.user_copy import SYNC_KEYWORD_COPY
+            try:
+                unknown = unknown_keyword_requests(Path(latest_manifest).parent)
+            except KeywordCheckpointError as exc:
+                message_box_warning(self, "无法继续关键词任务", str(exc))
+                return
+            if unknown:
+                if message_box_question(self, SYNC_KEYWORD_COPY['unknown_title'],
+                        SYNC_KEYWORD_COPY['unknown_message'].format(count=len(unknown)),
+                        yes_text=SYNC_KEYWORD_COPY['resume'], no_text="取消", default="no") != "yes":
+                    return
+                retry_unknown = True
         workflow = resume_workflow(
             spec.mode,
             str(latest_manifest),
             manifest,
             submit_max_cost=self._submit_max_cost_from_config(),
+            retry_unknown=retry_unknown,
         )
         if workflow is None:
             message_box_information(self, "无法继续任务", spec.not_implemented_message)
@@ -12761,6 +12931,11 @@ class MainWindow(QMainWindow):
         }
 
     def _on_run_repair(self) -> None:
+        from engine_adapters.project_config import project_engine
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        if project_engine(getattr(self, '_context_library_config_snapshot', {}) or {}) == 'rpgmaker_mv':
+            message_box_information(self, '当前模式不支持', MV_PROJECT_COPY['repair_unsupported'])
+            return
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
             message_box_information(
@@ -13001,6 +13176,11 @@ class MainWindow(QMainWindow):
         )
 
     def _on_open_export_writeback(self):
+        from engine_adapters.project_config import project_engine
+        from gui_qt.user_copy import MV_PROJECT_COPY
+        if project_engine(getattr(self, '_context_library_config_snapshot', {}) or {}) == 'rpgmaker_mv':
+            message_box_information(self, '当前模式不支持', MV_PROJECT_COPY['export_unsupported'])
+            return
         if not work_mode_spec(self._current_work_mode()).supports_translation_writeback:
             message_box_information(
                 self,
@@ -13411,12 +13591,15 @@ class MainWindow(QMainWindow):
     # --- Runner callbacks ---
 
     def _on_cli_stdout_line_ready(self, text: str):
+        """Collect command results without GUI startup or stderr diagnostics."""
         if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._workflow_step_output_lines.append(text)
         elif self._active_command == "apply":
             self._apply_output_lines.append(text)
         elif self._active_command == "recheck":
             self._recheck_output_lines.append(text)
+        elif self._active_command == "translate_preflight":
+            self._translate_preflight_output_lines.append(text)
 
     def _on_cli_line_ready(self, text: str):
         if self._active_command == "doctor":
@@ -13436,8 +13619,6 @@ class MainWindow(QMainWindow):
             self._profile_probe_output_lines.append(text)
         elif self._active_command == "profile_models":
             self._profile_models_output_lines.append(text)
-        elif self._active_command == "translate_preflight":
-            self._translate_preflight_output_lines.append(text)
         elif self._active_command == "compare_variants":
             self._compare_variants_output_lines.append(text)
         elif self._active_command == "split":
@@ -13952,8 +14133,10 @@ class MainWindow(QMainWindow):
         if page is not None and callable(getattr(page, "set_writeback_status", None)):
             # Keep the captured workflow heading aligned with the writeback
             # message/facts for pages without a separate writeback surface.
-            self._workflow_heading_text = summary.heading
-            page.set_writeback_status(summary)
+            # Sync keywords keep their extraction progress when writeback is idle.
+            if self._current_work_mode() != WorkMode.SYNC_KEYWORD_EXTRACTION or summary.status != 'idle':
+                self._workflow_heading_text = summary.heading
+                page.set_writeback_status(summary)
         else:
             self.writeback_status_label.set_status(summary.status, summary.heading)
             self.writeback_message_label.setText(summary.message)
@@ -14131,7 +14314,9 @@ class MainWindow(QMainWindow):
         if completed:
             lines.append(overview.counts)
         lines.append(preflight_line(status, getattr(self, "_readiness_preflight_payload", None)))
-        if not self._translation_target_is_runnable():
+        if not self._engine_allows_work_mode(self._current_work_mode()):
+            lines.append(READINESS_COPY["project_unavailable"])
+        elif not self._translation_target_is_runnable():
             lines.append(READINESS_COPY["unsupported"])
         elif getattr(self, "_task_running", False):
             lines.append(READINESS_COPY["busy"])
@@ -14386,6 +14571,7 @@ class MainWindow(QMainWindow):
                             result.get("profile_id")
                             or self._profile_models_profile_id
                         ),
+                        connection_id=self._profile_models_connection_id,
                     )
                 self.statusBar().showMessage(
                     f"模型目录完成：{int(result.get('count') or 0)} 个模型",
@@ -14401,12 +14587,14 @@ class MainWindow(QMainWindow):
                     page.set_model_catalog_error(
                         code or f"exit_{exit_code}",
                         profile_id=self._profile_models_profile_id,
+                        connection_id=self._profile_models_connection_id,
                     )
                 self.statusBar().showMessage(
                     "模型目录拉取失败，仍可手动输入模型 ID。",
                     8000,
                 )
             self._profile_models_profile_id = ""
+            self._profile_models_connection_id = ""
             if page is not None:
                 page.set_model_catalog_running(False)
             self._active_command = ""
@@ -14956,6 +15144,7 @@ class MainWindow(QMainWindow):
             and not is_revision_corpus_export_workflow
             and not is_revision_proposal_workflow
             and not is_sync_translation_workflow
+            and step_key != "sync-keywords"
             and not update.should_continue
             and update.status == "done"
         )
@@ -14987,7 +15176,9 @@ class MainWindow(QMainWindow):
             self._refresh_context_library_panel(running=False)
             if update.status == "done":
                 QTimer.singleShot(0, self._show_project_analysis_review_dialog)
-        if (
+        if sync_keyword_completed and finish_spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+            self._refresh_workflow_from_latest_manifest()
+        elif (
             not finish_spec.supports_translation_writeback
             and finish_spec.mode not in self._revision_writeback_modes()
             and not is_sync_translation_workflow
@@ -15022,6 +15213,7 @@ class MainWindow(QMainWindow):
                 update.heading
                 if is_project_analysis_workflow or is_revision_corpus_export_workflow
                 or is_revision_proposal_workflow or is_sync_translation_workflow
+                or sync_keyword_completed
                 else "翻译任务流程完成。"
             )
             self.statusBar().showMessage(message, 6000)
@@ -15272,6 +15464,7 @@ class MainWindow(QMainWindow):
         try:
             config = self.state.load_translator_config()
             self._context_library_config_snapshot = copy.deepcopy(config)
+            self._refresh_translation_preprocessing_summary(config)
             # Theme QSS is global; only touch appearance widgets / re-apply when needed.
             if want is None or "appearance" in want:
                 self._load_theme_to_ui(config, apply=(want is None or "appearance" in want))
@@ -15813,10 +16006,12 @@ def run_app(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv
 
+    set_windows_app_id()
     app = QApplication(argv)
-    app.setApplicationName("Ren'Py Translation Lab")
+    app.setApplicationName(APP_BRAND_COPY["name"])
     app.setApplicationVersion(__version__)
     resources_dir = Path(__file__).resolve().parent / "resources"
+    app.setWindowIcon(application_icon(resources_dir))
     project_state = ProjectState()
     try:
         bootstrap_config = project_state.load_translator_config()

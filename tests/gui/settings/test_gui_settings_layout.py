@@ -5,7 +5,7 @@ import unittest
 
 try:
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QFormLayout, QScrollArea
+    from PySide6.QtWidgets import QApplication, QFormLayout, QLabel, QScrollArea
 except ImportError as exc:
     Qt = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
@@ -263,14 +263,23 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         _process(self._app)
 
         viewport_rect = self.window.settings_nav.viewport().rect()
+        visible_labels: list[str] = []
         for row in range(self.window.settings_nav.count()):
             item = self.window.settings_nav.item(row)
+            if item.isHidden():
+                continue
+            visible_labels.append(item.text())
             with self.subTest(section=item.text()):
                 self.assertTrue(
                     viewport_rect.contains(
                         self.window.settings_nav.visualItemRect(item)
                     )
                 )
+
+        self.assertEqual(
+            visible_labels,
+            ["项目列表", "项目", "密钥", "模型与供应商", "扩展", "上下文", "外观", "快捷键", "高级"],
+        )
 
     def test_settings_nav_overflow_is_never_silently_clipped(self) -> None:
         # The real GUI loads the theme stylesheet, which widens every nav item
@@ -356,6 +365,22 @@ class GuiSettingsLayoutTests(unittest.TestCase):
         ):
             with self.subTest(combo=combo.objectName() or type(combo).__name__):
                 self.assertFalse(combo.isEditable())
+
+
+    def test_setting_field_row_keeps_inline_description_concise_with_full_tooltip(self) -> None:
+        from gui_qt.settings.field_widgets import create_basic_setting_widget, setting_field_row
+        from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELD_BY_KEY
+
+        field = ADVANCED_SETTING_FIELD_BY_KEY["sync_timeout_seconds"]
+        widget = create_basic_setting_widget(field)
+        error = QLabel("")
+        row = setting_field_row(field, widget, error)
+        desc = row.findChild(QLabel, "settings_description_label")
+        self.assertIsNotNone(desc)
+        assert desc is not None
+        self.assertLess(len(desc.text()), len(field.description))
+        self.assertEqual(desc.toolTip(), field.description)
+        self.assertEqual(widget.toolTip(), field.description)
 
 
 if __name__ == "__main__":

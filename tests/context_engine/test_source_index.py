@@ -596,7 +596,8 @@ class SourceIndexIntegrationTests(unittest.TestCase):
             self.assertTrue(stats['enabled'])
             self.assertEqual(stats['failure_reason'], 'retrieval_error')
             self.assertNotIn('embed failed', str(stats))
-            self.assertEqual(stats.get('error_category'), 'provider_error')
+            self.assertEqual(stats.get('error_category'), 'internal_error')
+            self.assertEqual(stats.get('exception_type'), 'RuntimeError')
             self.assertEqual(
                 stats['source_context_char_budget'],
                 batch_mod.get_source_index_char_budget(),

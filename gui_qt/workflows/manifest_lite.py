@@ -11,13 +11,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-_CHUNKS_MARKER_RE = re.compile(r'"chunks"\s*:\s*\[')
 _CHUNKS_MARKER_BYTES = b'"chunks"'
 _HEAD_READ_BYTES = 262_144
 _TAIL_READ_BYTES = 524_288
 
 _HEAD_SCALAR_KEYS = (
     "mode",
+    "execution",
     "base_dir",
     "display_name",
     "input_jsonl_path",
@@ -31,6 +31,7 @@ _HEAD_INT_KEYS = (
     "version",
     "manifest_version",
     "core_schema_version",
+    "keyword_checkpoint_version",
     "split_index",
     "split_total",
 )
@@ -40,6 +41,8 @@ _TAIL_OBJECT_KEYS = (
     "apply_summary",
     "split_children",
     "split_from_manifest",
+    "sync_summary",
+    "keyword_export",
 )
 _TAIL_SCALAR_KEYS = (
     "applied_at",
@@ -51,6 +54,8 @@ _TAIL_SCALAR_KEYS = (
     "last_retry_manifest_path",
     "last_check_at",
     "last_check",
+    "sync_completed_at",
+    "keyword_exported_at",
 )
 
 # Manifests larger than this are treated as "heavy" for GUI resume/summary reads.
@@ -122,14 +127,9 @@ def read_manifest_lite(path: str | Path) -> dict[str, Any]:
 
     result: dict[str, Any] = {}
     if marker_offset is not None:
-        marker = _CHUNKS_MARKER_RE.search(head)
-        if marker is not None:
-            head_part = head[: marker.start()].rstrip().rstrip(",")
-            head_obj = _read_json_object(head_part + "}")
-            if head_obj:
-                result.update(head_obj)
-        else:
-            result.update(_extract_sparse_head_fields(head))
+        # The read ends before the chunks key, so close the root prefix itself.
+        head_obj = _read_json_object(head.rstrip().rstrip(",") + "}")
+        result.update(head_obj or _extract_sparse_head_fields(head))
     elif '"chunks"' not in head and '"chunks"' not in tail:
         head_obj = _read_json_object(head.rstrip().rstrip(","))
         if head_obj:
@@ -188,7 +188,23 @@ def _extract_tail_fields(tail: str) -> dict[str, Any]:
         value = _extract_scalar_field(tail, key)
         if value is not None:
             result[key] = value
+    checkpoint_version = _extract_root_tail_value(tail, "keyword_checkpoint_version")
+    if checkpoint_version is not None:
+        result["keyword_checkpoint_version"] = checkpoint_version
     return result
+
+
+def _extract_root_tail_value(text: str, key: str) -> Any | None:
+    """Read recovery metadata only from a complete root-object suffix.
+
+    The tail may start inside a chunk. Parsing through EOF prevents a nested
+    checkpoint version from making a pre-checkpoint run appear resumable.
+    """
+    for marker in re.finditer(rf'"{re.escape(key)}"\s*:', text):
+        suffix = _read_json_object("{" + text[marker.start():])
+        if key in suffix:
+            return suffix[key]
+    return None
 
 
 def _extract_scalar_field(text: str, key: str) -> Any | None:

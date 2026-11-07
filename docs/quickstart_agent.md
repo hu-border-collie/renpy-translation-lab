@@ -119,7 +119,7 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 `--retry-unknown --ack-duplicate-billing-risk`，或当前 scope 已排除 unknown ID 后使用
 `--exclude-unknown` 才会继续。
 
-模型配置（`model_routing`）也提供离线机器接口，不需要 API Key 或项目文件；查询与校验只读，
+模型配置（`model_routing`）也提供离线机器接口（目录拉取除外），不需要 API Key 或项目文件；查询与校验只读，
 `set-*` 命令经共享 config store 原子写回并保留未知字段：
 
 ```powershell
@@ -133,8 +133,8 @@ python gemini_translate_batch.py profiles-list-models --profile <PROFILE_ID> --o
 
 `profiles-show` 只输出 provider/profile 元数据与**凭据引用**，不会解析或回显密钥值；
 `profiles-validate` 校验失败返回 `error.code=MODEL_ROUTING_INVALID` 与 `details.issues`；
-配置不存在时返回 `MODEL_ROUTING_NOT_CONFIGURED`。`profiles-list-models` 只服务
-`adapter=openai_compatible` 的 profile：只读请求 Provider models 端点，目录失败或未收录
+配置不存在时返回 `MODEL_ROUTING_NOT_CONFIGURED`。`profiles-list-models` 服务
+`adapter=gemini` 或 `adapter=openai_compatible` 的 profile：它需要该连接的凭据并联网读取目录，不属于离线配置命令。Gemini 请求官方 `models.list`，按生成 / 向量用途筛选，分页共用默认 15 秒超时、最多 10 页；OpenAI-compatible 请求 Provider models 端点。两者都不生成内容、不修改配置，目录失败或未收录
 不影响手动模型 ID；错误使用 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 稳定机器码。
 这些命令与 GUI「设置 → 模型与供应商」共用 `model_profiles_editor` 核心语义。
 

@@ -67,6 +67,7 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 - 初译、术语、订正继承该入口的 base；项目分析显式固定 Sync，最终审校显式固定 Batch。
   即使旧阶段没有指定模型，也保存所需的 profile/strategy 覆盖，以保留原行为。
 - 未选择的自定义 Provider 也保留连接元数据和凭据引用。
+- 新迁移生成的基础模型方案按模型连接命名（例如 `Gemini`、`DeepSeek` 或自定义供应商名称），不再沿用 `Gemini Batch` / `Primary sync model` 等带执行方式的名称。方案名称不限制执行方式；实际策略仍由所选方案的能力与执行方式设置共同决定。已有新版配置再次迁移不会自动改名，可在「设置 → 模型与供应商」编辑名称。
 - Sync 和 Batch 的 embedding 分别冻结为 `purpose=embedding` 的 profile，保留原
   backend、endpoint、模型、维度、task type 和 timeout；RAG policy 留在原位置。
   `openai_compatible` embedding 的 adapter 语义保存在 params，不能当作生成路由使用。

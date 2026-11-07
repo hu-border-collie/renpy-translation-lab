@@ -31,6 +31,18 @@ def fixture(name="gemini_batch"):
 
 
 class MigrationPlanTests(unittest.TestCase):
+    def test_base_profile_names_do_not_imply_an_execution_strategy(self):
+        for name, expected_sync_label in (
+            ("gemini_batch", "Gemini"),
+            ("gemini_sync", "Gemini"),
+            ("litellm_builtin", "OpenRouter"),
+            ("litellm_custom", "Acme Compatible"),
+        ):
+            with self.subTest(name=name):
+                profiles = preview_migration(fixture(name)).config["model_routing"]["profiles"]
+                self.assertEqual(profiles["legacy-sync"]["label"], expected_sync_label)
+                self.assertEqual(profiles["legacy-batch"]["label"], "Gemini")
+
     def test_migrated_sync_profiles_match_actual_runtime_model_selection(self):
         import translator_runtime as runtime
         for name in ("gemini_batch", "gemini_sync", "litellm_builtin", "litellm_custom"):

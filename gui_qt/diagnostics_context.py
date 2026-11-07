@@ -26,6 +26,7 @@ from .user_copy import (
     EXTERNAL_WORK_COPY,
     EXTERNAL_WORK_PRESERVED_COPY,
     MODEL_CONFIG_MIGRATION_COPY,
+    MODEL_PROFILES_PAGE_COPY,
     DURABLE_SYNC_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
@@ -242,6 +243,19 @@ def model_config_migration_commands(*, python_exe: str, script_path: str) -> lis
     ]
 
 
+def model_catalog_commands(*, python_exe: str, script_path: str) -> list[DiagnosticsCommand]:
+    """Expose the same explicit, read-only discovery used by model settings."""
+    if not script_path:
+        return []
+    return [DiagnosticsCommand(
+        label=MODEL_PROFILES_PAGE_COPY["model_catalog_command"],
+        command=format_cli_command(
+            python_exe, script_path,
+            ["profiles-list-models", "--profile", "<PROFILE_ID>", "--output", "json"],
+        ),
+    )]
+
+
 def _translate_preflight_command(
     python_exe: str, batch_script_path: str
 ) -> DiagnosticsCommand | None:
@@ -266,7 +280,9 @@ def build_cli_commands(
     submit_max_cost: float | None = None,
     engine: str = 'renpy',
 ) -> list[DiagnosticsCommand]:
-    if engine == 'rpgmaker_mv':
+    if engine == 'rpgmaker_mv' and (
+        not manifest_path or (manifest.get('translation_plan') or {}).get('execution_strategy') != 'gemini_batch'
+    ):
         return mv_cli_commands(python_exe, batch_script_path)
     if is_work_manifest(manifest):
         return [DiagnosticsCommand(
@@ -279,7 +295,7 @@ def build_cli_commands(
             command=format_cli_command(python_exe, batch_script_path, ['work-export', '--include-preserved']),
         )]
     if not manifest_path:
-        commands = []
+        commands = model_catalog_commands(python_exe=python_exe, script_path=batch_script_path)
         commands.append(DiagnosticsCommand(
             label='导出覆盖材料（Ren\'Py / MV）',
             command=format_cli_command(python_exe, batch_script_path,
@@ -305,6 +321,7 @@ def build_cli_commands(
 
     commands: list[DiagnosticsCommand] = [
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
+        *model_catalog_commands(python_exe=python_exe, script_path=batch_script_path),
         DiagnosticsCommand(
             label="项目检查（自动识别引擎并列出准备项）",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
@@ -973,20 +990,21 @@ def build_cli_commands(
     )
     from gui_qt.reports.ab_experiment_report import build_compare_variants_cli_args
 
-    commands.append(
-        DiagnosticsCommand(
-            label="翻译 A/B 对比（试跑）",
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                build_compare_variants_cli_args(
-                    manifest_path,
-                    "<variants.json>",
-                    dry_run=True,
+    if engine != 'rpgmaker_mv':
+        commands.append(
+            DiagnosticsCommand(
+                label="翻译 A/B 对比（试跑）",
+                command=format_cli_command(
+                    python_exe,
+                    batch_script_path,
+                    build_compare_variants_cli_args(
+                        manifest_path,
+                        "<variants.json>",
+                        dry_run=True,
+                    ),
                 ),
-            ),
+            )
         )
-    )
 
     safety_level = manifest_check_safety_level(manifest)
     if not manifest.get("applied_at") and safety_level == "safe":
@@ -1000,26 +1018,11 @@ def build_cli_commands(
                 ),
             )
         )
-        commands.append(
-            DiagnosticsCommand(
-                label="导出翻译文件（CLI，仅导出）",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["apply", manifest_path, "--export-only", "<EXPORT_ROOT>"],
-                ),
-            )
-        )
-        commands.append(
-            DiagnosticsCommand(
-                label="写回并导出翻译文件（CLI）",
-                command=format_cli_command(
-                    python_exe,
-                    batch_script_path,
-                    ["apply", manifest_path, "--export-dir", "<EXPORT_ROOT>"],
-                ),
-            )
-        )
+        if engine != 'rpgmaker_mv':
+            for label, option in (('导出翻译文件（CLI，仅导出）', '--export-only'),
+                                  ('写回并导出翻译文件（CLI）', '--export-dir')):
+                commands.append(DiagnosticsCommand(label=label, command=format_cli_command(
+                    python_exe, batch_script_path, ['apply', manifest_path, option, '<EXPORT_ROOT>'])))
 
     if safety_level == "warn":
         commands.extend(
@@ -1359,17 +1362,28 @@ def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[Diagnostics
     commands = [
         ('MV 自动识别与项目准备检查', ['doctor']),
         ('MV 启动预检', ['translate-preflight', '--strategy', 'sync']),
+        ('MV Batch 启动预检', ['translate-preflight', '--strategy', 'gemini_batch']),
+        ('MV 构建 Batch 翻译任务', ['build', '--skip-prepare']),
         ('导出覆盖材料', ['coverage-status', '--export-dir', '<OUTPUT_DIR>']),
         ('导入覆盖审阅', ['coverage-review-import', '--file', '<REVIEW.json>']),
         ('MV 同步关键词与概要', ['sync-keywords']),
+        ('继续 MV 同步关键词（复用有效成果，仅补缺失、失败与不完整块）', ['sync-keywords', '--resume', '<MANIFEST>']),
+        ('确认重试结果未知的关键词请求', ['sync-keywords', '--resume', '<MANIFEST>', '--retry-unknown']),
         (BOOTSTRAP_PROGRESS_COPY['source_command'], ['bootstrap-source-index', '--skip-prepare', '--output', 'json']),
         (BOOTSTRAP_PROGRESS_COPY['history_command'], ['bootstrap-rag', '--skip-prepare', '--output', 'json']),
+        ('MV Batch 预建原文索引', ['bootstrap-source-index', '--strategy', 'gemini_batch', '--output', 'json']),
+        ('MV Batch 预建已审阅历史', ['bootstrap-rag', '--strategy', 'gemini_batch', '--output', 'json']),
     ]
+    for name in ('submit', 'status', 'download', 'check', 'apply', 'build-retry'):
+        commands.append((f'MV Batch · {name}', [name, '<MANIFEST>']))
+    commands.append(('MV Batch · 合并补译', ['merge-retry', '<PARENT_MANIFEST>', '<RETRY_MANIFEST>']))
     for name in ('sync-start', 'sync-status', 'sync-resume', 'sync-cancel', 'sync-derive', 'check', 'apply'):
         args = [name, *(['--latest'] if name == 'sync-status' else ([] if name == 'sync-start' else ['<RUN>']))]
         commands.append((DURABLE_SYNC_COPY.get(name.removeprefix('sync-'), name), args))
     return [DiagnosticsCommand(label=label, command=format_cli_command(python_exe, batch_script_path, args))
-            for label, args in commands]
+            for label, args in commands] + model_catalog_commands(
+                python_exe=python_exe, script_path=batch_script_path,
+            )
 
 
 def idle_diagnostics_context(
@@ -1380,6 +1394,7 @@ def idle_diagnostics_context(
     engine: str = 'renpy',
 ) -> DiagnosticsContext:
     commands = list(_usage_report_command(batch_script_path, python_exe))
+    commands.extend(model_catalog_commands(python_exe=python_exe, script_path=batch_script_path))
     preflight = _translate_preflight_command(python_exe, batch_script_path)
     if preflight is not None:
         commands.append(preflight)
@@ -1414,6 +1429,7 @@ def sync_diagnostics_context(
 ) -> DiagnosticsContext:
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
+    commands.extend(model_catalog_commands(python_exe=python_exe, script_path=batch_script_path))
     commands.extend(_usage_report_command(batch_script_path, python_exe))
     preflight = _translate_preflight_command(python_exe, batch_script_path)
     if preflight is not None:
@@ -1443,7 +1459,7 @@ def sync_diagnostics_context(
             message = TRANSLATION_PLAN_COPY["legacy"]
     if engine == 'rpgmaker_mv':
         commands = mv_cli_commands(python_exe, batch_script_path)
-        message = 'MV 叙事模式使用耐久 Sync；原生验收仍单列。'
+        message = 'MV 支持 Gemini Batch 与耐久 Sync；原生验收仍单列。'
     return DiagnosticsContext(
         status=status,
         heading="同步翻译上下文",

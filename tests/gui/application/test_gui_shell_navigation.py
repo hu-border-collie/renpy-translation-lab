@@ -56,6 +56,13 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertFalse(self.window.settings_nav.isHidden())
         self.assertEqual(len(self.window._shell_nav_rows), 6)
         self.assertEqual(self.window._current_shell_route(), batch_route)
+        self.assertEqual(self.window.statusBar().currentMessage(), "")
+        self.assertTrue(self.window.statusBar().isHidden())
+        self.assertEqual(self.window.safety_status_label.text(), "写回门禁 · 尚未检查")
+        self.assertIs(
+            self.window.safety_status_label.parentWidget(),
+            self.window.statusBar(),
+        )
         self.assertEqual(
             self.window.shell_nav.currentRow(),
             self.window._shell_nav_rows[batch_route],
@@ -68,7 +75,12 @@ class GuiShellNavigationTests(unittest.TestCase):
         )
 
         self.assertEqual(self.window.app_sidebar.width(), 224)
-        self.assertFalse(hasattr(self.window, "sidebar_brand_mark"))
+        self.assertFalse(self.window.windowIcon().isNull())
+        self.assertFalse(self.window.sidebar_brand_icon.pixmap().isNull())
+        self.assertEqual(
+            self.window.sidebar_brand_icon.accessibleName(),
+            "Ren'Py Translation Lab 应用图标",
+        )
         self.assertFalse(hasattr(self.window, "sidebar_collapse_btn"))
         self.assertFalse(self.window.global_project_bar.isHidden())
         self.assertEqual(self.window.global_project_bar_label.text(), "当前项目")

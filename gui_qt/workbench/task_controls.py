@@ -111,10 +111,16 @@ class TaskStatusSection(QFrame):
         )
         layout.addWidget(self.message_label)
 
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("task_status_progress_label")
+        self.progress_label.setWordWrap(True)
+        self.progress_label.setVisible(False)
+        layout.addWidget(self.progress_label)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setObjectName("task_status_progress")
         self.progress_bar.setVisible(False)
-        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setTextVisible(False)
         layout.addWidget(self.progress_bar)
 
         self.facts_label = QLabel("")
@@ -165,6 +171,7 @@ class TaskStatusSection(QFrame):
         # A new snapshot supersedes previous progress/details; callers that
         # need them re-apply via set_progress/set_details.
         self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
         self.details_label.setText("")
         self.details_label.setVisible(False)
         self._sync_visibility()
@@ -198,6 +205,7 @@ class TaskStatusSection(QFrame):
         visible = bool(state is not None and getattr(state, "visible", False))
         if not visible:
             self.progress_bar.setVisible(False)
+            self.progress_label.setVisible(False)
             self._sync_visibility()
             self.updateGeometry()
             return
@@ -210,6 +218,9 @@ class TaskStatusSection(QFrame):
             self.progress_bar.setRange(0, max(total, 1))
             self.progress_bar.setValue(current)
         self.progress_bar.setFormat(getattr(state, "label", None) or "正在处理…")
+        self.progress_label.setText(self.progress_bar.format())
+        self.progress_label.setVisible(True)
+        self.progress_bar.setAccessibleName(self.progress_bar.format())
         self.progress_bar.setVisible(True)
         self._sync_visibility()
         self.updateGeometry()

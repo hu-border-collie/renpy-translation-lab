@@ -1,4 +1,5 @@
 import ast
+from contextlib import redirect_stdout
 import hashlib
 import importlib
 import io
@@ -923,6 +924,17 @@ class BatchRagRegressionTests(unittest.TestCase):
         parser.parse_args(['bootstrap-rag', '--seed-jsonl', 'first.jsonl'])
         parsed_without_seed = parser.parse_args(['bootstrap-rag'])
         self.assertIsNone(parsed_without_seed.seed_jsonl)
+
+    def test_mv_bootstrap_help_explains_batch_checkpoints_and_validated_publication(self):
+        for command in ('bootstrap-rag', 'bootstrap-source-index'):
+            with self.subTest(command=command):
+                output = io.StringIO()
+                with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                    batch_mod.build_arg_parser().parse_args([command, '--help'])
+                self.assertEqual(raised.exception.code, 0)
+                help_text = ' '.join(output.getvalue().split())
+                self.assertIn('resumes matching checkpoints', help_text)
+                self.assertIn('only a fully validated store becomes ready', help_text)
 
     def test_build_arg_parser_accepts_doctor_command(self):
         args = batch_mod.build_arg_parser().parse_args(['doctor'])

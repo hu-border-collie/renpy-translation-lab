@@ -38,6 +38,7 @@ class MvSyncSnapshot:
     occurrence_scope: MvOccurrenceScope | None = None
     reviewed_history_digest: str = ''
     reviewed_history_selection: str = ''
+    review_report: Any = None
 
     @cached_property
     def selected_occurrences(self):
@@ -194,7 +195,7 @@ def live_material_identity(snapshot: MvSyncSnapshot, config: Mapping[str, Any], 
     if settings.occurrence_scope_file is not None:
         current['occurrence_scope_digest'] = read_occurrence_scope(settings.occurrence_scope_file)[0]
     review = validate_review_record(load_review_record(default_coverage_review_path(settings.target_root)),
-                                    snapshot.report, snapshot.inventory)
+                                    getattr(snapshot, 'review_report', None) or snapshot.report, snapshot.inventory)
     current['coverage_review_digest'] = review.coverage_review_digest
     for key, target in (('source_files', False), ('target_files', True)):
         current[key] = {doc.file_rel_path: doc.sha256 for doc in snapshot.adapter.read_live_documents(

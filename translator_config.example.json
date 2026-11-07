@@ -319,7 +319,7 @@
     },
     "profiles": {
       "legacy-sync": {
-        "label": "Primary sync model",
+        "label": "Gemini",
         "provider_id": "gemini-gemini",
         "model": "gemini-3.1-flash-lite",
         "models": [
@@ -330,7 +330,7 @@
         "embedding_profile_id": "legacy-sync-embedding"
       },
       "legacy-batch": {
-        "label": "Gemini Batch",
+        "label": "Gemini",
         "provider_id": "gemini-gemini",
         "model": "gemini-3.1-flash-lite",
         "models": [

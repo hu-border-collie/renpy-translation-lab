@@ -24,6 +24,8 @@ from types import MappingProxyType
 from collections.abc import Mapping, Sequence
 from typing import Protocol, runtime_checkable
 
+from context_engine.embedding_diagnostics import safe_exception_diagnostics
+
 
 EMBEDDING_IDENTITY_SCHEMA_VERSION = 1
 EMBEDDING_REQUEST_SCHEMA_VERSION = 1
@@ -59,8 +61,9 @@ class EmbeddingBackendError(RuntimeError):
     """Provider adapter failure with a closed, credential-safe public string.
 
     Adapters classify raw SDK exceptions but must not attach provider bodies,
-    URLs, request headers, or codes to this cross-layer error.  This keeps
-    ``str(exc)`` safe for logs and future doctor/GUI diagnostics.
+    URLs or request headers to this cross-layer error. Only allowlisted type
+    names, numeric status and frame coordinates are retained for diagnostics;
+    ``str(exc)`` remains a closed, safe message.
     """
 
     def __init__(
@@ -68,11 +71,14 @@ class EmbeddingBackendError(RuntimeError):
         category: EmbeddingErrorCategory,
         *,
         retryable: bool = False,
+        diagnostics: Mapping[str, object] | None = None,
     ) -> None:
         if not isinstance(category, EmbeddingErrorCategory):
             raise EmbeddingContractError('category must be an EmbeddingErrorCategory')
         self.category = category
         self.retryable = bool(retryable)
+        self.diagnostics = MappingProxyType(safe_exception_diagnostics(diagnostics or {}))
+        self.attempt_count: int | None = None
         super().__init__(_SAFE_ERROR_MESSAGES[category])
 
 

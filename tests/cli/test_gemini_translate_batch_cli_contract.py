@@ -12,7 +12,7 @@ from unittest import mock
 import gemini_translate_batch as batch
 from providers import model_capability_probe as capability_probe
 from providers import model_profile
-from providers import openai_compatible_model_catalog as model_catalog
+from providers import profile_model_catalog as model_catalog
 from execution.sync_run_contracts import ErrorCode, SyncRunError
 
 

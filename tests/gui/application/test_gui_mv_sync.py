@@ -138,11 +138,12 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertTrue(validate_value(field, 'database'))
         self.assertTrue(validate_value(field, 'system_terms\nsystem_terms'))
         self.assertTrue(self.window._engine_allows_work_mode(WorkMode.SYNC_TRANSLATION))
-        for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.KEYWORD_EXTRACTION, WorkMode.REVISION):
+        self.assertTrue(self.window._engine_allows_work_mode(WorkMode.BATCH_TRANSLATION))
+        for mode in (WorkMode.KEYWORD_EXTRACTION, WorkMode.REVISION):
             self.assertFalse(self.window._engine_allows_work_mode(mode))
-        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._set_work_mode(WorkMode.KEYWORD_EXTRACTION, refresh_manifest_writeback=False)
         self.assertFalse(self.window.translate_btn.isEnabled())
-        self.assertIn('Batch、外部工作包', self.window.work_mode_hint_label.text())
+        self.assertIn('外部工作包、订正', self.window.work_mode_hint_label.text())
         self.assertFalse(self.window._resume_task_available()[0])
         self.window._sync_bootstrap_prep_button_chrome()
         self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
@@ -192,6 +193,50 @@ class GuiMvSyncTests(unittest.TestCase):
         self.window._sync_readiness_display()
         self.assertIsNone(self.window._readiness_doctor_report)
         self.assertNotIn('待译：14', self.window.doctor_facts_label.text())
+
+    def test_mv_batch_diagnostics_use_the_actual_manifest_and_hide_renpy_export(self):
+        path = str(self.root / 'original-batch/manifest.json')
+        manifest = {'mode': 'translation', 'translation_plan': {'execution_strategy': 'gemini_batch'},
+                    'last_check_summary': {'writeback_gate': {'decision': 'allow'}}}
+        commands = diagnostics_context.build_cli_commands(
+            python_exe='python', batch_script_path='batch.py', manifest_path=path,
+            manifest=manifest, engine='rpgmaker_mv')
+        text = '\n'.join(row.command for row in commands)
+        for command in ('submit', 'status', 'download', 'check', 'apply'):
+            self.assertIn(command + ' ' + path, text)
+        self.assertNotIn('--export-only', text)
+        self.assertNotIn('<EXPORT_ROOT>', text)
+        self.window._set_work_mode(WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._update_writeback_action_buttons(self.window._current_writeback_summary(), running=False)
+        self.assertTrue(self.window.export_writeback_btn.isHidden())
+
+    def test_mv_batch_default_drives_doctor_and_gui_context_bootstrap(self):
+        from providers.model_routing_migration import preview_migration
+        from gui_qt.workers.context_library_worker import collect_context_library_status
+        from gui_qt.workers.doctor_worker import run_doctor_check
+        import translator_runtime as runtime
+        self.config['batch'] = {'model': 'gemini-3.1-flash-lite', 'rag': {'enabled': True},
+                                'source_index': {'enabled': True}}
+        self.config = preview_migration(self.config).config
+        self.config['model_routing']['defaults'].update(primary_profile_id='legacy-batch', execution_strategy='gemini_batch')
+        self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
+        self.window._context_library_config_snapshot = self.config
+        result = collect_context_library_status(str(self.root / 'target'), self.config,
+                                                config_file=str(self.config_file))
+        self.assertFalse(result.error, result.error)
+        self.assertTrue(result.context_flags['mv_batch_context'])
+        self.assertTrue(result.context_flags['rag_enabled'])
+        self.assertTrue(result.context_flags['source_index_enabled'])
+        self.assertEqual(result.status['mv_preparation']['execution_strategy'], 'gemini_batch')
+        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
+            report = run_doctor_check().report
+        self.assertEqual(report['workflow_state'], 'start_pending_batch')
+        self.assertEqual(report['engine_status']['execution_strategy'], 'gemini_batch')
+        self.window._confirm_unsaved_config_before_workflow = lambda: True
+        with mock.patch.object(self.window, '_start_cli_command', return_value=True) as start:
+            self.assertTrue(self.window._start_bootstrap_task('source_index'))
+        self.assertIn('--strategy', start.call_args.args[2])
+        self.assertIn('gemini_batch', start.call_args.args[2])
 
     def test_mv_diagnostics_only_advertise_supported_routes_and_unknown_is_not_zero(self):
         context = diagnostics_context.sync_diagnostics_context(

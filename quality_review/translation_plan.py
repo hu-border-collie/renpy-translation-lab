@@ -1626,8 +1626,6 @@ def build_translation_plan(
     identity = source_identity if isinstance(source_identity, SourceIdentity) else SourceIdentity.from_dict(source_identity)
     if identity.engine not in ('renpy', 'tyrano', 'rpgmaker_mv'):
         raise ValueError('protection.unsupported_engine')
-    if identity.engine == 'rpgmaker_mv' and strategy != STRATEGY_SYNC:
-        raise ValueError('RPG Maker MV currently requires durable Sync.')
     profile_snapshot = _resolve_profile_snapshot(model_profile_snapshot)
     config_fingerprint = short_fingerprint(
         canonical_json(redact_sensitive(dict(config_snapshot or {})))

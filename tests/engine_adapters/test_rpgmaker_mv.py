@@ -574,10 +574,11 @@ class MvAdapterTests(unittest.TestCase):
         for document in project.target_documents:
             self.assertEqual(Path(document.file_path).read_bytes(), document.content)
 
-    def test_mv_batch_route_remains_explicitly_unsupported(self):
-        with self.assertRaisesRegex(ValueError, "durable Sync"):
-            translation_plan.build_translation_plan([], execution_strategy="gemini_batch",
-                                                    source_identity={"engine":"rpgmaker_mv"})
+    def test_mv_batch_uses_the_shared_translation_plan(self):
+        build = translation_plan.build_translation_plan([], execution_strategy="gemini_batch",
+                                                       source_identity={"engine":"rpgmaker_mv"})
+        self.assertEqual(build.plan.source_identity['engine'], 'rpgmaker_mv')
+        self.assertEqual(build.plan.execution_strategy, 'gemini_batch')
 
     def test_late_target_edit_is_still_guarded_by_existing_atomic_transaction(self):
         project, _, _, occurrences = self.snapshot()

@@ -11,6 +11,46 @@ import translator_runtime as runtime
 
 
 class GuiProjectStateTests(unittest.TestCase):
+    def test_interrupted_sync_keyword_progress_counts_records_without_loading_them(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            state._game_root = root / 'work'
+            package = root / 'package'
+            completed = package / 'keyword_checkpoint' / 'completed'
+            completed.mkdir(parents=True)
+            for index in range(2):
+                (completed / f'{index:064x}.json').write_text('not parsed for display', encoding='utf-8')
+            path = package / 'manifest.json'
+            path.write_text(json.dumps({
+                'mode': 'keyword_extraction', 'execution': 'sync',
+                'base_dir': str(state._game_root), 'keyword_checkpoint_version': 1,
+                'summary': {'chunk_count': 5},
+            }), encoding='utf-8')
+
+            manifest = state.load_resume_manifest(path, work_mode=WorkMode.SYNC_KEYWORD_EXTRACTION)
+            self.assertEqual(manifest.get('_keyword_saved_request_count'), 2)
+            self.assertNotIn('_keyword_saved_request_count', state.load_manifest_file(path))
+
+    def test_sync_keyword_resume_discovers_own_project_without_batch_latest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            state = self.make_state(root)
+            game = root / 'game'
+            directory = state.get_logs_dir().parent / 'sync_runs'
+            for name, base_dir, mode in (
+                    ('one', str(game), 'keyword_extraction'),
+                    ('two', str(root / 'other'), 'keyword_extraction'),
+                    ('three', str(game), 'revision')):
+                package = directory / name
+                package.mkdir(parents=True)
+                (package / 'manifest.json').write_text(json.dumps({
+                    'mode': mode, 'execution': 'sync', 'base_dir': base_dir,
+                    'keyword_checkpoint_version': 1}), encoding='utf-8')
+            latest = state.get_latest_manifest_path_for_mode(game, WorkMode.SYNC_KEYWORD_EXTRACTION)
+            self.assertEqual(latest, directory / 'one/manifest.json')
+            self.assertIsNone(state.get_latest_manifest_path())
+
     def test_switching_from_mv_back_to_renpy_layout_restores_engine_and_work_root(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
