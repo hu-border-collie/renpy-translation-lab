@@ -90,6 +90,7 @@ class FinalReviewWorkflow:
         self.manifest_path = manifest_path
         self.finding_ids = tuple(finding_ids)
         self.submit_max_cost = submit_max_cost
+        self.only_query = False
 
     @classmethod
     def start_new(cls, *, submit_max_cost=None):
@@ -170,7 +171,7 @@ class FinalReviewWorkflow:
         elif key == "status":
             state = extract_job_state(output)
             if state == "JOB_STATE_SUCCEEDED":
-                if getattr(self, "only_query", False):
+                if self.only_query:
                     self._steps.clear()
                     return WorkflowUpdate(
                         status="ready",

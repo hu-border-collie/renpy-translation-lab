@@ -62,6 +62,7 @@ class RevisionBatchWorkflow:
         self._pending_steps = list(pending_steps)
         self.manifest_path = manifest_path
         self.submit_max_cost = submit_max_cost
+        self.only_query = False
 
     @classmethod
     def start_new(cls, *, submit_max_cost: float | None = None) -> "RevisionBatchWorkflow":
@@ -148,7 +149,7 @@ class RevisionBatchWorkflow:
         if key == "status":
             status_update = self._finish_status(output)
             if status_update is not None:
-                if getattr(self, "only_query", False) and status_update.status == "running":
+                if self.only_query and status_update.status == "running":
                     return WorkflowUpdate(
                         status="ready",
                         heading="云端任务已完成",

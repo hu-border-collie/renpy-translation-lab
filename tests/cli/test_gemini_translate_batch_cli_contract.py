@@ -91,6 +91,8 @@ class BatchCliContractTests(unittest.TestCase):
             ]
         if command == "merge-keywords-to-glossary":
             return [command, "candidates.jsonl"]
+        if command == "merge-retry":
+            return [command, "parent.json", "retry.json"]
         if command in {
             "final-review-status",
             "final-review-export",

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
+from dataclasses import replace
 
 from gui_qt.reports.check_report import WritebackSummary
 from gui_qt.reports.summary_helpers import extend_facts_with_notices
@@ -330,13 +332,86 @@ def summarize_revision_apply_output(
     with a partial heading, and a clean run renders as applied; every terminal
     state disables further apply.
     """
-    parsed = parse_revision_summary(output)
+    return _summarize_revision_apply(
+        parse_revision_summary(output),
+        exit_code,
+        manifest_path=manifest_path,
+    )
+
+
+def summarize_revision_apply_envelope(
+    envelope: Mapping[str, object],
+    exit_code: int,
+    *,
+    manifest_path: str = "",
+    output: str = "",
+) -> WritebackSummary:
+    """Summarize an ``apply-revisions --output json`` run for the writeback page.
+
+    Apply state, counts and the blocked reason come from the structured
+    ``result`` of the shared CLI envelope. ``output`` carries the human-readable
+    diagnostics (stderr under machine output); it still supplies failure
+    categories, and for refusals the ``Revision apply state: blocked`` line the
+    CLI prints before exiting. State semantics match
+    :func:`summarize_revision_apply_output`.
+    """
+    text_parsed = parse_revision_summary(output)
+    if not envelope.get("ok"):
+        summary = _summarize_revision_apply(
+            text_parsed,
+            exit_code or 1,
+            manifest_path=manifest_path,
+        )
+        error = envelope.get("error")
+        message = error.get("message") if isinstance(error, Mapping) else ""
+        if (
+            isinstance(message, str)
+            and message.strip()
+            and text_parsed.get("apply_state") != "blocked"
+        ):
+            return replace(summary, message=message.strip())
+        return summary
+
+    result = envelope.get("result")
+    result = result if isinstance(result, Mapping) else {}
+    revision_apply = result.get("revision_apply")
+    revision_apply = revision_apply if isinstance(revision_apply, Mapping) else {}
+
+    parsed: dict[str, object] = {"findings": list(text_parsed.get("findings", []))}
+    for state in (
+        revision_apply.get("state"),
+        result.get("revision_apply_state"),
+        text_parsed.get("apply_state"),
+    ):
+        if isinstance(state, str) and state.strip():
+            parsed["apply_state"] = state.strip()
+            break
+    reason = result.get("revision_apply_blocked_reason") or text_parsed.get("apply_reason")
+    if isinstance(reason, str) and reason.strip():
+        parsed["apply_reason"] = reason.strip()
+    for key, source_key in (
+        ("applied_files", "applied_files"),
+        ("applied_lines", "applied_lines"),
+        ("failures_logged", "failure_count"),
+    ):
+        value = revision_apply.get(source_key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            parsed[key] = value
+    return _summarize_revision_apply(parsed, exit_code, manifest_path=manifest_path)
+
+
+def _summarize_revision_apply(
+    parsed: Mapping[str, object],
+    exit_code: int,
+    *,
+    manifest_path: str,
+) -> WritebackSummary:
     if parsed.get("apply_state") == "blocked":
         facts: list[str] = []
         if manifest_path:
             facts.append(format_manifest_path_fact(manifest_path))
-        reason = _parse_line_value(output, "Revision apply reason:")
-        if reason:
+        reason = parsed.get("apply_reason")
+        if isinstance(reason, str) and reason:
             facts.append(f"阻断原因：{reason}")
         return WritebackSummary(
             status="failed",
