@@ -151,7 +151,10 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(workflow.current_step().args, ["merge-retry", parent_path, retry_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["merge-retry", parent_path, retry_path, "--output", "json", "--non-interactive"],
+        )
         update = workflow.complete_current_step(0, f"Merged retry results into: {parent_path}\n")
         self.assertTrue(update.should_continue)
         self.assertEqual(
@@ -188,7 +191,10 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         update = workflow.complete_current_step(0, "Safety status: safe\n")
 
         self.assertTrue(update.should_continue)
-        self.assertEqual(workflow.current_step().args, ["merge-retry", parent_path, retry_path])
+        self.assertEqual(
+            workflow.current_step().args,
+            ["merge-retry", parent_path, retry_path, "--output", "json", "--non-interactive"],
+        )
 
     def test_resume_checked_manifest_uses_last_check_summary_as_complete(self):
         workflow = TranslationWorkflow.resume_manifest(
@@ -308,6 +314,29 @@ class GuiTranslationWorkflowTests(unittest.TestCase):
         self.assertIn("拆包", update.message)
         self.assertTrue(any("拆包命令" in fact for fact in update.facts))
         self.assertIsNone(workflow.current_step())
+
+    def test_output_has_quota_error_ignores_counts_with_429_substring(self):
+        from gui_qt.workflows.translation_workflow import output_has_quota_error
+
+        self.assertFalse(output_has_quota_error("Processed 4290 items in 12 chunks"))
+        self.assertTrue(output_has_quota_error("HTTP 429 Too Many Requests"))
+        envelope_non_quota = json.dumps(
+            cli_contract.error_envelope(
+                "submit",
+                code="COMMAND_REFUSED",
+                message="Invalid chunk count 4290 in package",
+            )
+        )
+        self.assertFalse(output_has_quota_error(envelope_non_quota))
+        envelope_quota = json.dumps(
+            cli_contract.error_envelope(
+                "submit",
+                code="REMOTE_RETRYABLE",
+                message="Provider returned HTTP 429: rate limit exceeded",
+                retryable=True,
+            )
+        )
+        self.assertTrue(output_has_quota_error(envelope_quota))
 
 
 

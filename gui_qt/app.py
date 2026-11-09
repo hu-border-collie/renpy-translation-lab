@@ -191,7 +191,10 @@ from gui_qt.reports.keyword_merge_report import (
     summarize_keyword_merge_result,
 )
 from gui_qt.reports.keyword_report import summarize_keyword_result_from_manifest
-from gui_qt.reports.revision_report import summarize_revision_apply_output
+from gui_qt.reports.revision_report import (
+    summarize_revision_apply_envelope,
+    summarize_revision_apply_output,
+)
 from gui_qt.reports.revision_writeback_report import (
     summarize_revision_writeback_from_manifest,
     summarize_revision_writeback_from_preview_output,
@@ -471,7 +474,10 @@ from .workbench.sync_translation_page import SyncTranslationPage
 from .workbench.translation_page import TranslationTargetSection, strategy_label
 from .workbench.task_controls import task_status_has_result
 from .workbench_session import WorkbenchModeSession
-from gui_qt.workflows.batch_workflow_support import resolve_submit_max_cost
+from gui_qt.workflows.batch_workflow_support import (
+    machine_output_args,
+    resolve_submit_max_cost,
+)
 from gui_qt.workflows.workflow_factory import create_workflow, resume_workflow
 from gui_qt.reports.workflow_progress import (
     WorkflowProgressState,
@@ -732,6 +738,7 @@ class MainWindow(QMainWindow):
         self._split_output_lines: list[str] = []
         self._repair_output_lines: list[str] = []
         self._apply_revision_output_lines: list[str] = []
+        self._apply_revision_stdout_lines: list[str] = []
         self._bootstrap_output_lines: list[str] = []
         self._bootstrap_progress: BootstrapProgressState | None = None
         self._bootstrap_progress_tracker: BootstrapProgressTracker | None = None
@@ -2911,7 +2918,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading="正在运行：项目分析",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _run_project_analysis_command(
@@ -6003,9 +6010,9 @@ class MainWindow(QMainWindow):
             )
         writeback_summary = self._current_writeback_summary()
         if writeback_summary.status not in {"idle", "running", "stale"}:
-            self._focus_workbench_status_tab(2)
+            self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
         else:
-            self._focus_workbench_status_tab(1)
+            self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
         self.statusBar().showMessage("已选择拆分包；可继续下载、检查或写回。", 5000)
 
     def _writeback_issues_ready(self, summary: WritebackSummary) -> bool:
@@ -8772,7 +8779,7 @@ class MainWindow(QMainWindow):
                 operation_identity=self._current_revision_corpus_export_identity()
             ),
             log_heading=REVISION_CORPUS_COPY["running"],
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _revision_corpus_result_for_action(self) -> RevisionCorpusExportResult | None:
@@ -8911,7 +8918,7 @@ class MainWindow(QMainWindow):
                 operation_identity=str(session.get("operation_identity") or ""),
             ),
             log_heading=REVISION_PROPOSAL_COPY["selection_running"],
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _refresh_writeback_from_revision_manifest(self, manifest_path: str) -> None:
@@ -9048,7 +9055,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             FinalReviewWorkflow.create_revisions(manifest_path, finding_ids),
             log_heading="正在把所选问题生成订正预览",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _import_review_workspace_proposals(
@@ -9076,7 +9083,7 @@ class MainWindow(QMainWindow):
                 proposal_path, corpus_manifest_path, stage=True,
                 operation_identity=operation_identity,
             ),
-            log_heading=REVISION_PROPOSAL_COPY["running"], status_tab=1,
+            log_heading=REVISION_PROPOSAL_COPY["running"], status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _sync_revision_page_controls(self, *, running: bool | None = None) -> None:
@@ -9732,7 +9739,7 @@ class MainWindow(QMainWindow):
 
     def _on_view_last_completed_task(self) -> None:
         self._show_completed_manifest_snapshot()
-        self._focus_workbench_status_tab(1)
+        self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
 
     def _on_hide_completed_manifest_view(self) -> None:
         self._viewing_completed_manifest = False
@@ -10199,12 +10206,10 @@ class MainWindow(QMainWindow):
         worker.deleteLater()
 
     def _switch_game_root(self, directory: str) -> bool:
-        if self._is_doctor_running():
-            self._invalidate_doctor_worker()
+        self._invalidate_doctor_worker()
         if self.runner.is_running():
             self.runner.kill()
             self._set_task_running(False)
-        self._invalidate_doctor_worker()
         try:
             effective_root, adjusted = self.state.set_game_root(directory)
             if adjusted:
@@ -11386,7 +11391,7 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._active_command = "doctor"
         self._doctor_output_lines = []
-        self._focus_workbench_status_tab(0)
+        self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         self._show_workbench_log_drawer()
         self._set_doctor_summary(running_summary())
         self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
@@ -11682,7 +11687,7 @@ class MainWindow(QMainWindow):
         self._workflow_progress = create_workflow_progress_state("work_bootstrap")
         self._workflow_progress_base_facts = []
         # 项目与环境只有环境检查页；准备进度折叠进同一项目状态摘要。
-        self._focus_workbench_status_tab(0)
+        self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         doctor_summary = work_bootstrap_to_doctor_summary(running_work_bootstrap_summary())
         self._set_doctor_summary(doctor_summary)
         self._set_workflow_summary(
@@ -11743,7 +11748,7 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._template_generation_output_lines = []
-        self._focus_workbench_status_tab(0)
+        self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         running_summary = running_template_generation_summary()
         doctor_summary = template_generation_to_doctor_summary(running_summary)
         self._set_doctor_summary(doctor_summary)
@@ -11876,7 +11881,7 @@ class MainWindow(QMainWindow):
             self._bootstrap_progress_eta_timer.start()
         elif hasattr(self, "_bootstrap_progress_eta_timer"):
             self._bootstrap_progress_eta_timer.stop()
-        self._focus_workbench_status_tab(1)
+        self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
         self._set_workflow_from_bootstrap_summary(running_summary)
         self._append_log(f"=== 正在运行：{log_heading} ===\n")
         self._apply_bootstrap_progress_ui()
@@ -12074,7 +12079,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading=f"正在运行：{spec.label}",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _format_translation_preflight_facts(self, payload: Mapping[str, object]) -> str:
@@ -12145,7 +12150,7 @@ class MainWindow(QMainWindow):
         workflow,
         *,
         log_heading: str,
-        status_tab: int = 1,
+        status_tab: int = _BATCH_STAGE_EXECUTE,
     ) -> None:
         self._workflow = workflow
         self._active_command = (
@@ -12332,7 +12337,7 @@ class MainWindow(QMainWindow):
                 self._refresh_diagnostics_context()
                 self._active_command = "translation_workflow"
                 self._workflow_step_output_lines = []
-                self._focus_workbench_status_tab(1)
+                self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
                 self._append_log("=== 正在刷新全部拆分包状态 ===\n")
                 self._run_workflow_current_step()
                 return
@@ -12371,7 +12376,7 @@ class MainWindow(QMainWindow):
             )
             writeback_summary = self._current_writeback_summary()
             if writeback_summary.status not in {"idle", "running", "stale"}:
-                self._focus_workbench_status_tab(2)
+                self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
             self.statusBar().showMessage(f"最新{spec.label}任务已完成。", 6000)
             return
 
@@ -12384,7 +12389,7 @@ class MainWindow(QMainWindow):
         self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
-        self._focus_workbench_status_tab(1)
+        self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
         self._append_log(f"=== 正在继续最新 {spec.label} 任务 ===\n")
         self._run_workflow_current_step()
 
@@ -12428,7 +12433,7 @@ class MainWindow(QMainWindow):
         self._refresh_diagnostics_context()
         self._active_command = "translation_workflow"
         self._workflow_step_output_lines = []
-        self._focus_workbench_status_tab(1)
+        self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
         self._append_log(f"=== 正在批量提交剩余拆分包（{pending_count} 个） ===\n")
         self._run_workflow_current_step()
 
@@ -13064,7 +13069,7 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._recheck_output_lines = []
-        self._focus_workbench_status_tab(2)
+        self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
         self._set_writeback_summary(
             running_writeback_summary(
                 manifest_path=manifest_path,
@@ -13123,7 +13128,7 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_output_lines = []
-        self._focus_workbench_status_tab(2)
+        self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
         self._set_writeback_summary(running_writeback_summary(manifest_path=manifest_path))
         self._append_log(
             f"=== 正在写回：gemini_translate_batch.py apply {manifest_path} ===\n"
@@ -13254,7 +13259,7 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_output_lines = []
-        self._focus_workbench_status_tab(2)
+        self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
         self._set_writeback_summary(
             running_writeback_summary(manifest_path=manifest_snapshot)
         )
@@ -13300,7 +13305,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading=f"正在派生新的同步运行：{run_id}",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _prompt_derive_options(
@@ -13395,7 +13400,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading="正在写回同步翻译预览",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _on_resume_durable_sync(self) -> None:
@@ -13440,7 +13445,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading="正在查询 / 继续耐久同步任务",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _on_cancel_durable_sync(self) -> None:
@@ -13484,7 +13489,7 @@ class MainWindow(QMainWindow):
         self._begin_translation_workflow(
             workflow,
             log_heading="正在取消同步任务",
-            status_tab=1,
+            status_tab=_BATCH_STAGE_EXECUTE,
         )
 
     def _on_apply_revision(self) -> None:
@@ -13532,7 +13537,8 @@ class MainWindow(QMainWindow):
         self._clear_log_view()
         self._show_workbench_log_drawer()
         self._apply_revision_output_lines = []
-        self._focus_workbench_status_tab(2)
+        self._apply_revision_stdout_lines = []
+        self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
         self._set_writeback_summary(
             running_writeback_summary(
                 manifest_path=manifest_path,
@@ -13540,8 +13546,8 @@ class MainWindow(QMainWindow):
                 message="正在写回订正；完成后这里会显示写回摘要。",
             )
         )
-        command_label = f"gemini_translate_batch.py apply-revisions {manifest_path}"
-        args = ["apply-revisions", manifest_path]
+        args = machine_output_args(["apply-revisions", manifest_path])
+        command_label = f"gemini_translate_batch.py {' '.join(args)}"
 
         self._append_log(f"=== 正在写回订正：{command_label} ===\n")
         self._start_cli_command(
@@ -13576,7 +13582,7 @@ class MainWindow(QMainWindow):
         self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
             if self._workflow_status_page() is None:
-                self._focus_workbench_status_tab(2)
+                self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
 
     @staticmethod
     def _manifest_path_from_sync_revision_output(output: str) -> str:
@@ -13600,6 +13606,8 @@ class MainWindow(QMainWindow):
             self._recheck_output_lines.append(text)
         elif self._active_command == "translate_preflight":
             self._translate_preflight_output_lines.append(text)
+        elif self._active_command == "apply_revision":
+            self._apply_revision_stdout_lines.append(text)
 
     def _on_cli_line_ready(self, text: str):
         if self._active_command == "doctor":
@@ -14194,7 +14202,7 @@ class MainWindow(QMainWindow):
         self._set_writeback_summary(summary)
         self._refresh_diagnostics_context()
         if summary.status not in {"idle", "running", "stale"}:
-            self._focus_workbench_status_tab(2)
+            self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
 
     def _set_doctor_summary(
         self,
@@ -14771,11 +14779,26 @@ class MainWindow(QMainWindow):
             return
 
         if self._active_command == "apply_revision":
-            summary = summarize_revision_apply_output(
-                "\n".join(self._apply_revision_output_lines),
-                exit_code,
-                manifest_path=self._writeback_manifest_path,
-            )
+            revision_output = "\n".join(self._apply_revision_output_lines)
+            try:
+                envelope = cli_contract.parse_result_envelope(
+                    "\n".join(self._apply_revision_stdout_lines)
+                )
+            except ValueError:
+                envelope = None
+            if envelope is not None:
+                summary = summarize_revision_apply_envelope(
+                    envelope,
+                    exit_code,
+                    manifest_path=self._writeback_manifest_path,
+                    output=revision_output,
+                )
+            else:
+                summary = summarize_revision_apply_output(
+                    revision_output,
+                    exit_code,
+                    manifest_path=self._writeback_manifest_path,
+                )
             self._set_writeback_summary(summary)
             self._refresh_diagnostics_context()
             self._active_command = ""

@@ -226,10 +226,23 @@ def extract_error_message(output: str) -> str:
     return ""
 
 
+_QUOTA_TEXT_MARKERS = ("RESOURCE_EXHAUSTED", "Quota/resource limit hit")
+_QUOTA_STATUS_PATTERN = re.compile(r"(?<!\d)429(?!\d)")
+
+
 def output_has_quota_error(output: str) -> bool:
-    return any(
-        marker in output for marker in ("RESOURCE_EXHAUSTED", "429", "Quota/resource limit hit")
-    )
+    """Return whether a failed step reported a provider quota/rate limit.
+
+    When stdout is a structured result envelope only its error message is
+    inspected, so counts or paths elsewhere in the result cannot match. A bare
+    HTTP status ``429`` must stand alone (``4290 items`` does not match).
+    """
+    text = output
+    if _result_envelope(output) is not None:
+        text = extract_error_message(output)
+    if any(marker in text for marker in _QUOTA_TEXT_MARKERS):
+        return True
+    return bool(_QUOTA_STATUS_PATTERN.search(text))
 
 
 def extract_suggested_split_command(output: str) -> str:
@@ -267,6 +280,7 @@ class TranslationWorkflow:
         self.submit_max_cost = submit_max_cost
         self.retry_parent_manifest_path = retry_parent_manifest_path
         self.profile_id = str(profile_id or "").strip()
+        self.only_query = False
 
     @classmethod
     def start_new(
@@ -405,7 +419,7 @@ class TranslationWorkflow:
         if key == "status":
             status_update = self._finish_status(output)
             if status_update is not None:
-                if getattr(self, "only_query", False) and status_update.status == "running":
+                if self.only_query and status_update.status == "running":
                     return WorkflowUpdate(
                         status="ready",
                         heading="云端任务已完成",
@@ -417,7 +431,10 @@ class TranslationWorkflow:
         if key == "check":
             return self._finish_check(output)
         if key == "merge-retry":
-            if self.retry_parent_manifest_path:
+            manifest_path = extract_manifest_path(output)
+            if manifest_path:
+                self.manifest_path = manifest_path
+            elif self.retry_parent_manifest_path:
                 self.manifest_path = self.retry_parent_manifest_path
             return self._continue_or_finish()
         if key == "check-parent":
@@ -579,7 +596,9 @@ class TranslationWorkflow:
 
     def _args_for_step(self, key: str) -> list[str]:
         if key == "merge-retry":
-            return ["merge-retry", self.retry_parent_manifest_path, self.manifest_path]
+            return machine_output_args(
+                ["merge-retry", self.retry_parent_manifest_path, self.manifest_path]
+            )
         if key == "check-parent":
             return machine_output_args(["check", self.retry_parent_manifest_path])
         if key == "build":

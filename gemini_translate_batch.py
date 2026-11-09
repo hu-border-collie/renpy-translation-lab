@@ -195,6 +195,7 @@ MACHINE_OUTPUT_COMMANDS = frozenset(
         'check',
         'apply',
         'apply-revisions',
+        'merge-retry',
         'export-revision-corpus',
         'import-revision-proposals',
         'confirm-revision-proposals',
@@ -23265,6 +23266,7 @@ def build_arg_parser():
     )
     merge_retry_parser.add_argument('parent', help='Parent translation manifest path or package dir.')
     merge_retry_parser.add_argument('retry', help='Retry translation manifest path or package dir.')
+    add_machine_output_argument(merge_retry_parser)
 
     repair_parser = subparsers.add_parser('repair', help='Synchronously repair specific remaining untranslated items from a JSONL report.')
     repair_parser.add_argument('report', help='JSONL report path, typically remaining_need_translate_*.jsonl')
@@ -25481,8 +25483,7 @@ def dispatch_command(parser, args):
         return
 
     if command == 'merge-retry':
-        merge_retry_results(args.parent, args.retry)
-        return
+        return merge_retry_results(args.parent, args.retry)
 
     if command == 'repair':
         repair_remaining_items(
@@ -25529,6 +25530,7 @@ def _load_machine_manifest(command, value, args):
         'build-revisions',
         'build-keywords',
         'final-review-build',
+        'merge-retry',
     }
     if command in builder_commands and value:
         return load_manifest(value)
@@ -25803,6 +25805,14 @@ def build_machine_success_envelope(command, value, args):
     elif command == 'download':
         status = 'downloaded'
         result['result_jsonl_sha256'] = manifest.get('result_jsonl_sha256', '')
+    elif command == 'merge-retry':
+        status = str(manifest.get('job_state') or 'RESULTS_MERGED')
+        merge_history = list(manifest.get('retry_merge_history') or [])
+        result['retry_merge'] = dict(merge_history[-1]) if merge_history else {}
+        result['last_retry_merged_manifest_path'] = (
+            manifest.get('last_retry_merged_manifest_path') or ''
+        )
+        result['last_retry_merged_at'] = manifest.get('last_retry_merged_at') or ''
     elif command == 'check':
         check_summary = dict(manifest.get('last_check_summary') or {})
         result['check'] = check_summary

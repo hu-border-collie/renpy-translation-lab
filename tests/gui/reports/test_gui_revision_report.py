@@ -1,7 +1,9 @@
 import unittest
 
+from foundation import cli_contract
 from gui_qt.reports.revision_report import (
     parse_revision_summary,
+    summarize_revision_apply_envelope,
     summarize_revision_apply_output,
     summarize_revision_preview_output,
     summarize_sync_revision_output,
@@ -215,6 +217,46 @@ class GuiRevisionReportTests(unittest.TestCase):
         self.assertEqual(summary.status, "failed")
         self.assertEqual(summary.heading, "订正写回被阻止")
         self.assertIn("results_changed", "\n".join(summary.facts))
+        self.assertFalse(summary.can_apply)
+
+    def test_summarize_apply_envelope_applied(self):
+        envelope = cli_contract.success_envelope(
+            "apply-revisions",
+            status="applied",
+            result={
+                "revision_apply_state": "applied",
+                "revision_apply": {
+                    "state": "applied",
+                    "applied_files": 2,
+                    "applied_lines": 5,
+                    "failure_count": 0,
+                },
+            },
+        )
+        summary = summarize_revision_apply_envelope(
+            envelope,
+            0,
+            manifest_path="C:\\package\\manifest.json",
+        )
+        self.assertEqual(summary.status, "applied")
+        self.assertFalse(summary.can_apply)
+        self.assertIn("已写回 2 个文件，5 处译文行", "\n".join(summary.facts))
+
+    def test_summarize_apply_envelope_refused_uses_blocked_state_from_output(self):
+        envelope = cli_contract.error_envelope(
+            "apply-revisions",
+            code="COMMAND_REFUSED",
+            message="Revision apply refused: quality blockers present",
+        )
+        summary = summarize_revision_apply_envelope(
+            envelope,
+            1,
+            manifest_path="C:\\package\\manifest.json",
+            output="Revision apply state: blocked\nRevision apply reason: quality_blockers_present\n",
+        )
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.heading, "订正写回被阻止")
+        self.assertIn("quality_blockers_present", "\n".join(summary.facts))
         self.assertFalse(summary.can_apply)
 
 
