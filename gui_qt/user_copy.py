@@ -7,16 +7,87 @@
 """
 from __future__ import annotations
 
-SYNC_KEYWORD_SCAN_MESSAGE = '正在扫描原文并生成术语候选与段落概要报告。'
+APP_BRAND_COPY = {
+    "name": "Ren'Py Translation Lab",
+    "window_title": "Ren'Py Translation Lab - 图形工作台",
+    "subtitle": "翻译工作台",
+    "icon_accessible_name": "Ren'Py Translation Lab 应用图标",
+}
+
+SYNC_KEYWORD_SCAN_MESSAGE = '正在提取关键词与段落概要；每个请求返回后保存响应，可停止后继续提取。'
+SYNC_KEYWORD_COPY = {
+    'scanning': '正在扫描关键词原文…',
+    'processed': '本轮已处理 {current}/{total} 个请求块',
+    'pending_processed': '本轮待补已处理 {current}/{total} 个请求块（{percent:.1f}%）',
+    'task_total': '任务总量：{count} 个请求块',
+    'restored_valid': '已复用有效结果：{count} 个请求块（不计入本轮待补进度）',
+    'queue_composition': '本轮任务组成：失败待重试 {failed} 个；响应不完整 {incomplete} 个；尚无结果 {missing} 个',
+    'exporting_restored': '有效结果已恢复，正在生成报告…',
+    'resumed': '载入历史处理记录：{count}',
+    'current_request': '当前请求块：{key}',
+    'validating': '正在核对原文与项目材料',
+    'waiting': '正在等待关键词服务响应',
+    'unknown_title': '确认恢复未收到结果的请求',
+    'unknown_message': '上次中断时有 {count} 个请求尚无已保存的响应，服务可能已经处理。'
+                       '已保存响应会直接复用；继续会重新发送这些结果未知的请求，可能重复计费。',
+    'resume': '确认继续提取',
+    'resume_tooltip': '继续当前项目最近的同步关键词任务，直接复用完整有效结果；'
+                      '只处理缺失、失败和不完整块，不完整块每次续跑最多新增一轮修复；'
+                      '结果未知时会先提示确认。',
+    'partial_heading': '同步关键词提取部分完成',
+    'partial_message': '部分请求失败或结果不完整；继续提取会复用有效成果，只补缺失、失败和不完整块。',
+    'completed_heading': '同步关键词提取完成',
+    'completed_message': '已加载提取结果，可审核术语候选。',
+    'ready_heading': '同步关键词提取可继续',
+    'ready_message': '已加载保存进度，点击「继续提取」继续；已保存响应会直接复用。',
+    'saved_records': '已保存处理记录：{current}/{total}',
+    'response_counts': '服务响应：成功 {successful} 个；失败 {failed} 个',
+    'valid_progress': '完整有效请求块：{current}/{total}（{percent:.1f}%）',
+    'incomplete_responses': '响应不完整：{count} 个请求块',
+    'candidates': '关键词候选：{count:,} 个',
+    'summaries': '剧情概要：{count:,} 条',
+}
 MV_PREPARATION_COPY = {
-    'ready': '当前范围的库已准备，可用于同步检索；这不表示真实游戏验收完成。',
+    'ready': '当前范围的库已准备，可用于对应执行方式的检索；这不表示真实游戏验收完成。',
     'empty': '当前范围已准备为 0 条记录；本次检索将为空。',
     'missing': '尚无有效语料或已准备的库，请核对输入并重新预建。',
-    'disabled': '请先启用对应的同步上下文开关并保存。',
+    'disabled': '请先启用对应执行方式的上下文开关并保存。',
+    'scope': '上下文范围：{strategy}（跟随模型设置中的默认执行方式）',
     'reviewed_history_not_configured': '请先配置独立审阅的双语历史文件。',
     'reviewed_history_missing': '找不到独立审阅的历史文件，请核对路径。',
     'no_reviewed_history': '输入尚无已批准的历史记录，请完成独立审阅。',
     'failed': '预建未成功完成，请查看诊断与运行日志。',
+    'failed_resumable': '预建未完成，已保存部分向量进度。排除错误后再次预建，将核对输入并续建；完整校验前不会用于翻译。',
+}
+
+BOOTSTRAP_FAILURE_STAGES = {
+    'store_load': '读取索引库', 'store_identity': '校验索引身份',
+    'checkpoint_load': '读取向量进度', 'checkpoint_selection': '核对可复用向量',
+    'checkpoint_save': '保存向量进度', 'metadata_write': '保存索引状态',
+    'material_validation': '校验输入材料', 'embedding_request': '请求向量',
+    'embedding_response_validation': '校验向量返回值', 'store_write': '写入完整索引',
+}
+BOOTSTRAP_FAILURE_REASONS = {
+    'authentication': '向量服务身份验证失败。',
+    'permission': '向量服务拒绝访问。',
+    'rate_limit': '向量服务限流或配额不足。',
+    'timeout': '向量请求超时。',
+    'unavailable': '向量服务或连接暂时不可用。',
+    'cancelled': '向量请求已取消。',
+    'invalid_request': '向量请求或配置无效。',
+    'invalid_response': '向量返回值未通过校验。',
+    'local_error': '本地文件或系统操作失败。',
+    'internal_error': '本地处理发生异常。',
+    'provider_error': '向量请求失败，具体原因未知。',
+}
+BOOTSTRAP_FAILURE_COPY = {
+    'unknown': '失败原因未知，现有诊断不足以确定根因。',
+    'unknown_value': '未知',
+    'http_unknown': 'HTTP 状态：未提供',
+    'batch': '失败批次：{start}-{end}/{total}（本轮待生成）',
+    'retryable_true': '自动重试策略：适用（有次数上限）',
+    'retryable_false': '自动重试策略：不适用（不代表再次预建必然失败）',
+    'diagnostic_persistence_failed': '失败诊断未能写入索引目录；请保留本次运行日志。',
 }
 
 from typing import Any
@@ -28,6 +99,16 @@ SAFETY_LEVEL_LABELS = {
     "safe": "可写回",
     "warn": "需处理",
     "block": "禁止写回",
+}
+
+SHELL_WRITEBACK_STATUS_COPY = {
+    "idle": "写回门禁 · 尚未检查",
+    "safe": "写回门禁 · 可安全写回",
+    "no_apply": "写回门禁 · 安全完成，无需写回",
+    "applied": "写回门禁 · 已完成写回",
+    "running": "写回门禁 · 检查中",
+    "warning": "写回门禁 · 需要处理或重查",
+    "blocked": "写回门禁 · 禁止写回",
 }
 
 MV_PROJECT_COPY = {
@@ -53,7 +134,7 @@ MV_PROJECT_COPY = {
     'coverage_export': '导出覆盖材料',
     'coverage_export_tip': '导出当前候选清单、独立覆盖报告和待填写审阅模板；不会批准范围或写入游戏。',
     'engine_label': '游戏引擎',
-    'engine_description': '选择游戏目录时自动识别并更新。缺省配置可识别 MV；可显式填写 renpy 或 rpgmaker_mv。MV 翻译使用耐久 Sync。',
+    'engine_description': '选择游戏目录时自动识别并更新。缺省配置可识别 MV；可显式填写 renpy 或 rpgmaker_mv。MV 翻译支持 Gemini Batch 与耐久 Sync。',
     'source_label': 'MV 原始源目录',
     'source_description': '可信原始内容根目录（含 data / js）；须与项目列表中的目标副本分离且不互相嵌套。',
     'window_label': 'MV 支持窗口文件',
@@ -65,8 +146,10 @@ MV_PROJECT_COPY = {
     'display_fields_invalid': 'MV 附加显示字段只能填写不重复的 system_terms、map_display_name。',
     'history_label': 'MV 已审阅双语历史文件（可选）',
     'history_description': '带 typed JSON path、源文件／支持窗口摘要及真实审阅者的 MV JSONL；仅 approved 行可入库。目标中文和 UI／图片初稿不会自动成为历史语料。',
-    'unsupported': 'MV 支持耐久 Sync、同步关键词与原文／已审阅历史预建；Batch、外部工作包、订正、Story Memory 和项目分析暂未支持。',
-    'scope_ready': 'MV 当前已审阅文本范围可使用耐久 Sync；真实游戏原生验收仍待完成。',
+    'unsupported': 'MV 支持 Gemini Batch、耐久 Sync、同步关键词与原文／已审阅历史预建；外部工作包、订正、Story Memory 和项目分析暂未支持。',
+    'scope_ready': 'MV 当前已审阅文本范围可使用 Gemini Batch 或耐久 Sync；真实游戏原生验收仍待完成。',
+    'export_unsupported': 'MV Batch 写入已绑定的独立目标副本；另目录导出仅支持 Ren\'Py。',
+    'repair_unsupported': 'MV Batch 请使用「生成补译包 → 合并补译 → 重新检查」处理失败项。同步修补仅支持 Ren\'Py。',
     'scope_empty': 'MV 当前已审阅文本范围没有待译条目；全游戏覆盖与原生验收仍单列。',
     'checked_heading': 'MV 文本范围检查完成',
     'review_required_heading': 'MV 文本已扫描，待覆盖核对',
@@ -211,10 +294,10 @@ DURABLE_SYNC_COPY = {
 }
 
 TRANSLATION_PLAN_COPY = {
-    "current": "翻译计划：已绑定共享 TranslationPlan",
+    "current": "翻译计划：已绑定共享翻译计划",
     "legacy": (
-        "翻译计划：旧版兼容模式；仍执行原有 source/check/adapter 安全校验，"
-        "但没有 plan/request 级 freshness 绑定。建议重新生成任务。"
+        "翻译计划：旧版兼容模式；仍执行原有源文件与检查安全校验，"
+        "但不包含请求级时效绑定，建议重新生成任务。"
     ),
     "fingerprint": "翻译计划指纹",
     "requests": "规范化请求数",
@@ -247,7 +330,7 @@ TASK_PROJECT_GATE_COPY = {
     ),
     "keywords_body": (
         "选择项目并运行环境检查后，才能提取关键词，或打开已有的候选文件审核。"
-        "任务只生成候选报告，不修改游戏脚本；报告会附上历史首次译法与保留不译的人工作提示，审核后可合并到 glossary.json。"
+        "生成的候选报告附带历史首次译法与保留提示，人工审核后可合并到 glossary.json。"
     ),
     "revision_body": (
         "选择项目并运行环境检查后，才能生成订正预览；确认预览后才可写回。"
@@ -258,6 +341,7 @@ TASK_PROJECT_GATE_COPY = {
 # the user's goal (审核并合并到术语表); the on-disk format name (JSONL) stays in
 # file information, tooltips and the file picker instead of the button label.
 KEYWORD_CANDIDATE_COPY = {
+    'running_hint': '关键词任务正在运行；结束后可审核并合并候选。',
     "open_action": "打开候选文件",
     "open_tooltip": (
         "打开已有的关键词候选 JSONL（外部生成或此前导出的报告），"
@@ -296,6 +380,18 @@ KEYWORD_CANDIDATE_COPY = {
     "stale_glossary": "术语表目标已变化，本次审核上下文已过期；请重新打开候选文件。",
 }
 
+KEYWORD_MERGE_TABLE_HEADERS = (
+    "写入", "原文术语", "建议译法", "类别", "置信度", "术语分区", "历史首次译法", "提示",
+)
+KEYWORD_CATEGORY_LABELS = {
+    "character": "人物", "place": "地点", "item": "物品", "ability": "能力",
+    "concept": "概念", "term": "术语", "relationship": "关系", "other": "其他",
+}
+KEYWORD_GLOSSARY_SECTION_LABELS = {
+    "preserve_terms": "保留原文", "normalize_map": "统一译法",
+    "non_translatable_exact": "精确保留原文",
+}
+
 REVISION_PROPOSAL_COPY = {
     "action": "导入润色提案",
     "tooltip": "导入结构化 JSONL 提案，校验并准备待选候选；明确选择后才生成预览。不会修改 .rpy。",
@@ -320,26 +416,26 @@ REVISION_PROPOSAL_COPY = {
 }
 
 REVISION_GUIDANCE_COPY = {
-    "model_title": "模型生成预览 / 任务控制 / 写回",
-    "external_title": "外部提案 / 人工审校（无需先生成模型预览）",
-    "empty": ("尚无订正结果", "模型入口：点击「生成订正预览」。外部入口：导出语料后起草提案，再「导入润色提案」；也可「逐条审校」保存草稿。"),
+    "model_title": "模型订正与写回",
+    "external_title": "外部提案与人工审校",
+    "empty": ("尚无订正结果", "模型订正请点击「生成订正预览」；人工或外部润色可先导出语料，再「导入润色提案」或「逐条审校」。"),
     "running": ("任务运行中", "查看「任务状态」和「运行日志」；需要中断本机执行时点击「停止」。停止本机执行不会取消已提交的云端任务。"),
     "stopping": ("正在停止本机执行", "等待进程退出后，再按当前任务记录继续或重新生成。"),
     "stopped": ("本机执行已停止", "查看「任务状态」确认中断步骤；批量任务可在「继续订正」可用时恢复，同步任务需重新生成预览。"),
     "waiting": ("等待任务结果 / 恢复", "点击「继续订正」查询、下载或恢复当前批量任务；完成后仍需查看订正预览。"),
     "waiting_unavailable": "查看「任务状态」确认当前任务记录；「继续订正」尚不可用，请先核对当前项目与任务。",
     "preview": ("预览已完成，尚未允许写回", "查看「任务状态」中的预览报告和检查详情；没有可写回项时，处理问题后重新生成预览。"),
-    "ready": ("预览允许写回，等待确认", "先阅读预览报告并确认修改；点击「写回订正」后仍需确认并通过当前快照与门禁校验。本次预览尚未写回游戏文件。"),
+    "ready": ("预览允许写回，等待确认", "请先阅读预览报告并确认修改；点击「写回订正」通过快照与门禁校验后写入项目文件。"),
     "applied": ("写回操作已完成", "查看「任务状态」中的实际写回数量及失败项；部分写回需处理剩余问题。"),
-    "select": ("提案已导入，等待选择", "点击「筛选并生成订正预览」，明确勾选有效候选并确认；候选尚未写回游戏。"),
-    "invalid": ("提案没有当前有效候选", "查看候选摘要中的过期、无效或冲突项，修正后重新导入当前语料。游戏文件尚未修改。"),
+    "select": ("提案已导入，等待选择", "点击「筛选并生成订正预览」，明确勾选有效候选以生成预览报告。"),
+    "invalid": ("提案没有当前有效候选", "查看候选摘要中的过期、无效或冲突项，修正后重新导入当前语料。"),
     "review": ("逐条审校中", "填写建议译文和修改原因，保存草稿；用真实审校者名称确认审校决定。选中草稿生成提案后仍须选择候选、预览、确认和写回。"),
-    "corpus": ("语料已导出，等待提案", "可「逐条审校」当前语料，或交给人工 / Agent 起草提案，再「导入润色提案」。导出没有修改游戏文件。"),
+    "corpus": ("语料已导出，等待提案", "可「逐条审校」当前语料，或交给人工 / Agent 起草提案后再「导入润色提案」。"),
     "failed": ("当前步骤失败或被阻止", "查看「任务状态」和「运行日志」；处理失败项后继续任务或重新生成预览，不能跳过检查直接写回。"),
     "stale": ("结果已过期", "项目、任务或文件已变化；请重新检查当前项目并生成预览或导入提案，旧结果不能作为当前写回依据。"),
     "sync_empty": ("尚无同步订正预览", "点击「生成订正预览」；生成后先阅读报告，再按检查结论确认写回。"),
     "final_empty": ("尚无最终审校结果", "点击「开始最终审校」；完成后明确选择问题并生成订正预览，再确认写回。"),
-    "final_select": ("最终审校完成，等待选择问题", "点击「选择问题并生成预览」，明确勾选要处理的问题；问题报告和选择都不会直接修改游戏文件。"),
+    "final_select": ("最终审校完成，等待选择问题", "点击「选择问题并生成预览」，明确勾选要处理的问题以生成订正预览。"),
 }
 
 REVIEW_WORKSPACE_COPY = {
@@ -979,19 +1075,33 @@ GAMES_REGISTRY_SOURCE_URL_COPY = {
 }
 
 BOOTSTRAP_PROGRESS_COPY = {
-    "source_command": "MV 预建原文索引（含阶段进度）",
-    "history_command": "MV 预建已审阅历史（含阶段进度）",
+    "source_command": "MV 预建原文索引（分批保存、续建与失败诊断）",
+    "history_command": "MV 预建已审阅历史（分批保存、续建与失败诊断）",
     "scanning": "正在扫描原文…",
     "mv_embedding": "正在生成向量：{done}/{total}（等待服务响应…）",
     "mv_validating": "正在校验原文与索引输入…",
     "mv_persisting": "正在保存索引…",
-    "mv_total": "原文片段：{total}（完成校验后保存）",
-    "mv_history_total": "历史语料：{total}（完成校验后保存）",
+    "mv_total": "原文片段：{total}（完整校验后用于翻译）",
+    "mv_history_total": "历史语料：{total}（完整校验后用于翻译）",
+    "mv_checkpointed": "已保存向量进度：{saved} 片段（可续建）",
+    "mv_resumed": "本次恢复向量：{resumed} 片段",
     "empty_done": "已完成（0 片段）",
 }
 
 
 BOOTSTRAP_FIELD_LABELS = {
+    'failure_stage': '失败阶段',
+    'exception_type': '异常类型',
+    'exception_chain': '异常原因链',
+    'error_category': '错误分类',
+    'http_status': 'HTTP 状态',
+    'provider_status': '服务状态',
+    'traceback_location': '调用位置',
+    'os_errno': '系统错误号',
+    'os_winerror': 'Windows 错误号',
+    'attempt_count': '已尝试请求次数',
+    'phase_elapsed_seconds': '失败阶段耗时（秒）',
+    'elapsed_seconds': '本轮累计耗时（秒）',
     "store_dir": "存储目录",
     "scan_scope": "扫描范围",
     "files_scanned": "扫描文件数",
@@ -999,6 +1109,8 @@ BOOTSTRAP_FIELD_LABELS = {
     "embedded": "生成向量数",
     "upserted": "写入记录数",
     "reused_embeddings": "复用向量数",
+    "resumed_embeddings": "恢复向量数",
+    "checkpointed_embeddings": "已保存向量进度",
     "stale_count": "过期记录数",
     "pruned": "清理记录数",
     "history_records_before": "更新前记录数",
@@ -1499,16 +1611,54 @@ READINESS_COPY = {
     "writeback": "启动预检不代表可写回；写回仍需当前结果通过 check。",
     "busy": "当前已有任务运行；请等待结束或停止后再启动。",
     "unsupported": "当前模型不支持所选执行方式；请选择支持的执行方式。",
+    "project_unavailable": "当前项目尚未满足此执行方式的条件；请先在「项目与环境」完成准备与检查。",
     "required": "需要处理：",
     "attention": "注意事项：",
     "details": "完整检查详情与次要建议",
     "settings": {"api_keys": "设置 · 密钥", "project": "设置 · 项目", "mv_project": "准备 MV 项目", "context": "设置 · 上下文", "profiles": "设置 · 模型与供应商"},
 }
 
+TRANSLATION_PREPROCESSING_COPY = {
+    "title": "预处理与上下文（已保存设置）",
+    "settings": "上下文设置",
+    "no_project": "选择项目后显示预处理与上下文设置。",
+    "unavailable": "无法读取当前预处理设置；请检查配置。",
+    "enabled": "已开启：{items}",
+    "disabled": "未开启：{items}",
+    "unsupported": "MV 暂不支持：{items}",
+    "unsupported_enabled": "（配置已开启，需关闭）",
+    "none": "无可选增强",
+    "features": {
+        "rag": "历史译文检索（RAG）",
+        "source_index": "原文索引",
+        "story_memory": "剧情记忆",
+        "project_analysis_brief": "项目摘要注入",
+    },
+    "assets": "术语表：{glossary}（按命中使用） · 风格设定：{macro}",
+    "asset_found": "已找到文件",
+    "asset_missing": "未找到文件",
+    "asset_unknown": "文件状态未知",
+    "inline_macro": "已配置文本",
+    "not_configured": "未配置",
+    "glossary_path": "术语表：{path}",
+    "macro_path": "风格设定文件：{path}",
+    "analysis_build": "项目分析预建：{state}；是否用于翻译取决于「项目摘要注入」。",
+    "on": "已开启",
+    "off": "未开启",
+    "note": (
+        "显示当前执行方式的已保存设置（含项目覆盖）。开启不代表已完成预建或本次已命中；"
+        "可到「上下文库」查看材料状态，实际使用以启动预检和运行结果为准。"
+    ),
+}
+
 TRANSLATION_TARGET_COPY = {
     "section_title": "模型与执行方式",
     "profile_label": "主模型",
+    "profile_tooltip": "模型方案名称用于识别模型与连接；实际执行方式由右侧选择。",
     "strategy_label": "执行方式",
+    "open_settings": "模型设置",
+    "legacy_profile": "旧配置",
+    "unresolved_model": "无法解析当前模型",
     "strategy_labels": {
         "sync": "同步",
         "gemini_batch": "Gemini Batch",
@@ -1520,9 +1670,10 @@ TRANSLATION_TARGET_COPY = {
     "resolved_stage_origin_inherited": "继承默认",
     "resolved_stage_unavailable": "本阶段模型：无法解析（请检查模型路由配置）",
     "legacy_hint": (
-        "当前项目仍是旧模型配置；迁移到 model_routing 后，可在这里选择"
-        "ModelProfile 与执行方式。迁移前保持原有默认行为不变。"
+        "当前使用旧模型配置，可按现有设置运行。修改模型请点击「模型设置」；"
+        "迁移后可在此选择模型与执行方式。"
     ),
+    "legacy_unresolved_hint": "无法解析旧模型配置，请点击「模型设置」检查；启动时仍会执行预检。",
     "invalid_hint": "model_routing 配置无效，已禁用模型选择：{reason}",
     "unsupported_hint": "该模型不支持{strategy}：{reason}",
     "unsupported_reasons": {
@@ -1619,11 +1770,11 @@ DURABLE_SYNC_RUN_COPY = {
     "interrupted_heading": "本机同步命令已中断",
     "interrupted_locate_heading": "本机同步命令已中断，正在定位运行记录",
     "interrupted_locate_message": (
-        "本机进程已停止；正在查询最近一次耐久运行，随后可继续或取消。"
+        "本机进程已停止；正在查询最近一次同步运行记录，随后可继续或取消。"
     ),
     "recover_located_heading": "已定位最近一次同步运行",
     "recover_located_message": (
-        "本机进程已停止，耐久运行仍可继续或取消；"
+        "本机进程已停止，同步运行仍可继续或取消；"
         "请选择「继续 / 查看最新任务」或「取消任务」。"
     ),
     "recover_located_terminal_message": (
@@ -1634,14 +1785,14 @@ DURABLE_SYNC_RUN_COPY = {
         "（默认排除结果未知条目，不重复调用）。"
     ),
     "worker_stopped_message": (
-        "本机进程已停止，但耐久运行不会被隐式取消；"
+        "本机进程已停止，但同步运行不会被隐式取消；"
         "已提交的请求不会重发，可稍后用「继续 / 查看最新任务」恢复。"
     ),
     "command_interrupted_message": "本机命令已中断；可稍后重试，已持久化的运行记录不受影响。",
     "log_hint_fact": "原始输出已保留在诊断与运行日志中",
     "error_fallback": "同步命令执行失败（{code}），请查看诊断与运行日志。",
     "error_messages": {
-        "SYNC_RUN_NOT_FOUND": "没有找到耐久同步运行记录；请先启动一次同步翻译。",
+        "SYNC_RUN_NOT_FOUND": "没有找到同步运行记录；请先启动一次同步翻译。",
         "SYNC_RUN_BUSY": "该运行正在被另一个进程使用；请等待其结束后重试。",
         "SYNC_RUN_STORAGE_ERROR": "运行存储校验失败；请查看诊断日志，必要时从备份恢复。",
         "SYNC_RUN_ARTIFACT_MISSING": "运行制品缺失；请重新生成检查预览。",
@@ -1685,10 +1836,10 @@ DURABLE_SYNC_RUN_COPY = {
     ),
     "cancel_unknown_message": "取消请求已发送；请稍后查询最新状态确认结果。",
     "derive_button": "派生新运行",
-    "derive_button_tooltip": "基于该运行已成功且仍通过校验的结果创建新的耐久运行。",
+    "derive_button_tooltip": "基于该运行已成功且仍通过校验的结果创建新的同步运行。",
     "derive_confirm_title": "派生新的同步运行",
     "derive_confirm_body": (
-        "将从运行 {run_id} 已成功且仍通过校验的结果继续，创建新的耐久运行；"
+        "将从运行 {run_id} 已成功且仍通过校验的结果继续，创建新的同步运行；"
         "原运行记录不会被修改。是否继续？"
     ),
     "derive_unknown_title": "选择派生方式",
@@ -1736,9 +1887,18 @@ ADVANCED_SETTINGS_NAV_COPY = {
 
 MODEL_PROFILES_PAGE_COPY = {
     "hint": (
-        "在这里统一管理供应商连接、模型方案和任务阶段路由。"
-        "凭据只保存引用；保存前会校验配置。"
+        "选择任务使用的模型，或维护模型方案与供应商连接。"
+        "修改后点击「保存设置」生效，凭据只保存引用。"
     ),
+    "sections_label": "模型与供应商配置区域",
+    "routes_tab": "默认与阶段",
+    "profiles_tab": "模型方案",
+    "providers_tab": "供应商连接",
+    "management_show": "配置管理与旧设置…",
+    "management_hide": "收起配置管理与旧设置",
+    "edit_provider": "编辑连接",
+    "routes_hint": "未勾选的阶段沿用默认模型和执行方式；勾选后可为该阶段单独设置。",
+    "route_override": "单独设置阶段",
     "legacy_hint": (
         "这个项目仍使用旧模型配置。请先打开「诊断与运行日志」的命令参考，"
         "复制带完整脚本路径的 preview / migrate 模板预览并迁移；"
@@ -1751,7 +1911,7 @@ MODEL_PROFILES_PAGE_COPY = {
     "empty_title": "尚未创建模型路由配置",
     "ready_title": "模型路由配置",
     "management_title": "配置管理与旧设置",
-    "readiness_valid": "配置校验通过；凭据与实际连接尚未验证。阶段路由可覆盖以下默认值。",
+    "readiness_valid": "配置校验通过；凭据与实际连接尚未验证。",
     "readiness_invalid": "配置有 {count} 项校验问题，保存会被阻止；请检查模型、供应商和阶段路由。",
     "remove_pending_title": "等待保存移除操作",
     "invalid_hint": (
@@ -1835,13 +1995,18 @@ MODEL_PROFILES_PAGE_COPY = {
     "structured_output_label": "结构化输出模式",
     "preset_placeholder": "选择预设以填充连接（不会自动保存）",
     "extra_headers_invalid": "额外请求头必须是 JSON 对象：{reason}",
-    "model_catalog_label": "模型目录（只读建议）",
-    "model_catalog_placeholder": "（选择目录模型以填入模型字段）",
-    "model_catalog_button": "拉取模型列表",
+    "model_placeholder": "选择、搜索或输入模型 ID",
+    "model_choices_hint": "可搜索、选择或手填模型 ID；刷新可从当前供应商获取更多选项。",
+    "model_catalog_unsupported": "此连接暂未配置可读取的模型目录；可手填模型 ID，或在「编辑连接」中填写模型目录 URL。",
+    "model_catalog_save_connection": "请先保存供应商连接与模型方案，再刷新该连接的模型目录。当前编辑内容会保留。",
+    "model_catalog_button": "刷新模型列表",
     "model_catalog_running": "正在拉取模型…",
     "model_catalog_tooltip": (
-        "只读请求 Provider 的模型列表端点；失败或未收录时仍可手动输入模型 ID。"
+        "点击后只读获取当前连接的模型目录，不生成内容。"
+        "支持 Gemini、OpenAI 兼容直连，以及已有官方目录或自定义目录 URL 的 LiteLLM 连接。"
+        "失败或未收录时仍可手动输入模型 ID。"
     ),
+    "model_catalog_command": "刷新 Gemini / LiteLLM / OpenAI 兼容模型目录（只读）",
     "model_catalog_loaded": "已拉取 {count} 个模型（来源：{source}）；手动输入始终可用。",
     "model_catalog_failed": "模型目录拉取失败：{code}。仍可手动输入模型 ID。",
     "model_catalog_stale": "已忽略 Profile「{profile_id}」的过期目录结果，请重新拉取。",

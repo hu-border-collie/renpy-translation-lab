@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import time
 from pathlib import Path
 from dataclasses import replace
 from datetime import datetime
@@ -16,6 +17,7 @@ from typing import Any
 
 from context_engine import advanced_context, embedding_runtime
 from context_engine.embedding_backend import check_persisted_store_query_compatibility
+from context_engine.embedding_checkpoint import EmbeddingCheckpoint
 from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore
 from engine_adapters.coverage import digest_json
 from engine_adapters.project_config import read_mv_project_config, _load_json, _unique_object, _reject_constant
@@ -26,9 +28,12 @@ from quality_review import translation_core
 CONTEXT_SCHEMA_VERSION = 1
 
 
-def store_paths(config, config_file) -> dict[str, Path]:
+def store_paths(config, config_file, *, execution='sync') -> dict[str, Path]:
     """Resolve MV stores with the existing context-storage and asset-path rules."""
     import translator_runtime as runtime
+    if execution not in {'sync', 'gemini_batch'}:
+        raise ValueError('Unsupported MV context execution strategy.')
+    scope = 'batch' if execution == 'gemini_batch' else 'sync'
     settings = read_mv_project_config(config, config_file)
     storage = config.get('context_storage') or {}
     location = runtime._normalize_context_storage_location(storage.get('location'))
@@ -38,7 +43,7 @@ def store_paths(config, config_file) -> dict[str, Path]:
             else Path(runtime.LOG_DIR))
     paths = {}
     for kind, section, name in (('history', 'rag', 'rag_store'), ('source', 'source_index', 'source_index_store')):
-        configured = ((config.get('sync') or {}).get(section) or {}).get('store_dir')
+        configured = ((config.get(scope) or {}).get(section) or {}).get('store_dir')
         if configured:
             path = Path(configured)
             paths[kind] = (path if path.is_absolute() else settings.target_root / path).resolve()
@@ -56,7 +61,19 @@ def store_paths(config, config_file) -> dict[str, Path]:
     return paths
 
 
-def context_status(config, config_file, *, snapshot=None) -> dict:
+def context_execution(config, override=''):
+    """Use the saved MV execution default, preserving Sync for legacy configs."""
+    section = config.get('model_routing') or {}
+    defaults = section.get('defaults') if isinstance(section, dict) else None
+    if not isinstance(section, dict) or (defaults is not None and not isinstance(defaults, dict)):
+        raise ValueError('Invalid MV context routing defaults.')
+    strategy = override or (defaults or {}).get('execution_strategy') or 'sync'
+    if strategy not in {'sync', 'gemini_batch'}:
+        raise ValueError('Unsupported MV context execution strategy.')
+    return strategy
+
+
+def context_status(config, config_file, *, snapshot=None, execution='') -> dict:
     """Report actual MV preparation from bytes without mutable runtime setup or I/O providers."""
     import copy
     from foundation.project_context_settings import apply_project_context_settings_to_config, _coerce_bool
@@ -66,29 +83,32 @@ def context_status(config, config_file, *, snapshot=None) -> dict:
     effective = copy.deepcopy(config)
     apply_project_context_settings_to_config(effective, config.get('game_root'))
     snapshot = snapshot or build_snapshot(effective, config_file, require_review=False)
-    sync = effective.get('sync') or {}
+    execution = context_execution(effective, execution)
+    scope = 'batch' if execution == 'gemini_batch' else 'sync'
+    sync = effective.get(scope) or {}
     enabled = {'source_index': _coerce_bool((sync.get('source_index') or {}).get('enabled'), False),
                'history': _coerce_bool((sync.get('rag') or {}).get('enabled'), False)}
     try:
         profile_id = None
         if 'model_routing' in effective:
-            plan = resolve_runtime_plan(effective, execution='sync', strict_override=False)
+            plan = resolve_runtime_plan(effective, execution=execution, strict_override=False)
             profile_id = plan.routes['translation'].profile_id
-        settings = read_embedding_settings(effective, execution='sync', profile_id=profile_id)
+        settings = read_embedding_settings(effective, execution=execution, profile_id=profile_id)
     except ValueError:
         if any(enabled.values()):
             return {name: {'enabled': value, 'prepared': False, 'status': 'failed' if value else 'disabled',
                           'record_count': None, 'reason': 'embedding_configuration_invalid'} for name, value in enabled.items()}
         settings = None
     if settings is not None and settings.backend == 'openai_compatible' and not settings.endpoint and 'model_routing' not in effective:
-        registry = custom_provider_registry((effective.get('sync') or {}).get('custom_litellm_providers'), allow_import=False)
+        registry = custom_provider_registry((effective.get(scope) or {}).get('custom_litellm_providers'), allow_import=False)
         if settings.provider in registry:
             settings = replace(settings, endpoint=registry[settings.provider].base_url)
-    paths = store_paths(effective, config_file)
+    paths = store_paths(effective, config_file, execution=execution)
     return {'source_index': inspect_store(snapshot, paths['source'], settings, 'source',
                 enabled=enabled['source_index']),
             'history': inspect_store(snapshot, paths['history'], settings, 'history',
                 enabled=enabled['history']),
+            'execution_strategy': execution,
             'coverage_review': 'required' if snapshot.review_error else 'current',
             'story_memory': {'status': 'unsupported'}, 'project_analysis': {'status': 'unsupported'}}
 
@@ -96,7 +116,7 @@ def context_status(config, config_file, *, snapshot=None) -> dict:
 def preparation_revision(config, config_file) -> tuple:
     """Cheap GUI invalidation for preparations completed during a status scan."""
     try:
-        paths = store_paths(config, config_file)
+        paths = store_paths(config, config_file, execution=context_execution(config))
         revisions = []
         for kind, names in (('source', ('source_metadata.json', 'source_segments.jsonl')),
                             ('history', ('metadata.json', 'history.jsonl'))):
@@ -241,16 +261,47 @@ def require_keyword_material(runtime, manifest) -> None:
         require_material_fresh(expected, material_identity(snapshot))
 
 
-def bootstrap(runtime, kind: str, *, seed_jsonl=(), prune=True) -> dict:
-    """Build the existing store with MV inputs and explicit, current review bindings."""
-    enabled = runtime.SYNC_RAG_ENABLED if kind == 'history' else runtime.SYNC_SOURCE_INDEX_ENABLED
+def keyword_material_checker(runtime, manifest, *, snapshot=None):
+    """Audit once, then hash live material before dispatch without extracting events.
+
+    The existing durable MV material check detects changed source/target bytes,
+    file sets, support windows, review, adapter and configuration. It retains the
+    full freshness contract without repeating occurrence extraction per request.
+    """
+    from engine_adapters.project_config import read_project_configuration
+    from execution.mv_sync import live_material_identity
+    expected = manifest.get('mv_preprocessing_identity')
+    if expected is None:
+        require_keyword_material(runtime, manifest)
+        return lambda: None
+    snapshot = snapshot or runtime.current_mv_sync_snapshot()
+    require_material_fresh(expected, material_identity(snapshot))
+
+    def check():
+        config = read_project_configuration(runtime.TRANSLATOR_CONFIG)
+        require_material_fresh(expected, live_material_identity(
+            snapshot, config, runtime.TRANSLATOR_CONFIG))
+
+    return check
+
+
+def bootstrap(runtime, kind: str, *, seed_jsonl=(), prune=True, execution='sync', embedding_source=None) -> dict:
+    """Resume durable MV batches, publishing only after all inputs pass validation."""
+    batch = execution == 'gemini_batch'
+    source = (embedding_source or runtime) if batch else runtime
+    enabled = ((source.RAG_ENABLED if kind == 'history' else source.SOURCE_INDEX_ENABLED) if batch
+               else (runtime.SYNC_RAG_ENABLED if kind == 'history' else runtime.SYNC_SOURCE_INDEX_ENABLED))
     if not enabled:
         return {'enabled': False, 'status': 'disabled', 'prepared': False}
-    runtime._require_sync_embedding_binding_for_retrieval()
+    if batch:
+        source._require_batch_embedding_binding_for_retrieval()
+    else:
+        runtime._require_sync_embedding_binding_for_retrieval()
     snapshot = runtime.current_mv_sync_snapshot()
-    settings = runtime.current_sync_embedding_settings()
+    settings = source.current_batch_embedding_settings() if batch else runtime.current_sync_embedding_settings()
     summary: dict[str, Any] = {'enabled': True, 'prepared': False, 'status': 'building',
         'scanned': 0, 'embedded': 0, 'upserted': 0, 'reused_embeddings': 0, 'pruned': 0,
+        'checkpointed_embeddings': 0, 'resumed_embeddings': 0,
         'files_scanned': len({row.unit.file_rel_path for row in snapshot.selected_occurrences}),
         'scan_scope': 'mv_source_occurrences' if kind == 'source' else 'mv_reviewed_history'}
     records = source_records(snapshot)
@@ -259,32 +310,54 @@ def bootstrap(runtime, kind: str, *, seed_jsonl=(), prune=True) -> dict:
         summary.update(history)
         if history['status'] != 'ready':
             return summary
-    directory = store_paths(_load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG)[kind]
+    directory = store_paths(_load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG,
+                            execution=execution)[kind]
     store = JsonRagStore(directory) if kind == 'history' else JsonSourceIndexStore(directory)
     with store.write_session('mv_bootstrap'):
-        return _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store, prune)
+        return _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store, prune,
+                                embed_texts=source.embed_texts)
 
 
-def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store, prune):
-    store.load()
-    embedding_runtime.ensure_store_document_identity(store, settings.document_identity(), rebuild=True)
-    data_file = Path(store.history_path if kind == 'history' else store.segments_path)
-    if not data_file.exists():
-        store.rebuild_document_identity(settings.document_identity())
-    previous_preparation = store.metadata.get('mv_preparation') or {}
-    trusted_previous = (previous_preparation.get('status') == 'ready'
-        and previous_preparation.get('data_sha256') == hashlib.sha256(data_file.read_bytes()).hexdigest())
-    store.set_metadata(mv_preparation={'status': 'building'})
-    previous = store.history if kind == 'history' else store.segments
-    upsert = store.upsert_history if kind == 'history' else store.upsert_segments
-    remove = store.delete_history if kind == 'history' else store.delete_segments
-    id_key = 'memory_id' if kind == 'history' else 'source_id'
-    summary.update(store_dir=store.store_dir, scanned=len(records), history_records_before=len(previous))
-    expected = material_identity(snapshot)
+def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store, prune, *, embed_texts=None):
+    started = phase_started = time.monotonic()
+    failure_stage = 'store_load'
+    batch_info = {}
+
+    def enter_stage(name):
+        nonlocal failure_stage, phase_started
+        failure_stage, phase_started = name, time.monotonic()
+
+    summary.update(store_dir=store.store_dir, scanned=len(records))
     try:
-        ready, pending = [], []
+        store.load()
+        enter_stage('store_identity')
+        embedding_runtime.ensure_store_document_identity(store, settings.document_identity(), rebuild=True)
+        data_file = Path(store.history_path if kind == 'history' else store.segments_path)
+        if not data_file.exists():
+            store.rebuild_document_identity(settings.document_identity())
+        previous_preparation = store.metadata.get('mv_preparation') or {}
+        trusted_previous = (previous_preparation.get('status') == 'ready'
+            and previous_preparation.get('data_sha256') == hashlib.sha256(data_file.read_bytes()).hexdigest())
+        previous = store.history if kind == 'history' else store.segments
+        upsert = store.upsert_history if kind == 'history' else store.upsert_segments
+        remove = store.delete_history if kind == 'history' else store.delete_segments
+        id_key = 'memory_id' if kind == 'history' else 'source_id'
+        summary['history_records_before'] = len(previous)
+        expected = material_identity(snapshot)
+        enter_stage('checkpoint_load')
+        checkpoint = EmbeddingCheckpoint(Path(store.store_dir) / 'mv_embedding_checkpoint.jsonl',
+            digest_json({'kind': kind, 'binding': source_binding(snapshot),
+                'source_root': snapshot.project.project_root, 'target_root': snapshot.project.localization_root,
+                'embedding_identity': settings.document_identity().to_dict(),
+                'history_inputs': summary.get('input_files', {}),
+                'history_selection': snapshot.reviewed_history_selection if kind == 'history' else None}),
+            settings.output_dimension)
+        enter_stage('checkpoint_selection')
+        ready, pending, preserved = [], [], []
+        fingerprints = {record[id_key]: digest_json(record) for record in records}
         for record in records:
             existing = previous.get(record[id_key]) or {}
+            cached = checkpoint.get(record[id_key], fingerprints[record[id_key]])
             if (trusted_previous and existing.get('source_checksum') == record['source_checksum']
                     and len(existing.get('embedding') or []) == settings.output_dimension
                     and existing.get('embedding_metadata') == {
@@ -293,33 +366,65 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
                 ready.append({**record, 'embedding': existing['embedding'],
                               'embedding_metadata': existing.get('embedding_metadata', {})})
                 summary['reused_embeddings'] += 1
+                if cached is None:
+                    preserved.append({'id': record[id_key], 'fingerprint': fingerprints[record[id_key]],
+                                      'embedding': existing['embedding']})
+            elif cached is not None:
+                ready.append({**record, 'embedding': cached, 'embedding_metadata': {
+                    'embedding_model': settings.model, 'embedding_task_type': settings.native_document_task_type,
+                    'embedding_dim': settings.output_dimension}})
+                summary['reused_embeddings'] += 1
+                summary['resumed_embeddings'] += 1
             else:
                 pending.append(record)
+        enter_stage('checkpoint_save')
+        checkpoint.save(preserved)
+        summary['checkpointed_embeddings'] = len(ready)
+        enter_stage('metadata_write')
+        store.set_metadata(mv_preparation={'status': 'building'})
         summary['embedding_pending'] = len(pending)
         print(f"MV context preparation: {len(records)} segments, "
               f"{summary['reused_embeddings']} reused, {len(pending)} pending.", flush=True)
+        print(f"MV context checkpoint progress: {summary['checkpointed_embeddings']}/{len(records)} saved, "
+              f"{summary['resumed_embeddings']} resumed.", flush=True)
         for start in range(0, len(pending), 16):
             batch = pending[start:start + 16]
+            batch_info = {'batch_start': start + 1, 'batch_end': start + len(batch),
+                          'batch_total': len(pending)}
+            enter_stage('material_validation')
             require_material_fresh(expected, live_material_identity(snapshot,
                 _load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG))
+            enter_stage('embedding_request')
             print(f"MV context embedding request: {start + 1}-{start + len(batch)}/{len(pending)}.", flush=True)
-            vectors = runtime.embed_texts([row['source_text'] for row in batch], settings.native_document_task_type)
+            vectors = (embed_texts or runtime.embed_texts)([row['source_text'] for row in batch], settings.native_document_task_type)
+            enter_stage('embedding_response_validation')
             if len(vectors) != len(batch):
                 raise ValueError('MV document embedding count mismatch.')
+            completed = []
             for row, vector in zip(batch, vectors):
                 if len(vector) != settings.output_dimension:
                     raise ValueError('MV document embedding dimension mismatch.')
-                ready.append({**row, 'embedding': vector, 'embedding_metadata': {
+                completed.append({**row, 'embedding': vector, 'embedding_metadata': {
                     'embedding_model': settings.model, 'embedding_task_type': settings.native_document_task_type,
                     'embedding_dim': settings.output_dimension}})
             summary['embedded'] += len(batch)
+            enter_stage('checkpoint_save')
+            checkpoint.save([{'id': row[id_key], 'fingerprint': fingerprints[row[id_key]],
+                              'embedding': row['embedding']} for row in completed])
+            ready.extend(completed)
+            summary['checkpointed_embeddings'] += len(completed)
             print(f"MV context embedding progress: {summary['embedded']}/{len(pending)}", flush=True)
+            print(f"MV context checkpoint progress: {summary['checkpointed_embeddings']}/{len(records)} saved, "
+                  f"{summary['resumed_embeddings']} resumed.", flush=True)
+        batch_info = {}
+        enter_stage('material_validation')
         print('MV context validation started.', flush=True)
         require_material_fresh(expected, live_material_identity(snapshot,
             _load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG))
         for path, digest in summary.get('input_files', {}).items():
             if hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest:
                 raise ValueError('MV reviewed history changed during bootstrap.')
+        enter_stage('store_write')
         print('MV context persistence started.', flush=True)
         summary['upserted'] = upsert(ready)
         stale = set(previous) - {row[id_key] for row in ready}
@@ -332,14 +437,30 @@ def _bootstrap_store(runtime, snapshot, settings, kind, records, summary, store,
             'data_sha256': hashlib.sha256(data_file.read_bytes()).hexdigest(),
             'history_inputs': summary.get('input_files', {}),
             **({'history_selection': snapshot.reviewed_history_selection} if kind == 'history' else {})}
+        enter_stage('metadata_write')
         store.set_metadata(mv_preparation=preparation)
         summary.update(prepared=True, status='ready', current_records=len(records),
             history_records_after=len(store.history if kind == 'history' else store.segments))
         print(f'MV context preparation complete: {len(records)} segments.', flush=True)
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
-        store.set_metadata(mv_preparation={'status': 'failed', **diagnostics})
+        now = time.monotonic()
+        diagnostics.update(failure_stage=failure_stage, **batch_info,
+            phase_elapsed_seconds=round(now - phase_started, 3), elapsed_seconds=round(now - started, 3))
         summary.update(status='failed', error=diagnostics.get('failure_reason') or 'context_prepare_failed', **diagnostics)
+        try:
+            store.set_metadata(mv_preparation={'status': 'failed',
+                'checkpointed_embeddings': summary['checkpointed_embeddings'], **diagnostics})
+        except Exception as write_exc:
+            # A disk error must not hide the original failure from CLI/JSON/GUI.
+            summary['diagnostic_persistence_failed'] = True
+            summary['diagnostic_write_exception'] = embedding_runtime.public_error_diagnostics(
+                write_exc).get('exception_type', 'unknown')
+    else:
+        try:
+            checkpoint.clear()
+        except OSError:
+            print('Warning: completed MV embedding checkpoint could not be removed.', flush=True)
     return summary
 
 
@@ -390,11 +511,14 @@ def inspect_store(snapshot, directory, settings, kind: str, *, enabled=True) -> 
         return {**result, 'status': 'failed', 'reason': 'store_unreadable'}
 
 
-def retrieve(runtime, snapshot, target_items, kind: str):
+def retrieve(runtime, snapshot, target_items, kind: str, *, execution='sync', config_file=None):
     """Gate material and embedding identity before using shared ranked retrieval."""
-    settings = runtime.current_sync_embedding_settings()
-    enabled = runtime.SYNC_RAG_ENABLED if kind == 'history' else runtime.SYNC_SOURCE_INDEX_ENABLED
-    directory = store_paths(_load_json(Path(runtime.TRANSLATOR_CONFIG)), runtime.TRANSLATOR_CONFIG)[kind]
+    batch = execution == 'gemini_batch'
+    settings = runtime.current_batch_embedding_settings() if batch else runtime.current_sync_embedding_settings()
+    enabled = ((runtime.RAG_ENABLED if kind == 'history' else runtime.SOURCE_INDEX_ENABLED) if batch
+               else (runtime.SYNC_RAG_ENABLED if kind == 'history' else runtime.SYNC_SOURCE_INDEX_ENABLED))
+    config_file = config_file or runtime.TRANSLATOR_CONFIG
+    directory = store_paths(_load_json(Path(config_file)), config_file, execution=execution)[kind]
     stats = inspect_store(snapshot, directory, settings, kind, enabled=enabled)
     stats['embedding_provider'] = advanced_context.embedding_provider_diagnostics(settings)
     if not stats['prepared'] or not stats['record_count']:
@@ -419,17 +543,25 @@ def retrieve(runtime, snapshot, target_items, kind: str):
         query = advanced_context.build_source_only_query_text(target_items)
         if not query:
             return [], {**stats, 'reason': 'empty_query'}
-        vector = runtime.embed_sync_query_text(query)
+        expected = material_identity(snapshot)
+        require_material_fresh(expected, live_material_identity(snapshot, _load_json(Path(config_file)), config_file))
+        vector = runtime.embed_query_text(query) if batch else runtime.embed_sync_query_text(query)
+        require_material_fresh(expected, live_material_identity(snapshot, _load_json(Path(config_file)), config_file))
         if kind == 'history':
             hits, diagnostics = advanced_context.retrieve_history_hits_compatible(view, vector, settings.query_identity(),
-                top_k=runtime.SYNC_RAG_TOP_K_HISTORY, min_similarity=runtime.SYNC_RAG_MIN_SIMILARITY,
-                char_limit=runtime.SYNC_RAG_HISTORY_CHAR_LIMIT, query_text=query)
+                top_k=runtime.RAG_TOP_K_HISTORY if batch else runtime.SYNC_RAG_TOP_K_HISTORY,
+                min_similarity=runtime.RAG_MIN_SIMILARITY if batch else runtime.SYNC_RAG_MIN_SIMILARITY,
+                char_limit=runtime.RAG_HISTORY_CHAR_LIMIT if batch else runtime.SYNC_RAG_HISTORY_CHAR_LIMIT,
+                query_text=query)
         else:
             hits, diagnostics = advanced_context.retrieve_source_hits_compatible(view, vector, settings.query_identity(),
-                top_k=runtime.SYNC_SOURCE_INDEX_TOP_K, min_similarity=runtime.SYNC_SOURCE_INDEX_MIN_SIMILARITY,
-                char_limit=runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT, query_text=query,
+                top_k=runtime.SOURCE_INDEX_TOP_K if batch else runtime.SYNC_SOURCE_INDEX_TOP_K,
+                min_similarity=runtime.SOURCE_INDEX_MIN_SIMILARITY if batch else runtime.SYNC_SOURCE_INDEX_MIN_SIMILARITY,
+                char_limit=runtime.SOURCE_INDEX_CHAR_LIMIT if batch else runtime.SYNC_SOURCE_INDEX_CHAR_LIMIT,
+                query_text=query,
                 embedding_model=settings.model, embedding_task_type=settings.native_document_task_type,
-                embedding_dim=settings.output_dimension, char_budget=runtime.get_sync_source_index_char_budget())
+                embedding_dim=settings.output_dimension,
+                char_budget=runtime.get_source_index_char_budget() if batch else runtime.get_sync_source_index_char_budget())
         return hits, {**stats, **diagnostics, 'reason': '' if hits else 'zero_hits'}
     except Exception as exc:
         return [], {**stats, 'status': 'failed', 'reason': 'retrieval_failed',

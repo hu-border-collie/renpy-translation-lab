@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from gui_qt.workflows.translation_workflow import TERMINAL_FAILURE_STATES
+from gui_qt.reports.keyword_report import summarize_sync_keyword_manifest, sync_keyword_progress_from_manifest
+from gui_qt.reports.workflow_progress import WorkflowProgressState
 from gui_qt.user_copy import (
     format_job_fact,
     format_job_state_fact,
@@ -28,6 +30,7 @@ class ManifestWorkflowDisplay:
     workflow: Any | None
     selected_manifest_path: str
     archive_when_idle: bool
+    progress: WorkflowProgressState | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +108,16 @@ def build_manifest_workflow_display(
     *,
     extra_facts: list[str] | None = None,
 ) -> ManifestWorkflowDisplay:
+    if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+        update = summarize_sync_keyword_manifest(manifest)
+        return ManifestWorkflowDisplay(
+            status=update.status, heading=update.heading, message=update.message,
+            facts=tuple([*update.facts, *(extra_facts or [])]),
+            timeline_step_key='sync-keywords',
+            workflow=resume_workflow(spec.mode, manifest_path, manifest),
+            selected_manifest_path=manifest_path, archive_when_idle=False,
+            progress=sync_keyword_progress_from_manifest(manifest),
+        )
     job_state = manifest.get("job_state")
     job_state_text = job_state if isinstance(job_state, str) else ""
     job_name = manifest.get("job_name")

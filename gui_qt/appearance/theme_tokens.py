@@ -12,7 +12,7 @@ Token naming convention
 * ``border_*`` – border colours
 * ``accent_*`` – accent / brand colours
 * ``badge_*`` – status badge colours
-* ``gradient_*`` – gradient stop colours
+* ``gradient_*`` – semantic fill colours (solid modern tokens)
 * ``scrollbar_*`` – scrollbar colours
 """
 from __future__ import annotations
@@ -30,10 +30,10 @@ LIGHT_TOKENS: dict[str, str] = {
     "bg_input_focus": "#fdfdfd",
     "bg_disabled": "#f1f5f9",
 
-    # -- Glassmorphism card backgrounds ----------------------------------------
-    "bg_card": "rgba(255, 255, 255, 0.85)",
-    "border_card": "rgba(15, 23, 42, 0.06)",
-    "border_card_top": "rgba(255, 255, 255, 0.9)",
+    # -- Card surfaces (flat, solid border) -----------------------------------
+    "bg_card": "#ffffff",
+    "border_card": "#e2e8f0",
+    "border_card_top": "#e2e8f0",
 
     # -- Foreground / text -----------------------------------------------------
     "fg_primary": "#0f172a",
@@ -85,13 +85,13 @@ LIGHT_TOKENS: dict[str, str] = {
     "bg_api_list_selected": "#dbeafe",
     "fg_api_list_selected": "#1e40af",
 
-    # -- Primary action buttons (Aurora Gradient) ------------------------------
-    "gradient_primary_start": "#3b82f6",
-    "gradient_primary_end": "#1d4ed8",
-    "gradient_primary_hover_start": "#60a5fa",
-    "gradient_primary_hover_end": "#2563eb",
-    "gradient_primary_pressed_start": "#1e3a8a",
-    "gradient_primary_pressed_end": "#1d4ed8",
+    # -- Primary action buttons (solid semantic fill) --------------------------
+    "gradient_primary_start": "#2563eb",
+    "gradient_primary_end": "#2563eb",
+    "gradient_primary_hover_start": "#1d4ed8",
+    "gradient_primary_hover_end": "#1d4ed8",
+    "gradient_primary_pressed_start": "#1e40af",
+    "gradient_primary_pressed_end": "#1e40af",
 
     # -- Default buttons -------------------------------------------------------
     "bg_button": "#ffffff",
@@ -127,21 +127,21 @@ LIGHT_TOKENS: dict[str, str] = {
 
     # -- Danger button (kill) --------------------------------------------------
     "gradient_danger_start": "#dc2626",
-    "gradient_danger_end": "#ef4444",
-    "gradient_danger_hover_start": "#ef4444",
-    "gradient_danger_hover_end": "#f87171",
-    "gradient_danger_pressed_start": "#b91c1c",
-    "gradient_danger_pressed_end": "#dc2626",
+    "gradient_danger_end": "#dc2626",
+    "gradient_danger_hover_start": "#b91c1c",
+    "gradient_danger_hover_end": "#b91c1c",
+    "gradient_danger_pressed_start": "#991b1b",
+    "gradient_danger_pressed_end": "#991b1b",
     "bg_danger_disabled": "#f1f5f9",
     "border_danger_disabled": "#e2e8f0",
     "fg_danger_disabled": "#cbd5e1",
 
     # -- Success / apply button ------------------------------------------------
-    "gradient_success_start": "#10b981",
-    "gradient_success_end": "#047857",
-    "gradient_success_hover_start": "#34d399",
-    "gradient_success_hover_end": "#059669",
-    "gradient_success_pressed_start": "#064e3b",
+    "gradient_success_start": "#059669",
+    "gradient_success_end": "#059669",
+    "gradient_success_hover_start": "#047857",
+    "gradient_success_hover_end": "#047857",
+    "gradient_success_pressed_start": "#065f46",
     "gradient_success_pressed_end": "#065f46",
     "bg_success_disabled": "#f1f5f9",
     "border_success_disabled": "#cbd5e1",
@@ -153,6 +153,9 @@ LIGHT_TOKENS: dict[str, str] = {
     "fg_log": "#f1f5f9",
 
     # -- Status badges ---------------------------------------------------------
+    "badge_neutral_fg": "#475569",
+    "badge_neutral_bg": "#f1f5f9",
+    "badge_neutral_border": "#cbd5e1",
     "badge_success_fg": "#065f46",
     "badge_success_bg": "rgba(16, 185, 129, 0.08)",
     "badge_success_border": "rgba(16, 185, 129, 0.4)",
@@ -176,7 +179,7 @@ LIGHT_TOKENS: dict[str, str] = {
 
     # -- GroupBox title --------------------------------------------------------
     "bg_groupbox_title": "#ffffff",
-    "fg_groupbox_title": "#2563eb",
+    "fg_groupbox_title": "#0f172a",
 
     # -- ComboBox dropdown list ------------------------------------------------
     "bg_combo_dropdown": "#ffffff",
@@ -190,7 +193,7 @@ LIGHT_TOKENS: dict[str, str] = {
     "bg_progress": "#f8fafc",
     "fg_progress": "#0f172a",
     "gradient_progress_start": "#2563eb",
-    "gradient_progress_end": "#60a5fa",
+    "gradient_progress_end": "#2563eb",
 
     # -- Table -----------------------------------------------------------------
     "border_table": "#cbd5e1",
@@ -213,8 +216,8 @@ LIGHT_TOKENS: dict[str, str] = {
     "fg_findings": "#334155",
 
     # -- Section labels --------------------------------------------------------
-    "fg_section": "#64748b",
-    "fg_workflow_section": "#2563eb",
+    "fg_section": "#0f172a",
+    "fg_workflow_section": "#0f172a",
 
     # -- Separators ------------------------------------------------------------
     "color_separator": "#e2e8f0",
@@ -239,10 +242,10 @@ DARK_TOKENS: dict[str, str] = {
     "bg_input_focus": "#090d16",
     "bg_disabled": "#111827",
 
-    # -- Glassmorphism card backgrounds ----------------------------------------
-    "bg_card": "rgba(22, 30, 46, 0.7)",
-    "border_card": "rgba(255, 255, 255, 0.05)",
-    "border_card_top": "rgba(255, 255, 255, 0.12)",
+    # -- Card surfaces (flat, solid border) -----------------------------------
+    "bg_card": "#161e2e",
+    "border_card": "#1f2937",
+    "border_card_top": "#1f2937",
 
     # -- Foreground / text -----------------------------------------------------
     "fg_primary": "#f3f4f6",
@@ -294,12 +297,12 @@ DARK_TOKENS: dict[str, str] = {
     "bg_api_list_selected": "#312e81",
     "fg_api_list_selected": "#e0e7ff",
 
-    # -- Primary action buttons ------------------------------------------------
-    "gradient_primary_start": "#4f46e5",
-    "gradient_primary_end": "#2563eb",
-    "gradient_primary_hover_start": "#6366f1",
-    "gradient_primary_hover_end": "#3b82f6",
-    "gradient_primary_pressed_start": "#3730a3",
+    # -- Primary action buttons (solid semantic fill) --------------------------
+    "gradient_primary_start": "#3b82f6",
+    "gradient_primary_end": "#3b82f6",
+    "gradient_primary_hover_start": "#2563eb",
+    "gradient_primary_hover_end": "#2563eb",
+    "gradient_primary_pressed_start": "#1d4ed8",
     "gradient_primary_pressed_end": "#1d4ed8",
 
     # -- Default buttons -------------------------------------------------------
@@ -336,21 +339,21 @@ DARK_TOKENS: dict[str, str] = {
 
     # -- Danger button (kill) --------------------------------------------------
     "gradient_danger_start": "#dc2626",
-    "gradient_danger_end": "#ef4444",
-    "gradient_danger_hover_start": "#ef4444",
-    "gradient_danger_hover_end": "#f87171",
-    "gradient_danger_pressed_start": "#b91c1c",
-    "gradient_danger_pressed_end": "#dc2626",
+    "gradient_danger_end": "#dc2626",
+    "gradient_danger_hover_start": "#b91c1c",
+    "gradient_danger_hover_end": "#b91c1c",
+    "gradient_danger_pressed_start": "#991b1b",
+    "gradient_danger_pressed_end": "#991b1b",
     "bg_danger_disabled": "#111827",
     "border_danger_disabled": "#1f2937",
     "fg_danger_disabled": "#6b7280",
 
     # -- Success / apply button ------------------------------------------------
     "gradient_success_start": "#059669",
-    "gradient_success_end": "#10b981",
-    "gradient_success_hover_start": "#067652",
-    "gradient_success_hover_end": "#059669",
-    "gradient_success_pressed_start": "#044e37",
+    "gradient_success_end": "#059669",
+    "gradient_success_hover_start": "#047857",
+    "gradient_success_hover_end": "#047857",
+    "gradient_success_pressed_start": "#065f46",
     "gradient_success_pressed_end": "#065f46",
     "bg_success_disabled": "#111827",
     "border_success_disabled": "#1f2937",
@@ -362,6 +365,9 @@ DARK_TOKENS: dict[str, str] = {
     "fg_log": "#f3f4f6",
 
     # -- Status badges ---------------------------------------------------------
+    "badge_neutral_fg": "#9ca3af",
+    "badge_neutral_bg": "rgba(148, 163, 184, 0.10)",
+    "badge_neutral_border": "#374151",
     "badge_success_fg": "#34d399",
     "badge_success_bg": "rgba(16, 185, 129, 0.12)",
     "badge_success_border": "rgba(16, 185, 129, 0.35)",
@@ -385,7 +391,7 @@ DARK_TOKENS: dict[str, str] = {
 
     # -- GroupBox title --------------------------------------------------------
     "bg_groupbox_title": "#161e2e",
-    "fg_groupbox_title": "#818cf8",
+    "fg_groupbox_title": "#f3f4f6",
 
     # -- ComboBox dropdown list ------------------------------------------------
     "bg_combo_dropdown": "#111827",
@@ -398,8 +404,8 @@ DARK_TOKENS: dict[str, str] = {
     "border_progress": "#374151",
     "bg_progress": "#0b0f19",
     "fg_progress": "#ffffff",
-    "gradient_progress_start": "#4f46e5",
-    "gradient_progress_end": "#06b6d4",
+    "gradient_progress_start": "#3b82f6",
+    "gradient_progress_end": "#3b82f6",
 
     # -- Table -----------------------------------------------------------------
     "border_table": "#1f2937",
@@ -422,8 +428,8 @@ DARK_TOKENS: dict[str, str] = {
     "fg_findings": "#d1d5db",
 
     # -- Section labels --------------------------------------------------------
-    "fg_section": "#9ca3af",
-    "fg_workflow_section": "#818cf8",
+    "fg_section": "#f3f4f6",
+    "fg_workflow_section": "#f3f4f6",
 
     # -- Separators ------------------------------------------------------------
     "color_separator": "#1f2937",

@@ -260,15 +260,17 @@ def require_engine_operation(
             raise ProjectEngineMismatchError(issue)
     if project_engine(config) != "rpgmaker_mv":
         return
-    allowed = {"doctor", "translate-preflight", "coverage-status", "coverage-review-import",
+    allowed = {"doctor", "translate-preflight", "coverage-status", "coverage-review-import", "build",
+               "submit", "recover-submit", "status", "download", "probe", "estimate-cost",
+               "split", "build-retry", "merge-retry", "quality-ack", "quality-unack",
                "sync-start", "sync-resume", "sync-status", "sync-cancel", "sync-derive",
                "sync-keywords", "export-keywords", "merge-keywords-to-glossary",
                "bootstrap-source-index", "bootstrap-rag",
                "check", "apply", "quality-report", "usage-report", "usage-import"}
     if operation not in allowed:
-        raise ValueError(f"RPG Maker MV narrative mode does not support {operation}; use durable Sync (sync-start -> check -> apply).")
+        raise ValueError(f"RPG Maker MV narrative mode does not support {operation}; use translation Batch or durable Sync (check -> apply).")
     if config_file is not None and operation in {
-        'sync-start', 'sync-resume', 'sync-derive', 'sync-keywords', 'bootstrap-rag', 'bootstrap-source-index',
+        'build', 'submit', 'sync-start', 'sync-resume', 'sync-derive', 'sync-keywords', 'bootstrap-rag', 'bootstrap-source-index',
     }:
         from .project_setup import mv_project_setup_status
         missing = mv_project_setup_status(config, config_file)['missing']

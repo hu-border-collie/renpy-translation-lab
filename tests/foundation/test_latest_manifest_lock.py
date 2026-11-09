@@ -66,17 +66,23 @@ def _direct_latest_write_offenders(relative_path: str, source: str) -> list[str]
 def _collect_direct_latest_write_offenders(repo_root: Path) -> list[str]:
     allowed = {"foundation/atomic_io.py"}
     offenders: list[str] = []
-    for path in repo_root.rglob("*.py"):
-        relative = path.relative_to(repo_root).as_posix()
-        if relative.startswith(("tests/", "logs/", "__pycache__/")):
-            continue
-        if relative in allowed:
-            continue
-        try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            continue
-        offenders.extend(_direct_latest_write_offenders(relative, source))
+    # Retained worktrees, downloaded SDKs and acceptance artifacts are not the
+    # running source tree. Prune them before walking rather than reading copies.
+    excluded = {"tests", "logs", "tmp", "artifacts", "__pycache__", ".git"}
+    for directory, children, filenames in os.walk(repo_root):
+        children[:] = [name for name in children if name not in excluded]
+        for filename in filenames:
+            if not filename.endswith('.py'):
+                continue
+            path = Path(directory) / filename
+            relative = path.relative_to(repo_root).as_posix()
+            if relative in allowed:
+                continue
+            try:
+                source = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                continue
+            offenders.extend(_direct_latest_write_offenders(relative, source))
     return offenders
 
 

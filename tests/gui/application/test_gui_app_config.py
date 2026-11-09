@@ -3238,7 +3238,8 @@ class GuiAppConfigHelperTests(unittest.TestCase):
 
         self.window._copy_sync_keyword_reports_to_game_parent.assert_called_once_with(output)
         self.window._copy_keyword_reports_to_game_parent.assert_not_called()
-        self.window._set_writeback_summary.assert_called_once()
+        self.window._set_writeback_summary.assert_not_called()
+        self.window._refresh_workflow_from_latest_manifest.assert_called_once()
         self.assertIn("同步关键词提取完成", status_bar.messages[-1][0])
 
     def test_leaving_dirty_config_tab_can_stay_on_config(self):

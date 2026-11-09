@@ -148,11 +148,13 @@ class ProjectConfigTests(unittest.TestCase):
                 project_engine({'engine': value})
 
     def test_routes_refuse_unsupported_mv_operations(self):
-        for operation in ('build', 'work-export', 'generate-template', 'prepare', 'legacy-sync',
+        for operation in ('work-export', 'generate-template', 'prepare', 'legacy-sync',
                           'build-keywords', 'preview-revisions', 'project-analysis-build-structure'):
             with self.subTest(operation=operation), self.assertRaisesRegex(ValueError, 'durable Sync'):
                 require_engine_operation({'engine': 'rpgmaker_mv'}, operation)
-        for operation in ('sync-start', 'sync-status', 'sync-resume', 'sync-derive',
+        for operation in ('build', 'sync-start', 'sync-status', 'sync-resume', 'sync-derive',
+                          'submit', 'recover-submit', 'status', 'download', 'probe', 'estimate-cost',
+                          'split', 'build-retry', 'merge-retry', 'quality-ack', 'quality-unack',
                           'sync-cancel', 'check', 'apply', 'doctor', 'coverage-status',
                           'sync-keywords', 'export-keywords', 'merge-keywords-to-glossary',
                           'bootstrap-rag', 'bootstrap-source-index'):

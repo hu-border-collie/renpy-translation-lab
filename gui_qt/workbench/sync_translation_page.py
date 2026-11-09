@@ -74,7 +74,7 @@ class SyncTranslationPage(QFrame):
         self.task_layout = TaskPageLayout(self.content_page)
 
         self.risk_warning = self.task_layout.add_notice(
-            "耐久同步任务在本地持久化进度：关闭或停止本机进程不会取消运行，"
+            "同步任务在本地自动保存进度：关闭或停止本机进程不会丢失进度，"
             "可用「继续 / 查看最新任务」恢复；只有「取消任务」才会停止后续调度。"
             "生成预览阶段不会修改项目脚本，检查通过并确认后才写回。",
             tone="info",
@@ -93,7 +93,7 @@ class SyncTranslationPage(QFrame):
         self.resume_btn = QPushButton("继续 / 查看最新任务")
         self.resume_btn.setObjectName("sync_translation_resume_btn")
         self.resume_btn.setToolTip(
-            "查询最近一次耐久运行：未结束则继续，已结束则生成检查预览。"
+            "查询最近一次同步任务：未结束则继续执行，已结束则生成检查预览。"
         )
         self.resume_btn.clicked.connect(self._trigger_resume)
         self.resume_btn.setEnabled(False)
@@ -102,7 +102,7 @@ class SyncTranslationPage(QFrame):
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setObjectName("sync_translation_stop_btn")
         self.stop_btn.setToolTip(
-            "只停止本机进程，不会取消耐久运行；已提交的请求不会重发。"
+            "只停止本机进程，不会取消同步运行；已提交的请求不会重发。"
         )
         self.stop_btn.clicked.connect(self._trigger_stop)
         self.stop_btn.setEnabled(False)
@@ -129,7 +129,7 @@ class SyncTranslationPage(QFrame):
         self.actions.add_action(self.apply_btn, min_width=128)
         self.actions.finish_setup()
 
-        self.run_status_label = QLabel("尚未启动耐久同步任务。")
+        self.run_status_label = QLabel("尚未启动同步翻译任务。")
         self.run_status_label.setObjectName("sync_translation_run_status")
         self.run_status_label.setWordWrap(True)
         self.task_layout.root.addWidget(self.run_status_label)
@@ -303,7 +303,7 @@ class SyncTranslationPage(QFrame):
         self.set_start_enabled(False)
         self.clear_preview()
         self.set_task_running(False)
-        self.run_status_label.setText("尚未启动耐久同步任务。")
+        self.run_status_label.setText("尚未启动同步翻译任务。")
         self.status_section.set_status("", "", "", [])
         self.status_section.set_progress(None)
 
@@ -344,7 +344,7 @@ class SyncTranslationPage(QFrame):
         self._preview_run_id = str(run_id or "").strip()
         self._refresh_run_controls()
         if self._preview_run_id:
-            detail = f"已生成绑定预览：运行 {self._preview_run_id}。"
+            detail = f"已生成可写回预览：运行 {self._preview_run_id}。"
             if check_manifest:
                 detail += f"检查清单：{check_manifest}。"
             detail += "审查差异后点击「确认并写回预览」。"

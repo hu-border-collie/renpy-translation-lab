@@ -3,7 +3,6 @@ from unittest import mock
 
 from gui_qt.reports.bootstrap_report import (
     BootstrapProgressState,
-    BootstrapProgressTracker,
     coerce_bool,
     create_bootstrap_progress_state,
     create_bootstrap_progress_tracker,
@@ -19,6 +18,57 @@ from gui_qt.reports.bootstrap_report import (
 
 
 class GuiBootstrapReportTests(unittest.TestCase):
+    def test_connection_failure_after_bounded_retries_keeps_resume_progress_visible(self):
+        output = ('Source Index bootstrap final summary:\n- status: failed\n- prepared: False'
+                  '\n- error_category: unavailable\n- retryable: True\n- exception_type: ConnectError'
+                  '\n- failure_stage: embedding_request\n- attempt_count: 3'
+                  '\n- checkpointed_embeddings: 16\n- upserted: 0')
+        summary = summarize_source_index_bootstrap_output(output, 0)
+        self.assertEqual(summary.status, 'failed')
+        self.assertIn('向量服务或连接暂时不可用', summary.message)
+        self.assertIn('再次预建', summary.message)
+        facts = '\n'.join(summary.facts)
+        self.assertIn('已尝试请求次数：3', facts)
+        self.assertIn('自动重试策略：适用（有次数上限）', facts)
+        self.assertIn('已保存向量进度：16', facts)
+        self.assertIn('写入记录数：0', facts)
+
+    def test_mv_failure_diagnostics_show_type_stage_status_and_request_attempts(self):
+        for parser, header in ((summarize_rag_bootstrap_output, 'RAG bootstrap summary:'),
+                               (summarize_source_index_bootstrap_output, 'Source Index bootstrap final summary:')):
+            with self.subTest(parser=parser.__name__):
+                summary = parser(header + '\n- status: failed\n- prepared: False'
+                    '\n- error_category: rate_limit\n- retryable: True\n- http_status: 429'
+                    '\n- exception_type: ClientError\n- provider_status: RESOURCE_EXHAUSTED'
+                    '\n- failure_stage: embedding_request\n- attempt_count: 3'
+                    '\n- batch_start: 1505\n- batch_end: 1520\n- batch_total: 16444'
+                    '\n- phase_elapsed_seconds: 30.1\n- checkpointed_embeddings: 12272', 0)
+                self.assertEqual(summary.status, 'failed')
+                self.assertIn('限流或配额', summary.message)
+                for fact in ('HTTP 状态：429', '失败阶段：请求向量', '异常类型：ClientError',
+                             '已尝试请求次数：3', '1505-1520/16444'):
+                    self.assertIn(fact, '\n'.join(summary.facts))
+                self.assertIn('再次预建', summary.message)
+                self.assertTrue(summary.findings)
+
+    def test_mv_unknown_failure_and_missing_http_status_are_explicit(self):
+        summary = summarize_source_index_bootstrap_output('Source Index bootstrap final summary:'
+            '\n- status: failed\n- prepared: False\n- error_category: provider_error'
+            '\n- failure_stage: embedding_request\n- exception_type: RemoteProtocolError'
+            '\n- retryable: False', 0)
+        self.assertIn('原因未知', summary.message)
+        self.assertIn('HTTP 状态：未提供', summary.findings)
+        self.assertIn('不代表再次预建必然失败', '\n'.join(summary.findings))
+
+    def test_mv_local_failure_and_diagnostic_write_failure_remain_visible(self):
+        summary = summarize_source_index_bootstrap_output('Source Index bootstrap final summary:'
+            '\n- status: failed\n- prepared: False\n- error_category: local_error'
+            '\n- failure_stage: checkpoint_save\n- exception_type: PermissionError'
+            '\n- os_errno: 13\n- diagnostic_persistence_failed: True', 0)
+        self.assertIn('本地文件', summary.message)
+        self.assertIn('保存向量进度', '\n'.join(summary.facts))
+        self.assertIn('未能写入索引目录', '\n'.join(summary.findings))
+
     def test_mv_progress_separates_embeddings_from_persisted_records(self):
         state = create_bootstrap_progress_state("source_index")
         state = update_bootstrap_progress_from_line(
@@ -33,6 +83,11 @@ class GuiBootstrapReportTests(unittest.TestCase):
         self.assertEqual(state.embedding_done, 16)
         self.assertEqual(state.stored_segments, 0)
         self.assertIn("本轮向量生成：16/16", format_bootstrap_progress_facts(state))
+        state = update_bootstrap_progress_from_line("MV context checkpoint progress: 20/20 saved, 4 resumed.", state)
+        self.assertEqual((state.checkpointed_embeddings, state.resumed_embeddings), (20, 4))
+        self.assertEqual(state.stored_segments, 0)
+        self.assertIn("已保存向量进度：20 片段（可续建）", format_bootstrap_progress_facts(state))
+        self.assertIn("本次恢复向量：4 片段", format_bootstrap_progress_facts(state))
         state = update_bootstrap_progress_from_line("MV context validation started.", state)
         self.assertIn("正在校验", format_bootstrap_progress_bar_label(state))
         state = update_bootstrap_progress_from_line("MV context persistence started.", state)
@@ -70,6 +125,19 @@ class GuiBootstrapReportTests(unittest.TestCase):
                 self.assertIn('独立审阅', missing.message)
                 failed = parser(header + '\n- status: failed\n- prepared: False', 0)
                 self.assertEqual(failed.status, 'failed')
+
+    def test_failed_mv_bootstrap_shows_durable_progress_and_resume_without_claiming_readiness(self):
+        for parser, header in ((summarize_rag_bootstrap_output, 'RAG bootstrap summary:'),
+                               (summarize_source_index_bootstrap_output, 'Source Index bootstrap final summary:')):
+            with self.subTest(parser=parser.__name__):
+                summary = parser(header + '\n- status: failed\n- prepared: False\n- embedded: 32'
+                    '\n- checkpointed_embeddings: 48\n- resumed_embeddings: 16\n- upserted: 0', 0)
+                self.assertEqual(summary.status, 'failed')
+                self.assertIn('再次预建', summary.message)
+                self.assertIn('不会用于翻译', summary.message)
+                self.assertIn('已保存向量进度：48', summary.facts)
+                self.assertIn('恢复向量数：16', summary.facts)
+                self.assertIn('写入记录数：0', summary.facts)
 
     def test_coerce_bool_accepts_common_literals(self):
         self.assertTrue(coerce_bool("true", False))

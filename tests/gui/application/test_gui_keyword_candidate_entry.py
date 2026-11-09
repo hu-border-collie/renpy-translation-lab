@@ -823,6 +823,65 @@ class GuiKeywordCandidateEntryTests(unittest.TestCase):
 
     # --- existing extraction-driven path (#539 requirement 6) -------------
 
+    def test_running_keyword_task_does_not_advertise_merge_ready(self):
+        self.window._sync_keywords_page_controls(running=True)
+        self.assertEqual(self.page.result_hint.text(), KEYWORD_CANDIDATE_COPY['running_hint'])
+        self.assertFalse(self.page.merge_btn.isEnabled())
+        self.window._sync_keywords_page_controls(running=False)
+        self.assertNotEqual(self.page.result_hint.text(), KEYWORD_CANDIDATE_COPY['running_hint'])
+
+    def test_sync_keyword_progress_survives_page_switch_and_fresh_window(self) -> None:
+        package = self.root / 'sync-run'
+        package.mkdir()
+        path = package / 'manifest.json'
+        path.write_text(json.dumps({
+            'mode': 'keyword_extraction', 'execution': 'sync',
+            'base_dir': str(self.game_root), 'job_state': 'SYNC_PARTIAL',
+            'summary': {'chunk_count': 4}, 'chunks': [{'payload': 'x' * 1_000_000}],
+            'keyword_checkpoint_version': 1,
+            'sync_summary': {
+                'request_count': 4, 'successful_request_count': 3,
+                'failed_request_count': 1, 'checkpointed_request_count': 4,
+                'contract_final_complete_chunks': 2, 'contract_partial_requests': 1,
+            },
+            'keyword_export': {
+                'jsonl_path': str(self.candidates_path),
+                'summary': {'candidate_count_deduped': 12, 'chunk_summary_count': 2},
+            },
+        }), encoding='utf-8')
+
+        def latest(_root, mode):
+            return path if mode == WorkMode.SYNC_KEYWORD_EXTRACTION else None
+
+        def assert_progress(window):
+            section = window.keywords_page.status_section
+            self.assertFalse(section.isHidden())
+            self.assertIn('部分完成', section.status_badge.text())
+            self.assertIn('成功 3 个；失败 1 个', section.facts_label.text())
+            self.assertIn('关键词候选：12 个', section.facts_label.text())
+            self.assertFalse(section.progress_bar.isHidden())
+            self.assertEqual((section.progress_bar.value(), section.progress_bar.maximum()), (2, 4))
+
+        with mock.patch.object(self.window.state, 'get_latest_manifest_path_for_mode', side_effect=latest):
+            self.window._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=True)
+            assert_progress(self.window)
+            self.window._set_work_mode(WorkMode.KEYWORD_EXTRACTION, refresh_manifest_writeback=True)
+            self.window._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=False)
+            assert_progress(self.window)
+
+            self.window._set_work_mode(WorkMode.KEYWORD_EXTRACTION, refresh_manifest_writeback=True)
+            self.window._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=True)
+            assert_progress(self.window)
+
+            reopened = MainWindow()
+            try:
+                reopened.state = self.window.state
+                reopened._set_work_mode(WorkMode.SYNC_KEYWORD_EXTRACTION, refresh_manifest_writeback=True)
+                assert_progress(reopened)
+            finally:
+                gui_test_support.close_main_window(reopened)
+                reopened.deleteLater()
+
     def test_extraction_candidate_path_still_reviews_and_merges(self) -> None:
         """A batch/sync extraction result keeps its own end-to-end merge."""
         extracted = self.game_root / "keyword_candidates.jsonl"

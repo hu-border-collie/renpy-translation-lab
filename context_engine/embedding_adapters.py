@@ -15,6 +15,8 @@ import math
 import re
 from urllib.parse import urlsplit, urlunsplit
 
+from context_engine.embedding_diagnostics import capture_exception_diagnostics, exception_http_status
+
 from context_engine.embedding_backend import (
     EmbeddingBackendError,
     EmbeddingBatchRequest,
@@ -170,18 +172,15 @@ def _field(value: object, name: str, default: object = None) -> object:
 
 
 def _status_code(exc: BaseException) -> int | None:
-    for name in ("status_code", "code", "status", "http_status"):
-        value = getattr(exc, name, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
-        numeric = getattr(value, "value", None)
-        if isinstance(numeric, int) and not isinstance(numeric, bool):
-            return numeric
-    return None
+    return exception_http_status(exc)
 
 
 def classify_provider_exception(exc: BaseException) -> EmbeddingErrorCategory:
-    """Classify an exception without copying provider-controlled text."""
+    """Classify status and transport errors without provider-controlled text.
+
+    HTTPX/httpcore use ConnectError, whose name does not contain "connection".
+    Treat it as transient unavailability while preserving HTTP status precedence.
+    """
 
     if isinstance(exc, TimeoutError):
         return EmbeddingErrorCategory.TIMEOUT
@@ -201,7 +200,7 @@ def classify_provider_exception(exc: BaseException) -> EmbeddingErrorCategory:
         return EmbeddingErrorCategory.INVALID_REQUEST
     if status is not None and 500 <= status <= 599:
         return EmbeddingErrorCategory.UNAVAILABLE
-    if any(marker in name for marker in ("connection", "unavailable", "serviceerror")):
+    if any(marker in name for marker in ("connection", "connecterror", "unavailable", "serviceerror")):
         return EmbeddingErrorCategory.UNAVAILABLE
     return EmbeddingErrorCategory.PROVIDER_ERROR
 
@@ -210,7 +209,8 @@ def _safe_backend_error(exc: BaseException) -> EmbeddingBackendError:
     if isinstance(exc, EmbeddingBackendError):
         return exc
     category = classify_provider_exception(exc)
-    return EmbeddingBackendError(category, retryable=category in _RETRYABLE_CATEGORIES)
+    return EmbeddingBackendError(category, retryable=category in _RETRYABLE_CATEGORIES,
+                                 diagnostics=capture_exception_diagnostics(exc))
 
 
 def _usage(response: object) -> EmbeddingUsage:
@@ -342,8 +342,9 @@ class GeminiEmbeddingAdapter:
             return validate_embedding_result(request, result)
         except EmbeddingBackendError:
             raise
-        except EmbeddingContractError:
-            raise EmbeddingBackendError(EmbeddingErrorCategory.INVALID_RESPONSE) from None
+        except EmbeddingContractError as exc:
+            raise EmbeddingBackendError(EmbeddingErrorCategory.INVALID_RESPONSE,
+                diagnostics=capture_exception_diagnostics(exc)) from None
         except Exception as exc:
             raise _safe_backend_error(exc) from None
 
@@ -480,7 +481,8 @@ class OpenAICompatibleEmbeddingAdapter:
             return validate_embedding_result(request, result)
         except EmbeddingBackendError:
             raise
-        except EmbeddingContractError:
-            raise EmbeddingBackendError(EmbeddingErrorCategory.INVALID_RESPONSE) from None
+        except EmbeddingContractError as exc:
+            raise EmbeddingBackendError(EmbeddingErrorCategory.INVALID_RESPONSE,
+                diagnostics=capture_exception_diagnostics(exc)) from None
         except Exception as exc:
             raise _safe_backend_error(exc) from None

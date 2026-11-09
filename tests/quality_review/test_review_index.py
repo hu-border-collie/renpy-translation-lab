@@ -1287,7 +1287,10 @@ class CliTests(unittest.TestCase):
             [
                 sys.executable,
                 "-B",
-                str(Path(__file__).resolve().parents[2] / "gemini_translate_batch.py"),
+                "-c",
+                "from tests.support.runtime_test_isolation import isolate_developer_translator_config; "
+                "isolate_developer_translator_config(); "
+                "import gemini_translate_batch as batch; raise SystemExit(batch.main())",
                 *args,
             ],
             cwd=str(Path(__file__).resolve().parents[2]),
@@ -1316,7 +1319,7 @@ class CliTests(unittest.TestCase):
                 "--output",
                 "json",
             )
-            self.assertEqual(built.returncode, 0, built.stderr)
+            self.assertEqual(built.returncode, 0, built.stderr or built.stdout)
             built_payload = json.loads(built.stdout)
             self.assertEqual(built_payload["command"], "review-index-build")
             self.assertEqual(built_payload["result"]["scope"]["entry_count"], 3)

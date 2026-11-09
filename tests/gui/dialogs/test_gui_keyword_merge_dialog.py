@@ -92,6 +92,13 @@ class GuiKeywordMergeDialogTests(unittest.TestCase):
         )
         try:
             self.assertEqual(dialog.table.columnCount(), 8)
+            self.assertEqual(
+                [dialog.table.horizontalHeaderItem(i).text() for i in range(8)],
+                ["写入", "原文术语", "建议译法", "类别", "置信度", "术语分区", "历史首次译法", "提示"],
+            )
+            self.assertEqual(dialog.table.item(0, 3).text(), "地点")
+            self.assertEqual(dialog.table.item(0, 5).text(), "统一译法")
+            self.assertEqual(rows[0].action.section, "normalize_map")
             history_header = dialog.table.horizontalHeaderItem(6)
             self.assertIsNotNone(history_header)
             self.assertEqual(history_header.text(), "历史首次译法")

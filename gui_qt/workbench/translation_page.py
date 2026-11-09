@@ -11,16 +11,18 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ..user_copy import READINESS_COPY, TRANSLATION_TARGET_COPY
+from ..user_copy import READINESS_COPY, TRANSLATION_PREPROCESSING_COPY, TRANSLATION_TARGET_COPY
 from gui_qt.widgets.widget_helpers import NoWheelComboBox
 
 _STRATEGY_ORDER = ("sync", "gemini_batch")
@@ -37,6 +39,8 @@ class TranslationTargetSection(QFrame):
         super().__init__(parent)
         self.setObjectName("translation_target_section")
         self._on_select: Callable[[str, str], None] | None = None
+        self._on_open_settings: Callable[[], None] | None = None
+        self._on_open_context_settings: Callable[[], None] | None = None
         self._entries: dict[str, dict[str, Any]] = {}
         self._updating = False
 
@@ -46,7 +50,15 @@ class TranslationTargetSection(QFrame):
 
         title = QLabel(TRANSLATION_TARGET_COPY["section_title"])
         title.setObjectName("translation_target_title")
-        layout.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        self.open_settings_btn = QPushButton(TRANSLATION_TARGET_COPY["open_settings"])
+        self.open_settings_btn.setObjectName("translation_model_settings_btn")
+        self.open_settings_btn.setEnabled(False)
+        self.open_settings_btn.clicked.connect(self._trigger_open_settings)
+        title_row.addWidget(self.open_settings_btn)
+        layout.addLayout(title_row)
 
         row = QWidget()
         row_layout = QHBoxLayout(row)
@@ -55,6 +67,8 @@ class TranslationTargetSection(QFrame):
         row_layout.addWidget(QLabel(TRANSLATION_TARGET_COPY["profile_label"]))
         self.profile_combo = NoWheelComboBox()
         self.profile_combo.setObjectName("translation_profile_combo")
+        self.profile_combo.setToolTip(TRANSLATION_TARGET_COPY["profile_tooltip"])
+        self.profile_combo.setPlaceholderText(TRANSLATION_TARGET_COPY["unresolved_model"])
         self.profile_combo.setMinimumWidth(200)
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         row_layout.addWidget(self.profile_combo, 1)
@@ -76,6 +90,24 @@ class TranslationTargetSection(QFrame):
         self.readiness_label.setWordWrap(True)
         layout.addWidget(self.readiness_label)
 
+        preprocessing_row = QHBoxLayout()
+        preprocessing_title = QLabel(TRANSLATION_PREPROCESSING_COPY["title"])
+        preprocessing_title.setObjectName("settings_inline_section_label")
+        preprocessing_title.setWordWrap(True)
+        preprocessing_row.addWidget(preprocessing_title, 1)
+        self.context_settings_btn = QPushButton(TRANSLATION_PREPROCESSING_COPY["settings"])
+        self.context_settings_btn.setObjectName("translation_context_settings_btn")
+        self.context_settings_btn.setEnabled(False)
+        self.context_settings_btn.clicked.connect(self._trigger_open_context_settings)
+        preprocessing_row.addWidget(self.context_settings_btn)
+        layout.addLayout(preprocessing_row)
+        self.preprocessing_label = QLabel(TRANSLATION_PREPROCESSING_COPY["no_project"])
+        self.preprocessing_label.setObjectName("translation_preprocessing_label")
+        self.preprocessing_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.preprocessing_label.setWordWrap(True)
+        self.preprocessing_label.setToolTip(TRANSLATION_PREPROCESSING_COPY["note"])
+        layout.addWidget(self.preprocessing_label)
+
         self.set_enabled(False)
 
     # -- external API ---------------------------------------------------
@@ -87,6 +119,21 @@ class TranslationTargetSection(QFrame):
 
     def set_select_callback(self, callback: Callable[[str, str], None] | None) -> None:
         self._on_select = callback
+
+    def set_preprocessing_summary(self, text: str, *, details: str = "") -> None:
+        """Show saved choices separately from readiness and writeback evidence."""
+        self.preprocessing_label.setText(text)
+        self.preprocessing_label.setToolTip(details)
+
+    def set_open_context_settings_callback(self, callback: Callable[[], None] | None) -> None:
+        """Use the host's existing settings navigation and editing protections."""
+        self._on_open_context_settings = callback
+        self.context_settings_btn.setEnabled(callback is not None)
+
+    def set_open_settings_callback(self, callback: Callable[[], None] | None) -> None:
+        """Connect model settings navigation without changing the current target."""
+        self._on_open_settings = callback
+        self.open_settings_btn.setEnabled(callback is not None)
 
     def set_target_choices(self, payload: Mapping[str, Any] | None) -> None:
         """Render selector data from ``model_routing_reader`` (or a hint)."""
@@ -124,6 +171,7 @@ class TranslationTargetSection(QFrame):
         self.set_enabled(enabled)
         if not enabled:
             self.hint_label.setText(hint or TRANSLATION_TARGET_COPY["empty_profiles"])
+            self.hint_label.setToolTip(self.hint_label.text())
         else:
             self._refresh_hint(hint)
 
@@ -155,6 +203,11 @@ class TranslationTargetSection(QFrame):
         supported = [str(item) for item in entry.get("strategies") or ()]
         unsupported = dict(entry.get("unsupported") or {})
         self.strategy_combo.clear()
+        if not entry:
+            # An unresolved/legacy selector is not capability evidence.
+            if preferred in _STRATEGY_ORDER:
+                self.strategy_combo.addItem(strategy_label(preferred), preferred)
+            return
         for strategy in _STRATEGY_ORDER:
             is_supported = strategy in supported
             label = strategy_label(strategy)
@@ -174,6 +227,7 @@ class TranslationTargetSection(QFrame):
                 item = self.strategy_combo.model().item(self.strategy_combo.count() - 1)
                 if item is not None:
                     item.setEnabled(False)
+                    item.setToolTip(reason)
         index = self._index_for(self.strategy_combo, preferred)
         if index < 0:
             for candidate in _STRATEGY_ORDER:
@@ -229,6 +283,14 @@ class TranslationTargetSection(QFrame):
         finally:
             self._updating = False
         self._emit_selection()
+
+    def _trigger_open_settings(self) -> None:
+        if self._on_open_settings is not None:
+            self._on_open_settings()
+
+    def _trigger_open_context_settings(self) -> None:
+        if self._on_open_context_settings is not None:
+            self._on_open_context_settings()
 
     def _on_strategy_changed(self, _index: int) -> None:
         if self._updating:

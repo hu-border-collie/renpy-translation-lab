@@ -4,8 +4,13 @@ import io
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
+
+from context_engine import embedding_runtime
+from context_engine.embedding_adapters import OpenAICompatibleEmbeddingAdapter
+from gui_qt.reports.bootstrap_report import summarize_source_index_bootstrap_output
 
 import gemini_translate_batch as batch
 import translator_runtime as runtime
@@ -14,6 +19,33 @@ from tests.support.mv_project import make_mv_project, review_mv_project, write_m
 
 
 class MvPreprocessingTests(unittest.TestCase):
+    def test_keyword_dispatch_hashes_live_bytes_without_reextracting_events(self):
+        from execution.mv_sync import material_identity
+        manifest = {'mv_preprocessing_identity': material_identity(self.snapshot)}
+        checker = mv.keyword_material_checker(runtime, manifest, snapshot=self.snapshot)
+        with mock.patch.object(runtime, 'current_mv_sync_snapshot',
+                               side_effect=AssertionError('repeated event extraction')):
+            checker()
+            checker()
+        target = self.target / 'data/Map001.json'
+        target.write_bytes(target.read_bytes() + b' ')
+        with self.assertRaisesRegex(ValueError, 'target changed'):
+            checker()
+
+    def test_keyword_live_check_rejects_added_source_file_and_config_change(self):
+        from execution.mv_sync import material_identity
+        checker = mv.keyword_material_checker(runtime, {
+            'mv_preprocessing_identity': material_identity(self.snapshot)}, snapshot=self.snapshot)
+        path = self.source / 'data/Map999.json'
+        path.write_bytes((self.source / 'data/Map001.json').read_bytes())
+        with self.assertRaises(ValueError):
+            checker()
+        path.unlink()
+        changed = {**self.config, 'include_files': ['data/Map001.json']}
+        self.file.write_text(json.dumps(changed), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'config_digest'):
+            checker()
+
     def setUp(self):
         self.stack = ExitStack()
         self.addCleanup(self.stack.close)
@@ -39,6 +71,7 @@ class MvPreprocessingTests(unittest.TestCase):
         self.configure()
         self.write_history()
         self.configure()
+        self.real_embed = runtime.embed_texts
         self.embed = self.stack.enter_context(mock.patch.object(runtime, 'embed_texts',
             side_effect=lambda texts, *_args: [[1.0, 0.5, 0.25] for _ in texts]))
 
@@ -68,6 +101,332 @@ class MvPreprocessingTests(unittest.TestCase):
         self.assertTrue(source['prepared'], source)
         self.assertTrue(history['prepared'], history)
         return source, history
+
+    def test_batch_bootstrap_and_retrieval_use_batch_settings_without_sync_embeddings(self):
+        self.config['batch'] = {
+            'rag': {**self.config['sync']['rag'], 'store_dir': str(self.root / 'batch-history')},
+            'source_index': {**self.config['sync']['source_index'], 'store_dir': str(self.root / 'batch-source')},
+        }
+        self.configure()
+        self.embed.reset_mock()
+        with mock.patch.object(batch, 'embed_texts', side_effect=lambda texts, *_args: [[1.0, 0.5, 0.25] for _ in texts]) as embed:
+            source = batch.bootstrap_source_index(skip_prepare=True, strategy='gemini_batch')
+            history = batch.bootstrap_rag_store(skip_prepare=True, strategy='gemini_batch')
+            self.assertTrue(source['prepared'], source)
+            self.assertTrue(history['prepared'], history)
+            hits, stats = mv.retrieve(batch, self.snapshot, [{'text': 'Same words.'}], 'source',
+                                     execution='gemini_batch', config_file=self.file)
+            self.assertTrue(hits, stats)
+            history_hits, stats = mv.retrieve(batch, self.snapshot, [{'text': self.positions[0]['source']}], 'history',
+                                             execution='gemini_batch', config_file=self.file)
+            self.assertTrue(history_hits, stats)
+            status = mv.context_status(self.config, self.file, execution='gemini_batch')
+            self.assertTrue(status['source_index']['prepared'], status)
+            self.assertTrue(status['history']['prepared'], status)
+            self.assertFalse(mv.context_status(self.config, self.file)['history']['prepared'])
+            self.assertGreater(embed.call_count, 0)
+            self.embed.assert_not_called()
+            original = (self.target / self.positions[0]['file']).read_bytes()
+            jobs = batch.collect_pending_file_jobs()
+            with mock.patch.object(batch, 'sync_rag_store_for_jobs', side_effect=AssertionError('MV target seeding')):
+                prepared = batch.prepare_rag_store(jobs)
+            self.assertTrue(prepared['prepared'], prepared)
+            plan = batch._build_batch_translation_plan(jobs)
+            self.assertTrue(plan['chunks'])
+            self.assertEqual((self.target / self.positions[0]['file']).read_bytes(), original)
+
+    def test_missing_batch_store_does_not_embed_or_reuse_sync_store(self):
+        self.prepare_stores()
+        self.config['batch'] = {'rag': {**self.config['sync']['rag'], 'store_dir': str(self.root / 'missing-batch')}}
+        self.configure()
+        with mock.patch.object(batch, 'embed_query_text') as query:
+            hits, stats = mv.retrieve(batch, self.snapshot, [{'text': 'Same words.'}], 'history',
+                                     execution='gemini_batch', config_file=self.file)
+        self.assertFalse(hits)
+        self.assertFalse(stats['prepared'])
+        query.assert_not_called()
+
+    def expand_checkpoint_project(self):
+        for root in (self.source, self.target):
+            path = root / 'data/Map001.json'
+            payload = json.loads(path.read_text(encoding='utf-8'))
+            commands = payload['events'][1]['pages'][0]['list']
+            for number in range(20):
+                commands[-1:-1] = [
+                    {'code': 101, 'indent': 0, 'parameters': ['', 0, 0, 2]},
+                    {'code': 401, 'indent': 0, 'parameters': [f'Checkpoint fixture line {number}.']},
+                ]
+            path.write_text(json.dumps(payload), encoding='utf-8')
+        self.configure()
+
+    def fail_second_embedding_batch(self, error=None):
+        calls = []
+
+        def embed(texts, *_args):
+            calls.append(list(texts))
+            if len(calls) == 2:
+                raise error or TimeoutError('original fixture timeout')
+            return [[1.0, 0.5, 0.25] for _ in texts]
+
+        self.embed.side_effect = embed
+        return calls
+
+    def test_failed_source_batches_are_durable_and_only_missing_vectors_are_requested_on_retry(self):
+        self.expand_checkpoint_project()
+        calls = self.fail_second_embedding_batch()
+        failed = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertEqual((failed['status'], failed['embedded'], failed['checkpointed_embeddings']), ('failed', 16, 16))
+        self.assertEqual(failed['upserted'], 0)
+        self.assertFalse((self.root / 'source-index/source_segments.jsonl').read_bytes())
+        checkpoint = self.root / 'source-index/mv_embedding_checkpoint.jsonl'
+        self.assertTrue(checkpoint.is_file())
+        before_query = self.embed.call_count
+        hits, diagnostics = mv.retrieve(runtime, self.snapshot, [{'text': 'Same words.'}], 'source')
+        self.assertFalse(hits)
+        self.assertFalse(diagnostics['prepared'])
+        self.assertEqual(self.embed.call_count, before_query)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            batch.print_source_index_bootstrap_summary(failed)
+        self.assertIn('- checkpointed_embeddings: 16', output.getvalue())
+        committed_texts = set(calls[0])
+        calls.clear()
+        self.embed.side_effect = lambda texts, *_args: (calls.append(list(texts)) or [[1., .5, .25] for _ in texts])
+        result = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(result['prepared'], result)
+        self.assertEqual(result['resumed_embeddings'], 16)
+        self.assertEqual(result['reused_embeddings'], 16)
+        self.assertEqual(result['embedded'], result['scanned'] - 16)
+        self.assertFalse(committed_texts.intersection(text for texts in calls for text in texts))
+        self.assertFalse(checkpoint.exists())
+        self.assertTrue(mv.context_status(self.config, self.file)['source_index']['prepared'])
+
+    def test_connection_retry_exhaustion_preserves_source_checkpoint_for_resume(self):
+        self.expand_checkpoint_project()
+        self.config['sync']['rag'].update(
+            embedding_backend='gemini', embedding_model='gemini-embedding-001')
+        self.configure()
+
+        class ConnectError(Exception):
+            pass
+
+        requests = []
+        failing = True
+
+        def transport(**kwargs):
+            texts = kwargs['contents']
+            requests.append(list(texts))
+            if failing and len(requests) > 1:
+                raise ConnectError('private-provider-body-and-key')
+            return {'embeddings': [{'values': [1., .5, .25]} for _ in texts]}
+
+        adapter = embedding_runtime.build_embedding_adapter(
+            runtime.current_sync_embedding_settings(),
+            gemini_client=SimpleNamespace(models=SimpleNamespace(embed_content=transport)),
+            gemini_config_factory=lambda **kwargs: kwargs,
+        )
+        self.embed.side_effect = self.real_embed
+        with (
+            mock.patch.object(runtime, 'build_live_embedding_adapter', return_value=adapter),
+            mock.patch.object(runtime, 'api_key_rotation_attempts', return_value=1),
+            mock.patch.object(runtime, 'rotate_api_key', return_value=False),
+            mock.patch.object(runtime.time, 'sleep') as sleep,
+        ):
+            failed = batch.bootstrap_source_index(skip_prepare=True)
+            self.assertFalse(failed['prepared'])
+            self.assertEqual(failed['attempt_count'], 3)
+            self.assertEqual(failed['error_category'], 'unavailable')
+            self.assertEqual(failed['checkpointed_embeddings'], 16)
+            self.assertEqual(failed['upserted'], 0)
+            self.assertEqual(len(requests), 4)
+            self.assertEqual(requests[1], requests[2])
+            self.assertEqual(requests[2], requests[3])
+            self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+            checkpoint = self.root / 'source-index/mv_embedding_checkpoint.jsonl'
+            self.assertTrue(checkpoint.is_file())
+            self.assertFalse((self.root / 'source-index/source_segments.jsonl').read_bytes())
+
+            committed_texts = set(requests[0])
+            requests.clear()
+            failing = False
+            resumed = batch.bootstrap_source_index(skip_prepare=True)
+            self.assertTrue(resumed['prepared'], resumed)
+            self.assertEqual(resumed['resumed_embeddings'], 16)
+            self.assertFalse(committed_texts.intersection(text for texts in requests for text in texts))
+            self.assertFalse(checkpoint.exists())
+
+    def test_provider_failure_reaches_metadata_cli_gui_and_preserves_resume(self):
+        self.expand_checkpoint_project()
+
+        class ProviderFailure(Exception):
+            status_code = 503
+
+        requests = []
+
+        def transport(**kwargs):
+            requests.append(kwargs['input'])
+            if len(requests) == 2:
+                raise ProviderFailure('private-provider-body-and-key')
+            return {'data': [{'index': index, 'embedding': [1., .5, .25]}
+                             for index, _text in enumerate(kwargs['input'])]}
+
+        adapter = OpenAICompatibleEmbeddingAdapter(transport=transport, model='original-test-embedding',
+            output_dimension=3, provider='local', endpoint='https://example.test/v1')
+        self.embed.side_effect = lambda texts, task: embedding_runtime.embed_texts(adapter, texts, task)
+        failed = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertEqual(failed['failure_stage'], 'embedding_request')
+        self.assertEqual((failed['exception_type'], failed['http_status']), ('ProviderFailure', 503))
+        self.assertEqual(failed['error_category'], 'unavailable')
+        self.assertEqual(failed['batch_start'], 17)
+        self.assertEqual(failed['checkpointed_embeddings'], 16)
+        self.assertFalse(failed['prepared'])
+        self.assertEqual(failed['upserted'], 0)
+        self.assertGreaterEqual(failed['elapsed_seconds'], failed['phase_elapsed_seconds'])
+        metadata = json.loads((self.root / 'source-index/source_metadata.json').read_text())
+        self.assertEqual(metadata['mv_preparation']['http_status'], 503)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            batch.print_source_index_bootstrap_summary(failed)
+        self.assertIn('- error_category: unavailable', output.getvalue())
+        self.assertIn('- exception_type: ProviderFailure', output.getvalue())
+        summary = summarize_source_index_bootstrap_output(output.getvalue(), 0)
+        self.assertEqual(summary.status, 'failed')
+        self.assertIn('暂时不可用', summary.message)
+        self.assertIn('HTTP 状态：503', '\n'.join(summary.facts))
+        self.assertIn('失败阶段：请求向量', '\n'.join(summary.facts))
+        self.assertNotIn('private-provider', json.dumps([failed, metadata, output.getvalue()]))
+        committed = set(requests[0])
+        requests.clear()
+        self.embed.side_effect = lambda texts, *_args: (requests.extend(texts) or [[1., .5, .25] for _ in texts])
+        ready = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(ready['prepared'], ready)
+        self.assertEqual(ready['resumed_embeddings'], 16)
+        self.assertFalse(committed.intersection(requests))
+
+    def test_checkpoint_disk_failure_identifies_local_save_and_keeps_old_progress(self):
+        self.expand_checkpoint_project()
+        original_save = mv.EmbeddingCheckpoint.save
+        saved_batches = []
+
+        def fail_second_save(checkpoint, entries):
+            if entries:
+                saved_batches.append(entries)
+                if len(saved_batches) == 2:
+                    raise PermissionError(13, 'private-checkpoint-path')
+            return original_save(checkpoint, entries)
+
+        with mock.patch.object(mv.EmbeddingCheckpoint, 'save', fail_second_save):
+            failed = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertEqual(failed['failure_stage'], 'checkpoint_save')
+        self.assertEqual(failed['error_category'], 'local_error')
+        self.assertEqual(failed['exception_type'], 'PermissionError')
+        self.assertEqual(failed['os_errno'], 13)
+        self.assertEqual(failed['checkpointed_embeddings'], 16)
+        self.assertFalse(failed['prepared'])
+        self.assertEqual(failed['upserted'], 0)
+        self.assertNotIn('private-checkpoint-path', json.dumps(failed))
+        ready = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(ready['prepared'], ready)
+        self.assertEqual(ready['resumed_embeddings'], 16)
+
+    def test_diagnostic_metadata_failure_does_not_hide_original_request_error(self):
+        self.expand_checkpoint_project()
+        self.fail_second_embedding_batch(RuntimeError('private-request-error'))
+        original = mv.JsonSourceIndexStore.set_metadata
+
+        def set_metadata(store, **kwargs):
+            if kwargs.get('mv_preparation', {}).get('status') == 'failed':
+                raise PermissionError(13, 'private-metadata-path')
+            return original(store, **kwargs)
+
+        with mock.patch.object(mv.JsonSourceIndexStore, 'set_metadata', set_metadata):
+            failed = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertEqual(failed['exception_type'], 'RuntimeError')
+        self.assertEqual(failed['failure_stage'], 'embedding_request')
+        self.assertTrue(failed['diagnostic_persistence_failed'])
+        self.assertEqual(failed['diagnostic_write_exception'], 'PermissionError')
+        self.assertEqual(failed['checkpointed_embeddings'], 16)
+        self.assertNotIn('private-', json.dumps(failed))
+
+    def test_abrupt_interruption_retains_completed_batch_without_publishing_a_partial_store(self):
+        self.expand_checkpoint_project()
+        self.fail_second_embedding_batch(KeyboardInterrupt())
+        with self.assertRaises(KeyboardInterrupt):
+            batch.bootstrap_source_index(skip_prepare=True)
+        self.assertFalse(mv.context_status(self.config, self.file)['source_index']['prepared'])
+        self.embed.side_effect = lambda texts, *_args: [[1., .5, .25] for _ in texts]
+        result = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(result['prepared'])
+        self.assertEqual(result['resumed_embeddings'], 16)
+
+    def test_source_model_or_scope_changes_reject_a_failed_checkpoint(self):
+        self.expand_checkpoint_project()
+        for change in ('source', 'model', 'scope'):
+            with self.subTest(change=change):
+                self.fail_second_embedding_batch()
+                self.assertEqual(batch.bootstrap_source_index(skip_prepare=True)['status'], 'failed')
+                if change == 'source':
+                    for root in (self.source, self.target):
+                        path = root / 'data/Map001.json'
+                        path.write_bytes(path.read_bytes() + b' ')
+                elif change == 'model':
+                    self.config['sync']['rag']['embedding_model'] = 'different-original-embedding'
+                else:
+                    scope = self.root / 'checkpoint-scope.json'
+                    write_mv_scope(scope, self.source, self.positions[:1])
+                    self.config['rpgmaker_mv']['occurrence_scope_file'] = str(scope)
+                self.configure()
+                self.embed.side_effect = lambda texts, *_args: [[1., .5, .25] for _ in texts]
+                result = batch.bootstrap_source_index(skip_prepare=True)
+                self.assertTrue(result['prepared'], result)
+                self.assertEqual(result['resumed_embeddings'], 0)
+                self.assertEqual(result['embedded'], result['scanned'])
+                # Start the next subcase without a ready store to reuse.
+                (self.root / 'source-index/source_metadata.json').write_text('{}', encoding='utf-8')
+
+    def test_final_store_failure_retains_all_vectors_including_previously_ready_ones(self):
+        from context_engine.rag_memory import JsonSourceIndexStore
+        self.assertTrue(batch.bootstrap_source_index(skip_prepare=True)['prepared'])
+        self.embed.reset_mock()
+        with mock.patch.object(JsonSourceIndexStore, 'upsert_segments', side_effect=OSError('fixture disk failure')):
+            failed = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertFalse(failed['prepared'])
+        self.assertEqual(failed['checkpointed_embeddings'], 14)
+        self.assertFalse(mv.context_status(self.config, self.file)['source_index']['prepared'])
+        result = batch.bootstrap_source_index(skip_prepare=True)
+        self.assertTrue(result['prepared'])
+        self.assertEqual(result['resumed_embeddings'], 14)
+        self.embed.assert_not_called()
+
+    def test_history_batches_resume_but_changed_reviewed_input_cannot_reuse_a_checkpoint(self):
+        self.expand_checkpoint_project()
+        rows = []
+        for row in self.snapshot.selected_occurrences:
+            if row.unit.source_text.startswith('Checkpoint fixture'):
+                rows.append({'schema_version': 1, 'engine': 'rpgmaker_mv',
+                    'adapter_version': self.snapshot.project.adapter_version,
+                    'support_window_digest': self.snapshot.project.support_window_digest,
+                    'file_rel_path': row.unit.file_rel_path, 'json_path': list(row.locator.locator['json_path']),
+                    'source': row.unit.source_text, 'translation': '原创测试行。',
+                    'source_file_sha256': self.snapshot.project.document_by_path()[row.unit.file_rel_path].sha256,
+                    'review': {'status': 'approved', 'reviewed_at': '2026-10-26T00:00:00Z',
+                               'reviewer': {'type': 'agent', 'id': 'original-checkpoint-fixture'}}})
+        self.history.write_text(''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+        self.configure()
+        self.fail_second_embedding_batch()
+        failed = batch.bootstrap_rag_store(skip_prepare=True)
+        self.assertEqual(failed['checkpointed_embeddings'], 16)
+        self.embed.side_effect = lambda texts, *_args: [[1., .5, .25] for _ in texts]
+        from context_engine.rag_memory import JsonRagStore
+        with mock.patch.object(JsonRagStore, 'upsert_history', side_effect=OSError('fixture disk failure')):
+            failed = batch.bootstrap_rag_store(skip_prepare=True)
+        self.assertEqual((failed['resumed_embeddings'], failed['embedded']), (16, 4))
+        self.history.write_bytes(self.history.read_bytes() + b'\n')
+        self.configure()
+        result = batch.bootstrap_rag_store(skip_prepare=True)
+        self.assertTrue(result['prepared'], result)
+        self.assertEqual(result['resumed_embeddings'], 0)
+        self.assertEqual(result['embedded'], 20)
 
     def test_source_bootstrap_reports_waiting_before_provider_and_ready_after_persistence(self):
         output = io.StringIO()

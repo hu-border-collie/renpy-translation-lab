@@ -9,6 +9,7 @@ from gui_qt.settings.registry import (
     PROJECT_CONFIG_KEYS,
     SETTINGS_CONFIG_PAGE_KEYS,
     SETTINGS_PAGE_SPECS,
+    SETTINGS_PRIMARY_NAV_KEYS,
     SettingsPageRegistry,
     SettingsPageSpec,
     WORKSPACE_MANAGED_KEYS,
@@ -40,6 +41,10 @@ class SettingsRegistryTests(unittest.TestCase):
             ),
         )
         self.assertEqual(len(SETTINGS_PAGE_SPECS), 11)
+        self.assertEqual(
+            SETTINGS_PRIMARY_NAV_KEYS,
+            frozenset(registry.keys()) - {"models", "litellm"},
+        )
 
     def test_legacy_tuple_is_derived_from_spec_objects(self) -> None:
         registry = build_default_registry()

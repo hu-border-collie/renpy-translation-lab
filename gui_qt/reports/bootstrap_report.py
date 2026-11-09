@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from gui_qt.reports.duration_format import format_remaining_duration_zh
 from gui_qt.reports.summary_helpers import extend_facts_with_notices
 from gui_qt.user_copy import BOOTSTRAP_PROGRESS_COPY, format_bootstrap_fact, MV_PREPARATION_COPY
+from gui_qt.user_copy import BOOTSTRAP_FAILURE_COPY, BOOTSTRAP_FAILURE_REASONS, BOOTSTRAP_FAILURE_STAGES
 from typing import Any
 
 
@@ -23,7 +24,7 @@ class BootstrapSummary:
 
 @dataclass(frozen=True)
 class BootstrapProgressState:
-    """Bootstrap counters; MV vectors stay buffered until validated persistence."""
+    """Track MV checkpoint durability separately from published store records."""
 
     kind: str = "source_index"
     phase: str = "starting"
@@ -32,6 +33,8 @@ class BootstrapProgressState:
     embedding_total: int = 0
     embedding_done: int = 0
     reused_embeddings: int = 0
+    checkpointed_embeddings: int = 0
+    resumed_embeddings: int = 0
 
 
 _SOURCE_INDEX_PRE_RUN_TOTAL_RE = re.compile(
@@ -57,6 +60,7 @@ _MV_PREPARATION_RE = re.compile(
 )
 _MV_EMBEDDING_REQUEST_RE = re.compile(r"MV context embedding request:\s*\d+-\d+/(\d+)")
 _MV_EMBEDDING_PROGRESS_RE = re.compile(r"MV context embedding progress:\s*(\d+)/(\d+)")
+_MV_CHECKPOINT_PROGRESS_RE = re.compile(r"MV context checkpoint progress:\s*(\d+)/(\d+) saved,\s*(\d+) resumed\.")
 _MV_PREPARATION_COMPLETE_RE = re.compile(r"MV context preparation complete:\s*(\d+) segments\.")
 
 
@@ -90,10 +94,18 @@ def read_batch_context_flags(
 
     flags = resolve_batch_context_flags(config, game_root)
     if config.get('engine') == 'rpgmaker_mv':
-        sync = config.get('sync') or {}
-        flags.update(rag_enabled=coerce_bool((sync.get('rag') or {}).get('enabled')),
-                     source_index_enabled=bool(flags.get('sync_source_index_enabled')),
-                     project_analysis_enabled=False, project_analysis_inject_enabled=False)
+        from execution.mv_preprocessing import context_execution
+        try:
+            batch = context_execution(config) == 'gemini_batch'
+        except ValueError:
+            flags.update(rag_enabled=False, source_index_enabled=False)
+            batch = False
+        flags['mv_batch_context'] = batch
+        if not batch:
+            sync = config.get('sync') or {}
+            flags.update(rag_enabled=coerce_bool((sync.get('rag') or {}).get('enabled')),
+                         source_index_enabled=bool(flags.get('sync_source_index_enabled')))
+        flags.update(project_analysis_enabled=False, project_analysis_inject_enabled=False)
     return flags
 
 
@@ -174,6 +186,11 @@ def update_bootstrap_progress_from_line(
     if match:
         return replace(state, phase="mv_embedding", embedding_done=int(match.group(1)),
                        embedding_total=int(match.group(2)))
+
+    match = _MV_CHECKPOINT_PROGRESS_RE.search(text)
+    if match:
+        return replace(state, checkpointed_embeddings=int(match.group(1)),
+                       total_segments=int(match.group(2)), resumed_embeddings=int(match.group(3)))
 
     if text == "MV context validation started.":
         return replace(state, phase="mv_validating")
@@ -357,6 +374,9 @@ def format_bootstrap_progress_facts(state: BootstrapProgressState) -> list[str]:
     if state.phase.startswith("mv_"):
         key = "mv_history_total" if state.kind == "rag" else "mv_total"
         facts.append(BOOTSTRAP_PROGRESS_COPY[key].format(total=state.total_segments))
+        facts.append(BOOTSTRAP_PROGRESS_COPY['mv_checkpointed'].format(saved=state.checkpointed_embeddings))
+        if state.resumed_embeddings:
+            facts.append(BOOTSTRAP_PROGRESS_COPY['mv_resumed'].format(resumed=state.resumed_embeddings))
     elif state.total_segments > 0:
         percent = (state.stored_segments * 100) // state.total_segments
         facts.append(
@@ -408,6 +428,31 @@ def stale_bootstrap_summary() -> BootstrapSummary:
     )
 
 
+def _bootstrap_failure_findings(values):
+    findings = []
+    stage = values.get('failure_stage')
+    if stage:
+        findings.append(format_bootstrap_fact('failure_stage',
+            BOOTSTRAP_FAILURE_STAGES.get(stage, BOOTSTRAP_FAILURE_COPY['unknown_value'])))
+    findings.extend(_format_fact_values(values, ('error_category', 'exception_type', 'exception_chain',
+        'http_status', 'provider_status', 'os_errno', 'os_winerror', 'attempt_count',
+        'phase_elapsed_seconds', 'elapsed_seconds')))
+    if stage == 'embedding_request' and not values.get('http_status'):
+        findings.append(BOOTSTRAP_FAILURE_COPY['http_unknown'])
+    if all(values.get(key, '').isdigit() for key in ('batch_start', 'batch_end', 'batch_total')):
+        findings.append(BOOTSTRAP_FAILURE_COPY['batch'].format(
+            start=values['batch_start'], end=values['batch_end'], total=values['batch_total']))
+    if values.get('traceback_location'):
+        findings.append(format_bootstrap_fact('traceback_location',
+            values['traceback_location'].split(' > ')[-1]))
+    retryable = values.get('retryable', '').lower()
+    if retryable in {'true', 'false'}:
+        findings.append(BOOTSTRAP_FAILURE_COPY['retryable_' + retryable])
+    if values.get('diagnostic_persistence_failed', '').lower() == 'true':
+        findings.append(BOOTSTRAP_FAILURE_COPY['diagnostic_persistence_failed'])
+    return findings
+
+
 def _mv_preparation_summary(values, kind, exit_code):
     if 'prepared' not in values:
         return None
@@ -416,10 +461,18 @@ def _mv_preparation_summary(values, kind, exit_code):
     failed = exit_code != 0 or values.get('status') == 'failed'
     message_key = ('empty' if _parse_int_field(values, 'scanned') == 0 else 'ready') if ready else (
         'failed' if failed else values.get('reason') or values.get('status') or 'missing')
+    if failed and (_parse_int_field(values, 'checkpointed_embeddings') or 0) > 0:
+        message_key = 'failed_resumable'
+    message = MV_PREPARATION_COPY.get(message_key, MV_PREPARATION_COPY['missing'])
+    findings = _bootstrap_failure_findings(values) if failed else []
+    if failed:
+        reason = BOOTSTRAP_FAILURE_REASONS.get(values.get('error_category'), BOOTSTRAP_FAILURE_COPY['unknown'])
+        message = reason + message
+    facts = _format_fact_values(values, ('store_dir', 'scanned', 'embedded', 'reused_embeddings',
+                                       'resumed_embeddings', 'checkpointed_embeddings', 'upserted'))
     return BootstrapSummary(kind, 'ready' if ready else ('failed' if failed else 'warning'),
         f"MV {name}{'已准备' if ready else '尚未准备'}",
-        MV_PREPARATION_COPY.get(message_key, MV_PREPARATION_COPY['missing']),
-        _format_fact_values(values, ('store_dir', 'scanned', 'embedded', 'reused_embeddings', 'upserted')), [])
+        message, extend_facts_with_notices(facts, findings), findings)
 
 
 def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSummary:

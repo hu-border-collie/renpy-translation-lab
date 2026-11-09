@@ -18,7 +18,7 @@
 |---|---|---|
 | Ren'Py | `{...}` 标签、含索引/引号的 `[...]` 插值、百分号格式符、`[[` / `{{` / `%%` 转义、反斜线换行/制表转义和实际行边界 | 命名插值和命名百分号格式符可随语序移动；标签、位置格式符、转义和行边界保持相对顺序；已知成对标签校验栈嵌套 |
 | Tyrano | 已支持 catalog 条目中的方括号控制标签（尊重属性引号）、反斜线转义和行边界 | 控制结构保持相对顺序；已有空值和控制字符 blocker 继续有效 |
-| RPG Maker MV | 限定叙事窗口中的核心控制码；显式 `mv_message_styles` profile 才开放已支持的数值 popup | 控制码大小写、参数、次数、顺序和消息物理位置保留；仅接入[耐久 Sync](rpgmaker_mv_sync.md)，Batch / repair / 外部工作包不因此开放 |
+| RPG Maker MV | 限定叙事窗口中的核心控制码；显式 `mv_message_styles` profile 才开放已支持的数值 popup | 控制码大小写、参数、次数、顺序和消息物理位置保留；接入[Gemini Batch / 耐久 Sync](rpgmaker_mv_sync.md)，repair / 外部工作包不因此开放 |
 
 MV profile 和消息／选项上下文通过共享 TranslationUnit 转换保留。MV 使用引擎对应的指令，恢复后由同一 Adapter 校验，Ren'Py / Tyrano 的既有映射形状与指纹保持兼容。原生游戏运行、显示与译文语义验收不属于结构保护通过的含义。
 

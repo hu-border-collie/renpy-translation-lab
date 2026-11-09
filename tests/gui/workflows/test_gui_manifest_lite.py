@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gui_qt.workflows.manifest_lite import (
     read_manifest_index_fields,
@@ -12,6 +13,44 @@ from gui_qt.reports.split_report import translation_split_ready
 
 
 class GuiManifestLiteTests(unittest.TestCase):
+    def test_heavy_sync_keyword_metadata_survives_head_and_tail_reads(self):
+        for checkpoint_in_head in (False, True):
+            with self.subTest(checkpoint_in_head=checkpoint_in_head), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "manifest.json"
+                payload = {
+                    "mode": "keyword_extraction",
+                    "execution": "sync",
+                    "base_dir": "C:/game/work",
+                    **({"keyword_checkpoint_version": 1} if checkpoint_in_head else {}),
+                    "chunks": [{"payload": "x" * 1_000_000}],
+                    **({} if checkpoint_in_head else {"keyword_checkpoint_version": 1}),
+                    "sync_summary": {"successful_request_count": 2, "failed_request_count": 1},
+                    "keyword_export": {"jsonl_path": "C:/pkg/keyword_candidates.jsonl"},
+                }
+                path.write_text(json.dumps(payload), encoding="utf-8")
+
+                with mock.patch.object(Path, "read_text", side_effect=AssertionError("full read")):
+                    lite = read_manifest_lite(path)
+
+                self.assertEqual(lite.get("execution"), "sync")
+                self.assertEqual(lite.get("keyword_checkpoint_version"), 1)
+                self.assertEqual(lite.get("sync_summary"), payload["sync_summary"])
+                self.assertEqual(lite.get("keyword_export"), payload["keyword_export"])
+                self.assertNotIn("chunks", lite)
+
+    def test_chunk_metadata_does_not_make_old_keyword_run_resumable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            path.write_text(json.dumps({
+                "mode": "keyword_extraction", "execution": "sync", "base_dir": "C:/game/work",
+                "chunks": [{"payload": "x" * 1_000_000, "keyword_checkpoint_version": 1}],
+            }), encoding="utf-8")
+
+            lite = read_manifest_lite(path)
+
+            self.assertEqual(lite.get("execution"), "sync")
+            self.assertNotIn("keyword_checkpoint_version", lite)
+
     def test_read_manifest_lite_skips_heavy_chunks_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "manifest.json"

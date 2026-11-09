@@ -23,6 +23,25 @@ from gui_qt.settings.settings_schema import SettingField
 
 SettingValue = Any
 
+_MAX_INLINE_DESC_CHARS = 38
+
+
+def _concise_field_summary(description: str) -> str:
+    """Return a concise single-clause summary for inline form descriptions.
+
+    Full multi-sentence explanations stay in the widget and label tooltips so
+    settings forms remain scannable without losing technical detail.
+    """
+    cleaned = " ".join(str(description or "").split())
+    if len(cleaned) <= _MAX_INLINE_DESC_CHARS:
+        return cleaned
+    for sep in ("。", "；"):
+        if sep in cleaned:
+            first = cleaned.split(sep, 1)[0].strip()
+            if first:
+                return f"{first}。"
+    return cleaned
+
 
 def setting_placeholder(field: SettingField) -> str:
     if field.kind == "list":
@@ -134,9 +153,10 @@ def setting_field_row(
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(4)
     layout.addWidget(widget)
-    desc = QLabel(field.description)
+    desc = QLabel(_concise_field_summary(field.description))
     desc.setWordWrap(True)
     desc.setObjectName("settings_description_label")
+    desc.setToolTip(field.description)
     layout.addWidget(desc)
     error.setWordWrap(True)
     error.setObjectName("settings_error_label")

@@ -4,6 +4,13 @@
 索引，不替代模块 docstring、测试或用户手册。源码与测试路径已按 2026-10-24 的
 `main@b5a3f14` 核对，目录分层见[架构概览](architecture.md)，测试运行见[测试目录](../tests/README.md)。
 
+上下文预建失败诊断：`context_engine/embedding_diagnostics.py` 提取有界白名单异常事实，
+`embedding_adapters.py` 包装 SDK 异常前保留这些事实，`embedding_runtime.py` 提供公共诊断。
+`execution/mv_preprocessing.py` 附加失败阶段、批次与耗时；`gemini_translate_batch.py` 的
+两种 bootstrap 摘要和 `gui_qt/reports/bootstrap_report.py` 消费相同字段。
+回归入口为 `tests.context_engine.test_embedding_diagnostics`、
+`tests.execution.test_mv_preprocessing` 与 `tests.gui.reports.test_gui_bootstrap_report`。
+
 ## `translator_config.json`
 
 - `translator_runtime.py`
@@ -76,6 +83,9 @@
 - `execution/mv_sync.py`：MV 完整材料审计、独立 review 绑定、耐久 Sync 源／目标身份、
   occurrence 到共享结果与 schema 2 plan 的桥接；产品回归见 `tests/execution/test_mv_durable_sync.py`，
   操作与真实验收边界见 [MV Sync](rpgmaker_mv_sync.md)。
+- `execution/mv_batch.py`：将同一 MV occurrence 接入 Batch job，保留完整材料身份；共享 JSON plan／writer，
+  同事务保存写回凭据，限定前序拆包的已检查输出，并恢复写后进度／导航。
+  离线 Provider、控制码／镜像、补译、拆包、漂移和事务回归见 `tests/execution/test_mv_batch.py`。
 - `execution/mv_preprocessing.py`：MV 关键词真实位置、source-only 记录、独立审阅历史输入、
   准备状态和受控检索；复用 `context_engine/rag_memory.py` 的两种 store、写 session、
   `advanced_context.py` 排名及共享 ContextAssembler，不扫描 Ren'Py JSON 或推断目标批准。
@@ -209,14 +219,15 @@
   `section_issues()` 复用 `model_routing_config.validate_model_routing_section()`。
 - CLI 对等入口：`profiles-show` / `profiles-validate` / `profiles-set-default` /
   `profiles-set-route` / `profiles-list-models`（`gemini_translate_batch.py`，离线、原子写回、
-  保留未知字段；`profiles-list-models` 只读直连 provider 的 models 端点），
+  保留未知字段；`profiles-list-models` 例外，需要凭据并只读拉取 Gemini / OpenAI-compatible 模型目录，不写配置），
   与 GUI 页共用同一 editor 核心。
 - 直连 adapter：`providers/openai_compatible_sync_backend.py` 调用 Chat Completions；
   `providers/openai_compatible_connection.py` 统一生成/目录路径的凭据、headers、URL 与脱敏；
   `providers/openai_compatible_model_catalog.py` 提供只读模型目录发现。
+- `providers/profile_model_catalog.py` 为 CLI / GUI 共用的目录分派与 Gemini `models.list` 读取入口；Gemini 按方案用途筛选并在同一超时预算内读取有界分页。内置静态候选仍由 `providers/gemini_model_catalog.py` 维护。
 - 测试：`tests.providers.test_model_profiles_editor`、`tests.gui.settings.test_settings_profiles_page`、
   `tests.gui.settings.test_settings_registry`、`tests.gui.settings.test_settings_save_apply`、
-  `tests.providers.test_openai_compatible_model_catalog`。
+  `tests.providers.test_openai_compatible_model_catalog`、`tests.providers.test_profile_model_catalog`。
 - #540 A 的 GUI 分类入口：`gui_qt/app.py` 的 `settings_nav` 保留单行横向滚动，
   与页面直接跳转同步，仍复用 Settings coordinator 的页面实例；`gui_qt/settings/page_chrome.py`
   的 `add_model_navigation()` 通过页面 action 回调连接统一编辑器和旧模型页。
@@ -276,6 +287,16 @@
   `_copy_keyword_reports_to_game_parent()` 与 `keyword_merge_candidates_path_from_manifest()` 记录候选路径。
 - 同步提取：`gui_qt/workflows/sync_keyword_workflow.py` 的 `SyncKeywordWorkflow` →
   `gemini_translate_batch.py sync-keywords` → `keyword_merge_candidates_path_from_sync_output()`。
+  `execution/keyword_checkpoint.py` 保存实际服务响应及结果未知状态；
+  `sync-keywords --resume <MANIFEST>` 与 GUI「继续提取」共用恢复路径。
+  `KeywordCheckpoint.plan()` 分离有效结果与待补队列；`begin_repair()` 持久保存不完整块的
+  修复轮次，支持中断后复用该轮响应。`workflow_progress.py` 消费队列与逐块保存事件，
+  主进度只统计本轮待补；结束后 `keyword_report.py` 保留相同分母。
+  `execution/mv_preprocessing.py` 的 `keyword_material_checker()` 复用完整事件审计，
+  发送前通过 `live_material_identity()` 复核字节、文件集合与审阅身份。
+  回归见 `tests.cli.test_sync_keyword_resume`、`tests.execution.test_keyword_checkpoint`、
+  `tests.gui.application.test_gui_sync_keyword_resume` 与实际子进程日志刷新测试
+  `tests.gui.runtime.test_gui_cli_runner`。
 - 人工合并：工作台 Keywords 页「打开候选文件」→ `_on_open_keyword_candidates()`（`_load_keyword_candidate_selection()`
   经 `load_keyword_merge_context()` 解析候选、术语表目标，记入按项目绑定的
   `KeywordCandidateSelection`），再由「审核并合并到术语表」→ `_on_open_keyword_merge()` →

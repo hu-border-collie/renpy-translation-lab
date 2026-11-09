@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
 """Unit tests for production embedding runtime wiring (issue #341)."""
 
+from contextlib import redirect_stdout
+import io
 import tempfile
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 from context_engine.embedding_backend import (
@@ -214,6 +217,97 @@ class AdapterEmbedTests(unittest.TestCase):
         self.assertEqual(leaked['failure_reason'], 'retrieval_error')
         self.assertNotIn('secret', str(leaked))
         self.assertNotIn('example.test', str(leaked))
+
+    def test_retry_attempt_count_survives_both_runtime_entry_points(self):
+        import gemini_translate_batch as batch
+        import translator_runtime as sync
+        from context_engine import embedding_runtime as engine
+
+        settings = SimpleNamespace(backend=BACKEND_GEMINI, timeout_seconds=1)
+        for module, binding, settings_name, builder in (
+            (sync, '_require_sync_embedding_binding_for_retrieval', 'current_sync_embedding_settings',
+             'build_live_embedding_adapter'),
+            (batch, '_require_batch_embedding_binding_for_retrieval', 'current_batch_embedding_settings',
+             'build_live_batch_embedding_adapter'),
+        ):
+            with (
+                self.subTest(module=module.__name__),
+                mock.patch.object(module, binding),
+                mock.patch.object(module, settings_name, return_value=settings),
+                mock.patch.object(module, builder),
+                mock.patch.object(sync, 'api_key_rotation_attempts', return_value=1),
+                mock.patch.object(sync, 'rotate_api_key', return_value=False),
+                mock.patch.object(batch.time, 'sleep') as sleep,
+                mock.patch.object(engine, 'embed_texts', side_effect=EmbeddingBackendError(
+                    EmbeddingErrorCategory.TIMEOUT, retryable=True)) as embed,
+            ):
+                with self.assertRaises(EmbeddingBackendError) as raised:
+                    module.embed_texts(['original offline fixture'], 'RETRIEVAL_DOCUMENT')
+                self.assertEqual(embed.call_count, 3)
+                self.assertEqual(public_error_diagnostics(raised.exception)['attempt_count'], 3)
+                self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+
+    def test_connection_failures_recover_or_stop_at_the_runtime_attempt_budget(self):
+        import gemini_translate_batch as batch
+        import translator_runtime as sync
+
+        class ConnectError(Exception):
+            """HTTPX/httpcore transport failure without requiring either SDK."""
+
+        private = 'private-provider-body-and-key'
+        connection_error = ConnectError(private)
+        authentication_error = ConnectError(private)
+        authentication_error.status_code = 401
+        response = SimpleNamespace(embeddings=[SimpleNamespace(values=[1.0, 0.0])])
+        settings = parse_embedding_runtime_settings({'output_dimensionality': 2})
+        cases = (
+            ('recovered', [connection_error, connection_error, response], None, 3, 1),
+            ('exhausted', connection_error, EmbeddingErrorCategory.UNAVAILABLE, 3, 1),
+            ('multi_key_exhausted', connection_error, EmbeddingErrorCategory.UNAVAILABLE, 6, 3),
+            ('authentication', authentication_error, EmbeddingErrorCategory.AUTHENTICATION, 1, 1),
+            ('unknown', RuntimeError(private), EmbeddingErrorCategory.PROVIDER_ERROR, 1, 1),
+        )
+        for module, binding, settings_name, builder in (
+            (sync, '_require_sync_embedding_binding_for_retrieval', 'current_sync_embedding_settings',
+             'build_live_embedding_adapter'),
+            (batch, '_require_batch_embedding_binding_for_retrieval', 'current_batch_embedding_settings',
+             'build_live_batch_embedding_adapter'),
+        ):
+            for case, outcomes, category, attempts, key_attempts in cases:
+                models = SimpleNamespace(embed_content=mock.Mock(side_effect=outcomes))
+                adapter = build_embedding_adapter(
+                    settings, gemini_client=SimpleNamespace(models=models),
+                    gemini_config_factory=lambda **kwargs: SimpleNamespace(**kwargs),
+                )
+                output = io.StringIO()
+                with (
+                    self.subTest(module=module.__name__, case=case),
+                    mock.patch.object(module, binding),
+                    mock.patch.object(module, settings_name, return_value=settings),
+                    mock.patch.object(module, builder, return_value=adapter),
+                    mock.patch.object(sync, 'api_key_rotation_attempts', return_value=key_attempts),
+                    mock.patch.object(sync, 'rotate_api_key', return_value=False) as rotate,
+                    mock.patch.object(module.time, 'sleep') as sleep,
+                    redirect_stdout(output),
+                ):
+                    if category is None:
+                        result = module.embed_texts(['original offline fixture'], 'RETRIEVAL_DOCUMENT')
+                        self.assertEqual(result, [[1.0, 0.0]])
+                    else:
+                        with self.assertRaises(EmbeddingBackendError) as raised:
+                            module.embed_texts(['original offline fixture'], 'RETRIEVAL_DOCUMENT')
+                        facts = public_error_diagnostics(raised.exception)
+                        self.assertEqual(raised.exception.category, category)
+                        self.assertEqual(facts['attempt_count'], attempts)
+                        self.assertEqual(facts['retryable'], category == EmbeddingErrorCategory.UNAVAILABLE)
+                        self.assertNotIn(private, str(facts))
+                    self.assertEqual(models.embed_content.call_count, attempts)
+                    self.assertEqual(rotate.call_count, attempts - 1)
+                    delays = (1, 2, 2, 2, 2)[:attempts - 1]
+                    self.assertEqual(sleep.call_args_list, [mock.call(delay) for delay in delays])
+                    for call in models.embed_content.call_args_list:
+                        self.assertEqual(call.kwargs['contents'], ['original offline fixture'])
+                    self.assertNotIn(private, output.getvalue())
 
 
 class StoreIdentityTests(unittest.TestCase):

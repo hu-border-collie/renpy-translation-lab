@@ -14,6 +14,7 @@ import gemini_translate_batch as batch
 from providers import model_capability_probe as capability_probe
 from providers import model_profiles_editor as editor
 from providers import openai_compatible_model_catalog as model_catalog
+from providers import profile_model_catalog
 import translator_runtime as legacy
 from providers.model_routing_migration import preview_migration
 
@@ -386,18 +387,47 @@ class ProfileCliTests(unittest.TestCase):
         self.assertEqual(result["provider"], "openai")
         self.assertEqual(result["models_url"], "https://api.example/v1/models")
 
-    def test_profiles_list_models_rejects_non_direct_profile(self) -> None:
-        exit_code, envelope = self._run_json(
-            "profiles-list-models",
-            "--profile",
-            "legacy-batch",
-            "--output",
-            "json",
-            "--non-interactive",
+    def test_profiles_list_models_returns_gemini_catalog_without_writing_config(self) -> None:
+        original = self.config_path.read_bytes()
+        with mock.patch.object(
+            profile_model_catalog, "_gemini_transport", return_value=profile_model_catalog.CatalogResponse(
+                200, json.dumps({"models": [
+                    {"name": "models/gemini-4-argon", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+                    {"name": "models/gemini-embedding-2", "supportedGenerationMethods": ["embedContent"]},
+                ]}).encode(),
+            ),
+        ) as transport, mock.patch.object(capability_probe, "default_credential_loader", return_value="FAKE_KEY"):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models", "--profile", "legacy-batch",
+                "--output", "json", "--non-interactive",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(envelope["result"]["models"], ["gemini-3.8-flash", "gemini-4-argon"])
+        self.assertEqual(envelope["result"]["provider"], "gemini")
+        self.assertEqual(
+            envelope["result"]["models_url"], f"{profile_model_catalog.GEMINI_API_BASE}/models",
         )
-        self.assertNotEqual(exit_code, 0)
-        self.assertFalse(envelope["ok"])
-        self.assertEqual(envelope["error"]["code"], "MODEL_CATALOG_UNSUPPORTED")
+        self.assertEqual(transport.call_args.args[0].get_method(), "GET")
+        self.assertNotIn("FAKE_KEY", json.dumps(envelope))
+        self.assertEqual(self.config_path.read_bytes(), original)
+
+    def test_profiles_list_models_supports_litellm_profile_without_generation(self) -> None:
+        self.config = migrated_config("litellm_builtin")
+        self._write_config(self.config)
+        original = self.config_path.read_bytes()
+        with mock.patch.object(profile_model_catalog, "_gemini_transport", return_value=profile_model_catalog.CatalogResponse(
+            200, json.dumps({"data": [{"id": "vendor/new-model"}]}).encode(),
+        )) as transport, mock.patch.object(capability_probe, "default_credential_loader", return_value="FAKE_KEY"):
+            exit_code, envelope = self._run_json(
+                "profiles-list-models", "--profile", "legacy-sync", "--output", "json", "--non-interactive",
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(envelope["ok"])
+        self.assertEqual(envelope["result"]["models"], ["openrouter/vendor/new-model"])
+        self.assertEqual(transport.call_args.args[0].get_method(), "GET")
+        self.assertEqual(self.config_path.read_bytes(), original)
+        self.assertNotIn("FAKE_KEY", json.dumps(envelope))
 
     def test_profiles_list_models_reports_missing_credential(self) -> None:
         section = self._direct_section()

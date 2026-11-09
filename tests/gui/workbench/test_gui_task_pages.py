@@ -769,6 +769,21 @@ class GuiTaskPageTests(unittest.TestCase):
         self.assertFalse(page.merge_btn.isEnabled())
         self.assertTrue(page.stop_btn.isEnabled())
 
+    def test_task_progress_text_has_its_own_wrapping_label(self) -> None:
+        from gui_qt.reports.workflow_progress import WorkflowProgressState
+        section = self.window.keywords_page.status_section
+        label = '本轮待补已处理 1/113 个请求块（0.9%）'
+        section.set_progress(WorkflowProgressState(
+            kind='sync_keywords', current=1, total=113, visible=True, label=label))
+        self.assertEqual(section.progress_label.text(), label)
+        self.assertTrue(section.progress_label.wordWrap())
+        self.assertFalse(section.progress_label.isHidden())
+        self.assertFalse(section.progress_bar.isTextVisible())
+        self.assertEqual(section.progress_bar.accessibleName(), label)
+        section.set_status('done', '已结束', '任务结束')
+        self.assertTrue(section.progress_label.isHidden())
+        self.assertTrue(section.progress_bar.isHidden())
+
     def test_revision_page_shows_apply_revision_not_translation_apply(self) -> None:
         self.window._set_work_mode(
             WorkMode.REVISION,
@@ -1592,11 +1607,14 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._bootstrap_progress = create_bootstrap_progress_state("source_index")
         self.window._on_cli_line_ready("MV context preparation: 20 segments, 4 reused, 16 pending.\n")
         self.window._on_cli_line_ready("MV context embedding progress: 16/16\n")
+        self.window._on_cli_line_ready("MV context checkpoint progress: 20/20 saved, 4 resumed.\n")
         self.window._flush_throttled_progress_ui()
         section = self.window.context_library_page.bootstrap_status_section
         self.assertIn("16/16", section.message_label.text())
         self.assertEqual(section.progress_bar.maximum(), 0)
         self.assertEqual(self.window._bootstrap_progress.stored_segments, 0)
+        self.assertIn("已保存向量进度：20", section.facts_label.text())
+        self.assertIn("本次恢复向量：4", section.facts_label.text())
         self.window._on_cli_line_ready("MV context persistence started.\n")
         self.window._flush_throttled_progress_ui()
         self.assertIn("正在保存", section.message_label.text())
@@ -1634,10 +1652,12 @@ class GuiTaskPageTests(unittest.TestCase):
         self.window._bootstrap_progress = create_bootstrap_progress_state("rag")
         self.window._on_cli_line_ready("MV context preparation: 20 segments, 4 reused, 16 pending.")
         self.window._on_cli_line_ready("MV context embedding progress: 16/16")
+        self.window._on_cli_line_ready("MV context checkpoint progress: 20/20 saved, 4 resumed.")
         self.window._flush_throttled_progress_ui()
         section = self.window.context_library_page.bootstrap_status_section
         self.assertIn("16/16", section.message_label.text())
         self.assertEqual(self.window._bootstrap_progress.stored_segments, 0)
+        self.assertIn("已保存向量进度：20", section.facts_label.text())
         self.window._on_cli_line_ready("MV context persistence started.")
         self.window._flush_throttled_progress_ui()
         self.assertIn("正在保存", section.message_label.text())
@@ -2073,6 +2093,19 @@ class GuiTaskPageTests(unittest.TestCase):
             for i in range(self.window.keywords_page.mode_combo.count())
         ]
         self.assertEqual(labels, ["批量", "同步"])
+
+    def test_workbench_user_copy_avoids_internal_jargon_and_slash_headers(self) -> None:
+        from gui_qt.user_copy import (
+            APP_BRAND_COPY,
+            REVISION_GUIDANCE_COPY,
+            TRANSLATION_PLAN_COPY,
+        )
+
+        self.assertEqual(APP_BRAND_COPY["subtitle"], "翻译工作台")
+        self.assertEqual(REVISION_GUIDANCE_COPY["model_title"], "模型订正与写回")
+        self.assertEqual(REVISION_GUIDANCE_COPY["external_title"], "外部提案与人工审校")
+        self.assertNotIn("TranslationPlan", TRANSLATION_PLAN_COPY["current"])
+        self.assertNotIn("耐久", self.window.sync_translation_page.run_status_label.text())
 
 
 if __name__ == "__main__":

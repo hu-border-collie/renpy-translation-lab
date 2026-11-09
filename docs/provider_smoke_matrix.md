@@ -102,7 +102,7 @@ CLI 与 GUI 使用同一选择语义：`--profile` 只覆盖本次运行；GUI �
 
 | 命令 | Provider 调用预算 | 说明 |
 |---|---|---|
-| `profiles-list-models` | 1 次只读 models GET | 目录仅作填写建议；失败不阻止手填模型 ID。部分 Provider 仍可能计量该请求。 |
+| `profiles-list-models` | OpenAI-compatible 为 1 次只读 models GET；Gemini 为每页 1 次、最多 10 页 | Gemini 按生成 / 向量用途筛选，分页共用默认 15 秒超时，无重试。目录仅作填写建议；失败不阻止手填模型 ID。部分 Provider 仍可能计量该请求。 |
 | `profiles-probe` | 恰好 1 次计费生成请求 | 报告 `auth` / `sync_generation` / `structured_output` / `reasoning` / `usage`；Batch/embedding 只报告声明能力。 |
 | `sync-start` | 由 TranslationPlan 决定 | 先用 `include_files` / `include_prefixes` 限定到 1 个小文件；请求数 = chunk 数（受重试合同影响）。 |
 | `final-review-build` | 0 | 只读扫描、冻结上下文、生成 review units；sync 策略不写 Batch requests。 |

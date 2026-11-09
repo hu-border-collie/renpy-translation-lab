@@ -25,7 +25,10 @@ DEFAULT_GEMINI_TRANSLATION_MODEL = "gemini-3.1-flash-lite"
 DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001"
 
 # GUI display order: newer / primary options first.
+# Text-generation catalog checked against the official Models guide on 2026-11-02.
 BUILTIN_GEMINI_TRANSLATION_MODELS: tuple[str, ...] = (
+    "gemini-4-argon",
+    "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
@@ -47,6 +50,8 @@ BUILTIN_GEMINI_EMBEDDING_MODELS: tuple[str, ...] = (
 # their configured sampling behavior.
 GEMINI_MODELS_WITHOUT_SAMPLING_PARAMETERS: frozenset[str] = frozenset(
     {
+        "gemini-4-argon",
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash",
         "gemini-3.5-flash-lite",

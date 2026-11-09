@@ -59,10 +59,13 @@ def resume_workflow(
     manifest: dict[str, Any],
     *,
     submit_max_cost: float | None = None,
+    retry_unknown: bool = False,
 ) -> GuiWorkflow | None:
     spec = work_mode_spec(mode)
     if not spec.implemented or not spec.supports_resume:
         return None
+    if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+        return SyncKeywordWorkflow.resume_manifest(manifest_path, retry_unknown=retry_unknown)
     if spec.mode == WorkMode.BATCH_TRANSLATION:
         return TranslationWorkflow.resume_manifest(
             manifest_path,
@@ -99,6 +102,10 @@ def validate_resume_manifest(
 ) -> None:
     spec = work_mode_spec(mode)
     expected_mode = manifest_mode_for_work_mode(spec.mode)
+    if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
+        expected_mode = "keyword_extraction"
+        if manifest.get("execution") != "sync" or manifest.get("keyword_checkpoint_version") != 1:
+            raise ValueError("该任务没有同步关键词检查点；旧任务未保存的响应无法恢复，请重新提取。")
     actual_mode = manifest.get("mode", "translation")
     actual_text = actual_mode.strip() if isinstance(actual_mode, str) else "translation"
     if expected_mode == "translation":

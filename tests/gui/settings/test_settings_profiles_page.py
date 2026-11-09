@@ -79,9 +79,61 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertEqual(self.page.profiles_group.title(), "模型方案")
         self.page.widget.resize(1200, 800)
         self.page.widget.show()
+        self.page.section_tabs.setCurrentIndex(1)
         self._app.processEvents()
-        self.assertLessEqual(self.page.profiles_group.width(), self.page.notice_group.width())
-        self.assertEqual(self.page.profile_panels.width(), self.page.notice_group.width())
+        self.assertLess(self.page.profiles_group.width(), self.page.profile_editor_group.width())
+        self.assertLess(self.page.profile_panels.width(), self.page.widget.viewport().width())
+
+    def test_edit_connection_reveals_the_selected_profiles_provider(self) -> None:
+        section = migrated_section()
+        self.page.load({"model_routing": section})
+        # Deliberately start with a different connection selected.
+        self.page.providers_list.setCurrentRow(self.page.providers_list.count() - 1)
+        expected = self.page.profile_provider_combo.currentData()
+        self.assertNotEqual(self.page._selected_provider_id, expected)
+        self.page.section_tabs.setCurrentIndex(1)
+        self.page.edit_provider_btn.click()
+        self.assertEqual(self.page.section_tabs.currentIndex(), 2)
+        self.assertEqual(self.page._selected_provider_id, expected)
+        self.assertEqual(self.page.collect(), {"model_routing": section})
+
+    def test_model_search_can_be_selected_with_the_keyboard(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        self.page.load({"model_routing": migrated_section()})
+        profile_id = self.page._selected_profile_id
+        self.page.widget.resize(1100, 800)
+        self.page.widget.show()
+        self.page.section_tabs.setCurrentIndex(1)
+        self._app.processEvents()
+        edit = self.page.profile_model_edit
+        edit.setFocus()
+        edit.selectAll()
+        QTest.keyClicks(edit, "argon")
+        self._app.processEvents()
+        popup = self.page.profile_model_combo.completer().popup()
+        self.assertTrue(popup.isVisible())
+        QTest.keyClick(popup, Qt.Key.Key_Down)
+        QTest.keyClick(popup, Qt.Key.Key_Return)
+        self._app.processEvents()
+        self.assertEqual(self.page.profile_model_combo.currentText(), "gemini-4-argon")
+        self.assertEqual(self.page.collect()["model_routing"]["profiles"][profile_id]["model"], "gemini-4-argon")
+
+    def test_management_disclosure_preserves_config_and_invalid_removal_access(self) -> None:
+        section = migrated_section()
+        self.page.load({"model_routing": section})
+        self.assertTrue(self.page.notice_group.isHidden())
+        self.page.management_toggle.click()
+        self.assertFalse(self.page.notice_group.isHidden())
+        self.page.management_toggle.click()
+        self.assertTrue(self.page.notice_group.isHidden())
+        self.assertEqual(self.page.collect(), {"model_routing": section})
+        self.page.load({"model_routing": "invalid"})
+        self.assertTrue(self.page.section_tabs.isHidden())
+        self.assertTrue(self.page.management_toggle.isHidden())
+        self.assertFalse(self.page.notice_group.isHidden())
+        self.assertFalse(self.page.remove_btn.isHidden())
 
     def test_create_section_stores_a_valid_gemini_batch_default(self) -> None:
         from providers.gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
@@ -939,6 +991,36 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
             editor.profile_ids(section)[0],
         )
 
+    def test_gemini_catalog_is_available_for_generation_and_embedding_profiles(self) -> None:
+        calls: list[tuple[str, object]] = []
+        page = ProfilesSettingsPage(actions=SettingsPageActions(
+            run_immediate=lambda name, payload: calls.append((name, payload)) or True,
+        ))
+        self.addCleanup(page.widget.deleteLater)
+        section = migrated_section()
+        page.load({"model_routing": section})
+        kinds = set()
+        for row in range(page.profiles_list.count()):
+            page.profiles_list.setCurrentRow(row)
+            profile_id = page._selected_profile_id
+            kinds.add(section["profiles"][profile_id].get("purpose", "generation"))
+            self.assertTrue(page.profile_model_catalog_btn.isEnabled())
+            page.profile_model_catalog_btn.click()
+            self.assertEqual(calls[-1], ("list_profile_models", {"profile_id": profile_id}))
+        self.assertEqual(kinds, {"generation", "embedding"})
+
+    def test_gemini_catalog_selection_still_needs_explicit_model_selection(self) -> None:
+        section = migrated_section()
+        self.page.load({"model_routing": section})
+        self.page.profiles_list.setCurrentRow(0)
+        profile_id = self.page._selected_profile_id
+        original = self.page.collect()
+        self.page.set_model_catalog(["gemini-4-argon", "gemini-3.8-flash"], profile_id=profile_id)
+        self.assertEqual(self.page.collect(), original)
+        combo = self.page.profile_model_combo
+        combo.setCurrentIndex(combo.findText("gemini-4-argon"))
+        self.assertEqual(self.page.collect()["model_routing"]["profiles"][profile_id]["model"], "gemini-4-argon")
+
     def test_model_catalog_populates_and_selects_model(self) -> None:
         section = self._direct_section()
         self.page.load({"model_routing": section})
@@ -950,18 +1032,19 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
             source="openai",
             profile_id=profile_id,
         )
-        self.assertEqual(self.page.profile_model_catalog_combo.count(), 3)
-        self.page.profile_model_catalog_combo.setCurrentIndex(1)
+        combo = self.page.profile_model_combo
+        self.assertTrue(combo.isEditable())
+        self.assertEqual(combo.count(), 2)
+        combo.setCurrentIndex(combo.findText("gpt-4.1"))
 
         collected = self.page.collect()["model_routing"]["profiles"][profile_id]
         self.assertEqual(collected["model"], "gpt-4.1")
         self.assertTrue(self.messages)
 
-        # Re-populating the editor (e.g. switching profiles) must not leak the
-        # previous provider's catalog into the next profile.
+        # Refreshing the same connection retains its fetched suggestions.
         self.page._populate_profile_editor()
-        self.assertEqual(self.page.profile_model_catalog_combo.count(), 1)
-        self.assertEqual(self.page.profile_model_catalog_combo.currentData(), "")
+        self.assertEqual(combo.count(), 2)
+        self.assertEqual(combo.currentText(), "gpt-4.1")
 
     def test_model_catalog_ignores_result_for_other_profile(self) -> None:
         section = self._direct_section()
@@ -974,11 +1057,56 @@ class ProfilesPageDirectAdapterTests(unittest.TestCase):
             profile_id="some-other-profile",
         )
 
-        self.assertEqual(self.page.profile_model_catalog_combo.count(), 1)
-        self.assertEqual(self.page.profile_model_catalog_combo.currentData(), "")
+        self.assertEqual(self.page.profile_model_combo.count(), 1)
+        self.assertEqual(self.page.profile_model_combo.currentText(), "gpt-4.1-mini")
         self.assertTrue(
             any("some-other-profile" in message for message in self.messages)
         )
+
+    def test_offline_dropdown_supports_search_selection_and_unknown_ids(self) -> None:
+        section = migrated_section()
+        self.page.load({"model_routing": section})
+        original = self.page.collect()
+        combo = self.page.profile_model_combo
+        self.assertTrue(combo.isEditable())
+        self.assertGreater(combo.count(), 1)
+        self.assertEqual(combo.completer().filterMode().name, "MatchContains")
+        self.assertEqual(self.page.collect(), original)
+        profile_id = self.page._selected_profile_id
+        combo.setCurrentIndex(combo.findText("gemini-4-argon"))
+        self.assertEqual(self.page.collect()["model_routing"]["profiles"][profile_id]["model"], "gemini-4-argon")
+        self.page.profile_model_edit.setText("future-unlisted-model")
+        self.page.profile_model_edit.editingFinished.emit()
+        self.assertEqual(self.page.collect()["model_routing"]["profiles"][profile_id]["model"], "future-unlisted-model")
+        self.page.set_model_catalog(["another-model"], profile_id=profile_id)
+        self.assertEqual(combo.currentText(), "future-unlisted-model")
+
+    def test_litellm_dropdown_and_refresh_use_the_existing_connection(self) -> None:
+        section = migrated_section("litellm_builtin")
+        self.page.load({"model_routing": section})
+        self.page.profiles_list.setCurrentRow(next(
+            row for row in range(self.page.profiles_list.count())
+            if self.page.profiles_list.item(row).data(256) == "legacy-sync"
+        ))
+        self.assertTrue(self.page.profile_model_catalog_btn.isEnabled())
+        self.assertTrue(self.page.profile_model_combo.isEnabled())
+        self.assertEqual(self.page.collect(), {"model_routing": section})
+
+    def test_changed_connection_cannot_receive_a_late_catalog_or_reuse_old_choices(self) -> None:
+        from providers import profile_model_catalog
+
+        section = self._direct_section()
+        self.page.load({"model_routing": section})
+        profile_id = self.page._selected_profile_id
+        identity = profile_model_catalog.connection_identity(section, profile_id)
+        self.page.set_model_catalog(["old-host-only-model"], profile_id=profile_id, connection_id=identity)
+        provider_id = self.page._selected_provider_id
+        changed = editor.update_provider(section, provider_id, base_url="https://new.example/v1", models_url="https://new.example/v1/models")
+        self.page.load({"model_routing": changed})
+        self.assertEqual(self.page.profile_model_combo.findText("old-host-only-model"), -1)
+        self.page.set_model_catalog(["late-model"], profile_id=profile_id, connection_id=identity)
+        self.assertEqual(self.page.profile_model_combo.findText("late-model"), -1)
+        self.assertEqual(self.page.collect(), {"model_routing": changed})
 
     def test_model_catalog_running_and_error_feedback(self) -> None:
         page = ProfilesSettingsPage(

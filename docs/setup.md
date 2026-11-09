@@ -1,6 +1,6 @@
 # 安装与本地配置
 
-RPG Maker MV 的自动识别、独立源／目标和核心／插件窗口配置见 [MV 耐久 Sync](rpgmaker_mv_sync.md)。GUI 选目录会识别 MV 并打开相应准备入口；CLI 缺少 `engine` 时也可按 `game_root` 识别，无 MV 标记时保持 Ren'Py 行为。MV 翻译使用耐久 Sync，不适用下面的 Ren'Py prepare / TL 模板步骤。
+RPG Maker MV 的自动识别、独立源／目标和核心／插件窗口配置见 [MV Batch / 耐久 Sync](rpgmaker_mv_sync.md)。GUI 选目录会识别 MV 并打开相应准备入口；CLI 缺少 `engine` 时也可按 `game_root` 识别，无 MV 标记时保持 Ren'Py 行为。MV 翻译可选择 Gemini Batch 或耐久 Sync，不适用下面的 Ren'Py prepare / TL 模板步骤。
 
 文档地图：[docs/README.md](README.md)
 
@@ -267,7 +267,7 @@ JSON object 模式的术语提示也会明确置信度是 0–1 的数字，字�
 - 结构化输出模式：`strict_json_schema` / `json_object` / `prompt_only_json`；未声明时直连 adapter 保守使用 `prompt_only_json`，Provider 返回“不支持 response_format”时按 `unsupported_capability` 失败，不会静默降级后宣称成功。
 - 该模式用于 JSON 任务。项目分析的普通文本摘要显式请求 `text/plain`，会沿用同一连接而不发送 JSON `response_format`；这不是 JSON 能力失败后的静默降级。显式普通文本请求同时携带 JSON schema 会在调用前拒绝。
 - GUI「设置 → 模型与供应商」提供内置供应商预设（OpenAI、OpenRouter、DeepSeek、xAI、Ollama、自定义）、额外请求头与结构化输出模式字段；预设只填充连接，不限制手填模型 ID。
-- Profile 编辑区提供「拉取模型列表」：只读请求 `models_url`（或 `base_url + /models`），选择后填入模型字段；目录失败、未收录或端点缺失时仍可手动输入模型 ID。CLI 等价命令为 `profiles-list-models --profile <ID> --output json`，失败返回稳定 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 机器码。
+- Profile 编辑区提供可搜索、可手填的模型下拉框，候选来自当前连接已配置的模型与内置列表；「刷新模型列表」只读请求供应商目录，并保留当前输入。OpenAI-compatible 请求 `models_url`（或 `base_url + /models`）；LiteLLM 生成连接复用已有的 OpenAI、Anthropic、OpenRouter、DeepSeek、xAI、Ollama 目录，或显式配置的目录地址，返回模型 ID 保留 LiteLLM 供应商前缀。显式地址优先，不自动转向其他地址或子集目录。未知连接未配置目录、加载失败或未收录时仍可手填模型 ID；供应商连接及新模型方案需先保存再刷新。CLI 等价命令为 `profiles-list-models --profile <ID> --output json`，失败返回稳定 `MODEL_CATALOG_*` / `CREDENTIAL_UNAVAILABLE` 机器码；只列目录，不生成、不重试、不改配置，LiteLLM 目录也无需导入其 SDK。
 - 连接诊断复用 `profiles-probe` / GUI「测试所选 Profile 能力」：探测请求按 profile 声明的结构化输出模式发送 strict JSON schema 兼容样例，并区分鉴权、基本生成、结构化输出、reasoning 与 usage。
 - 直连 adapter 与 Gemini Sync 都服务同步生成；显式把 `routes.final_review.strategy` 配为 `sync` 后，用 `final-review-run-sync` 逐 unit 审校（report-only，不写 `.rpy`）。未显式配置时不会跟随 `defaults.execution_strategy` 静默切换。Gemini Batch 仍要求 `gemini` adapter；旧配置迁移仍生成 `gemini_batch` 路由。
 
@@ -280,6 +280,8 @@ JSON object 模式的术语提示也会明确置信度是 0–1 的数字，字�
 
 - 为兼容现有项目，Batch / 同步默认模型目前仍是 `gemini-3.1-flash-lite`；默认值不等于长期推荐，正式运行前应检查模型生命周期、价格和当前 API 能力。
 - **内置模型列表的单一源**是 `providers/gemini_model_catalog.py`（GUI 与 CLI 共用）。发版更新模型时优先改该文件。
+- 内置文本模型候选已于 2026-11-02 按[官方模型目录](https://ai.google.dev/gemini-api/docs/models)补入 `gemini-4-argon`、`gemini-3.8-flash`；目录不代表当前账号可用性或本项目已完成真实翻译验收，也不会改写已保存的默认模型。
+- **Gemini 在线目录**：在「设置 → 模型与供应商」选择 Gemini 模型方案后点击「刷新模型列表」，或运行 `python gemini_translate_batch.py profiles-list-models --profile <PROFILE_ID> --output json`。使用该连接的凭据引用，只读请求官方 `models.list`；生成方案按 `generateContent`、向量方案按 `embedContent` 筛选，自动读取分页，默认共用 15 秒超时、最多 10 页，不重试、不生成内容。启动或打开设置时不会自动联网；刷新成功后仍需明确选择并保存模型，失败时保留当前输入并允许手填 ID。该目录与旧页的静态 `model_catalog` 分开，不自动写回旧目录或启用模型轮换。
 - **配置可扩展**：在 `translator_config.json` 增加 `model_catalog`，无需改代码即可把新模型 ID 加进下拉框与 CLI 轮换列表：
 
 ```json
@@ -292,8 +294,8 @@ JSON object 模式的术语提示也会明确置信度是 0–1 的数字，字�
 ```
 
 - 旧配置路径：GUI「设置 → 模型」仅从下拉列表选择，自定义模型 ID 在「设置 → 高级 → 模型目录」编辑并保存到 `model_catalog`。项目写入 `model_routing` 后，可在「设置 → 模型与供应商」中统一新增 / 复制 / 编辑模型与供应商，凭据只保存引用；迁移说明见[模型配置迁移](model_config_migration.md)。
-- Google 当前将 `gemini-3.5-flash-lite` 定位为高吞吐、低成本型号，将 `gemini-3.6-flash` / `gemini-3.5-flash` 定位为更强的 Flash 型号；具体选择仍须用 `probe` 或小 package 验证本项目的结构化翻译质量。
-- **采样参数兼容性：** Google 自 2026-07-21 起说明，新 Gemini 型号不再推荐或支持显式 `temperature` / `top_p` / `top_k`，未来型号可能因这些参数返回 400。Lab 会为 `gemini-3.6-flash`、`gemini-3.5-flash` 和 `gemini-3.5-flash-lite` 自动移除这些参数，同时保留旧型号与非 Gemini 模型的既有配置；切换型号后仍应先用小 package 验证结构化翻译质量。见 [Latest model guide](https://ai.google.dev/gemini-api/docs/latest-model) 与 [模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
+- 官方目录还列有 `gemini-3.5-flash-lite`、`gemini-3.6-flash` 等文本型号；`gemini-3.5-flash` 为兼容别名。具体选择仍须用 `probe` 或小 package 验证本项目的结构化翻译质量。
+- **采样参数兼容性：** 新 Gemini 型号不再推荐或支持显式 `temperature` / `top_p` / `top_k`。Lab 会为 `gemini-4-argon`、`gemini-3.8-flash`、`gemini-3.6-flash`、`gemini-3.5-flash` 和 `gemini-3.5-flash-lite` 自动移除这些参数，同时保留旧型号与非 Gemini 模型的既有配置；切换型号后仍应先用小 package 验证结构化翻译质量。见 [Gemini 4 迁移说明](https://ai.google.dev/gemini-api/docs/latest-model)、[Gemini 3.8 迁移说明](https://ai.google.dev/gemini-api/docs/whats-new-gemini-3.8)与[模型弃用表](https://ai.google.dev/gemini-api/docs/deprecations)。
 - RAG 当前默认搭配 `gemini-embedding-001`（也可选 `gemini-embedding-2`）。
 
 ### 请求轮换（API Key / 模型）

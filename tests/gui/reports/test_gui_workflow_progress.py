@@ -7,6 +7,99 @@ from gui_qt.reports.workflow_progress import (
 
 
 class GuiWorkflowProgressTests(unittest.TestCase):
+    def test_keyword_pending_queue_excludes_restored_results_and_saved_errors(self):
+        state = create_workflow_progress_state('sync_keywords')
+        state = update_workflow_progress_from_line(
+            'Sync keyword queue: total=768; reused=655; pending=113; failed=112; incomplete=1.', state)
+        self.assertEqual((state.current, state.total), (0, 113))
+        self.assertIn('已复用有效结果：655', '\n'.join(state.facts))
+        self.assertIn('任务总量：768', '\n'.join(state.facts))
+        state = update_workflow_progress_from_line(
+            'Sync keyword saved: 768/768 requests; resumed=768.', state)
+        self.assertEqual((state.current, state.total), (0, 113))
+        self.assertIn('已保存处理记录：768/768', state.facts)
+        for line in ('[1/113] failed-key', 'Sync keyword phase: waiting failed-key',
+                     '  targeted retry: 40 items',
+                     'Sync keyword saved: 768/768 requests; resumed=768.'):
+            state = update_workflow_progress_from_line(line, state)
+            self.assertEqual(state.current, 0)
+        line = 'Sync keyword progress: 1/113 pending blocks processed.'
+        state = update_workflow_progress_from_line(line, state)
+        self.assertEqual((state.current, state.total), (1, 113))
+        self.assertIn('本轮待补已处理 1/113', state.label)
+        self.assertFalse(any('failed-key' in fact for fact in state.facts))
+        self.assertEqual(update_workflow_progress_from_line(line, state), state)
+        self.assertEqual(update_workflow_progress_from_line(
+            'Sync keyword progress: 1/768 pending blocks processed.', state), state)
+
+    def test_keyword_fully_restored_queue_has_no_zero_over_zero_percentage(self):
+        state = create_workflow_progress_state('sync_keywords')
+        state = update_workflow_progress_from_line(
+            'Sync keyword queue: total=768; reused=768; pending=0; failed=0; incomplete=0.', state)
+        state = update_workflow_progress_from_line(
+            'Sync keyword saved: 768/768 requests; resumed=768.', state)
+        self.assertEqual(state.total, 0)
+        self.assertTrue(state.indeterminate)
+        self.assertIn('正在生成报告', state.label)
+        self.assertNotIn('0/0', state.label)
+
+    def test_keywords_show_scan_then_saved_count_without_counting_dispatch_as_done(self):
+        state = create_workflow_progress_state("sync_keywords")
+        self.assertTrue(state.visible)
+        self.assertTrue(state.indeterminate)
+        state = update_workflow_progress_from_line(
+            "Sync keyword saved: 3/10 requests; resumed=3.", state)
+        self.assertEqual((state.current, state.total), (0, 10))
+        self.assertIn("载入历史处理记录：3", state.facts)
+        state = update_workflow_progress_from_line("[4/10] fixture-key", state)
+        self.assertEqual(state.current, 0)
+        state = update_workflow_progress_from_line(
+            "Sync keyword phase: waiting fixture-key", state)
+        self.assertIn("正在等待关键词服务响应：fixture-key", state.facts)
+        state = update_workflow_progress_from_line(
+            "Sync keyword saved: 4/10 requests; resumed=3.", state)
+        self.assertEqual(state.current, 4)
+        self.assertFalse(state.indeterminate)
+
+    def test_keyword_resume_full_record_count_does_not_fill_current_run_progress(self):
+        state = create_workflow_progress_state("sync_keywords")
+        state = update_workflow_progress_from_line(
+            "Sync keyword saved: 768/768 requests; resumed=768.", state)
+        self.assertEqual((state.current, state.total), (0, 768))
+        self.assertIn("本轮已处理 0/768", state.label)
+        self.assertIn("已保存处理记录：768/768", state.facts)
+
+        for index in range(1, 78):
+            state = update_workflow_progress_from_line(f"[{index}/768] cached-{index}", state)
+            self.assertEqual(state.current, index - 1)
+            state = update_workflow_progress_from_line(
+                "Sync keyword saved: 768/768 requests; resumed=768.", state)
+            self.assertEqual(state.current, index)
+
+        state = update_workflow_progress_from_line("[78/768] retry-key", state)
+        state = update_workflow_progress_from_line("Sync keyword phase: waiting retry-key", state)
+        self.assertEqual(state.current, 77)
+        self.assertIn("正在等待关键词服务响应：retry-key", state.facts)
+        state = update_workflow_progress_from_line("  finish_reason: stop", state)
+        self.assertEqual(state.current, 77)
+        state = update_workflow_progress_from_line(
+            "Sync keyword saved: 768/768 requests; resumed=768.", state)
+        self.assertEqual(state.current, 78)
+        self.assertIn("本轮已处理 78/768", state.label)
+        self.assertFalse(any("retry-key" in fact for fact in state.facts))
+
+    def test_keyword_failed_row_advances_processing_only_after_saved(self):
+        state = create_workflow_progress_state("sync_keywords")
+        for line in ("Sync keyword saved: 2/2 requests; resumed=2.",
+                     "[1/2] failed-key", "  error: service temporarily unavailable"):
+            state = update_workflow_progress_from_line(line, state)
+        self.assertEqual(state.current, 0)
+        line = "Sync keyword saved: 2/2 requests; resumed=2."
+        state = update_workflow_progress_from_line(line, state)
+        self.assertEqual(state.current, 1)
+        self.assertIn("本轮已处理 1/2", state.label)
+        self.assertEqual(update_workflow_progress_from_line(line, state).current, 1)
+
     def test_source_index_build_progress_tracks_chunk_lookup(self):
         state = create_workflow_progress_state("source_index_build")
 

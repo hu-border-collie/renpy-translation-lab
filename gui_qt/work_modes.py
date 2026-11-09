@@ -123,7 +123,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         writeback_tab_label="写回说明",
         idle_workflow_heading="尚未开始同步翻译",
         idle_workflow_message=(
-            "耐久同步任务支持中断恢复与显式取消；运行结束并通过检查后才生成绑定预览，"
+            "同步任务支持中断恢复与显式取消；运行结束并通过检查后生成预览，"
             "确认后才写回项目脚本。"
         ),
         supports_resume=False,
@@ -146,7 +146,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         idle_workflow_heading="尚未开始批量关键词提取",
         idle_workflow_message=(
             "会扫描翻译文本，批量提取术语与剧情概要；"
-            "只生成报告，不修改游戏脚本。"
+            "生成可审核的候选报告。"
         ),
         supports_resume=True,
         supports_translation_writeback=False,
@@ -166,8 +166,8 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="提取进度",
         writeback_tab_label="结果说明",
         idle_workflow_heading="尚未开始同步关键词提取",
-        idle_workflow_message="适合小范围即时生成术语与剧情报告；不修改游戏脚本。",
-        supports_resume=False,
+        idle_workflow_message="适合小范围即时生成术语与剧情候选报告。",
+        supports_resume=True,
         supports_translation_writeback=False,
         implemented=True,
         is_bootstrap=False,
@@ -208,7 +208,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         writeback_tab_label="说明",
         idle_workflow_heading="尚未预建原文索引",
         idle_workflow_message=(
-            "只索引翻译模板里的原文，不修改游戏脚本；"
+            "读取翻译模板中的原文建立本地索引；"
             "需先在「设置 · 上下文」启用并保存，再到左侧「上下文库」预建。"
         ),
         supports_resume=False,
@@ -250,7 +250,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="审查进度",
         writeback_tab_label="订正候选",
         idle_workflow_heading="尚未开始最终审校",
-        idle_workflow_message="先生成问题报告；只有人工选择的问题才会进入订正预览，绝不直接修改脚本。",
+        idle_workflow_message="先生成终审问题报告；经人工选择的问题才会进入订正预览，确认后写回。",
         supports_resume=True,
         supports_translation_writeback=False,
         implemented=True,
@@ -288,7 +288,7 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         progress_tab_label="订正进度",
         writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始同步订正",
-        idle_workflow_message="适合小范围订正预览；默认只出报告，不会自动写回，请先备份。",
+        idle_workflow_message="适合小范围即时生成订正预览；确认预览后再单独写回。",
         supports_resume=False,
         supports_translation_writeback=False,
         implemented=True,

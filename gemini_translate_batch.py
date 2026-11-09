@@ -38,6 +38,7 @@ from foundation.atomic_io import (
 from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 from context_engine import advanced_context
 from context_engine import embedding_runtime
+from context_engine.embedding_diagnostics import BOOTSTRAP_DIAGNOSTIC_FIELDS
 from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
 from execution import batch_export
 from providers import batch_cost_estimate
@@ -296,6 +297,8 @@ class DualLogger(object):
 
     def write(self, message):
         self.terminal.write(message)
+        if '\n' in message:
+            self.terminal.flush()
         self.log.write(message)
         self.log.flush()
 
@@ -2062,6 +2065,7 @@ def embed_texts(contents, task_type):
             )
         except EmbeddingBackendError as exc:
             last_error = exc
+            exc.attempt_count = attempt
             if exc.retryable and attempt < attempts:
                 rotated = legacy.rotate_api_key()
                 key_action = 'next API key' if rotated else 'same API key'
@@ -3218,6 +3222,8 @@ def create_batch_package_dir(package_name):
 
 
 def copy_split_context_metadata(source_manifest, part_manifest, part_chunks):
+    if source_manifest.get('mv_coverage_report'):
+        part_manifest['mv_coverage_report'] = source_manifest['mv_coverage_report']
     if source_manifest.get('model_routing'):
         part_manifest['model_routing'] = copy.deepcopy(source_manifest.get('model_routing'))
     if source_manifest.get('translation_plan'):
@@ -3414,6 +3420,17 @@ def collect_pending_file_jobs(
     pending/translated counts stay identical to the full build path, but the
     expensive occurrence extraction and large task list copies are skipped.
     """
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        from execution.mv_batch import file_jobs, require_supported_context
+        if legacy.PREP_ENABLED:
+            raise ValueError('RPG Maker MV Batch does not run Ren\'Py prepare; disable prepare.enabled.')
+        require_supported_context(story_memory=STORY_MEMORY_ENABLED,
+                                  project_analysis=PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF)
+        snapshot = legacy.current_mv_sync_snapshot()
+        return TranslationFileJobs(file_jobs(snapshot,
+            include_complete_files=include_complete_files,
+            include_task_payloads=include_task_payloads),
+            coverage_snapshot=snapshot, adapter_snapshot=snapshot)
     adapter_snapshot = build_translation_snapshot(
         RenPyAdapter(legacy_module=legacy),
         ProjectDiscoveryRequest(
@@ -4099,6 +4116,9 @@ def _batch_plan_source_identity(file_jobs):
     snapshot = getattr(file_jobs, 'adapter_snapshot', None)
     if snapshot is None:
         return translation_plan.SourceIdentity()
+    if snapshot.project.engine == 'rpgmaker_mv':
+        from execution.mv_sync import source_identity
+        return source_identity(snapshot)
     project = snapshot.project
     documents = tuple(project.source_documents or ())
     return translation_plan.SourceIdentity(
@@ -4427,6 +4447,9 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
     split/repair, and additionally carry the rendered ``TranslationRequest``
     fields so :func:`build_batch_request` only wraps them in a Batch envelope.
     """
+    mv_snapshot = getattr(file_jobs, 'adapter_snapshot', None)
+    if mv_snapshot is not None and mv_snapshot.project.engine != 'rpgmaker_mv':
+        mv_snapshot = None
     total_chunks = count_translation_chunks(file_jobs)
     if SOURCE_INDEX_ENABLED and total_chunks:
         print(f'Source index retrieval for build: {total_chunks} chunks to query.')
@@ -4435,13 +4458,20 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
     captures = []
     per_file_chunk_numbers = {}
 
+    def retrieve_context(items, before, kind):
+        if mv_snapshot is not None:
+            from execution.mv_preprocessing import retrieve
+            return retrieve(sys.modules[__name__], mv_snapshot, items, kind,
+                            execution='gemini_batch', config_file=legacy.TRANSLATOR_CONFIG)
+        return retrieve_history_hits(items, before) if kind == 'history' else retrieve_source_hits(items, before)
+
     def retrieval_provider(chunk_input):
         target_items = chunk_input.target_items
         file_rel_path = str(chunk_input.file_rel_path or '')
         before = list(chunk_input.context_window.before or [])
         after = list(chunk_input.context_window.after or [])
         history_hits, rag_stats = (
-            retrieve_history_hits(target_items, before) if RAG_ENABLED else ([], {'enabled': False})
+            retrieve_context(target_items, before, 'history') if RAG_ENABLED else ([], {'enabled': False})
         )
         if SOURCE_INDEX_ENABLED:
             chunk_number = per_file_chunk_numbers.get(file_rel_path, 0) + 1
@@ -4453,7 +4483,7 @@ def _build_batch_translation_plan(file_jobs, routing_plan=None):
             )
             sys.stdout.flush()
         source_hits, source_index_stats = (
-            retrieve_source_hits(target_items, before)
+            retrieve_context(target_items, before, 'source')
             if SOURCE_INDEX_ENABLED
             else ([], {'enabled': False})
         )
@@ -4771,7 +4801,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
     )
     translation_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
     effective_model = route_model(routing_plan, translation_route)
-    if not skip_prepare:
+    if not skip_prepare and legacy.current_project_engine() != 'rpgmaker_mv':
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
         raise SystemExit(f'TL dir does not exist: {legacy.TL_DIR}')
@@ -4829,7 +4859,7 @@ def create_batch_package(display_name_override='', skip_prepare=False):
                 coverage_snapshot.project,
                 coverage_snapshot.inventory,
                 coverage_snapshot.report,
-                review_policy=coverage_snapshot.review_policy,
+                review_policy=getattr(coverage_snapshot, 'review_policy', None),
             )
         except (OSError, ValueError) as exc:
             # Coverage is read-only P1 evidence; do not abort package creation.
@@ -4961,6 +4991,9 @@ def create_batch_package(display_name_override='', skip_prepare=False):
         manifest,
         routing_plan,
     )
+
+    if legacy.current_project_engine() == 'rpgmaker_mv':
+        manifest['mv_coverage_report'] = file_jobs.adapter_snapshot.report.to_dict()
 
     manifest_path = os.path.join(package_dir, 'manifest.json')
     manifest['_manifest_path'] = manifest_path
@@ -9308,12 +9341,22 @@ def validate_batch_translation_plan_before_dispatch(manifest, *, operation='subm
                 details={'request_index': index, 'chunk_key': str(chunk.get('key') or '')},
             )
 
-    current_jobs = collect_pending_file_jobs(
-        include_complete_files=True,
-        include_occurrences=False,
-        include_task_payloads=False,
-    )
-    current_identity = _batch_plan_source_identity(current_jobs).to_dict()
+    if _is_mv_sync_manifest(manifest):
+        from execution.mv_batch import snapshot_for_manifest
+        from execution.mv_sync import source_identity
+        snapshot = snapshot_for_manifest(legacy, manifest, load_manifest, _require_mv_batch_safe_check)
+        manifest['_mv_snapshot'] = snapshot
+        current_identity = source_identity(snapshot).to_dict()
+        # snapshot_for_manifest has checked the complete material identity,
+        # including exact receipts of earlier split writes when applicable.
+        current_identity['material_identity'] = plan['source_identity']['material_identity']
+    else:
+        current_jobs = collect_pending_file_jobs(
+            include_complete_files=True,
+            include_occurrences=False,
+            include_task_payloads=False,
+        )
+        current_identity = _batch_plan_source_identity(current_jobs).to_dict()
     reasons = translation_plan.source_identity_differences(
         plan.get('source_identity') or {},
         current_identity,
@@ -9467,6 +9510,10 @@ def submit_manifest(
                 print(f'Uploaded file: {uploaded_file_name}')
 
             print(f"Creating batch job with model: {manifest['batch_model']}")
+            if _is_mv_sync_manifest(manifest):
+                # Upload can outlive the original scan; do not create paid
+                # work from MV material that changed while uploading.
+                validate_batch_translation_plan_before_dispatch(manifest)
             batch_job = client.batches.create(
                 model=manifest['batch_model'],
                 src=uploaded_file_name,
@@ -13673,12 +13720,17 @@ def _is_mv_sync_manifest(manifest):
 def _mv_snapshot_for_manifest(manifest):
     """Bind canonical MV occurrences to both frozen roots for offline check."""
     from execution.mv_sync import material_identity, require_material_fresh
-    if not manifest.get('durable_sync_source'):
-        raise ValueError('MV results require the durable Sync check/apply route.')
+    if (not manifest.get('durable_sync_source')
+            and manifest['translation_plan'].get('execution_strategy') != 'gemini_batch'):
+        raise ValueError('MV results require a bound Batch or durable Sync plan.')
     if '_mv_snapshot' not in manifest:
-        snapshot = legacy.current_mv_sync_snapshot()
-        expected = manifest['translation_plan']['source_identity'].get('material_identity') or {}
-        require_material_fresh(expected, material_identity(snapshot))
+        if manifest.get('durable_sync_source'):
+            snapshot = legacy.current_mv_sync_snapshot()
+            expected = manifest['translation_plan']['source_identity'].get('material_identity') or {}
+            require_material_fresh(expected, material_identity(snapshot))
+        else:
+            from execution.mv_batch import snapshot_for_manifest
+            snapshot = snapshot_for_manifest(legacy, manifest, load_manifest, _require_mv_batch_safe_check)
         manifest['_mv_snapshot'] = snapshot
     return manifest['_mv_snapshot']
 
@@ -14066,8 +14118,6 @@ def _reject_export_only_unsupported(manifest=None, *, durable_target=False):
                 'manifest_mode': manifest_mode(manifest),
             },
         )
-
-
 def _prepare_export_only_transaction(manifest, export_root):
     package_dir = manifest.get('_package_dir') or ''
     export_journal = os.path.join(
@@ -14307,6 +14357,13 @@ def _reject_export_option_unsupported(manifest=None, *, option, durable_target=F
         else 'EXPORT_OPTION_UNSUPPORTED_MODE'
     )
     mode_label = 'export-only' if export_only_option else 'apply-export'
+    if isinstance(manifest, dict) and _is_mv_sync_manifest(manifest):
+        raise cli_contract.MachineContractError(
+            f'MV Batch does not support {option}; apply to its independent target copy.',
+            code_name=target_code, suggested_action='apply_to_bound_mv_target',
+            semantic_exit_code=cli_contract.EXIT_USAGE,
+            details={'mode': mode_label, 'target_kind': 'rpgmaker_mv', 'option': option},
+        )
     if durable_target or (
         isinstance(manifest, dict)
         and (
@@ -15256,6 +15313,28 @@ def _prepare_apply_export_transaction(manifest):
     return os.path.join(package_dir, '.apply_export_transaction.json')
 
 
+def _require_mv_batch_safe_check(manifest):
+    translation_plan.validate_plan_fingerprint(manifest['translation_plan'])
+    require_safe_check_for_apply(manifest, update_latest=False)
+
+
+def _finish_mv_batch_apply(manifest, receipt):
+    """Recover progress and split navigation from the committed file receipt."""
+    for relative, item_ids in receipt['translated_by_file'].items():
+        update_progress(relative, item_ids)
+    manifest['applied_at'] = receipt['applied_at']
+    manifest['apply_summary'] = receipt['apply_summary']
+    manifest.pop('last_apply_failure_report_path', None)
+    next_part = mark_next_split_after_apply(manifest)
+    save_manifest(manifest, update_latest=not bool(next_part))
+    if next_part:
+        remember_latest_manifest(next_part)
+    print(f"Applied files: {receipt['apply_summary']['applied_files']}")
+    print(f"Applied lines: {receipt['apply_summary']['applied_lines']}")
+    print_next_split_after_apply(next_part)
+    return manifest
+
+
 def apply_results(target=None, force=False, export_only=None, export_dir=None):
     if export_only is not None and export_dir is not None:
         raise cli_contract.MachineContractError(
@@ -15535,6 +15614,13 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
         manifest,
         update_latest=not export_requested,
     )
+    if _is_mv_sync_manifest(manifest):
+        from execution.mv_batch import read_receipt, snapshot_for_manifest
+        receipt = read_receipt(manifest, _require_mv_batch_safe_check)
+        if receipt is not None:
+            snapshot_for_manifest(legacy, manifest, load_manifest, _require_mv_batch_safe_check,
+                                  own_receipt=receipt)
+            return _finish_mv_batch_apply(manifest, receipt)
     if export_root is not None:
         export_transaction_path, export_recovery_state = _prepare_export_only_transaction(
             manifest,
@@ -15584,13 +15670,19 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
         file_path = resolve_manifest_file_path(manifest, file_key, file_info)
         source_document = _source_document_from_path(file_key, file_path)
         lines = source_document.lines()
-        replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
-            manifest,
-            file_key,
-            replacements,
-            lines,
-            summary,
-        )
+        if _is_mv_sync_manifest(manifest):
+            # JSON addresses and mirrors were validated against both MV roots;
+            # Ren'Py line/span validation must not reinterpret those addresses.
+            line_numbers_set = {str(action[6]) for actions in replacements.values() for action in actions}
+            revalidation_failures, revalidated_skipped, revalidated_mismatches = [], 0, 0
+        else:
+            replacements, line_numbers_set, revalidation_failures, revalidated_skipped, revalidated_mismatches = validate_replacements_for_lines(
+                manifest,
+                file_key,
+                replacements,
+                lines,
+                summary,
+            )
         line_numbers_set.update(translated_lines_by_file.get(file_key, set()))
         if revalidated_skipped:
             summary['valid_items'] = max(0, summary['valid_items'] - revalidated_skipped)
@@ -15645,10 +15737,7 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
     rendered_by_file = {}
     if adapter_plan is not None and adapter_snapshot is not None:
         rendered_by_file = _normalize_adapter_rendered_files(
-            render_writeback_plan(
-                adapter_plan,
-                adapter_snapshot.project.source_documents,
-            )
+            _render_adapter_plan(adapter_plan, adapter_snapshot)
         )
         _require_adapter_render_targets(
             revalidated_replacements_by_file,
@@ -15895,13 +15984,40 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
             print(f"Failures logged: {len(failure_entries)}")
         return manifest
 
+    mv_receipt = None
     if writeback_files:
+        guards = {}
+        if _is_mv_sync_manifest(manifest):
+            from execution.mv_batch import build_receipt, commit_guards, prior_split_outputs, receipt_path
+
+            prior_outputs = prior_split_outputs(manifest, load_manifest, _require_mv_batch_safe_check,
+                                               require_previous=True)
+
+            def validate_checked_mv_batch():
+                current = load_manifest(manifest['_manifest_path'])
+                _require_mv_batch_safe_check(current)
+                if prior_split_outputs(current, load_manifest, _require_mv_batch_safe_check,
+                                       require_previous=True) != prior_outputs:
+                    raise ValueError('MV Batch earlier split outputs changed during commit.')
+
+            guards = commit_guards(manifest, adapter_snapshot, writeback_files,
+                config_file=legacy.TRANSLATOR_CONFIG, check_validator=validate_checked_mv_batch,
+                prior_outputs=prior_outputs)
+            mv_receipt = build_receipt(manifest, writeback_files, revalidated_line_numbers_by_file,
+                                      summary, applied_at=datetime.now().isoformat(timespec='seconds'))
+            path = str(receipt_path(manifest))
+            guards['expected_preimages'][path] = None
+            writeback_files.append((path, [json.dumps(mv_receipt, ensure_ascii=False, indent=2) + '\n']))
         atomic_write_many_lines(
             writeback_files,
             journal_path=transaction_path,
             encoding='utf-8',
             transaction_kind='apply',
+            **guards,
         )
+
+    if mv_receipt is not None:
+        return _finish_mv_batch_apply(manifest, mv_receipt)
 
     for file_key, line_numbers_set in revalidated_line_numbers_by_file.items():
         file_path = revalidated_file_paths[file_key]
@@ -15916,7 +16032,7 @@ def apply_results(target=None, force=False, export_only=None, export_dir=None):
     summary['pending_lines'] = applied_lines
 
     rag_apply_summary = {}
-    if RAG_ENABLED and rag_jobs:
+    if RAG_ENABLED and rag_jobs and not _is_mv_sync_manifest(manifest):
         rag_apply_summary = sync_rag_store_for_jobs(rag_jobs, quality_state='batch_applied')
 
     # A real workspace apply supersedes the latest export-only operation.  The
@@ -16838,6 +16954,17 @@ def sync_rag_store_for_jobs(
 def prepare_rag_store(file_jobs):
     if not RAG_ENABLED:
         return {'enabled': False}
+    snapshot = getattr(file_jobs, 'adapter_snapshot', None)
+    if snapshot is not None and snapshot.project.engine == 'rpgmaker_mv':
+        from execution.mv_preprocessing import inspect_store, store_paths
+        paths = store_paths(_read_translator_config_object(), legacy.TRANSLATOR_CONFIG,
+                            execution='gemini_batch')
+        status = inspect_store(snapshot, paths['history'], current_batch_embedding_settings(),
+                               'history', enabled=True)
+        # Only explicitly reviewed MV history may be published. Never seed a
+        # Ren'Py history scanner from JSON or from newly applied MV targets.
+        return {**status, 'enabled': True, 'store_dir': str(paths['history']),
+                'bootstrap_on_build': False, 'bootstrap_requested': RAG_BOOTSTRAP_ON_BUILD}
     store = get_rag_store()
     summary = {
         'enabled': True,
@@ -16873,11 +17000,14 @@ def print_rag_bootstrap_summary(summary):
         'pending',
         'embedding_pending',
         'reused_embeddings',
+        'resumed_embeddings',
+        'checkpointed_embeddings',
         'embedded',
         'upserted',
         'history_records_before',
         'history_records_after',
         'action',
+        *BOOTSTRAP_DIAGNOSTIC_FIELDS,
     ):
         if key in summary:
             print(f'- {key}: {summary[key]}')
@@ -16953,6 +17083,8 @@ def print_source_index_bootstrap_summary(summary):
         'scanned',
         'history_records_before',
         'reused_embeddings',
+        'resumed_embeddings',
+        'checkpointed_embeddings',
         'embedding_pending',
         'embedded',
         'upserted',
@@ -16960,6 +17092,7 @@ def print_source_index_bootstrap_summary(summary):
         'prune_enabled',
         'pruned',
         'history_records_after',
+        *BOOTSTRAP_DIAGNOSTIC_FIELDS,
     ):
         if key in summary:
             print(f'- {key}: {summary[key]}')
@@ -16967,10 +17100,14 @@ def print_source_index_bootstrap_summary(summary):
         print(f"- error: {summary['error']}")
 
 
-def bootstrap_source_index(skip_prepare=False, prune=True):
+def bootstrap_source_index(skip_prepare=False, prune=True, strategy=''):
     if legacy.current_project_engine() == 'rpgmaker_mv':
-        from execution.mv_preprocessing import bootstrap
-        return bootstrap(legacy, 'source', prune=prune)
+        from execution.mv_preprocessing import bootstrap, context_execution
+        return bootstrap(legacy, 'source', prune=prune,
+            execution=context_execution(_read_translator_config_object(), strategy),
+            embedding_source=sys.modules[__name__])
+    if strategy and strategy != 'gemini_batch':
+        raise ValueError('Ren\'Py bootstrap uses Gemini Batch context settings.')
     if not skip_prepare:
         legacy.run_prepare_steps()
     if not os.path.isdir(legacy.TL_DIR):
@@ -17109,12 +17246,16 @@ def bootstrap_source_index(skip_prepare=False, prune=True):
     return summary
 
 
-def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None):
+def bootstrap_rag_store(skip_prepare=False, seed_jsonl_paths=None, strategy=''):
     if legacy.current_project_engine() == 'rpgmaker_mv':
-        from execution.mv_preprocessing import bootstrap
-        summary = bootstrap(legacy, 'history', seed_jsonl=seed_jsonl_paths or ())
+        from execution.mv_preprocessing import bootstrap, context_execution
+        summary = bootstrap(legacy, 'history', seed_jsonl=seed_jsonl_paths or (),
+            execution=context_execution(_read_translator_config_object(), strategy),
+            embedding_source=sys.modules[__name__])
         print_rag_bootstrap_summary(summary)
         return summary
+    if strategy and strategy != 'gemini_batch':
+        raise ValueError('Ren\'Py bootstrap uses Gemini Batch context settings.')
     if not RAG_ENABLED:
         summary = {'enabled': False}
         print_rag_bootstrap_summary(summary)
@@ -17818,7 +17959,61 @@ def write_manifest_file(package_dir, manifest, update_latest=True):
     return manifest_path
 
 
-def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *, routing_plan=None):
+def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *,
+                              routing_plan=None, retry_unknown=False, keyword_snapshot=None):
+    """Execute frozen rows, durably saving each keyword provider response.
+
+    Keyword recovery holds a package lock and refuses unacknowledged unknown
+    dispatches. Valid completed results are restored separately; only failed,
+    missing or incomplete blocks enter the current processing queue.
+    """
+    from foundation.atomic_io import exclusive_file_lock
+    from execution.keyword_checkpoint import KeywordCheckpoint, checkpoint_binding
+    manifest = load_manifest(manifest_path)
+    if manifest_mode(manifest) != MANIFEST_MODE_KEYWORD_EXTRACTION:
+        return _execute_sync_request_rows(
+            manifest_path, request_rows, api_key_index, routing_plan=routing_plan)
+    from execution.mv_preprocessing import keyword_material_checker
+    material_check = keyword_material_checker(legacy, manifest, snapshot=keyword_snapshot)
+    for path, expected in (manifest.get('keyword_source_files') or {}).items():
+        if file_sha256(path) != expected:
+            raise ValueError('Keyword source changed; start a new run.')
+    with exclusive_file_lock(os.path.join(manifest['_package_dir'], 'sync_keywords.lock'), timeout=0.1):
+        checkpoint = KeywordCheckpoint(manifest['_package_dir'],
+            checkpoint_binding(manifest, request_rows), retry_unknown=retry_unknown)
+        return _execute_sync_request_rows(
+            manifest_path, request_rows, api_key_index, routing_plan=routing_plan,
+            keyword_checkpoint=checkpoint, material_check=material_check)
+
+
+def _record_restored_keyword_summary(summary, result_row, chunk):
+    """Include restored results in full-run totals without processing them again."""
+    summary['successful_request_count'] += 1
+    summary['contract_final_complete_chunks'] += 1
+    diagnostics = result_row.get('contract_diagnostics') or {}
+    attempts = result_row.get('provider_response_attempts') or []
+    first = attempts[0] if attempts else {}
+    summary['contract_first_pass_complete_chunks'] += int(
+        (first.get('contract_diagnostics') or {}).get('complete') is True)
+    summary['max_tokens_count'] += int(result_row.get('finish_reason') == 'MAX_TOKENS')
+    if result_row.get('finish_reason') == 'MAX_TOKENS':
+        bump_counter(summary['reason_counts'], 'max_tokens')
+    summary['missing_text_count'] += int(
+        (result_row.get('output_diagnostics') or {}).get('empty_text') is True)
+    if diagnostics.get('targeted_retry_count'):
+        summary['targeted_retry_requests'] += 1
+        summary['targeted_retry_items'] += len(chunk.get('items') or [])
+    for attempt in attempts:
+        record_sync_output_summary(summary, attempt.get('output_diagnostics') or {})
+        for field in ('reason_counts', 'diagnostic_counts'):
+            bucket = summary.setdefault(field, {})
+            for reason, count in contract_diagnostics_counts(
+                    attempt.get('contract_diagnostics'), field).items():
+                bump_counter(bucket, reason, count)
+
+
+def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *,
+                               routing_plan=None, keyword_checkpoint=None, material_check=None):
     """Execute one complete, unique request row for every manifest chunk.
 
     Full coverage is validated before any provider call so the rewritten result
@@ -17920,20 +18115,57 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
             'contract_final_valid_items': 0,
         })
     result_rows = []
-    for index, row in enumerate(request_rows, start=1):
+    from execution.keyword_checkpoint import KeywordCheckpointError
+
+    pending_rows = request_rows
+    if keyword_checkpoint is not None:
+        resume_plan = keyword_checkpoint.plan(request_rows)
+        for key in resume_plan.restored:
+            restored = keyword_checkpoint.restore(key)
+            result_rows.append(restored)
+            _record_restored_keyword_summary(summary, restored, chunk_map[key])
+        pending_rows = resume_plan.pending
+        print(f'Sync keyword queue: total={len(request_rows)}; '
+              f'reused={len(resume_plan.restored)}; pending={len(pending_rows)}; '
+              f'failed={resume_plan.failed}; incomplete={resume_plan.incomplete}.', flush=True)
+
+    def dispatch_request(key, phase, request):
+        def send():
+            return run_sync_request(request, route, plan=plan, api_key_index=api_key_index)
+        if keyword_checkpoint is None:
+            return send()
+
+        def validate_material():
+            print(f'Sync keyword phase: validating {key}', flush=True)
+            try:
+                material_check()
+                for path, expected in (manifest.get('keyword_source_files') or {}).items():
+                    if file_sha256(path) != expected:
+                        raise ValueError('Keyword source changed; start a new run.')
+            except (OSError, ValueError) as exc:
+                raise KeywordCheckpointError(str(exc)) from exc
+            print(f'Sync keyword phase: waiting {key}', flush=True)
+
+        return keyword_checkpoint.call(key, phase, request, send, before_dispatch=validate_material)
+
+    def print_keyword_progress():
+        if keyword_checkpoint is not None:
+            print(f'Sync keyword saved: {len(keyword_checkpoint.saved_keys)}/{len(request_rows)} '
+                  f'requests; resumed={keyword_checkpoint.resumed_chunks}.', flush=True)
+
+    print_keyword_progress()
+    for index, row in enumerate(pending_rows, start=1):
         key = row.get('key', f'sync-{index}')
-        chunk = requested_chunks[index - 1]
+        chunk = chunk_map[key]
         from execution.mv_preprocessing import require_keyword_material
-        require_keyword_material(legacy, manifest)
-        print(f'[{index}/{len(request_rows)}] {key}')
+        if keyword_checkpoint is None:
+            require_keyword_material(legacy, manifest)
+        print(f'[{index}/{len(pending_rows)}] {key}', flush=True)
+        if keyword_checkpoint is not None:
+            keyword_checkpoint.begin_repair(key)
         result_row = {'key': key}
         try:
-            result = run_sync_request(
-                row.get('request') or {},
-                route,
-                plan=plan,
-                api_key_index=api_key_index,
-            )
+            result = dispatch_request(key, 'first_pass', row.get('request') or {})
             result_row['response'] = result.get('response_payload') or {}
             result_row['response_semantics'] = {
                 'response': 'first_pass_provider_payload',
@@ -17992,6 +18224,11 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
                 ] = first_contract.to_diagnostics()
             except Exception as exc:
                 first_error = exc
+                if keyword_checkpoint is not None:
+                    result_row['provider_response_attempts'][0]['contract_diagnostics'] = {
+                        'complete': False,
+                        'reason_counts': {contract_error_reason(exc, 'response_contract_error'): 1},
+                    }
                 bump_counter(
                     summary['reason_counts'],
                     contract_error_reason(exc, 'response_contract_error'),
@@ -18012,25 +18249,23 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
 
             final_contract = first_contract
             if retry_ids:
-                retry_row, retry_chunk = _targeted_sync_request_row(
-                    manifest,
-                    chunk,
-                    retry_ids,
-                    model=effective_model,
-                )
+                if keyword_checkpoint is not None:
+                    # Keyword retries cover the whole chunk. Keep the original
+                    # frozen prompt/schema even after a restart or config edit.
+                    retry_chunk = {**chunk, 'key': f'{key}-targeted-001'}
+                    retry_row = {'key': retry_chunk['key'], 'request': row.get('request') or {}}
+                else:
+                    retry_row, retry_chunk = _targeted_sync_request_row(
+                        manifest, chunk, retry_ids, model=effective_model)
                 summary['targeted_retry_requests'] += 1
                 summary['targeted_retry_items'] += len(retry_chunk.get('items') or [])
                 print(
                     f"  targeted retry: {len(retry_chunk.get('items') or [])} items"
                 )
-                require_keyword_material(legacy, manifest)
+                if keyword_checkpoint is None:
+                    require_keyword_material(legacy, manifest)
                 try:
-                    retry_result = run_sync_request(
-                        retry_row.get('request') or {},
-                        route,
-                        plan=plan,
-                        api_key_index=api_key_index,
-                    )
+                    retry_result = dispatch_request(key, 'targeted_retry', retry_row.get('request') or {})
                     result_row['provider_response_attempts'].append({
                         'kind': 'targeted_retry',
                         'item_ids': [
@@ -18074,6 +18309,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
                             contract_mode,
                         )
                     )
+                except KeywordCheckpointError:
+                    raise
                 except Exception as exc:
                     error_category = sync_error_category(exc)
                     result_row['provider_response_attempts'].append({
@@ -18134,6 +18371,8 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
                         ): 1
                     },
                 }
+        except KeywordCheckpointError:
+            raise
         except Exception as exc:
             error_category = sync_error_category(exc)
             summary['failed_request_count'] += 1
@@ -18148,12 +18387,26 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
                 result_row['request_metadata'] = request_metadata
             print(f"  error: {result_row['error']}")
         result_rows.append(result_row)
+        if keyword_checkpoint is not None:
+            keyword_checkpoint.complete(key, result_row)
+            print_keyword_progress()
+            print(f'Sync keyword progress: {index}/{len(pending_rows)} pending blocks processed.',
+                  flush=True)
 
+    result_order = {key: index for index, key in enumerate(requested_keys)}
+    result_rows.sort(key=lambda row: result_order[row['key']])
     atomic_write_jsonl(result_path, result_rows, ensure_ascii=False)
     content_sha = file_sha256(result_path)
     atomic_write_text(f'{result_path}.sha256', content_sha + '\n')
 
     manifest['sync_completed_at'] = datetime.now().isoformat(timespec='seconds')
+    if keyword_checkpoint is not None:
+        summary['resumed_request_count'] = keyword_checkpoint.resumed_chunks
+        summary['checkpointed_request_count'] = len(keyword_checkpoint.saved_keys)
+        summary['reused_response_count'] = keyword_checkpoint.reused_attempts
+        summary['restored_request_count'] = len(resume_plan.restored)
+        summary['pending_request_count'] = len(pending_rows)
+        summary['processed_pending_request_count'] = len(pending_rows)
     if keyword_contract:
         expected = summary['contract_expected_chunks']
         summary['contract_first_pass_chunk_completeness'] = (
@@ -18293,7 +18546,36 @@ def sync_keyword_candidates(
     output_summary_jsonl='',
     output_summary_markdown='',
     api_key_index=None,
+    resume='',
+    retry_unknown=False,
 ):
+    """Start a keyword run, or replay saved responses and dispatch missing ones."""
+    print('Sync keyword phase: scanning', flush=True)
+    if resume:
+        if display_name_override or not skip_prepare or chunk_size or max_candidates_per_chunk or limit or offset:
+            raise ValueError('--resume cannot change prepare, source range or keyword generation settings.')
+        manifest = load_manifest(resume)
+        if (manifest_mode(manifest) != MANIFEST_MODE_KEYWORD_EXTRACTION
+                or manifest.get('execution') != 'sync'
+                or manifest.get('keyword_checkpoint_version') != 1):
+            raise ValueError('This is not a resumable sync keyword run; old runs without checkpoints must start again.')
+        if not os.path.isfile(os.path.join(manifest['_package_dir'], 'keyword_checkpoint', 'binding.json')):
+            raise ValueError('Keyword checkpoint is missing; saved responses cannot be safely recovered.')
+        for name, current in (('base_dir', legacy.BASE_DIR), ('tl_dir', legacy.TL_DIR)):
+            if os.path.normcase(os.path.realpath(manifest.get(name) or '')) != os.path.normcase(os.path.realpath(current)):
+                raise ValueError('Keyword run belongs to another project.')
+        with open(manifest['input_jsonl_path'], encoding='utf-8') as handle:
+            request_rows = [json.loads(line) for line in handle if line.strip()]
+        print(f"Sync keyword run: {manifest['_package_dir']}", flush=True)
+        manifest = execute_sync_request_rows(manifest['_manifest_path'], request_rows,
+            api_key_index=api_key_index, retry_unknown=retry_unknown)
+        export = export_keyword_candidates(target=manifest['_manifest_path'],
+            output_jsonl=output_jsonl, output_markdown=output_markdown,
+            output_summary_jsonl=output_summary_jsonl,
+            output_summary_markdown=output_summary_markdown)
+        return {**(export or {}), 'manifest_path': manifest['_manifest_path']}
+    if retry_unknown:
+        raise ValueError('--retry-unknown requires --resume <MANIFEST>.')
     from execution.mv_sync import material_identity as mv_material_identity
     mv_snapshot = legacy.current_mv_sync_snapshot() if legacy.current_project_engine() == 'rpgmaker_mv' else None
     if mv_snapshot is not None and not skip_prepare:
@@ -18345,6 +18627,9 @@ def sync_keyword_candidates(
             'thinking_level': BATCH_THINKING_LEVEL,
         },
         extra_fields={
+            'keyword_checkpoint_version': 1,
+            'keyword_source_files': ({job['file_path']: file_sha256(job['file_path'])
+                                      for job in file_jobs} if mv_snapshot is None else {}),
             **({'mv_preprocessing_identity': mv_material_identity(mv_snapshot)}
                if mv_snapshot is not None else {}),
             'keyword_settings': {
@@ -18354,11 +18639,13 @@ def sync_keyword_candidates(
         },
         routing_plan=routing_plan,
     )
+    print(f"Sync keyword run: {os.path.dirname(manifest_path)}", flush=True)
     manifest = execute_sync_request_rows(
         manifest_path,
         request_rows,
         api_key_index=api_key_index,
         routing_plan=routing_plan,
+        keyword_snapshot=mv_snapshot,
     )
     print(f"Sync keyword run: {manifest['_package_dir']}")
     export = export_keyword_candidates(
@@ -18511,6 +18798,9 @@ def _repair_protection_trace(job, response_text, result_items):
 
 
 def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2, api_key_index=None):
+    from engine_adapters.project_config import read_project_configuration, require_engine_operation
+    require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'repair',
+                             config_file=legacy.TRANSLATOR_CONFIG, game_root=legacy.BASE_DIR)
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.SYNC,
         required_stages={model_profile.STAGE_TRANSLATION},
@@ -20839,7 +21129,7 @@ def collect_doctor_report():
 
 
 def collect_mv_doctor_report():
-    """Diagnose the scoped MV Sync route without Ren'Py prepare or retrieval."""
+    """Diagnose the saved MV Batch/Sync route without prepare or retrieval."""
     from engine_adapters.project_config import read_project_configuration
     from engine_adapters.project_setup import mv_project_setup_status
     config = read_project_configuration(legacy.TRANSLATOR_CONFIG)
@@ -20861,7 +21151,10 @@ def collect_mv_doctor_report():
     issues = []
     snapshot = None
     coverage = None
+    strategy = 'sync'
     try:
+        from execution.mv_preprocessing import context_execution
+        strategy = context_execution(config)
         snapshot = legacy.current_mv_sync_snapshot(require_review=False)
         coverage = summarize_coverage_for_doctor(snapshot, review_path=resolve_coverage_review_path())
         if snapshot.review_error:
@@ -20879,18 +21172,21 @@ def collect_mv_doctor_report():
                 details={'review_status': review_status,
                          'review_path': resolve_coverage_review_path(),
                          'review_error': snapshot.review_error}))
-        if legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF:
+        unsupported_context = ((STORY_MEMORY_ENABLED or PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF)
+            if strategy == 'gemini_batch' else
+            (legacy.SYNC_STORY_MEMORY_ENABLED or legacy.SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF))
+        if unsupported_context:
             issues.append(_engine_status_issue('engine.mv.context_unsupported', 'error',
                 'MV does not support Story Memory or Project Analysis injection; disable these layers.',
-                suggested_action='configure_context'))
+                suggested_action='configure_context', details={'execution_strategy': strategy}))
     except (ValueError, OSError) as exc:
         issues.append(_engine_status_issue('engine.mv.material_invalid', 'error', str(exc),
                                           suggested_action='configure_mv_project'))
     routing = collect_doctor_model_routing_status()
     routing_warnings = [
-        f"Model routing preflight [{issue['code']}] (sync/{issue.get('stage') or 'profile'}): {issue['message']}"
+        f"Model routing preflight [{issue['code']}] ({strategy}/{issue.get('stage') or 'profile'}): {issue['message']}"
         for issue in routing.get('issues') or []
-        if issue.get('execution_strategy') == 'sync' and issue.get('stage') in {'', None, 'translation'}]
+        if issue.get('execution_strategy') == strategy and issue.get('stage') in {'', None, 'translation'}]
     blocked = bool(issues)
     report = {
         'base_dir': legacy.BASE_DIR, 'tl_dir': legacy.TL_DIR, 'tl_subdir': '',
@@ -20905,10 +21201,11 @@ def collect_mv_doctor_report():
         'coverage': coverage,
         'model_routing': routing, 'recommendations': [],
         'engine_status': {'engine': 'rpgmaker_mv',
+            'execution_strategy': strategy,
             'adapter_version': snapshot.adapter.adapter_version if snapshot is not None else '',
             'status': 'blocked' if blocked else 'ready', 'issues': issues,
-            'supported_routes': ['durable_sync', 'sync_keywords', 'bootstrap_source_index', 'bootstrap_rag'],
-            'unsupported_routes': ['gemini_batch', 'legacy_sync', 'external_work', 'revision', 'batch_keywords', 'story_memory', 'project_analysis'],
+            'supported_routes': ['gemini_batch', 'durable_sync', 'sync_keywords', 'bootstrap_source_index', 'bootstrap_rag'],
+            'unsupported_routes': ['legacy_sync', 'external_work', 'revision', 'batch_keywords', 'story_memory', 'project_analysis'],
             'runtime_acceptance': 'unverified'},
         'warnings': routing_warnings, 'workflow_state': '', 'mv_setup': setup,
     }
@@ -20923,7 +21220,8 @@ def collect_mv_doctor_report():
                       pending_file_count=len(snapshot.pending_tasks_by_file),
                       translated_task_count=total - pending, total_task_count=total)
         if not blocked:
-            report['workflow_state'] = (doctor_rec.START_PENDING_SYNC if pending else doctor_rec.MV_SCOPE_NO_PENDING)
+            report['workflow_state'] = ((doctor_rec.START_PENDING_BATCH if strategy == 'gemini_batch'
+                                        else doctor_rec.START_PENDING_SYNC) if pending else doctor_rec.MV_SCOPE_NO_PENDING)
     return report
 
 
@@ -21281,7 +21579,7 @@ def _manifest_target_language_fields(source_manifest=None):
 
 def print_banner():
     print('=' * 60)
-    print('RPG Maker MV narrative translator (durable Sync)' if legacy.current_project_engine() == 'rpgmaker_mv'
+    print('RPG Maker MV translator (Gemini Batch / durable Sync)' if legacy.current_project_engine() == 'rpgmaker_mv'
           else 'Gemini Batch Translator (Ren\'Py)')
     print(f'Base dir: {legacy.BASE_DIR}')
     print(f'TL subdir: {legacy.TL_SUBDIR}')
@@ -21386,7 +21684,7 @@ def add_durable_sync_output_arguments(command_parser):
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
-        description='Translation workbench: Ren\'Py Batch / Sync and scoped RPG Maker MV durable Sync.'
+        description='Translation workbench: Ren\'Py and scoped RPG Maker MV Batch / durable Sync.'
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     subparsers = parser.add_subparsers(dest='command', required=True)
@@ -21920,13 +22218,17 @@ def build_arg_parser():
 
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
-        description='Prebuild the history store. MV reports embedding requests, validation and persistence stages.',
+        description='Prebuild the history store. MV saves each embedding batch and resumes matching checkpoints on rerun; only a fully validated store becomes ready. Failures include safe exception, stage and batch diagnostics in text/JSON output.',
         help=(
-            'Prebuild Batch history from TL files, or MV Sync history from explicit reviewed JSONL. '
-            'MV uses sync.rag embedding/profile settings and never infers history from target text. '
+            'Prebuild Batch history from TL files, or MV history from explicit reviewed JSONL. '
+            'MV uses the selected strategy\'s embedding settings and never infers history from target text. '
             'Missing or incompatible embedding identity rebuilds the '
             'store and does not reuse existing vectors.'
         ),
+    )
+    bootstrap_rag_parser.add_argument(
+        '--strategy', choices=('sync', 'gemini_batch'), default='',
+        help='MV context scope. Defaults to the saved execution strategy, or sync for legacy MV configs. Ren\'Py supports gemini_batch.',
     )
     bootstrap_rag_parser.add_argument(
         '--skip-prepare',
@@ -21943,8 +22245,12 @@ def build_arg_parser():
 
     bootstrap_source_index_parser = subparsers.add_parser(
         'bootstrap-source-index',
-        help='Prebuild source-only index: Batch TL originals or MV audited source occurrences using sync embedding settings.',
-        description='Prebuild the source-only index. MV reports embedding requests, validation and persistence stages.',
+        help='Prebuild source-only index: Batch TL originals or MV audited source occurrences with the selected strategy\'s embedding settings.',
+        description='Prebuild the source-only index. MV saves each embedding batch and resumes matching checkpoints on rerun; only a fully validated store becomes ready. Failures include safe exception, stage and batch diagnostics in text/JSON output.',
+    )
+    bootstrap_source_index_parser.add_argument(
+        '--strategy', choices=('sync', 'gemini_batch'), default='',
+        help='MV context scope. Defaults to the saved execution strategy, or sync for legacy MV configs. Ren\'Py supports gemini_batch.',
     )
     bootstrap_source_index_parser.add_argument(
         '--skip-prepare',
@@ -22431,7 +22737,7 @@ def build_arg_parser():
     profiles_models_parser = subparsers.add_parser(
         'profiles-list-models',
         help=(
-            'Fetch the provider model list for an openai_compatible ModelProfile '
+            'Fetch the provider model list for a Gemini, LiteLLM or openai_compatible ModelProfile '
             '(read-only discovery; manual model ids remain valid).'
         ),
     )
@@ -22440,13 +22746,13 @@ def build_arg_parser():
         '--profile',
         required=True,
         metavar='PROFILE_ID',
-        help='openai_compatible ModelProfile whose provider model list is fetched.',
+        help='ModelProfile whose provider model list is fetched; LiteLLM requires a known native or configured catalog endpoint.',
     )
     profiles_models_parser.add_argument(
         '--timeout-seconds',
         type=int,
         default=15,
-        help='Model-list request timeout in seconds (5-600).',
+        help='Model-list timeout in seconds (5-600; shared by Gemini catalog pages).',
     )
 
     submit_parser = subparsers.add_parser('submit', help='Create and submit a batch job.')
@@ -22835,6 +23141,13 @@ def build_arg_parser():
         help='Synchronously extract keyword candidates and export JSONL/Markdown reports.',
     )
     sync_keyword_parser.add_argument('--display-name', default='', help='Override sync run display name.')
+    sync_keyword_parser.add_argument('--resume', default='', metavar='MANIFEST',
+        help='Resume a sync keyword manifest or package. Restore valid results separately; '
+             'process only missing, failed and incomplete blocks. Each explicit resume permits '
+             'one new repair round for an incomplete block; interrupted rounds reuse saved responses. '
+             'Progress counts pending blocks only.')
+    sync_keyword_parser.add_argument('--retry-unknown', action='store_true',
+        help='With --resume, explicitly permit resending interrupted requests with no saved response (may duplicate a charge).')
     sync_keyword_parser.add_argument(
         '--skip-prepare',
         action='store_true',
@@ -23271,7 +23584,7 @@ def _write_model_routing_section(config, section, *, changed, summary=None):
 
 
 def run_profile_command(args):
-    """Run one ModelProfile configuration command (offline, no provider calls)."""
+    """Run profile configuration, explicit catalog discovery or acknowledged probing."""
 
     from providers import model_profiles_editor as profiles_editor
 
@@ -23341,7 +23654,7 @@ def run_profile_command(args):
         return report
 
     if command == 'profiles-list-models':
-        from providers import openai_compatible_model_catalog as catalog
+        from providers import profile_model_catalog as catalog
         from providers.sync_model_backend import SyncBackendError
 
         _require_valid_routing_section(section, command)
@@ -23894,10 +24207,10 @@ def _run_translate_preflight(args):
         strategy = str(defaults.get('execution_strategy') or '').strip()
     mv_mode = legacy.current_project_engine() == 'rpgmaker_mv'
     strategy = strategy or ('sync' if mv_mode else 'gemini_batch')
-    if mv_mode and strategy != 'sync':
-        raise cli_contract.MachineContractError('MV narrative mode requires durable Sync.',
-            code_name='ENGINE_ROUTE_UNSUPPORTED', suggested_action='use_sync_strategy',
-            semantic_exit_code=cli_contract.EXIT_BLOCKED)
+    if mv_mode and strategy == 'gemini_batch':
+        from execution.mv_batch import require_supported_context
+        require_supported_context(story_memory=STORY_MEMORY_ENABLED,
+                                  project_analysis=PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF)
 
     context = legacy.prepare_sync_translation_execution_context(
         prepare=False,
@@ -24194,7 +24507,7 @@ def _run_translate_preflight(args):
         from execution.mv_preprocessing import context_status
         from engine_adapters.project_config import read_project_configuration
         payload['context_preparation'] = context_status(read_project_configuration(legacy.TRANSLATOR_CONFIG),
-            legacy.TRANSLATOR_CONFIG, snapshot=context.adapter_snapshot)
+            legacy.TRANSLATOR_CONFIG, snapshot=context.adapter_snapshot, execution=strategy)
         for name in ('source_index', 'history'):
             state = payload['context_preparation'][name]
             if state.get('enabled') and not state.get('prepared'):
@@ -24934,10 +25247,12 @@ def dispatch_command(parser, args):
         )
 
     if command == 'bootstrap-rag':
-        return bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl)
+        return bootstrap_rag_store(skip_prepare=args.skip_prepare, seed_jsonl_paths=args.seed_jsonl,
+                                   strategy=getattr(args, 'strategy', ''))
 
     if command == 'bootstrap-source-index':
-        summary = bootstrap_source_index(skip_prepare=args.skip_prepare, prune=(not args.no_prune))
+        summary = bootstrap_source_index(skip_prepare=args.skip_prepare, prune=(not args.no_prune),
+                                         strategy=getattr(args, 'strategy', ''))
         print_source_index_bootstrap_summary(summary)
         return summary
 
@@ -25133,6 +25448,8 @@ def dispatch_command(parser, args):
             output_summary_jsonl=args.summary_jsonl,
             output_summary_markdown=args.summary_markdown,
             api_key_index=args.api_key_index,
+            resume=args.resume,
+            retry_unknown=args.retry_unknown,
         )
 
     if command == 'sync-revisions':

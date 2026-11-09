@@ -117,8 +117,10 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(page.widget.verticalScrollBar().value(), 0)
         for control in (page.default_profile_combo, page.default_strategy_combo):
             self.assert_in_viewport(control, page.widget.viewport())
-        self.assertLess(page.defaults_group.y(), page.profiles_group.mapTo(page.body, QPoint(0, 0)).y())
-        self.assertLess(page.defaults_group.y(), page.notice_group.y())
+        self.assertEqual(page.section_tabs.currentIndex(), 0)
+        self.assertFalse(page.profiles_group.isVisible())
+        self.assertFalse(page.providers_group.isVisible())
+        self.assertFalse(page.notice_group.isVisible())
         self.assert_in_viewport(page.readiness_label, page.widget.viewport())
         self.assertIn("未验证", page.readiness_label.text())
         alternate = editor.profile_ids(self.config["model_routing"])[1]
@@ -152,7 +154,15 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(nav.count(), 11)
         self.assertFalse(nav.isWrapping())
         # Force overflow with room for each label, independent of platform fonts.
-        widest = max(nav.visualItemRect(nav.item(index)).width() for index in range(nav.count()))
+        widest = max(
+            nav.visualItemRect(nav.item(index)).width()
+            for index in range(nav.count())
+            if not nav.item(index).isHidden()
+        )
+        self.assertEqual(
+            {key for index, (key, _label, _builder) in enumerate(_SETTINGS_PAGE_SPECS) if nav.item(index).isHidden()},
+            {"models", "litellm"},
+        )
         margins = nav.contentsMargins()
         nav.setFixedWidth(2 * widest + margins.left() + margins.right())
         self.process()
@@ -182,6 +192,12 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(self.window._settings_coordinator.active_key, "advanced")
         for index, (key, label, _builder) in enumerate(_SETTINGS_PAGE_SPECS):
             item = nav.item(index)
+            if item.isHidden():
+                self.window._focus_settings_section(key)
+                self.process()
+                self.assertEqual(nav.currentRow(), index)
+                self.assertEqual(self.window._settings_coordinator.active_key, key)
+                continue
             nav.scrollToItem(item)
             self.process()
             rect = nav.visualItemRect(item)
@@ -217,6 +233,7 @@ class SettingsEntryTests(unittest.TestCase):
                 self.assertEqual(len({
                     nav.visualItemRect(nav.item(index)).top()
                     for index in range(nav.count())
+                    if not nav.item(index).isHidden()
                 }), 1)
                 nav.setFocus()
                 QTest.keyClick(nav, Qt.Key.Key_End)
@@ -270,6 +287,8 @@ class SettingsEntryTests(unittest.TestCase):
 
     def test_model_list_detail_reflow_keeps_selection_and_unfinished_text(self) -> None:
         page = self.window._profiles_page()
+        page.section_tabs.setCurrentIndex(1)
+        self.process()
         page.profiles_list.setCurrentRow(1)
         selected = page.profiles_list.currentItem().data(Qt.ItemDataRole.UserRole)
         page.profile_model_edit.setText("original-long-model-id/" * 12)
@@ -280,10 +299,10 @@ class SettingsEntryTests(unittest.TestCase):
             self.process()
             list_pos = page.profiles_group.mapTo(page.body, QPoint(0, 0))
             detail_pos = page.profile_editor_group.mapTo(page.body, QPoint(0, 0))
-            if size[0] == 1920:
+            if size[0] in (1280, 1920):
                 self.assertGreater(detail_pos.x(), list_pos.x() + page.profiles_group.width())
                 self.assertEqual(detail_pos.y(), list_pos.y())
-                self.assertLess(page.profile_label_edit.width(), page.profile_model_edit.width())
+                self.assertGreater(page.profile_model_combo.width(), 200)
             elif size[0] == 960:
                 self.assertGreater(detail_pos.y(), list_pos.y())
             self.assertEqual(page.profiles_list.currentItem().data(Qt.ItemDataRole.UserRole), selected)
@@ -293,9 +312,62 @@ class SettingsEntryTests(unittest.TestCase):
             page.widget.ensureWidgetVisible(page.profile_model_edit)
             self.process()
             self.assert_in_viewport(page.profile_model_edit, page.widget.viewport())
+            page.section_tabs.setCurrentIndex(2)
+            self.process()
             page.widget.ensureWidgetVisible(page.provider_base_url_edit)
             self.process()
             self.assert_in_viewport(page.provider_base_url_edit, page.widget.viewport())
+            page.section_tabs.setCurrentIndex(1)
+            self.process()
+        self.save_mock.assert_not_called()
+
+    def test_model_editor_sections_are_keyboard_reachable_without_saving(self) -> None:
+        page = self.window._profiles_page()
+        original = page.collect()
+        page.section_tabs.setFocus()
+        for index, control in ((1, page.profile_model_edit), (2, page.provider_base_url_edit)):
+            QTest.keyClick(page.section_tabs, Qt.Key.Key_Right)
+            self.process()
+            self.assertEqual(page.section_tabs.currentIndex(), index)
+            self.assertTrue(control.isVisible())
+            page.widget.ensureWidgetVisible(control)
+            self.process()
+            self.assert_in_viewport(control, page.widget.viewport())
+        self.assertEqual(page.collect(), original)
+        self.save_mock.assert_not_called()
+
+    def test_direct_entry_returns_from_connection_editor_to_defaults(self) -> None:
+        page = self.window._profiles_page()
+        page.section_tabs.setCurrentIndex(2)
+        self.process()
+        page.widget.verticalScrollBar().setValue(page.widget.verticalScrollBar().maximum())
+        self.window._focus_settings_section("profiles")
+        self.process()
+        self.assertEqual(page.section_tabs.currentIndex(), 0)
+        self.assertEqual(page.widget.verticalScrollBar().value(), 0)
+        self.assert_in_viewport(page.default_profile_combo, page.widget.viewport())
+        self.save_mock.assert_not_called()
+
+    def test_catalog_refresh_requires_saved_connection_but_allows_model_edits(self) -> None:
+        page = self.window._profiles_page()
+        profile_id = page._selected_profile_id
+        provider_id = page._selected_provider_id
+        page._section = editor.update_provider(
+            page._section, provider_id, base_url="https://new.example/v1",
+        )
+        with mock.patch.object(self.window, "_start_cli_command") as start, mock.patch(
+            "gui_qt.app.message_box_information",
+        ) as explain:
+            self.window._on_profile_models({"profile_id": profile_id})
+        start.assert_not_called()
+        explain.assert_called_once()
+        self.assertIn("保存", explain.call_args.args[1])
+        page.load(self.config)
+        page.profile_model_edit.setText("unlisted-new-model")
+        page.profile_model_edit.editingFinished.emit()
+        with mock.patch.object(self.window, "_start_cli_command", return_value=True) as start:
+            self.window._on_profile_models({"profile_id": profile_id})
+        start.assert_called_once()
         self.save_mock.assert_not_called()
 
     def test_load_states_remain_distinct_and_legacy_expansion_survives_navigation_reload(self) -> None:

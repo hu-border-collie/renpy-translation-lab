@@ -1,3 +1,4 @@
+from pathlib import Path
 import unittest
 
 from gui_qt.appearance.theme_helpers import (
@@ -5,12 +6,15 @@ from gui_qt.appearance.theme_helpers import (
     THEME_DARK,
     THEME_LIGHT,
     THEME_SYSTEM,
+    clear_stylesheet_cache,
+    load_theme_stylesheet,
     normalize_theme_preference,
     read_gui_theme_from_config,
     resolve_effective_theme,
     theme_stylesheet_filename,
     write_gui_theme_to_config,
 )
+from gui_qt.appearance.theme_tokens import DARK_TOKENS, LIGHT_TOKENS
 
 
 class GuiThemeHelperTests(unittest.TestCase):
@@ -47,6 +51,21 @@ class GuiThemeHelperTests(unittest.TestCase):
         self.assertEqual(config["gui"]["theme"], THEME_DARK)
         self.assertEqual(config["gui"]["other"], 1)
         self.assertEqual(config["sync"]["model"], "x")
+
+    def test_light_and_dark_tokens_share_identical_keys(self):
+        self.assertEqual(set(LIGHT_TOKENS.keys()), set(DARK_TOKENS.keys()))
+
+    def test_rendered_stylesheet_resolves_all_tokens_and_uses_solid_surfaces(self):
+        clear_stylesheet_cache()
+        resources_dir = Path(__file__).resolve().parents[3] / "gui_qt" / "resources"
+        for theme in (THEME_LIGHT, THEME_DARK):
+            with self.subTest(theme=theme):
+                css = load_theme_stylesheet(resources_dir, theme)
+                self.assertNotIn("${", css)
+                self.assertNotIn("qlineargradient", css)
+                self.assertIn("QFrame#translation_target_section", css)
+                self.assertIn('QLabel#task_page_notice[tone="info"]', css)
+                self.assertIn('QLabel#doctor_status_label[status="idle"]', css)
 
 
 if __name__ == "__main__":

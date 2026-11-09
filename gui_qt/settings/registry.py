@@ -52,6 +52,7 @@ class SettingsPageSpec:
     config_page: bool = False
     config_keys: frozenset[str] = frozenset()
     immediate_action_ids: frozenset[str] = frozenset()
+    primary_nav: bool = True
 
 
 SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
@@ -84,6 +85,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
         "模型",
         "_create_models_settings_page",
         config_page=True,
+        primary_nav=False,
         config_keys=frozenset(
             {
                 "sync_model",
@@ -107,6 +109,7 @@ SETTINGS_PAGE_SPEC_OBJECTS: tuple[SettingsPageSpec, ...] = (
         "LiteLLM",
         "_create_litellm_settings_page",
         config_page=True,
+        primary_nav=False,
         config_keys=frozenset(
             {
                 "sync_backend",
@@ -168,6 +171,10 @@ SETTINGS_PAGE_SPECS: tuple[tuple[str, str, str], ...] = tuple(
 
 SETTINGS_CONFIG_PAGE_KEYS: frozenset[str] = frozenset(
     spec.key for spec in SETTINGS_PAGE_SPEC_OBJECTS if spec.config_page
+)
+
+SETTINGS_PRIMARY_NAV_KEYS: frozenset[str] = frozenset(
+    spec.key for spec in SETTINGS_PAGE_SPEC_OBJECTS if spec.primary_nav
 )
 
 # Kept as a derived view for existing app helpers. The registry methods are the

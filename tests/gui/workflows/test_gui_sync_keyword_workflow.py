@@ -34,6 +34,13 @@ class GuiSyncKeywordWorkflowTests(unittest.TestCase):
 
         self.assertIsNone(workflow.current_step())
 
+    def test_resume_uses_same_package_and_only_explicit_unknown_ack(self):
+        workflow = SyncKeywordWorkflow.resume_manifest("C:/fixture/manifest.json")
+        self.assertEqual(workflow.current_step().args,
+                         ["sync-keywords", "--resume", "C:/fixture/manifest.json"])
+        workflow = SyncKeywordWorkflow.resume_manifest("C:/fixture/manifest.json", retry_unknown=True)
+        self.assertEqual(workflow.current_step().args[-1], "--retry-unknown")
+
 
 if __name__ == "__main__":
     unittest.main()

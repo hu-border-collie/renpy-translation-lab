@@ -1,3 +1,5 @@
+<img src="gui_qt/resources/branding/app-icon.png" alt="Ren'Py Translation Lab 图标" width="96" height="96">
+
 # Ren'Py Translation Lab
 
 面向视觉小说（以 Ren'Py 为主生产支持，底层具备 Engine Adapter 扩展架构）的翻译工作台：Gemini Batch 作业流、上下文增强、轻量 RAG 记忆层，以及写回前安全校验。
@@ -9,6 +11,7 @@
 - **GUI**（`python -m gui_qt`）：普通用户的推荐入口，覆盖项目准备、翻译、检查、问题处理和安全写回。
 - **Batch CLI**（`gemini_translate_batch.py`）：Agent 与自动化主路径，覆盖 `build / submit / status / probe / download / check / apply / split / repair` 等。
 - **统一翻译（GUI/CLI）**：先选主模型（ModelProfile），再选执行方式（同步 / Gemini Batch）；同一模型与凭据可切换策略而不复制配置。CLI 用 `gemini_translate_batch.py sync-start --profile <ID>` / `build --profile <ID>`，模型与阶段路由在 GUI「设置 → 模型与供应商」或 `profiles-*` 命令维护。
+- **RPG Maker MV**：已审阅文本范围可走 [Gemini Batch 或耐久 Sync](docs/rpgmaker_mv_sync.md)，使用独立源／目标、控制码与选项镜像保护及同一安全写回门禁；真实游戏验收另行完成。
 - **同步 CLI**（`gemini_translate.py`，兼容入口）：保留可用，但不再持久化可恢复 run；新任务请使用耐久 `sync-start` → `check <RUN>` → `apply <RUN>`，详见 [同步翻译工作流](docs/sync_workflow.md)。
 - **上下文**：glossary / macro setting、RAG（`context_engine/rag_memory.py`）、可选 Story Memory（`context_engine/story_memory.py`）。
 - **共用 runtime**（`translator_runtime.py`）：配置、SDK、校验、响应解析与文件处理。

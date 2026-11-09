@@ -9,6 +9,75 @@ from gui_qt.work_modes import WORK_MODE_SPECS, WorkMode
 
 
 class ManifestResumeSummaryTests(unittest.TestCase):
+    def test_sync_keyword_pending_denominator_survives_reload_and_processing_failure(self):
+        display = build_manifest_workflow_display(
+            WORK_MODE_SPECS[WorkMode.SYNC_KEYWORD_EXTRACTION], 'C:/package/manifest.json', {
+                'job_state': 'SYNC_PARTIAL',
+                'sync_summary': {
+                    'request_count': 768, 'successful_request_count': 767,
+                    'failed_request_count': 1, 'checkpointed_request_count': 768,
+                    'contract_final_complete_chunks': 766, 'contract_partial_requests': 1,
+                    'restored_request_count': 655, 'pending_request_count': 113,
+                    'processed_pending_request_count': 113,
+                },
+            })
+        self.assertEqual((display.progress.current, display.progress.total), (113, 113))
+        self.assertIn('本轮待补已处理 113/113', display.progress.label)
+        self.assertEqual(display.status, 'warning')
+        self.assertIn('完整有效请求块：766/768（99.7%）', display.facts)
+        self.assertTrue(any('已复用有效结果：655' in fact for fact in display.facts))
+
+    def test_sync_keyword_partial_progress_remains_visible_after_reload(self):
+        display = build_manifest_workflow_display(
+            WORK_MODE_SPECS[WorkMode.SYNC_KEYWORD_EXTRACTION], "C:/package/manifest.json", {
+                "job_state": "SYNC_PARTIAL",
+                "sync_summary": {
+                    "request_count": 768, "successful_request_count": 559,
+                    "failed_request_count": 209, "checkpointed_request_count": 768,
+                    "contract_final_complete_chunks": 558, "contract_partial_requests": 1,
+                },
+                "keyword_export": {"summary": {
+                    "candidate_count_deduped": 2712, "chunk_summary_count": 476,
+                }},
+            },
+        )
+        self.assertEqual(display.status, "warning")
+        self.assertIn("部分完成", display.heading)
+        self.assertFalse(display.archive_when_idle)
+        self.assertEqual((display.progress.current, display.progress.total), (558, 768))
+        self.assertTrue(display.progress.visible)
+        self.assertIn("已保存处理记录：768/768", display.facts)
+        self.assertIn("服务响应：成功 559 个；失败 209 个", display.facts)
+        self.assertIn("关键词候选：2,712 个", display.facts)
+        self.assertIn("剧情概要：476 条", display.facts)
+
+    def test_completed_sync_keyword_progress_is_not_archived(self):
+        display = build_manifest_workflow_display(
+            WORK_MODE_SPECS[WorkMode.SYNC_KEYWORD_EXTRACTION], "C:/package/manifest.json", {
+                "job_state": "SYNC_COMPLETED",
+                "sync_summary": {
+                    "request_count": 3, "successful_request_count": 3,
+                    "failed_request_count": 0, "checkpointed_request_count": 3,
+                    "contract_final_complete_chunks": 3,
+                },
+            },
+        )
+        self.assertEqual(display.status, "done")
+        self.assertFalse(display.archive_when_idle)
+        self.assertEqual((display.progress.current, display.progress.total), (3, 3))
+
+    def test_interrupted_sync_keyword_progress_uses_saved_record_count(self):
+        display = build_manifest_workflow_display(
+            WORK_MODE_SPECS[WorkMode.SYNC_KEYWORD_EXTRACTION], "C:/package/manifest.json", {
+                "job_state": "SYNC_LOCAL", "summary": {"chunk_count": 5},
+                "_keyword_saved_request_count": 2,
+            },
+        )
+        self.assertEqual(display.status, "ready")
+        self.assertEqual((display.progress.current, display.progress.total), (2, 5))
+        self.assertIn("已保存处理记录", display.progress.label)
+        self.assertFalse(any("成功" in fact for fact in display.facts))
+
     def test_completed_translation_archives_when_idle(self):
         spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
         manifest = {

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 from providers import model_profile as routing
 from context_engine.embedding_runtime import parse_embedding_runtime_settings
 from providers.gemini_model_catalog import DEFAULT_GEMINI_TRANSLATION_MODEL
-from providers.litellm_provider_config import custom_provider_registry
+from providers.litellm_provider_config import custom_provider_registry, provider_display_label
 from providers.model_routing_config import legacy_fields_present, _find_sensitive_keys
 from providers.model_routing_reader import checked_section, read_routing_plan, read_embedding_settings
 
@@ -121,6 +121,12 @@ def preview_migration(
         # Adapter prefix avoids collisions between Gemini-direct and custom IDs.
         provider_id = f"{profile.adapter}-{profile.provider}"
         metadata = custom.get(profile.provider) if profile.adapter == "litellm" else None
+        label = profile.label
+        if slot in {"primary", "batch"}:
+            label = (
+                "Gemini" if profile.adapter == routing.ADAPTER_GEMINI
+                else provider_display_label(profile.provider, custom) or profile.model
+            )
         providers[provider_id] = {
             "label": metadata.label if metadata else profile.provider,
             "adapter": profile.adapter, "provider": profile.provider,
@@ -128,7 +134,7 @@ def preview_migration(
             "base_url": profile.base_url, "models_url": metadata.models_url if metadata else "",
         }
         profiles[ids[slot]] = {
-            "label": profile.label, "provider_id": provider_id, "model": profile.model,
+            "label": label, "provider_id": provider_id, "model": profile.model,
             "models": list(profile.models), "params": dict(profile.params),
             "capability_overrides": dict(profile.capability_overrides),
         }

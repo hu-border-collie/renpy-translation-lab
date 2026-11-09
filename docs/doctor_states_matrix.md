@@ -20,11 +20,11 @@ GUI 摘要另有呈现生命周期：未检查、检查中、失败、过期均�
 | 显式 Ren'Py 与 MV 材料冲突，或检测到 MZ | `engine.project_mismatch`；blocked | MV 可通过「准备 MV 项目」保存识别结果及必要材料；MZ 仍不支持。 |
 | 源／目标／窗口缺失、漂移或不可读 | `engine.mv.material_invalid`；blocked | 扫描失败计数为未知，不补零。 |
 | 覆盖审阅缺失、pending、stale 或不满足 policy | `engine.mv.scope_review_required`；blocked；`details.review_status` 区分状态 | 保留已测计数，禁止启动；GUI 提示待覆盖核对，导出／导入入口位于完整详情之前，底层读取错误仅放详情。 |
-| 开启 MV StoryMemory／Project Analysis 注入 | `engine.mv.context_unsupported`；blocked | 关闭相关层后重新检查。 |
-| 原文索引／历史库禁用或缺失 | `mv_preparation.*.status=disabled/missing`；`prepared=false`，计数 null | 已启用但未准备时 preflight warning；耐久 Sync 降级为空检索。 |
+| 保存的默认执行方式开启 MV StoryMemory／Project Analysis 注入 | `engine.mv.context_unsupported`；blocked | 关闭对应 Sync / Batch 的相关层后重新检查。 |
+| 默认执行方式的原文索引／历史库禁用或缺失 | `mv_preparation.*.status=disabled/missing`；`prepared=false`，计数 null | 已启用但未准备时 preflight warning；Sync / Batch 降级为空检索。 |
 | 源、范围或审阅输入漂移（含 `reviewed_history_file` 切换／清空）／embedding 身份不兼容／准备失败 | `stale/incompatible/failed`；`prepared=false`，计数 null | 显式重新 bootstrap；不能显示为 ready。 |
 | 当前身份的库实际准备完成 | `ready`；`prepared=true`，实际计数（含 0） | 实际检索零命中另记 `zero_hits`；空库为 `prepared_empty_store`。 |
-| 材料和独立审阅有效，存在待处理叙事条目 | `start_pending_sync` | 翻译开放耐久 Sync；预处理另有同步关键词及两种 bootstrap。 |
+| 材料和独立审阅有效，存在待处理叙事条目 | 默认 Batch 为 `start_pending_batch`，否则 `start_pending_sync` | 翻译开放 Gemini Batch 与耐久 Sync；预处理另有同步关键词及两种 bootstrap。 |
 | 当前已审阅叙事范围无待处理条目 | `mv_scope_no_pending` | 全游戏覆盖和原生验收仍未确认。 |
 
 这是环境检查的最底层，决定项目所处的物理阶段，也是判定是否存在“阻断级”异常的基础。

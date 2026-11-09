@@ -267,7 +267,7 @@ class KeywordsPage(QFrame):
         self.set_controls(
             start_enabled=False,
             resume_enabled=False,
-            resume_visible=self._active_mode == WorkMode.KEYWORD_EXTRACTION,
+            resume_visible=True,
             resume_label="继续提取",
             merge_enabled=False,
             merge_message="项目已切换；请先完成环境检查并重新提取关键词。",

@@ -285,10 +285,12 @@ class ContextLibraryPage(QFrame):
             + ("" if source_index_enabled else " · 请先在设置 · 上下文开启并保存")
         )
         if project_analysis_status and 'mv_preparation' in project_analysis_status:
-            from gui_qt.user_copy import mv_context_status_label
+            from gui_qt.user_copy import mv_context_status_label, MV_PREPARATION_COPY
             preparation = project_analysis_status['mv_preparation']
-            self.rag_status_row.set_status(mv_context_status_label(preparation.get('history')))
-            self.source_index_status_row.set_status(mv_context_status_label(preparation.get('source_index')))
+            strategy = 'Gemini Batch' if preparation.get('execution_strategy') == 'gemini_batch' else '同步'
+            scope = MV_PREPARATION_COPY['scope'].format(strategy=strategy)
+            self.rag_status_row.set_status(scope + ' · ' + mv_context_status_label(preparation.get('history')))
+            self.source_index_status_row.set_status(scope + ' · ' + mv_context_status_label(preparation.get('source_index')))
         if project_analysis_label:
             analysis_text = project_analysis_label
         elif project_analysis_status is not None:

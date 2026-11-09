@@ -6,7 +6,96 @@ import re
 from gui_qt.reports.check_report import WritebackSummary
 from gui_qt.workflows.translation_workflow import WorkflowUpdate
 from gui_qt.reports.sync_usage_report import collect_sync_usage_facts
-from gui_qt.user_copy import MODEL_CONTRACT_COPY
+from gui_qt.reports.workflow_progress import WorkflowProgressState
+from gui_qt.user_copy import MODEL_CONTRACT_COPY, SYNC_KEYWORD_COPY
+
+
+def _count(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _sync_keyword_manifest_counts(manifest: dict) -> tuple[int, int | None, int | None, int | None, int | None]:
+    summary = manifest.get('sync_summary')
+    summary = summary if isinstance(summary, dict) else {}
+    source = manifest.get('summary')
+    source = source if isinstance(source, dict) else {}
+    total = _count(summary.get('request_count'))
+    if total is None:
+        total = _count(source.get('chunk_count')) or 0
+    saved = _count(summary.get('checkpointed_request_count'))
+    if saved is None:
+        saved = _count(manifest.get('_keyword_saved_request_count'))
+    successful = _count(summary.get('successful_request_count'))
+    failed = _count(summary.get('failed_request_count'))
+    valid = _count(summary.get('contract_final_complete_chunks'))
+    if valid is None and successful is not None:
+        valid = max(0, successful - (_count(summary.get('contract_partial_requests')) or 0))
+    return total, saved, successful, failed, valid
+
+
+def summarize_sync_keyword_manifest(manifest: dict[str, object]) -> WorkflowUpdate:
+    """Restore saved extraction statistics without treating saved errors as success."""
+    total, saved, successful, failed, valid = _sync_keyword_manifest_counts(manifest)
+    summary = manifest.get('sync_summary')
+    summary = summary if isinstance(summary, dict) else {}
+    incomplete = _count(summary.get('contract_partial_requests')) or 0
+    partial = manifest.get('job_state') == 'SYNC_PARTIAL' or bool(failed) or bool(incomplete)
+    completed = manifest.get('job_state') == 'SYNC_COMPLETED'
+    prefix = 'partial' if partial else 'completed' if completed else 'ready'
+    facts: list[str] = []
+    restored = _count(summary.get('restored_request_count'))
+    if restored is not None:
+        facts.extend((SYNC_KEYWORD_COPY['task_total'].format(count=total),
+                      SYNC_KEYWORD_COPY['restored_valid'].format(count=restored)))
+    if saved is not None and total:
+        facts.append(SYNC_KEYWORD_COPY['saved_records'].format(current=saved, total=total))
+    if successful is not None and failed is not None:
+        facts.append(SYNC_KEYWORD_COPY['response_counts'].format(successful=successful, failed=failed))
+    if valid is not None and total:
+        facts.append(SYNC_KEYWORD_COPY['valid_progress'].format(
+            current=valid, total=total, percent=100 * valid / total))
+    if incomplete:
+        facts.append(SYNC_KEYWORD_COPY['incomplete_responses'].format(count=incomplete))
+    export = manifest.get('keyword_export')
+    counts = export.get('summary') if isinstance(export, dict) else None
+    if isinstance(counts, dict):
+        for key, label in (('candidate_count_deduped', 'candidates'), ('chunk_summary_count', 'summaries')):
+            count = _count(counts.get(key))
+            if count is not None:
+                facts.append(SYNC_KEYWORD_COPY[label].format(count=count))
+    return WorkflowUpdate(
+        status='warning' if partial else 'done' if completed else 'ready',
+        heading=SYNC_KEYWORD_COPY[f'{prefix}_heading'],
+        message=SYNC_KEYWORD_COPY[f'{prefix}_message'],
+        facts=facts,
+    )
+
+
+def sync_keyword_progress_from_manifest(manifest: dict[str, object]) -> WorkflowProgressState:
+    """Keep the latest pending-queue denominator; support pre-queue manifests."""
+    summary = manifest.get('sync_summary')
+    summary = summary if isinstance(summary, dict) else {}
+    pending = _count(summary.get('pending_request_count'))
+    processed = _count(summary.get('processed_pending_request_count'))
+    if pending is not None and processed is not None:
+        current = min(processed, pending)
+        label = (SYNC_KEYWORD_COPY['pending_processed'].format(
+            current=current, total=pending, percent=100 * current / pending)
+            if pending else SYNC_KEYWORD_COPY['exporting_restored'])
+        return WorkflowProgressState(
+            kind='sync_keywords', current=current, total=pending, label=label,
+            visible=pending > 0,
+        )
+    total, saved, _successful, _failed, valid = _sync_keyword_manifest_counts(manifest)
+    current = valid if valid is not None else saved
+    label = ''
+    if current is not None and total:
+        key = 'valid_progress' if valid is not None else 'saved_records'
+        label = SYNC_KEYWORD_COPY[key].format(current=current, total=total, percent=100 * current / total)
+    return WorkflowProgressState(
+        kind='sync_keywords', current=current or 0, total=total, label=label,
+        visible=current is not None and total > 0,
+    )
 
 
 def summarize_keyword_export_output(output: str, exit_code: int) -> WorkflowUpdate:
@@ -179,6 +268,14 @@ def _collect_export_facts(output: str) -> list[str]:
 
 def _collect_sync_facts(output: str) -> list[str]:
     facts = _collect_export_facts(output)
+    saved = re.findall(r"^Sync keyword saved: (\d+)/(\d+) requests; resumed=(\d+)\.$",
+                       output, re.MULTILINE)
+    if saved:
+        current, total, resumed = saved[-1]
+        facts.extend([
+            SYNC_KEYWORD_COPY['saved_records'].format(current=current, total=total),
+            SYNC_KEYWORD_COPY['resumed'].format(count=resumed),
+        ])
     run_match = re.search(r"^Sync keyword run:\s*(.+?)\s*$", output, re.MULTILINE)
     if run_match:
         facts.insert(0, f"同步输出目录：{run_match.group(1).strip()}")

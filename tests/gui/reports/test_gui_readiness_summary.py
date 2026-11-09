@@ -414,7 +414,7 @@ class ReadinessSummaryTests(unittest.TestCase):
             payload = batch.run_translate_preflight(
                 batch.build_arg_parser().parse_args(["translate-preflight", "--strategy", "sync"])
             )
-        self.window._on_cli_line_ready(
+        self.window.runner.stdout_line_ready.emit(
             json.dumps(
                 cli_contract.success_envelope(
                     "translate-preflight", status=payload["status"], result=payload
@@ -461,6 +461,35 @@ class ReadinessSummaryTests(unittest.TestCase):
             cli.assert_not_called()
         self.provider.assert_not_called()
 
+    def test_preprocessing_uses_saved_settings_and_refreshes_both_executions(self):
+        config = dict(self.config, batch={"source_index": {"enabled": True}}, sync={"rag": {"enabled": True}})
+        self.window.state.config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.window._refresh_translation_target_choices()
+        for section in self.window._translation_target_sections.values():
+            self.assertEqual(section.preprocessing_label.text().splitlines()[0], "已开启：原文索引")
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        for section in self.window._translation_target_sections.values():
+            self.assertEqual(section.preprocessing_label.text().splitlines()[0], "已开启：历史译文检索（RAG）")
+        config["sync"]["rag"]["enabled"] = False
+        self.window.state.config_path.write_text(json.dumps(config), encoding="utf-8")
+        self.window._load_config_to_ui(pages=set())
+        for section in self.window._translation_target_sections.values():
+            self.assertIn("已开启：无可选增强", section.preprocessing_label.text())
+        self.provider.assert_not_called()
+
+    def test_preprocessing_settings_navigation_preserves_unsaved_context_edits(self):
+        self.window._focus_settings_section("context")
+        page = self.window._context_page()
+        page.rag_enabled_cb.setChecked(True)
+        self.window._sync_readiness_display()
+        for section in self.window._translation_target_sections.values():
+            self.assertIn("未开启：历史译文检索（RAG）", section.preprocessing_label.text())
+        self.window._translation_target_sections[WorkMode.BATCH_TRANSLATION].context_settings_btn.click()
+        self.assertEqual(self.window.settings_nav.currentRow(), self.window._settings_nav_rows["context"])
+        self.assertTrue(page.rag_enabled_cb.isChecked())
+        self.assertEqual(json.loads(self.window.state.config_path.read_text(encoding="utf-8")), self.config)
+        self.provider.assert_not_called()
+
     def test_layout_at_small_regular_and_wide_sizes(self):
         from PySide6.QtGui import QFont
         from gui_qt.appearance.theme import apply_theme
@@ -498,10 +527,10 @@ class ReadinessSummaryTests(unittest.TestCase):
                     QApplication.processEvents()
                 QTest.qWait(150)
                 section = self.window._translation_target_sections[mode]
-                label = section.readiness_label
-                self.assertTrue(label.isVisible())
-                self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
-                self.assertTrue(section.rect().contains(label.geometry()))
+                for label in (section.readiness_label, section.preprocessing_label):
+                    self.assertTrue(label.isVisible())
+                    self.assertGreaterEqual(label.height(), label.heightForWidth(label.width()))
+                    self.assertTrue(section.rect().contains(label.geometry()))
                 if evidence_dir:
                     self.assertTrue(
                         self.window.grab().save(
