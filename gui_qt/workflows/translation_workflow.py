@@ -6,12 +6,15 @@ existing command-line tool through ``CliRunner``.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 
+from execution.batch_resume import TERMINAL_FAILURE_STATES
 from foundation import cli_contract
+from foundation.project_asset_paths import canonical_abs_path
 
 from gui_qt.workflows.batch_workflow_support import (
     build_recover_submit_cli_args,
@@ -22,25 +25,17 @@ from gui_qt.workflows.batch_workflow_support import (
     machine_output_args,
     output_blocked_by_max_cost,
     output_blocked_by_uncertain_submit,
-    plan_unsubmitted_workflow_steps,
     uncertain_submit_failure_message,
 )
 from gui_qt.user_copy import (
+    BATCH_CHECK_WORKFLOW_COPY,
     check_status_label,
     format_job_state_fact,
     format_manifest_path_fact,
     format_quality_gate_fact,
-    format_safety_fact,
     job_state_label,
     safety_level_label,
 )
-
-TERMINAL_FAILURE_STATES = {
-    "JOB_STATE_FAILED",
-    "JOB_STATE_CANCELLED",
-    "JOB_STATE_EXPIRED",
-}
-
 
 @dataclass(frozen=True)
 class WorkflowStep:
@@ -92,6 +87,8 @@ def build_export_writeback_cli_args(
 STEP_TEXT = {
     "build": ("正在准备翻译内容", "正在扫描待翻译文本并准备待提交内容。"),
     "submit": ("正在提交翻译任务", "正在上传请求文件并创建云端批量任务。"),
+    "resume-submit": ("正在继续提交翻译任务", "正在使用已上传的请求创建云端批量任务。"),
+    "inspect": ("正在读取批量任务", "正在读取 CLI 给出的下一步。"),
     "recover-submit": ("正在恢复提交状态", "正在从提交日志恢复远端批量任务信息。"),
     "status": ("正在刷新任务状态", "正在查询云端任务处理状态。"),
     "download": ("正在获取翻译结果", "任务已完成，正在下载结果文件。"),
@@ -154,21 +151,6 @@ def extract_check_status(output: str) -> str:
         if isinstance(status, str) and status.strip():
             return status.strip()
     return _extract_line_value(output, "Check status:") or extract_safety_status(output)
-
-
-def extract_writeback_gate(output: str) -> str:
-    envelope = _result_envelope(output)
-    if envelope:
-        check = envelope.get("result")
-        if isinstance(check, Mapping):
-            check = check.get("check")
-        if isinstance(check, Mapping):
-            gate = check.get("writeback_gate")
-            if isinstance(gate, Mapping):
-                decision = gate.get("decision")
-                if isinstance(decision, str):
-                    return decision.strip()
-    return _extract_line_value(output, "Writeback gate:")
 
 
 def extract_quality_gate(output: str) -> dict[str, object]:
@@ -308,79 +290,12 @@ class TranslationWorkflow:
     def resume_manifest(
         cls,
         manifest_path: str,
-        manifest: dict[str, object],
         *,
         submit_max_cost: float | None = None,
+        retry_parent_manifest_path: str = "",
     ) -> "TranslationWorkflow":
-        retry_parent = _stripped(manifest.get("retry_of_manifest"))
-        if retry_parent:
-            return cls.resume_retry_manifest(
-                manifest_path,
-                manifest,
-                retry_parent,
-                submit_max_cost=submit_max_cost,
-            )
-        if manifest.get("last_check") or manifest.get("last_check_summary"):
-            return cls([], manifest_path=manifest_path, submit_max_cost=submit_max_cost)
-        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
-            return cls(
-                ["download", "check"],
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-            )
-        if not manifest.get("job_name"):
-            return cls(
-                plan_unsubmitted_workflow_steps(manifest_path),
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-            )
-        return cls.resume_latest(manifest_path, submit_max_cost=submit_max_cost)
-
-    @classmethod
-    def resume_retry_manifest(
-        cls,
-        manifest_path: str,
-        manifest: dict[str, object],
-        retry_parent_manifest_path: str,
-        *,
-        submit_max_cost: float | None = None,
-    ) -> "TranslationWorkflow":
-        check_summary = manifest.get("last_check_summary")
-        safety = ""
-        if isinstance(check_summary, dict):
-            safety = _stripped(check_summary.get("safety_level"))
-        if safety == "safe":
-            return cls(
-                ["merge-retry", "check-parent"],
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-                retry_parent_manifest_path=retry_parent_manifest_path,
-            )
-        if check_summary:
-            return cls(
-                [],
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-                retry_parent_manifest_path=retry_parent_manifest_path,
-            )
-        if manifest.get("job_state") == "JOB_STATE_SUCCEEDED":
-            return cls(
-                ["download", "check"],
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-                retry_parent_manifest_path=retry_parent_manifest_path,
-            )
-        if not manifest.get("job_name"):
-            return cls(
-                plan_unsubmitted_workflow_steps(manifest_path),
-                manifest_path=manifest_path,
-                submit_max_cost=submit_max_cost,
-                retry_parent_manifest_path=retry_parent_manifest_path,
-            )
         return cls(
-            ["status"],
-            manifest_path=manifest_path,
-            submit_max_cost=submit_max_cost,
+            ["inspect"], manifest_path=manifest_path, submit_max_cost=submit_max_cost,
             retry_parent_manifest_path=retry_parent_manifest_path,
         )
 
@@ -412,22 +327,12 @@ class TranslationWorkflow:
 
         if key == "build":
             return self._finish_build(output)
-        if key in {"submit", "recover-submit"}:
+        if key in {"submit", "resume-submit", "recover-submit"}:
             manifest_path = extract_manifest_path(output)
             if manifest_path:
                 self.manifest_path = manifest_path
-        if key == "status":
-            status_update = self._finish_status(output)
-            if status_update is not None:
-                if self.only_query and status_update.status == "running":
-                    return WorkflowUpdate(
-                        status="ready",
-                        heading="云端任务已完成",
-                        message="查询结果：云端批量任务已成功完成！请点击「继续翻译」下载并校验结果。",
-                        facts=status_update.facts,
-                        should_continue=False,
-                    )
-                return status_update
+        if key in {"inspect", "status"}:
+            return self._finish_status(key, output)
         if key == "check":
             return self._finish_check(output)
         if key == "merge-retry":
@@ -449,13 +354,13 @@ class TranslationWorkflow:
         structured_error = extract_error_message(output)
         message = structured_error or f"{STEP_TEXT[key][0]}没有正常完成，请查看下方原始输出。"
         extra_facts: list[str] = []
-        if key in {"submit", "recover-submit"} and output_blocked_by_max_cost(output):
+        if key in {"submit", "resume-submit", "recover-submit"} and output_blocked_by_max_cost(output):
             message = (
                 "提交被成本上限拦截。请在高级设置中提高「提交成本上限」，"
                 "或先拆分任务包以降低单次提交成本。"
             )
             extra_facts.append("建议：检查高级设置中的提交成本上限，或先运行 split 拆包。")
-        elif key in {"submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
+        elif key in {"submit", "resume-submit", "recover-submit"} and output_blocked_by_uncertain_submit(output):
             message = uncertain_submit_failure_message(output)
             extra_facts.append(
                 "建议：在诊断与工具运行 recover-submit，或按提示使用 --resume / --force。"
@@ -506,14 +411,59 @@ class TranslationWorkflow:
         extra_facts.extend(load_cost_estimate_facts_from_manifest(self.manifest_path))
         return self._continue_or_finish(extra_facts=extra_facts)
 
-    def _finish_status(self, output: str) -> WorkflowUpdate | None:
+    def _finish_status(self, key: str, output: str) -> WorkflowUpdate:
+        envelope = _result_envelope(output)
+        result = (
+            envelope["result"]
+            if envelope and envelope["ok"] and envelope["command"] == "status"
+            else {}
+        )
+        action = result.get("next_action")
         state = extract_job_state(output)
-        if state == "JOB_STATE_SUCCEEDED":
-            if "download" not in self._pending_steps:
-                self._pending_steps[:0] = ["download", "check"]
-            return self._continue_or_finish(
-                extra_facts=[format_job_state_fact(state)],
+        facts = [format_job_state_fact(state)]
+        if not result or "next_action" not in result:
+            if state not in TERMINAL_FAILURE_STATES and state not in {
+                "JOB_STATE_PENDING", "JOB_STATE_RUNNING",
+            }:
+                self._pending_steps.clear()
+                heading, message = BATCH_CHECK_WORKFLOW_COPY["missing_resume_action"]
+                return WorkflowUpdate("failed", heading, message, self._facts(facts))
+
+        if key == "inspect":
+            parent = _stripped(result.get("retry_parent_manifest_path"))
+            expected_parent = self.retry_parent_manifest_path
+            if expected_parent and (
+                not parent or os.path.normcase(canonical_abs_path(parent))
+                != os.path.normcase(canonical_abs_path(expected_parent))
+            ):
+                self._pending_steps.clear()
+                heading, message = BATCH_CHECK_WORKFLOW_COPY["retry_parent_mismatch"]
+                return WorkflowUpdate("failed", heading, message, self._facts(facts))
+            self.retry_parent_manifest_path = parent
+        if self.only_query and state == "JOB_STATE_SUCCEEDED":
+            self._pending_steps.clear()
+            return WorkflowUpdate(
+                status="ready",
+                heading="云端任务已完成",
+                message="查询结果：云端批量任务已完成。请点击「继续翻译」执行后续步骤。",
+                facts=self._facts(facts),
             )
+        if not self.only_query:
+            steps = {
+                "": [],
+                "check": ["check"],
+                "download": ["download", "check"],
+            }
+            if key == "inspect":
+                steps.update({
+                    "status": ["status"],
+                    "recover-submit": ["recover-submit", "status"],
+                    "submit": ["submit", "status"],
+                    "resume-submit": ["resume-submit", "status"],
+                })
+            if isinstance(action, str) and action in steps and state not in TERMINAL_FAILURE_STATES:
+                self._pending_steps[:] = steps[action]
+                return self._continue_or_finish(extra_facts=facts)
         if state in TERMINAL_FAILURE_STATES:
             self._pending_steps.clear()
             return WorkflowUpdate(
@@ -533,24 +483,35 @@ class TranslationWorkflow:
         )
 
     def _finish_check(self, output: str) -> WorkflowUpdate:
-        status = extract_check_status(output)
-        writeback_gate = extract_writeback_gate(output)
-        quality_gate = extract_quality_gate(output)
-        safety = extract_safety_status(output) or status
-        can_apply = writeback_gate == "allow" or (
-            not writeback_gate and status in {"safe", "ready", "ready_with_warnings"}
+        envelope = _result_envelope(output)
+        result = (
+            envelope["result"]
+            if envelope and envelope["ok"] and envelope["command"] == "check"
+            else {}
         )
-        facts = [format_safety_fact(safety, prefix="检查结果")]
+        check = result.get("check")
+        gate = check.get("writeback_gate") if isinstance(check, Mapping) else None
+        decision = gate.get("decision") if isinstance(gate, Mapping) else None
+        status = extract_check_status(output)
+        quality_gate = extract_quality_gate(output)
+        blocked_status = status in {"warn", "block", "blocked"}
+        label = (
+            safety_level_label(status) if status in {"safe", "warn", "block"}
+            else check_status_label(status)
+        )
+        facts = []
+        if decision == "allow" or blocked_status:
+            facts.append(f"检查结果：{label}")
         if quality_gate.get("warning_count"):
             facts.append(format_quality_gate_fact(quality_gate))
 
-        if can_apply:
-            if self.retry_parent_manifest_path:
+        if decision == "allow":
+            if self.retry_parent_manifest_path and result.get("next_action") == "merge-retry":
                 self._pending_steps[:] = ["merge-retry", "check-parent"]
-                return self._continue_or_finish(
-                    extra_facts=[format_safety_fact(safety, prefix="补译检查结果")],
-                )
-            if status == "ready_with_warnings" or quality_gate.get("warning_count"):
+                return self._continue_or_finish(extra_facts=facts)
+            if self.retry_parent_manifest_path:
+                heading, message = BATCH_CHECK_WORKFLOW_COPY["missing_retry_action"]
+            elif status == "ready_with_warnings" or quality_gate.get("warning_count"):
                 heading = "翻译结果可写回，但有质量报警"
                 message = (
                     "检查结果为可写回，但发现需要人工关注的质量问题。"
@@ -559,20 +520,23 @@ class TranslationWorkflow:
             else:
                 heading = "翻译结果检查通过"
                 message = "检查结果为可写回，可以进入写回前确认。"
-        elif status in {"warn", "block", "blocked"} or writeback_gate == "deny":
+        elif decision == "deny" or blocked_status:
             heading = "补译结果仍需处理" if self.retry_parent_manifest_path else "翻译结果需要处理"
+            check_label = (
+                label if blocked_status
+                else BATCH_CHECK_WORKFLOW_COPY["blocked_label"]
+            )
             message = (
-                f"检查结果为 {check_status_label(status)}，普通流程不应写回；"
+                f"检查结果为 {check_label}，普通流程不应写回；"
                 "请先查看问题并重试或修复。"
             )
             if self.retry_parent_manifest_path:
                 message = (
-                    f"补译包检查结果为 {safety_level_label(safety)}，暂不能合并回父任务；"
+                    f"补译包检查结果为 {check_label}，暂不能合并回父任务；"
                     "请先查看问题清单，必要时继续补译或人工处理。"
                 )
         else:
-            heading = "翻译结果检查完成"
-            message = "未能识别安全状态，请查看原始输出。"
+            heading, message = BATCH_CHECK_WORKFLOW_COPY["missing_writeback_decision"]
 
         self._pending_steps.clear()
         return WorkflowUpdate(status="done", heading=heading, message=message, facts=self._facts(facts))
@@ -595,9 +559,14 @@ class TranslationWorkflow:
         )
 
     def _args_for_step(self, key: str) -> list[str]:
+        if key == "inspect":
+            return machine_output_args(["status", self.manifest_path, "--local"])
         if key == "merge-retry":
             return machine_output_args(
-                ["merge-retry", self.retry_parent_manifest_path, self.manifest_path]
+                [
+                    "merge-retry", self.retry_parent_manifest_path, self.manifest_path,
+                    "--require-checked-retry",
+                ]
             )
         if key == "check-parent":
             return machine_output_args(["check", self.retry_parent_manifest_path])
@@ -608,8 +577,10 @@ class TranslationWorkflow:
             return machine_output_args(args)
         if not self.manifest_path:
             return [key]
-        if key == "submit":
-            return build_submit_cli_args(self.manifest_path, self.submit_max_cost)
+        if key in {"submit", "resume-submit"}:
+            return build_submit_cli_args(
+                self.manifest_path, self.submit_max_cost, resume=key == "resume-submit",
+            )
         if key == "recover-submit":
             return build_recover_submit_cli_args(self.manifest_path)
         if key in {"status", "download", "check"}:

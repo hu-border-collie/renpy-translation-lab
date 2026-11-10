@@ -2861,7 +2861,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(self.window.timeline.current_step_key, "check")
         self.assertEqual(self.window.timeline.status, "stale")
 
-    def test_refresh_workflow_from_latest_retry_safe_prompts_merge(self):
+    def test_refresh_workflow_from_latest_retry_safe_prompts_recheck(self):
         from gui_qt.work_modes import WorkMode
 
         summary_calls = self._prepare_resume_refresh(
@@ -2884,7 +2884,37 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(status, "ready")
         self.assertIn("补译后续处理", heading)
         self.assertIn("继续补译", message)
-        self.assertEqual(self.window.timeline.current_step_key, "merge-retry")
+        self.assertEqual(self.window.timeline.current_step_key, "check")
+
+    def test_retry_check_advances_without_publishing_a_writeback_summary(self):
+        from foundation import cli_contract
+        from gui_qt.workflows.translation_workflow import TranslationWorkflow
+
+        workflow = TranslationWorkflow(
+            ["check"], manifest_path="retry.json", retry_parent_manifest_path="parent.json",
+        )
+        self.window._workflow = workflow
+        self.window._workflow_step_output_lines = [json.dumps(cli_contract.success_envelope(
+            "check", status="ready",
+            result={
+                "check": {"writeback_gate": {"decision": "allow"}},
+                "next_action": "merge-retry",
+            },
+        ))]
+        self.window._invalidate_manifest_caches = mock.Mock()
+        self.window._uses_revision_writeback = lambda: False
+        self.window._update_writeback_from_check = mock.Mock()
+        self.window._set_workflow_update = mock.Mock()
+        self.window._clear_workflow_progress_ui = mock.Mock()
+        self.window._refresh_diagnostics_context = mock.Mock()
+        self.window.statusBar = mock.Mock()
+
+        with mock.patch("gui_qt.app.QTimer.singleShot") as schedule:
+            self.window._on_workflow_step_finished(0)
+
+        self.window._update_writeback_from_check.assert_not_called()
+        self.assertEqual(workflow.current_step().key, "merge-retry")
+        schedule.assert_called_once()
 
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
@@ -3070,7 +3100,7 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(focus_calls, [2])
         self.assertIn("任务已完成", status_bar.messages[-1][0])
 
-    def test_resume_after_successful_status_query_runs_download_next(self):
+    def test_resume_after_successful_status_query_inspects_local_plan_first(self):
         from gui_qt.work_modes import WorkMode
 
         manifest_path = Path("C:/dummy/manifest.json")
@@ -3122,11 +3152,11 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         script_path, args = self.window.runner.calls[0]
         self.assertEqual(script_path, Path("C:/tool/gemini_translate_batch.py"))
         self.assertEqual(
-            args, ["download", str(manifest_path), "--output", "json", "--non-interactive"]
+            args, ["status", str(manifest_path), "--local", "--output", "json", "--non-interactive"]
         )
         self.assertEqual(summary_calls[-1][0], "running")
         self.assertTrue(self.window.timeline.visible)
-        self.assertEqual(self.window.timeline.current_step_key, "download")
+        self.assertEqual(self.window.timeline.current_step_key, "inspect")
 
     def test_keyword_export_finish_refreshes_keyword_result_summary(self):
         from gui_qt.workflows.translation_workflow import WorkflowStep, WorkflowUpdate

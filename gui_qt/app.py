@@ -29,6 +29,7 @@ from PySide6.QtCore import (
     QProcessEnvironment,
     QSize,
     Qt,
+    QTemporaryDir,
     QThread,
     QThreadPool,
     QTimer,
@@ -394,7 +395,11 @@ from .settings.registry import (
     build_default_registry,
 )
 
-from gui_qt.workflows.translation_workflow import WorkflowUpdate, build_export_writeback_cli_args
+from gui_qt.workflows.translation_workflow import (
+    TranslationWorkflow,
+    WorkflowUpdate,
+    build_export_writeback_cli_args,
+)
 from gui_qt.widgets.widget_helpers import (
     message_box_information,
     message_box_question,
@@ -716,7 +721,7 @@ class MainWindow(QMainWindow):
         self._durable_status_output_lines: list[str] = []
         self._durable_status_poll_active = False
         self._durable_status_run_id = ""
-        self._durable_status_identity_warning_shown = False
+        self._durable_status_identity_dir = None
         self._durable_status_runner = None
         self._durable_status_poll_timer = QTimer(self)
         self._durable_status_poll_timer.setSingleShot(False)
@@ -6597,14 +6602,13 @@ class MainWindow(QMainWindow):
             return False
 
         try:
-            retry_manifest = self.state.load_manifest_file(resolved_retry_path)
+            self.state.load_manifest_file(resolved_retry_path)
         except ValueError as exc:
             message_box_warning(self, "无法继续补译", str(exc))
             return False
 
         workflow = create_retry_followup_workflow(
             resolved_retry_path,
-            retry_manifest,
             parent_path,
             submit_max_cost=self._submit_max_cost_from_config(),
         )
@@ -12043,7 +12047,6 @@ class MainWindow(QMainWindow):
             return
         self._pending_translation_start = None
         self._durable_status_run_id = ""
-        self._durable_status_identity_warning_shown = False
         if not isinstance(pending, Mapping):
             return
         if pending.get("readiness_identity") is not None and pending["readiness_identity"] != self._readiness_task_identity():
@@ -12186,14 +12189,18 @@ class MainWindow(QMainWindow):
         step_key = str(getattr(step, "key", "") or "")
         if step_key not in {"sync-start", "sync-resume", "sync-derive"}:
             return
-        if not self._durable_status_run_id:
-            workflow_run_id = str(
-                getattr(getattr(self, "_workflow", None), "run_id", "") or ""
-            ).strip()
-            if workflow_run_id:
-                self._durable_status_run_id = workflow_run_id
+        self._durable_status_run_id = self._workflow.run_id if step_key == "sync-resume" else ""
         self._durable_status_poll_active = True
         self._durable_status_poll_timer.start(3000)
+
+    def _durable_status_launch_args(self, step) -> list[str]:
+        if step.key not in {"sync-start", "sync-derive"} or not self._durable_status_polling_supported():
+            return step.args
+        directory = QTemporaryDir()
+        if not directory.isValid():
+            return step.args
+        self._durable_status_identity_dir = directory
+        return [*step.args, "--run-id-file", directory.filePath("run.json")]
 
     def _stop_durable_status_poll(self) -> None:
         self._durable_status_poll_active = False
@@ -12203,9 +12210,14 @@ class MainWindow(QMainWindow):
         runner = self._durable_status_runner
         if runner is not None and runner.is_active():
             runner.kill()
+        self._durable_status_identity_dir = None
 
     def _poll_durable_status(self) -> None:
         if not self._durable_status_poll_active or self._shutdown_requested:
+            return
+        if not self._durable_status_run_id:
+            self._durable_status_run_id = self._read_created_durable_run_id()
+        if not self._durable_status_run_id:
             return
         runner = self._get_durable_status_runner()
         if runner.is_active():
@@ -12215,30 +12227,24 @@ class MainWindow(QMainWindow):
             self.state.get_batch_script_path(),
             [
                 "sync-status",
-                "--latest",
+                "--run-id",
+                self._durable_status_run_id,
                 "--output",
                 "json",
                 "--non-interactive",
             ],
         )
 
-    def _capture_durable_status_run_id(self, text: str) -> None:
-        """Bind live status polling to the run announced by the CLI marker.
-
-        ``sync-status --latest`` has no run identity parameter; the durable CLI
-        emits ``RTL_DURABLE_RUN_ID`` on stderr before execution starts so the
-        poller never binds the page to a historical run.
-        """
-
-        if not getattr(self, "_durable_status_poll_active", False):
-            return
-        match = re.search(
-            r"^\s*RTL_DURABLE_RUN_ID=(\S+)\s*$",
-            str(text or ""),
-            re.MULTILINE,
-        )
-        if match:
-            self._durable_status_run_id = match.group(1).strip()
+    def _read_created_durable_run_id(self) -> str:
+        directory = getattr(self, "_durable_status_identity_dir", None)
+        if directory is None:
+            return ""
+        try:
+            identity = json.loads(Path(directory.filePath("run.json")).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        run_id = identity.get("run_id") if isinstance(identity, dict) else None
+        return run_id.strip() if isinstance(run_id, str) else ""
 
     def _on_durable_status_stdout(self, text: str) -> None:
         self._durable_status_output_lines.append(text)
@@ -12256,7 +12262,7 @@ class MainWindow(QMainWindow):
             envelope = cli_contract.parse_result_envelope(output)
         except ValueError:
             return
-        if not envelope.get("ok"):
+        if envelope["command"] != "sync-status" or not envelope["ok"]:
             return
         raw_result = envelope.get("result")
         snapshot = dict(raw_result) if isinstance(raw_result, Mapping) else {}
@@ -12266,21 +12272,7 @@ class MainWindow(QMainWindow):
             getattr(self, "_durable_status_run_id", "") or ""
         ).strip()
         snapshot_run_id = str(snapshot.get("run_id") or "").strip()
-        if not expected_run_id:
-            if not getattr(
-                self,
-                "_durable_status_identity_warning_shown",
-                False,
-            ):
-                self._durable_status_identity_warning_shown = True
-                self._append_log(
-                    "[GUI] 尚未收到本次运行的 ID，已忽略 sync-status --latest "
-                    "快照；实时进度会在运行 ID 到达后恢复。\n"
-                )
-            return
-        if snapshot_run_id != expected_run_id:
-            # ``--latest`` may still resolve a historical run before the new
-            # run is visible; never bind the current page to another identity.
+        if not expected_run_id or snapshot_run_id != expected_run_id:
             return
         page = getattr(self, "sync_translation_page", None)
         if page is None:
@@ -12357,13 +12349,16 @@ class MainWindow(QMainWindow):
                         yes_text=SYNC_KEYWORD_COPY['resume'], no_text="取消", default="no") != "yes":
                     return
                 retry_unknown = True
-        workflow = resume_workflow(
-            spec.mode,
-            str(latest_manifest),
-            manifest,
-            submit_max_cost=self._submit_max_cost_from_config(),
-            retry_unknown=retry_unknown,
-        )
+        if only_query and spec.mode == WorkMode.BATCH_TRANSLATION:
+            workflow = TranslationWorkflow.resume_latest(str(latest_manifest))
+        else:
+            workflow = resume_workflow(
+                spec.mode,
+                str(latest_manifest),
+                manifest,
+                submit_max_cost=self._submit_max_cost_from_config(),
+                retry_unknown=retry_unknown,
+            )
         if workflow is None:
             message_box_information(self, "无法继续任务", spec.not_implemented_message)
             return
@@ -13613,7 +13608,6 @@ class MainWindow(QMainWindow):
         if self._active_command == "doctor":
             self._doctor_output_lines.append(text)
         elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
-            self._capture_durable_status_run_id(text)
             self._workflow_progress = update_workflow_progress_from_line(
                 text,
                 self._workflow_progress,
@@ -13948,88 +13942,41 @@ class MainWindow(QMainWindow):
         stage = _RESOLVED_STAGE_BY_WORK_MODE.get(selected_mode)
         if not stage:
             return ""
-        try:
-            config = self.state.load_translator_config()
-        except Exception:
-            return ""
+        config = self.state.load_translator_config()
         if not isinstance(config, Mapping) or "model_routing" not in config:
             return ""
         section = config["model_routing"]
-        label = ""
-        model = ""
-        strategy = ""
-        explicit = False
-        profile_id = ""
+        if not isinstance(section, Mapping):
+            return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(
+                error=TRANSLATION_TARGET_COPY["resolved_stage_invalid_section"],
+            )
         try:
-            execution = _RESOLVED_STAGE_EXECUTION_BY_WORK_MODE.get(selected_mode)
             plan = model_profile.resolve_routing_plan_from_runtime(
                 model_routing_config=section,
                 sync_backend="",
-                execution=execution or model_profile.ExecutionStrategy.SYNC,
+                execution=_RESOLVED_STAGE_EXECUTION_BY_WORK_MODE.get(
+                    selected_mode, model_profile.ExecutionStrategy.SYNC,
+                ),
             )
-            route = plan.routes.get(stage)
-            if route is not None:
-                profile = plan.profiles.get(route.profile_id)
-                if profile is not None:
-                    profile_id = profile.id
-                    label = profile.label or profile.id
-                    model = profile.model
-                    strategy = route.strategy.value
-                    explicit = route.source in {
-                        model_profile.ROUTE_SOURCE_STAGE_CONFIG,
-                        model_profile.ROUTE_SOURCE_EXPLICIT,
-                    }
-        except Exception:
-            # Editor-created sections without legacy entrypoints cannot resolve
-            # as a legacy command plan; fall through to the editor projection.
-            pass
-        if not profile_id:
-            try:
-                from providers import model_profiles_editor as profiles_editor
-
-                routes = {
-                    str(row.get("stage") or ""): row
-                    for row in profiles_editor.resolved_routes(section)
-                }
-                route = routes.get(stage)
-                if not isinstance(route, Mapping):
-                    return TRANSLATION_TARGET_COPY["resolved_stage_unavailable"]
-                profile_id = str(route.get("profile_id") or "")
-                raw_profile = (section.get("profiles") or {}).get(profile_id)
-                raw_profile = (
-                    raw_profile if isinstance(raw_profile, Mapping) else {}
-                )
-                label = str(raw_profile.get("label") or profile_id)
-                model = str(raw_profile.get("model") or "")
-                strategy = str(route.get("strategy") or "")
-                explicit = bool(route.get("explicit"))
-            except Exception:
-                return TRANSLATION_TARGET_COPY["resolved_stage_unavailable"]
-        try:
-            strategy_label = TRANSLATION_TARGET_COPY["strategy_labels"].get(
-                strategy,
-                strategy,
-            )
-            origin = (
-                TRANSLATION_TARGET_COPY["resolved_stage_origin_explicit"]
-                if explicit
-                else TRANSLATION_TARGET_COPY["resolved_stage_origin_inherited"]
-            )
-            model_text = (
-                TRANSLATION_TARGET_COPY["resolved_stage_model_suffix"].format(
-                    model=model
-                )
-                if model
-                else ""
-            )
-            return TRANSLATION_TARGET_COPY["resolved_stage"].format(
-                label=label,
-                model=model_text,
-                strategy=strategy_label,
-                origin=origin,
-            )
-        except Exception:
+        except model_profile.ModelRoutingConfigError as exc:
+            return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(error=str(exc))
+        route = plan.routes.get(stage)
+        profile = plan.profiles.get(route.profile_id) if route is not None else None
+        if route is None or profile is None:
             return TRANSLATION_TARGET_COPY["resolved_stage_unavailable"]
+        strategy = route.strategy.value
+        explicit = route.source in {
+            model_profile.ROUTE_SOURCE_STAGE_CONFIG,
+            model_profile.ROUTE_SOURCE_EXPLICIT,
+        }
+        return TRANSLATION_TARGET_COPY["resolved_stage"].format(
+            label=profile.label or profile.id,
+            model=TRANSLATION_TARGET_COPY["resolved_stage_model_suffix"].format(model=profile.model),
+            strategy=TRANSLATION_TARGET_COPY["strategy_labels"].get(strategy, strategy),
+            origin=TRANSLATION_TARGET_COPY[
+                "resolved_stage_origin_explicit" if explicit else "resolved_stage_origin_inherited"
+            ],
+        )
 
     def _set_workflow_summary(
         self,
@@ -14127,9 +14074,12 @@ class MainWindow(QMainWindow):
         args_text = " ".join(step.args)
         command_label = f"{step.script_basename} {args_text}".strip()
         self._append_log(f"\n=== {step.heading}：{command_label} ===\n")
-        started = self._start_cli_command(self._active_command, script_path, step.args)
+        args = self._durable_status_launch_args(step)
+        started = self._start_cli_command(self._active_command, script_path, args)
         if started:
             self._maybe_start_durable_status_poll(step)
+        elif args is not step.args:
+            self._durable_status_identity_dir = None
 
     def _current_writeback_summary(self) -> WritebackSummary:
         return getattr(self, "_writeback_summary", idle_writeback_summary())
@@ -15012,6 +14962,8 @@ class MainWindow(QMainWindow):
         restore_latest_manifest_path = getattr(self._workflow, "restore_latest_manifest_path", "")
         workflow = self._workflow
         is_sync_translation_workflow = isinstance(self._workflow, SyncTranslationWorkflow)
+        if is_sync_translation_workflow and step_key in {"sync-start", "sync-derive"}:
+            workflow.created_run_id = self._read_created_durable_run_id()
         is_project_analysis_workflow = isinstance(self._workflow, ProjectAnalysisWorkflow)
         is_revision_corpus_export_workflow = isinstance(
             self._workflow,
@@ -15145,7 +15097,12 @@ class MainWindow(QMainWindow):
             if sync_candidates:
                 self._remember_keyword_merge_candidates(sync_candidates)
 
-        if _workflow_output_updates_writeback(step_key, step_output):
+        checking_retry = (
+            step_key == "check"
+            and isinstance(workflow, TranslationWorkflow)
+            and bool(workflow.retry_parent_manifest_path)
+        )
+        if not checking_retry and _workflow_output_updates_writeback(step_key, step_output):
             self._update_writeback_from_check(step_output, exit_code, manifest_path)
         if self._uses_revision_writeback() and (
             "Preview JSONL:" in step_output or "Preview Markdown:" in step_output

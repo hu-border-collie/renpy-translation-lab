@@ -397,6 +397,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("生成订正包", by_label)
         self.assertNotIn("预览订正结果", by_label)
         self.assertIn(retry_path, by_label["提交补译任务"])
+        self.assertIn(retry_path, by_label["检查补译结果"])
+        self.assertIn("--require-checked-retry", by_label["合并补译结果"])
         self.assertIn(retry_path, by_label["合并补译结果"])
 
     def test_translation_commands_include_split_child_submit_examples(self):
@@ -472,6 +474,8 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertNotIn("写回翻译（仅可写回）", by_label)
         self.assertIn(parent_path, by_label["合并补译结果"])
         self.assertIn(retry_path, by_label["合并补译结果"])
+        self.assertIn(retry_path, by_label["检查补译结果"])
+        self.assertIn("--require-checked-retry", by_label["合并补译结果"])
         self.assertIn("usage-import", by_label["导入当前结果用量"])
         self.assertIn("usage-report", by_label["查看项目模型用量"])
 

@@ -421,8 +421,11 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.assertIn("运行 ID", page.status_section.facts_label.text())
 
     def test_stopping_local_worker_locates_run_without_resuming(self) -> None:
-        self.window._on_start_translation()
-        self._finish_preflight()
+        with mock.patch.object(self.window, "_durable_status_polling_supported", return_value=True):
+            self.window._on_start_translation()
+            self._finish_preflight()
+        path = Path(self.runner.calls[1][1][-1])
+        path.write_text(json.dumps({"run_id": RUN_ID}), encoding="utf-8")
 
         self._finish_step("Traceback: local worker killed\n", exit_code=1)
         QApplication.processEvents()
@@ -430,7 +433,7 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         # The locator query is read-only: no resume, no cancel, no check.
         self.assertEqual(
             self.runner.calls[2][1],
-            ["sync-status", "--latest", "--output", "json", "--non-interactive"],
+            ["sync-status", "--run-id", RUN_ID, "--output", "json", "--non-interactive"],
         )
         commands = [args[0] for _script, args in self.runner.calls]
         self.assertNotIn("sync-resume", commands)
@@ -490,13 +493,27 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.assertFalse(self.window._durable_status_poll_active)
         self.assertFalse(self.window._durable_status_poll_timer.isActive())
 
-    def test_sync_output_captures_live_run_identity(self) -> None:
-        self.window._active_command = "translation_workflow"
+    def test_new_run_poll_uses_identity_file_and_explicit_id(self) -> None:
+        runner = mock.Mock()
+        runner.is_active.return_value = False
+        step = SimpleNamespace(key="sync-start", args=["sync-start"])
+        with mock.patch.object(self.window, "_durable_status_polling_supported", return_value=True):
+            args = self.window._durable_status_launch_args(step)
+        self.assertEqual(args[-2], "--run-id-file")
         self.window._durable_status_poll_active = True
 
-        self.window._on_cli_line_ready(f"RTL_DURABLE_RUN_ID={RUN_ID}")
+        with mock.patch.object(self.window, "_get_durable_status_runner", return_value=runner):
+            self.window._poll_durable_status()
+            runner.run.assert_not_called()
+            Path(args[-1]).write_text(json.dumps({"run_id": RUN_ID}), encoding="utf-8")
+            self.window._poll_durable_status()
 
         self.assertEqual(self.window._durable_status_run_id, RUN_ID)
+        self.assertEqual(
+            runner.run.call_args.args[1],
+            ["sync-status", "--run-id", RUN_ID, "--output", "json", "--non-interactive"],
+        )
+        self.window._stop_durable_status_poll()
 
     def test_status_poll_ignores_snapshot_before_run_identity_is_known(self) -> None:
         self.window._durable_status_poll_active = True
@@ -509,11 +526,9 @@ class DurableSyncAppWiringTests(unittest.TestCase):
             )
         ]
 
-        with mock.patch.object(self.window, "_append_log") as append_log:
-            self.window._on_durable_status_finished(0)
+        self.window._on_durable_status_finished(0)
 
         self.assertEqual(self.window.sync_translation_page.run_id(), "")
-        append_log.assert_called_once()
 
     def test_poll_identity_inherits_the_active_workflow_run_id(self) -> None:
         self.window._workflow = SimpleNamespace(run_id=RUN_ID)
@@ -591,7 +606,7 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.window._poll_durable_status()
         self.assertEqual(
             status_runner.calls[0],
-            ["sync-status", "--latest", "--output", "json", "--non-interactive"],
+            ["sync-status", "--run-id", RUN_ID, "--output", "json", "--non-interactive"],
         )
         self.window._durable_status_output_lines = [
             envelope(

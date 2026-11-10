@@ -122,6 +122,21 @@ class ResolvedStageFactTests(unittest.TestCase):
             page.status_section.facts_label.text(),
         )
 
+    def test_runtime_error_is_shown_without_an_editor_projection(self) -> None:
+        from providers.model_profile import ModelRoutingConfigError
+
+        with (
+            mock.patch(
+                "gui_qt.app.model_profile.resolve_routing_plan_from_runtime",
+                side_effect=ModelRoutingConfigError("Runtime routing refused this profile"),
+            ),
+            mock.patch("providers.model_profiles_editor.resolved_routes") as editor_routes,
+        ):
+            fact = self.window._compute_resolved_stage_target_fact(WorkMode.SYNC_TRANSLATION)
+
+        self.assertIn("Runtime routing refused this profile", fact)
+        editor_routes.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
