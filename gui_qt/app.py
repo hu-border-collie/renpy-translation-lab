@@ -12194,6 +12194,8 @@ class MainWindow(QMainWindow):
         self._durable_status_poll_timer.start(3000)
 
     def _durable_status_launch_args(self, step) -> list[str]:
+        if step.key in {"sync-start", "sync-derive"}:
+            self._durable_status_run_id = ""
         if step.key not in {"sync-start", "sync-derive"} or not self._durable_status_polling_supported():
             return step.args
         directory = QTemporaryDir()
@@ -12202,7 +12204,7 @@ class MainWindow(QMainWindow):
         self._durable_status_identity_dir = directory
         return [*step.args, "--run-id-file", directory.filePath("run.json")]
 
-    def _stop_durable_status_poll(self) -> None:
+    def _stop_durable_status_poll(self, *, preserve_identity: bool = False) -> None:
         self._durable_status_poll_active = False
         timer = getattr(self, "_durable_status_poll_timer", None)
         if timer is not None:
@@ -12210,7 +12212,8 @@ class MainWindow(QMainWindow):
         runner = self._durable_status_runner
         if runner is not None and runner.is_active():
             runner.kill()
-        self._durable_status_identity_dir = None
+        if not preserve_identity:
+            self._durable_status_identity_dir = None
 
     def _poll_durable_status(self) -> None:
         if not self._durable_status_poll_active or self._shutdown_requested:
@@ -12433,7 +12436,11 @@ class MainWindow(QMainWindow):
         self._run_workflow_current_step()
 
     def _on_kill(self):
-        self._stop_durable_status_poll()
+        preserve_identity = (
+            not self._is_doctor_running()
+            and self._active_command == "translation_workflow"
+        )
+        self._stop_durable_status_poll(preserve_identity=preserve_identity)
         if self._is_doctor_running():
             self._invalidate_doctor_worker()
             self._append_log("\n[环境检查已取消]\n")
@@ -14310,7 +14317,7 @@ class MainWindow(QMainWindow):
         elif self._active_command == "generate_template":
             self._template_generation_output_lines.append(message)
         if self._active_command == "translation_workflow":
-            self._stop_durable_status_poll()
+            self._stop_durable_status_poll(preserve_identity=True)
         self._reveal_log_for_active_context()
         self.statusBar().showMessage("任务运行失败，请查看运行日志。", 6000)
 
@@ -14322,6 +14329,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_shutdown_requested", False):
             if self._active_command == "compare_variants":
                 self._cleanup_compare_variants_temp_file()
+            self._durable_status_identity_dir = None
             self._active_command = ""
             self._workflow = None
             self._set_task_running(False)
@@ -14963,7 +14971,11 @@ class MainWindow(QMainWindow):
         workflow = self._workflow
         is_sync_translation_workflow = isinstance(self._workflow, SyncTranslationWorkflow)
         if is_sync_translation_workflow and step_key in {"sync-start", "sync-derive"}:
-            workflow.created_run_id = self._read_created_durable_run_id()
+            workflow.created_run_id = (
+                self._read_created_durable_run_id()
+                or str(getattr(self, "_durable_status_run_id", "") or "").strip()
+            )
+            self._durable_status_identity_dir = None
         is_project_analysis_workflow = isinstance(self._workflow, ProjectAnalysisWorkflow)
         is_revision_corpus_export_workflow = isinstance(
             self._workflow,

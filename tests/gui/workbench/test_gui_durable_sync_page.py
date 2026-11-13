@@ -84,10 +84,14 @@ def envelope(
 class _FakeRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, list[str]]] = []
+        self.kill_calls = 0
 
     def run(self, script, args) -> bool:
         self.calls.append((Path(script), list(args)))
         return True
+
+    def kill(self) -> None:
+        self.kill_calls += 1
 
 
 @gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
@@ -744,6 +748,68 @@ class DurableSyncAppWiringTests(unittest.TestCase):
 
         info.assert_called_once()
         self.assertEqual(self.runner.calls, [])
+
+    def test_kill_preserves_created_run_id_for_recovery_status_query(self) -> None:
+        with mock.patch.object(
+            self.window,
+            "_durable_status_polling_supported",
+            return_value=True,
+        ):
+            self.window._on_start_translation()
+            self._finish_preflight()
+            args = self.runner.calls[-1][1]
+            self.assertEqual(args[0], "sync-start")
+            Path(args[args.index("--run-id-file") + 1]).write_text(
+                json.dumps({"run_id": RUN_ID}),
+                encoding="utf-8",
+            )
+
+            self.window._on_kill()
+            self.assertFalse(self.window._durable_status_poll_active)
+            self.assertFalse(self.window._durable_status_poll_timer.isActive())
+            self.assertEqual(self.runner.kill_calls, 1)
+
+            self.window._on_finished(-1)
+            QApplication.processEvents()
+
+        self.assertIsNone(self.window._durable_status_identity_dir)
+        self.assertEqual(len(self.runner.calls), 3)
+        self.assertEqual(
+            self.runner.calls[-1][1],
+            ["sync-status", "--run-id", RUN_ID, "--output", "json", "--non-interactive"],
+        )
+
+    def test_runner_error_preserves_derived_run_id_for_recovery_status_query(self) -> None:
+        derived_run_id = "sync-run-v1-derived"
+        self.window.sync_translation_page.set_run_snapshot(
+            snapshot(status="failed", next_action="derive")
+        )
+        with (
+            mock.patch.object(
+                self.window,
+                "_durable_status_polling_supported",
+                return_value=True,
+            ),
+            mock.patch("gui_qt.app.message_box_question", return_value="yes"),
+        ):
+            self.window._on_derive_durable_sync()
+            args = self.runner.calls[0][1]
+            Path(args[args.index("--run-id-file") + 1]).write_text(
+                json.dumps({"run_id": derived_run_id}),
+                encoding="utf-8",
+            )
+
+            self.window._on_runner_error("process crashed")
+            self.assertFalse(self.window._durable_status_poll_active)
+            self.window._on_finished(1)
+            QApplication.processEvents()
+
+        self.assertIsNone(self.window._durable_status_identity_dir)
+        self.assertEqual(len(self.runner.calls), 2)
+        self.assertEqual(
+            self.runner.calls[1][1],
+            ["sync-status", "--run-id", derived_run_id, "--output", "json", "--non-interactive"],
+        )
 
 
 if __name__ == "__main__":
