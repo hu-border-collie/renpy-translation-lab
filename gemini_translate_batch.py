@@ -22691,7 +22691,7 @@ def build_arg_parser():
     for run_parser in (sync_start_parser, sync_derive_parser):
         run_parser.add_argument(
             '--run-id-file', default='', metavar='NEW_JSON_FILE',
-            help='Publish the created run ID to a new JSON file before execution.',
+            help='Publish the created run ID to a new JSON file. Execution stops if publication fails.',
         )
 
     profiles_show_parser = subparsers.add_parser(
@@ -23458,8 +23458,21 @@ def _durable_sync_production_service(*, require_provider):
 def _emit_durable_run_id(run_id, *, path=''):
     """Publish the identity of a newly created run before execution."""
     if path:
-        with open(path, 'x', encoding='utf-8') as handle:
-            json.dump({'run_id': run_id}, handle)
+        created = False
+        try:
+            with open(path, 'x', encoding='utf-8') as handle:
+                created = True
+                json.dump({'run_id': run_id}, handle)
+        except (OSError, ValueError) as exc:
+            if created:
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+            raise cli_contract.MachineContractError(
+                f'Could not publish durable run {run_id} to --run-id-file: {exc}',
+                code_name='SYNC_RUN_ID_FILE_FAILED',
+                suggested_action='choose_new_writable_run_id_file',
+                details={'run_id': run_id},
+            ) from exc
     else:
         print(f"RTL_DURABLE_RUN_ID={run_id}", file=sys.stderr, flush=True)
 
@@ -26715,7 +26728,8 @@ def _collect_output_file_protected_paths(args):
             os.path.join(output_dir, engine_reuse.DEFAULT_CANDIDATES_FILENAME)
         )
 
-    # Keep the JSON envelope separate from the generated HTML artifact.
+    # Keep the JSON envelope separate from other command outputs.
+    add_path(getattr(args, 'run_id_file', ''))
     html_output = getattr(args, 'html', None)
     if isinstance(html_output, str) and html_output.strip():
         add_path(os.path.abspath(html_output.strip()))

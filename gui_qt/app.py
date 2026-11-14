@@ -5971,7 +5971,12 @@ class MainWindow(QMainWindow):
         if hasattr(self, "action_panel"):
             self.action_panel.reflow()
 
-    def _refresh_writeback_for_manifest_path(self, manifest_path: str) -> None:
+    def _refresh_writeback_for_manifest_path(
+        self,
+        manifest_path: str,
+        *,
+        current_writeback_gate: dict[str, object] | None = None,
+    ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         if not spec.supports_translation_writeback:
             self._set_writeback_summary(idle_writeback_summary_for_work_mode(spec.mode))
@@ -5981,7 +5986,9 @@ class MainWindow(QMainWindow):
         except ValueError:
             self._set_writeback_summary(idle_writeback_summary())
             return
-        summary = summarize_manifest_writeback(manifest)
+        summary = summarize_manifest_writeback(
+            manifest, current_writeback_gate=current_writeback_gate,
+        )
         if summary is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
@@ -13965,8 +13972,9 @@ class MainWindow(QMainWindow):
                     selected_mode, model_profile.ExecutionStrategy.SYNC,
                 ),
             )
-        except model_profile.ModelRoutingConfigError as exc:
-            return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(error=str(exc))
+        except (ValueError, TypeError) as exc:
+            issue = model_profile.routing_resolution_issue(exc, stage=stage)
+            return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(error=issue.message)
         route = plan.routes.get(stage)
         profile = plan.profiles.get(route.profile_id) if route is not None else None
         if route is None or profile is None:
@@ -15199,6 +15207,12 @@ class MainWindow(QMainWindow):
         elif archive_completed:
             self._viewing_completed_manifest = False
             self._refresh_workflow_from_latest_manifest()
+            if manifest_path and update.batch_writeback_gate is not None:
+                self._refresh_writeback_for_manifest_path(
+                    manifest_path, current_writeback_gate=update.batch_writeback_gate,
+                )
+                if self._current_writeback_summary().status != "idle":
+                    self._focus_workbench_status_tab(_BATCH_STAGE_RESULT)
             self.statusBar().showMessage(update.heading, 6000)
         else:
             message = (

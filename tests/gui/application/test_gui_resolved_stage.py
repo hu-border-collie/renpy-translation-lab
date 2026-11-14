@@ -122,6 +122,19 @@ class ResolvedStageFactTests(unittest.TestCase):
             page.status_section.facts_label.text(),
         )
 
+    def test_invalid_capability_token_limit_is_shown_in_stage_fact(self) -> None:
+        for invalid_value, detail in (("oops", "oops"), ([], "list")):
+            with self.subTest(invalid_value=invalid_value):
+                config = migrated_config()
+                profile = config["model_routing"]["profiles"]["legacy-sync"]
+                profile["capability_overrides"] = {"context_limit_tokens": invalid_value}
+                self.window.state.load_translator_config = lambda: config
+
+                fact = self.window._compute_resolved_stage_target_fact(WorkMode.SYNC_TRANSLATION)
+
+                self.assertIn("无法解析", fact)
+                self.assertIn(detail, fact)
+
     def test_runtime_error_is_shown_without_an_editor_projection(self) -> None:
         from providers.model_profile import ModelRoutingConfigError
 

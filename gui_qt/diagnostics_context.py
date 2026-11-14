@@ -423,7 +423,7 @@ def build_cli_commands(
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['start'],
             command=format_cli_command(
-                python_exe, batch_script_path, ['sync-start']
+                python_exe, batch_script_path, ['sync-start', '--run-id-file', '<NEW_JSON_FILE>']
             ),
         ),
         DiagnosticsCommand(
@@ -453,7 +453,8 @@ def build_cli_commands(
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['derive'],
             command=format_cli_command(
-                python_exe, batch_script_path, ['sync-derive', '<RUN>']
+                python_exe, batch_script_path,
+                ['sync-derive', '<RUN>', '--run-id-file', '<NEW_JSON_FILE>'],
             ),
         ),
         DiagnosticsCommand(

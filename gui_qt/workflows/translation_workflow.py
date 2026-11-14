@@ -54,6 +54,7 @@ class WorkflowUpdate:
     facts: list[str]
     should_continue: bool = False
     timeline_step_key: str | None = None
+    batch_writeback_gate: dict[str, object] | None = None
 
 
 def build_export_writeback_cli_args(
@@ -463,6 +464,12 @@ class TranslationWorkflow:
                 })
             if isinstance(action, str) and action in steps and state not in TERMINAL_FAILURE_STATES:
                 self._pending_steps[:] = steps[action]
+                if not action and not self.retry_parent_manifest_path:
+                    gate = result.get("writeback_gate")
+                    return self._continue_or_finish(
+                        extra_facts=facts,
+                        batch_writeback_gate=dict(gate) if isinstance(gate, Mapping) else {},
+                    )
                 return self._continue_or_finish(extra_facts=facts)
         if state in TERMINAL_FAILURE_STATES:
             self._pending_steps.clear()
@@ -541,7 +548,12 @@ class TranslationWorkflow:
         self._pending_steps.clear()
         return WorkflowUpdate(status="done", heading=heading, message=message, facts=self._facts(facts))
 
-    def _continue_or_finish(self, extra_facts: list[str] | None = None) -> WorkflowUpdate:
+    def _continue_or_finish(
+        self,
+        extra_facts: list[str] | None = None,
+        *,
+        batch_writeback_gate: dict[str, object] | None = None,
+    ) -> WorkflowUpdate:
         next_step = self.current_step()
         if next_step is None:
             return WorkflowUpdate(
@@ -549,6 +561,7 @@ class TranslationWorkflow:
                 heading="翻译流程完成",
                 message="当前翻译任务流程已完成。",
                 facts=self._facts(extra_facts),
+                batch_writeback_gate=batch_writeback_gate,
             )
         return WorkflowUpdate(
             status="running",

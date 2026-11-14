@@ -320,6 +320,11 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
             self.assertIn(name, command_text)
         self.assertIn('check', command_text)
         self.assertIn('apply', command_text)
+        self.assertTrue(any('sync-start --run-id-file' in item.command for item in commands))
+        self.assertTrue(any(
+            'sync-derive' in item.command and '--run-id-file' in item.command
+            for item in commands
+        ))
 
     def test_build_cli_commands_includes_compare_variants_dry_run(self):
         commands = build_cli_commands(

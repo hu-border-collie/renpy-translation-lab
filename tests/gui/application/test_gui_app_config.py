@@ -2916,6 +2916,47 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertEqual(workflow.current_step().key, "merge-retry")
         schedule.assert_called_once()
 
+    def test_completed_batch_inspect_refreshes_writeback_using_cli_gate(self):
+        from foundation import cli_contract
+        from gui_qt.work_modes import WorkMode
+        from gui_qt.workflows.translation_workflow import TranslationWorkflow
+
+        manifest_path = "C:/dummy/manifest.json"
+        saved_gate = {"decision": "allow", "can_apply": True}
+        self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+        self.window.state = mock.Mock()
+        self.window.state.load_manifest_file.return_value = {
+            "_manifest_path": manifest_path,
+            "last_check_summary": {"safety_level": "safe", "writeback_gate": saved_gate},
+        }
+        self.window._clear_workflow_progress_ui = mock.Mock()
+        self.window._refresh_diagnostics_context = mock.Mock()
+        self.window._refresh_workflow_from_latest_manifest = mock.Mock()
+        self.window._focus_workbench_status_tab = mock.Mock()
+        self.window._set_task_running = mock.Mock()
+        self.window._set_writeback_summary = mock.Mock(
+            side_effect=lambda summary: setattr(self.window, "_writeback_summary", summary),
+        )
+        self.window.statusBar = mock.Mock()
+
+        for gate, expected_status in (
+            (saved_gate, "safe"),
+            ({"decision": "deny", "can_apply": False}, "stale"),
+        ):
+            with self.subTest(gate=gate):
+                self.window._workflow = TranslationWorkflow.resume_manifest(manifest_path)
+                self.window._workflow_step_output_lines = [json.dumps(cli_contract.success_envelope(
+                    "status", status="JOB_STATE_SUCCEEDED",
+                    result={"next_action": "", "writeback_gate": gate},
+                ))]
+
+                self.window._on_workflow_step_finished(0)
+
+                summary = self.window._current_writeback_summary()
+                self.assertEqual(summary.status, expected_status)
+                self.assertEqual(summary.can_apply, expected_status == "safe")
+                self.assertEqual(summary.manifest_path, manifest_path)
+
     def test_refresh_workflow_from_latest_manifest_failed_job_state(self):
         from gui_qt.work_modes import WorkMode
 

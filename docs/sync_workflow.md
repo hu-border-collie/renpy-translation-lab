@@ -119,7 +119,7 @@ python gemini_translate_batch.py sync-cancel <RUN> --json
 python gemini_translate_batch.py sync-derive <RUN> --json
 ```
 
-`sync-start` 和 `sync-derive` 可使用 `--run-id-file <NEW_JSON_FILE>`，在创建运行后、执行前将 `{"run_id": "..."}` 写到新文件。GUI 读取这个 ID 后才开始用 `sync-status --run-id <RUN>` 轮询，恢复已知运行时直接使用其 ID。stdout 继续用于机器结果 envelope。
+`sync-start` 和 `sync-derive` 可使用 `--run-id-file <NEW_JSON_FILE>`，在创建运行后、执行前将 `{"run_id": "..."}` 写到新文件。请在可写目录下选择一个新文件，并为 `--output-file` 使用独立路径。写入失败时命令返回 `SYNC_RUN_ID_FILE_FAILED`，并在错误中提供已创建的运行 ID，此时尚未发送翻译请求。GUI 读取这个 ID 文件后才开始用 `sync-status --run-id <RUN>` 轮询，恢复已知运行时直接使用其 ID。stdout 继续用于机器结果 envelope。
 
 `sync-start --profile <PROFILE_ID>` 只用该 ModelProfile 覆盖本次运行的 translation 路由，不写回配置文件；profile 不存在、是 embedding profile 或与命令策略不兼容时启动前拒绝。
 

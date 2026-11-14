@@ -1274,6 +1274,10 @@ BATCH_CHECK_WORKFLOW_COPY = {
         "检查结果缺少写回结论",
         "请查看诊断与运行日志，再重新检查结果。",
     ),
+    "stale_writeback_gate": (
+        "需要重新检查结果",
+        "当前状态未确认最近一次检查仍允许写回。请点击「重新检查」后再写回。",
+    ),
     "blocked_label": "未通过写回检查",
     "check_retry_command": "检查补译结果",
 }
@@ -1825,6 +1829,7 @@ DURABLE_SYNC_RUN_COPY = {
         "SYNC_RUN_ARTIFACT_STALE": "运行制品已变化；请重新生成检查预览。",
         "SYNC_RUN_NOT_TERMINAL": "运行尚未结束，暂时不能生成检查预览；请先继续运行。",
         "SYNC_RUN_NO_WORK": "当前没有待翻译内容，无需启动同步任务。",
+        "SYNC_RUN_ID_FILE_FAILED": "未能写入同步运行 ID 文件，任务尚未执行。请查看诊断日志后重试。",
         "SYNC_RUN_FRESHNESS_MISMATCH": (
             "项目、源文件或配置已变化，不能继续复用该运行；请重新启动同步翻译。"
         ),

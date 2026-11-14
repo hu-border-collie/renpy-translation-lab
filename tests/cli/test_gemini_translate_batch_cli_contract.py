@@ -361,6 +361,68 @@ class BatchCliContractTests(unittest.TestCase):
                 batch.run_durable_sync_command(args)
             self.assertNotIn("RTL_DURABLE_RUN_ID", stderr.getvalue())
 
+    def test_run_id_file_failure_stops_start_and_derive_before_execution(self):
+        from execution.sync_run_service import SyncRunService
+        from tests.execution.test_sync_run_service import Backend, child_builder, plan_build
+
+        with tempfile.TemporaryDirectory() as root:
+            config_path = Path(root) / "translator_config.json"
+            service = SyncRunService(
+                Path(root) / "sync_runs",
+                backend_factory=lambda _store: Backend(),
+                derived_builder_factory=lambda _store: child_builder,
+            )
+            source = service.start(plan_build())
+            path = Path(root) / "run.json"
+            path.write_text("existing identity", encoding="utf-8")
+            unavailable_path = Path(root) / "missing" / "run.json"
+            plan = plan_build()
+            plan["requests"][0]["user_prompt"] = "new content requiring a provider call"
+            context = SimpleNamespace(plan_build=SimpleNamespace(**plan))
+
+            for command in (["sync-start"], ["sync-derive", source["run_id"]]):
+                for output_path in (path, unavailable_path):
+                    with self.subTest(command=command[0], path=output_path):
+                        stdout, stderr = io.StringIO(), io.StringIO()
+                        with (
+                            mock.patch.object(batch.legacy, "TRANSLATOR_CONFIG", str(config_path)),
+                            mock.patch.object(
+                                batch, "_durable_sync_production_service",
+                                return_value=(service, context),
+                            ),
+                            mock.patch.object(service, "_execute") as execute,
+                            contextlib.redirect_stdout(stdout),
+                            contextlib.redirect_stderr(stderr),
+                        ):
+                            code = batch.main([
+                                *command, "--run-id-file", str(output_path), "--output", "json",
+                            ])
+
+                        execute.assert_not_called()
+                        self.assertNotEqual(code, 0)
+                        error = json.loads(stdout.getvalue())["error"]
+                        self.assertEqual(error["code"], "SYNC_RUN_ID_FILE_FAILED")
+                        self.assertTrue(error["details"]["run_id"])
+                        self.assertEqual(path.read_text(encoding="utf-8"), "existing identity")
+
+    def test_run_id_file_cannot_also_be_the_output_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "run.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+            ):
+                code = batch.main([
+                    "sync-start", "--run-id-file", str(path), "--output", "json",
+                    "--output-file", str(path),
+                ])
+
+            self.assertNotEqual(code, 0)
+            dispatch.assert_not_called()
+            self.assertFalse(path.exists())
+            self.assertEqual(json.loads(stdout.getvalue())["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+
     def test_batch_embedding_refuses_unresolvable_v1_plan_when_retrieval_enabled(self):
         with (
             mock.patch.object(batch.legacy, "MODEL_ROUTING_CONFIG", {}),
