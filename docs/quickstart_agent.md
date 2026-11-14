@@ -104,7 +104,7 @@ input/context digest 续跑（`--force` 重跑全部）。`final-review-resume` 
 ```powershell
 python gemini_translate_batch.py sync-start --json --strict-exit-codes
 python gemini_translate_batch.py sync-start --profile <PROFILE_ID> --json  # 本项目已有 model_routing 时可选
-python gemini_translate_batch.py sync-status <RUN> --json --strict-exit-codes
+python gemini_translate_batch.py sync-status --run-id <RUN> --json --strict-exit-codes
 python gemini_translate_batch.py sync-resume <RUN> --json --strict-exit-codes
 python gemini_translate_batch.py sync-cancel <RUN> --json --strict-exit-codes
 python gemini_translate_batch.py sync-derive <RUN> --json --strict-exit-codes

@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 
 from gui_qt.reports.summary_helpers import extend_facts_with_notices
 from gui_qt.user_copy import (
+    BATCH_CHECK_WORKFLOW_COPY,
     QUALITY_DELIVERY_NOTICE,
     format_manifest_path_fact,
     format_quality_gate_fact,
@@ -113,11 +114,7 @@ def _can_apply_from_check_fields(
     return False
 
 
-def _can_apply_from_manifest_gate(
-    writeback_gate: object,
-    check_status: str,
-    safety_status: str,
-) -> bool:
+def _can_apply_from_manifest_gate(writeback_gate: object) -> bool:
     if isinstance(writeback_gate, dict):
         return writeback_gate.get("decision") == "allow" and bool(
             writeback_gate.get("can_apply")
@@ -516,7 +513,12 @@ def summarize_apply_output(
     )
 
 
-def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummary | None:
+def summarize_manifest_writeback(
+    manifest: dict[str, object],
+    *,
+    current_writeback_gate: dict[str, object] | None = None,
+) -> WritebackSummary | None:
+    """Summarize the saved check, honoring the current CLI gate when supplied."""
     manifest_path = manifest.get("_manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path.strip():
         manifest_path = ""
@@ -577,7 +579,7 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
     check_status = last_summary.get("check_status")
     check_status_text = check_status if isinstance(check_status, str) else safety_text
     writeback_gate = last_summary.get("writeback_gate")
-    can_apply = _can_apply_from_manifest_gate(writeback_gate, check_status_text, safety_text)
+    can_apply = _can_apply_from_manifest_gate(writeback_gate)
     facts: list[str] = []
     if manifest_path:
         facts.append(format_manifest_path_fact(manifest_path))
@@ -625,6 +627,22 @@ def summarize_manifest_writeback(manifest: dict[str, object]) -> WritebackSummar
                 "最近一次检查缺少 writeback_gate，可能是旧版本检查合同。\n"
                 "请点击「重新检查」后再写回。"
             ),
+            facts=extend_facts_with_notices(facts, findings),
+            findings=findings,
+            can_apply=False,
+            manifest_path=manifest_path,
+        )
+
+    if (
+        can_apply
+        and current_writeback_gate is not None
+        and not _can_apply_from_manifest_gate(current_writeback_gate)
+    ):
+        heading, message = BATCH_CHECK_WORKFLOW_COPY["stale_writeback_gate"]
+        return WritebackSummary(
+            status="stale",
+            heading=heading,
+            message=message,
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
             can_apply=False,

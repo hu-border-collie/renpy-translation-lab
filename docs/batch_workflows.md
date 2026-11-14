@@ -110,6 +110,10 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json -
 
 JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare 子进程输出和诊断文本实时进入 stderr。`result` 提供业务摘要，`artifacts` 提供 manifest / results / 检查报告路径，`status` 表示 job state 或检查结论 `ready / ready_with_warnings / blocked`。文本模式和默认退出码保持兼容；判断能否写回应读 `result.check.writeback_gate.decision`，只有 `allow` 才可继续 `apply`。
 
+恢复批量翻译时，先用 `status <MANIFEST> --local --output json` 读取任务记录与提交日志。这一步无需 API Key，也不会查询云端。按 `result.next_action` 继续，可能是 `submit`、`resume-submit`（`submit --resume`）、`recover-submit`、`status`、`download`、`check` 或空字符串（没有可自动执行的步骤）。需要查询云端时，去掉 `--local`。状态结果还提供 `result.retry_parent_manifest_path` 和 `result.writeback_gate`，后者仅在已有检查仍与当前结果匹配时返回 `allow`。实际写回仍遵守 `check → apply`。
+
+自动合并补译时，先对补译包运行 `check <RETRY_MANIFEST> --output json`。当检查门禁为 `allow` 时，补译包的 `result.next_action` 为 `merge-retry`，其余情况为空。随后运行 `merge-retry <PARENT_MANIFEST> <RETRY_MANIFEST> --require-checked-retry`，命令会核对补译包最近一次检查的门禁和指纹。结果变更后须重新检查补译包。合并成功后，重新检查父任务再进入写回确认。只有质量报警时仍可推进，配置为阻断项的规则会拒绝自动合并。
+
 ### Parser-level 错误
 
 如果原始参数中包含精确的 `--output json` 或 `--output=json`，但 argparse 在生成参数 Namespace 前失败（例如未知参数、缺少参数值或非法 choice），CLI 会在 stdout 输出一个 schema v1 的错误 envelope：`error.code=ARGUMENT_PARSE_ERROR`，退出码为 `2`，并把原生 argparse usage / error 诊断保留在 stderr。若已识别出合法子命令，envelope 的 `command` 使用该名称；最早期无法识别子命令时使用 `command=cli`。

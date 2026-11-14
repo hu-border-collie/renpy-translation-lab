@@ -1256,6 +1256,33 @@ DOCTOR_WARNING_TRANSLATIONS: tuple[tuple[str, str], ...] = (
 )
 
 
+BATCH_CHECK_WORKFLOW_COPY = {
+    "local_status_command": "查看批量任务的本地状态与下一步",
+    "retry_parent_mismatch": (
+        "补译包与当前父任务不匹配",
+        "请在当前父任务中重新选择补译包，再继续。",
+    ),
+    "missing_resume_action": (
+        "无法确认批量任务的下一步",
+        "CLI 没有返回批量任务的下一步。请查看诊断与运行日志。",
+    ),
+    "missing_retry_action": (
+        "补译尚未获准合并",
+        "检查结果未确认可以合并补译包。请查看诊断与运行日志后重新检查补译包。",
+    ),
+    "missing_writeback_decision": (
+        "检查结果缺少写回结论",
+        "请查看诊断与运行日志，再重新检查结果。",
+    ),
+    "stale_writeback_gate": (
+        "需要重新检查结果",
+        "当前状态未确认最近一次检查仍允许写回。请点击「重新检查」后再写回。",
+    ),
+    "blocked_label": "未通过写回检查",
+    "check_retry_command": "检查补译结果",
+}
+
+
 def safety_level_label(level: str) -> str:
     text = str(level or "").strip().lower()
     return SAFETY_LEVEL_LABELS.get(text, level or "未知")
@@ -1669,6 +1696,8 @@ TRANSLATION_TARGET_COPY = {
     "resolved_stage_origin_explicit": "显式覆盖",
     "resolved_stage_origin_inherited": "继承默认",
     "resolved_stage_unavailable": "本阶段模型：无法解析（请检查模型路由配置）",
+    "resolved_stage_error": "本阶段模型：无法解析。{error}",
+    "resolved_stage_invalid_section": "model_routing 必须是 JSON 对象。",
     "legacy_hint": (
         "当前使用旧模型配置，可按现有设置运行。修改模型请点击「模型设置」；"
         "迁移后可在此选择模型与执行方式。"
@@ -1741,6 +1770,7 @@ TRANSLATION_PREFLIGHT_COPY = {
 # fields; it never reads the run's SQLite state or invents retry/freshness
 # semantics. Command-reference labels stay in ``DURABLE_SYNC_COPY`` above.
 DURABLE_SYNC_RUN_COPY = {
+    "status_by_id": "按运行 ID 查询同步任务",
     "run_label": "运行 ID",
     "run_dir_label": "运行目录",
     "check_manifest_label": "检查清单",
@@ -1770,18 +1800,18 @@ DURABLE_SYNC_RUN_COPY = {
     "interrupted_heading": "本机同步命令已中断",
     "interrupted_locate_heading": "本机同步命令已中断，正在定位运行记录",
     "interrupted_locate_message": (
-        "本机进程已停止；正在查询最近一次同步运行记录，随后可继续或取消。"
+        "本机进程已停止。正在按运行 ID 查询这次任务，随后可继续或取消。"
     ),
-    "recover_located_heading": "已定位最近一次同步运行",
+    "recover_located_heading": "已定位这次同步运行",
     "recover_located_message": (
         "本机进程已停止，同步运行仍可继续或取消；"
         "请选择「继续 / 查看最新任务」或「取消任务」。"
     ),
     "recover_located_terminal_message": (
-        "最近一次运行已经结束；点击「继续 / 查看最新任务」可生成检查预览。"
+        "这次运行已经结束；点击「继续 / 查看最新任务」可生成检查预览。"
     ),
     "recover_located_derive_message": (
-        "最近一次运行存在未解决或结果未知项；如需继续，请使用「派生新运行」"
+        "这次运行存在未解决或结果未知项；如需继续，请使用「派生新运行」"
         "（默认排除结果未知条目，不重复调用）。"
     ),
     "worker_stopped_message": (
@@ -1799,6 +1829,7 @@ DURABLE_SYNC_RUN_COPY = {
         "SYNC_RUN_ARTIFACT_STALE": "运行制品已变化；请重新生成检查预览。",
         "SYNC_RUN_NOT_TERMINAL": "运行尚未结束，暂时不能生成检查预览；请先继续运行。",
         "SYNC_RUN_NO_WORK": "当前没有待翻译内容，无需启动同步任务。",
+        "SYNC_RUN_ID_FILE_FAILED": "未能写入同步运行 ID 文件，任务尚未执行。请查看诊断日志后重试。",
         "SYNC_RUN_FRESHNESS_MISMATCH": (
             "项目、源文件或配置已变化，不能继续复用该运行；请重新启动同步翻译。"
         ),

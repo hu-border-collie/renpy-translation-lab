@@ -365,6 +365,7 @@ class DurableSyncRecoveryTests(unittest.TestCase):
 
     def test_worker_interruption_locates_run_without_resuming(self) -> None:
         workflow = SyncTranslationWorkflow.start_new()
+        workflow.created_run_id = RUN_ID
 
         update = workflow.complete_current_step(1, "Traceback disconnected\n")
 
@@ -373,7 +374,7 @@ class DurableSyncRecoveryTests(unittest.TestCase):
         self.assertEqual(workflow.current_step().key, "sync-status")
         self.assertEqual(
             workflow.current_step().args,
-            machine_args("sync-status", "--latest"),
+            machine_args("sync-status", "--run-id", RUN_ID),
         )
 
         update = workflow.complete_current_step(
@@ -392,6 +393,7 @@ class DurableSyncRecoveryTests(unittest.TestCase):
 
     def test_recover_derives_wording_from_next_action(self) -> None:
         workflow = SyncTranslationWorkflow.start_new()
+        workflow.created_run_id = RUN_ID
         workflow.complete_current_step(1, "")
 
         update = workflow.complete_current_step(
@@ -405,6 +407,12 @@ class DurableSyncRecoveryTests(unittest.TestCase):
 
         self.assertIn("派生", update.message)
         self.assertNotIn("检查预览", update.message)
+
+    def test_start_interruption_before_identity_does_not_query_latest(self) -> None:
+        workflow = SyncTranslationWorkflow.start_new()
+        update = workflow.complete_current_step(1, "")
+        self.assertFalse(update.should_continue)
+        self.assertIsNone(workflow.current_step())
 
     def test_interruption_after_known_run_keeps_terminal_message(self) -> None:
         workflow = SyncTranslationWorkflow.resume_run(RUN_ID)

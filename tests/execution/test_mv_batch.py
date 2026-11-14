@@ -163,9 +163,23 @@ class MvBatchTests(unittest.TestCase):
         retry = batch.load_manifest(batch.build_retry_package(manifest['_manifest_path']))
         self.assertEqual(retry['summary']['item_count'], 1)
         self.assertEqual(retry['translation_plan']['source_identity'], manifest['translation_plan']['source_identity'])
-        self.results(retry)
+        retry_results = self.results(retry)
+        parent_before = Path(manifest['_manifest_path']).read_bytes()
+        retry_args = (manifest['_manifest_path'], retry['_manifest_path'])
+        with self.assertRaises(batch.cli_contract.MachineContractError) as missing:
+            batch.merge_retry_results(*retry_args, require_checked_retry=True)
+        self.assertEqual(missing.exception.code_name, 'RETRY_MERGE_CHECK_REQUIRED')
+        retry_checked = batch.check_results(retry['_manifest_path'])
+        status = batch.build_machine_success_envelope('status', retry_checked, SimpleNamespace(target=''))
+        self.assertEqual(status['result']['writeback_gate']['decision'], 'allow')
+        with retry_results.open('ab') as handle:
+            handle.write(b'\n')
+        with self.assertRaises(batch.cli_contract.MachineContractError) as stale:
+            batch.merge_retry_results(*retry_args, require_checked_retry=True)
+        self.assertEqual(stale.exception.code_name, 'RETRY_MERGE_CHECK_REQUIRED')
+        self.assertEqual(Path(manifest['_manifest_path']).read_bytes(), parent_before)
         batch.check_results(retry['_manifest_path'])
-        batch.merge_retry_results(manifest['_manifest_path'], retry['_manifest_path'])
+        batch.merge_retry_results(*retry_args, require_checked_retry=True)
         with self.assertRaises(SystemExit):
             batch.apply_results(manifest['_manifest_path'], force=True)
         repaired = batch.check_results(manifest['_manifest_path'])

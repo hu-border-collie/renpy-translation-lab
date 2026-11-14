@@ -69,7 +69,6 @@ def resume_workflow(
     if spec.mode == WorkMode.BATCH_TRANSLATION:
         return TranslationWorkflow.resume_manifest(
             manifest_path,
-            manifest,
             submit_max_cost=submit_max_cost,
         )
     if spec.mode == WorkMode.KEYWORD_EXTRACTION:

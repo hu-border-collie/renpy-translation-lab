@@ -192,6 +192,19 @@ class BatchCliContractTests(unittest.TestCase):
             stdout.getvalue(),
         )
 
+    def test_sync_status_run_id_is_an_explicit_exclusive_selector(self):
+        parser = batch.build_arg_parser()
+        service = mock.Mock()
+        service.status.return_value = {"run_id": "sync-run-v1-demo"}
+        with mock.patch.object(batch, "_durable_sync_store_only_service", return_value=service):
+            args = parser.parse_args(["sync-status", "--run-id", "sync-run-v1-demo"])
+            snapshot = batch.run_durable_sync_command(args)
+            self.assertEqual(snapshot["run_id"], "sync-run-v1-demo")
+            service.status.assert_called_once_with("sync-run-v1-demo", latest=False)
+            for selectors in ([], ["--latest", "--run-id", "demo"], ["demo", "--run-id", "demo"]):
+                with self.subTest(selectors=selectors), self.assertRaises(batch.cli_contract.MachineContractError):
+                    batch.run_durable_sync_command(parser.parse_args(["sync-status", *selectors]))
+
     def test_sync_status_json_reports_stored_gemini_sdk_usage(self):
         from execution.sync_run_service import SyncRunService
         from tests.execution.test_sync_run_store import bootstrap_run
@@ -323,6 +336,92 @@ class BatchCliContractTests(unittest.TestCase):
 
         self.assertEqual(snapshot["run_id"], "sync-run-v1-demo")
         self.assertIn("RTL_DURABLE_RUN_ID=sync-run-v1-demo", stderr.getvalue())
+
+    def test_sync_start_publishes_json_identity_before_execution(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "run.json"
+
+            def fake_start(_plan_build, *, on_run_created, **_kwargs):
+                on_run_created("sync-run-v1-demo")
+                self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {
+                    "run_id": "sync-run-v1-demo",
+                })
+                return {"run_id": "sync-run-v1-demo", "run_status": "completed"}
+
+            args = batch.build_arg_parser().parse_args(["sync-start", "--run-id-file", str(path)])
+            context = SimpleNamespace(plan_build=SimpleNamespace(requests=[object()]))
+            stderr = io.StringIO()
+            with (
+                mock.patch.object(
+                    batch, "_durable_sync_production_service",
+                    return_value=(SimpleNamespace(start=fake_start), context),
+                ),
+                contextlib.redirect_stderr(stderr),
+            ):
+                batch.run_durable_sync_command(args)
+            self.assertNotIn("RTL_DURABLE_RUN_ID", stderr.getvalue())
+
+    def test_run_id_file_failure_stops_start_and_derive_before_execution(self):
+        from execution.sync_run_service import SyncRunService
+        from tests.execution.test_sync_run_service import Backend, child_builder, plan_build
+
+        with tempfile.TemporaryDirectory() as root:
+            config_path = Path(root) / "translator_config.json"
+            service = SyncRunService(
+                Path(root) / "sync_runs",
+                backend_factory=lambda _store: Backend(),
+                derived_builder_factory=lambda _store: child_builder,
+            )
+            source = service.start(plan_build())
+            path = Path(root) / "run.json"
+            path.write_text("existing identity", encoding="utf-8")
+            unavailable_path = Path(root) / "missing" / "run.json"
+            plan = plan_build()
+            plan["requests"][0]["user_prompt"] = "new content requiring a provider call"
+            context = SimpleNamespace(plan_build=SimpleNamespace(**plan))
+
+            for command in (["sync-start"], ["sync-derive", source["run_id"]]):
+                for output_path in (path, unavailable_path):
+                    with self.subTest(command=command[0], path=output_path):
+                        stdout, stderr = io.StringIO(), io.StringIO()
+                        with (
+                            mock.patch.object(batch.legacy, "TRANSLATOR_CONFIG", str(config_path)),
+                            mock.patch.object(
+                                batch, "_durable_sync_production_service",
+                                return_value=(service, context),
+                            ),
+                            mock.patch.object(service, "_execute") as execute,
+                            contextlib.redirect_stdout(stdout),
+                            contextlib.redirect_stderr(stderr),
+                        ):
+                            code = batch.main([
+                                *command, "--run-id-file", str(output_path), "--output", "json",
+                            ])
+
+                        execute.assert_not_called()
+                        self.assertNotEqual(code, 0)
+                        error = json.loads(stdout.getvalue())["error"]
+                        self.assertEqual(error["code"], "SYNC_RUN_ID_FILE_FAILED")
+                        self.assertTrue(error["details"]["run_id"])
+                        self.assertEqual(path.read_text(encoding="utf-8"), "existing identity")
+
+    def test_run_id_file_cannot_also_be_the_output_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "run.json"
+            stdout = io.StringIO()
+            with (
+                mock.patch.object(batch, "dispatch_command") as dispatch,
+                contextlib.redirect_stdout(stdout),
+            ):
+                code = batch.main([
+                    "sync-start", "--run-id-file", str(path), "--output", "json",
+                    "--output-file", str(path),
+                ])
+
+            self.assertNotEqual(code, 0)
+            dispatch.assert_not_called()
+            self.assertFalse(path.exists())
+            self.assertEqual(json.loads(stdout.getvalue())["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
 
     def test_batch_embedding_refuses_unresolvable_v1_plan_when_retrieval_enabled(self):
         with (
@@ -2430,6 +2529,8 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(payload["status"], "warn")
         self.assertEqual(payload["result"]["check"]["failure_items"], 1)
+        self.assertEqual(payload["result"]["check"]["writeback_gate"]["decision"], "deny")
+        self.assertEqual(payload["result"]["next_action"], "")
         self.assertEqual(
             payload["artifacts"]["check_report"],
             "C:/jobs/demo/check_failures.jsonl",
@@ -2486,6 +2587,27 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(payload["error"]["code"], "INTERNAL_ERROR")
         self.assertNotIn("semantic_exit_code", payload["error"]["details"])
+
+    def test_check_next_action_requires_retry_manifest_and_allow_gate(self):
+        for retry_of, decision, expected in (
+            ("parent.json", "allow", "merge-retry"),
+            ("parent.json", "deny", ""),
+            ("parent.json", None, ""),
+            ("", "allow", ""),
+        ):
+            with self.subTest(retry_of=retry_of, decision=decision):
+                summary = {"safety_level": "safe", "check_status": "ready_with_warnings"}
+                if decision is not None:
+                    summary["writeback_gate"] = {"decision": decision}
+                envelope = batch.build_machine_success_envelope(
+                    "check",
+                    {"retry_of_manifest": retry_of, "last_check_summary": summary},
+                    SimpleNamespace(target=""),
+                )
+                self.assertEqual(envelope["result"]["next_action"], expected)
+                self.assertEqual(
+                    envelope["result"]["check"]["writeback_gate"]["decision"], decision or "deny",
+                )
 
     def test_strict_check_ready_with_warnings_reports_needs_action(self):
         manifest = {
@@ -3263,6 +3385,67 @@ class BatchCliContractTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         load_config.assert_called_once_with(require_api_key=True)
+
+    def test_local_batch_status_is_read_only_and_exposes_resume_plan(self):
+        manifest = {
+            "_manifest_path": "retry.json",
+            "job_name": "batches/fake",
+            "job_state": "JOB_STATE_SUCCEEDED",
+            "retry_of_manifest": "parent.json",
+            "last_check_summary": {
+                "safety_level": "safe",
+                "writeback_gate": {"decision": "allow"},
+                "check_contract_version": batch.CHECK_CONTRACT_VERSION,
+                "check_fingerprint": {"fingerprint_sha256": "stale"},
+            },
+        }
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(batch, "initialize_batch_logging"),
+            mock.patch.object(batch.legacy, "load_config") as load_config,
+            mock.patch.object(batch.legacy, "load_translator_settings"),
+            mock.patch.object(batch.legacy, "load_glossary"),
+            mock.patch.object(batch, "load_batch_settings"),
+            mock.patch.object(batch, "print_banner"),
+            mock.patch.object(batch, "load_manifest", return_value=manifest),
+            mock.patch.object(batch, "refresh_manifest_status") as refresh,
+            mock.patch.object(batch, "build_check_fingerprint", return_value={"fingerprint_sha256": "current"}),
+            contextlib.redirect_stdout(stdout),
+        ):
+            exit_code = batch.main(["status", "retry.json", "--local", "--output", "json"])
+        self.assertEqual(exit_code, 0)
+        load_config.assert_called_once_with(require_api_key=False)
+        refresh.assert_not_called()
+        result = json.loads(stdout.getvalue())["result"]
+        self.assertEqual(result["next_action"], "check")
+        self.assertEqual(result["retry_parent_manifest_path"], "parent.json")
+        self.assertEqual(result["writeback_gate"]["decision"], "deny")
+
+    def test_batch_status_next_action_uses_local_state_and_submit_recovery(self):
+        for manifest, uncertain, expected in (
+            ({}, {}, "submit"),
+            ({}, {"kind": "upload_pending_job_create"}, "resume-submit"),
+            ({}, {"kind": "job_created_uncommitted"}, "recover-submit"),
+            ({"job_name": "batches/fake"}, {}, "status"),
+            ({"job_state": "JOB_STATE_SUCCEEDED"}, {}, "download"),
+            ({"job_state": "JOB_STATE_FAILED", "job_name": "batches/fake"}, {}, ""),
+            ({"job_state": "RESULTS_MERGED"}, {}, "check"),
+            ({"last_check": {"status": "safe"}}, {}, ""),
+            ({
+                "retry_of_manifest": "parent.json",
+                "last_check_summary": {"writeback_gate": {"decision": "deny"}},
+            }, {}, ""),
+        ):
+            with (
+                self.subTest(manifest=manifest, uncertain=uncertain),
+                mock.patch.object(
+                    batch.batch_submit_recovery, "get_uncertain_submit_state", return_value=uncertain,
+                ),
+            ):
+                envelope = batch.build_machine_success_envelope(
+                    "status", manifest, SimpleNamespace(target=""),
+                )
+                self.assertEqual(envelope["result"]["next_action"], expected)
 
     def test_output_file_conflict_with_manifest_is_rejected_before_dispatch(self):
         stdout = io.StringIO()
