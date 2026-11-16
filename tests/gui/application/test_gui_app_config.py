@@ -3484,6 +3484,57 @@ class GuiAppConfigHelperTests(unittest.TestCase):
             str(Path("C:/dummy/split_parts/part02_of_10/manifest.json")),
         )
 
+    def test_restored_batch_writeback_revalidates_cached_manifest_against_results(self):
+        import gemini_translate_batch as batch
+        from gui_qt.project_state import ProjectState
+        from gui_qt.work_modes import WorkMode
+        from quality_review.translation_quality import load_policy_from_config
+
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory).resolve()
+            manifest_path = package / "manifest.json"
+            results = package / "results.jsonl"
+            results.write_bytes(b'{"key":"checked"}\n')
+            manifest = {
+                "_manifest_path": str(manifest_path),
+                "_package_dir": str(package),
+                "tl_dir": str(package),
+                "chunks": [{"key": "checked"}],
+            }
+            manifest["last_check_summary"] = {
+                "check_contract_version": batch.CHECK_CONTRACT_VERSION,
+                "check_fingerprint": batch.build_check_fingerprint(
+                    manifest, quality_policy=load_policy_from_config({}),
+                ),
+                "safety_level": "safe",
+                "writeback_gate": {"decision": "allow", "can_apply": True},
+            }
+            batch.save_manifest(manifest, update_latest=False)
+            self.window.state = ProjectState()
+            self.window.state.config_path = package / "translator_config.json"
+            self.window._current_work_mode = lambda: WorkMode.BATCH_TRANSLATION
+            self.window._refresh_split_status_ui = mock.Mock()
+            self.window._set_writeback_summary = mock.Mock()
+
+            def refresh_latest():
+                self.window._refresh_writeback_from_latest_manifest(
+                    latest_manifest=manifest_path,
+                    manifest=self.window.state.load_manifest_file(manifest_path, lite=True),
+                )
+
+            for restore in (
+                refresh_latest,
+                lambda: self.window._refresh_writeback_for_manifest_path(str(manifest_path)),
+            ):
+                results.write_bytes(b'{"key":"checked"}\n')
+                restore()
+                self.assertTrue(self.window._set_writeback_summary.call_args.args[0].can_apply)
+                results.write_bytes(b'{"key":"changed"}\n')
+                restore()
+                summary = self.window._set_writeback_summary.call_args.args[0]
+                self.assertFalse(summary.can_apply)
+                self.assertEqual(summary.status, "stale")
+
     def test_keyword_result_hides_writeback_action_buttons(self):
         from gui_qt.reports.check_report import WritebackSummary
         from gui_qt.work_modes import WorkMode

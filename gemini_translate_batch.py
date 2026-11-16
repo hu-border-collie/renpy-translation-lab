@@ -2820,8 +2820,10 @@ def manifest_target_shape(manifest):
     }
 
 
-def build_check_fingerprint(manifest):
-    result_path = resolve_manifest_result_path(manifest)
+def build_check_fingerprint(manifest, *, quality_policy=None, result_fingerprint=None):
+    """Bind a check to the manifest, active policy and exact result bytes."""
+    if result_fingerprint is None:
+        result_fingerprint = file_content_fingerprint(resolve_manifest_result_path(manifest))
     package_dir = manifest.get('_package_dir', '')
     project_identity = manifest_project_identity(manifest)
     payload = {
@@ -2833,9 +2835,9 @@ def build_check_fingerprint(manifest):
         'core_schema_version': manifest.get('core_schema_version', 1),
         'batch_model': manifest.get('batch_model', ''),
         'settings': manifest.get('settings') or {},
-        'quality_policy': BATCH_QUALITY_POLICY,
+        'quality_policy': BATCH_QUALITY_POLICY if quality_policy is None else quality_policy,
         'project': project_identity,
-        'result': file_content_fingerprint(result_path),
+        'result': result_fingerprint,
         'target_shape': manifest_target_shape(manifest),
     }
     if isinstance(manifest.get('durable_sync_source'), dict):
@@ -7302,28 +7304,11 @@ def freeze_final_review_routing_plan():
     v1 config whose ``defaults.execution_strategy`` is sync from silently
     switching an existing final-review path from Batch to sync.
     """
-    from providers.model_routing_reader import read_routing_plan
+    from providers.model_routing_reader import read_explicit_final_review_plan
 
-    section = legacy.MODEL_ROUTING_CONFIG
     try:
-        if isinstance(section, dict):
-            routes = section.get("routes")
-            raw_route = (
-                routes.get("final_review") if isinstance(routes, dict) else {}
-            )
-            raw_route = raw_route if isinstance(raw_route, dict) else {}
-            explicit_strategy = str(raw_route.get("strategy") or "").strip()
-            if explicit_strategy:
-                plan = read_routing_plan({"model_routing": section})
-            else:
-                # Preserve the pre-#431 behavior exactly: final_review used
-                # the Batch entrypoint contract unless the route explicitly
-                # opted into another strategy.
-                plan = freeze_runtime_routing_plan(
-                    execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-                    required_stages={model_profile.STAGE_FINAL_REVIEW},
-                )
-        else:
+        plan = read_explicit_final_review_plan({"model_routing": legacy.MODEL_ROUTING_CONFIG})
+        if plan is None:
             plan = freeze_runtime_routing_plan(
                 execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
                 required_stages={model_profile.STAGE_FINAL_REVIEW},
@@ -8784,28 +8769,46 @@ def build_retry_package(target=None, display_name_override=''):
 
 
 def load_result_rows_by_key(manifest, label):
+    rows, rows_by_key, result = _read_result_rows_snapshot(manifest, label)
+    return rows, rows_by_key, result['path']
+
+
+def _read_result_rows_snapshot(manifest, label):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
         raise SystemExit(f'{label} result JSONL not found: {result_path}')
     rows = []
     rows_by_key = {}
-    with open(result_path, 'r', encoding='utf-8') as handle:
-        for index, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
-            key = row.get('key')
-            if not key:
-                raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
-            if key in rows_by_key:
-                raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
-            rows.append(row)
-            rows_by_key[key] = row
-    return rows, rows_by_key, result_path
+    digest = hashlib.sha256()
+    size = row_count = index = 0
+    with open(result_path, 'rb') as handle:
+        for raw_line in handle:
+            digest.update(raw_line)
+            size += len(raw_line)
+            row_count += bool(raw_line.strip())
+            # Match the text reader's universal newlines, including old CR-only files.
+            for decoded_line in io.StringIO(raw_line.decode('utf-8'), newline=None):
+                index += 1
+                line = decoded_line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
+                key = row.get('key')
+                if not key:
+                    raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
+                if key in rows_by_key:
+                    raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
+                rows.append(row)
+                rows_by_key[key] = row
+    return rows, rows_by_key, {
+        'path': os.path.abspath(result_path),
+        'size': size,
+        'sha256': digest.hexdigest(),
+        'row_count': row_count,
+    }
 
 
 def result_items_from_row(row, label, expected_items, allow_empty=False, *, chunk=None):
@@ -9040,7 +9043,8 @@ def _batch_check_allows_retry_merge(manifest, check_summary):
     )
 
 
-def _batch_status_writeback_gate(manifest):
+def current_batch_writeback_gate(manifest, *, quality_policy=None):
+    """Return the saved Batch gate only if its allowing check is still current."""
     summary = manifest.get('last_check_summary')
     if isinstance(summary, dict):
         gate = summary.get('writeback_gate')
@@ -9052,8 +9056,8 @@ def _batch_status_writeback_gate(manifest):
             and summary.get('check_contract_version') == CHECK_CONTRACT_VERSION
         ):
             try:
-                current = build_check_fingerprint(manifest)
-            except (OSError, ValueError, SystemExit):
+                current = build_check_fingerprint(manifest, quality_policy=quality_policy)
+            except (OSError, ValueError, TypeError, KeyError, SystemExit):
                 pass
             else:
                 if check_fingerprint_id(summary.get('check_fingerprint')) == check_fingerprint_id(current):
@@ -9075,7 +9079,8 @@ def merge_retry_results(parent_target, retry_target, *, require_checked_retry=Fa
     retry_key_set = set(retry_keys)
     parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
     parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
-    retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
+    _, retry_rows_by_key, retry_result = _read_result_rows_snapshot(retry_manifest, 'retry')
+    retry_result_path = retry_result['path']
     if require_checked_retry:
         retry_check = retry_manifest.get('last_check_summary') or {}
         if (
@@ -9083,7 +9088,9 @@ def merge_retry_results(parent_target, retry_target, *, require_checked_retry=Fa
             or not _batch_check_allows_retry_merge(retry_manifest, retry_check)
             or retry_check.get('check_contract_version') != CHECK_CONTRACT_VERSION
             or check_fingerprint_id(retry_check.get('check_fingerprint'))
-            != check_fingerprint_id(build_check_fingerprint(retry_manifest))
+            != check_fingerprint_id(build_check_fingerprint(
+                retry_manifest, result_fingerprint=retry_result,
+            ))
         ):
             raise cli_contract.MachineContractError(
                 'Retry merge requires a current check with writeback_gate=allow. '
@@ -25900,7 +25907,7 @@ def build_machine_success_envelope(command, value, args):
         if command == 'status' and manifest_mode(manifest) == MANIFEST_MODE_TRANSLATION:
             result['next_action'] = batch_resume.next_action(manifest)
             result['retry_parent_manifest_path'] = manifest.get('retry_of_manifest') or ''
-            result['writeback_gate'] = _batch_status_writeback_gate(manifest)
+            result['writeback_gate'] = current_batch_writeback_gate(manifest)
     elif command == 'download':
         status = 'downloaded'
         result['result_jsonl_sha256'] = manifest.get('result_jsonl_sha256', '')

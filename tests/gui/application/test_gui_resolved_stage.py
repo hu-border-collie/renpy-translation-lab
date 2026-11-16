@@ -64,8 +64,8 @@ class ResolvedStageFactTests(unittest.TestCase):
 
     def test_every_generation_stage_shows_resolved_profile(self) -> None:
         cases = {
-            WorkMode.BATCH_TRANSLATION: ("gemini-3.5-flash", "Gemini Batch", "继承默认"),
-            WorkMode.SYNC_TRANSLATION: ("gemini-3.1-flash-lite", "同步", "继承默认"),
+            WorkMode.BATCH_TRANSLATION: ("gemini-3.5-flash", "Gemini Batch", "显式覆盖"),
+            WorkMode.SYNC_TRANSLATION: ("gemini-3.5-flash", "同步", "显式覆盖"),
             WorkMode.KEYWORD_EXTRACTION: ("gemini-3.5-flash", "Gemini Batch", "继承默认"),
             WorkMode.SYNC_KEYWORD_EXTRACTION: ("gemini-3.1-flash-lite", "同步", "继承默认"),
             WorkMode.REVISION: ("gemini-3.5-flash", "Gemini Batch", "继承默认"),
@@ -80,6 +80,40 @@ class ResolvedStageFactTests(unittest.TestCase):
                 self.assertIn(model, facts)
                 self.assertIn(strategy, facts)
                 self.assertIn(origin, facts)
+
+    def test_same_strategy_profile_selection_refreshes_the_visible_stage_fact(self) -> None:
+        self.assertIn("gemini-3.5-flash", self._facts_for(WorkMode.SYNC_TRANSLATION))
+
+        self.window._on_translation_target_selected("legacy-sync", "sync")
+
+        _, _, _, facts = self.window.sync_translation_page.workflow_status_snapshot()
+        stage_facts = [fact for fact in facts if fact.startswith("本阶段模型：")]
+        self.assertEqual(len(stage_facts), 1)
+        self.assertIn("gemini-3.1-flash-lite", stage_facts[0])
+
+    def test_batch_keyword_summary_rejects_sync_route(self) -> None:
+        config = migrated_config()
+        config["model_routing"]["routes"]["keyword"] = {
+            "profile_id": "legacy-sync", "strategy": "sync",
+        }
+        self.window.state.load_translator_config = lambda: config
+
+        facts = self._facts_for(WorkMode.KEYWORD_EXTRACTION)
+
+        self.assertIn("无法解析", facts)
+        self.assertIn("Selected command cannot execute the configured stage strategy", facts)
+
+    def test_final_review_summary_accepts_explicit_sync_route(self) -> None:
+        config = migrated_config()
+        config["model_routing"]["routes"]["final_review"] = {
+            "profile_id": "legacy-sync", "strategy": "sync",
+        }
+        self.window.state.load_translator_config = lambda: config
+
+        facts = self._facts_for(WorkMode.FINAL_REVIEW)
+
+        self.assertIn("同步", facts)
+        self.assertIn("gemini-3.1-flash-lite", facts)
 
     def test_missing_stage_route_shows_visible_fallback_fact(self) -> None:
         with mock.patch.dict(

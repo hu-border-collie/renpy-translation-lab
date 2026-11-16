@@ -112,7 +112,7 @@ JSON 模式下 stdout 只包含结果文档，原有 banner、进度、prepare �
 
 恢复批量翻译时，先用 `status <MANIFEST> --local --output json` 读取任务记录与提交日志。这一步无需 API Key，也不会查询云端。按 `result.next_action` 继续，可能是 `submit`、`resume-submit`（`submit --resume`）、`recover-submit`、`status`、`download`、`check` 或空字符串（没有可自动执行的步骤）。需要查询云端时，去掉 `--local`。状态结果还提供 `result.retry_parent_manifest_path` 和 `result.writeback_gate`，后者仅在已有检查仍与当前结果匹配时返回 `allow`。实际写回仍遵守 `check → apply`。
 
-自动合并补译时，先对补译包运行 `check <RETRY_MANIFEST> --output json`。当检查门禁为 `allow` 时，补译包的 `result.next_action` 为 `merge-retry`，其余情况为空。随后运行 `merge-retry <PARENT_MANIFEST> <RETRY_MANIFEST> --require-checked-retry`，命令会核对补译包最近一次检查的门禁和指纹。结果变更后须重新检查补译包。合并成功后，重新检查父任务再进入写回确认。只有质量报警时仍可推进，配置为阻断项的规则会拒绝自动合并。
+自动合并补译时，先对补译包运行 `check <RETRY_MANIFEST> --output json`。当检查门禁为 `allow` 时，补译包的 `result.next_action` 为 `merge-retry`，其余情况为空。随后运行 `merge-retry <PARENT_MANIFEST> <RETRY_MANIFEST> --require-checked-retry`，命令会核对补译包最近一次检查的门禁和实际读入的结果字节。结果变更后须重新检查补译包。合并成功后，重新检查父任务再进入写回确认。只有质量报警时仍可推进，配置为阻断项的规则会拒绝自动合并。
 
 ### Parser-level 错误
 

@@ -1691,6 +1691,7 @@ TRANSLATION_TARGET_COPY = {
         "gemini_batch": "Gemini Batch",
     },
     "resolved": "当前选择：{model} · {strategy}",
+    "resolved_stage_prefix": "本阶段模型：",
     "resolved_stage": "本阶段模型：{label}{model} · {strategy} · {origin}",
     "resolved_stage_model_suffix": "（{model}）",
     "resolved_stage_origin_explicit": "显式覆盖",

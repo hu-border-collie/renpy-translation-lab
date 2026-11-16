@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import ExitStack, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import tempfile
@@ -178,6 +179,27 @@ class MvBatchTests(unittest.TestCase):
             batch.merge_retry_results(*retry_args, require_checked_retry=True)
         self.assertEqual(stale.exception.code_name, 'RETRY_MERGE_CHECK_REQUIRED')
         self.assertEqual(Path(manifest['_manifest_path']).read_bytes(), parent_before)
+
+        checked_results = retry_results.read_bytes().rstrip(b'\r\n') + b'\r\n'
+        retry_results.write_bytes(checked_results)
+        batch.check_results(retry['_manifest_path'])
+        retry_results.write_bytes(checked_results + b'\r\n')
+        restored_results = retry_results.with_suffix('.restored')
+        restored_results.write_bytes(checked_results)
+        read_snapshot = batch._read_result_rows_snapshot
+
+        def replace_after_read(package, label):
+            snapshot = read_snapshot(package, label)
+            if label == 'retry':
+                os.replace(restored_results, retry_results)
+            return snapshot
+
+        with mock.patch.object(batch, '_read_result_rows_snapshot', side_effect=replace_after_read):
+            with self.assertRaises(batch.cli_contract.MachineContractError) as concurrent:
+                batch.merge_retry_results(*retry_args, require_checked_retry=True)
+        self.assertEqual(concurrent.exception.code_name, 'RETRY_MERGE_CHECK_REQUIRED')
+        self.assertEqual(Path(manifest['_manifest_path']).read_bytes(), parent_before)
+
         batch.check_results(retry['_manifest_path'])
         batch.merge_retry_results(*retry_args, require_checked_retry=True)
         with self.assertRaises(SystemExit):

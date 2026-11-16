@@ -693,7 +693,7 @@ class MainWindow(QMainWindow):
             "strategy": "",
         }
         self._translation_routing_active = False
-        self._resolved_stage_fact_cache: dict[tuple[WorkMode, str], str] = {}
+        self._resolved_stage_fact_cache: dict[tuple[WorkMode, str, str], str] = {}
         self._translation_supported_strategies: dict[str, tuple[str, ...]] = {}
         self._translation_profile_models: dict[str, str] = {}
         self._workflow_step_output_lines: list[str] = []
@@ -5986,13 +5986,36 @@ class MainWindow(QMainWindow):
         except ValueError:
             self._set_writeback_summary(idle_writeback_summary())
             return
-        summary = summarize_manifest_writeback(
+        summary = self._summarize_saved_batch_writeback(
             manifest, current_writeback_gate=current_writeback_gate,
         )
         if summary is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
         self._set_writeback_summary(summary)
+
+    def _summarize_saved_batch_writeback(
+        self,
+        manifest: dict[str, object],
+        *,
+        current_writeback_gate: dict[str, object] | None = None,
+    ) -> WritebackSummary | None:
+        summary = summarize_manifest_writeback(manifest, current_writeback_gate=current_writeback_gate)
+        if current_writeback_gate is not None or summary is None or not summary.can_apply:
+            return summary
+        from gemini_translate_batch import current_batch_writeback_gate
+        from quality_review.translation_quality import load_policy_from_config
+
+        try:
+            # The display reader may omit chunks needed to verify the fingerprint.
+            full_manifest = self.state.load_manifest_file(summary.manifest_path, lite=False)
+        except ValueError:
+            return summarize_manifest_writeback(manifest, current_writeback_gate={})
+        gate = current_batch_writeback_gate(
+            {**full_manifest, "_package_dir": str(Path(summary.manifest_path).parent)},
+            quality_policy=load_policy_from_config(self.state.load_translator_config()),
+        )
+        return summarize_manifest_writeback(full_manifest, current_writeback_gate=gate)
 
     def _select_split_manifest(self, manifest_path: str) -> None:
         self._invalidate_manifest_caches(manifest_path)
@@ -6765,7 +6788,7 @@ class MainWindow(QMainWindow):
             manifest = state.load_manifest_file(manifest_path)
         except ValueError:
             return
-        summary = summarize_manifest_writeback(manifest)
+        summary = self._summarize_saved_batch_writeback(manifest)
         if summary is not None:
             self._set_writeback_summary(summary)
         self.statusBar().showMessage("质量报警确认状态已更新。", 3000)
@@ -9427,6 +9450,13 @@ class MainWindow(QMainWindow):
                 ),
                 4000,
             )
+            session = self._capture_mode_session()
+            self._apply_session_workflow_ui({
+                "status": session.workflow_status,
+                "heading": session.workflow_heading,
+                "message": session.workflow_message,
+                "facts": session.workflow_facts,
+            })
         self._sync_readiness_display()
 
     def _apply_work_mode_ui(
@@ -9483,7 +9513,10 @@ class MainWindow(QMainWindow):
         def _try_restore_writeback_snapshot() -> bool:
             if pending_writeback is None:
                 return False
-            self._set_writeback_summary(pending_writeback)
+            if spec.supports_translation_writeback and pending_writeback.can_apply:
+                self._refresh_writeback_for_manifest_path(pending_writeback.manifest_path)
+            else:
+                self._set_writeback_summary(pending_writeback)
             return True
 
         if refresh_manifest_writeback or refresh_diagnostics:
@@ -9750,6 +9783,10 @@ class MainWindow(QMainWindow):
 
     def _on_view_last_completed_task(self) -> None:
         self._show_completed_manifest_snapshot()
+        snapshot = self._completed_manifest_snapshot or {}
+        manifest_path = snapshot.get("manifest_path")
+        if self._current_work_mode() == WorkMode.BATCH_TRANSLATION and isinstance(manifest_path, str):
+            self._refresh_writeback_for_manifest_path(manifest_path)
         self._focus_workbench_status_tab(_BATCH_STAGE_EXECUTE)
 
     def _on_hide_completed_manifest_view(self) -> None:
@@ -10132,7 +10169,7 @@ class MainWindow(QMainWindow):
                 self._set_writeback_summary(idle_writeback_summary())
                 return
 
-        summary = summarize_manifest_writeback(manifest)
+        summary = self._summarize_saved_batch_writeback(manifest)
         if summary is None:
             self._set_writeback_summary(idle_writeback_summary())
             return
@@ -13943,6 +13980,7 @@ class MainWindow(QMainWindow):
         cache_key = (
             selected_mode,
             str(self.state.get_game_root() or ""),
+            self._stage_target_profile_override(selected_mode),
         )
         cached = self._resolved_stage_fact_cache.get(cache_key)
         if cached is not None:
@@ -13951,8 +13989,13 @@ class MainWindow(QMainWindow):
         self._resolved_stage_fact_cache[cache_key] = value
         return value
 
+    def _stage_target_profile_override(self, mode: WorkMode) -> str:
+        if mode in {WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION}:
+            return self._selected_translation_profile_id()
+        return ""
+
     def _compute_resolved_stage_target_fact(self, selected_mode: WorkMode) -> str:
-        """Resolve one stage fact; callers cache by mode and project root."""
+        """Resolve the selected command's route using the same checks as startup."""
         stage = _RESOLVED_STAGE_BY_WORK_MODE.get(selected_mode)
         if not stage:
             return ""
@@ -13964,17 +14007,30 @@ class MainWindow(QMainWindow):
             return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(
                 error=TRANSLATION_TARGET_COPY["resolved_stage_invalid_section"],
             )
+        from providers.model_routing_reader import (
+            primary_profile_override,
+            read_explicit_final_review_plan,
+            require_entrypoint_strategy,
+            section_custom_providers,
+        )
+
+        execution = _RESOLVED_STAGE_EXECUTION_BY_WORK_MODE[selected_mode]
         try:
-            plan = model_profile.resolve_routing_plan_from_runtime(
-                model_routing_config=section,
-                sync_backend="",
-                execution=_RESOLVED_STAGE_EXECUTION_BY_WORK_MODE.get(
-                    selected_mode, model_profile.ExecutionStrategy.SYNC,
-                ),
+            plan = read_explicit_final_review_plan(config) if selected_mode == WorkMode.FINAL_REVIEW else None
+            if plan is None:
+                with primary_profile_override(self._stage_target_profile_override(selected_mode)):
+                    plan = model_profile.resolve_routing_plan_from_runtime(
+                        model_routing_config=section, sync_backend="", execution=execution,
+                    )
+                require_entrypoint_strategy(plan, execution=execution, stages=(stage,))
+            issues = model_profile.validate_routing_plan(
+                plan, stages=(stage,), custom_providers=section_custom_providers(section),
             )
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OverflowError) as exc:
             issue = model_profile.routing_resolution_issue(exc, stage=stage)
             return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(error=issue.message)
+        if issues:
+            return TRANSLATION_TARGET_COPY["resolved_stage_error"].format(error=issues[0].message)
         route = plan.routes.get(stage)
         profile = plan.profiles.get(route.profile_id) if route is not None else None
         if route is None or profile is None:
@@ -14000,7 +14056,10 @@ class MainWindow(QMainWindow):
         message: str,
         facts: list[str] | None = None,
     ):
-        facts = list(facts or [])
+        facts = [
+            fact for fact in (facts or [])
+            if not fact.startswith(TRANSLATION_TARGET_COPY["resolved_stage_prefix"])
+        ]
         resolved_fact = self._resolved_stage_target_fact()
         if resolved_fact and resolved_fact not in facts:
             facts.append(resolved_fact)
