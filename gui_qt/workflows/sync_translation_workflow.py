@@ -190,6 +190,7 @@ class SyncTranslationWorkflow:
     ) -> None:
         self.manifest_path = ""
         self.run_id = str(run_id or "")
+        self.created_run_id = ""
         self.profile_id = str(profile_id or "").strip()
         self.run_dir = ""
         self.run_snapshot: dict[str, Any] | None = None
@@ -271,7 +272,7 @@ class SyncTranslationWorkflow:
             if self.profile_id:
                 args.extend(["--profile", self.profile_id])
         elif key == "sync-status":
-            args = ["sync-status", self.run_id] if self.run_id else [
+            args = ["sync-status", "--run-id", self.run_id] if self.run_id else [
                 "sync-status",
                 "--latest",
             ]
@@ -322,10 +323,8 @@ class SyncTranslationWorkflow:
         facts = [f"退出码：{exit_code}"] if exit_code else []
         if output.strip():
             facts.append(DURABLE_SYNC_RUN_COPY["log_hint_fact"])
-        if key in {"sync-start", "sync-resume"} and not self.run_id:
-            # The worker died before any snapshot was rendered. Locate the
-            # persisted run with a read-only status query so the user can
-            # resume or cancel it instead of guessing a run id.
+        if key in {"sync-start", "sync-derive"} and self.created_run_id:
+            self.run_id = self.created_run_id
             self.operation = "recover"
             self._pending_steps.append("sync-status")
             return WorkflowUpdate(

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import unittest
-from unittest import mock
 
 from gui_qt.reports.manifest_resume_summary import build_manifest_workflow_display
 from gui_qt.work_modes import WORK_MODE_SPECS, WorkMode
@@ -83,17 +82,14 @@ class ManifestResumeSummaryTests(unittest.TestCase):
         manifest = {
             "job_state": "RESULTS_MERGED",
             "job_name": "batches/example",
+            "last_check_summary": {"writeback_gate": {"decision": "allow"}},
             "summary": {"file_count": 5, "chunk_count": 42, "item_count": 800},
         }
-        with mock.patch("gui_qt.reports.manifest_resume_summary.resume_workflow") as resume_mock:
-            workflow = mock.Mock()
-            workflow.current_step.return_value = None
-            resume_mock.return_value = workflow
-            display = build_manifest_workflow_display(
-                spec,
-                "C:/logs/batch_jobs/20260615_Game_Example/manifest.json",
-                manifest,
-            )
+        display = build_manifest_workflow_display(
+            spec,
+            "C:/logs/batch_jobs/20260615_Game_Example/manifest.json",
+            manifest,
+        )
 
         self.assertTrue(display.archive_when_idle)
         self.assertEqual(display.status, "done")
@@ -105,17 +101,11 @@ class ManifestResumeSummaryTests(unittest.TestCase):
             "job_name": "batches/example",
             "summary": {"file_count": 3, "chunk_count": 2, "item_count": 120},
         }
-        with mock.patch("gui_qt.reports.manifest_resume_summary.resume_workflow") as resume_mock:
-            workflow = mock.Mock()
-            step = mock.Mock()
-            step.key = "check"
-            workflow.current_step.return_value = step
-            resume_mock.return_value = workflow
-            display = build_manifest_workflow_display(
-                spec,
-                "C:/logs/batch_jobs/current/manifest.json",
-                manifest,
-            )
+        display = build_manifest_workflow_display(
+            spec,
+            "C:/logs/batch_jobs/current/manifest.json",
+            manifest,
+        )
 
         self.assertFalse(display.archive_when_idle)
         self.assertEqual(display.status, "ready")
@@ -128,15 +118,11 @@ class ManifestResumeSummaryTests(unittest.TestCase):
             "retry_of_manifest": "C:/logs/batch_jobs/parent/manifest.json",
             "last_check_summary": {"safety_level": "warn"},
         }
-        with mock.patch("gui_qt.reports.manifest_resume_summary.resume_workflow") as resume_mock:
-            workflow = mock.Mock()
-            workflow.current_step.return_value = None
-            resume_mock.return_value = workflow
-            display = build_manifest_workflow_display(
-                spec,
-                "C:/logs/batch_jobs/retry/manifest.json",
-                manifest,
-            )
+        display = build_manifest_workflow_display(
+            spec,
+            "C:/logs/batch_jobs/retry/manifest.json",
+            manifest,
+        )
 
         self.assertFalse(display.archive_when_idle)
         self.assertEqual(display.status, "stale")
@@ -157,40 +143,32 @@ class ManifestResumeSummaryTests(unittest.TestCase):
                 }
             },
         }
-        with mock.patch("gui_qt.reports.manifest_resume_summary.resume_workflow") as resume_mock:
-            workflow = mock.Mock()
-            workflow.current_step.return_value = None
-            resume_mock.return_value = workflow
-            display = build_manifest_workflow_display(
-                spec,
-                "C:/logs/batch_jobs/current/manifest.json",
-                manifest,
-            )
+        display = build_manifest_workflow_display(
+            spec,
+            "C:/logs/batch_jobs/current/manifest.json",
+            manifest,
+        )
 
         quality_facts = [fact for fact in display.facts if fact.startswith("质量检查：")]
         self.assertTrue(quality_facts)
         self.assertIn("未确认 2", quality_facts[0])
 
-    def test_retry_manifest_completed_archives_when_idle(self):
+    def test_merged_retry_manifest_stays_active_until_rechecked(self):
         spec = WORK_MODE_SPECS[WorkMode.BATCH_TRANSLATION]
         manifest = {
             "job_state": "RESULTS_MERGED",
             "job_name": "batches/retry",
             "retry_of_manifest": "C:/logs/batch_jobs/parent/manifest.json",
         }
-        with mock.patch("gui_qt.reports.manifest_resume_summary.resume_workflow") as resume_mock:
-            workflow = mock.Mock()
-            workflow.current_step.return_value = None
-            resume_mock.return_value = workflow
-            display = build_manifest_workflow_display(
-                spec,
-                "C:/logs/batch_jobs/retry/manifest.json",
-                manifest,
-            )
+        display = build_manifest_workflow_display(
+            spec,
+            "C:/logs/batch_jobs/retry/manifest.json",
+            manifest,
+        )
 
-        self.assertTrue(display.archive_when_idle)
-        self.assertEqual(display.status, "done")
-        self.assertEqual(display.heading, "补译任务已完成")
+        self.assertFalse(display.archive_when_idle)
+        self.assertEqual(display.status, "ready")
+        self.assertEqual(display.timeline_step_key, "check")
 
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ from execution import batch_export
 from providers import batch_cost_estimate
 from quality_review import batch_non_chinese_rules
 from quality_review import preflight_display
-from execution import batch_submit_recovery
+from execution import batch_resume, batch_submit_recovery
 from foundation import cli_contract
 from foundation import cli_discovery
 from execution import external_translation_work
@@ -2820,8 +2820,10 @@ def manifest_target_shape(manifest):
     }
 
 
-def build_check_fingerprint(manifest):
-    result_path = resolve_manifest_result_path(manifest)
+def build_check_fingerprint(manifest, *, quality_policy=None, result_fingerprint=None):
+    """Bind a check to the manifest, active policy and exact result bytes."""
+    if result_fingerprint is None:
+        result_fingerprint = file_content_fingerprint(resolve_manifest_result_path(manifest))
     package_dir = manifest.get('_package_dir', '')
     project_identity = manifest_project_identity(manifest)
     payload = {
@@ -2833,9 +2835,9 @@ def build_check_fingerprint(manifest):
         'core_schema_version': manifest.get('core_schema_version', 1),
         'batch_model': manifest.get('batch_model', ''),
         'settings': manifest.get('settings') or {},
-        'quality_policy': BATCH_QUALITY_POLICY,
+        'quality_policy': BATCH_QUALITY_POLICY if quality_policy is None else quality_policy,
         'project': project_identity,
-        'result': file_content_fingerprint(result_path),
+        'result': result_fingerprint,
         'target_shape': manifest_target_shape(manifest),
     }
     if isinstance(manifest.get('durable_sync_source'), dict):
@@ -7302,28 +7304,11 @@ def freeze_final_review_routing_plan():
     v1 config whose ``defaults.execution_strategy`` is sync from silently
     switching an existing final-review path from Batch to sync.
     """
-    from providers.model_routing_reader import read_routing_plan
+    from providers.model_routing_reader import read_explicit_final_review_plan
 
-    section = legacy.MODEL_ROUTING_CONFIG
     try:
-        if isinstance(section, dict):
-            routes = section.get("routes")
-            raw_route = (
-                routes.get("final_review") if isinstance(routes, dict) else {}
-            )
-            raw_route = raw_route if isinstance(raw_route, dict) else {}
-            explicit_strategy = str(raw_route.get("strategy") or "").strip()
-            if explicit_strategy:
-                plan = read_routing_plan({"model_routing": section})
-            else:
-                # Preserve the pre-#431 behavior exactly: final_review used
-                # the Batch entrypoint contract unless the route explicitly
-                # opted into another strategy.
-                plan = freeze_runtime_routing_plan(
-                    execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
-                    required_stages={model_profile.STAGE_FINAL_REVIEW},
-                )
-        else:
+        plan = read_explicit_final_review_plan({"model_routing": legacy.MODEL_ROUTING_CONFIG})
+        if plan is None:
             plan = freeze_runtime_routing_plan(
                 execution=model_profile.ExecutionStrategy.GEMINI_BATCH,
                 required_stages={model_profile.STAGE_FINAL_REVIEW},
@@ -8784,28 +8769,46 @@ def build_retry_package(target=None, display_name_override=''):
 
 
 def load_result_rows_by_key(manifest, label):
+    rows, rows_by_key, result = _read_result_rows_snapshot(manifest, label)
+    return rows, rows_by_key, result['path']
+
+
+def _read_result_rows_snapshot(manifest, label):
     result_path = resolve_manifest_result_path(manifest)
     if not os.path.isfile(result_path):
         raise SystemExit(f'{label} result JSONL not found: {result_path}')
     rows = []
     rows_by_key = {}
-    with open(result_path, 'r', encoding='utf-8') as handle:
-        for index, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
-            key = row.get('key')
-            if not key:
-                raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
-            if key in rows_by_key:
-                raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
-            rows.append(row)
-            rows_by_key[key] = row
-    return rows, rows_by_key, result_path
+    digest = hashlib.sha256()
+    size = row_count = index = 0
+    with open(result_path, 'rb') as handle:
+        for raw_line in handle:
+            digest.update(raw_line)
+            size += len(raw_line)
+            row_count += bool(raw_line.strip())
+            # Match the text reader's universal newlines, including old CR-only files.
+            for decoded_line in io.StringIO(raw_line.decode('utf-8'), newline=None):
+                index += 1
+                line = decoded_line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise SystemExit(f'Invalid {label} result JSONL row #{index}: {exc}') from exc
+                key = row.get('key')
+                if not key:
+                    raise SystemExit(f'Missing key in {label} result JSONL row #{index}.')
+                if key in rows_by_key:
+                    raise SystemExit(f'Duplicate key in {label} result JSONL: {key}')
+                rows.append(row)
+                rows_by_key[key] = row
+    return rows, rows_by_key, {
+        'path': os.path.abspath(result_path),
+        'size': size,
+        'sha256': digest.hexdigest(),
+        'row_count': row_count,
+    }
 
 
 def result_items_from_row(row, label, expected_items, allow_empty=False, *, chunk=None):
@@ -9031,7 +9034,39 @@ def assert_retry_manifest_matches_parent(parent_manifest, retry_manifest):
         elif chunk_target_signature(chunk) != chunk_target_signature(parent_chunk):
             raise SystemExit(f'Retry chunk target shape differs from parent manifest: {key}')
 
-def merge_retry_results(parent_target, retry_target):
+def _batch_check_allows_retry_merge(manifest, check_summary):
+    gate = check_summary.get('writeback_gate')
+    return bool(
+        manifest.get('retry_of_manifest')
+        and isinstance(gate, dict)
+        and gate.get('decision') == translation_quality.GATE_ALLOW
+    )
+
+
+def current_batch_writeback_gate(manifest, *, quality_policy=None):
+    """Return the saved Batch gate only if its allowing check is still current."""
+    summary = manifest.get('last_check_summary')
+    if isinstance(summary, dict):
+        gate = summary.get('writeback_gate')
+        if isinstance(gate, dict) and gate.get('decision') == translation_quality.GATE_DENY:
+            return gate
+        if (
+            isinstance(gate, dict)
+            and gate.get('decision') == translation_quality.GATE_ALLOW
+            and summary.get('check_contract_version') == CHECK_CONTRACT_VERSION
+        ):
+            try:
+                current = build_check_fingerprint(manifest, quality_policy=quality_policy)
+            except (OSError, ValueError, TypeError, KeyError, SystemExit):
+                pass
+            else:
+                if check_fingerprint_id(summary.get('check_fingerprint')) == check_fingerprint_id(current):
+                    return gate
+    return {'decision': translation_quality.GATE_DENY, 'can_apply': False}
+
+
+def merge_retry_results(parent_target, retry_target, *, require_checked_retry=False):
+    """Merge retry results, optionally requiring a current, allowing retry check."""
     parent_manifest = load_manifest(parent_target)
     retry_manifest = load_manifest(retry_target)
     require_manifest_mode(parent_manifest, MANIFEST_MODE_TRANSLATION, 'merge-retry')
@@ -9044,7 +9079,26 @@ def merge_retry_results(parent_target, retry_target):
     retry_key_set = set(retry_keys)
     parent_chunks = {chunk['key']: chunk for chunk in parent_manifest.get('chunks') or []}
     parent_rows, parent_rows_by_key, parent_result_path = load_result_rows_by_key(parent_manifest, 'parent')
-    retry_rows, retry_rows_by_key, retry_result_path = load_result_rows_by_key(retry_manifest, 'retry')
+    _, retry_rows_by_key, retry_result = _read_result_rows_snapshot(retry_manifest, 'retry')
+    retry_result_path = retry_result['path']
+    if require_checked_retry:
+        retry_check = retry_manifest.get('last_check_summary') or {}
+        if (
+            not isinstance(retry_check, dict)
+            or not _batch_check_allows_retry_merge(retry_manifest, retry_check)
+            or retry_check.get('check_contract_version') != CHECK_CONTRACT_VERSION
+            or check_fingerprint_id(retry_check.get('check_fingerprint'))
+            != check_fingerprint_id(build_check_fingerprint(
+                retry_manifest, result_fingerprint=retry_result,
+            ))
+        ):
+            raise cli_contract.MachineContractError(
+                'Retry merge requires a current check with writeback_gate=allow. '
+                'Run check on the retry manifest and try again.',
+                code_name='RETRY_MERGE_CHECK_REQUIRED',
+                suggested_action='check_retry_manifest',
+                semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
+            )
 
     unknown_retry_rows = set(retry_rows_by_key) - retry_key_set
     if unknown_retry_rows:
@@ -9598,14 +9652,15 @@ def refresh_manifest_status(manifest):
     return manifest
 
 
-def show_status(target=None):
+def show_status(target=None, *, local=False):
+    """Inspect a package and refresh its remote job unless local was requested."""
     manifest = load_manifest(target)
     uncertain_state = batch_submit_recovery.get_uncertain_submit_state(manifest)
     if uncertain_state:
         print('Submit recovery required before re-submitting this package.')
         for hint in batch_submit_recovery.format_uncertain_submit_hints(uncertain_state):
             print(hint)
-    if manifest.get('job_name'):
+    if manifest.get('job_name') and not local:
         manifest = refresh_manifest_status(manifest)
     print(f"Manifest: {manifest['_manifest_path']}")
     print(f"Job: {manifest.get('job_name')}")
@@ -22608,6 +22663,8 @@ def build_arg_parser():
         action='store_true',
         help='Select the uniquely latest valid durable run in the active project log.',
     )
+    sync_status_parser.add_argument('--run-id', default='', metavar='ID',
+                                    help='Inspect exactly this durable Sync run ID.')
 
     sync_cancel_parser = subparsers.add_parser(
         'sync-cancel',
@@ -22638,6 +22695,11 @@ def build_arg_parser():
         action='store_true',
         help='Acknowledge duplicate execution/billing risk required by --retry-unknown.',
     )
+    for run_parser in (sync_start_parser, sync_derive_parser):
+        run_parser.add_argument(
+            '--run-id-file', default='', metavar='NEW_JSON_FILE',
+            help='Publish the created run ID to a new JSON file. Execution stops if publication fails.',
+        )
 
     profiles_show_parser = subparsers.add_parser(
         'profiles-show',
@@ -22852,8 +22914,19 @@ def build_arg_parser():
         default='',
         help='Manifest path or package dir. Defaults to latest package.',
     )
+    status_parser.add_argument(
+        '--local', action='store_true',
+        help='Read the manifest and next action without refreshing the remote job.',
+    )
 
-    check_parser = subparsers.add_parser('check', help='Dry-run parse downloaded results and summarize recoverable items.')
+    check_parser = subparsers.add_parser(
+        'check',
+        help='Check downloaded results for writeback and recoverable items.',
+        description=(
+            'Check downloaded results. JSON output includes the writeback gate '
+            'and a merge-retry next action when a retry check allows it.'
+        ),
+    )
     add_machine_output_argument(check_parser)
     check_parser.add_argument(
         'target',
@@ -23266,6 +23339,11 @@ def build_arg_parser():
     )
     merge_retry_parser.add_argument('parent', help='Parent translation manifest path or package dir.')
     merge_retry_parser.add_argument('retry', help='Retry translation manifest path or package dir.')
+    merge_retry_parser.add_argument(
+        '--require-checked-retry',
+        action='store_true',
+        help='Require a current check with writeback_gate=allow on the retry manifest.',
+    )
     add_machine_output_argument(merge_retry_parser)
 
     repair_parser = subparsers.add_parser('repair', help='Synchronously repair specific remaining untranslated items from a JSONL report.')
@@ -23384,16 +23462,26 @@ def _durable_sync_production_service(*, require_provider):
     return service, context
 
 
-def _emit_durable_run_id(run_id):
-    """Emit the run identity as a stable stderr marker before execution ends.
-
-    stdout stays reserved for the machine result envelope. ``CliRunner`` mirrors
-    stderr lines onto its combined ``line_ready`` signal, so the GUI can bind
-    live ``sync-status --latest`` polls to the new run without parsing human
-    prose or reading the durable store.
-    """
-
-    print(f"RTL_DURABLE_RUN_ID={run_id}", file=sys.stderr, flush=True)
+def _emit_durable_run_id(run_id, *, path=''):
+    """Publish the identity of a newly created run before execution."""
+    if path:
+        created = False
+        try:
+            with open(path, 'x', encoding='utf-8') as handle:
+                created = True
+                json.dump({'run_id': run_id}, handle)
+        except (OSError, ValueError) as exc:
+            if created:
+                with contextlib.suppress(OSError):
+                    os.unlink(path)
+            raise cli_contract.MachineContractError(
+                f'Could not publish durable run {run_id} to --run-id-file: {exc}',
+                code_name='SYNC_RUN_ID_FILE_FAILED',
+                suggested_action='choose_new_writable_run_id_file',
+                details={'run_id': run_id},
+            ) from exc
+    else:
+        print(f"RTL_DURABLE_RUN_ID={run_id}", file=sys.stderr, flush=True)
 
 
 def _print_durable_sync_snapshot(snapshot):
@@ -23441,11 +23529,13 @@ def run_durable_sync_command(args):
     command = str(args.command or '')
     root_dir = _durable_sync_root_dir()
     if command == 'sync-status':
-        run_id = str(getattr(args, 'run', '') or '').strip()
+        positional_run = str(getattr(args, 'run', '') or '').strip()
+        explicit_run = str(getattr(args, 'run_id', '') or '').strip()
+        run_id = explicit_run or positional_run
         latest = bool(getattr(args, 'latest', False))
-        if bool(run_id) == latest:
+        if sum(map(bool, (positional_run, explicit_run, latest))) != 1:
             raise cli_contract.MachineContractError(
-                'sync-status requires exactly one of RUN or --latest.',
+                'sync-status requires exactly one of RUN, --run-id ID, or --latest.',
                 code_name='INVALID_RUN_SELECTOR',
                 suggested_action='pass_run_or_latest',
                 semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
@@ -23469,7 +23559,9 @@ def run_durable_sync_command(args):
             snapshot = service.start(
                 context.plan_build,
                 client_token=getattr(args, 'client_token', '') or None,
-                on_run_created=_emit_durable_run_id,
+                on_run_created=lambda run_id: _emit_durable_run_id(
+                    run_id, path=getattr(args, 'run_id_file', ''),
+                ),
             )
     elif command == 'sync-resume':
         run_id = str(args.run)
@@ -23513,7 +23605,9 @@ def run_durable_sync_command(args):
                 getattr(args, 'ack_duplicate_billing_risk', False)
             ),
             exclude_unknown=bool(getattr(args, 'exclude_unknown', False)),
-            on_run_created=_emit_durable_run_id,
+            on_run_created=lambda run_id: _emit_durable_run_id(
+                run_id, path=getattr(args, 'run_id_file', ''),
+            ),
         )
     else:
         raise SystemExit(f'Unknown durable Sync command: {command}')
@@ -25164,9 +25258,12 @@ def dispatch_command(parser, args):
     # Sync and embedding requests validate the selected provider's credentials;
     # an OpenAI-compatible/LiteLLM stage does not need a Gemini key.
     embedding_bootstrap = command in {'bootstrap-rag', 'bootstrap-source-index'}
+    local_batch_status = command == 'status' and args.local
     require_api_key = command not in OFFLINE_BATCH_COMMANDS and command not in {
         'sync-keywords', 'sync-revisions', 'bootstrap-rag', 'bootstrap-source-index',
     }
+    if local_batch_status:
+        require_api_key = False
     if command == 'submit' and getattr(args, 'target', ''):
         # External work packages never reach Provider submission; refuse before
         # key loading so the diagnostic is about the contract, not credentials.
@@ -25183,7 +25280,10 @@ def dispatch_command(parser, args):
             legacy.load_config(require_api_key=require_api_key)
         except model_profile.ModelRoutingConfigError as exc:
             raise model_profile.routing_resolution_error(exc) from exc
-        legacy.load_translator_settings()
+        if local_batch_status:
+            legacy.load_translator_settings(persist_corrected_game_root=False)
+        else:
+            legacy.load_translator_settings()
         legacy.load_glossary()
         load_batch_settings()
         if (
@@ -25281,7 +25381,7 @@ def dispatch_command(parser, args):
         return
 
     if command == 'status':
-        return show_status(args.target or None)
+        return show_status(args.target or None, local=local_batch_status)
 
     if command == 'check':
         return check_results(args.target or None)
@@ -25483,7 +25583,9 @@ def dispatch_command(parser, args):
         return
 
     if command == 'merge-retry':
-        return merge_retry_results(args.parent, args.retry)
+        return merge_retry_results(
+            args.parent, args.retry, require_checked_retry=args.require_checked_retry
+        )
 
     if command == 'repair':
         repair_remaining_items(
@@ -25802,6 +25904,10 @@ def build_machine_success_envelope(command, value, args):
         status = str(manifest.get('job_state') or 'unknown')
         if manifest.get('job_error'):
             result['job_error'] = manifest.get('job_error')
+        if command == 'status' and manifest_mode(manifest) == MANIFEST_MODE_TRANSLATION:
+            result['next_action'] = batch_resume.next_action(manifest)
+            result['retry_parent_manifest_path'] = manifest.get('retry_of_manifest') or ''
+            result['writeback_gate'] = current_batch_writeback_gate(manifest)
     elif command == 'download':
         status = 'downloaded'
         result['result_jsonl_sha256'] = manifest.get('result_jsonl_sha256', '')
@@ -25815,7 +25921,18 @@ def build_machine_success_envelope(command, value, args):
         result['last_retry_merged_at'] = manifest.get('last_retry_merged_at') or ''
     elif command == 'check':
         check_summary = dict(manifest.get('last_check_summary') or {})
+        gate = check_summary.get('writeback_gate')
+        if not isinstance(gate, dict) or gate.get('decision') not in (
+            translation_quality.GATE_ALLOW, translation_quality.GATE_DENY,
+        ):
+            check_summary['writeback_gate'] = {
+                'decision': translation_quality.GATE_DENY,
+                'can_apply': False,
+            }
         result['check'] = check_summary
+        result['next_action'] = (
+            'merge-retry' if _batch_check_allows_retry_merge(manifest, check_summary) else ''
+        )
         status = str(
             check_summary.get('check_status')
             or check_summary.get('safety_level')
@@ -26618,7 +26735,8 @@ def _collect_output_file_protected_paths(args):
             os.path.join(output_dir, engine_reuse.DEFAULT_CANDIDATES_FILENAME)
         )
 
-    # Keep the JSON envelope separate from the generated HTML artifact.
+    # Keep the JSON envelope separate from other command outputs.
+    add_path(getattr(args, 'run_id_file', ''))
     html_output = getattr(args, 'html', None)
     if isinstance(html_output, str) and html_output.strip():
         add_path(os.path.abspath(html_output.strip()))

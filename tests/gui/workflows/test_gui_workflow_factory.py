@@ -84,7 +84,7 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
         self.assertIsInstance(workflow, TranslationWorkflow)
         self.assertEqual(
             workflow.current_step().args,
-            ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
+            ["status", "C:\\package\\manifest.json", "--local", "--output", "json", "--non-interactive"],
         )
 
     def test_resume_workflow_returns_revision_resume(self):

@@ -22,12 +22,14 @@ from gui_qt.workflows.batch_workflow_support import (
     load_uncertain_submit_facts_from_manifest,
 )
 from .user_copy import (
+    BATCH_CHECK_WORKFLOW_COPY,
     BOOTSTRAP_PROGRESS_COPY,
     EXTERNAL_WORK_COPY,
     EXTERNAL_WORK_PRESERVED_COPY,
     MODEL_CONFIG_MIGRATION_COPY,
     MODEL_PROFILES_PAGE_COPY,
     DURABLE_SYNC_COPY,
+    DURABLE_SYNC_RUN_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
     TRANSLATION_PREFLIGHT_COPY,
@@ -421,13 +423,19 @@ def build_cli_commands(
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['start'],
             command=format_cli_command(
-                python_exe, batch_script_path, ['sync-start']
+                python_exe, batch_script_path, ['sync-start', '--run-id-file', '<NEW_JSON_FILE>']
             ),
         ),
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['status'],
             command=format_cli_command(
                 python_exe, batch_script_path, ['sync-status', '--latest']
+            ),
+        ),
+        DiagnosticsCommand(
+            label=DURABLE_SYNC_RUN_COPY['status_by_id'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-status', '--run-id', '<RUN>', '--output', 'json']
             ),
         ),
         DiagnosticsCommand(
@@ -445,7 +453,8 @@ def build_cli_commands(
         DiagnosticsCommand(
             label=DURABLE_SYNC_COPY['derive'],
             command=format_cli_command(
-                python_exe, batch_script_path, ['sync-derive', '<RUN>']
+                python_exe, batch_script_path,
+                ['sync-derive', '<RUN>', '--run-id-file', '<NEW_JSON_FILE>'],
             ),
         ),
         DiagnosticsCommand(
@@ -922,6 +931,12 @@ def build_cli_commands(
                 )
         return commands
 
+    commands.append(DiagnosticsCommand(
+        label=BATCH_CHECK_WORKFLOW_COPY["local_status_command"],
+        command=format_cli_command(
+            python_exe, batch_script_path, ["status", manifest_path, "--local", "--output", "json"],
+        ),
+    ))
     retry_parent = manifest.get("retry_of_manifest")
     if isinstance(retry_parent, str) and retry_parent.strip():
         parent_manifest_path = retry_parent.strip()
@@ -940,11 +955,17 @@ def build_cli_commands(
         commands.extend(
             [
                 DiagnosticsCommand(
+                    label=BATCH_CHECK_WORKFLOW_COPY["check_retry_command"],
+                    command=format_cli_command(
+                        python_exe, batch_script_path, ["check", manifest_path, "--output", "json"],
+                    ),
+                ),
+                DiagnosticsCommand(
                     label="合并补译结果",
                     command=format_cli_command(
                         python_exe,
                         batch_script_path,
-                        ["merge-retry", parent_manifest_path, manifest_path],
+                        ["merge-retry", parent_manifest_path, manifest_path, "--require-checked-retry"],
                     ),
                 ),
                 DiagnosticsCommand(
@@ -1143,7 +1164,7 @@ def manifest_check_safety_level(manifest: dict[str, object]) -> str:
         if writeback_gate.get("decision") == "allow":
             return "safe"
         safety = summary.get("safety_level")
-        return safety.strip().lower() if isinstance(safety, str) else "block"
+        return "warn" if isinstance(safety, str) and safety.strip().lower() == "warn" else "block"
     # Contract v3 check summaries always carry a writeback gate.  Legacy
     # summaries are stale for apply; keep warn/block visible for remediation
     # but never infer "safe" from the old field alone.
@@ -1210,11 +1231,17 @@ def build_warn_remediation_commands(
             ),
         ),
         DiagnosticsCommand(
+            label=BATCH_CHECK_WORKFLOW_COPY["check_retry_command"],
+            command=format_cli_command(
+                python_exe, batch_script_path, ["check", retry_manifest_path, "--output", "json"],
+            ),
+        ),
+        DiagnosticsCommand(
             label="合并补译结果",
             command=format_cli_command(
                 python_exe,
                 batch_script_path,
-                ["merge-retry", manifest_path, retry_manifest_path],
+                ["merge-retry", manifest_path, retry_manifest_path, "--require-checked-retry"],
             ),
         ),
         DiagnosticsCommand(
@@ -1376,7 +1403,9 @@ def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[Diagnostics
     ]
     for name in ('submit', 'status', 'download', 'check', 'apply', 'build-retry'):
         commands.append((f'MV Batch · {name}', [name, '<MANIFEST>']))
-    commands.append(('MV Batch · 合并补译', ['merge-retry', '<PARENT_MANIFEST>', '<RETRY_MANIFEST>']))
+    commands.append(('MV Batch · 合并补译', [
+        'merge-retry', '<PARENT_MANIFEST>', '<RETRY_MANIFEST>', '--require-checked-retry',
+    ]))
     for name in ('sync-start', 'sync-status', 'sync-resume', 'sync-cancel', 'sync-derive', 'check', 'apply'):
         args = [name, *(['--latest'] if name == 'sync-status' else ([] if name == 'sync-start' else ['<RUN>']))]
         commands.append((DURABLE_SYNC_COPY.get(name.removeprefix('sync-'), name), args))

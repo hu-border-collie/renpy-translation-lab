@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from execution import batch_resume
+from gui_qt.diagnostics_context import manifest_check_safety_level
 from gui_qt.workflows.translation_workflow import TERMINAL_FAILURE_STATES
 from gui_qt.reports.keyword_report import summarize_sync_keyword_manifest, sync_keyword_progress_from_manifest
 from gui_qt.reports.workflow_progress import WorkflowProgressState
@@ -44,16 +46,16 @@ class _ResumeDisplayCopy:
 
 
 def _display_for_resumed_workflow(
-    workflow: Any | None,
+    has_pending_step: bool,
     *,
     latest_safety: str,
     copy: _ResumeDisplayCopy,
 ) -> tuple[str, str, str, str | None]:
-    if workflow and workflow.current_step() is None and latest_safety in {"warn", "block"}:
+    if not has_pending_step and latest_safety in {"warn", "block"}:
         status = "stale" if latest_safety == "warn" else "failed"
         message = copy.safety_message.format(safety=safety_level_label(latest_safety))
         return status, copy.safety_heading, message, "check"
-    if workflow and workflow.current_step() is None:
+    if not has_pending_step:
         return "done", copy.done_heading, copy.done_message, None
     return "ready", copy.ready_heading, copy.ready_message, None
 
@@ -134,6 +136,8 @@ def build_manifest_workflow_display(
         raw_quality_gate = check_summary.get("quality_gate")
         if isinstance(raw_quality_gate, dict):
             quality_gate = raw_quality_gate
+    if retry_parent_text and spec.mode == WorkMode.BATCH_TRANSLATION:
+        latest_safety = manifest_check_safety_level(manifest)
 
     facts: list[str] = [format_manifest_path_fact(manifest_path)]
     if job_name:
@@ -190,13 +194,23 @@ def build_manifest_workflow_display(
                 "无法继续该任务；可以重新开始。"
             )
     else:
-        workflow = resume_workflow(spec.mode, manifest_path, manifest)
+        batch_action = ""
+        if spec.mode == WorkMode.BATCH_TRANSLATION:
+            batch_action = batch_resume.next_action(
+                manifest, package_dir=str(Path(manifest_path).parent),
+            )
+            has_pending_step = bool(batch_action)
+        else:
+            workflow = resume_workflow(spec.mode, manifest_path, manifest)
+            has_pending_step = workflow is None or workflow.current_step() is not None
         copy = _resume_display_copy(spec, is_retry=bool(retry_parent_text))
         status, heading, message, timeline_step_key = _display_for_resumed_workflow(
-            workflow,
+            has_pending_step,
             latest_safety=latest_safety,
             copy=copy,
         )
+        if status == "ready" and batch_action:
+            timeline_step_key = "submit" if batch_action == "resume-submit" else batch_action
 
     selected_manifest_path = retry_parent_text or manifest_path
     return ManifestWorkflowDisplay(

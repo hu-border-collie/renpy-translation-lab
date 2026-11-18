@@ -113,20 +113,17 @@ LiteLLM 后端不额外要求 Gemini Key；Gemini 后端仍在进入预建前检
 ```powershell
 python gemini_translate_batch.py sync-start --json
 python gemini_translate_batch.py sync-start --profile <PROFILE_ID> --json
-python gemini_translate_batch.py sync-status <RUN> --json
+python gemini_translate_batch.py sync-status --run-id <RUN> --json
 python gemini_translate_batch.py sync-resume <RUN> --json
 python gemini_translate_batch.py sync-cancel <RUN> --json
 python gemini_translate_batch.py sync-derive <RUN> --json
 ```
 
-`sync-start` / `sync-resume` / `sync-derive` 在执行前向 stderr 输出稳定的
-`RTL_DURABLE_RUN_ID=<RUN>` 标记；stdout 仍只包含机器结果 envelope。GUI 的实时进度
-轮询依赖该标记把 `sync-status --latest` 快照绑定到本次运行，避免冷启动期间误显示
-历史 run。
+`sync-start` 和 `sync-derive` 可使用 `--run-id-file <NEW_JSON_FILE>`，在创建运行后、执行前将 `{"run_id": "..."}` 写到新文件。请在可写目录下选择一个新文件，并为 `--output-file` 使用独立路径。写入失败时命令返回 `SYNC_RUN_ID_FILE_FAILED`，并在错误中提供已创建的运行 ID，此时尚未发送翻译请求。GUI 读取这个 ID 文件后才开始用 `sync-status --run-id <RUN>` 轮询，恢复已知运行时直接使用其 ID。stdout 继续用于机器结果 envelope。
 
 `sync-start --profile <PROFILE_ID>` 只用该 ModelProfile 覆盖本次运行的 translation 路由，不写回配置文件；profile 不存在、是 embedding profile 或与命令策略不兼容时启动前拒绝。
 
-`sync-status` 必须显式给出 `RUN`，或明确使用 `--latest`；`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录，不会把旧的时间戳预览目录当成耐久运行。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
+`sync-status` 接受三种互斥选择器，分别是位置参数 `RUN`、`--run-id <RUN>` 和 `--latest`。`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
 
 `sync-status` 快照包含只读 `frozen_profile`（`profile_id` / `label` / `adapter` / `provider` / `model` / `embedding_profile_id` / `execution_strategy` / `source`）：优先来自 run 启动时冻结的 plan 快照；旧 run 没有快照时回退到 attempt 记录的 provider/model；两者都没有时 `source=unknown` 且不显示假值。CLI 文本输出与 GUI 运行事实都会显示该 Provider/模型，失败或降级时不再只能看到错误分类。
 
@@ -153,9 +150,9 @@ LiteLLM adapter 显式关闭 LiteLLM 和底层 SDK 的自动重试；重试由�
 
 这些 `sync-*` 命令支持 `--output text|json`、`--strict-exit-codes`、`--non-interactive`、`--fields`、`--compact`、`--output-file`；仅这些新命令额外提供 `--json` 作为 `--output json` 的同义写法。`completed_with_errors` 的严格退出码为 `3`，`cancelled/failed` 为 `4`，选择器、freshness 与 schema 错误为 `5`，run busy 为 `6`。
 
-启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源、成本 / coverage / 已有质量摘要与风险。文本模式在 counts 后打印这三行摘要；`--output json` 仍只输出 envelope。未知价格不显示为 0，stale / 缺失质量报告不显示为通过。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配。GUI 的「开始」会先跑该命令并展示同一 payload 的确认框。运行中 GUI 会旁路轮询 `sync-status --latest` 刷新公开 snapshot。
+启动前可先运行 `translate-preflight --strategy sync --profile <ID> --output json`：它只扫描项目并构建共享计划，不调用 Provider/embedding，输出条目/chunk 数、上下文来源、成本 / coverage / 已有质量摘要与风险。文本模式在 counts 后打印这三行摘要；`--output json` 仍只输出 envelope。未知价格不显示为 0，stale / 缺失质量报告不显示为通过。质量摘要按执行方式取可验证来源：Batch 读 latest manifest，durable Sync 读最新 run 已完成 `check` 的绑定预览；两者都要求项目与 plan fingerprint 匹配。GUI 的「开始」会先跑该命令并展示同一 payload 的确认框。运行中 GUI 会按本次运行 ID 查询 `sync-status --run-id <RUN>` 来刷新公开快照。
 
-GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程并自动用只读 `sync-status --latest` 定位该运行。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步执行（耐久）](gui_workbench.md#同步执行耐久)。
+GUI「翻译」页使用同一服务边界：按所选 ModelProfile/执行方式传 `--profile`，启动调用 `sync-start`，完成后自动 `check <RUN>` 生成绑定预览，确认后 `apply <RUN>` 写回；「继续 / 查看最新任务」先 `sync-status --latest` 再按 `next_action` 恢复或检查，「取消任务」单独调用 `sync-cancel`，「停止」只结束本机进程。新建或派生运行已发布 ID 时，GUI 会按该 ID 查询运行记录。存在可复用结果时「派生新运行」调用 `sync-derive`，有 `outcome_unknown` 时默认 `--exclude-unknown`，只有显式确认风险才使用 `--retry-unknown --ack-duplicate-billing-risk`。页面不读取 `state.sqlite3`，也不自行重试或修改 freshness 判定。详见 [GUI 工作台 · 同步执行（耐久）](gui_workbench.md#同步执行耐久)。
 
 ### 1. 生成预览
 

@@ -265,6 +265,16 @@ def read_routing_plan(
     )
 
 
+def read_explicit_final_review_plan(config: Mapping[str, Any]) -> routing.ModelRoutingPlan | None:
+    """Resolve an explicit final-review strategy, or leave the Batch default to the caller."""
+    section = config.get("model_routing")
+    routes = section.get("routes") if isinstance(section, dict) else None
+    route = routes.get("final_review") if isinstance(routes, dict) else None
+    if isinstance(route, dict) and str(route.get("strategy") or "").strip():
+        return read_routing_plan(config)
+    return None
+
+
 def read_embedding_settings(config: Mapping[str, Any], *, execution: str, profile_id: str | None = None) -> EmbeddingRuntimeSettings:
     """Read one path's embedding connection entirely from legacy or v1 fields."""
     if execution not in ("sync", "gemini_batch"):

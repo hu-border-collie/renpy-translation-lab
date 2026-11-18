@@ -37,7 +37,8 @@ def _notify_run_created(
     """Announce a durable run before its synchronous execution starts.
 
     Observers are advisory: a broken log/UI pipe must not abort a run that has
-    already been durably created.
+    already been durably created. An explicit CLI refusal (SystemExit) still
+    propagates before execution.
     """
 
     if callback is None:
@@ -375,7 +376,6 @@ class SyncRunService:
                 'derivation': derivation,
             },
         )
-        _notify_run_created(on_run_created, derived_run_id)
         self._ensure_run_artifacts(target)
         self._seed_reusable_results(
             source,
@@ -384,6 +384,7 @@ class SyncRunService:
             retry_unknown_ids=unknown_ids if retry_unknown else set(),
             policy=frozen_policy,
         )
+        _notify_run_created(on_run_created, derived_run_id)
         snapshot = self._execute(target, wait_for_backoff=wait_for_backoff)
         snapshot['changed'] = True
         return snapshot

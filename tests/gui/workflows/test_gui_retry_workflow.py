@@ -1,4 +1,7 @@
+import json
 import unittest
+
+from foundation.cli_contract import success_envelope
 
 from gui_qt.reports.check_report import WritebackSummary
 from gui_qt.workflows.retry_workflow import (
@@ -26,30 +29,43 @@ class GuiRetryWorkflowTests(unittest.TestCase):
     def test_create_retry_followup_workflow_restores_parent_pointer(self):
         workflow = create_retry_followup_workflow(
             RETRY_PATH,
-            _retry_manifest(),
             PARENT_PATH,
         )
 
         self.assertEqual(workflow.restore_latest_manifest_path, PARENT_PATH)
         self.assertEqual(
             workflow.current_step().args,
-            ["submit", RETRY_PATH, "--output", "json", "--non-interactive"],
+            ["status", RETRY_PATH, "--local", "--output", "json", "--non-interactive"],
         )
 
     def test_create_retry_followup_workflow_passes_submit_max_cost(self):
         workflow = create_retry_followup_workflow(
             RETRY_PATH,
-            _retry_manifest(),
             PARENT_PATH,
             submit_max_cost=4.5,
         )
+        workflow.complete_current_step(0, json.dumps(success_envelope(
+            "status", status="LOCAL_ONLY", result={
+                "next_action": "submit", "retry_parent_manifest_path": PARENT_PATH,
+            },
+        )))
 
         self.assertEqual(
             workflow.current_step().args,
             ["submit", RETRY_PATH, "--max-cost", "4.5", "--output", "json", "--non-interactive"],
         )
 
-    def test_describe_retry_followup_button_for_merge_step(self):
+    def test_create_retry_followup_refuses_a_different_parent_from_cli(self):
+        workflow = create_retry_followup_workflow(RETRY_PATH, PARENT_PATH)
+        update = workflow.complete_current_step(0, json.dumps(success_envelope(
+            "status", status="LOCAL_ONLY", result={
+                "next_action": "submit", "retry_parent_manifest_path": "other.json",
+            },
+        )))
+        self.assertEqual(update.status, "failed")
+        self.assertIsNone(workflow.current_step())
+
+    def test_describe_retry_followup_button_for_recheck_step(self):
         label, tooltip = describe_retry_followup_button(
             RETRY_PATH,
             _retry_manifest(
@@ -60,8 +76,8 @@ class GuiRetryWorkflowTests(unittest.TestCase):
             PARENT_PATH,
         )
 
-        self.assertEqual(label, "合并补译结果")
-        self.assertIn("合并", tooltip)
+        self.assertEqual(label, "继续补译")
+        self.assertIn("校验", tooltip)
 
     def test_retry_followup_workflow_ready_requires_confirmed_preview(self):
         summary = WritebackSummary(
