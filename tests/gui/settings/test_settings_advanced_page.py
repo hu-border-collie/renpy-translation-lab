@@ -7,9 +7,10 @@ from gui_qt.settings.page_contract import SettingsIssue, SettingsPage
 from gui_qt.settings.registry import ADVANCED_CONFIG_KEYS
 
 try:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QComboBox
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
+    QComboBox = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
     AdvancedSettingsPage = None  # type: ignore[misc,assignment]
 else:
@@ -207,6 +208,83 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         self.assertFalse(checklist.isEnabled())
         self.page.set_task_running(False)
         self.assertTrue(checklist.isEnabled())
+
+    def test_embedding_backend_uses_combo_and_invalid_values_preserve_raw_and_mark_errors(self) -> None:
+        for key in ("sync_rag_embedding_backend", "batch_rag_embedding_backend"):
+            combo = self.page.field_widgets[key]
+            self.assertIsInstance(combo, QComboBox)
+            self.assertEqual(
+                [combo.itemData(i) for i in range(combo.count())],
+                ["gemini", "openai_compatible"],
+            )
+
+        self.page.load(
+            {
+                "sync_chunk_size": "abc",
+                "batch_temperature": 5.0,
+                "api_key_rotation_enabled": "yes",
+                "sync_rag_embedding_backend": "vertex",
+                "context_storage_game_dir_name": "",
+                "batch_safety_settings": '[{"bad"',
+                "model_rotation_models": ["unknown-model"],
+            }
+        )
+        collected = self.page.collect()
+        self.assertEqual(collected["sync_chunk_size"], "abc")
+        self.assertEqual(collected["batch_temperature"], 5.0)
+        self.assertEqual(collected["api_key_rotation_enabled"], "yes")
+        self.assertEqual(collected["sync_rag_embedding_backend"], "vertex")
+        self.assertEqual(collected["context_storage_game_dir_name"], "")
+        self.assertEqual(collected["batch_safety_settings"], '[{"bad"')
+        self.assertEqual(collected["model_rotation_models"], ["unknown-model"])
+
+        for key in (
+            "sync_chunk_size",
+            "batch_temperature",
+            "api_key_rotation_enabled",
+            "sync_rag_embedding_backend",
+            "context_storage_game_dir_name",
+            "batch_safety_settings",
+            "model_rotation_models",
+        ):
+            self.assertTrue(self.page.error_labels[key].text(), msg=key)
+
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {
+                "sync_chunk_size",
+                "batch_temperature",
+                "api_key_rotation_enabled",
+                "sync_rag_embedding_backend",
+                "context_storage_game_dir_name",
+                "batch_safety_settings",
+                "model_rotation_models",
+            },
+        )
+
+        # User edits repair each invalid value so collection reflects new edits.
+        self.page.field_widgets["sync_chunk_size"].setValue(32)
+        self.page.field_widgets["batch_temperature"].setValue(0.5)
+        self.page.field_widgets["api_key_rotation_enabled"].setChecked(False)
+        backend_combo = self.page.field_widgets["sync_rag_embedding_backend"]
+        backend_combo.setCurrentIndex(backend_combo.findData("openai_compatible"))
+        self.page.field_widgets["context_storage_game_dir_name"].setText("ctx_dir")
+        self.page.field_widgets["batch_safety_settings"].setPlainText("[]")
+        self.page.field_widgets["model_rotation_models"].item(0).setCheckState(
+            self.page.field_widgets["model_rotation_models"].item(0).checkState().Checked
+        )
+        repaired = self.page.collect()
+        self.assertEqual(repaired["sync_chunk_size"], 32)
+        self.assertEqual(repaired["batch_temperature"], 0.5)
+        self.assertFalse(repaired["api_key_rotation_enabled"])
+        self.assertEqual(repaired["sync_rag_embedding_backend"], "openai_compatible")
+        self.assertEqual(repaired["context_storage_game_dir_name"], "ctx_dir")
+        self.assertEqual(repaired["batch_safety_settings"], "[]")
+        self.assertEqual(
+            repaired["model_rotation_models"],
+            [self.page.field_widgets["model_rotation_models"].item(0).text()],
+        )
+        self.assertEqual(self.page.validate(), [])
 
 
 if __name__ == "__main__":

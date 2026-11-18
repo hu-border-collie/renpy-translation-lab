@@ -5,6 +5,8 @@ them after migration; host load/collect helpers reuse the same functions.
 """
 from __future__ import annotations
 
+import copy
+import json
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import Qt
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
 from providers.gemini_model_catalog import allowed_gemini_rotation_models, extras_beyond_builtins
 
 StatusCallback = Callable[[str], None]
+_INVALID_VALUE_PROP = "_rtl_invalid_raw_value"
 
 
 def create_gemini_catalog_list_editor(
@@ -75,6 +78,7 @@ def create_gemini_catalog_list_editor(
             on_status(message)
 
     def _add_model() -> None:
+        host.setProperty(_INVALID_VALUE_PROP, None)
         name = entry.text().strip()
         if not name:
             return
@@ -98,6 +102,7 @@ def create_gemini_catalog_list_editor(
         model_list.setCurrentRow(model_list.count() - 1)
 
     def _remove_selected() -> None:
+        host.setProperty(_INVALID_VALUE_PROP, None)
         for item in model_list.selectedItems():
             row_index = model_list.row(item)
             model_list.takeItem(row_index)
@@ -110,7 +115,10 @@ def create_gemini_catalog_list_editor(
     return host
 
 
-def gemini_catalog_list_values(widget: QWidget) -> list[str]:
+def gemini_catalog_list_values(widget: QWidget) -> object:
+    invalid = widget.property(_INVALID_VALUE_PROP)
+    if invalid is not None:
+        return invalid
     model_list = getattr(widget, "_catalog_list", None)
     if not isinstance(model_list, QListWidget):
         return []
@@ -130,7 +138,27 @@ def set_gemini_catalog_list_values(widget: QWidget, values: object) -> None:
     if not isinstance(model_list, QListWidget):
         return
     kind = str(widget.property("catalog_kind") or "translation")
-    cleaned = extras_beyond_builtins(values, kind=kind)
+    raw_items: object = values
+    invalid = False
+    if isinstance(values, str):
+        text = values.strip()
+        if text.startswith("["):
+            try:
+                raw_items = json.loads(text)
+            except json.JSONDecodeError:
+                invalid = True
+        elif text:
+            raw_items = [part.strip() for line in text.splitlines() for part in line.split(",")]
+        else:
+            raw_items = []
+    if not invalid and raw_items is not None and not isinstance(raw_items, (list, tuple, set)):
+        invalid = True
+    if invalid:
+        widget.setProperty(_INVALID_VALUE_PROP, copy.deepcopy(values))
+        cleaned: list[str] = []
+    else:
+        widget.setProperty(_INVALID_VALUE_PROP, None)
+        cleaned = extras_beyond_builtins(raw_items, kind=kind)
     previous = model_list.blockSignals(True)
     try:
         model_list.clear()
@@ -158,6 +186,7 @@ def create_gemini_model_checklist(
         else allowed_gemini_rotation_models(),
         selected=selected,
     )
+    widget.itemChanged.connect(lambda _item, w=widget: w.setProperty(_INVALID_VALUE_PROP, None))
     return widget
 
 
@@ -194,7 +223,10 @@ def refresh_gemini_model_checklist(
         widget.blockSignals(previous_block)
 
 
-def gemini_model_checklist_values(widget: QListWidget) -> list[str]:
+def gemini_model_checklist_values(widget: QListWidget) -> object:
+    invalid = widget.property(_INVALID_VALUE_PROP)
+    if invalid is not None:
+        return invalid
     selected: list[str] = []
     for index in range(widget.count()):
         item = widget.item(index)
@@ -211,17 +243,33 @@ def set_gemini_model_checklist_values(
     widget: QListWidget,
     values: object,
 ) -> None:
-    selected = {
-        str(item).strip()
-        for item in (values if isinstance(values, (list, tuple, set)) else [])
-        if str(item).strip()
+    allowed_names = {
+        widget.item(index).text().strip()
+        for index in range(widget.count())
+        if widget.item(index) is not None and widget.item(index).text().strip()
     }
-    for index in range(widget.count()):
-        item = widget.item(index)
-        if item is None:
-            continue
-        item.setCheckState(
-            Qt.CheckState.Checked
-            if item.text().strip() in selected
-            else Qt.CheckState.Unchecked
-        )
+    invalid = False
+    if values is None:
+        selected_items: list[str] = []
+    elif not isinstance(values, (list, tuple, set)):
+        invalid = True
+        selected_items = []
+    else:
+        selected_items = [str(item).strip() for item in values if str(item).strip()]
+        if any(name not in allowed_names for name in selected_items):
+            invalid = True
+    selected = set(selected_items)
+    previous_block = widget.blockSignals(True)
+    try:
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if item.text().strip() in selected
+                else Qt.CheckState.Unchecked
+            )
+    finally:
+        widget.blockSignals(previous_block)
+    widget.setProperty(_INVALID_VALUE_PROP, copy.deepcopy(values) if invalid else None)

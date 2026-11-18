@@ -197,6 +197,38 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertTrue(config["batch"]["project_analysis"]["enabled"])
         self.assertTrue(config["batch"]["project_analysis"]["inject_published_brief"])
 
+    def test_saving_one_changed_field_does_not_materialize_defaults_or_empty_sections(self) -> None:
+        config: dict = {"game_root": "C:/Game/work"}
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(
+            config,
+            {"sync_chunk_size": 24, "batch_chunk_size": 60},
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            config,
+            {"game_root": "C:/Game/work", "sync": {"chunk_size": 24}},
+        )
+
+    def test_invalid_existing_disk_setting_blocks_save_without_overwriting(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "sync": {"chunk_size": "not-an-int", "rag": {"embedding_backend": "azure"}},
+        }
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(
+            config,
+            {"batch_chunk_size": 24},
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("sync_chunk_size", result.advanced_errors)
+        self.assertIn("sync_rag_embedding_backend", result.advanced_errors)
+        self.assertEqual(config, original)
+
 
 
 class ModelRoutingSaveApplyTests(unittest.TestCase):

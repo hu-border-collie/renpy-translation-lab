@@ -478,3 +478,34 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(page.validate(), [])
         self.assertIn("校验通过", page.readiness_label.text())
         self.save_mock.assert_not_called()
+
+    def test_invalid_disk_settings_show_errors_and_block_save_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            game_root = Path(directory) / "work"
+            game_root.mkdir()
+            config_path = Path(directory) / "translator_config.json"
+            original = {
+                "game_root": str(game_root),
+                "sync": {"chunk_size": "bad", "rag": {"embedding_backend": "vertex"}},
+            }
+            config_path.write_text(json.dumps(original), encoding="utf-8")
+            self.config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            def save_config(config):
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+                self.config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.save_mock.side_effect = save_config
+            with (
+                mock.patch.object(self.window.state, "get_game_root", return_value=game_root),
+                mock.patch.object(self.window.state, "normalize_game_root", return_value=(game_root, False)),
+                mock.patch("gui_qt.app.message_box_warning"),
+            ):
+                self.window._focus_settings_section("advanced")
+                advanced = self.window._settings_coordinator.page("advanced")
+                self.assertIn("整数", advanced.error_labels["sync_chunk_size"].text())
+                self.assertIn("openai_compatible", advanced.error_labels["sync_rag_embedding_backend"].text())
+                self.assertFalse(self.window._config_tab_has_unsaved_changes())
+                self.assertFalse(self.window._on_save_config())
+                self.save_mock.assert_not_called()
+                self.assertEqual(json.loads(config_path.read_text(encoding="utf-8")), original)

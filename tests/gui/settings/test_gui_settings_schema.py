@@ -2,12 +2,18 @@ import unittest
 
 from gui_qt.settings.settings_schema import (
     ADVANCED_SETTING_FIELD_BY_KEY,
+    ADVANCED_SETTING_FIELDS,
+    CORE_ADVANCED_SETTING_FIELDS,
+    FULL_COVERAGE_SETTING_FIELDS,
+    SettingField,
     apply_advanced_settings,
     filter_gemini_rotation_models,
     read_advanced_settings,
+    read_setting,
     recommended_advanced_settings,
     resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
+    validate_value,
 )
 
 
@@ -48,6 +54,11 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         default = values['batch_quality_gate']
         self.assertNotIn('language_allowed_latin_tokens', default)
         self.assertNotIn('typography_exempt_latin_tokens', default)
+        saved = apply_advanced_settings(config, values)
+        self.assertNotIn('batch', saved)
+        edited = dict(default)
+        edited['rules'] = {'ascii_ellipsis': 'warning'}
+        values['batch_quality_gate'] = edited
         saved = apply_advanced_settings(config, values)
         self.assertNotIn('language_allowed_latin_tokens', saved['batch']['quality_gate'])
         self.assertNotIn('typography_exempt_latin_tokens', saved['batch']['quality_gate'])
@@ -337,6 +348,142 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertEqual(
             saved["rotation"]["model"]["models"],
             ["gemini-3.1-flash-lite", "gemini-brand-new-extra"],
+        )
+
+    def test_apply_advanced_settings_skips_untouched_defaults_and_partial_keys(self):
+        config = {"game_root": "C:/Game/work"}
+        values = read_advanced_settings(config)
+        saved = apply_advanced_settings(config, values)
+        self.assertEqual(saved, {"game_root": "C:/Game/work"})
+
+        partial_saved = apply_advanced_settings(config, {"sync_chunk_size": 12})
+        self.assertEqual(
+            partial_saved,
+            {"game_root": "C:/Game/work", "sync": {"chunk_size": 12}},
+        )
+
+        # Updating an existing key back to its default writes the reset value.
+        reset_saved = apply_advanced_settings(partial_saved, {"sync_chunk_size": 60})
+        self.assertEqual(reset_saved["sync"]["chunk_size"], 60)
+
+    def test_read_setting_preserves_invalid_values_and_blocks_overwrite(self):
+        config = {
+            "engine": "godot",
+            "rpgmaker_mv": {"display_fields": ["database"]},
+            "rotation": {
+                "api_key": {"enabled": "yes"},
+                "model": {"models": ["unknown-model"]},
+            },
+            "sync": {
+                "chunk_size": "abc",
+                "max_source_chars": 0,
+                "rag": {"embedding_backend": "vertex"},
+            },
+            "batch": {
+                "temperature": 2.5,
+                "safety_settings": '[{"bad"',
+                "rag": {"embedding_backend": "local"},
+            },
+            "context_storage": {"game_dir_name": ""},
+        }
+        values = read_advanced_settings(config)
+        self.assertEqual(values["engine"], "godot")
+        self.assertEqual(values["mv_display_fields"], ["database"])
+        self.assertEqual(values["api_key_rotation_enabled"], "yes")
+        self.assertEqual(values["model_rotation_models"], ["unknown-model"])
+        self.assertEqual(values["sync_chunk_size"], "abc")
+        self.assertEqual(values["sync_max_source_chars"], 0)
+        self.assertEqual(values["sync_rag_embedding_backend"], "vertex")
+        self.assertEqual(values["batch_temperature"], 2.5)
+        self.assertEqual(values["batch_safety_settings"], '[{"bad"')
+        self.assertEqual(values["batch_rag_embedding_backend"], "local")
+        self.assertEqual(values["context_storage_game_dir_name"], "")
+        self.assertEqual(
+            read_setting({"sync": {"chunk_size": True}}, ADVANCED_SETTING_FIELD_BY_KEY["sync_chunk_size"]),
+            True,
+        )
+
+        errors = validate_advanced_settings(values, translator_config=config)
+        for key in (
+            "engine",
+            "mv_display_fields",
+            "api_key_rotation_enabled",
+            "model_rotation_models",
+            "sync_chunk_size",
+            "sync_max_source_chars",
+            "sync_rag_embedding_backend",
+            "batch_temperature",
+            "batch_safety_settings",
+            "batch_rag_embedding_backend",
+            "context_storage_game_dir_name",
+        ):
+            self.assertIn(key, errors)
+        with self.assertRaises(ValueError):
+            apply_advanced_settings(config, values)
+
+    def test_declarative_choices_validation(self):
+        for key, valid_value, invalid_value in (
+            ("engine", "rpgmaker_mv", "godot"),
+            ("sync_rag_embedding_backend", "openai_compatible", "azure"),
+            ("batch_rag_embedding_backend", "gemini", "local"),
+            ("mv_display_fields", ["system_terms", "map_display_name"], ["database"]),
+        ):
+            field = ADVANCED_SETTING_FIELD_BY_KEY[key]
+            self.assertIsNotNone(field.choices)
+            self.assertEqual(validate_value(field, valid_value), "")
+            self.assertTrue(validate_value(field, invalid_value))
+
+        custom = SettingField(
+            "custom_mode",
+            ("custom", "mode"),
+            "自定义模式",
+            "",
+            "str",
+            "alpha",
+            "测试",
+            choices=("alpha", "beta"),
+        )
+        self.assertEqual(validate_value(custom, "beta"), "")
+        self.assertIn("alpha 或 beta", validate_value(custom, "gamma"))
+
+    def test_settings_schema_defaults_match_runtime_constants(self):
+        from context_engine import embedding_runtime
+        from engine_adapters import project_config, rpgmaker_mv_fields
+        from quality_review import translation_core, translation_plan
+
+        self.assertEqual(
+            ADVANCED_SETTING_FIELDS,
+            FULL_COVERAGE_SETTING_FIELDS + CORE_ADVANCED_SETTING_FIELDS,
+        )
+        self.assertEqual(ADVANCED_SETTING_FIELD_BY_KEY["engine"].choices, project_config.SUPPORTED_ENGINES)
+        self.assertEqual(ADVANCED_SETTING_FIELD_BY_KEY["mv_display_fields"].choices, rpgmaker_mv_fields.DISPLAY_FIELDS)
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_rag_embedding_backend"].choices,
+            embedding_runtime.SUPPORTED_EMBEDDING_BACKENDS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["batch_rag_embedding_backend"].choices,
+            embedding_runtime.SUPPORTED_EMBEDDING_BACKENDS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_chunk_size"].default,
+            translation_core.CANONICAL_CHUNK_MAX_ITEMS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_max_source_chars"].default,
+            translation_core.CANONICAL_CHUNK_MAX_CHARS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["sync_max_output_tokens"].default,
+            translation_core.DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["batch_max_output_tokens"].default,
+            translation_core.DEFAULT_BATCH_MAX_OUTPUT_TOKENS,
+        )
+        self.assertEqual(
+            ADVANCED_SETTING_FIELD_BY_KEY["batch_temperature"].default,
+            translation_plan.CANONICAL_TEMPERATURE,
         )
 
 

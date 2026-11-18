@@ -35,6 +35,7 @@ from context_engine.embedding_diagnostics import capture_exception_diagnostics, 
 
 BACKEND_GEMINI = 'gemini'
 BACKEND_OPENAI_COMPATIBLE = 'openai_compatible'
+SUPPORTED_EMBEDDING_BACKENDS = (BACKEND_GEMINI, BACKEND_OPENAI_COMPATIBLE)
 ADAPTER_BACKEND_GEMINI = 'google_genai'
 ADAPTER_BACKEND_OPENAI = 'openai_compatible'
 DEFAULT_GEMINI_PROVIDER = 'google_ai'

@@ -7,9 +7,10 @@ from gui_qt.settings.page_contract import SettingsIssue, SettingsPage, SettingsP
 from gui_qt.settings.registry import PROJECT_CONFIG_KEYS
 
 try:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QComboBox
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
+    QComboBox = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
     ProjectSettingsPage = None  # type: ignore[misc,assignment]
 else:
@@ -89,6 +90,30 @@ class ProjectSettingsPageContractTests(unittest.TestCase):
         self.page.set_game_root_display("/tmp/work")
         self.assertEqual(self.page.settings_project_root_value.text(), "/tmp/work")
         self.assertNotIn("game_root", self.page.collect())
+
+    def test_engine_uses_combo_and_preserves_invalid_values_with_error_labels(self) -> None:
+        engine_widget = self.page.field_widgets["engine"]
+        self.assertIsInstance(engine_widget, QComboBox)
+        self.assertEqual(
+            [engine_widget.itemData(i) for i in range(engine_widget.count())],
+            ["renpy", "rpgmaker_mv"],
+        )
+
+        self.page.load({"engine": "godot", "mv_display_fields": ["database"]})
+        self.assertEqual(self.page.collect()["engine"], "godot")
+        self.assertEqual(self.page.collect()["mv_display_fields"], ["database"])
+        self.assertIn("renpy 或 rpgmaker_mv", self.page.error_labels["engine"].text())
+        self.assertIn("system_terms", self.page.error_labels["mv_display_fields"].text())
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"engine", "mv_display_fields"},
+        )
+
+        engine_widget.setCurrentIndex(engine_widget.findData("rpgmaker_mv"))
+        self.page.field_widgets["mv_display_fields"].setPlainText("system_terms")
+        self.assertEqual(self.page.collect()["engine"], "rpgmaker_mv")
+        self.assertEqual(self.page.collect()["mv_display_fields"], "system_terms")
+        self.assertEqual(self.page.validate(), [])
 
 
 if __name__ == "__main__":

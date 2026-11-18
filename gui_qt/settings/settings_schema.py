@@ -13,10 +13,21 @@ advanced-page widget, which is not the intended UX.
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 import json
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Literal, Mapping
 
+from context_engine.embedding_runtime import (
+    BACKEND_GEMINI,
+    DEFAULT_DOCUMENT_TASK_TYPE,
+    DEFAULT_OUTPUT_DIMENSION,
+    DEFAULT_QUERY_TASK_TYPE,
+    DEFAULT_TIMEOUT_SECONDS,
+    SUPPORTED_EMBEDDING_BACKENDS,
+)
+from engine_adapters.project_config import SUPPORTED_ENGINES
+from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS
 from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -29,6 +40,21 @@ from providers.sync_model_backend import (
     MAX_SYNC_TIMEOUT_SECONDS,
     MIN_SYNC_TIMEOUT_SECONDS,
 )
+from quality_review.translation_core import (
+    CANONICAL_ANALYSIS_CHAR_LIMIT,
+    CANONICAL_CHUNK_MAX_CHARS,
+    CANONICAL_CHUNK_MAX_ITEMS,
+    CANONICAL_HISTORY_CHAR_LIMIT,
+    CANONICAL_LOCAL_CONTEXT_AFTER,
+    CANONICAL_LOCAL_CONTEXT_BEFORE,
+    CANONICAL_STORY_CHAR_LIMIT,
+    DEFAULT_BATCH_MAX_OUTPUT_TOKENS,
+    DEFAULT_BATCH_RETRY_CHUNK_SIZE,
+    DEFAULT_BATCH_RETRY_MAX_SOURCE_CHARS,
+    DEFAULT_MACRO_SETTING_FILE,
+    DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
+)
+from quality_review.translation_plan import CANONICAL_TEMPERATURE
 from gui_qt.user_copy import (
     BATCH_MAX_OUTPUT_TOKENS_COPY,
     QUALITY_POLICY_SETTING_COPY,
@@ -67,6 +93,7 @@ class SettingField:
     minimum: float | None = None
     maximum: float | None = None
     allow_empty: bool = False
+    choices: tuple[str, ...] | None = None
 
     @property
     def recommended_value(self) -> SettingValue:
@@ -106,17 +133,34 @@ CONTEXT_PRIMARY_SETTING_KEYS: frozenset[str] = frozenset(
 CONTEXT_PRIMARY_SETTING_CATEGORY = "上下文主开关"
 
 
-ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
-    SettingField('engine', ('engine',), MV_PROJECT_COPY['engine_label'],
-                 MV_PROJECT_COPY['engine_description'], 'str', 'renpy', '项目与资源'),
+CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    SettingField(
+        'engine',
+        ('engine',),
+        MV_PROJECT_COPY['engine_label'],
+        MV_PROJECT_COPY['engine_description'],
+        'str',
+        SUPPORTED_ENGINES[0],
+        '项目与资源',
+        choices=SUPPORTED_ENGINES,
+    ),
     SettingField('mv_source_root', ('rpgmaker_mv', 'source_root'), MV_PROJECT_COPY['source_label'],
                  MV_PROJECT_COPY['source_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField('mv_support_window_file', ('rpgmaker_mv', 'support_window_file'), MV_PROJECT_COPY['window_label'],
                  MV_PROJECT_COPY['window_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField('mv_occurrence_scope_file', ('rpgmaker_mv', 'occurrence_scope_file'), MV_PROJECT_COPY['occurrence_scope_label'],
                  MV_PROJECT_COPY['occurrence_scope_description'], 'str', '', '项目与资源', allow_empty=True),
-    SettingField('mv_display_fields', ('rpgmaker_mv', 'display_fields'), MV_PROJECT_COPY['display_fields_label'],
-                 MV_PROJECT_COPY['display_fields_description'], 'list', [], '项目与资源', allow_empty=True),
+    SettingField(
+        'mv_display_fields',
+        ('rpgmaker_mv', 'display_fields'),
+        MV_PROJECT_COPY['display_fields_label'],
+        MV_PROJECT_COPY['display_fields_description'],
+        'list',
+        [],
+        '项目与资源',
+        allow_empty=True,
+        choices=DISPLAY_FIELDS,
+    ),
     SettingField('mv_reviewed_history_file', ('rpgmaker_mv', 'reviewed_history_file'), MV_PROJECT_COPY['history_label'],
                  MV_PROJECT_COPY['history_description'], 'str', '', '项目与资源', allow_empty=True),
     SettingField(
@@ -174,7 +218,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步分块条数",
         "同步翻译单次请求最多包含的条目数。",
         "int",
-        60,
+        CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -184,7 +228,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步原文字符上限",
         "同步翻译单次请求允许的原文字符预算。",
         "int",
-        18000,
+        CANONICAL_CHUNK_MAX_CHARS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -194,7 +238,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步输出 token 上限",
         "同步请求传给模型的 max_output_tokens。",
         "int",
-        24576,
+        DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -215,7 +259,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         SYNC_CONTEXT_BEFORE_COPY["label"],
         SYNC_CONTEXT_BEFORE_COPY["description"],
         "int",
-        30,
+        CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=0,
     ),
@@ -225,7 +269,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         SYNC_CONTEXT_AFTER_COPY["label"],
         SYNC_CONTEXT_AFTER_COPY["description"],
         "int",
-        10,
+        CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=0,
     ),
@@ -235,7 +279,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         SYNC_MACRO_SETTING_FILE_COPY["label"],
         SYNC_MACRO_SETTING_FILE_COPY["description"],
         "str",
-        "macro_setting.md",
+        DEFAULT_MACRO_SETTING_FILE,
         "术语与风格",
         allow_empty=True,
     ),
@@ -245,7 +289,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量分块条数",
         "Batch 构建时每个请求最多包含的条目数。",
         "int",
-        60,
+        CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -255,7 +299,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量原文字符上限",
         "Batch 构建时每个请求允许的原文字符预算。",
         "int",
-        18000,
+        CANONICAL_CHUNK_MAX_CHARS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -265,7 +309,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "前文条目数",
         "Batch 请求附带的前文条目数量；取当前文件对白顺序，包含已译邻句，并在多行翻译块或路线/场景边界处截断。",
         "int",
-        30,
+        CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=1,
     ),
@@ -275,7 +319,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "后文条目数",
         "Batch 请求附带的后文条目数量；取当前文件对白顺序，包含已译邻句，并在多行翻译块或路线/场景边界处截断。",
         "int",
-        10,
+        CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=1,
     ),
@@ -285,7 +329,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         BATCH_MAX_OUTPUT_TOKENS_COPY["label"],
         BATCH_MAX_OUTPUT_TOKENS_COPY["description"],
         "int",
-        12288,
+        DEFAULT_BATCH_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -295,7 +339,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量 temperature",
         "仅供仍支持采样参数的模型；Lab 会对不兼容的新 Gemini 型号自动移除该值。",  # noqa: RUF001
         "float",
-        0.2,
+        CANONICAL_TEMPERATURE,
         "翻译吞吐",
         minimum=0.0,
         maximum=2.0,
@@ -407,7 +451,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "项目 brief 最大字符",
         "LLM 生成与注入 brief 的长度上限。",
         "int",
-        4000,
+        CANONICAL_ANALYSIS_CHAR_LIMIT,
         "项目分析",
         minimum=200,
     ),
@@ -495,7 +539,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步 RAG 向量维度",
         "同步 RAG 存储和查询使用的 embedding 维度。",
         "int",
-        768,
+        DEFAULT_OUTPUT_DIMENSION,
         "同步 RAG",
         minimum=1,
     ),
@@ -546,7 +590,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步历史字符上限",
         "同步 RAG 单条历史命中注入 prompt 前的截断上限。",
         "int",
-        220,
+        CANONICAL_HISTORY_CHAR_LIMIT,
         "同步 RAG",
         minimum=1,
     ),
@@ -575,7 +619,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量 RAG 向量维度",
         "Batch RAG 存储和查询使用的 embedding 维度。",
         "int",
-        768,
+        DEFAULT_OUTPUT_DIMENSION,
         "批量 RAG",
         minimum=1,
     ),
@@ -626,7 +670,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量历史字符上限",
         "Batch RAG 单条历史命中注入 prompt 前的截断上限。",
         "int",
-        220,
+        CANONICAL_HISTORY_CHAR_LIMIT,
         "批量 RAG",
         minimum=1,
     ),
@@ -667,7 +711,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "原文索引字符上限",
         "单条原文索引命中注入 prompt 前的截断上限。",
         "int",
-        220,
+        CANONICAL_HISTORY_CHAR_LIMIT,
         "原文索引",
         minimum=1,
     ),
@@ -687,8 +731,9 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步向量后端",
         "gemini 或 openai_compatible。不得从生成模型推断；换后端后需重建记忆库/原文索引。",
         "str",
-        "gemini",
+        BACKEND_GEMINI,
         "同步 RAG",
+        choices=SUPPORTED_EMBEDDING_BACKENDS,
     ),
     SettingField(
         "sync_rag_embedding_provider",
@@ -716,7 +761,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步向量请求超时",
         "同步 RAG / 原文索引 embedding 请求超时秒数。",
         "float",
-        30.0,
+        DEFAULT_TIMEOUT_SECONDS,
         "同步 RAG",
         minimum=1.0,
     ),
@@ -736,8 +781,9 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量向量后端",
         "gemini 或 openai_compatible。Batch RAG 与原文索引共用该后端，不得从生成模型推断。",
         "str",
-        "gemini",
+        BACKEND_GEMINI,
         "批量 RAG",
+        choices=SUPPORTED_EMBEDDING_BACKENDS,
     ),
     SettingField(
         "batch_rag_embedding_provider",
@@ -765,7 +811,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量向量请求超时",
         "Batch RAG / 原文索引 embedding 请求超时秒数。",
         "float",
-        30.0,
+        DEFAULT_TIMEOUT_SECONDS,
         "批量 RAG",
         minimum=1.0,
     ),
@@ -806,7 +852,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步原文索引字符上限",
         "同步翻译单条原文索引命中注入 prompt 前的截断上限。",
         "int",
-        220,
+        CANONICAL_HISTORY_CHAR_LIMIT,
         "同步原文索引",
         minimum=1,
     ),
@@ -845,7 +891,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步剧情字符预算",
         "同步翻译注入剧情记忆的最大字符预算。",
         "int",
-        1200,
+        CANONICAL_STORY_CHAR_LIMIT,
         "同步剧情记忆",
         minimum=1,
     ),
@@ -903,7 +949,7 @@ ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量剧情字符预算",
         "Batch 请求注入剧情记忆的最大字符预算。",
         "int",
-        1200,
+        CANONICAL_STORY_CHAR_LIMIT,
         "批量剧情记忆",
         minimum=1,
     ),
@@ -948,6 +994,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         "",
         "项目与资源",
+        allow_empty=True,
     ),
     SettingField(
         "glossary_file",
@@ -1127,7 +1174,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "补译分块条数",
         "build-retry 生成补译请求时每个分块的最大条目数。",
         "int",
-        8,
+        DEFAULT_BATCH_RETRY_CHUNK_SIZE,
         "翻译吞吐",
         minimum=1,
     ),
@@ -1137,7 +1184,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "补译原文字符上限",
         "build-retry 生成补译请求时每个 chunk 的原文字符预算。",
         "int",
-        4000,
+        DEFAULT_BATCH_RETRY_MAX_SOURCE_CHARS,
         "翻译吞吐",
         minimum=1,
     ),
@@ -1158,7 +1205,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。"
         "留空则使用当前 work 下的 macro_setting.md。",
         "str",
-        "macro_setting.md",
+        DEFAULT_MACRO_SETTING_FILE,
         "术语与风格",
         allow_empty=True,
     ),
@@ -1228,7 +1275,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步查询 task type",
         "同步 RAG 查询 embedding 的 task type。",
         "str",
-        "RETRIEVAL_QUERY",
+        DEFAULT_QUERY_TASK_TYPE,
         "同步 RAG",
     ),
     SettingField(
@@ -1237,7 +1284,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步文档 task type",
         "同步 RAG 写入文档 embedding 的 task type。",
         "str",
-        "RETRIEVAL_DOCUMENT",
+        DEFAULT_DOCUMENT_TASK_TYPE,
         "同步 RAG",
     ),
     SettingField(
@@ -1246,7 +1293,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量查询 task type",
         "Batch RAG 查询 embedding 的 task type。",
         "str",
-        "RETRIEVAL_QUERY",
+        DEFAULT_QUERY_TASK_TYPE,
         "批量 RAG",
     ),
     SettingField(
@@ -1255,12 +1302,14 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量文档 task type",
         "Batch RAG / 原文索引写入文档 embedding 的 task type。",
         "str",
-        "RETRIEVAL_DOCUMENT",
+        DEFAULT_DOCUMENT_TASK_TYPE,
         "批量 RAG",
     ),
 )
 
-ADVANCED_SETTING_FIELDS = FULL_COVERAGE_SETTING_FIELDS + ADVANCED_SETTING_FIELDS
+ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
+    FULL_COVERAGE_SETTING_FIELDS + CORE_ADVANCED_SETTING_FIELDS
+)
 
 
 ADVANCED_SETTING_FIELD_BY_KEY = {field.key: field for field in ADVANCED_SETTING_FIELDS}
@@ -1375,10 +1424,34 @@ def config_with_pending_catalog_updates(
     return base
 
 
+def _normalized_existing_value(
+    field: SettingField,
+    existing_raw: Any,
+    *,
+    translator_config: Mapping[str, Any],
+) -> tuple[bool, Any]:
+    try:
+        normalized = normalize_for_write(
+            field,
+            existing_raw,
+            translator_config=translator_config,
+        )
+    except ValueError:
+        return False, existing_raw
+    if validate_value(field, normalized, translator_config=translator_config):
+        return False, existing_raw
+    return True, normalized
+
+
 def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
 ) -> dict[str, Any]:
+    """Validate and write changed or pre-existing advanced settings onto config.
+
+    Missing keys in *values* are skipped, and defaults are never materialized
+    for fields absent from *config*.
+    """
     # Validate rotation against the catalog *as it will look after this save*.
     provisional = config_with_pending_catalog_updates(config, values)
     errors = validate_advanced_settings(values, translator_config=provisional)
@@ -1387,33 +1460,62 @@ def apply_advanced_settings(
         raise ValueError(first)
 
     for field in ADVANCED_SETTING_FIELDS:
-        set_nested_value(
-            config,
-            field.path,
-            normalize_for_write(
-                field,
-                values[field.key],
-                translator_config=provisional,
-            ),
+        if field.key not in values:
+            continue
+        normalized = normalize_for_write(
+            field,
+            values[field.key],
+            translator_config=provisional,
         )
+        default_normalized = normalize_for_write(
+            field,
+            field.default,
+            translator_config=provisional,
+        )
+        existing_present = has_nested_value(config, field.path)
+        existing_raw = get_nested_value(config, field.path) if existing_present else None
+        if not existing_present or existing_raw is None:
+            if normalized == default_normalized:
+                continue
+            set_nested_value(config, field.path, normalized)
+            continue
+
+        existing_ok, existing_normalized = _normalized_existing_value(
+            field,
+            existing_raw,
+            translator_config=config,
+        )
+        if (
+            existing_ok
+            and existing_normalized == normalized
+            and type(existing_normalized) is type(normalized)
+        ):
+            continue
+        set_nested_value(config, field.path, normalized)
     return config
 
 
 def read_setting(config: dict[str, Any], field: SettingField) -> SettingValue:
+    """Read and validate one setting, preserving invalid raw values in place."""
+    if not has_nested_value(config, field.path):
+        return copy.deepcopy(field.default)
     raw = get_nested_value(config, field.path)
     if raw is None:
-        return field.default
+        return copy.deepcopy(field.default)
     try:
-        return normalize_for_write(field, raw, translator_config=config)
+        normalized = normalize_for_write(field, raw, translator_config=config)
     except ValueError:
-        return field.default
+        return copy.deepcopy(raw)
+    if validate_value(field, normalized, translator_config=config):
+        return copy.deepcopy(raw)
+    return copy.deepcopy(normalized)
 
 
 def validate_value(
     field: SettingField,
     value: Any,
     *,
-    translator_config: dict[str, Any] | None = None,
+    translator_config: Mapping[str, Any] | None = None,
 ) -> str:
     try:
         normalized = normalize_for_write(
@@ -1425,8 +1527,6 @@ def validate_value(
         return str(exc)
 
     if field.kind in {"str", "text"}:
-        if field.key == 'engine' and normalized not in {'renpy', 'rpgmaker_mv'}:
-            return '游戏引擎必须是 renpy 或 rpgmaker_mv。'
         if not field.allow_empty and not str(normalized).strip():
             return f"{field.label}不能为空。"
         return ""
@@ -1447,15 +1547,18 @@ def validate_value(
 def validate_advanced_settings(
     values: dict[str, Any],
     *,
-    translator_config: dict[str, Any] | None = None,
+    translator_config: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     # Include pending catalog_* values so rotation can select brand-new extras.
-    provisional = config_with_pending_catalog_updates(translator_config, values)
+    base = dict(translator_config) if isinstance(translator_config, Mapping) else None
+    provisional = config_with_pending_catalog_updates(base, values)
     errors: dict[str, str] = {}
     for field in ADVANCED_SETTING_FIELDS:
+        if field.key not in values:
+            continue
         error = validate_value(
             field,
-            values.get(field.key),
+            values[field.key],
             translator_config=provisional,
         )
         if error:
@@ -1467,7 +1570,7 @@ def normalize_for_write(
     field: SettingField,
     value: Any,
     *,
-    translator_config: dict[str, Any] | None = None,
+    translator_config: Mapping[str, Any] | None = None,
 ) -> SettingValue:
     if field.kind == "bool":
         if isinstance(value, bool):
@@ -1495,16 +1598,28 @@ def normalize_for_write(
             raise ValueError(f"{field.label}必须是数字。") from None
 
     if field.kind in {"str", "text"}:
-        return value.strip() if isinstance(value, str) else str(value).strip()
+        if value is None:
+            normalized = ""
+        elif isinstance(value, str):
+            normalized = value.strip()
+        else:
+            raise ValueError(f"{field.label}必须是字符串。")
+        if field.choices is not None and (normalized or not field.allow_empty):
+            if normalized not in field.choices:
+                allowed = " 或 ".join(field.choices)
+                raise ValueError(f"{field.label}必须是 {allowed}。")
+        return normalized
 
     if field.kind == "list":
         normalized = normalize_list_value(field, value)
-        if field.key == 'mv_display_fields':
-            from engine_adapters.rpgmaker_mv_fields import parse_display_fields
-            try:
-                return list(parse_display_fields(normalized))
-            except ValueError:
-                raise ValueError(MV_PROJECT_COPY['display_fields_invalid']) from None
+        if field.choices is not None:
+            if (
+                any(item not in field.choices for item in normalized)
+                or len(set(normalized)) != len(normalized)
+            ):
+                allowed = "、".join(field.choices)
+                raise ValueError(f"{field.label}只能填写不重复的 {allowed}。")
+            return sorted(normalized)
         return normalized
 
     if field.kind == "gemini_catalog_list":
@@ -1514,6 +1629,8 @@ def normalize_for_write(
         return extras_beyond_builtins(normalized, kind="translation")
 
     if field.kind == "gemini_model_list":
+        if value is not None and not isinstance(value, (list, tuple, set)):
+            raise ValueError(f"{field.label}必须是列表。")
         return filter_gemini_rotation_models(
             value,
             translator_config=translator_config,
@@ -1560,6 +1677,15 @@ def normalize_json_value(field: SettingField, value: Any) -> Any:
                 raise ValueError(f"{field.label}必须是有效 JSON。") from exc
         return text
     return value
+
+
+def has_nested_value(config: Mapping[str, Any], path: Iterable[str]) -> bool:
+    current: Any = config
+    for part in path:
+        if not isinstance(current, Mapping) or part not in current:
+            return False
+        current = current[part]
+    return True
 
 
 def get_nested_value(config: dict[str, Any], path: Iterable[str]) -> Any:

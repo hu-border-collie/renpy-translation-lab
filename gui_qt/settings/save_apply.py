@@ -309,31 +309,59 @@ def apply_collected_settings(
                 advanced_errors=dict(errors),
             )
         apply_advanced_settings(config, complete_advanced_values)
-        original_project_analysis = original_config.get("batch")
+        original_batch = original_config.get("batch")
+        original_project_analysis = (
+            original_batch.get("project_analysis")
+            if isinstance(original_batch, Mapping)
+            else None
+        )
         if not isinstance(original_project_analysis, Mapping):
             original_project_analysis = {}
-        original_project_analysis = original_project_analysis.get("project_analysis")
-        if not isinstance(original_project_analysis, Mapping):
-            original_project_analysis = {}
-        saved_project_analysis = _ensure_section(
-            _ensure_section(config, "batch"), "project_analysis"
-        )
-        for setting_key in ("enabled", "inject_published_brief"):
-            if setting_key in original_project_analysis:
-                saved_project_analysis[setting_key] = original_project_analysis[
-                    setting_key
-                ]
-            else:
-                saved_project_analysis.pop(setting_key, None)
-        write_model_catalog_extras(
-            config,
-            translation_models=list(
-                complete_advanced_values.get("catalog_gemini_models") or []
-            ),
-            embedding_models=list(
-                complete_advanced_values.get("catalog_gemini_embedding_models") or []
-            ),
-        )
+        batch_section = config.get("batch")
+        if isinstance(batch_section, dict) and isinstance(
+            batch_section.get("project_analysis"), dict
+        ):
+            saved_project_analysis = batch_section["project_analysis"]
+            for setting_key in ("enabled", "inject_published_brief"):
+                if setting_key in original_project_analysis:
+                    saved_project_analysis[setting_key] = original_project_analysis[
+                        setting_key
+                    ]
+                else:
+                    saved_project_analysis.pop(setting_key, None)
+            if not saved_project_analysis and not (
+                isinstance(original_batch, Mapping)
+                and "project_analysis" in original_batch
+            ):
+                batch_section.pop("project_analysis", None)
+                if not batch_section and "batch" not in original_config:
+                    config.pop("batch", None)
+        elif any(
+            setting_key in original_project_analysis
+            for setting_key in ("enabled", "inject_published_brief")
+        ):
+            saved_project_analysis = _ensure_section(
+                _ensure_section(config, "batch"), "project_analysis"
+            )
+            for setting_key in ("enabled", "inject_published_brief"):
+                if setting_key in original_project_analysis:
+                    saved_project_analysis[setting_key] = original_project_analysis[
+                        setting_key
+                    ]
+        if (
+            "catalog_gemini_models" in advanced_values
+            or "catalog_gemini_embedding_models" in advanced_values
+            or "model_catalog" in config
+        ):
+            write_model_catalog_extras(
+                config,
+                translation_models=list(
+                    complete_advanced_values.get("catalog_gemini_models") or []
+                ),
+                embedding_models=list(
+                    complete_advanced_values.get("catalog_gemini_embedding_models") or []
+                ),
+            )
 
     saved_context_flags = resolve_batch_context_flags(
         config,
