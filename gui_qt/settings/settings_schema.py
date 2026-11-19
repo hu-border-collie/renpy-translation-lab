@@ -24,6 +24,7 @@ from context_engine.embedding_runtime import (
     DEFAULT_OUTPUT_DIMENSION,
     DEFAULT_QUERY_TASK_TYPE,
     DEFAULT_TIMEOUT_SECONDS,
+    EMBEDDING_BACKEND_ALIASES,
     SUPPORTED_EMBEDDING_BACKENDS,
 )
 from engine_adapters.project_config import SUPPORTED_ENGINES
@@ -94,6 +95,8 @@ class SettingField:
     maximum: float | None = None
     allow_empty: bool = False
     choices: tuple[str, ...] | None = None
+    choice_aliases: Mapping[str, str] | None = None
+    legacy_paths: tuple[tuple[str, ...], ...] = ()
 
     @property
     def recommended_value(self) -> SettingValue:
@@ -231,6 +234,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_CHARS,
         "翻译吞吐",
         minimum=1,
+        legacy_paths=(("sync", "target_chars"),),
     ),
     SettingField(
         "sync_max_output_tokens",
@@ -302,6 +306,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_CHARS,
         "翻译吞吐",
         minimum=1,
+        legacy_paths=(("batch", "target_chars"),),
     ),
     SettingField(
         "batch_context_before",
@@ -397,6 +402,10 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         "translation_context",
         "上下文路径",
+        legacy_paths=(
+            ("context_storage", "directory_name"),
+            ("context_storage", "directory"),
+        ),
     ),
     SettingField(
         "sync_rag_enabled",
@@ -734,6 +743,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         BACKEND_GEMINI,
         "同步 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
+        choice_aliases=EMBEDDING_BACKEND_ALIASES,
     ),
     SettingField(
         "sync_rag_embedding_provider",
@@ -784,6 +794,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         BACKEND_GEMINI,
         "批量 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
+        choice_aliases=EMBEDDING_BACKEND_ALIASES,
     ),
     SettingField(
         "batch_rag_embedding_provider",
@@ -1006,6 +1017,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "glossary.json",
         "项目与资源",
         allow_empty=True,
+        legacy_paths=(("glossary_path",),),
     ),
     SettingField(
         "tl_subdir",
@@ -1187,6 +1199,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_BATCH_RETRY_MAX_SOURCE_CHARS,
         "翻译吞吐",
         minimum=1,
+        legacy_paths=(("batch", "retry_target_chars"),),
     ),
     SettingField(
         "batch_safety_settings",
@@ -1347,7 +1360,7 @@ def context_primary_setting_fields() -> tuple[SettingField, ...]:
     )
 
 
-def read_advanced_settings(config: dict[str, Any]) -> dict[str, SettingValue]:
+def read_advanced_settings(config: Mapping[str, Any]) -> dict[str, SettingValue]:
     return {field.key: read_setting(config, field) for field in ADVANCED_SETTING_FIELDS}
 
 
@@ -1424,6 +1437,33 @@ def config_with_pending_catalog_updates(
     return base
 
 
+def _resolve_choice_alias(value: str, aliases: Mapping[str, str]) -> str:
+    lowered = value.lower()
+    for candidate in (
+        value,
+        lowered,
+        lowered.replace("-", "_"),
+        lowered.replace("_", "-"),
+    ):
+        if candidate in aliases:
+            return aliases[candidate]
+    return value
+
+
+def _resolve_existing_setting_value(
+    config: Mapping[str, Any],
+    field: SettingField,
+) -> tuple[bool, Any]:
+    """Return ``(present, raw)`` checking primary path then legacy fallbacks."""
+    for path in (field.path, *field.legacy_paths):
+        if not has_nested_value(config, path):
+            continue
+        raw = get_nested_value(config, path)
+        if raw is not None:
+            return True, raw
+    return False, None
+
+
 def _normalized_existing_value(
     field: SettingField,
     existing_raw: Any,
@@ -1450,7 +1490,7 @@ def apply_advanced_settings(
     """Validate and write changed or pre-existing advanced settings onto config.
 
     Missing keys in *values* are skipped, and defaults are never materialized
-    for fields absent from *config*.
+    when neither the primary path nor a legacy fallback is set in *config*.
     """
     # Validate rotation against the catalog *as it will look after this save*.
     provisional = config_with_pending_catalog_updates(config, values)
@@ -1472,9 +1512,8 @@ def apply_advanced_settings(
             field.default,
             translator_config=provisional,
         )
-        existing_present = has_nested_value(config, field.path)
-        existing_raw = get_nested_value(config, field.path) if existing_present else None
-        if not existing_present or existing_raw is None:
+        existing_present, existing_raw = _resolve_existing_setting_value(config, field)
+        if not existing_present:
             if normalized == default_normalized:
                 continue
             set_nested_value(config, field.path, normalized)
@@ -1495,12 +1534,10 @@ def apply_advanced_settings(
     return config
 
 
-def read_setting(config: dict[str, Any], field: SettingField) -> SettingValue:
+def read_setting(config: Mapping[str, Any], field: SettingField) -> SettingValue:
     """Read and validate one setting, preserving invalid raw values in place."""
-    if not has_nested_value(config, field.path):
-        return copy.deepcopy(field.default)
-    raw = get_nested_value(config, field.path)
-    if raw is None:
+    present, raw = _resolve_existing_setting_value(config, field)
+    if not present:
         return copy.deepcopy(field.default)
     try:
         normalized = normalize_for_write(field, raw, translator_config=config)
@@ -1604,6 +1641,8 @@ def normalize_for_write(
             normalized = value.strip()
         else:
             raise ValueError(f"{field.label}必须是字符串。")
+        if field.choice_aliases is not None and normalized:
+            normalized = _resolve_choice_alias(normalized, field.choice_aliases)
         if field.choices is not None and (normalized or not field.allow_empty):
             if normalized not in field.choices:
                 allowed = " 或 ".join(field.choices)
@@ -1688,10 +1727,10 @@ def has_nested_value(config: Mapping[str, Any], path: Iterable[str]) -> bool:
     return True
 
 
-def get_nested_value(config: dict[str, Any], path: Iterable[str]) -> Any:
+def get_nested_value(config: Mapping[str, Any], path: Iterable[str]) -> Any:
     current: Any = config
     for part in path:
-        if not isinstance(current, dict) or part not in current:
+        if not isinstance(current, Mapping) or part not in current:
             return None
         current = current[part]
     return current

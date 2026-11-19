@@ -8,6 +8,7 @@ from gui_qt.settings.settings_schema import (
     SettingField,
     apply_advanced_settings,
     filter_gemini_rotation_models,
+    normalize_for_write,
     read_advanced_settings,
     read_setting,
     recommended_advanced_settings,
@@ -485,6 +486,62 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             ADVANCED_SETTING_FIELD_BY_KEY["batch_temperature"].default,
             translation_plan.CANONICAL_TEMPERATURE,
         )
+
+    def test_embedding_backend_aliases_normalize_and_validate(self):
+        cases = (
+            ("google_genai", "gemini"),
+            ("google-ai", "gemini"),
+            ("openai-compatible", "openai_compatible"),
+            ("litellm", "openai_compatible"),
+        )
+        for key, section in (
+            ("sync_rag_embedding_backend", "sync"),
+            ("batch_rag_embedding_backend", "batch"),
+        ):
+            field = ADVANCED_SETTING_FIELD_BY_KEY[key]
+            for raw_alias, canonical in cases:
+                with self.subTest(key=key, raw_alias=raw_alias):
+                    self.assertEqual(validate_value(field, raw_alias), "")
+                    self.assertEqual(normalize_for_write(field, raw_alias), canonical)
+                    config = {section: {"rag": {"embedding_backend": raw_alias}}}
+                    self.assertEqual(read_setting(config, field), canonical)
+                    # Preserves valid alias until changed, and writes canonical value on change.
+                    unchanged = apply_advanced_settings(
+                        {section: {"rag": {"embedding_backend": raw_alias}}},
+                        {key: canonical},
+                    )
+                    self.assertEqual(unchanged[section]["rag"]["embedding_backend"], raw_alias)
+                    normalized_save = apply_advanced_settings({}, {key: raw_alias})
+                    if canonical == field.default:
+                        self.assertEqual(normalized_save, {})
+                    else:
+                        self.assertEqual(normalized_save[section]["rag"]["embedding_backend"], canonical)
+
+    def test_legacy_override_forces_canonical_write_when_resetting_to_default(self):
+        override_cases = (
+            ("batch_max_source_chars", "batch", "target_chars", "max_source_chars", 9000, 18000),
+            ("batch_retry_max_source_chars", "batch", "retry_target_chars", "retry_max_source_chars", 2000, 4000),
+            ("sync_max_source_chars", "sync", "target_chars", "max_source_chars", 9000, 18000),
+        )
+        for key, section, legacy_key, canonical_key, legacy_val, default_val in override_cases:
+            with self.subTest(key=key):
+                field = ADVANCED_SETTING_FIELD_BY_KEY[key]
+                legacy_cfg = {section: {legacy_key: legacy_val}}
+                self.assertEqual(read_setting(legacy_cfg, field), legacy_val)
+
+                # Saving the schema default must write the canonical override so runtime no
+                # longer falls back to the stale legacy value.
+                saved = apply_advanced_settings(
+                    {section: {legacy_key: legacy_val}},
+                    {key: default_val},
+                )
+                self.assertEqual(saved[section][canonical_key], default_val)
+                self.assertEqual(saved[section][legacy_key], legacy_val)
+
+                # If legacy already equals the saved value, do not write a duplicate key.
+                matching_legacy_cfg = {section: {legacy_key: default_val}}
+                untouched = apply_advanced_settings(matching_legacy_cfg, {key: default_val})
+                self.assertNotIn(canonical_key, untouched[section])
 
 
 if __name__ == "__main__":

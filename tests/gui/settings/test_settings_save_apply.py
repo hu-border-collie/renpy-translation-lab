@@ -229,6 +229,70 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertIn("sync_rag_embedding_backend", result.advanced_errors)
         self.assertEqual(config, original)
 
+    def test_embedding_backend_aliases_allow_unrelated_saves(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "sync": {"rag": {"embedding_backend": "google_genai"}},
+            "batch": {"rag": {"embedding_backend": "litellm"}},
+        }
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(
+            config,
+            {"batch_chunk_size": 24},
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["batch"]["chunk_size"], 24)
+        update_result = apply_collected_settings(
+            config,
+            {"sync_rag_embedding_backend": "openai-compatible"},
+            original_config=copy.deepcopy(config),
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(update_result.ok, update_result)
+        self.assertEqual(
+            config["sync"]["rag"]["embedding_backend"],
+            "openai_compatible",
+        )
+
+    def test_legacy_target_chars_override_writes_canonical_default_on_reset(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "batch": {"target_chars": 9000, "retry_target_chars": 2000},
+            "sync": {"target_chars": 9000},
+        }
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(
+            config,
+            {
+                "batch_max_source_chars": 18000,
+                "batch_retry_max_source_chars": 4000,
+                "sync_max_source_chars": 18000,
+            },
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["batch"]["max_source_chars"], 18000)
+        self.assertEqual(config["batch"]["retry_max_source_chars"], 4000)
+        self.assertEqual(config["sync"]["max_source_chars"], 18000)
+
+    def test_matching_legacy_target_chars_does_not_materialize_canonical_key(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "batch": {"target_chars": 18000},
+        }
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(
+            config,
+            {"batch_max_source_chars": 18000},
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertNotIn("max_source_chars", config["batch"])
+
 
 
 class ModelRoutingSaveApplyTests(unittest.TestCase):
