@@ -111,7 +111,12 @@ from providers.gemini_model_catalog import (
     is_gemini_3_model,
 )
 from foundation.project_version import __version__
-from foundation.runtime_config_values import legacy_batch_limits, normalize_batch_safety_settings
+from foundation.runtime_config_values import (
+    DEFAULT_BATCH_DISPLAY_NAME_PREFIX,
+    coerce_non_empty_string,
+    legacy_batch_limits,
+    normalize_batch_safety_settings,
+)
 from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     normalize_sync_timeout_seconds,
@@ -339,7 +344,7 @@ BATCH_MAX_OUTPUT_TOKENS = translation_core.DEFAULT_BATCH_MAX_OUTPUT_TOKENS
 BATCH_TEMPERATURE = translation_plan.CANONICAL_TEMPERATURE
 BATCH_THINKING_LEVEL = ''
 BATCH_SAFETY_SETTINGS = []
-BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
+BATCH_DISPLAY_NAME_PREFIX = DEFAULT_BATCH_DISPLAY_NAME_PREFIX
 BATCH_SPLIT_RECOMMEND_CHUNKS = 400
 BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
@@ -498,14 +503,6 @@ def coerce_bool(value, default):
     return default
 
 
-def coerce_non_empty_string(value, default):
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            return stripped
-    return default
-
-
 def coerce_thinking_level(value, default):
     if value is None or value is False:
         return ''
@@ -635,9 +632,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if 'batch_safety_settings' in config:
         BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(config.get('batch_safety_settings'))
 
-    display_name_prefix = config.get('batch_display_name_prefix')
-    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
-        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+    BATCH_DISPLAY_NAME_PREFIX = coerce_non_empty_string(
+        config.get('batch_display_name_prefix'), BATCH_DISPLAY_NAME_PREFIX,
+    )
 
     macro_setting = config.get('batch_macro_setting')
     if isinstance(macro_setting, str) and macro_setting.strip():
@@ -676,9 +673,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if isinstance(model_name, str) and model_name.strip():
         BATCH_MODEL = model_name.strip()
 
-    display_name_prefix = batch.get('display_name_prefix')
-    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
-        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+    BATCH_DISPLAY_NAME_PREFIX = coerce_non_empty_string(
+        batch.get('display_name_prefix'), BATCH_DISPLAY_NAME_PREFIX,
+    )
 
     BATCH_TARGET_SIZE = coerce_positive_int(batch.get('chunk_size'), BATCH_TARGET_SIZE)
     BATCH_TARGET_CHARS = coerce_positive_int(

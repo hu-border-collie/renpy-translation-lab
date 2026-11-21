@@ -29,7 +29,12 @@ from context_engine.embedding_runtime import (
 )
 from engine_adapters.project_config import SUPPORTED_ENGINES, project_engine
 from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS, parse_display_fields
-from foundation.runtime_config_values import LegacyTranslationDefaults, parse_config_bool
+from foundation.runtime_config_values import (
+    DEFAULT_BATCH_DISPLAY_NAME_PREFIX,
+    LegacyTranslationDefaults,
+    normalize_batch_safety_settings,
+    parse_config_bool,
+)
 from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -88,7 +93,8 @@ SettingValue = Any
 class SettingField:
     """Describe a field and the runtime rules for reading its stored value.
 
-    An inherited null keeps its key precedence and uses the effective default.
+    Numeric and boolean settings inherit on null unless explicitly overridden.
+    A field can also inherit on empty strings, as its runtime reader permits.
     A legacy path is read on missing keys, or on empty values when opted in.
     """
 
@@ -107,7 +113,8 @@ class SettingField:
     choice_aliases: Mapping[str, str] | None = None
     legacy_paths: tuple[tuple[str, ...], ...] = ()
     legacy_fallback_on_empty: bool = False
-    inherit_on_null: bool = False
+    inherit_on_null: bool | None = None
+    inherit_on_empty: bool = False
 
     @property
     def recommended_value(self) -> SettingValue:
@@ -205,7 +212,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         True,
         "请求轮换",
-        inherit_on_null=True,
     ),
     SettingField(
         "model_rotation_enabled",
@@ -215,7 +221,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         False,
         "请求轮换",
-        inherit_on_null=True,
     ),
     SettingField(
         "model_rotation_models",
@@ -237,7 +242,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_max_source_chars",
@@ -249,7 +253,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("sync", "target_chars"),),
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_max_output_tokens",
@@ -260,7 +263,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_timeout_seconds",
@@ -272,7 +274,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=MIN_SYNC_TIMEOUT_SECONDS,
         maximum=MAX_SYNC_TIMEOUT_SECONDS,
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_context_before",
@@ -283,7 +284,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=0,
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_context_after",
@@ -294,7 +294,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=0,
-        inherit_on_null=True,
     ),
     SettingField(
         "sync_macro_setting_file",
@@ -315,7 +314,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_max_source_chars",
@@ -327,7 +325,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("batch", "target_chars"),),
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_context_before",
@@ -338,7 +335,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_context_after",
@@ -349,7 +345,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_max_output_tokens",
@@ -360,7 +355,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_BATCH_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_temperature",
@@ -372,7 +366,6 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=0.0,
         maximum=2.0,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_display_name_prefix",
@@ -380,9 +373,10 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量任务名称前缀",
         "提交 Batch 任务时使用的 display name 前缀。",
         "str",
-        "renpy-translate",
+        DEFAULT_BATCH_DISPLAY_NAME_PREFIX,
         "翻译吞吐",
         allow_empty=True,
+        inherit_on_empty=True,
     ),
     SettingField(
         "batch_submit_max_cost",
@@ -772,7 +766,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
         choice_aliases=EMBEDDING_BACKEND_ALIASES,
-        inherit_on_null=True,
+        inherit_on_empty=True,
     ),
     SettingField(
         "sync_rag_embedding_provider",
@@ -824,7 +818,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
         choice_aliases=EMBEDDING_BACKEND_ALIASES,
-        inherit_on_null=True,
+        inherit_on_empty=True,
     ),
     SettingField(
         "batch_rag_embedding_provider",
@@ -1136,6 +1130,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         "schinese",
         "准备流程",
+        inherit_on_empty=True,
     ),
     SettingField(
         "generation_target_language",
@@ -1220,7 +1215,6 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_BATCH_RETRY_CHUNK_SIZE,
         "翻译吞吐",
         minimum=1,
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_retry_max_source_chars",
@@ -1232,7 +1226,6 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("batch", "retry_target_chars"),),
-        inherit_on_null=True,
     ),
     SettingField(
         "batch_safety_settings",
@@ -1323,6 +1316,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         DEFAULT_QUERY_TASK_TYPE,
         "同步 RAG",
+        inherit_on_empty=True,
     ),
     SettingField(
         "sync_rag_document_task_type",
@@ -1332,6 +1326,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         DEFAULT_DOCUMENT_TASK_TYPE,
         "同步 RAG",
+        inherit_on_empty=True,
     ),
     SettingField(
         "batch_rag_query_task_type",
@@ -1341,6 +1336,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         DEFAULT_QUERY_TASK_TYPE,
         "批量 RAG",
+        inherit_on_empty=True,
     ),
     SettingField(
         "batch_rag_document_task_type",
@@ -1350,6 +1346,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "str",
         DEFAULT_DOCUMENT_TASK_TYPE,
         "批量 RAG",
+        inherit_on_empty=True,
     ),
 )
 
@@ -1519,11 +1516,20 @@ def _setting_default(
     return legacy_defaults.get(field.path, field.default)
 
 
+def _inherits_setting_default(field: SettingField, value: SettingValue) -> bool:
+    if value is None:
+        if field.inherit_on_null is not None:
+            return field.inherit_on_null
+        return field.inherit_on_empty or field.kind in {"bool", "int", "float"}
+    return field.inherit_on_empty and isinstance(value, str) and not value.strip()
+
+
 def _existing_raw_accepted_by_runtime(
     field: SettingField,
     raw: Any,
+    normalized: SettingValue,
 ) -> bool:
-    """Return whether *raw* is directly accepted by runtime readers without repair."""
+    """Return whether the runtime can keep the stored representation without repair."""
     if field.key == "engine":
         try:
             project_engine({"engine": raw})
@@ -1551,6 +1557,8 @@ def _existing_raw_accepted_by_runtime(
         return raw is None or isinstance(raw, (str, list))
     if field.key == "batch_quality_gate":
         return isinstance(raw, Mapping) or (isinstance(raw, str) and not raw.strip())
+    if field.key == "batch_safety_settings":
+        return normalize_batch_safety_settings(raw) == normalize_batch_safety_settings(normalized)
     if field.kind == "gemini_model_list":
         return raw is None or isinstance(raw, (str, list))
     if field.kind == "gemini_catalog_list":
@@ -1622,13 +1630,13 @@ def apply_advanced_settings(
             translator_config=provisional,
         )
         existing_present, existing_raw = _resolve_existing_setting_value(config, field)
-        if not existing_present or (existing_raw is None and field.inherit_on_null):
+        if not existing_present or _inherits_setting_default(field, existing_raw):
             default_normalized = normalize_for_write(
                 field,
                 _setting_default(field, legacy_defaults),
                 translator_config=provisional,
             )
-            if normalized == default_normalized:
+            if normalized == default_normalized or _inherits_setting_default(field, normalized):
                 continue
             set_nested_value(config, field.path, normalized)
             continue
@@ -1642,7 +1650,7 @@ def apply_advanced_settings(
             existing_ok
             and existing_normalized == normalized
             and type(existing_normalized) is type(normalized)
-            and _existing_raw_accepted_by_runtime(field, existing_raw)
+            and _existing_raw_accepted_by_runtime(field, existing_raw, normalized)
         ):
             continue
         set_nested_value(config, field.path, normalized)
@@ -1657,7 +1665,7 @@ def read_setting(
 ) -> SettingValue:
     """Read and validate one setting, preserving invalid raw values in place."""
     present, raw = _resolve_existing_setting_value(config, field)
-    if not present or (raw is None and field.inherit_on_null):
+    if not present or _inherits_setting_default(field, raw):
         return copy.deepcopy(_setting_default(field, legacy_defaults))
     _, value = _normalized_existing_value(field, raw, translator_config=config)
     return copy.deepcopy(value)

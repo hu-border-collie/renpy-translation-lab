@@ -5,7 +5,8 @@ from collections.abc import Mapping
 from typing import Any
 
 
-LegacyTranslationDefaults = Mapping[tuple[str, ...], int | list[dict[str, str]]]
+DEFAULT_BATCH_DISPLAY_NAME_PREFIX = "renpy-translate"
+LegacyTranslationDefaults = Mapping[tuple[str, ...], int | str | list[str] | list[dict[str, str]]]
 
 
 def parse_config_bool(value: object) -> bool | None:
@@ -19,6 +20,34 @@ def parse_config_bool(value: object) -> bool | None:
         if value in {"0", "false", "no", "off"}:
             return False
     return None
+
+
+def coerce_non_empty_string(value: object, default: str) -> str:
+    """Use a nonblank configured string or fall back to the supplied default."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    return default
+
+
+def normalize_rel_path(value: object) -> str:
+    """Normalize relative paths using the runtime's filter and lookup rules."""
+    if not value:
+        return ""
+    path = str(value).replace("\\", "/").strip()
+    return path.lstrip("./")
+
+
+def coerce_normalized_rel_path_set(value: object) -> set[str]:
+    """Read a path allowlist, treating a scalar string as one literal path."""
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        return set()
+    return {path for item in values if (path := normalize_rel_path(item))}
 
 
 def legacy_sync_limits(config: Mapping[str, Any]) -> dict[str, Any]:
@@ -83,8 +112,8 @@ def normalize_batch_safety_settings(value: object) -> list[dict[str, str]]:
 
 
 def legacy_translation_defaults(config: Mapping[str, Any]) -> LegacyTranslationDefaults:
-    """Project inherited limits and Batch safety settings onto translator_config.json paths."""
-    defaults: dict[tuple[str, ...], int | list[dict[str, str]]] = {}
+    """Project supported inherited settings onto translator_config.json paths."""
+    defaults: dict[tuple[str, ...], int | str | list[str] | list[dict[str, str]]] = {}
     for section, values in (("sync", legacy_sync_limits(config)), ("batch", legacy_batch_limits(config))):
         for key, raw in values.items():
             try:
@@ -96,4 +125,11 @@ def legacy_translation_defaults(config: Mapping[str, Any]) -> LegacyTranslationD
     safety_settings = normalize_batch_safety_settings(config.get("batch_safety_settings"))
     if safety_settings:
         defaults[("batch", "safety_settings")] = safety_settings
+    display_name_prefix = coerce_non_empty_string(config.get("batch_display_name_prefix"), "")
+    if display_name_prefix:
+        defaults[("batch", "display_name_prefix")] = display_name_prefix
+    for key in ("include_files", "include_prefixes"):
+        allowlist = sorted(coerce_normalized_rel_path_set(config.get(key)))
+        if allowlist:
+            defaults[(key,)] = allowlist
     return defaults

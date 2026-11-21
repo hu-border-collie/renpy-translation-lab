@@ -36,7 +36,12 @@ def locked_runtime_state():
 
 from foundation.atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 from foundation import cli_contract
-from foundation.runtime_config_values import legacy_sync_limits, parse_config_bool
+from foundation.runtime_config_values import (
+    coerce_normalized_rel_path_set,
+    legacy_sync_limits,
+    normalize_rel_path as _normalize_rel_path,
+    parse_config_bool,
+)
 from quality_review import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -404,15 +409,6 @@ def get_genai_module():
             ) from exc
         GENAI_MODULE = imported_genai
     return GENAI_MODULE
-
-
-def _normalize_rel_path(value):
-    if not value:
-        return ""
-    value = str(value).replace("\\", "/").strip()
-    value = value.lstrip("./")
-    value = value.lstrip("/")
-    return value
 
 
 class InvalidTlSubdirError(ValueError):
@@ -1337,24 +1333,6 @@ def load_sync_translation_settings(
             f"Using sync macro setting file: {SYNC_MACRO_SETTING_FILE}",
             flush=True,
         )
-
-
-def coerce_normalized_rel_path_set(value):
-    if value is None:
-        return set()
-    if isinstance(value, str):
-        values = [value]
-    elif isinstance(value, (list, tuple, set)):
-        values = value
-    else:
-        values = []
-
-    normalized = set()
-    for item in values:
-        path = _normalize_rel_path(item)
-        if path:
-            normalized.add(path)
-    return normalized
 
 
 def replace_model_list(values, label):

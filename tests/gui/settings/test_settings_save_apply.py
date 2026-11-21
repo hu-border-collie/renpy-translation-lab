@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import copy
+import json
 import unittest
 
 from context_engine.embedding_runtime import parse_embedding_runtime_settings
-from foundation.runtime_config_values import legacy_translation_defaults
+from foundation.runtime_config_values import legacy_translation_defaults, normalize_batch_safety_settings
 from gui_qt.settings.save_apply import (
     SettingsSaveExtras,
     apply_collected_settings,
@@ -259,28 +260,70 @@ class SettingsSaveApplyTests(unittest.TestCase):
             "openai_compatible",
         )
 
-    def test_null_embedding_backends_display_runtime_default_and_allow_unrelated_save(self) -> None:
+    def test_null_rag_settings_display_runtime_defaults_and_allow_unrelated_save(self) -> None:
+        null_rag = dict.fromkeys((
+            "embedding_backend",
+            "embedding_timeout_seconds",
+            "output_dimensionality",
+            "query_task_type",
+            "document_task_type",
+            "top_k_history",
+            "top_k_terms",
+            "min_similarity",
+            "segment_lines",
+            "history_char_limit",
+        ))
         config = {
             "game_root": "C:/Game/work",
-            "sync": {"rag": {"embedding_backend": None}},
-            "batch": {"rag": {"embedding_backend": None}},
+            "sync": {"rag": {**null_rag, "enabled": None, "update_on_success": None}},
+            "batch": {"rag": dict(null_rag)},
         }
+        original = copy.deepcopy(config)
         snapshot = read_advanced_settings(config)
+        self.assertIs(snapshot["sync_rag_enabled"], False)
+        self.assertIs(snapshot["sync_rag_update_on_success"], True)
         for scope in ("sync", "batch"):
-            self.assertEqual(
-                snapshot[f"{scope}_rag_embedding_backend"],
-                parse_embedding_runtime_settings(config[scope]["rag"]).backend,
-            )
+            parsed = parse_embedding_runtime_settings(config[scope]["rag"])
+            expected = {
+                "embedding_backend": parsed.backend,
+                "embedding_timeout_seconds": parsed.timeout_seconds,
+                "output_dimensionality": parsed.output_dimension,
+                "query_task_type": parsed.native_query_task_type,
+                "document_task_type": parsed.native_document_task_type,
+                "top_k_history": 4,
+                "top_k_terms": 8,
+                "min_similarity": 0.72,
+                "segment_lines": 4,
+                "history_char_limit": 220,
+            }
+            for key, value in expected.items():
+                self.assertEqual(snapshot[f"{scope}_rag_{key}"], value, f"{scope}.rag.{key}")
 
         result = apply_collected_settings(
             config,
             {"batch_chunk_size": 24},
-            original_config=copy.deepcopy(config),
+            original_config=original,
         )
         self.assertTrue(result.ok, result)
         self.assertEqual(config["batch"]["chunk_size"], 24)
         for scope in ("sync", "batch"):
-            self.assertEqual(config[scope]["rag"], {"embedding_backend": None})
+            self.assertEqual(config[scope]["rag"], original[scope]["rag"])
+
+    def test_save_repairs_json_encoded_batch_safety_settings(self) -> None:
+        rule = {"category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE"}
+        for decoded in (rule, [rule]):
+            with self.subTest(decoded=decoded):
+                config = {"batch": {"safety_settings": json.dumps(decoded)}}
+                self.assertEqual(read_advanced_settings(config)["batch_safety_settings"], decoded)
+                result = apply_collected_settings(
+                    config, {"batch_chunk_size": 24}, original_config=copy.deepcopy(config),
+                )
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["batch"]["safety_settings"], decoded)
+                self.assertEqual(
+                    normalize_batch_safety_settings(config["batch"]["safety_settings"]),
+                    [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_LOW_AND_ABOVE"}],
+                )
 
     def test_explicit_empty_batch_safety_setting_overrides_legacy_default(self) -> None:
         legacy_defaults = legacy_translation_defaults({
@@ -301,6 +344,27 @@ class SettingsSaveApplyTests(unittest.TestCase):
                 )
                 self.assertTrue(result.ok, result)
                 self.assertEqual(config["batch"]["safety_settings"], empty)
+
+    def test_blank_batch_display_name_prefix_inherits_legacy_value_until_overridden(self) -> None:
+        legacy_defaults = legacy_translation_defaults({"batch_display_name_prefix": "  old-prefix  "})
+        extras = SettingsSaveExtras(legacy_defaults=legacy_defaults)
+        for empty in (None, "  "):
+            with self.subTest(empty=empty):
+                config = {"batch": {"display_name_prefix": empty}}
+                snapshot = read_advanced_settings(config, legacy_defaults=legacy_defaults)
+                self.assertEqual(snapshot["batch_display_name_prefix"], "old-prefix")
+                result = apply_collected_settings(
+                    config, {"batch_chunk_size": 24}, original_config=copy.deepcopy(config),
+                    extras=extras,
+                )
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["batch"]["display_name_prefix"], empty)
+                result = apply_collected_settings(
+                    config, {"batch_display_name_prefix": "renpy-translate"},
+                    original_config=copy.deepcopy(config), extras=extras,
+                )
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["batch"]["display_name_prefix"], "renpy-translate")
 
     def test_legacy_target_chars_override_writes_canonical_default_on_reset(self) -> None:
         config: dict = {
