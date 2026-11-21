@@ -81,6 +81,12 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
             json.loads(self.page.collect()['batch_quality_gate']),
             value,
         )
+        self.assertEqual(self.page.validate(), [])
+        widget.setPlainText("[]")
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"batch_quality_gate"},
+        )
 
     def test_reset_restores_last_loaded_baseline(self) -> None:
         self.page.load({"sync_chunk_size": 42})
@@ -222,7 +228,7 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
             {
                 "sync_chunk_size": "abc",
                 "batch_temperature": 5.0,
-                "api_key_rotation_enabled": "yes",
+                "api_key_rotation_enabled": "maybe",
                 "sync_rag_embedding_backend": "vertex",
                 "context_storage_game_dir_name": "",
                 "batch_safety_settings": '[{"bad"',
@@ -232,7 +238,7 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         collected = self.page.collect()
         self.assertEqual(collected["sync_chunk_size"], "abc")
         self.assertEqual(collected["batch_temperature"], 5.0)
-        self.assertEqual(collected["api_key_rotation_enabled"], "yes")
+        self.assertEqual(collected["api_key_rotation_enabled"], "maybe")
         self.assertEqual(collected["sync_rag_embedding_backend"], "vertex")
         self.assertEqual(collected["context_storage_game_dir_name"], "")
         self.assertEqual(collected["batch_safety_settings"], '[{"bad"')
@@ -284,6 +290,78 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
             repaired["model_rotation_models"],
             [self.page.field_widgets["model_rotation_models"].item(0).text()],
         )
+        self.assertEqual(self.page.validate(), [])
+
+    def test_explicit_null_int_and_single_string_rotation_models_preserve_runtime_semantics(self) -> None:
+        from gui_qt.settings.settings_schema import read_advanced_settings
+
+        self.page.load(
+            read_advanced_settings({
+                "sync": {"max_source_chars": None, "target_chars": 9000},
+                "rotation": {"model": {"models": "gemini-3.1-flash-lite"}},
+            })
+        )
+        collected = self.page.collect()
+        self.assertEqual(collected["sync_max_source_chars"], 18000)
+        self.assertEqual(self.page.error_labels["sync_max_source_chars"].text(), "")
+        self.assertEqual(collected["model_rotation_models"], ["gemini-3.1-flash-lite"])
+        self.assertEqual(self.page.error_labels["model_rotation_models"].text(), "")
+        self.assertEqual(self.page.validate(), [])
+
+        self.page.load({"api_key_rotation_enabled": "false"})
+        self.assertIs(self.page.collect()["api_key_rotation_enabled"], False)
+        self.assertEqual(self.page.validate(), [])
+
+        self.page.load({"model_rotation_models": "unknown-model"})
+        self.assertEqual(self.page.collect()["model_rotation_models"], "unknown-model")
+        self.assertTrue(self.page.error_labels["model_rotation_models"].text())
+        self.assertIn("model_rotation_models", {issue.field_key for issue in self.page.validate()})
+
+    def test_invalid_catalog_list_stays_blocked_on_noop_actions_until_cleared_or_edited(self) -> None:
+        self.page.load({"catalog_gemini_models": 123})
+        editor = self.page.field_widgets["catalog_gemini_models"]
+        entry = editor._catalog_entry
+        add_btn = editor._catalog_add_btn
+        remove_btn = editor._catalog_remove_btn
+        clear_btn = editor._catalog_clear_invalid_btn
+
+        self.assertFalse(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertTrue(self.page.error_labels["catalog_gemini_models"].text())
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"catalog_gemini_models"},
+        )
+
+        # No-op actions (remove with no selection, add empty, add builtin) must NOT clear the block.
+        remove_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertIn("catalog_gemini_models", {issue.field_key for issue in self.page.validate()})
+
+        entry.setText("")
+        add_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+
+        entry.setText("gemini-3.1-flash-lite")
+        add_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertFalse(clear_btn.isHidden())
+
+        # Explicit clear unblocks and clears error label.
+        clear_btn.click()
+        self.assertTrue(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], [])
+        self.assertEqual(self.page.error_labels["catalog_gemini_models"].text(), "")
+        self.assertEqual(self.page.validate(), [])
+
+        # Adding a genuine custom model after loading invalid value also unblocks.
+        self.page.load({"catalog_gemini_models": 123})
+        self.assertFalse(clear_btn.isHidden())
+        entry.setText("gemini-custom-extra")
+        add_btn.click()
+        self.assertTrue(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], ["gemini-custom-extra"])
+        self.assertEqual(self.page.error_labels["catalog_gemini_models"].text(), "")
         self.assertEqual(self.page.validate(), [])
 
 

@@ -1,6 +1,7 @@
 """Independent construction tests for the #202 Phase D Project Settings page."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from gui_qt.settings.page_contract import SettingsIssue, SettingsPage, SettingsPageActions
@@ -64,6 +65,24 @@ class ProjectSettingsPageContractTests(unittest.TestCase):
         self.page.reset()
         self.assertEqual(self.page.collect()["tl_subdir"], "game/tl/saved")
 
+    def test_path_filters_round_trip_literal_paths_and_allow_multiple_entries(self) -> None:
+        from gui_qt.settings.settings_schema import apply_advanced_settings, read_advanced_settings
+
+        config = {"include_files": "story,extra.rpy", "include_prefixes": ["[chapter]/", "bonus,part/"]}
+        self.page.load(read_advanced_settings(config))
+        self.assertEqual(json.loads(self.page.collect()["include_files"]), ["story,extra.rpy"])
+        self.assertEqual(self.page.validate(), [])
+        original = dict(config)
+        apply_advanced_settings(config, dict(self.page.collect()))
+        self.assertEqual(config, original)
+
+        self.page.field_widgets["include_files"].setPlainText('["story,extra.rpy", "ending.rpy"]')
+        self.page.field_widgets["include_prefixes"].setPlainText('["[chapter]/", "new,part/"]')
+        self.assertEqual(self.page.validate(), [])
+        apply_advanced_settings(config, dict(self.page.collect()))
+        self.assertEqual(config["include_files"], ["story,extra.rpy", "ending.rpy"])
+        self.assertEqual(config["include_prefixes"], ["[chapter]/", "new,part/"])
+
     def test_focus_issue_targets_owned_widget(self) -> None:
         issue = SettingsIssue("project", "glossary_file", "missing")
         self.assertTrue(self.page.focus_issue(issue))
@@ -113,6 +132,21 @@ class ProjectSettingsPageContractTests(unittest.TestCase):
         self.page.field_widgets["mv_display_fields"].setPlainText("system_terms")
         self.assertEqual(self.page.collect()["engine"], "rpgmaker_mv")
         self.assertEqual(self.page.collect()["mv_display_fields"], "system_terms")
+        self.assertEqual(self.page.validate(), [])
+
+    def test_explicit_null_engine_preserves_none_and_blocks_until_selected(self) -> None:
+        self.page.load({"engine": None})
+        self.assertIsNone(self.page.collect()["engine"])
+        self.assertIn("renpy 或 rpgmaker_mv", self.page.error_labels["engine"].text())
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"engine"},
+        )
+
+        engine_widget = self.page.field_widgets["engine"]
+        self.assertEqual(engine_widget.currentText(), "null")
+        engine_widget.setCurrentIndex(engine_widget.findData("renpy"))
+        self.assertEqual(self.page.collect()["engine"], "renpy")
         self.assertEqual(self.page.validate(), [])
 
 

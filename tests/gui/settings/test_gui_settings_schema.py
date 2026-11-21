@@ -49,6 +49,37 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         self.assertEqual(policy['language_allowed_latin_tokens'], ['Alice'])
         self.assertEqual(policy['typography_exempt_latin_tokens'], ['Alice'])
 
+    def test_quality_policy_repairs_encoded_object_and_rejects_non_objects(self):
+        import json
+        from quality_review import translation_quality as quality
+
+        policy = {"rules": {"unclosed_delimiters": "blocker"}}
+        config = {"batch": {"quality_gate": json.dumps(policy)}}
+        field = ADVANCED_SETTING_FIELD_BY_KEY["batch_quality_gate"]
+        self.assertEqual(read_setting(config, field), policy)
+        apply_advanced_settings(config, {"batch_quality_gate": policy})
+        self.assertEqual(config["batch"]["quality_gate"], policy)
+        self.assertEqual(quality.load_policy_from_config(config)["rules"]["unclosed_delimiters"], "blocker")
+
+        for invalid in ([], "[]", "true", 12, "null"):
+            with self.subTest(invalid=invalid):
+                self.assertTrue(validate_value(field, invalid))
+                with self.assertRaises(ValueError):
+                    apply_advanced_settings(config, {"batch_quality_gate": invalid})
+                self.assertEqual(config["batch"]["quality_gate"], policy)
+
+        self.assertEqual(validate_value(field, ""), "")
+        apply_advanced_settings(config, {"batch_quality_gate": ""})
+        self.assertEqual(config["batch"]["quality_gate"], field.default)
+        self.assertIsNot(config["batch"]["quality_gate"], field.default)
+
+        for empty in (None, ""):
+            with self.subTest(empty=empty):
+                config["batch"]["quality_gate"] = empty
+                self.assertEqual(read_setting(config, field), field.default)
+                apply_advanced_settings(config, {"batch_quality_gate": field.default})
+                self.assertEqual(config["batch"]["quality_gate"], empty)
+
     def test_missing_quality_policy_gui_default_does_not_materialize_new_fields(self):
         config = {'game_root': 'C:/Game/work'}
         values = read_advanced_settings(config)
@@ -372,7 +403,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
             "engine": "godot",
             "rpgmaker_mv": {"display_fields": ["database"]},
             "rotation": {
-                "api_key": {"enabled": "yes"},
+                "api_key": {"enabled": "maybe"},
                 "model": {"models": ["unknown-model"]},
             },
             "sync": {
@@ -390,7 +421,7 @@ class GuiSettingsSchemaTests(unittest.TestCase):
         values = read_advanced_settings(config)
         self.assertEqual(values["engine"], "godot")
         self.assertEqual(values["mv_display_fields"], ["database"])
-        self.assertEqual(values["api_key_rotation_enabled"], "yes")
+        self.assertEqual(values["api_key_rotation_enabled"], "maybe")
         self.assertEqual(values["model_rotation_models"], ["unknown-model"])
         self.assertEqual(values["sync_chunk_size"], "abc")
         self.assertEqual(values["sync_max_source_chars"], 0)
@@ -542,6 +573,139 @@ class GuiSettingsSchemaTests(unittest.TestCase):
                 matching_legacy_cfg = {section: {legacy_key: default_val}}
                 untouched = apply_advanced_settings(matching_legacy_cfg, {key: default_val})
                 self.assertNotIn(canonical_key, untouched[section])
+
+    def test_save_repairs_raw_formats_rejected_by_runtime(self):
+        from engine_adapters.project_config import project_engine
+        from engine_adapters.rpgmaker_mv_fields import parse_display_fields
+
+        engine_cfg = {"engine": " renpy "}
+        engine_field = ADVANCED_SETTING_FIELD_BY_KEY["engine"]
+        self.assertEqual(read_setting(engine_cfg, engine_field), "renpy")
+        saved_engine = apply_advanced_settings(engine_cfg, {"engine": "renpy"})
+        self.assertEqual(saved_engine["engine"], "renpy")
+        self.assertEqual(project_engine(saved_engine), "renpy")
+
+        for raw_fields in ("map_display_name", [" map_display_name "]):
+            with self.subTest(raw_fields=raw_fields):
+                mv_cfg = {"rpgmaker_mv": {"display_fields": raw_fields}}
+                mv_field = ADVANCED_SETTING_FIELD_BY_KEY["mv_display_fields"]
+                self.assertEqual(read_setting(mv_cfg, mv_field), ["map_display_name"])
+                saved_mv = apply_advanced_settings(
+                    mv_cfg,
+                    {"mv_display_fields": ["map_display_name"]},
+                )
+                self.assertEqual(
+                    saved_mv["rpgmaker_mv"]["display_fields"],
+                    ["map_display_name"],
+                )
+                self.assertEqual(
+                    parse_display_fields(saved_mv["rpgmaker_mv"]["display_fields"]),
+                    ("map_display_name",),
+                )
+
+        # Already runtime-valid lists should not be rewritten solely for sort order.
+        valid_mv_cfg = {"rpgmaker_mv": {"display_fields": ["map_display_name", "system_terms"]}}
+        untouched_mv = apply_advanced_settings(
+            valid_mv_cfg,
+            {"mv_display_fields": ["system_terms", "map_display_name"]},
+        )
+        self.assertEqual(
+            untouched_mv["rpgmaker_mv"]["display_fields"],
+            ["map_display_name", "system_terms"],
+        )
+
+        # Non-Chinese extra paths must be repaired from a single string to a list.
+        extra_cfg = {"batch": {"non_chinese_validation": {"extra_static_name_credit_rel_paths": "credits.rpy"}}}
+        saved_extra = apply_advanced_settings(
+            extra_cfg,
+            {"batch_non_chinese_extra_static_paths": ["credits.rpy"]},
+        )
+        self.assertEqual(
+            saved_extra["batch"]["non_chinese_validation"]["extra_static_name_credit_rel_paths"],
+            ["credits.rpy"],
+        )
+
+    def test_explicit_null_distinguished_from_missing_and_legacy_fallback(self):
+        from foundation.project_asset_paths import resolve_configured_glossary_value
+
+        engine_field = ADVANCED_SETTING_FIELD_BY_KEY["engine"]
+        engine_null_cfg = {"engine": None}
+        self.assertIsNone(read_setting(engine_null_cfg, engine_field))
+        self.assertTrue(validate_value(engine_field, None))
+        with self.assertRaises(ValueError):
+            apply_advanced_settings(engine_null_cfg, read_advanced_settings(engine_null_cfg))
+        repaired_engine = apply_advanced_settings(engine_null_cfg, {"engine": "renpy"})
+        self.assertEqual(repaired_engine["engine"], "renpy")
+
+        null_beats_legacy_cases = (
+            ("sync_max_source_chars", "sync", "max_source_chars", "target_chars", 9000, 18000),
+            ("batch_max_source_chars", "batch", "max_source_chars", "target_chars", 9000, 18000),
+            ("batch_retry_max_source_chars", "batch", "retry_max_source_chars", "retry_target_chars", 2000, 4000),
+            ("context_storage_game_dir_name", "context_storage", "game_dir_name", "directory_name", "legacy_ctx", "translation_context"),
+        )
+        for key, section, primary_key, legacy_key, legacy_val, default in null_beats_legacy_cases:
+            with self.subTest(key=key):
+                field = ADVANCED_SETTING_FIELD_BY_KEY[key]
+                cfg = {section: {primary_key: None, legacy_key: legacy_val}}
+                self.assertEqual(read_setting(cfg, field), default)
+                apply_advanced_settings(cfg, {key: default})
+                self.assertEqual(cfg[section], {primary_key: None, legacy_key: legacy_val})
+                apply_advanced_settings(cfg, {key: legacy_val})
+                self.assertEqual(cfg[section][primary_key], legacy_val)
+
+        # glossary_file falls back to glossary_path when null or blank, matching runtime.
+        glossary_field = ADVANCED_SETTING_FIELD_BY_KEY["glossary_file"]
+        for primary_raw in (None, ""):
+            cfg = {"glossary_file": primary_raw, "glossary_path": "custom.json"}
+            self.assertEqual(resolve_configured_glossary_value(cfg), "custom.json")
+            self.assertEqual(read_setting(cfg, glossary_field), "custom.json")
+            reset_cfg = apply_advanced_settings(cfg, {"glossary_file": "glossary.json"})
+            self.assertEqual(reset_cfg["glossary_file"], "glossary.json")
+
+        # Nullable optional float cost ceiling matches resolve_submit_max_cost (0.0 / unlimited).
+        cost_field = ADVANCED_SETTING_FIELD_BY_KEY["batch_submit_max_cost"]
+        self.assertEqual(read_setting({"batch": {"submit_max_cost": None}}, cost_field), 0.0)
+        self.assertEqual(validate_value(cost_field, None), "")
+        self.assertEqual(validate_value(cost_field, ""), "")
+        preserved_cost = apply_advanced_settings(
+            {"batch": {"submit_max_cost": None}},
+            {"batch_submit_max_cost": 0.0},
+        )
+        self.assertIsNone(preserved_cost["batch"]["submit_max_cost"])
+
+    def test_rotation_models_accepts_runtime_single_string_and_rejects_unknown_or_non_string(self):
+        field = ADVANCED_SETTING_FIELD_BY_KEY["model_rotation_models"]
+        self.assertEqual(validate_value(field, "gemini-3.1-flash-lite"), "")
+        self.assertEqual(
+            normalize_for_write(field, "gemini-3.1-flash-lite"),
+            ["gemini-3.1-flash-lite"],
+        )
+        single_cfg = {"rotation": {"model": {"models": "gemini-3.1-flash-lite"}}}
+        self.assertEqual(read_setting(single_cfg, field), ["gemini-3.1-flash-lite"])
+        untouched = apply_advanced_settings(
+            single_cfg,
+            {"model_rotation_models": ["gemini-3.1-flash-lite"]},
+        )
+        self.assertEqual(untouched["rotation"]["model"]["models"], "gemini-3.1-flash-lite")
+
+        for bad_raw in ("unknown-model", 123):
+            with self.subTest(bad_raw=bad_raw):
+                bad_cfg = {"rotation": {"model": {"models": bad_raw}}}
+                self.assertEqual(read_setting(bad_cfg, field), bad_raw)
+                self.assertTrue(validate_value(field, bad_raw))
+                with self.assertRaises(ValueError):
+                    apply_advanced_settings(bad_cfg, {"model_rotation_models": bad_raw})
+
+    def test_rotation_switches_preserve_cli_boolean_strings(self):
+        config = {"rotation": {"api_key": {"enabled": "false"}, "model": {"enabled": " ON "}}}
+        values = read_advanced_settings(config)
+        self.assertIs(values["api_key_rotation_enabled"], False)
+        self.assertIs(values["model_rotation_enabled"], True)
+        apply_advanced_settings(config, values)
+        self.assertEqual(config["rotation"], {"api_key": {"enabled": "false"}, "model": {"enabled": " ON "}})
+        apply_advanced_settings(config, {"api_key_rotation_enabled": True})
+        self.assertIs(config["rotation"]["api_key"]["enabled"], True)
+        self.assertTrue(validate_value(ADVANCED_SETTING_FIELD_BY_KEY["api_key_rotation_enabled"], "maybe"))
 
 
 if __name__ == "__main__":

@@ -111,6 +111,7 @@ from providers.gemini_model_catalog import (
     is_gemini_3_model,
 )
 from foundation.project_version import __version__
+from foundation.runtime_config_values import legacy_batch_limits
 from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     normalize_sync_timeout_seconds,
@@ -657,20 +658,12 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if isinstance(batch_model, str) and batch_model.strip():
         BATCH_MODEL = batch_model.strip()
 
-    BATCH_TARGET_SIZE = coerce_positive_int(
-        config.get('batch_target_size', config.get('batch_size')),
-        BATCH_TARGET_SIZE,
-    )
-    BATCH_TARGET_CHARS = coerce_positive_int(
-        config.get('batch_target_chars', config.get('batch_max_source_chars')),
-        BATCH_TARGET_CHARS,
-    )
-    BATCH_CONTEXT_BEFORE = coerce_positive_int(config.get('batch_context_before'), BATCH_CONTEXT_BEFORE)
-    BATCH_CONTEXT_AFTER = coerce_positive_int(config.get('batch_context_after'), BATCH_CONTEXT_AFTER)
-    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
-        config.get('batch_max_output_tokens'),
-        BATCH_MAX_OUTPUT_TOKENS,
-    )
+    legacy_limits = legacy_batch_limits(config)
+    BATCH_TARGET_SIZE = coerce_positive_int(legacy_limits['chunk_size'], BATCH_TARGET_SIZE)
+    BATCH_TARGET_CHARS = coerce_positive_int(legacy_limits['max_source_chars'], BATCH_TARGET_CHARS)
+    BATCH_CONTEXT_BEFORE = coerce_positive_int(legacy_limits['context_before'], BATCH_CONTEXT_BEFORE)
+    BATCH_CONTEXT_AFTER = coerce_positive_int(legacy_limits['context_after'], BATCH_CONTEXT_AFTER)
+    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(legacy_limits['max_output_tokens'], BATCH_MAX_OUTPUT_TOKENS)
     if 'batch_thinking_level' in config:
         BATCH_THINKING_LEVEL = coerce_thinking_level(
             config.get('batch_thinking_level'),

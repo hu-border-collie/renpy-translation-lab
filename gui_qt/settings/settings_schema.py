@@ -27,8 +27,9 @@ from context_engine.embedding_runtime import (
     EMBEDDING_BACKEND_ALIASES,
     SUPPORTED_EMBEDDING_BACKENDS,
 )
-from engine_adapters.project_config import SUPPORTED_ENGINES
-from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS
+from engine_adapters.project_config import SUPPORTED_ENGINES, project_engine
+from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS, parse_display_fields
+from foundation.runtime_config_values import LegacyTranslationLimits, parse_config_bool
 from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -58,6 +59,7 @@ from quality_review.translation_core import (
 from quality_review.translation_plan import CANONICAL_TEMPERATURE
 from gui_qt.user_copy import (
     BATCH_MAX_OUTPUT_TOKENS_COPY,
+    QUALITY_POLICY_INVALID_COPY,
     QUALITY_POLICY_SETTING_COPY,
     SYNC_CONTEXT_AFTER_COPY,
     SYNC_CONTEXT_BEFORE_COPY,
@@ -74,6 +76,7 @@ SettingKind = Literal[
     "str",
     "text",
     "list",
+    "path_list",
     "json",
     "gemini_model_list",
     "gemini_catalog_list",
@@ -83,6 +86,12 @@ SettingValue = Any
 
 @dataclass(frozen=True)
 class SettingField:
+    """Describe a field and the runtime rules for reading its stored value.
+
+    An inherited null keeps its key precedence and uses the effective default.
+    A legacy path is read on missing keys, or on empty values when opted in.
+    """
+
     key: str
     path: tuple[str, ...]
     label: str
@@ -97,6 +106,8 @@ class SettingField:
     choices: tuple[str, ...] | None = None
     choice_aliases: Mapping[str, str] | None = None
     legacy_paths: tuple[tuple[str, ...], ...] = ()
+    legacy_fallback_on_empty: bool = False
+    inherit_on_null: bool = False
 
     @property
     def recommended_value(self) -> SettingValue:
@@ -194,6 +205,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         True,
         "请求轮换",
+        inherit_on_null=True,
     ),
     SettingField(
         "model_rotation_enabled",
@@ -203,6 +215,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         False,
         "请求轮换",
+        inherit_on_null=True,
     ),
     SettingField(
         "model_rotation_models",
@@ -224,6 +237,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_max_source_chars",
@@ -235,6 +249,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("sync", "target_chars"),),
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_max_output_tokens",
@@ -245,6 +260,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_SYNC_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_timeout_seconds",
@@ -256,6 +272,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=MIN_SYNC_TIMEOUT_SECONDS,
         maximum=MAX_SYNC_TIMEOUT_SECONDS,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_context_before",
@@ -266,6 +283,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=0,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_context_after",
@@ -276,6 +294,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=0,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_macro_setting_file",
@@ -296,6 +315,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_CHUNK_MAX_ITEMS,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_max_source_chars",
@@ -307,6 +327,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("batch", "target_chars"),),
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_context_before",
@@ -317,6 +338,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_BEFORE,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_context_after",
@@ -327,6 +349,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         CANONICAL_LOCAL_CONTEXT_AFTER,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_max_output_tokens",
@@ -337,6 +360,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_BATCH_MAX_OUTPUT_TOKENS,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_temperature",
@@ -348,6 +372,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=0.0,
         maximum=2.0,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_display_name_prefix",
@@ -393,6 +418,8 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
             "garbled_phrases": [],
         },
         "翻译吞吐",
+        allow_empty=True,
+        inherit_on_null=True,
     ),
     SettingField(
         "context_storage_game_dir_name",
@@ -406,6 +433,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
             ("context_storage", "directory_name"),
             ("context_storage", "directory"),
         ),
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_rag_enabled",
@@ -1018,6 +1046,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "项目与资源",
         allow_empty=True,
         legacy_paths=(("glossary_path",),),
+        legacy_fallback_on_empty=True,
     ),
     SettingField(
         "tl_subdir",
@@ -1035,7 +1064,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         ("include_files",),
         "仅包含文件",
         "可选过滤列表；每行一个相对路径。留空表示不过滤。",
-        "list",
+        "path_list",
         [],
         "项目与资源",
         allow_empty=True,
@@ -1045,7 +1074,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         ("include_prefixes",),
         "仅包含路径前缀",
         "可选过滤列表；每行一个相对路径前缀。留空表示不过滤。",
-        "list",
+        "path_list",
         [],
         "项目与资源",
         allow_empty=True,
@@ -1189,6 +1218,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         DEFAULT_BATCH_RETRY_CHUNK_SIZE,
         "翻译吞吐",
         minimum=1,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_retry_max_source_chars",
@@ -1200,6 +1230,7 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
         "翻译吞吐",
         minimum=1,
         legacy_paths=(("batch", "retry_target_chars"),),
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_safety_settings",
@@ -1360,8 +1391,16 @@ def context_primary_setting_fields() -> tuple[SettingField, ...]:
     )
 
 
-def read_advanced_settings(config: Mapping[str, Any]) -> dict[str, SettingValue]:
-    return {field.key: read_setting(config, field) for field in ADVANCED_SETTING_FIELDS}
+def read_advanced_settings(
+    config: Mapping[str, Any],
+    *,
+    legacy_limits: LegacyTranslationLimits | None = None,
+) -> dict[str, SettingValue]:
+    """Read settings and project inherited limits onto the settings form."""
+    return {
+        field.key: read_setting(config, field, legacy_limits=legacy_limits)
+        for field in ADVANCED_SETTING_FIELDS
+    }
 
 
 def resolve_project_analysis_flags_for_save(
@@ -1454,14 +1493,77 @@ def _resolve_existing_setting_value(
     config: Mapping[str, Any],
     field: SettingField,
 ) -> tuple[bool, Any]:
-    """Return ``(present, raw)`` checking primary path then legacy fallbacks."""
+    """Return ``(present, raw)`` following each field's runtime lookup rules."""
+    first_present: tuple[bool, Any] = (False, None)
     for path in (field.path, *field.legacy_paths):
         if not has_nested_value(config, path):
             continue
         raw = get_nested_value(config, path)
-        if raw is not None:
+        if not field.legacy_fallback_on_empty:
             return True, raw
-    return False, None
+        if not first_present[0]:
+            first_present = (True, raw)
+        if raw is not None and not (isinstance(raw, str) and not raw.strip()):
+            return True, raw
+    return first_present
+
+
+def _setting_default(
+    field: SettingField,
+    legacy_limits: LegacyTranslationLimits | None,
+) -> SettingValue:
+    if legacy_limits is None:
+        return field.default
+    return legacy_limits.get(field.path, field.default)
+
+
+def _existing_raw_accepted_by_runtime(
+    field: SettingField,
+    raw: Any,
+) -> bool:
+    """Return whether *raw* is directly accepted by runtime readers without repair."""
+    if field.key == "engine":
+        try:
+            project_engine({"engine": raw})
+        except ValueError:
+            return False
+        return True
+    if field.key == "mv_display_fields":
+        if not isinstance(raw, list):
+            return False
+        try:
+            parse_display_fields(raw)
+        except ValueError:
+            return False
+        return True
+    if field.key in {
+        "mv_source_root",
+        "mv_support_window_file",
+        "mv_occurrence_scope_file",
+        "mv_reviewed_history_file",
+    }:
+        return isinstance(raw, str)
+    if field.key == "batch_non_chinese_extra_static_paths":
+        return isinstance(raw, list) and all(isinstance(item, str) for item in raw)
+    if field.kind == "path_list":
+        return raw is None or isinstance(raw, (str, list))
+    if field.key == "batch_quality_gate":
+        return isinstance(raw, Mapping) or (isinstance(raw, str) and not raw.strip())
+    if field.kind == "gemini_model_list":
+        return raw is None or isinstance(raw, (str, list))
+    if field.kind == "gemini_catalog_list":
+        if raw is None or isinstance(raw, list):
+            return True
+        if isinstance(raw, str):
+            return normalize_list_value(field, raw) == (
+                [raw.strip()] if raw.strip() else []
+            )
+        return False
+    if field.kind == "str" and field.choices is not None and field.choice_aliases is None:
+        return isinstance(raw, str) and (
+            raw in field.choices or (field.allow_empty and raw == "")
+        )
+    return True
 
 
 def _normalized_existing_value(
@@ -1470,10 +1572,17 @@ def _normalized_existing_value(
     *,
     translator_config: Mapping[str, Any],
 ) -> tuple[bool, Any]:
+    # The runtime treats a configured scalar path as one literal, even if it
+    # contains commas or brackets. Only form text can encode several paths.
+    value = (
+        [existing_raw]
+        if field.kind == "path_list" and isinstance(existing_raw, str)
+        else existing_raw
+    )
     try:
         normalized = normalize_for_write(
             field,
-            existing_raw,
+            value,
             translator_config=translator_config,
         )
     except ValueError:
@@ -1486,11 +1595,14 @@ def _normalized_existing_value(
 def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
+    *,
+    legacy_limits: LegacyTranslationLimits | None = None,
 ) -> dict[str, Any]:
-    """Validate and write changed or pre-existing advanced settings onto config.
+    """Write settings whose submitted values change the effective config.
 
-    Missing keys in *values* are skipped, and defaults are never materialized
-    when neither the primary path nor a legacy fallback is set in *config*.
+    The inherited value can come from an older translator_config.json key or
+    a legacy limit in api_keys.json. Explicit null suppresses nested aliases
+    where the runtime uses key presence to choose them.
     """
     # Validate rotation against the catalog *as it will look after this save*.
     provisional = config_with_pending_catalog_updates(config, values)
@@ -1507,13 +1619,13 @@ def apply_advanced_settings(
             values[field.key],
             translator_config=provisional,
         )
-        default_normalized = normalize_for_write(
-            field,
-            field.default,
-            translator_config=provisional,
-        )
         existing_present, existing_raw = _resolve_existing_setting_value(config, field)
-        if not existing_present:
+        if not existing_present or (existing_raw is None and field.inherit_on_null):
+            default_normalized = normalize_for_write(
+                field,
+                _setting_default(field, legacy_limits),
+                translator_config=provisional,
+            )
             if normalized == default_normalized:
                 continue
             set_nested_value(config, field.path, normalized)
@@ -1528,24 +1640,25 @@ def apply_advanced_settings(
             existing_ok
             and existing_normalized == normalized
             and type(existing_normalized) is type(normalized)
+            and _existing_raw_accepted_by_runtime(field, existing_raw)
         ):
             continue
         set_nested_value(config, field.path, normalized)
     return config
 
 
-def read_setting(config: Mapping[str, Any], field: SettingField) -> SettingValue:
+def read_setting(
+    config: Mapping[str, Any],
+    field: SettingField,
+    *,
+    legacy_limits: LegacyTranslationLimits | None = None,
+) -> SettingValue:
     """Read and validate one setting, preserving invalid raw values in place."""
     present, raw = _resolve_existing_setting_value(config, field)
-    if not present:
-        return copy.deepcopy(field.default)
-    try:
-        normalized = normalize_for_write(field, raw, translator_config=config)
-    except ValueError:
-        return copy.deepcopy(raw)
-    if validate_value(field, normalized, translator_config=config):
-        return copy.deepcopy(raw)
-    return copy.deepcopy(normalized)
+    if not present or (raw is None and field.inherit_on_null):
+        return copy.deepcopy(_setting_default(field, legacy_limits))
+    _, value = _normalized_existing_value(field, raw, translator_config=config)
+    return copy.deepcopy(value)
 
 
 def validate_value(
@@ -1568,7 +1681,7 @@ def validate_value(
             return f"{field.label}不能为空。"
         return ""
 
-    if field.kind in {"bool", "list", "json", "gemini_model_list", "gemini_catalog_list"}:
+    if field.kind in {"bool", "list", "path_list", "json", "gemini_model_list", "gemini_catalog_list"}:
         return ""
 
     number = float(normalized)
@@ -1612,6 +1725,10 @@ def normalize_for_write(
     if field.kind == "bool":
         if isinstance(value, bool):
             return value
+        if field.key in {"api_key_rotation_enabled", "model_rotation_enabled"}:
+            parsed = parse_config_bool(value)
+            if parsed is not None:
+                return parsed
         raise ValueError(f"{field.label}必须是布尔值。")
 
     if field.kind == "int":
@@ -1627,6 +1744,10 @@ def normalize_for_write(
     if field.kind == "float":
         if isinstance(value, bool):
             raise ValueError(f"{field.label}必须是数字。")
+        if field.allow_empty and (
+            value is None or (isinstance(value, str) and not value.strip())
+        ):
+            return float(field.default)
         try:
             if isinstance(value, str) and not value.strip():
                 raise ValueError
@@ -1661,6 +1782,9 @@ def normalize_for_write(
             return sorted(normalized)
         return normalized
 
+    if field.kind == "path_list":
+        return normalize_list_value(field, value)
+
     if field.kind == "gemini_catalog_list":
         normalized = normalize_list_value(field, value)
         if field.key == "catalog_gemini_embedding_models":
@@ -1668,7 +1792,7 @@ def normalize_for_write(
         return extras_beyond_builtins(normalized, kind="translation")
 
     if field.kind == "gemini_model_list":
-        if value is not None and not isinstance(value, (list, tuple, set)):
+        if value is not None and not isinstance(value, (str, list, tuple, set)):
             raise ValueError(f"{field.label}必须是列表。")
         return filter_gemini_rotation_models(
             value,
@@ -1677,7 +1801,10 @@ def normalize_for_write(
         )
 
     if field.kind == "json":
-        return normalize_json_value(field, value)
+        normalized = normalize_json_value(field, value)
+        if field.key == "batch_quality_gate" and not isinstance(normalized, dict):
+            raise ValueError(QUALITY_POLICY_INVALID_COPY)
+        return normalized
 
     raise ValueError(f"Unsupported setting type: {field.kind}")
 
@@ -1699,16 +1826,18 @@ def normalize_list_value(field: SettingField, value: Any) -> list[str]:
             value = [part.strip() for line in text.splitlines() for part in line.split(",")]
     if not isinstance(value, (list, tuple, set)):
         raise ValueError(f"{field.label}必须是列表。")
+    if field.kind == "path_list" and any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{field.label}必须是路径字符串列表。")
     return [str(item).strip() for item in value if str(item).strip()]
 
 
 def normalize_json_value(field: SettingField, value: Any) -> Any:
     if value is None:
-        return field.default if field.allow_empty else None
+        return copy.deepcopy(field.default) if field.allow_empty else None
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            return field.default if field.allow_empty else ""
+            return copy.deepcopy(field.default) if field.allow_empty else ""
         if text.startswith("[") or text.startswith("{"):
             try:
                 return json.loads(text)

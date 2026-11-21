@@ -23,23 +23,33 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui_qt.settings.settings_schema import SettingField, validate_value
+from gui_qt.settings.settings_schema import (
+    SettingField,
+    normalize_for_write,
+    validate_value,
+)
+from gui_qt.user_copy import QUALITY_POLICY_JSON_PLACEHOLDER
 from gui_qt.widgets.widget_helpers import NoWheelComboBox
 
 SettingValue = Any
 
 _MAX_INLINE_DESC_CHARS = 38
 _INVALID_VALUE_PROP = "_rtl_invalid_raw_value"
+_HAS_INVALID_VALUE_PROP = "_rtl_has_invalid_raw_value"
 
 
 def _set_invalid_raw(widget: object, value: object) -> None:
     setter = getattr(widget, "setProperty", None)
     if callable(setter):
+        setter(_HAS_INVALID_VALUE_PROP, True)
         setter(_INVALID_VALUE_PROP, value)
 
 
 def _clear_invalid_raw(widget: object) -> None:
-    _set_invalid_raw(widget, None)
+    setter = getattr(widget, "setProperty", None)
+    if callable(setter):
+        setter(_HAS_INVALID_VALUE_PROP, False)
+        setter(_INVALID_VALUE_PROP, None)
 
 
 def _on_choice_combo_changed(field: SettingField, combo: QComboBox) -> None:
@@ -66,7 +76,10 @@ def _populate_choice_combo(
     if field.allow_empty and "" not in choices:
         combo.addItem("", "")
     if is_valid:
-        target = value.strip() if isinstance(value, str) else value
+        try:
+            target = normalize_for_write(field, value)
+        except ValueError:
+            target = value.strip() if isinstance(value, str) else value
         index = combo.findData(target)
         if index < 0 and target is not None:
             index = combo.findText(str(target))
@@ -74,7 +87,7 @@ def _populate_choice_combo(
             combo.setCurrentIndex(index)
         _clear_invalid_raw(combo)
         return
-    display = "" if value is None else str(value)
+    display = "null" if value is None else str(value)
     combo.addItem(display, value)
     combo.setCurrentIndex(combo.count() - 1)
     _set_invalid_raw(combo, value)
@@ -117,6 +130,10 @@ def _concise_field_summary(description: str) -> str:
 def setting_placeholder(field: SettingField) -> str:
     if field.kind == "list":
         return "每行一个值，或填写 JSON 数组"
+    if field.kind == "path_list":
+        return "每行一个路径。路径内含逗号时用 JSON 数组"
+    if field.key == "batch_quality_gate":
+        return QUALITY_POLICY_JSON_PLACEHOLDER
     if field.kind == "json":
         return "留空使用默认；可填写字符串预设或 JSON"
     if field.kind == "text":
@@ -125,9 +142,15 @@ def setting_placeholder(field: SettingField) -> str:
 
 
 def format_setting_text(field: SettingField, value: object) -> str:
-    if field.kind in {"list", "gemini_model_list", "gemini_catalog_list"}:
+    if field.kind in {"list", "path_list", "gemini_model_list", "gemini_catalog_list"}:
         if isinstance(value, (list, tuple, set)):
-            return "\n".join(str(item) for item in value)
+            items = [str(item) for item in value]
+            if field.kind == "path_list" and any(
+                "," in item or item.startswith("[") or "\n" in item or "\r" in item
+                for item in items
+            ):
+                return json.dumps(items, ensure_ascii=False, indent=2)
+            return "\n".join(items)
         return str(value or "")
     if field.kind == "json":
         if value in (None, ""):
@@ -167,7 +190,7 @@ def create_basic_setting_widget(field: SettingField) -> QWidget:
         if spin_f.lineEdit() is not None:
             spin_f.lineEdit().textEdited.connect(lambda _txt="", w=spin_f: _clear_invalid_raw(w))
         widget = spin_f
-    elif field.kind in {"text", "list", "json"}:
+    elif field.kind in {"text", "list", "path_list", "json"}:
         text = QTextEdit()
         text.setAcceptRichText(False)
         text.setMinimumHeight(72 if field.kind != "text" else 96)
@@ -196,10 +219,8 @@ def create_basic_setting_widget(field: SettingField) -> QWidget:
 
 def setting_value_from_widget(field: SettingField, widget: QWidget) -> SettingValue:
     prop_fn = getattr(widget, "property", None)
-    if callable(prop_fn):
-        invalid = prop_fn(_INVALID_VALUE_PROP)
-        if invalid is not None:
-            return invalid
+    if callable(prop_fn) and bool(prop_fn(_HAS_INVALID_VALUE_PROP)):
+        return prop_fn(_INVALID_VALUE_PROP)
     if field.kind == "bool":
         return bool(getattr(widget, "isChecked")())
     if field.kind in {"int", "float"}:
@@ -231,19 +252,17 @@ def apply_setting_value_to_widget(
         if isinstance(widget, QComboBox):
             _populate_choice_combo(field, widget, value, is_valid=is_valid)
             return
-        if field.kind == "bool":
-            _set_invalid_raw(widget, None if is_valid else value)
-            widget.setChecked(bool(value) if is_valid else bool(field.default))
+        if is_valid:
+            _clear_invalid_raw(widget)
+        else:
+            _set_invalid_raw(widget, value)
+        if field.kind in {"bool", "int", "float"}:
+            displayed_value = normalize_for_write(field, value if is_valid else field.default)
+            if field.kind == "bool":
+                widget.setChecked(displayed_value)
+            else:
+                widget.setValue(displayed_value)
             return
-        if field.kind == "int":
-            _set_invalid_raw(widget, None if is_valid else value)
-            widget.setValue(int(value) if is_valid else int(field.default))
-            return
-        if field.kind == "float":
-            _set_invalid_raw(widget, None if is_valid else value)
-            widget.setValue(float(value) if is_valid else float(field.default))
-            return
-        _set_invalid_raw(widget, None if is_valid else value)
         set_plain = getattr(widget, "setPlainText", None)
         if callable(set_plain):
             set_plain(format_setting_text(field, value))

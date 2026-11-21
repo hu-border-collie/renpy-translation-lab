@@ -36,6 +36,7 @@ def locked_runtime_state():
 
 from foundation.atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 from foundation import cli_contract
+from foundation.runtime_config_values import legacy_sync_limits, parse_config_bool
 from quality_review import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -524,15 +525,8 @@ def _is_placeholder_api_key(value):
 
 
 def _coerce_bool(value, default):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return default
+    parsed = parse_config_bool(value)
+    return default if parsed is None else parsed
 
 
 def _coerce_positive_int(value, default):
@@ -2247,12 +2241,10 @@ def load_config(*, require_api_key=True):
                 keys = config.get("api_keys", [])
                 custom_models = config.get("models", [])
                 single_model = config.get("model")
-                batch_size = config.get("sync_chunk_size", config.get("batch_size"))
-                max_chars = config.get("max_chars")
-                sync_max_chars = config.get("sync_max_source_chars")
-                if sync_max_chars is not None:
-                    max_chars = sync_max_chars
-                sync_max_output_tokens = config.get("sync_max_output_tokens")
+                limits = legacy_sync_limits(config)
+                batch_size = limits["chunk_size"]
+                max_chars = limits["max_source_chars"]
+                sync_max_output_tokens = limits["max_output_tokens"]
                 include_files = config.get("include_files")
                 include_prefixes = config.get("include_prefixes")
 

@@ -6,7 +6,7 @@ goes through MainWindow's single save transaction.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -206,6 +206,22 @@ class AdvancedSettingsPage(QObject):
         if callable(show_status):
             show_status(message)
 
+    def _on_catalog_changed(self, field: SettingField) -> None:
+        if self._loading:
+            return
+        widget = self.field_widgets.get(field.key)
+        if widget is None:
+            return
+        update_setting_error_label(
+            field,
+            self.error_labels.get(field.key),
+            gemini_catalog_list_values(widget),
+            translator_config=self._rotation_config(),
+        )
+
+    def _make_catalog_change_callback(self, field: SettingField) -> Callable[[], None]:
+        return lambda: self._on_catalog_changed(field)
+
     def _create_field_widget(self, field: SettingField) -> QWidget:
         if field.kind == "gemini_model_list":
             return create_gemini_model_checklist()
@@ -218,6 +234,7 @@ class AdvancedSettingsPage(QObject):
             return create_gemini_catalog_list_editor(
                 kind=kind,
                 on_status=self._show_status,
+                on_change=self._make_catalog_change_callback(field),
             )
         widget = create_basic_setting_widget(field)
         if field.kind in {"int", "float"}:

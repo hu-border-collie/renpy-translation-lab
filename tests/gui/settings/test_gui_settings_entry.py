@@ -479,6 +479,51 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertIn("校验通过", page.readiness_label.text())
         self.save_mock.assert_not_called()
 
+    def test_advanced_save_preserves_inherited_limits_and_writes_explicit_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            game_root = Path(directory) / "work"
+            game_root.mkdir()
+            api_keys_path = Path(directory) / "api_keys.json"
+            legacy = {
+                "api_keys": ["replace-me"],
+                "batch_target_chars": "9000",
+                "batch_max_source_chars": 8000,
+                "sync_max_source_chars": None,
+                "max_chars": 13000,
+            }
+            api_keys_path.write_text(json.dumps(legacy), encoding="utf-8")
+            self.config = {
+                "game_root": str(game_root),
+                "sync": {"max_source_chars": None, "target_chars": 7000},
+            }
+
+            def save_config(config):
+                self.config = copy.deepcopy(config)
+
+            self.save_mock.side_effect = save_config
+            with (
+                mock.patch.object(self.window.state, "api_keys_path", api_keys_path),
+                mock.patch.object(self.window.state, "get_game_root", return_value=game_root),
+                mock.patch.object(self.window.state, "normalize_game_root", return_value=(game_root, False)),
+            ):
+                self.window._focus_settings_section("advanced")
+                page = self.window._settings_coordinator.page("advanced")
+                self.assertEqual(page.collect()["batch_max_source_chars"], 9000)
+                self.assertEqual(page.collect()["sync_max_source_chars"], 13000)
+
+                page.field_widgets["batch_chunk_size"].setValue(24)
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(self.config["batch"]["chunk_size"], 24)
+                self.assertNotIn("max_source_chars", self.config["batch"])
+                self.assertIsNone(self.config["sync"]["max_source_chars"])
+
+                page.field_widgets["batch_max_source_chars"].setValue(18000)
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(self.config["batch"]["max_source_chars"], 18000)
+                self.assertEqual(page.collect()["batch_max_source_chars"], 18000)
+                self.assertNotIn("api_keys", self.config)
+                self.assertEqual(json.loads(api_keys_path.read_text(encoding="utf-8")), legacy)
+
     def test_invalid_disk_settings_show_errors_and_block_save_without_overwriting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             game_root = Path(directory) / "work"

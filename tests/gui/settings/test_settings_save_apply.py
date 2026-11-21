@@ -293,6 +293,50 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertTrue(result.ok, result)
         self.assertNotIn("max_source_chars", config["batch"])
 
+    def test_unrelated_save_repairs_padded_engine_and_string_mv_display_fields(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "engine": " renpy ",
+            "rpgmaker_mv": {"display_fields": "map_display_name"},
+        }
+        result = apply_collected_settings(
+            config,
+            {"batch_chunk_size": 24},
+            original_config=copy.deepcopy(config),
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["engine"], "renpy")
+        self.assertEqual(config["rpgmaker_mv"]["display_fields"], ["map_display_name"])
+
+    def test_explicit_null_engine_blocks_unrelated_save(self) -> None:
+        bad_config = {"game_root": "C:/Game/work", "engine": None}
+        original = copy.deepcopy(bad_config)
+        result = apply_collected_settings(
+            bad_config,
+            {"batch_chunk_size": 24},
+            original_config=original,
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("engine", result.advanced_errors)
+        self.assertEqual(bad_config, original)
+
+    def test_single_string_rotation_models_allows_unrelated_save(self) -> None:
+        config: dict = {
+            "game_root": "C:/Game/work",
+            "rotation": {"model": {"enabled": True, "models": "gemini-3.1-flash-lite"}},
+        }
+        result = apply_collected_settings(
+            config,
+            {"batch_chunk_size": 24},
+            original_config=copy.deepcopy(config),
+            extras=SettingsSaveExtras(game_root="C:/Game/work"),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["batch"]["chunk_size"], 24)
+        self.assertEqual(config["rotation"]["model"]["models"], "gemini-3.1-flash-lite")
+
 
 
 class ModelRoutingSaveApplyTests(unittest.TestCase):
