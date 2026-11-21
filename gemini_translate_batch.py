@@ -111,7 +111,7 @@ from providers.gemini_model_catalog import (
     is_gemini_3_model,
 )
 from foundation.project_version import __version__
-from foundation.runtime_config_values import legacy_batch_limits
+from foundation.runtime_config_values import legacy_batch_limits, normalize_batch_safety_settings
 from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     normalize_sync_timeout_seconds,
@@ -530,43 +530,6 @@ def read_text_file(path):
 
 def normalize_task_type(value, default):
     return embedding_runtime.persist_task_type(value, default)
-
-
-def normalize_batch_safety_settings(value):
-    if value is None:
-        return []
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return []
-        normalized = cleaned.lower().replace('-', '_')
-        if normalized in {'relaxed_adult', 'adult', 'sexually_explicit_block_none'}:
-            return [
-                {
-                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                    'threshold': 'BLOCK_NONE',
-                }
-            ]
-        return []
-    if isinstance(value, dict):
-        value = [value]
-    if not isinstance(value, list):
-        return []
-
-    settings = []
-    for entry in value:
-        if not isinstance(entry, dict):
-            continue
-        category = str(entry.get('category') or entry.get('harm_category') or '').strip().upper()
-        threshold = str(entry.get('threshold') or entry.get('block_threshold') or '').strip().upper()
-        if not category or not threshold:
-            continue
-        if not category.startswith('HARM_CATEGORY_'):
-            category = f'HARM_CATEGORY_{category}'
-        if threshold in {'NONE', 'NO_BLOCK', 'BLOCKNONE'}:
-            threshold = 'BLOCK_NONE'
-        settings.append({'category': category, 'threshold': threshold})
-    return settings
 
 
 def load_batch_settings(*, tolerate_routing_errors=False):

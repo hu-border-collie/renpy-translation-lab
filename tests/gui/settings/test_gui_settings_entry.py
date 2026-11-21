@@ -479,7 +479,7 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertIn("校验通过", page.readiness_label.text())
         self.save_mock.assert_not_called()
 
-    def test_advanced_save_preserves_inherited_limits_and_writes_explicit_override(self) -> None:
+    def test_advanced_save_preserves_inherited_settings_and_writes_explicit_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             game_root = Path(directory) / "work"
             game_root.mkdir()
@@ -490,6 +490,7 @@ class SettingsEntryTests(unittest.TestCase):
                 "batch_max_source_chars": 8000,
                 "sync_max_source_chars": None,
                 "max_chars": 13000,
+                "batch_safety_settings": {"category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE"},
             }
             api_keys_path.write_text(json.dumps(legacy), encoding="utf-8")
             self.config = {
@@ -510,17 +511,26 @@ class SettingsEntryTests(unittest.TestCase):
                 page = self.window._settings_coordinator.page("advanced")
                 self.assertEqual(page.collect()["batch_max_source_chars"], 9000)
                 self.assertEqual(page.collect()["sync_max_source_chars"], 13000)
+                inherited_safety = [{
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_LOW_AND_ABOVE",
+                }]
+                self.assertEqual(json.loads(page.collect()["batch_safety_settings"]), inherited_safety)
 
                 page.field_widgets["batch_chunk_size"].setValue(24)
                 self.assertTrue(self.window._on_save_config())
                 self.assertEqual(self.config["batch"]["chunk_size"], 24)
                 self.assertNotIn("max_source_chars", self.config["batch"])
+                self.assertNotIn("safety_settings", self.config["batch"])
                 self.assertIsNone(self.config["sync"]["max_source_chars"])
 
                 page.field_widgets["batch_max_source_chars"].setValue(18000)
+                page.field_widgets["batch_safety_settings"].clear()
                 self.assertTrue(self.window._on_save_config())
                 self.assertEqual(self.config["batch"]["max_source_chars"], 18000)
+                self.assertEqual(self.config["batch"]["safety_settings"], [])
                 self.assertEqual(page.collect()["batch_max_source_chars"], 18000)
+                self.assertEqual(json.loads(page.collect()["batch_safety_settings"]), [])
                 self.assertNotIn("api_keys", self.config)
                 self.assertEqual(json.loads(api_keys_path.read_text(encoding="utf-8")), legacy)
 

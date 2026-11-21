@@ -4,10 +4,13 @@ from __future__ import annotations
 import copy
 import unittest
 
+from context_engine.embedding_runtime import parse_embedding_runtime_settings
+from foundation.runtime_config_values import legacy_translation_defaults
 from gui_qt.settings.save_apply import (
     SettingsSaveExtras,
     apply_collected_settings,
 )
+from gui_qt.settings.settings_schema import read_advanced_settings
 
 
 class SettingsSaveApplyTests(unittest.TestCase):
@@ -255,6 +258,49 @@ class SettingsSaveApplyTests(unittest.TestCase):
             config["sync"]["rag"]["embedding_backend"],
             "openai_compatible",
         )
+
+    def test_null_embedding_backends_display_runtime_default_and_allow_unrelated_save(self) -> None:
+        config = {
+            "game_root": "C:/Game/work",
+            "sync": {"rag": {"embedding_backend": None}},
+            "batch": {"rag": {"embedding_backend": None}},
+        }
+        snapshot = read_advanced_settings(config)
+        for scope in ("sync", "batch"):
+            self.assertEqual(
+                snapshot[f"{scope}_rag_embedding_backend"],
+                parse_embedding_runtime_settings(config[scope]["rag"]).backend,
+            )
+
+        result = apply_collected_settings(
+            config,
+            {"batch_chunk_size": 24},
+            original_config=copy.deepcopy(config),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["batch"]["chunk_size"], 24)
+        for scope in ("sync", "batch"):
+            self.assertEqual(config[scope]["rag"], {"embedding_backend": None})
+
+    def test_explicit_empty_batch_safety_setting_overrides_legacy_default(self) -> None:
+        legacy_defaults = legacy_translation_defaults({
+            "batch_safety_settings": {
+                "category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE",
+            },
+        })
+        for empty in (None, [], ""):
+            with self.subTest(empty=empty):
+                config = {"batch": {"safety_settings": empty}}
+                snapshot = read_advanced_settings(config, legacy_defaults=legacy_defaults)
+                self.assertEqual(snapshot["batch_safety_settings"], [])
+                result = apply_collected_settings(
+                    config,
+                    {"batch_chunk_size": 24},
+                    original_config=copy.deepcopy(config),
+                    extras=SettingsSaveExtras(legacy_defaults=legacy_defaults),
+                )
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["batch"]["safety_settings"], empty)
 
     def test_legacy_target_chars_override_writes_canonical_default_on_reset(self) -> None:
         config: dict = {

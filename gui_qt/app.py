@@ -89,7 +89,7 @@ from PySide6.QtWidgets import (
 )
 from foundation.project_version import __version__
 from foundation import cli_contract
-from foundation.runtime_config_values import LegacyTranslationLimits
+from foundation.runtime_config_values import LegacyTranslationDefaults
 from providers import model_profile
 from quality_review import preflight_display
 from providers import model_routing_config
@@ -15733,7 +15733,7 @@ class MainWindow(QMainWindow):
             ):
                 advanced_values = read_advanced_settings(
                     config,
-                    legacy_limits=self._settings_legacy_translation_limits(),
+                    legacy_defaults=self._settings_legacy_translation_defaults(),
                 )
                 project_flags = read_batch_context_flags(
                     config,
@@ -15928,10 +15928,10 @@ class MainWindow(QMainWindow):
         collected.update(self._advanced_settings_values_from_ui())
         return collected
 
-    def _settings_legacy_translation_limits(self) -> LegacyTranslationLimits:
-        loader = getattr(getattr(self, "state", None), "load_legacy_translation_limits", None)
-        limits = loader() if callable(loader) else None
-        return limits if isinstance(limits, Mapping) else {}
+    def _settings_legacy_translation_defaults(self) -> LegacyTranslationDefaults:
+        loader = getattr(getattr(self, "state", None), "load_legacy_translation_defaults", None)
+        defaults = loader() if callable(loader) else None
+        return defaults if isinstance(defaults, Mapping) else {}
 
     def _settings_save_extras(self) -> SettingsSaveExtras:
         litellm_page = self._litellm_page() if hasattr(self, "_litellm_page") else None
@@ -15958,7 +15958,7 @@ class MainWindow(QMainWindow):
             if litellm_page is not None
             else "",
             batch_thinking_user_changed=thinking_changed,
-            legacy_limits=self._settings_legacy_translation_limits(),
+            legacy_defaults=self._settings_legacy_translation_defaults(),
         )
 
     def _persist_collected_settings(self, collected: Mapping[str, object]) -> bool:

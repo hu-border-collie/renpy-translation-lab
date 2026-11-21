@@ -29,7 +29,7 @@ from context_engine.embedding_runtime import (
 )
 from engine_adapters.project_config import SUPPORTED_ENGINES, project_engine
 from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS, parse_display_fields
-from foundation.runtime_config_values import LegacyTranslationLimits, parse_config_bool
+from foundation.runtime_config_values import LegacyTranslationDefaults, parse_config_bool
 from providers.gemini_model_catalog import (
     DEFAULT_GEMINI_EMBEDDING_MODEL,
     DEFAULT_GEMINI_TRANSLATION_MODEL,
@@ -772,6 +772,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "同步 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
         choice_aliases=EMBEDDING_BACKEND_ALIASES,
+        inherit_on_null=True,
     ),
     SettingField(
         "sync_rag_embedding_provider",
@@ -823,6 +824,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "批量 RAG",
         choices=SUPPORTED_EMBEDDING_BACKENDS,
         choice_aliases=EMBEDDING_BACKEND_ALIASES,
+        inherit_on_null=True,
     ),
     SettingField(
         "batch_rag_embedding_provider",
@@ -1394,11 +1396,11 @@ def context_primary_setting_fields() -> tuple[SettingField, ...]:
 def read_advanced_settings(
     config: Mapping[str, Any],
     *,
-    legacy_limits: LegacyTranslationLimits | None = None,
+    legacy_defaults: LegacyTranslationDefaults | None = None,
 ) -> dict[str, SettingValue]:
-    """Read settings and project inherited limits onto the settings form."""
+    """Read settings and project inherited values onto the settings form."""
     return {
-        field.key: read_setting(config, field, legacy_limits=legacy_limits)
+        field.key: read_setting(config, field, legacy_defaults=legacy_defaults)
         for field in ADVANCED_SETTING_FIELDS
     }
 
@@ -1510,11 +1512,11 @@ def _resolve_existing_setting_value(
 
 def _setting_default(
     field: SettingField,
-    legacy_limits: LegacyTranslationLimits | None,
+    legacy_defaults: LegacyTranslationDefaults | None,
 ) -> SettingValue:
-    if legacy_limits is None:
+    if legacy_defaults is None:
         return field.default
-    return legacy_limits.get(field.path, field.default)
+    return legacy_defaults.get(field.path, field.default)
 
 
 def _existing_raw_accepted_by_runtime(
@@ -1596,12 +1598,12 @@ def apply_advanced_settings(
     config: dict[str, Any],
     values: dict[str, Any],
     *,
-    legacy_limits: LegacyTranslationLimits | None = None,
+    legacy_defaults: LegacyTranslationDefaults | None = None,
 ) -> dict[str, Any]:
     """Write settings whose submitted values change the effective config.
 
     The inherited value can come from an older translator_config.json key or
-    a legacy limit in api_keys.json. Explicit null suppresses nested aliases
+    a setting in api_keys.json. Explicit null suppresses nested aliases
     where the runtime uses key presence to choose them.
     """
     # Validate rotation against the catalog *as it will look after this save*.
@@ -1623,7 +1625,7 @@ def apply_advanced_settings(
         if not existing_present or (existing_raw is None and field.inherit_on_null):
             default_normalized = normalize_for_write(
                 field,
-                _setting_default(field, legacy_limits),
+                _setting_default(field, legacy_defaults),
                 translator_config=provisional,
             )
             if normalized == default_normalized:
@@ -1651,12 +1653,12 @@ def read_setting(
     config: Mapping[str, Any],
     field: SettingField,
     *,
-    legacy_limits: LegacyTranslationLimits | None = None,
+    legacy_defaults: LegacyTranslationDefaults | None = None,
 ) -> SettingValue:
     """Read and validate one setting, preserving invalid raw values in place."""
     present, raw = _resolve_existing_setting_value(config, field)
     if not present or (raw is None and field.inherit_on_null):
-        return copy.deepcopy(_setting_default(field, legacy_limits))
+        return copy.deepcopy(_setting_default(field, legacy_defaults))
     _, value = _normalized_existing_value(field, raw, translator_config=config)
     return copy.deepcopy(value)
 
