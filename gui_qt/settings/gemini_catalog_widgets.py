@@ -5,6 +5,8 @@ them after migration; host load/collect helpers reuse the same functions.
 """
 from __future__ import annotations
 
+import copy
+import json
 from collections.abc import Callable, Sequence
 
 from PySide6.QtCore import Qt
@@ -19,15 +21,43 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from providers.gemini_model_catalog import allowed_gemini_rotation_models, extras_beyond_builtins
+from providers.gemini_model_catalog import (
+    allowed_gemini_rotation_models,
+    extras_beyond_builtins,
+    normalize_model_names,
+)
 
 StatusCallback = Callable[[str], None]
+ChangeCallback = Callable[[], None]
+_INVALID_VALUE_PROP = "_rtl_invalid_raw_value"
+_HAS_INVALID_VALUE_PROP = "_rtl_has_invalid_raw_value"
+
+
+def _has_invalid_raw(widget: QWidget) -> bool:
+    return bool(widget.property(_HAS_INVALID_VALUE_PROP))
+
+
+def _set_invalid_raw(widget: QWidget, value: object) -> None:
+    widget.setProperty(_HAS_INVALID_VALUE_PROP, True)
+    widget.setProperty(_INVALID_VALUE_PROP, value)
+    clear_btn = getattr(widget, "_catalog_clear_invalid_btn", None)
+    if clear_btn is not None:
+        clear_btn.setVisible(True)
+
+
+def _clear_invalid_raw(widget: QWidget) -> None:
+    widget.setProperty(_HAS_INVALID_VALUE_PROP, False)
+    widget.setProperty(_INVALID_VALUE_PROP, None)
+    clear_btn = getattr(widget, "_catalog_clear_invalid_btn", None)
+    if clear_btn is not None:
+        clear_btn.setVisible(False)
 
 
 def create_gemini_catalog_list_editor(
     *,
     kind: str,
     on_status: StatusCallback | None = None,
+    on_change: ChangeCallback | None = None,
 ) -> QWidget:
     """Compact custom-model editor: short list + single-line add/remove."""
     host = QWidget()
@@ -68,11 +98,21 @@ def create_gemini_catalog_list_editor(
     remove_btn.setObjectName("secondary_btn")
     remove_btn.setToolTip("删除列表中选中的自定义模型。")
     row_layout.addWidget(remove_btn)
+
+    clear_invalid_btn = QPushButton("清空无效值")
+    clear_invalid_btn.setObjectName("secondary_btn")
+    clear_invalid_btn.setToolTip("清除当前无效配置并恢复为空列表。")
+    clear_invalid_btn.setVisible(False)
+    row_layout.addWidget(clear_invalid_btn)
     layout.addWidget(row)
 
     def _emit_status(message: str) -> None:
         if callable(on_status):
             on_status(message)
+
+    def _notify_changed() -> None:
+        if callable(on_change):
+            on_change()
 
     def _add_model() -> None:
         name = entry.text().strip()
@@ -93,24 +133,42 @@ def create_gemini_catalog_list_editor(
             _emit_status(f"已在列表中：{cleaned}")
             entry.clear()
             return
+        _clear_invalid_raw(host)
         model_list.addItem(cleaned)
         entry.clear()
         model_list.setCurrentRow(model_list.count() - 1)
+        _notify_changed()
 
     def _remove_selected() -> None:
-        for item in model_list.selectedItems():
+        selected_items = model_list.selectedItems()
+        if not selected_items:
+            return
+        _clear_invalid_raw(host)
+        for item in selected_items:
             row_index = model_list.row(item)
             model_list.takeItem(row_index)
+        _notify_changed()
+
+    def _clear_invalid() -> None:
+        _clear_invalid_raw(host)
+        _emit_status("已清空无效模型目录配置。")
+        _notify_changed()
 
     add_btn.clicked.connect(_add_model)
     entry.returnPressed.connect(_add_model)
     remove_btn.clicked.connect(_remove_selected)
+    clear_invalid_btn.clicked.connect(_clear_invalid)
     host._catalog_list = model_list  # type: ignore[attr-defined]
     host._catalog_entry = entry  # type: ignore[attr-defined]
+    host._catalog_add_btn = add_btn  # type: ignore[attr-defined]
+    host._catalog_remove_btn = remove_btn  # type: ignore[attr-defined]
+    host._catalog_clear_invalid_btn = clear_invalid_btn  # type: ignore[attr-defined]
     return host
 
 
-def gemini_catalog_list_values(widget: QWidget) -> list[str]:
+def gemini_catalog_list_values(widget: QWidget) -> object:
+    if _has_invalid_raw(widget):
+        return widget.property(_INVALID_VALUE_PROP)
     model_list = getattr(widget, "_catalog_list", None)
     if not isinstance(model_list, QListWidget):
         return []
@@ -130,7 +188,27 @@ def set_gemini_catalog_list_values(widget: QWidget, values: object) -> None:
     if not isinstance(model_list, QListWidget):
         return
     kind = str(widget.property("catalog_kind") or "translation")
-    cleaned = extras_beyond_builtins(values, kind=kind)
+    raw_items: object = values
+    invalid = False
+    if isinstance(values, str):
+        text = values.strip()
+        if text.startswith("["):
+            try:
+                raw_items = json.loads(text)
+            except json.JSONDecodeError:
+                invalid = True
+        elif text:
+            raw_items = [part.strip() for line in text.splitlines() for part in line.split(",")]
+        else:
+            raw_items = []
+    if not invalid and raw_items is not None and not isinstance(raw_items, (list, tuple, set)):
+        invalid = True
+    if invalid:
+        _set_invalid_raw(widget, copy.deepcopy(values))
+        cleaned: list[str] = []
+    else:
+        _clear_invalid_raw(widget)
+        cleaned = extras_beyond_builtins(raw_items, kind=kind)
     previous = model_list.blockSignals(True)
     try:
         model_list.clear()
@@ -158,6 +236,7 @@ def create_gemini_model_checklist(
         else allowed_gemini_rotation_models(),
         selected=selected,
     )
+    widget.itemChanged.connect(lambda _item, w=widget: _clear_invalid_raw(w))
     return widget
 
 
@@ -171,11 +250,7 @@ def refresh_gemini_model_checklist(
     previous_block = widget.blockSignals(True)
     try:
         widget.clear()
-        selected_set = {
-            str(item).strip()
-            for item in (selected if isinstance(selected, (list, tuple, set)) else [])
-            if str(item).strip()
-        }
+        selected_set = set(normalize_model_names(selected))
         for name in models:
             item = QListWidgetItem(name)
             item.setFlags(
@@ -194,7 +269,9 @@ def refresh_gemini_model_checklist(
         widget.blockSignals(previous_block)
 
 
-def gemini_model_checklist_values(widget: QListWidget) -> list[str]:
+def gemini_model_checklist_values(widget: QListWidget) -> object:
+    if _has_invalid_raw(widget):
+        return widget.property(_INVALID_VALUE_PROP)
     selected: list[str] = []
     for index in range(widget.count()):
         item = widget.item(index)
@@ -211,17 +288,36 @@ def set_gemini_model_checklist_values(
     widget: QListWidget,
     values: object,
 ) -> None:
-    selected = {
-        str(item).strip()
-        for item in (values if isinstance(values, (list, tuple, set)) else [])
-        if str(item).strip()
+    allowed_names = {
+        widget.item(index).text().strip()
+        for index in range(widget.count())
+        if widget.item(index) is not None and widget.item(index).text().strip()
     }
-    for index in range(widget.count()):
-        item = widget.item(index)
-        if item is None:
-            continue
-        item.setCheckState(
-            Qt.CheckState.Checked
-            if item.text().strip() in selected
-            else Qt.CheckState.Unchecked
-        )
+    invalid = False
+    if values is None:
+        selected_items: list[str] = []
+    elif not isinstance(values, (str, list, tuple, set)):
+        invalid = True
+        selected_items = []
+    else:
+        selected_items = normalize_model_names(values)
+        if any(name not in allowed_names for name in selected_items):
+            invalid = True
+    selected = set(selected_items)
+    previous_block = widget.blockSignals(True)
+    try:
+        for index in range(widget.count()):
+            item = widget.item(index)
+            if item is None:
+                continue
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if item.text().strip() in selected
+                else Qt.CheckState.Unchecked
+            )
+    finally:
+        widget.blockSignals(previous_block)
+    if invalid:
+        _set_invalid_raw(widget, copy.deepcopy(values))
+    else:
+        _clear_invalid_raw(widget)

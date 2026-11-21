@@ -19,12 +19,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELDS, SettingField
+from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELDS, SettingField, validate_value
 from .field_widgets import (
     apply_setting_value_to_widget,
     create_basic_setting_widget,
     setting_field_row,
     setting_value_from_widget,
+    update_setting_error_label,
 )
 from .page_chrome import build_settings_scroll_page, settings_form
 from .page_contract import SettingsIssue, SettingsPageActions
@@ -123,8 +124,10 @@ class ProjectSettingsPage(QObject):
                 widget = self.field_widgets.get(field.key)
                 if widget is None:
                     continue
-                apply_setting_value_to_widget(
-                    field, widget, snapshot.get(field.key, field.default)
+                value = snapshot.get(field.key, field.default)
+                apply_setting_value_to_widget(field, widget, value)
+                update_setting_error_label(
+                    field, self.error_labels.get(field.key), value
                 )
             self._baseline = dict(self.collect())
         finally:
@@ -140,7 +143,15 @@ class ProjectSettingsPage(QObject):
         return values
 
     def validate(self) -> Sequence[SettingsIssue]:
-        return []
+        collected = self.collect()
+        issues: list[SettingsIssue] = []
+        for field in PROJECT_FIELDS:
+            if field.key not in collected:
+                continue
+            error = validate_value(field, collected[field.key])
+            if error:
+                issues.append(SettingsIssue(self.page_key, field.key, error))
+        return issues
 
     def reset(self) -> None:
         if self._baseline:

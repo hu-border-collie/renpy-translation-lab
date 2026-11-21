@@ -7,9 +7,10 @@ from gui_qt.settings.page_contract import SettingsIssue, SettingsPage
 from gui_qt.settings.registry import ADVANCED_CONFIG_KEYS
 
 try:
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QComboBox
 except ImportError as exc:
     QApplication = None  # type: ignore[assignment,misc]
+    QComboBox = None  # type: ignore[assignment,misc]
     IMPORT_ERROR = exc
     AdvancedSettingsPage = None  # type: ignore[misc,assignment]
 else:
@@ -79,6 +80,12 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         self.assertEqual(
             json.loads(self.page.collect()['batch_quality_gate']),
             value,
+        )
+        self.assertEqual(self.page.validate(), [])
+        widget.setPlainText("[]")
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"batch_quality_gate"},
         )
 
     def test_reset_restores_last_loaded_baseline(self) -> None:
@@ -207,6 +214,155 @@ class AdvancedSettingsPageContractTests(unittest.TestCase):
         self.assertFalse(checklist.isEnabled())
         self.page.set_task_running(False)
         self.assertTrue(checklist.isEnabled())
+
+    def test_embedding_backend_uses_combo_and_invalid_values_preserve_raw_and_mark_errors(self) -> None:
+        for key in ("sync_rag_embedding_backend", "batch_rag_embedding_backend"):
+            combo = self.page.field_widgets[key]
+            self.assertIsInstance(combo, QComboBox)
+            self.assertEqual(
+                [combo.itemData(i) for i in range(combo.count())],
+                ["gemini", "openai_compatible"],
+            )
+
+        self.page.load(
+            {
+                "sync_chunk_size": "abc",
+                "batch_temperature": 5.0,
+                "api_key_rotation_enabled": "maybe",
+                "sync_rag_embedding_backend": "vertex",
+                "context_storage_game_dir_name": "",
+                "batch_safety_settings": '[{"bad"',
+                "model_rotation_models": ["unknown-model"],
+            }
+        )
+        collected = self.page.collect()
+        self.assertEqual(collected["sync_chunk_size"], "abc")
+        self.assertEqual(collected["batch_temperature"], 5.0)
+        self.assertEqual(collected["api_key_rotation_enabled"], "maybe")
+        self.assertEqual(collected["sync_rag_embedding_backend"], "vertex")
+        self.assertEqual(collected["context_storage_game_dir_name"], "")
+        self.assertEqual(collected["batch_safety_settings"], '[{"bad"')
+        self.assertEqual(collected["model_rotation_models"], ["unknown-model"])
+
+        for key in (
+            "sync_chunk_size",
+            "batch_temperature",
+            "api_key_rotation_enabled",
+            "sync_rag_embedding_backend",
+            "context_storage_game_dir_name",
+            "batch_safety_settings",
+            "model_rotation_models",
+        ):
+            self.assertTrue(self.page.error_labels[key].text(), msg=key)
+
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {
+                "sync_chunk_size",
+                "batch_temperature",
+                "api_key_rotation_enabled",
+                "sync_rag_embedding_backend",
+                "context_storage_game_dir_name",
+                "batch_safety_settings",
+                "model_rotation_models",
+            },
+        )
+
+        # User edits repair each invalid value so collection reflects new edits.
+        self.page.field_widgets["sync_chunk_size"].setValue(32)
+        self.page.field_widgets["batch_temperature"].setValue(0.5)
+        self.page.field_widgets["api_key_rotation_enabled"].setChecked(False)
+        backend_combo = self.page.field_widgets["sync_rag_embedding_backend"]
+        backend_combo.setCurrentIndex(backend_combo.findData("openai_compatible"))
+        self.page.field_widgets["context_storage_game_dir_name"].setText("ctx_dir")
+        self.page.field_widgets["batch_safety_settings"].setPlainText("[]")
+        self.page.field_widgets["model_rotation_models"].item(0).setCheckState(
+            self.page.field_widgets["model_rotation_models"].item(0).checkState().Checked
+        )
+        repaired = self.page.collect()
+        self.assertEqual(repaired["sync_chunk_size"], 32)
+        self.assertEqual(repaired["batch_temperature"], 0.5)
+        self.assertFalse(repaired["api_key_rotation_enabled"])
+        self.assertEqual(repaired["sync_rag_embedding_backend"], "openai_compatible")
+        self.assertEqual(repaired["context_storage_game_dir_name"], "ctx_dir")
+        self.assertEqual(repaired["batch_safety_settings"], "[]")
+        self.assertEqual(
+            repaired["model_rotation_models"],
+            [self.page.field_widgets["model_rotation_models"].item(0).text()],
+        )
+        self.assertEqual(self.page.validate(), [])
+
+    def test_explicit_null_int_and_single_string_rotation_models_preserve_runtime_semantics(self) -> None:
+        from gui_qt.settings.settings_schema import read_advanced_settings
+
+        self.page.load(
+            read_advanced_settings({
+                "sync": {"max_source_chars": None, "target_chars": 9000},
+                "rotation": {"model": {"models": "gemini-3.1-flash-lite"}},
+            })
+        )
+        collected = self.page.collect()
+        self.assertEqual(collected["sync_max_source_chars"], 18000)
+        self.assertEqual(self.page.error_labels["sync_max_source_chars"].text(), "")
+        self.assertEqual(collected["model_rotation_models"], ["gemini-3.1-flash-lite"])
+        self.assertEqual(self.page.error_labels["model_rotation_models"].text(), "")
+        self.assertEqual(self.page.validate(), [])
+
+        self.page.load({"api_key_rotation_enabled": "false"})
+        self.assertIs(self.page.collect()["api_key_rotation_enabled"], False)
+        self.assertEqual(self.page.validate(), [])
+
+        self.page.load({"model_rotation_models": "unknown-model"})
+        self.assertEqual(self.page.collect()["model_rotation_models"], "unknown-model")
+        self.assertTrue(self.page.error_labels["model_rotation_models"].text())
+        self.assertIn("model_rotation_models", {issue.field_key for issue in self.page.validate()})
+
+    def test_invalid_catalog_list_stays_blocked_on_noop_actions_until_cleared_or_edited(self) -> None:
+        self.page.load({"catalog_gemini_models": 123})
+        editor = self.page.field_widgets["catalog_gemini_models"]
+        entry = editor._catalog_entry
+        add_btn = editor._catalog_add_btn
+        remove_btn = editor._catalog_remove_btn
+        clear_btn = editor._catalog_clear_invalid_btn
+
+        self.assertFalse(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertTrue(self.page.error_labels["catalog_gemini_models"].text())
+        self.assertEqual(
+            {issue.field_key for issue in self.page.validate()},
+            {"catalog_gemini_models"},
+        )
+
+        # No-op actions (remove with no selection, add empty, add builtin) must NOT clear the block.
+        remove_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertIn("catalog_gemini_models", {issue.field_key for issue in self.page.validate()})
+
+        entry.setText("")
+        add_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+
+        entry.setText("gemini-3.1-flash-lite")
+        add_btn.click()
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], 123)
+        self.assertFalse(clear_btn.isHidden())
+
+        # Explicit clear unblocks and clears error label.
+        clear_btn.click()
+        self.assertTrue(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], [])
+        self.assertEqual(self.page.error_labels["catalog_gemini_models"].text(), "")
+        self.assertEqual(self.page.validate(), [])
+
+        # Adding a genuine custom model after loading invalid value also unblocks.
+        self.page.load({"catalog_gemini_models": 123})
+        self.assertFalse(clear_btn.isHidden())
+        entry.setText("gemini-custom-extra")
+        add_btn.click()
+        self.assertTrue(clear_btn.isHidden())
+        self.assertEqual(self.page.collect()["catalog_gemini_models"], ["gemini-custom-extra"])
+        self.assertEqual(self.page.error_labels["catalog_gemini_models"].text(), "")
+        self.assertEqual(self.page.validate(), [])
 
 
 if __name__ == "__main__":

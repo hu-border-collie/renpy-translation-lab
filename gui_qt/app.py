@@ -89,6 +89,7 @@ from PySide6.QtWidgets import (
 )
 from foundation.project_version import __version__
 from foundation import cli_contract
+from foundation.runtime_config_values import LegacyTranslationDefaults
 from providers import model_profile
 from quality_review import preflight_display
 from providers import model_routing_config
@@ -349,6 +350,7 @@ from gui_qt.settings.settings_schema import (
     BASIC_RECOMMENDED_VALUES,
     SettingField,
     allowed_gemini_rotation_models,
+    config_with_pending_catalog_updates,
     read_advanced_settings,
     recommended_advanced_settings,
 )
@@ -377,7 +379,10 @@ from .settings.api_keys_page import ApiKeysSettingsPage
 from .settings.extensions_page import ExtensionsSettingsPage
 from .settings.workspace_page import WorkspaceSettingsPage
 from .settings.field_widgets import (
+    apply_setting_value_to_widget,
     format_setting_text,
+    setting_value_from_widget,
+    update_setting_error_label,
 )
 from .settings.gemini_catalog_widgets import (
     gemini_catalog_list_values,
@@ -10571,18 +10576,12 @@ class MainWindow(QMainWindow):
             widget = widgets.get(field.key)
             if widget is None:
                 continue
-            if field.kind == "bool":
-                values[field.key] = widget.isChecked()
-            elif field.kind in {"int", "float"}:
-                values[field.key] = widget.value()
-            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+            if field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
                 values[field.key] = self._gemini_model_checklist_values(widget)
             elif field.kind == "gemini_catalog_list":
                 values[field.key] = self._gemini_catalog_list_values(widget)
-            elif hasattr(widget, "toPlainText"):
-                values[field.key] = widget.toPlainText().strip()
             else:
-                values[field.key] = widget.text().strip()
+                values[field.key] = setting_value_from_widget(field, widget)
         return values
 
     def _load_advanced_settings_to_ui(
@@ -10594,6 +10593,8 @@ class MainWindow(QMainWindow):
         widgets = getattr(self, "_advanced_setting_widgets", {})
         if not widgets:
             return
+        error_labels = getattr(self, "_advanced_setting_error_labels", {})
+        provisional = config_with_pending_catalog_updates(None, values)
         for field in ADVANCED_SETTING_FIELDS:
             if field.key in _SETTINGS_WORKSPACE_MANAGED_KEYS:
                 continue
@@ -10603,28 +10604,44 @@ class MainWindow(QMainWindow):
             if widget is None:
                 continue
             value = values.get(field.key, field.default)
-            if field.kind == "bool":
-                widget.setChecked(bool(value))
-            elif field.kind == "int":
-                widget.setValue(int(value))
-            elif field.kind == "float":
-                widget.setValue(float(value))
-            elif field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
+            if field.kind == "gemini_model_list" and isinstance(widget, QListWidget):
                 try:
                     config = self.state.load_translator_config()
                 except Exception:
                     config = {}
+                checklist_config = (
+                    config_with_pending_catalog_updates(config, values)
+                    if isinstance(config, dict)
+                    else provisional
+                )
                 self._refresh_gemini_model_checklist(
                     widget,
                     selected=value,
-                    config=config if isinstance(config, dict) else {},
+                    config=checklist_config,
+                )
+                self._set_gemini_model_checklist_values(widget, value)
+                update_setting_error_label(
+                    field,
+                    error_labels.get(field.key),
+                    value,
+                    translator_config=checklist_config,
                 )
             elif field.kind == "gemini_catalog_list":
                 self._set_gemini_catalog_list_values(widget, value)
-            elif hasattr(widget, "setPlainText"):
-                widget.setPlainText(self._format_advanced_setting_text(field, value))
+                update_setting_error_label(
+                    field,
+                    error_labels.get(field.key),
+                    value,
+                    translator_config=provisional,
+                )
             else:
-                widget.setText(str(value))
+                apply_setting_value_to_widget(field, widget, value)
+                update_setting_error_label(
+                    field,
+                    error_labels.get(field.key),
+                    value,
+                    translator_config=provisional,
+                )
         # Keep rotation pool checklist enabled only when model rotation is on.
         enabled_widget = widgets.get("model_rotation_enabled")
         if isinstance(enabled_widget, QCheckBox):
@@ -15714,7 +15731,10 @@ class MainWindow(QMainWindow):
                 or "context" in want
                 or "project" in want
             ):
-                advanced_values = read_advanced_settings(config)
+                advanced_values = read_advanced_settings(
+                    config,
+                    legacy_defaults=self._settings_legacy_translation_defaults(),
+                )
                 project_flags = read_batch_context_flags(
                     config,
                     game_root=self._game_root_str_for_flags(),
@@ -15742,7 +15762,6 @@ class MainWindow(QMainWindow):
                         advanced_values,
                         keys=advanced_keys,
                     )
-                    self._clear_advanced_setting_errors()
                     project_page = self._project_page()
                     if project_page is not None and (
                         want is None or "project" in want
@@ -15909,6 +15928,11 @@ class MainWindow(QMainWindow):
         collected.update(self._advanced_settings_values_from_ui())
         return collected
 
+    def _settings_legacy_translation_defaults(self) -> LegacyTranslationDefaults:
+        loader = getattr(getattr(self, "state", None), "load_legacy_translation_defaults", None)
+        defaults = loader() if callable(loader) else None
+        return defaults if isinstance(defaults, Mapping) else {}
+
     def _settings_save_extras(self) -> SettingsSaveExtras:
         litellm_page = self._litellm_page() if hasattr(self, "_litellm_page") else None
         models_page = self._models_page() if hasattr(self, "_models_page") else None
@@ -15934,6 +15958,7 @@ class MainWindow(QMainWindow):
             if litellm_page is not None
             else "",
             batch_thinking_user_changed=thinking_changed,
+            legacy_defaults=self._settings_legacy_translation_defaults(),
         )
 
     def _persist_collected_settings(self, collected: Mapping[str, object]) -> bool:

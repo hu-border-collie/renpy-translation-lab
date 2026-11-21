@@ -35,6 +35,7 @@ from context_engine.embedding_diagnostics import capture_exception_diagnostics, 
 
 BACKEND_GEMINI = 'gemini'
 BACKEND_OPENAI_COMPATIBLE = 'openai_compatible'
+SUPPORTED_EMBEDDING_BACKENDS = (BACKEND_GEMINI, BACKEND_OPENAI_COMPATIBLE)
 ADAPTER_BACKEND_GEMINI = 'google_genai'
 ADAPTER_BACKEND_OPENAI = 'openai_compatible'
 DEFAULT_GEMINI_PROVIDER = 'google_ai'
@@ -45,15 +46,17 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
 DEFAULT_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
 
-_BACKEND_ALIASES = {
+EMBEDDING_BACKEND_ALIASES: dict[str, str] = {
     'gemini': BACKEND_GEMINI,
     'google_genai': BACKEND_GEMINI,
+    'google-genai': BACKEND_GEMINI,
     'google-ai': BACKEND_GEMINI,
     'google_ai': BACKEND_GEMINI,
     'openai_compatible': BACKEND_OPENAI_COMPATIBLE,
     'openai-compatible': BACKEND_OPENAI_COMPATIBLE,
     'litellm': BACKEND_OPENAI_COMPATIBLE,
 }
+_BACKEND_ALIASES = EMBEDDING_BACKEND_ALIASES
 
 _NATIVE_TASK_TYPES = {
     'RETRIEVAL_DOCUMENT': EmbeddingTaskType.DOCUMENT,

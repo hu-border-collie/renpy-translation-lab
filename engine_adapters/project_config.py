@@ -98,6 +98,9 @@ def mv_project_asset_roots(content_root: str | Path) -> tuple[Path, ...]:
     return tuple(roots)
 
 
+SUPPORTED_ENGINES = ("renpy", "rpgmaker_mv")
+
+
 def project_engine(config: Mapping[str, Any], *, config_file: str | Path | None = None) -> str:
     """Honor explicit engines; infer MV when an older config omits the field."""
     if 'engine' not in config:
@@ -105,7 +108,7 @@ def project_engine(config: Mapping[str, Any], *, config_file: str | Path | None 
         if material and material['engine'] == 'rpgmaker_mv':
             return 'rpgmaker_mv'
     value = config.get('engine', 'renpy')
-    if value not in ("renpy", "rpgmaker_mv"):
+    if value not in SUPPORTED_ENGINES:
         raise ValueError("engine must be renpy or rpgmaker_mv.")
     return str(value)
 

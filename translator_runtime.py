@@ -36,6 +36,12 @@ def locked_runtime_state():
 
 from foundation.atomic_io import atomic_write_json, atomic_write_lines, file_sha256, sha256_text
 from foundation import cli_contract
+from foundation.runtime_config_values import (
+    coerce_normalized_rel_path_set,
+    legacy_sync_limits,
+    normalize_rel_path as _normalize_rel_path,
+    parse_config_bool,
+)
 from quality_review import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
 from engine_adapters.coverage import export_coverage_package
@@ -107,28 +113,28 @@ DEFAULT_CONTEXT_STORAGE_GAME_DIR_NAME = "translation_context"
 DEFAULT_MODELS = default_model_rotation_list()
 DEFAULT_MAX_CHARS = translation_core.CANONICAL_CHUNK_MAX_CHARS
 DEFAULT_MAX_ITEMS = translation_core.CANONICAL_CHUNK_MAX_ITEMS
-DEFAULT_SYNC_MAX_OUTPUT_TOKENS = 24576
+DEFAULT_SYNC_MAX_OUTPUT_TOKENS = translation_core.DEFAULT_SYNC_MAX_OUTPUT_TOKENS
 DEFAULT_SYNC_BACKEND = "gemini"
 DEFAULT_SYNC_RAG_EMBEDDING_MODEL = DEFAULT_GEMINI_EMBEDDING_MODEL
 DEFAULT_SYNC_RAG_EMBEDDING_BACKEND = embedding_runtime.BACKEND_GEMINI
 DEFAULT_SYNC_RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_runtime.DEFAULT_TIMEOUT_SECONDS
 DEFAULT_SYNC_SOURCE_INDEX_TOP_K = 4
 DEFAULT_SYNC_SOURCE_INDEX_MIN_SIMILARITY = 0.72
-DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT = 220
-DEFAULT_SYNC_CONTEXT_BEFORE = 30
-DEFAULT_SYNC_CONTEXT_AFTER = 10
-DEFAULT_SYNC_MACRO_SETTING_FILE = "macro_setting.md"
+DEFAULT_SYNC_SOURCE_INDEX_CHAR_LIMIT = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
+DEFAULT_SYNC_CONTEXT_BEFORE = translation_core.CANONICAL_LOCAL_CONTEXT_BEFORE
+DEFAULT_SYNC_CONTEXT_AFTER = translation_core.CANONICAL_LOCAL_CONTEXT_AFTER
+DEFAULT_SYNC_MACRO_SETTING_FILE = translation_core.DEFAULT_MACRO_SETTING_FILE
 # Rotation policy defaults: multi-key failover stays on; model hopping is off.
 DEFAULT_API_KEY_ROTATION_ENABLED = True
 DEFAULT_MODEL_ROTATION_ENABLED = False
-DEFAULT_SYNC_RAG_QUERY_TASK_TYPE = "RETRIEVAL_QUERY"
-DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT"
-DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY = 768
+DEFAULT_SYNC_RAG_QUERY_TASK_TYPE = embedding_runtime.DEFAULT_QUERY_TASK_TYPE
+DEFAULT_SYNC_RAG_DOCUMENT_TASK_TYPE = embedding_runtime.DEFAULT_DOCUMENT_TASK_TYPE
+DEFAULT_SYNC_RAG_OUTPUT_DIMENSIONALITY = embedding_runtime.DEFAULT_OUTPUT_DIMENSION
 DEFAULT_SYNC_RAG_TOP_K_HISTORY = 4
 DEFAULT_SYNC_RAG_TOP_K_TERMS = 8
 DEFAULT_SYNC_RAG_MIN_SIMILARITY = 0.72
 DEFAULT_SYNC_RAG_SEGMENT_LINES = 4
-DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT = 220
+DEFAULT_SYNC_RAG_HISTORY_CHAR_LIMIT = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
 DEFAULT_SYNC_STORY_MEMORY_MAX_CONTEXT_CHARS = translation_core.CANONICAL_STORY_CHAR_LIMIT
 DEFAULT_SYNC_STORY_MEMORY_TOP_K_RELATIONS = 4
 DEFAULT_SYNC_STORY_MEMORY_TOP_K_TERMS = 8
@@ -405,15 +411,6 @@ def get_genai_module():
     return GENAI_MODULE
 
 
-def _normalize_rel_path(value):
-    if not value:
-        return ""
-    value = str(value).replace("\\", "/").strip()
-    value = value.lstrip("./")
-    value = value.lstrip("/")
-    return value
-
-
 class InvalidTlSubdirError(ValueError):
     """Raised when ``tl_subdir`` is not a safe project-relative path."""
 
@@ -524,15 +521,8 @@ def _is_placeholder_api_key(value):
 
 
 def _coerce_bool(value, default):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-    return default
+    parsed = parse_config_bool(value)
+    return default if parsed is None else parsed
 
 
 def _coerce_positive_int(value, default):
@@ -1343,24 +1333,6 @@ def load_sync_translation_settings(
             f"Using sync macro setting file: {SYNC_MACRO_SETTING_FILE}",
             flush=True,
         )
-
-
-def coerce_normalized_rel_path_set(value):
-    if value is None:
-        return set()
-    if isinstance(value, str):
-        values = [value]
-    elif isinstance(value, (list, tuple, set)):
-        values = value
-    else:
-        values = []
-
-    normalized = set()
-    for item in values:
-        path = _normalize_rel_path(item)
-        if path:
-            normalized.add(path)
-    return normalized
 
 
 def replace_model_list(values, label):
@@ -2247,12 +2219,10 @@ def load_config(*, require_api_key=True):
                 keys = config.get("api_keys", [])
                 custom_models = config.get("models", [])
                 single_model = config.get("model")
-                batch_size = config.get("sync_chunk_size", config.get("batch_size"))
-                max_chars = config.get("max_chars")
-                sync_max_chars = config.get("sync_max_source_chars")
-                if sync_max_chars is not None:
-                    max_chars = sync_max_chars
-                sync_max_output_tokens = config.get("sync_max_output_tokens")
+                limits = legacy_sync_limits(config)
+                batch_size = limits["chunk_size"]
+                max_chars = limits["max_source_chars"]
+                sync_max_output_tokens = limits["max_output_tokens"]
                 include_files = config.get("include_files")
                 include_prefixes = config.get("include_prefixes")
 

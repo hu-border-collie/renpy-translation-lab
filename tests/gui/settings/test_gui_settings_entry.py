@@ -478,3 +478,106 @@ class SettingsEntryTests(unittest.TestCase):
         self.assertEqual(page.validate(), [])
         self.assertIn("校验通过", page.readiness_label.text())
         self.save_mock.assert_not_called()
+
+    def test_advanced_save_preserves_inherited_settings_and_writes_explicit_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            game_root = Path(directory) / "work"
+            game_root.mkdir()
+            api_keys_path = Path(directory) / "api_keys.json"
+            legacy = {
+                "api_keys": ["replace-me"],
+                "batch_target_chars": "9000",
+                "batch_max_source_chars": 8000,
+                "sync_max_source_chars": None,
+                "max_chars": 13000,
+                "batch_safety_settings": {"category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE"},
+                "batch_display_name_prefix": " old-prefix ",
+                "include_files": "./story\\part,1.rpy",
+                "include_prefixes": ["./story/"],
+            }
+            api_keys_path.write_text(json.dumps(legacy), encoding="utf-8")
+            self.config = {
+                "game_root": str(game_root),
+                "sync": {"max_source_chars": None, "target_chars": 7000},
+            }
+
+            def save_config(config):
+                self.config = copy.deepcopy(config)
+
+            self.save_mock.side_effect = save_config
+            with (
+                mock.patch.object(self.window.state, "api_keys_path", api_keys_path),
+                mock.patch.object(self.window.state, "get_game_root", return_value=game_root),
+                mock.patch.object(self.window.state, "normalize_game_root", return_value=(game_root, False)),
+            ):
+                self.window._focus_settings_section("advanced")
+                page = self.window._settings_coordinator.page("advanced")
+                self.window._focus_settings_section("project")
+                project = self.window._settings_coordinator.page("project")
+                self.assertEqual(json.loads(project.collect()["include_files"]), ["story/part,1.rpy"])
+                self.assertEqual(project.collect()["include_prefixes"], "story/")
+                self.assertEqual(page.collect()["batch_max_source_chars"], 9000)
+                self.assertEqual(page.collect()["sync_max_source_chars"], 13000)
+                self.assertEqual(page.collect()["batch_display_name_prefix"], "old-prefix")
+                inherited_safety = [{
+                    "category": "HARM_CATEGORY_HARASSMENT",
+                    "threshold": "BLOCK_LOW_AND_ABOVE",
+                }]
+                self.assertEqual(json.loads(page.collect()["batch_safety_settings"]), inherited_safety)
+
+                page.field_widgets["batch_chunk_size"].setValue(24)
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(self.config["batch"]["chunk_size"], 24)
+                self.assertNotIn("max_source_chars", self.config["batch"])
+                self.assertNotIn("safety_settings", self.config["batch"])
+                self.assertNotIn("display_name_prefix", self.config["batch"])
+                self.assertNotIn("include_files", self.config)
+                self.assertNotIn("include_prefixes", self.config)
+                self.assertIsNone(self.config["sync"]["max_source_chars"])
+
+                page.field_widgets["batch_max_source_chars"].setValue(18000)
+                page.field_widgets["batch_safety_settings"].clear()
+                page.field_widgets["batch_display_name_prefix"].setText("renpy-translate")
+                project.field_widgets["include_files"].clear()
+                project.field_widgets["include_prefixes"].clear()
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(self.config["batch"]["max_source_chars"], 18000)
+                self.assertEqual(self.config["batch"]["safety_settings"], [])
+                self.assertEqual(self.config["batch"]["display_name_prefix"], "renpy-translate")
+                self.assertEqual(self.config["include_files"], [])
+                self.assertEqual(self.config["include_prefixes"], [])
+                self.assertEqual(page.collect()["batch_max_source_chars"], 18000)
+                self.assertEqual(json.loads(page.collect()["batch_safety_settings"]), [])
+                self.assertNotIn("api_keys", self.config)
+                self.assertEqual(json.loads(api_keys_path.read_text(encoding="utf-8")), legacy)
+
+    def test_invalid_disk_settings_show_errors_and_block_save_without_overwriting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            game_root = Path(directory) / "work"
+            game_root.mkdir()
+            config_path = Path(directory) / "translator_config.json"
+            original = {
+                "game_root": str(game_root),
+                "sync": {"chunk_size": "bad", "rag": {"embedding_backend": "vertex"}},
+            }
+            config_path.write_text(json.dumps(original), encoding="utf-8")
+            self.config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            def save_config(config):
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+                self.config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.save_mock.side_effect = save_config
+            with (
+                mock.patch.object(self.window.state, "get_game_root", return_value=game_root),
+                mock.patch.object(self.window.state, "normalize_game_root", return_value=(game_root, False)),
+                mock.patch("gui_qt.app.message_box_warning"),
+            ):
+                self.window._focus_settings_section("advanced")
+                advanced = self.window._settings_coordinator.page("advanced")
+                self.assertIn("整数", advanced.error_labels["sync_chunk_size"].text())
+                self.assertIn("openai_compatible", advanced.error_labels["sync_rag_embedding_backend"].text())
+                self.assertFalse(self.window._config_tab_has_unsaved_changes())
+                self.assertFalse(self.window._on_save_config())
+                self.save_mock.assert_not_called()
+                self.assertEqual(json.loads(config_path.read_text(encoding="utf-8")), original)

@@ -167,6 +167,10 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 首次只打开「模型与供应商」页时，模型编辑同样纳入未保存提示；随后首次打开其他设置分类不会把这些编辑当成已保存。
 
+设置页会显示从旧版 `api_keys.json` 继承的数值上限、Batch 安全设置、任务名称前缀和文件筛选。保存其他设置时继续继承这些值。显式修改后，`translator_config.json` 中保存的值优先。清空「安全设置」恢复模型的默认安全设置，清空项目页的文件筛选则取消相应限制。Batch 任务名称前缀可显式改回 `renpy-translate`。
+
+项目页的文件过滤支持逐行、逗号分隔或 JSON 数组。含逗号的单个路径会以 JSON 数组显示，编辑时也请使用数组保留路径中的逗号。
+
 关闭窗口时若仍有工作台命令、后台下载 / 检查、上下文扫描或可选功能安装，GUI 会列出活动任务并要求选择 **停止任务并退出 / 取消**。确认后只停止本机进程、下载和状态轮询；已经提交到云端的任务继续运行，不会被远程取消。停止过程由 Qt 信号驱动，窗口不会同步等待；任务未在 10 秒内结束时窗口保持打开并显示提示，直到线程进入真实终态后再自动退出。
 
 > **项目列表例外：** 底部三个配置按钮会替换为“项目列表操作即时保存”的提示。
@@ -200,7 +204,7 @@ doctor -> build -> submit -> status -> download -> check -> apply
 - **高级 · 术语与风格**：`同步风格设定文件` 指定注入同步提示词的 `macro_setting.md` 路径（相对当前 work；留空使用当前 work 下的同名文件）。
 - **上下文**：
   - **按当前项目保存**（`work/project_context_settings.json`）：启用批量 RAG、启用原文索引、开始翻译时自动暖 RAG、同步翻译使用原文索引、项目分析的启用 / 用于翻译，以及同步翻译注入已发布项目摘要。切换游戏互不影响。
-  - **工具全局**（`translator_config.json`）：上下文库保存位置（工具 `logs/` 或游戏旁 `translation_context/`）；以及 **同步 RAG / 同步·批量剧情记忆主开关**（仅在本分区编辑，高级页不重复）。向量后端（`embedding_backend`）与检索参数在高级页配置。
+  - **工具全局**（`translator_config.json`）：上下文库保存位置（工具 `logs/` 或游戏旁 `translation_context/`）；以及 **同步 RAG / 同步·批量剧情记忆主开关**（仅在本分区编辑，高级页不重复）。向量后端（`embedding_backend`）与检索参数在高级页配置。旧配置中值为 `null` 的 RAG 向量和检索参数会按运行时默认值显示。
   - 启用项目级开关后须点 **保存设置**，再到工作台 **上下文库** 页预建。
 - **外观**：浅色 / 深色 / 跟随系统。切换主题会立即预览，保存设置后才写入 `translator_config.json`。
   - 术语候选审核表格及表头遵循应用主题；历史证据等警告使用对应主题的警告色，选中行和禁用状态保留清晰区分。术语与润色提案审核表的未选框和已选状态也遵循应用主题。
@@ -658,7 +662,7 @@ GUI 界面用中文显示检查结果；与 CLI 的对应关系为：
 
 `writeback_gate=allow` 只表示当前 manifest/results、项目身份、源快照、占位符和 Ren'Py 标签等满足结构性写回合同，**不代表译文内容质量合格**。界面明确区分「可写回」与「可交付」：`quality_gate` 会输出机械质量报警；写回后仍须按报警处理，并对错译、术语、语气与上下文进行人工/LLM 通读。
 
-高级设置的「质量检查策略（JSON）」编辑 `batch.quality_gate`。`language_allowed_latin_tokens` 只豁免英文残留、英文后缀和说话人标签；`typography_exempt_latin_tokens` 只豁免中英文间距。旧 `allowed_latin_tokens` 继续覆盖这两种作用域。保存后重新 `check`；规则映射、合并语义及 Alice 配置例见 [Batch 工作流与安全检查](batch_workflows.md)。
+高级设置的「质量检查策略（JSON）」编辑 `batch.quality_gate`。请填写 JSON 对象，留空或填 `{}` 使用默认规则。`language_allowed_latin_tokens` 只豁免英文残留、英文后缀和说话人标签；`typography_exempt_latin_tokens` 只豁免中英文间距。旧 `allowed_latin_tokens` 继续覆盖这两种作用域。保存后重新 `check`；规则映射、合并语义及 Alice 配置例见 [Batch 工作流与安全检查](batch_workflows.md)。
 
 - **可写回（无质量报警）**：允许进入写回确认，并调用 `apply`。
 - **可写回，有质量报警**：仍允许写回；结果区显示报警数量，用户可按规则、文件和严重程度筛选，并在报警对话框中选择「确认所选 / 确认全部」把已复核的 warning 标记为已确认；「导出 HTML 报告」会生成可离线搜索、筛选和打印的单文件质量体检快照。已确认状态写入 manifest，不在 `quality_findings.jsonl` 中修改；HTML 导出也不会修改 manifest 或译文。blocker 不能被确认绕过；译文变化或重新 check 后，旧确认自动失效。

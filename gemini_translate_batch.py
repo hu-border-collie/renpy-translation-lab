@@ -111,6 +111,12 @@ from providers.gemini_model_catalog import (
     is_gemini_3_model,
 )
 from foundation.project_version import __version__
+from foundation.runtime_config_values import (
+    DEFAULT_BATCH_DISPLAY_NAME_PREFIX,
+    coerce_non_empty_string,
+    legacy_batch_limits,
+    normalize_batch_safety_settings,
+)
 from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
     normalize_sync_timeout_seconds,
@@ -328,17 +334,17 @@ def initialize_batch_logging():
         print(f'Warning: Could not open console log {CONSOLE_LOG}: {exc}')
 
 BATCH_MODEL = DEFAULT_GEMINI_TRANSLATION_MODEL
-BATCH_TARGET_SIZE = 60
-BATCH_TARGET_CHARS = 18000
-BATCH_RETRY_TARGET_SIZE = 8
-BATCH_RETRY_TARGET_CHARS = 4000
-BATCH_CONTEXT_BEFORE = 30
-BATCH_CONTEXT_AFTER = 10
-BATCH_MAX_OUTPUT_TOKENS = 12288
-BATCH_TEMPERATURE = 0.2
+BATCH_TARGET_SIZE = translation_core.CANONICAL_CHUNK_MAX_ITEMS
+BATCH_TARGET_CHARS = translation_core.CANONICAL_CHUNK_MAX_CHARS
+BATCH_RETRY_TARGET_SIZE = translation_core.DEFAULT_BATCH_RETRY_CHUNK_SIZE
+BATCH_RETRY_TARGET_CHARS = translation_core.DEFAULT_BATCH_RETRY_MAX_SOURCE_CHARS
+BATCH_CONTEXT_BEFORE = translation_core.CANONICAL_LOCAL_CONTEXT_BEFORE
+BATCH_CONTEXT_AFTER = translation_core.CANONICAL_LOCAL_CONTEXT_AFTER
+BATCH_MAX_OUTPUT_TOKENS = translation_core.DEFAULT_BATCH_MAX_OUTPUT_TOKENS
+BATCH_TEMPERATURE = translation_plan.CANONICAL_TEMPERATURE
 BATCH_THINKING_LEVEL = ''
 BATCH_SAFETY_SETTINGS = []
-BATCH_DISPLAY_NAME_PREFIX = 'renpy-translate'
+BATCH_DISPLAY_NAME_PREFIX = DEFAULT_BATCH_DISPLAY_NAME_PREFIX
 BATCH_SPLIT_RECOMMEND_CHUNKS = 400
 BATCH_SPLIT_RECOMMEND_ITEMS = 12000
 BATCH_MACRO_SETTING = ''
@@ -404,15 +410,15 @@ RAG_EMBEDDING_ENDPOINT = ''
 RAG_EMBEDDING_TIMEOUT_SECONDS = embedding_runtime.DEFAULT_TIMEOUT_SECONDS
 RAG_EMBEDDING_API_KEY_ENV = ''
 RAG_EMBEDDING_LOAD_ERROR = ''
-RAG_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
-RAG_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
-RAG_OUTPUT_DIMENSIONALITY = 768
+RAG_QUERY_TASK_TYPE = embedding_runtime.DEFAULT_QUERY_TASK_TYPE
+RAG_DOCUMENT_TASK_TYPE = embedding_runtime.DEFAULT_DOCUMENT_TASK_TYPE
+RAG_OUTPUT_DIMENSIONALITY = embedding_runtime.DEFAULT_OUTPUT_DIMENSION
 RAG_TOP_K_HISTORY = 4
 RAG_TOP_K_TERMS = 8
 RAG_MIN_SIMILARITY = 0.72
 RAG_SEGMENT_LINES = 4
 RAG_BOOTSTRAP_ON_BUILD = True
-RAG_HISTORY_CHAR_LIMIT = 220
+RAG_HISTORY_CHAR_LIMIT = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
 _RAG_STORE = None
 _RAG_PRESERVED_TERMS_CACHE = None
 _RAG_PRESERVED_TERMS_CACHE_KEY = None
@@ -426,12 +432,12 @@ _BATCH_EMBEDDING_BINDING_CACHE: tuple[object, bool] | None = None
 SOURCE_INDEX_SCHEMA_VERSION = 1
 SOURCE_INDEX_TOP_K = 4
 SOURCE_INDEX_MIN_SIMILARITY = 0.72
-SOURCE_INDEX_CHAR_LIMIT = 220
+SOURCE_INDEX_CHAR_LIMIT = translation_core.CANONICAL_HISTORY_CHAR_LIMIT
 SOURCE_INDEX_CHAR_BUDGET = advanced_context.DEFAULT_SOURCE_INDEX_CHAR_BUDGET
 
 STORY_MEMORY_ENABLED = False
 STORY_MEMORY_GRAPH_FILE = ''
-STORY_MEMORY_MAX_CONTEXT_CHARS = 1200
+STORY_MEMORY_MAX_CONTEXT_CHARS = translation_core.CANONICAL_STORY_CHAR_LIMIT
 STORY_MEMORY_TOP_K_RELATIONS = 6
 STORY_MEMORY_TOP_K_TERMS = 12
 STORY_MEMORY_INCLUDE_SCENE_SUMMARY = True
@@ -441,7 +447,7 @@ _STORY_GRAPH_PATH = ''
 PROJECT_ANALYSIS_ENABLED = False
 PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF = False
 PROJECT_ANALYSIS_STORE_DIR = ''
-PROJECT_ANALYSIS_MAX_BRIEF_CHARS = 4000
+PROJECT_ANALYSIS_MAX_BRIEF_CHARS = translation_core.CANONICAL_ANALYSIS_CHAR_LIMIT
 PROJECT_ANALYSIS_MODEL = ''
 PROJECT_ANALYSIS_THINKING_LEVEL = ''
 PROJECT_ANALYSIS_MAX_LABEL_SUMMARY_CHARS = 800
@@ -497,14 +503,6 @@ def coerce_bool(value, default):
     return default
 
 
-def coerce_non_empty_string(value, default):
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            return stripped
-    return default
-
-
 def coerce_thinking_level(value, default):
     if value is None or value is False:
         return ''
@@ -529,43 +527,6 @@ def read_text_file(path):
 
 def normalize_task_type(value, default):
     return embedding_runtime.persist_task_type(value, default)
-
-
-def normalize_batch_safety_settings(value):
-    if value is None:
-        return []
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if not cleaned:
-            return []
-        normalized = cleaned.lower().replace('-', '_')
-        if normalized in {'relaxed_adult', 'adult', 'sexually_explicit_block_none'}:
-            return [
-                {
-                    'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                    'threshold': 'BLOCK_NONE',
-                }
-            ]
-        return []
-    if isinstance(value, dict):
-        value = [value]
-    if not isinstance(value, list):
-        return []
-
-    settings = []
-    for entry in value:
-        if not isinstance(entry, dict):
-            continue
-        category = str(entry.get('category') or entry.get('harm_category') or '').strip().upper()
-        threshold = str(entry.get('threshold') or entry.get('block_threshold') or '').strip().upper()
-        if not category or not threshold:
-            continue
-        if not category.startswith('HARM_CATEGORY_'):
-            category = f'HARM_CATEGORY_{category}'
-        if threshold in {'NONE', 'NO_BLOCK', 'BLOCKNONE'}:
-            threshold = 'BLOCK_NONE'
-        settings.append({'category': category, 'threshold': threshold})
-    return settings
 
 
 def load_batch_settings(*, tolerate_routing_errors=False):
@@ -657,20 +618,12 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if isinstance(batch_model, str) and batch_model.strip():
         BATCH_MODEL = batch_model.strip()
 
-    BATCH_TARGET_SIZE = coerce_positive_int(
-        config.get('batch_target_size', config.get('batch_size')),
-        BATCH_TARGET_SIZE,
-    )
-    BATCH_TARGET_CHARS = coerce_positive_int(
-        config.get('batch_target_chars', config.get('batch_max_source_chars')),
-        BATCH_TARGET_CHARS,
-    )
-    BATCH_CONTEXT_BEFORE = coerce_positive_int(config.get('batch_context_before'), BATCH_CONTEXT_BEFORE)
-    BATCH_CONTEXT_AFTER = coerce_positive_int(config.get('batch_context_after'), BATCH_CONTEXT_AFTER)
-    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(
-        config.get('batch_max_output_tokens'),
-        BATCH_MAX_OUTPUT_TOKENS,
-    )
+    legacy_limits = legacy_batch_limits(config)
+    BATCH_TARGET_SIZE = coerce_positive_int(legacy_limits['chunk_size'], BATCH_TARGET_SIZE)
+    BATCH_TARGET_CHARS = coerce_positive_int(legacy_limits['max_source_chars'], BATCH_TARGET_CHARS)
+    BATCH_CONTEXT_BEFORE = coerce_positive_int(legacy_limits['context_before'], BATCH_CONTEXT_BEFORE)
+    BATCH_CONTEXT_AFTER = coerce_positive_int(legacy_limits['context_after'], BATCH_CONTEXT_AFTER)
+    BATCH_MAX_OUTPUT_TOKENS = coerce_positive_int(legacy_limits['max_output_tokens'], BATCH_MAX_OUTPUT_TOKENS)
     if 'batch_thinking_level' in config:
         BATCH_THINKING_LEVEL = coerce_thinking_level(
             config.get('batch_thinking_level'),
@@ -679,9 +632,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if 'batch_safety_settings' in config:
         BATCH_SAFETY_SETTINGS = normalize_batch_safety_settings(config.get('batch_safety_settings'))
 
-    display_name_prefix = config.get('batch_display_name_prefix')
-    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
-        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+    BATCH_DISPLAY_NAME_PREFIX = coerce_non_empty_string(
+        config.get('batch_display_name_prefix'), BATCH_DISPLAY_NAME_PREFIX,
+    )
 
     macro_setting = config.get('batch_macro_setting')
     if isinstance(macro_setting, str) and macro_setting.strip():
@@ -720,9 +673,9 @@ def load_batch_settings(*, tolerate_routing_errors=False):
     if isinstance(model_name, str) and model_name.strip():
         BATCH_MODEL = model_name.strip()
 
-    display_name_prefix = batch.get('display_name_prefix')
-    if isinstance(display_name_prefix, str) and display_name_prefix.strip():
-        BATCH_DISPLAY_NAME_PREFIX = display_name_prefix.strip()
+    BATCH_DISPLAY_NAME_PREFIX = coerce_non_empty_string(
+        batch.get('display_name_prefix'), BATCH_DISPLAY_NAME_PREFIX,
+    )
 
     BATCH_TARGET_SIZE = coerce_positive_int(batch.get('chunk_size'), BATCH_TARGET_SIZE)
     BATCH_TARGET_CHARS = coerce_positive_int(
