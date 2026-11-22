@@ -87,6 +87,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QToolButton,
 )
+from foundation.project_asset_paths import suggest_batch_macro_setting_file
 from foundation.project_version import __version__
 from foundation import cli_contract
 from foundation.runtime_config_values import LegacyTranslationDefaults
@@ -15751,6 +15752,12 @@ class MainWindow(QMainWindow):
                     advanced_values.get("game_root")
                 ):
                     advanced_values["game_root"] = str(current_game_root)
+                if want is None or "advanced" in want:
+                    suggested_file = suggest_batch_macro_setting_file(
+                        config, game_root=self._config_string(advanced_values.get("game_root"))
+                    )
+                    if suggested_file:
+                        advanced_values["batch_macro_setting_file"] = suggested_file
                 if self.__dict__.get("_advanced_setting_widgets"):
                     registry = getattr(self, "_settings_registry", None)
                     advanced_keys = (

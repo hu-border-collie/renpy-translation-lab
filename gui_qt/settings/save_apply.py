@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from providers.gemini_model_catalog import write_model_catalog_extras
+from foundation.project_asset_paths import suggest_batch_macro_setting_file
 from foundation.project_context_settings import resolve_batch_context_flags
 from foundation.runtime_config_values import LegacyTranslationDefaults
 
@@ -313,6 +314,15 @@ def apply_collected_settings(
                 advanced_errors=dict(errors),
             )
         apply_advanced_settings(config, complete_advanced_values, legacy_defaults=extras.legacy_defaults)
+        if (
+            "batch_macro_setting_file" in advanced_values
+            and not _config_string(advanced_values["batch_macro_setting_file"])
+            and suggest_batch_macro_setting_file(
+                config, game_root=_config_string(complete_advanced_values.get("game_root"))
+            )
+        ):
+            # Remember a cleared suggestion so reloading the form keeps it empty.
+            _ensure_section(config, "batch")["macro_setting_file"] = ""
         original_batch = original_config.get("batch")
         original_project_analysis = (
             original_batch.get("project_analysis")

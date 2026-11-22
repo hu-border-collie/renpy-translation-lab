@@ -551,6 +551,48 @@ class SettingsEntryTests(unittest.TestCase):
                 self.assertNotIn("api_keys", self.config)
                 self.assertEqual(json.loads(api_keys_path.read_text(encoding="utf-8")), legacy)
 
+    def test_batch_macro_suggestion_persists_and_respects_an_explicit_clear(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            game_root = Path(directory) / "work"
+            game_root.mkdir()
+            macro_file = game_root / "macro_setting.md"
+            macro_file.write_text("Use a calm tone.", encoding="utf-8")
+            config_path = Path(directory) / "translator_config.json"
+            self.config = {"game_root": str(game_root)}
+
+            def save_config(config):
+                state = self.window.state
+                type(state).save_translator_config(state, config)
+                self.config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.save_mock.side_effect = save_config
+            with (
+                mock.patch.object(self.window.state, "config_path", config_path),
+                mock.patch.object(self.window.state, "get_game_root", return_value=game_root),
+                mock.patch.object(self.window.state, "normalize_game_root", return_value=(game_root, False)),
+            ):
+                self.window._focus_settings_section("advanced")
+                page = self.window._settings_coordinator.page("advanced")
+                field = page.field_widgets["batch_macro_setting_file"]
+                self.assertEqual(field.text(), "macro_setting.md")
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(Path(self.config["batch"]["macro_setting_file"]), macro_file.resolve())
+
+                del self.config["batch"]["macro_setting_file"]
+                self.window._load_config_to_ui(refresh_task_gates=False, pages={"advanced"})
+                self.assertEqual(field.text(), "macro_setting.md")
+                field.clear()
+                self.assertTrue(self.window._on_save_config())
+                self.assertEqual(self.config["batch"]["macro_setting_file"], "")
+                self.assertEqual(field.text(), "")
+
+                macro_file.unlink()
+                del self.config["batch"]["macro_setting_file"]
+                self.window._load_config_to_ui(refresh_task_gates=False, pages={"advanced"})
+                self.assertEqual(field.text(), "")
+                self.assertTrue(self.window._on_save_config())
+                self.assertNotIn("macro_setting_file", self.config.get("batch", {}))
+
     def test_invalid_disk_settings_show_errors_and_block_save_without_overwriting(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             game_root = Path(directory) / "work"

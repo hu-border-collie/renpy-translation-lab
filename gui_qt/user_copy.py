@@ -572,6 +572,15 @@ SYNC_MACRO_SETTING_FILE_COPY = {
     ),
 }
 
+BATCH_MACRO_SETTING_FILE_COPY = {
+    "label": "批量风格设定文件",
+    "description": (
+        "注入批量翻译提示词的风格文件。相对路径以当前 work 为基准。"
+        "未配置路径且当前 work 有 macro_setting.md 时会预填该文件。"
+        "留空保存会停用风格文件。"
+    ),
+}
+
 MODEL_CONTRACT_COPY = {
     "partial_translation": (
         "部分模型结果未通过完整性合同，其余安全预览已生成。"

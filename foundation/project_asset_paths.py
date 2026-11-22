@@ -1,6 +1,7 @@
 """Project-scoped asset paths (glossary, macro setting) for translator_config.json."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,15 @@ def expected_project_asset_paths(game_root: str | os.PathLike[str]) -> dict[str,
         "glossary_file": os.path.join(root, DEFAULT_GLOSSARY_NAME),
         "macro_setting_file": os.path.join(root, DEFAULT_MACRO_SETTING_NAME),
     }
+
+
+def suggest_batch_macro_setting_file(config: Mapping[str, Any], *, game_root: str) -> str:
+    """Offer the current project's style file when Batch has no saved path choice."""
+    batch = config.get("batch", {})
+    if not game_root or not isinstance(batch, Mapping) or "macro_setting_file" in batch:
+        return ""
+    path = os.path.join(game_root, DEFAULT_MACRO_SETTING_NAME)
+    return DEFAULT_MACRO_SETTING_NAME if os.path.isfile(path) else ""
 
 
 def resolve_project_asset_path(

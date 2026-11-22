@@ -63,6 +63,7 @@ from quality_review.translation_core import (
 )
 from quality_review.translation_plan import CANONICAL_TEMPERATURE
 from gui_qt.user_copy import (
+    BATCH_MACRO_SETTING_FILE_COPY,
     BATCH_MAX_OUTPUT_TOKENS_COPY,
     QUALITY_POLICY_INVALID_COPY,
     QUALITY_POLICY_SETTING_COPY,
@@ -1244,12 +1245,12 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "batch_macro_setting_file",
         ("batch", "macro_setting_file"),
-        "风格设定文件",
-        "macro_setting.md 路径。相对路径相对当前 work；切换项目时会同步到当前 work。"
-        "留空则使用当前 work 下的 macro_setting.md。",
+        BATCH_MACRO_SETTING_FILE_COPY["label"],
+        BATCH_MACRO_SETTING_FILE_COPY["description"],
         "str",
-        DEFAULT_MACRO_SETTING_FILE,
+        "",
         "术语与风格",
+        recommended=DEFAULT_MACRO_SETTING_FILE,
         allow_empty=True,
     ),
     SettingField(
