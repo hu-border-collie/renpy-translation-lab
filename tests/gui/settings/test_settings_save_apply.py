@@ -219,7 +219,11 @@ class SettingsSaveApplyTests(unittest.TestCase):
     def test_invalid_existing_disk_setting_blocks_save_without_overwriting(self) -> None:
         config: dict = {
             "game_root": "C:/Game/work",
-            "sync": {"chunk_size": "not-an-int", "rag": {"embedding_backend": "azure"}},
+            "sync": {
+                "chunk_size": "not-an-int",
+                "rag": {"embedding_backend": "azure", "embedding_timeout_seconds": "   "},
+            },
+            "prepare": {"allow_shell_commands": 1},
         }
         original = copy.deepcopy(config)
         result = apply_collected_settings(
@@ -231,6 +235,8 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("sync_chunk_size", result.advanced_errors)
         self.assertIn("sync_rag_embedding_backend", result.advanced_errors)
+        self.assertIn("sync_rag_embedding_timeout_seconds", result.advanced_errors)
+        self.assertIn("prepare_allow_shell_commands", result.advanced_errors)
         self.assertEqual(config, original)
 
     def test_embedding_backend_aliases_allow_unrelated_saves(self) -> None:
@@ -308,6 +314,70 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertEqual(config["batch"]["chunk_size"], 24)
         for scope in ("sync", "batch"):
             self.assertEqual(config[scope]["rag"], original[scope]["rag"])
+
+    def test_empty_embedding_numbers_preserve_runtime_defaults_on_unrelated_save(self) -> None:
+        rag = {"output_dimensionality": "", "embedding_timeout_seconds": ""}
+        config = {scope: {"rag": dict(rag)} for scope in ("sync", "batch")}
+        snapshot = read_advanced_settings(config)
+        for scope in ("sync", "batch"):
+            parsed = parse_embedding_runtime_settings(config[scope]["rag"])
+            self.assertEqual(snapshot[f"{scope}_rag_output_dimensionality"], parsed.output_dimension)
+            self.assertEqual(snapshot[f"{scope}_rag_embedding_timeout_seconds"], parsed.timeout_seconds)
+        result = apply_collected_settings(
+            config, {"batch_chunk_size": 24}, original_config=copy.deepcopy(config),
+        )
+        self.assertTrue(result.ok, result)
+        for scope in ("sync", "batch"):
+            self.assertEqual(config[scope]["rag"], rag)
+        result = apply_collected_settings(
+            config, {"sync_rag_output_dimensionality": 384}, original_config=copy.deepcopy(config),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config["sync"]["rag"]["output_dimensionality"], 384)
+
+    def test_legacy_boolean_switches_keep_their_values_and_can_be_overridden(self) -> None:
+        config = {
+            "sync": {"rag": {"enabled": " YES ", "update_on_success": "0"}},
+            "prepare": {"generate_template": "false"},
+            "batch": {
+                "final_review": {"require_zero_pending": "off"},
+                "project_analysis": {"enabled": 1, "inject_published_brief": 0.0},
+            },
+        }
+        original = copy.deepcopy(config)
+        snapshot = read_advanced_settings(config)
+        expected = {
+            "sync_rag_enabled": True,
+            "sync_rag_update_on_success": False,
+            "prepare_generate_template": False,
+            "batch_final_review_require_zero_pending": False,
+            "batch_project_analysis_enabled": True,
+            "batch_project_analysis_inject_published_brief": False,
+        }
+        for key, value in expected.items():
+            self.assertIs(snapshot[key], value, key)
+        result = apply_collected_settings(
+            config, {"batch_chunk_size": 24}, original_config=original,
+        )
+        self.assertTrue(result.ok, result)
+        self.assertEqual(config, {**original, "batch": {**original["batch"], "chunk_size": 24}})
+        self.assertIs(result.project_context_flags["project_analysis_enabled"], True)
+        self.assertIs(result.project_context_flags["project_analysis_inject_enabled"], False)
+
+        result = apply_collected_settings(
+            config,
+            {
+                "sync_rag_enabled": False,
+                "batch_project_analysis_enabled": "false",
+                "batch_project_analysis_inject_published_brief": 1,
+            },
+            original_config=copy.deepcopy(config),
+        )
+        self.assertTrue(result.ok, result)
+        self.assertIs(config["sync"]["rag"]["enabled"], False)
+        self.assertEqual(config["batch"]["project_analysis"], original["batch"]["project_analysis"])
+        self.assertIs(result.project_context_flags["project_analysis_enabled"], False)
+        self.assertIs(result.project_context_flags["project_analysis_inject_enabled"], True)
 
     def test_save_repairs_json_encoded_batch_safety_settings(self) -> None:
         rule = {"category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE"}

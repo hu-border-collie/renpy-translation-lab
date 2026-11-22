@@ -94,6 +94,7 @@ class SettingField:
     """Describe a field and the runtime rules for reading its stored value.
 
     Numeric and boolean settings inherit on null unless explicitly overridden.
+    A stored empty string also inherits the default for numeric settings.
     A field can also inherit on empty strings, as its runtime reader permits.
     A legacy path is read on missing keys, or on empty values when opted in.
     """
@@ -115,6 +116,7 @@ class SettingField:
     legacy_fallback_on_empty: bool = False
     inherit_on_null: bool | None = None
     inherit_on_empty: bool = False
+    allow_numeric_bool: bool = False
 
     @property
     def recommended_value(self) -> SettingValue:
@@ -446,6 +448,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         False,
         CONTEXT_PRIMARY_SETTING_CATEGORY,
+        allow_numeric_bool=True,
     ),
     SettingField(
         "batch_project_analysis_inject_published_brief",
@@ -455,6 +458,7 @@ CORE_ADVANCED_SETTING_FIELDS: tuple[SettingField, ...] = (
         "bool",
         False,
         CONTEXT_PRIMARY_SETTING_CATEGORY,
+        allow_numeric_bool=True,
     ),
     SettingField(
         "batch_project_analysis_model",
@@ -1418,15 +1422,15 @@ def resolve_project_analysis_flags_for_save(
         saved_context_flags.get("project_analysis_inject_enabled")
     )
     if "batch_project_analysis_enabled" in advanced_values:
-        enabled = bool(
-            complete_advanced_values.get("batch_project_analysis_enabled")
-        )
+        enabled = parse_config_bool(
+            complete_advanced_values.get("batch_project_analysis_enabled"),
+            allow_numeric=True,
+        ) is True
     if "batch_project_analysis_inject_published_brief" in advanced_values:
-        inject_enabled = bool(
-            complete_advanced_values.get(
-                "batch_project_analysis_inject_published_brief"
-            )
-        )
+        inject_enabled = parse_config_bool(
+            complete_advanced_values.get("batch_project_analysis_inject_published_brief"),
+            allow_numeric=True,
+        ) is True
     return {
         "project_analysis_enabled": enabled,
         "project_analysis_inject_enabled": inject_enabled,
@@ -1521,7 +1525,11 @@ def _inherits_setting_default(field: SettingField, value: SettingValue) -> bool:
         if field.inherit_on_null is not None:
             return field.inherit_on_null
         return field.inherit_on_empty or field.kind in {"bool", "int", "float"}
-    return field.inherit_on_empty and isinstance(value, str) and not value.strip()
+    if not isinstance(value, str):
+        return False
+    if field.kind in {"int", "float"} and value == "":
+        return True
+    return field.inherit_on_empty and not value.strip()
 
 
 def _existing_raw_accepted_by_runtime(
@@ -1733,12 +1741,9 @@ def normalize_for_write(
     translator_config: Mapping[str, Any] | None = None,
 ) -> SettingValue:
     if field.kind == "bool":
-        if isinstance(value, bool):
-            return value
-        if field.key in {"api_key_rotation_enabled", "model_rotation_enabled"}:
-            parsed = parse_config_bool(value)
-            if parsed is not None:
-                return parsed
+        parsed = parse_config_bool(value, allow_numeric=field.allow_numeric_bool)
+        if parsed is not None:
+            return parsed
         raise ValueError(f"{field.label}必须是布尔值。")
 
     if field.kind == "int":

@@ -9,10 +9,12 @@ DEFAULT_BATCH_DISPLAY_NAME_PREFIX = "renpy-translate"
 LegacyTranslationDefaults = Mapping[tuple[str, ...], int | str | list[str] | list[dict[str, str]]]
 
 
-def parse_config_bool(value: object) -> bool | None:
-    """Parse a JSON boolean or a legacy string accepted by the runtime."""
+def parse_config_bool(value: object, *, allow_numeric: bool = False) -> bool | None:
+    """Parse booleans and legacy strings, with optional numeric 0 and 1."""
     if isinstance(value, bool):
         return value
+    if allow_numeric and isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
     if isinstance(value, str):
         value = value.strip().lower()
         if value in {"1", "true", "yes", "on"}:

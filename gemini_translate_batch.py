@@ -116,6 +116,7 @@ from foundation.runtime_config_values import (
     coerce_non_empty_string,
     legacy_batch_limits,
     normalize_batch_safety_settings,
+    parse_config_bool,
 )
 from providers.sync_model_backend import (
     DEFAULT_SYNC_TIMEOUT_SECONDS,
@@ -492,15 +493,8 @@ def coerce_float(value, default):
 
 
 def coerce_bool(value, default):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {'1', 'true', 'yes', 'on'}:
-            return True
-        if lowered in {'0', 'false', 'no', 'off'}:
-            return False
-    return default
+    parsed = parse_config_bool(value)
+    return default if parsed is None else parsed
 
 
 def coerce_thinking_level(value, default):
