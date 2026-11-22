@@ -209,19 +209,21 @@ def _optional_text(value: object) -> str:
     return str(value).strip()
 
 
-def _positive_int(value: object, field_name: str, default: int) -> int:
+def parse_embedding_output_dimension(value: object) -> int:
+    """Parse the persisted dimension shared by Sync and Batch embeddings."""
     if value is None or value == '':
-        return default
+        return DEFAULT_OUTPUT_DIMENSION
+    message = 'output_dimensionality must be a positive integer'
     if isinstance(value, bool):
-        raise EmbeddingContractError(f'{field_name} must be a positive integer')
+        raise EmbeddingContractError(message)
     if isinstance(value, int) and value > 0:
         return value
     try:
         number = int(str(value).strip())
     except (TypeError, ValueError) as exc:
-        raise EmbeddingContractError(f'{field_name} must be a positive integer') from exc
+        raise EmbeddingContractError(message) from exc
     if number <= 0:
-        raise EmbeddingContractError(f'{field_name} must be a positive integer')
+        raise EmbeddingContractError(message)
     return number
 
 
@@ -289,11 +291,7 @@ def parse_embedding_runtime_settings(
         backend=backend,
         provider=provider,
         model=model,
-        output_dimension=_positive_int(
-            rag.get('output_dimensionality'),
-            'output_dimensionality',
-            DEFAULT_OUTPUT_DIMENSION,
-        ),
+        output_dimension=parse_embedding_output_dimension(rag.get('output_dimensionality')),
         endpoint=endpoint,
         timeout_seconds=_positive_float(
             rag.get('embedding_timeout_seconds'),

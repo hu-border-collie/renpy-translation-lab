@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import json
 from typing import Any, Iterable, Literal, Mapping
 
+from context_engine.embedding_backend import EmbeddingContractError
 from context_engine.embedding_runtime import (
     BACKEND_GEMINI,
     DEFAULT_DOCUMENT_TASK_TYPE,
@@ -26,6 +27,7 @@ from context_engine.embedding_runtime import (
     DEFAULT_TIMEOUT_SECONDS,
     EMBEDDING_BACKEND_ALIASES,
     SUPPORTED_EMBEDDING_BACKENDS,
+    parse_embedding_output_dimension,
 )
 from engine_adapters.project_config import SUPPORTED_ENGINES, project_engine
 from engine_adapters.rpgmaker_mv_fields import DISPLAY_FIELDS, parse_display_fields
@@ -88,6 +90,7 @@ SettingKind = Literal[
     "gemini_catalog_list",
 ]
 SettingValue = Any
+_EMBEDDING_DIMENSION_KEYS = {"sync_rag_output_dimensionality", "batch_rag_output_dimensionality"}
 
 
 @dataclass(frozen=True)
@@ -1571,6 +1574,11 @@ def _existing_raw_accepted_by_runtime(
     if field.key in {"prepare_unpack_command", "prepare_template_command"}:
         # The runtime only interprets a stored list as argv.
         return not isinstance(normalized, list) or isinstance(raw, list)
+    if field.key in _EMBEDDING_DIMENSION_KEYS:
+        try:
+            return parse_embedding_output_dimension(raw) == normalized
+        except EmbeddingContractError:
+            return False
     if field.kind == "gemini_model_list":
         return raw is None or isinstance(raw, (str, list))
     if field.kind == "gemini_catalog_list":
@@ -1751,6 +1759,13 @@ def normalize_for_write(
         raise ValueError(f"{field.label}必须是布尔值。")
 
     if field.kind == "int":
+        if field.key in _EMBEDDING_DIMENSION_KEYS:
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)
+            try:
+                return parse_embedding_output_dimension(value)
+            except EmbeddingContractError as exc:
+                raise ValueError(f"{field.label}必须是正整数。") from exc
         if isinstance(value, bool):
             raise ValueError(f"{field.label}必须是整数。")
         try:

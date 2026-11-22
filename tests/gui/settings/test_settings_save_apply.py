@@ -335,6 +335,30 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertTrue(result.ok, result)
         self.assertEqual(config["sync"]["rag"]["output_dimensionality"], 384)
 
+    def test_saved_embedding_dimensions_use_runtime_accepted_representations(self) -> None:
+        for raw, expected in ((1024.0, 1024), (768.0, 768), (" 1024 ", " 1024 "), (1024, 1024)):
+            with self.subTest(raw=raw):
+                config = {scope: {"rag": {"output_dimensionality": raw}} for scope in ("sync", "batch")}
+                result = apply_collected_settings(
+                    config, {"batch_chunk_size": 24}, original_config=copy.deepcopy(config),
+                )
+                self.assertTrue(result.ok, result)
+                for scope in ("sync", "batch"):
+                    rag = config[scope]["rag"]
+                    saved = rag["output_dimensionality"]
+                    self.assertIs(type(saved), type(expected))
+                    self.assertEqual(saved, expected)
+                    self.assertEqual(parse_embedding_runtime_settings(rag).output_dimension, int(expected))
+
+    def test_fractional_embedding_dimensions_are_reported_without_truncation(self) -> None:
+        config = {scope: {"rag": {"output_dimensionality": 1024.5}} for scope in ("sync", "batch")}
+        original = copy.deepcopy(config)
+        result = apply_collected_settings(config, {"batch_chunk_size": 24}, original_config=original)
+        self.assertFalse(result.ok)
+        for scope in ("sync", "batch"):
+            self.assertIn(f"{scope}_rag_output_dimensionality", result.advanced_errors)
+        self.assertEqual(config, original)
+
     def test_legacy_boolean_switches_keep_their_values_and_can_be_overridden(self) -> None:
         config = {
             "sync": {"rag": {"enabled": " YES ", "update_on_success": "0"}},
