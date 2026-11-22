@@ -97,7 +97,7 @@ Game_Example/
 
 `doctor`、`build` 与 `generate-template` 会分别打印目录语言与生成目标，便于确认配置。
 
-推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板；如果启用了 `prepare`，脚本会尝试从 `original/game` 提取脚本并自动调用 Ren'Py 生成或刷新对应语言模板。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher；如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
+推荐先使用 Ren'Py SDK 生成标准 `tl/<language>` 模板。启用 `prepare` 后，工具会从选定的源 game 目录准备脚本，并调用 Ren'Py 生成或刷新模板。`prepare.source_game_dir` 留空时会自动选择，优先尝试含脚本或 RPA 的 `work/game`。相对路径以当前 work 为基准，示例配置使用 `../original/game` 优先选取原始副本。自动模板生成需要 Ren'Py SDK 或目标游戏自带的 Ren'Py launcher。如果已经有可用 TL 文件，缺少 SDK 时仍可直接处理现有 TL。
 
 推荐用目标行保留原文的模板，之后再把目标行或 `new` 行替换成中文。不要用 Ren'Py 的 `--empty` 作为首选生成方式。若模板里已经是空目标（`e ""` / `new ""`）但上一行注释原文或 `old` 行仍有可译原文，扫描会把它们识别为待译并写回该空目标，而不会把空白项计为已完成。没有原文证据、或原文本身为空的目标既不是待译也不是已译。
 

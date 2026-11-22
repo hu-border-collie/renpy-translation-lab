@@ -21,6 +21,7 @@ from gui_qt.settings.settings_schema import (
     PROJECT_ANALYSIS_CONTEXT_SETTING_KEYS,
     SettingField,
     context_primary_setting_fields,
+    validate_value,
 )
 from ..user_copy import CONTEXT_DEFAULTS_COPY
 from .field_widgets import (
@@ -28,6 +29,7 @@ from .field_widgets import (
     create_basic_setting_widget,
     setting_field_row,
     setting_value_from_widget,
+    update_setting_error_label,
 )
 from .page_chrome import build_settings_scroll_page, settings_group
 from .page_contract import SettingsIssue, SettingsPageActions
@@ -120,8 +122,10 @@ class ContextSettingsPage(QObject):
                 widget = self.field_widgets.get(field.key)
                 if widget is None:
                     continue
-                apply_setting_value_to_widget(
-                    field, widget, snapshot.get(field.key, field.default)
+                value = snapshot.get(field.key, field.default)
+                apply_setting_value_to_widget(field, widget, value)
+                update_setting_error_label(
+                    field, self.error_labels.get(field.key), value
                 )
             if not restore:
                 self._baseline = dict(self.collect())
@@ -143,7 +147,15 @@ class ContextSettingsPage(QObject):
         return values
 
     def validate(self) -> Sequence[SettingsIssue]:
-        return []
+        collected = self.collect()
+        issues: list[SettingsIssue] = []
+        for field in CONTEXT_PRIMARY_FIELDS:
+            if field.key not in collected:
+                continue
+            error = validate_value(field, collected[field.key])
+            if error:
+                issues.append(SettingsIssue(self.page_key, field.key, error))
+        return issues
 
     def reset(self) -> None:
         if self._baseline:

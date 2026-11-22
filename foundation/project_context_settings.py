@@ -14,6 +14,7 @@ import tempfile
 from typing import Any
 
 from foundation.project_asset_paths import canonical_abs_path
+from foundation.runtime_config_values import parse_config_bool
 
 PROJECT_CONTEXT_SETTINGS_FILENAME = "project_context_settings.json"
 SCHEMA_VERSION = 1
@@ -40,17 +41,8 @@ def project_context_settings_path(game_root: str | os.PathLike[str] | None) -> s
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
-    return default
+    parsed = parse_config_bool(value, allow_numeric=True)
+    return default if parsed is None else parsed
 
 
 def default_context_flags_from_config(config: dict[str, Any] | None) -> dict[str, bool]:

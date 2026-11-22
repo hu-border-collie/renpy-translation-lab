@@ -6,7 +6,7 @@ goes through MainWindow's single save transaction.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from PySide6.QtCore import QObject, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -30,6 +30,7 @@ from gui_qt.settings.settings_schema import (
     ADVANCED_SETTING_FIELDS,
     SettingField,
     grouped_advanced_fields,
+    validate_value,
 )
 from ..user_copy import ADVANCED_SETTINGS_NAV_COPY as COPY
 from gui_qt.widgets.widget_helpers import NoWheelComboBox
@@ -38,6 +39,7 @@ from .field_widgets import (
     create_basic_setting_widget,
     setting_field_row,
     setting_value_from_widget,
+    update_setting_error_label,
 )
 from .gemini_catalog_widgets import (
     create_gemini_catalog_list_editor,
@@ -117,19 +119,35 @@ class AdvancedSettingsPage(QObject):
         previous = self._loading
         self._loading = True
         try:
+            rotation_cfg = self._rotation_config(snapshot)
             for field in ADVANCED_FIELDS:
                 if field.key not in snapshot or field.kind == "gemini_model_list":
                     continue
                 widget = self.field_widgets.get(field.key)
                 if widget is None:
                     continue
-                self._apply_value(field, widget, snapshot.get(field.key, field.default))
+                value = snapshot.get(field.key, field.default)
+                self._apply_value(field, widget, value)
+                update_setting_error_label(
+                    field,
+                    self.error_labels.get(field.key),
+                    value,
+                    translator_config=rotation_cfg,
+                )
             self._refresh_rotation_checklist(snapshot)
             if "model_rotation_models" in snapshot:
                 widget = self.field_widgets.get("model_rotation_models")
                 if isinstance(widget, QListWidget):
-                    set_gemini_model_checklist_values(
-                        widget, snapshot.get("model_rotation_models")
+                    rotation_value = snapshot.get("model_rotation_models")
+                    set_gemini_model_checklist_values(widget, rotation_value)
+                    rotation_field = next(
+                        f for f in ADVANCED_FIELDS if f.key == "model_rotation_models"
+                    )
+                    update_setting_error_label(
+                        rotation_field,
+                        self.error_labels.get("model_rotation_models"),
+                        rotation_value,
+                        translator_config=rotation_cfg,
                     )
             self._sync_rotation_enabled()
             if not restore:
@@ -147,7 +165,20 @@ class AdvancedSettingsPage(QObject):
         return values
 
     def validate(self) -> Sequence[SettingsIssue]:
-        return []
+        collected = self.collect()
+        rotation_cfg = self._rotation_config()
+        issues: list[SettingsIssue] = []
+        for field in ADVANCED_FIELDS:
+            if field.key not in collected:
+                continue
+            error = validate_value(
+                field,
+                collected[field.key],
+                translator_config=rotation_cfg,
+            )
+            if error:
+                issues.append(SettingsIssue(self.page_key, field.key, error))
+        return issues
 
     def reset(self) -> None:
         if self._baseline:
@@ -175,6 +206,22 @@ class AdvancedSettingsPage(QObject):
         if callable(show_status):
             show_status(message)
 
+    def _on_catalog_changed(self, field: SettingField) -> None:
+        if self._loading:
+            return
+        widget = self.field_widgets.get(field.key)
+        if widget is None:
+            return
+        update_setting_error_label(
+            field,
+            self.error_labels.get(field.key),
+            gemini_catalog_list_values(widget),
+            translator_config=self._rotation_config(),
+        )
+
+    def _make_catalog_change_callback(self, field: SettingField) -> Callable[[], None]:
+        return lambda: self._on_catalog_changed(field)
+
     def _create_field_widget(self, field: SettingField) -> QWidget:
         if field.kind == "gemini_model_list":
             return create_gemini_model_checklist()
@@ -187,6 +234,7 @@ class AdvancedSettingsPage(QObject):
             return create_gemini_catalog_list_editor(
                 kind=kind,
                 on_status=self._show_status,
+                on_change=self._make_catalog_change_callback(field),
             )
         widget = create_basic_setting_widget(field)
         if field.kind in {"int", "float"}:
@@ -233,8 +281,12 @@ class AdvancedSettingsPage(QObject):
         config: dict = {}
         write_model_catalog_extras(
             config,
-            translation_models=list(translation or []),
-            embedding_models=list(embedding or []),
+            translation_models=list(translation)
+            if isinstance(translation, (list, tuple, set))
+            else [],
+            embedding_models=list(embedding)
+            if isinstance(embedding, (list, tuple, set))
+            else [],
         )
         return config
 

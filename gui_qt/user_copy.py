@@ -193,7 +193,10 @@ QUALITY_GATE_LABELS = {
 }
 
 QUALITY_DELIVERY_NOTICE = "可写回 ≠ 可交付：写回门禁只证明结构安全，质量报警处理完前不建议交付。"
+QUALITY_POLICY_JSON_PLACEHOLDER = "JSON 对象，留空或填 {} 使用默认规则"
+QUALITY_POLICY_INVALID_COPY = "质量检查策略必须是 JSON 对象。"
 QUALITY_POLICY_SETTING_COPY = (
+    "填写 JSON 对象。留空或填 {} 使用默认规则。"
     "检查阶段的确定性质量规则。规则 disposition 可设为 warning / blocker / off。"
     "language_allowed_latin_tokens 仅豁免英文残留、英文后缀和说话人标签；"
     "typography_exempt_latin_tokens 仅豁免中英文间距；"
@@ -561,11 +564,28 @@ SYNC_CONTEXT_AFTER_COPY = {
     ),
 }
 
+PREPARE_SOURCE_GAME_DIR_COPY = {
+    "label": "源 game 目录",
+    "description": (
+        "留空时自动选择，优先使用含脚本或 RPA 的 work/game。"
+        "相对路径以当前 work 为基准，可填 ../original/game 优先使用原始副本。"
+    ),
+}
+
 SYNC_MACRO_SETTING_FILE_COPY = {
     "label": "同步风格设定文件",
     "description": (
         "注入同步提示词的 macro_setting.md 路径。相对路径相对当前 work；"
         "切换项目时会同步到当前 work。留空则使用当前 work 下的 macro_setting.md。"
+    ),
+}
+
+BATCH_MACRO_SETTING_FILE_COPY = {
+    "label": "批量风格设定文件",
+    "description": (
+        "注入批量翻译提示词的风格文件。相对路径以当前 work 为基准。"
+        "未配置路径且当前 work 有 macro_setting.md 时会预填该文件。"
+        "留空保存会停用风格文件。"
     ),
 }
 

@@ -35,6 +35,7 @@ from context_engine.embedding_diagnostics import capture_exception_diagnostics, 
 
 BACKEND_GEMINI = 'gemini'
 BACKEND_OPENAI_COMPATIBLE = 'openai_compatible'
+SUPPORTED_EMBEDDING_BACKENDS = (BACKEND_GEMINI, BACKEND_OPENAI_COMPATIBLE)
 ADAPTER_BACKEND_GEMINI = 'google_genai'
 ADAPTER_BACKEND_OPENAI = 'openai_compatible'
 DEFAULT_GEMINI_PROVIDER = 'google_ai'
@@ -45,15 +46,17 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 DEFAULT_QUERY_TASK_TYPE = 'RETRIEVAL_QUERY'
 DEFAULT_DOCUMENT_TASK_TYPE = 'RETRIEVAL_DOCUMENT'
 
-_BACKEND_ALIASES = {
+EMBEDDING_BACKEND_ALIASES: dict[str, str] = {
     'gemini': BACKEND_GEMINI,
     'google_genai': BACKEND_GEMINI,
+    'google-genai': BACKEND_GEMINI,
     'google-ai': BACKEND_GEMINI,
     'google_ai': BACKEND_GEMINI,
     'openai_compatible': BACKEND_OPENAI_COMPATIBLE,
     'openai-compatible': BACKEND_OPENAI_COMPATIBLE,
     'litellm': BACKEND_OPENAI_COMPATIBLE,
 }
+_BACKEND_ALIASES = EMBEDDING_BACKEND_ALIASES
 
 _NATIVE_TASK_TYPES = {
     'RETRIEVAL_DOCUMENT': EmbeddingTaskType.DOCUMENT,
@@ -206,19 +209,21 @@ def _optional_text(value: object) -> str:
     return str(value).strip()
 
 
-def _positive_int(value: object, field_name: str, default: int) -> int:
+def parse_embedding_output_dimension(value: object) -> int:
+    """Parse the persisted dimension shared by Sync and Batch embeddings."""
     if value is None or value == '':
-        return default
+        return DEFAULT_OUTPUT_DIMENSION
+    message = 'output_dimensionality must be a positive integer'
     if isinstance(value, bool):
-        raise EmbeddingContractError(f'{field_name} must be a positive integer')
+        raise EmbeddingContractError(message)
     if isinstance(value, int) and value > 0:
         return value
     try:
         number = int(str(value).strip())
     except (TypeError, ValueError) as exc:
-        raise EmbeddingContractError(f'{field_name} must be a positive integer') from exc
+        raise EmbeddingContractError(message) from exc
     if number <= 0:
-        raise EmbeddingContractError(f'{field_name} must be a positive integer')
+        raise EmbeddingContractError(message)
     return number
 
 
@@ -286,11 +291,7 @@ def parse_embedding_runtime_settings(
         backend=backend,
         provider=provider,
         model=model,
-        output_dimension=_positive_int(
-            rag.get('output_dimensionality'),
-            'output_dimensionality',
-            DEFAULT_OUTPUT_DIMENSION,
-        ),
+        output_dimension=parse_embedding_output_dimension(rag.get('output_dimensionality')),
         endpoint=endpoint,
         timeout_seconds=_positive_float(
             rag.get('embedding_timeout_seconds'),

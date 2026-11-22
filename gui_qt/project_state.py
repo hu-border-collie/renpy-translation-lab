@@ -26,6 +26,7 @@ from foundation.project_asset_paths import (
     normalize_relative_project_assets_in_config,
     sync_project_asset_paths_in_config,
 )
+from foundation.runtime_config_values import LegacyTranslationDefaults, legacy_translation_defaults
 
 from .path_utils import canonical_abs_path, resolve_effective_game_root
 
@@ -589,6 +590,14 @@ class ProjectState:
         data = self._read_json_object(self.api_keys_path, "api_keys.json")
         data["api_keys"] = keys
         self._write_json_object(self.api_keys_path, data)
+
+    def load_legacy_translation_defaults(self) -> LegacyTranslationDefaults:
+        """Read inherited translation settings without returning credential fields."""
+        try:
+            config = self._read_json_object(self.api_keys_path, "api_keys.json")
+        except (OSError, ValueError):
+            return {}
+        return legacy_translation_defaults(config)
 
     def load_translator_config(self) -> dict[str, Any]:
         if not self.config_path.exists():

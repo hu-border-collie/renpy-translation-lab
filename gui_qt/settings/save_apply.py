@@ -11,12 +11,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from providers.gemini_model_catalog import write_model_catalog_extras
+from foundation.project_asset_paths import suggest_batch_macro_setting_file
 from foundation.project_context_settings import resolve_batch_context_flags
+from foundation.runtime_config_values import LegacyTranslationDefaults
 
 from gui_qt.settings.litellm_settings import write_sync_backend_models
 from gui_qt.settings.settings_schema import (
+    ADVANCED_SETTING_FIELD_BY_KEY,
     ADVANCED_SETTING_FIELDS,
     apply_advanced_settings,
+    normalize_for_write,
     read_advanced_settings,
     resolve_project_analysis_flags_for_save,
     validate_advanced_settings,
@@ -42,6 +46,7 @@ class SettingsSaveExtras:
     custom_providers_modified: bool = False
     custom_providers_load_error: str = ""
     batch_thinking_user_changed: bool = False
+    legacy_defaults: LegacyTranslationDefaults = field(default_factory=dict)
 
 
 @dataclass
@@ -295,7 +300,7 @@ def apply_collected_settings(
     }
     complete_advanced_values: dict[str, Any] = {}
     if advanced_values:
-        complete_advanced_values = read_advanced_settings(config)
+        complete_advanced_values = read_advanced_settings(config, legacy_defaults=extras.legacy_defaults)
         complete_advanced_values.update(advanced_values)
         if extras.game_root:
             complete_advanced_values["game_root"] = extras.game_root
@@ -308,32 +313,75 @@ def apply_collected_settings(
                 project_context_flags=project_context_flags,
                 advanced_errors=dict(errors),
             )
-        apply_advanced_settings(config, complete_advanced_values)
-        original_project_analysis = original_config.get("batch")
+        apply_advanced_settings(config, complete_advanced_values, legacy_defaults=extras.legacy_defaults)
+        if (
+            "batch_macro_setting_file" in advanced_values
+            and not _config_string(advanced_values["batch_macro_setting_file"])
+            and suggest_batch_macro_setting_file(
+                config, game_root=_config_string(complete_advanced_values.get("game_root"))
+            )
+        ):
+            # Remember a cleared suggestion so reloading the form keeps it empty.
+            _ensure_section(config, "batch")["macro_setting_file"] = ""
+        original_batch = original_config.get("batch")
+        original_project_analysis = (
+            original_batch.get("project_analysis")
+            if isinstance(original_batch, Mapping)
+            else None
+        )
         if not isinstance(original_project_analysis, Mapping):
             original_project_analysis = {}
-        original_project_analysis = original_project_analysis.get("project_analysis")
-        if not isinstance(original_project_analysis, Mapping):
-            original_project_analysis = {}
-        saved_project_analysis = _ensure_section(
-            _ensure_section(config, "batch"), "project_analysis"
-        )
-        for setting_key in ("enabled", "inject_published_brief"):
-            if setting_key in original_project_analysis:
-                saved_project_analysis[setting_key] = original_project_analysis[
-                    setting_key
-                ]
-            else:
-                saved_project_analysis.pop(setting_key, None)
-        write_model_catalog_extras(
-            config,
-            translation_models=list(
-                complete_advanced_values.get("catalog_gemini_models") or []
-            ),
-            embedding_models=list(
-                complete_advanced_values.get("catalog_gemini_embedding_models") or []
-            ),
-        )
+        batch_section = config.get("batch")
+        if isinstance(batch_section, dict) and isinstance(
+            batch_section.get("project_analysis"), dict
+        ):
+            saved_project_analysis = batch_section["project_analysis"]
+            for setting_key in ("enabled", "inject_published_brief"):
+                if setting_key in original_project_analysis:
+                    saved_project_analysis[setting_key] = original_project_analysis[
+                        setting_key
+                    ]
+                else:
+                    saved_project_analysis.pop(setting_key, None)
+            if not saved_project_analysis and not (
+                isinstance(original_batch, Mapping)
+                and "project_analysis" in original_batch
+            ):
+                batch_section.pop("project_analysis", None)
+                if not batch_section and "batch" not in original_config:
+                    config.pop("batch", None)
+        elif any(
+            setting_key in original_project_analysis
+            for setting_key in ("enabled", "inject_published_brief")
+        ):
+            saved_project_analysis = _ensure_section(
+                _ensure_section(config, "batch"), "project_analysis"
+            )
+            for setting_key in ("enabled", "inject_published_brief"):
+                if setting_key in original_project_analysis:
+                    saved_project_analysis[setting_key] = original_project_analysis[
+                        setting_key
+                    ]
+        if (
+            "catalog_gemini_models" in advanced_values
+            or "catalog_gemini_embedding_models" in advanced_values
+            or "model_catalog" in config
+        ):
+            translation_models = normalize_for_write(
+                ADVANCED_SETTING_FIELD_BY_KEY["catalog_gemini_models"],
+                complete_advanced_values.get("catalog_gemini_models"),
+                translator_config=config,
+            )
+            embedding_models = normalize_for_write(
+                ADVANCED_SETTING_FIELD_BY_KEY["catalog_gemini_embedding_models"],
+                complete_advanced_values.get("catalog_gemini_embedding_models"),
+                translator_config=config,
+            )
+            write_model_catalog_extras(
+                config,
+                translation_models=list(translation_models),
+                embedding_models=list(embedding_models),
+            )
 
     saved_context_flags = resolve_batch_context_flags(
         config,
