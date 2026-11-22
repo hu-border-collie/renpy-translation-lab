@@ -67,6 +67,7 @@ from quality_review.translation_plan import CANONICAL_TEMPERATURE
 from gui_qt.user_copy import (
     BATCH_MACRO_SETTING_FILE_COPY,
     BATCH_MAX_OUTPUT_TOKENS_COPY,
+    PREPARE_SOURCE_GAME_DIR_COPY,
     QUALITY_POLICY_INVALID_COPY,
     QUALITY_POLICY_SETTING_COPY,
     SYNC_CONTEXT_AFTER_COPY,
@@ -1095,11 +1096,12 @@ FULL_COVERAGE_SETTING_FIELDS: tuple[SettingField, ...] = (
     SettingField(
         "prepare_source_game_dir",
         ("prepare", "source_game_dir"),
-        "源 game 目录",
-        "准备流程复制/生成模板时使用的原始 game 目录。",
+        PREPARE_SOURCE_GAME_DIR_COPY["label"],
+        PREPARE_SOURCE_GAME_DIR_COPY["description"],
         "str",
-        "../original/game",
+        "",
         "准备流程",
+        recommended="../original/game",
         allow_empty=True,
     ),
     SettingField(

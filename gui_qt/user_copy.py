@@ -564,6 +564,14 @@ SYNC_CONTEXT_AFTER_COPY = {
     ),
 }
 
+PREPARE_SOURCE_GAME_DIR_COPY = {
+    "label": "源 game 目录",
+    "description": (
+        "留空时自动选择，优先使用含脚本或 RPA 的 work/game。"
+        "相对路径以当前 work 为基准，可填 ../original/game 优先使用原始副本。"
+    ),
+}
+
 SYNC_MACRO_SETTING_FILE_COPY = {
     "label": "同步风格设定文件",
     "description": (

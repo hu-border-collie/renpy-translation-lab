@@ -11,7 +11,7 @@ from gui_qt.settings.save_apply import (
     SettingsSaveExtras,
     apply_collected_settings,
 )
-from gui_qt.settings.settings_schema import read_advanced_settings
+from gui_qt.settings.settings_schema import read_advanced_settings, recommended_advanced_settings
 
 
 class SettingsSaveApplyTests(unittest.TestCase):
@@ -402,6 +402,24 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertEqual(config["batch"]["project_analysis"], original["batch"]["project_analysis"])
         self.assertIs(result.project_context_flags["project_analysis_enabled"], False)
         self.assertIs(result.project_context_flags["project_analysis_inject_enabled"], True)
+
+    def test_prepare_source_distinguishes_automatic_choice_from_recommended_path(self) -> None:
+        key = "prepare_source_game_dir"
+        recommended = recommended_advanced_settings()[key]
+        self.assertEqual(recommended, "../original/game")
+        for config in ({}, {"prepare": {"source_game_dir": ""}}, {"prepare": {"source_game_dir": None}}):
+            with self.subTest(config=config):
+                original = copy.deepcopy(config)
+                shown = read_advanced_settings(config)[key]
+                self.assertEqual(shown, "")
+                result = apply_collected_settings(config, {key: shown}, original_config=original)
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config, original)
+
+                result = apply_collected_settings(config, {key: recommended}, original_config=original)
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["prepare"]["source_game_dir"], recommended)
+                self.assertEqual(read_advanced_settings(config)[key], recommended)
 
     def test_save_keeps_prepare_command_representation_compatible_with_runtime(self) -> None:
         argv = ["example-prepare", "{base_dir}", "argument with spaces"]
