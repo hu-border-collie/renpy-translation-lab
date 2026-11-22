@@ -379,6 +379,34 @@ class SettingsSaveApplyTests(unittest.TestCase):
         self.assertIs(result.project_context_flags["project_analysis_enabled"], False)
         self.assertIs(result.project_context_flags["project_analysis_inject_enabled"], True)
 
+    def test_save_keeps_prepare_command_representation_compatible_with_runtime(self) -> None:
+        argv = ["example-prepare", "{base_dir}", "argument with spaces"]
+        shell_command = " example-prepare {base_dir} "
+        for raw, expected, allow_shell in (
+            (json.dumps(argv), argv, False),
+            (json.dumps(argv), argv, True),
+            ("[]", [], False),
+            (argv, argv, False),
+            (shell_command, shell_command, True),
+            (None, None, False),
+            ("   ", "   ", False),
+        ):
+            with self.subTest(raw=raw, allow_shell=allow_shell):
+                config = {"prepare": {
+                    "allow_shell_commands": allow_shell,
+                    "unpack_command": copy.deepcopy(raw),
+                    "template_command": copy.deepcopy(raw),
+                }}
+                result = apply_collected_settings(
+                    config, {"batch_chunk_size": 24}, original_config=copy.deepcopy(config),
+                )
+                self.assertTrue(result.ok, result)
+                self.assertEqual(config["prepare"], {
+                    "allow_shell_commands": allow_shell,
+                    "unpack_command": expected,
+                    "template_command": expected,
+                })
+
     def test_save_repairs_json_encoded_batch_safety_settings(self) -> None:
         rule = {"category": "harassment", "threshold": "BLOCK_LOW_AND_ABOVE"}
         for decoded in (rule, [rule]):

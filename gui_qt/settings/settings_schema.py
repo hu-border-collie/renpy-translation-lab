@@ -1568,6 +1568,9 @@ def _existing_raw_accepted_by_runtime(
         return isinstance(raw, Mapping) or (isinstance(raw, str) and not raw.strip())
     if field.key == "batch_safety_settings":
         return normalize_batch_safety_settings(raw) == normalize_batch_safety_settings(normalized)
+    if field.key in {"prepare_unpack_command", "prepare_template_command"}:
+        # The runtime only interprets a stored list as argv.
+        return not isinstance(normalized, list) or isinstance(raw, list)
     if field.kind == "gemini_model_list":
         return raw is None or isinstance(raw, (str, list))
     if field.kind == "gemini_catalog_list":
