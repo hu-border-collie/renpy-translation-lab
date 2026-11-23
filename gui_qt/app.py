@@ -2843,10 +2843,17 @@ class MainWindow(QMainWindow):
         """Open the read-only engine/snapshot/reuse dialog for the active project."""
         from gui_qt.dialogs.engine_snapshot_dialog import EngineSnapshotDialog
 
+        game_root = str(self.state.get_game_root() or "")
+        engine = self._active_project_engine()
         dialog = EngineSnapshotDialog(
             self,
-            game_root=str(self.state.get_game_root() or ""),
+            game_root=game_root,
+            engine=engine,
             start_tab=int(start_tab),
+            project_is_current=lambda: (
+                game_root == str(self.state.get_game_root() or "")
+                and engine == self._active_project_engine()
+            ),
         )
         dialog.exec()
 
@@ -3059,6 +3066,7 @@ class MainWindow(QMainWindow):
             rag_enabled=bool(flags.get("rag_enabled")),
             source_index_enabled=bool(flags.get("source_index_enabled")),
             game_root=str(game_root or ""),
+            engine=self._active_project_engine(),
             project_analysis_status=result.status if result is not None else None,
             project_analysis_label=(
                 result.label
@@ -7355,6 +7363,7 @@ class MainWindow(QMainWindow):
             self._keyword_merge_candidates_path = candidates_path
         manifest_path, manifest = self._current_diagnostics_manifest()
         base_context = build_diagnostics_context(
+            engine=self._active_project_engine(),
             latest_manifest_path=manifest_path or None,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -7376,6 +7385,11 @@ class MainWindow(QMainWindow):
         self._sync_keywords_page_controls()
         self._update_keyword_merge_btn_enabled()
 
+    def _active_project_engine(self) -> str:
+        """Use the saved project configuration already loaded by the workbench."""
+        config = getattr(self, "_context_library_config_snapshot", {})
+        return str(config.get("engine", "renpy"))
+
     def _update_compare_variants_btn_enabled(
         self,
         *,
@@ -7389,7 +7403,9 @@ class MainWindow(QMainWindow):
             running = self.kill_btn.isEnabled()
         if manifest_path is None:
             manifest_path, manifest = self._current_diagnostics_manifest()
-        ready, message = translation_ab_experiment_ready(manifest_path, manifest)
+        ready, message = translation_ab_experiment_ready(
+            manifest_path, manifest, engine=self._active_project_engine(),
+        )
         self.compare_variants_btn.setEnabled(not running and ready)
         if ready:
             self.compare_variants_btn.setToolTip(
@@ -7494,7 +7510,7 @@ class MainWindow(QMainWindow):
         )
         if spec.mode == WorkMode.SYNC_TRANSLATION:
             sync_preview_path = self.sync_translation_page.preview_manifest_path()
-            diagnostics_engine = str(self._context_library_config_snapshot.get('engine', 'renpy'))
+            diagnostics_engine = self._active_project_engine()
             sync_preview_signature = self._diagnostics_file_signature(sync_preview_path)
             input_key = (
                 "sync",
@@ -7556,7 +7572,7 @@ class MainWindow(QMainWindow):
             manifest_path = str(latest_manifest) if latest_manifest is not None else None
         shared_path = str(manifest_path or "")
         submit_max_cost = self._submit_max_cost_from_config()
-        diagnostics_engine = str(self._context_library_config_snapshot.get('engine', 'renpy'))
+        diagnostics_engine = self._active_project_engine()
         input_key = (
             "batch",
             spec.mode.value,
@@ -12744,6 +12760,7 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
         self._probe_output_lines = []
         base_context = build_diagnostics_context(
+            engine=self._active_project_engine(),
             latest_manifest_path=manifest_path,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -12778,7 +12795,9 @@ class MainWindow(QMainWindow):
 
     def _on_run_compare_variants(self) -> None:
         manifest_path, manifest = self._current_diagnostics_manifest()
-        ready, message = translation_ab_experiment_ready(manifest_path, manifest)
+        ready, message = translation_ab_experiment_ready(
+            manifest_path, manifest, engine=self._active_project_engine(),
+        )
         if not ready:
             message_box_information(self, "无法运行翻译 A/B 对比", message)
             return
@@ -12797,6 +12816,7 @@ class MainWindow(QMainWindow):
         self._compare_variants_temp_file = variants_file
         dry_run = bool(options["dry_run"])
         base_context = build_diagnostics_context(
+            engine=self._active_project_engine(),
             latest_manifest_path=manifest_path,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -12849,6 +12869,7 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
         self._split_output_lines = []
         base_context = build_diagnostics_context(
+            engine=self._active_project_engine(),
             latest_manifest_path=manifest_path,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -13073,6 +13094,7 @@ class MainWindow(QMainWindow):
         self._show_workbench_log_drawer()
         self._repair_output_lines = []
         base_context = build_diagnostics_context(
+            engine=self._active_project_engine(),
             latest_manifest_path=manifest_path,
             manifest=manifest,
             batch_script_path=str(self.state.get_batch_script_path()),
@@ -14661,6 +14683,7 @@ class MainWindow(QMainWindow):
                 manifest_path=manifest_path,
             )
             base_context = build_diagnostics_context(
+                engine=self._active_project_engine(),
                 latest_manifest_path=manifest_path or None,
                 manifest=manifest,
                 batch_script_path=str(self.state.get_batch_script_path()),
@@ -14693,6 +14716,7 @@ class MainWindow(QMainWindow):
                 variant_names=self._compare_variants_names,
             )
             base_context = build_diagnostics_context(
+                engine=self._active_project_engine(),
                 latest_manifest_path=manifest_path or None,
                 manifest=manifest,
                 batch_script_path=str(self.state.get_batch_script_path()),
@@ -14735,6 +14759,7 @@ class MainWindow(QMainWindow):
                 context_manifest_path or None
             )
             base_context = build_diagnostics_context(
+                engine=self._active_project_engine(),
                 latest_manifest_path=latest_manifest_path or None,
                 manifest=context_manifest,
                 batch_script_path=str(self.state.get_batch_script_path()),
@@ -14785,6 +14810,7 @@ class MainWindow(QMainWindow):
                 manifest_path=manifest_path or "",
             )
             base_context = build_diagnostics_context(
+                engine=self._active_project_engine(),
                 latest_manifest_path=manifest_path or None,
                 manifest=manifest,
                 batch_script_path=str(self.state.get_batch_script_path()),

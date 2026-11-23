@@ -136,6 +136,8 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 复用候选页支持页面滚动，小窗口仍可访问完整详情、审阅者填写、决定和 Batch 导出按钮；窗口过窄时会按需显示横向滚动条，可滚动访问右侧控件。
 
+RPG Maker MV 项目可在 **引擎与快照…** 查看 MV Adapter 能力和覆盖核对路径。项目快照、版本对比和旧译复用在 MV 下尚未开放，对话框显示原因，命令参考省略对应模板。
+
 上下文库底部提供两个入口：**引擎与快照…** 展示当前 engine / adapter 能力、`logs/project_snapshots/` 快照列表，并可用两版快照生成版本 diff（disposition、匹配依据、置信度、base/target locator、候选与证据）；**复用候选…** 打开同一对话框的复用页，读取已有 `reuse_report.json`，展示候选类别、状态、歧义目标、译文来源、完整旧译文、证据与审计记录，并可打开 `reuse_review.md`。用户可对选中的单条候选提交 `accept` / `reject`，填写真实人类审阅者身份与可选备注；接受歧义候选必须显式选择一个合法 target occurrence。GUI 通过既有导入服务生成新候选包并保留原包。首次只支持 accept / reject；`override_translation`、`split_lineage`、`merge_lineage` 继续使用 CLI。
 
 选定目标 translation `manifest.json` 后，可通过既有 `export-reuse-results` 核心服务导出 Batch 结果并更新 manifest 簿记。GUI 不直接修改游戏文件；导出后必须对该 manifest 执行 `check`，并且只有当前 manifest/results 对应的最近一次 `writeback_gate.decision=allow` 才能 `apply`。候选每页最多展示 500 条，摘要最多 160 字符；可翻页审阅，详情显示完整文本，而决定与导出始终由共用服务读取完整权威包。切换候选、候选包或 manifest，或取消未提交填写时，未提交的审阅者、备注和目标选择都会清空；已提交的后台操作不会被关闭窗口回滚。迟到的 worker 结果若不匹配当前项目、候选包和 manifest 上下文则会忽略。#427 普通条目审校状态、quality acknowledgement 与复用决定互不授权。
@@ -284,6 +286,8 @@ doctor -> build -> submit -> status -> download -> check -> apply
 
 - 当前诊断上下文绑定的是**批量翻译**任务记录（`mode=translation`）；
 - 任务记录中有可采样的 chunk（完整 manifest 含 `chunks`，或 lite manifest 含 `summary.chunk_count > 0`）。
+
+RPG Maker MV 项目或任务记录尚不支持 A/B 对比。工具栏禁用该按钮并说明原因，命令参考省略 `compare-variants` 模板。
 
 关键词、订正等非翻译任务记录会禁用该按钮，悬停提示会说明原因。
 

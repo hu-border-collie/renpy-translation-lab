@@ -34,6 +34,7 @@ MV 的 `engine.mv.context_unsupported` 目前只针对 StoryMemory／Project Ana
 stale、incompatible、failed 均不标 ready，未知记录数是 null；实际准备的空库为 ready / 0。
 历史库的配置语料切换／清空也会使旧库 stale；显式 seed 输入仍独立按摘要核验，原文索引不受这项选择变化影响。
 MV 的 `engine_status.supported_routes` 包含 `gemini_batch` 与 `durable_sync`，不表示真实游戏验收完成。
+`engine_status.unsupported_operations` 列出尚未开放的 A/B 对比、项目快照、版本对比及复用候选命令。GUI 环境检查在详情中显示对应说明。
 doctor 按保存的默认执行方式检查上下文配置和库状态；待译范围对应 `start_pending_batch` 或 `start_pending_sync`。
 这些是可选检索层，未准备时 Sync / Batch 降级为空上下文，preflight 发 `MV_CONTEXT_NOT_PREPARED`
 warning；不取消材料或覆盖审阅阻断。doctor／preflight 只读状态，不调用 embedding 或翻译模型。

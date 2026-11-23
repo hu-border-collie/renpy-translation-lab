@@ -124,6 +124,20 @@ class EngineSnapshotActionsTests(unittest.TestCase):
         self.assertEqual(payload["snapshot_count"], 1)
         self.assertEqual(payload["latest_snapshot"]["version_id"], "1.0.0")
 
+    def test_mv_overview_reports_actual_adapter_without_scanning_renpy_assets(self):
+        from tests.support.mv_project import make_mv_project
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, config, _ = make_mv_project(Path(tmp))
+            with mock.patch("gui_qt.workbench.engine_snapshot_actions.discover_snapshot_manifests") as discover:
+                payload = collect_engine_snapshot_overview(game_root=config["game_root"], snapshot_root=tmp)
+            discover.assert_not_called()
+            self.assertEqual(payload["engine"], "rpgmaker_mv")
+            self.assertEqual(payload["capabilities"]["declarative_writeback"], ["json_source_string_set"])
+            self.assertFalse(payload["snapshot_export_available"])
+            self.assertEqual(payload["snapshots"], [])
+            self.assertTrue(Path(payload["coverage_review_path"]).is_file())
+
     def test_reconcile_snapshots_formats_items_and_locators(self):
         base = SimpleNamespace(
             occurrences=(_occurrence("base:1", "old.rpy", 1),),

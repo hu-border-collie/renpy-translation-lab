@@ -15,6 +15,8 @@ from typing import Callable
 
 from providers import model_usage_ledger
 from context_engine import story_memory
+from engine_adapters.project_config import require_engine_operation
+from quality_review.translation_plan import manifest_source_engine
 import translator_runtime as legacy
 from providers.sync_model_backend import sync_error_category, sync_error_summary
 
@@ -755,6 +757,8 @@ def run_translation_ab_experiment(
     dry_run: bool = False,
     sync_runner: Callable[..., dict] | None = None,
 ) -> dict:
+    if manifest_source_engine(manifest) == 'rpgmaker_mv':
+        require_engine_operation({'engine': 'rpgmaker_mv'}, 'compare-variants')
     batch_mod = _batch()
     batch_mod.legacy.require_supported_generation_target()
     batch_mod.require_manifest_mode(manifest, batch_mod.MANIFEST_MODE_TRANSLATION, 'compare-variants')

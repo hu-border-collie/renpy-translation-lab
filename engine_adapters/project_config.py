@@ -238,6 +238,22 @@ def read_mv_project_config(config: Mapping[str, Any], config_file: str | Path) -
         payload["material_sha256"], message_styles=payload.get("message_styles", False)), scope_file, display_fields, history_file)
 
 
+_MV_SUPPORTED_OPERATIONS = frozenset({
+    'doctor', 'translate-preflight', 'coverage-status', 'coverage-review-import', 'build',
+    'submit', 'recover-submit', 'status', 'download', 'probe', 'estimate-cost',
+    'split', 'build-retry', 'merge-retry', 'quality-ack', 'quality-unack',
+    'sync-start', 'sync-resume', 'sync-status', 'sync-cancel', 'sync-derive',
+    'sync-keywords', 'export-keywords', 'merge-keywords-to-glossary',
+    'bootstrap-source-index', 'bootstrap-rag', 'check', 'apply', 'quality-report',
+    'usage-report', 'usage-import',
+})
+
+
+def engine_supports_operation(engine: str, operation: str) -> bool:
+    """Report route availability without checking project material or readiness."""
+    return engine == 'renpy' or (engine == 'rpgmaker_mv' and operation in _MV_SUPPORTED_OPERATIONS)
+
+
 def require_engine_operation(
     config: Mapping[str, Any], operation: str, *, config_file: str | Path | None = None,
     game_root: str | Path | None = None,
@@ -261,18 +277,10 @@ def require_engine_operation(
         issue = detect_project_engine_mismatch(config, config_file, game_root=game_root)
         if issue is not None:
             raise ProjectEngineMismatchError(issue)
-    if project_engine(config) != "rpgmaker_mv":
-        return
-    allowed = {"doctor", "translate-preflight", "coverage-status", "coverage-review-import", "build",
-               "submit", "recover-submit", "status", "download", "probe", "estimate-cost",
-               "split", "build-retry", "merge-retry", "quality-ack", "quality-unack",
-               "sync-start", "sync-resume", "sync-status", "sync-cancel", "sync-derive",
-               "sync-keywords", "export-keywords", "merge-keywords-to-glossary",
-               "bootstrap-source-index", "bootstrap-rag",
-               "check", "apply", "quality-report", "usage-report", "usage-import"}
-    if operation not in allowed:
+    engine = project_engine(config)
+    if not engine_supports_operation(engine, operation):
         raise ValueError(f"RPG Maker MV narrative mode does not support {operation}; use translation Batch or durable Sync (check -> apply).")
-    if config_file is not None and operation in {
+    if engine == 'rpgmaker_mv' and config_file is not None and operation in {
         'build', 'submit', 'sync-start', 'sync-resume', 'sync-derive', 'sync-keywords', 'bootstrap-rag', 'bootstrap-source-index',
     }:
         from .project_setup import mv_project_setup_status

@@ -679,6 +679,10 @@ def project_analysis_record_status_label(status: str) -> str:
 
 
 # Engine / project-snapshot / reuse-candidate copy (#424 P6, #512).
+AB_EXPERIMENT_COPY = {
+    "engine_unsupported": "当前引擎或任务记录不支持翻译 A/B 对比。RPG Maker MV 尚未开放此功能。",
+}
+
 # The GUI calls existing P3/P4 services; it must not re-derive matching,
 # candidate decisions, or Batch result export semantics.
 ENGINE_SNAPSHOT_COPY = {
@@ -696,6 +700,7 @@ ENGINE_SNAPSHOT_COPY = {
         "并调用现有 reconciliation / reuse API 展示版本差异与复用候选。"
         "候选审校、决策导入和 Batch 结果导出均复用现有核心服务；不会直接修改游戏文件。"
     ),
+    "overview_only_intro": "查看当前引擎的 Adapter 能力和覆盖核对路径。",
     "tab_overview": "引擎与能力",
     "tab_diff": "版本对比",
     "tab_reuse": "复用候选",
@@ -705,6 +710,8 @@ ENGINE_SNAPSHOT_COPY = {
     "coverage_review_path": "coverage review",
     "behavior_digest": "adapter behavior digest",
     "no_snapshots": "尚未导出任何项目快照；可先运行 export-project-snapshot。",
+    "snapshot_unsupported": "当前引擎尚未开放项目快照和版本对比。",
+    "reuse_unsupported": "当前引擎尚未开放跨版本旧译复用。",
     "snapshot_columns": (
         "版本",
         "生成时间",

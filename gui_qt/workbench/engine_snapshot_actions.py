@@ -14,6 +14,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
+from engine_adapters.coverage import default_coverage_review_path
+from engine_adapters.project_config import engine_supports_operation, project_engine
+
 MAX_DIFF_ITEMS = 500
 MAX_REUSE_CANDIDATES = 500
 EXCERPT_LIMIT = 160
@@ -127,35 +130,42 @@ def collect_engine_snapshot_overview(
     *,
     game_root: str = "",
     snapshot_root: str = "",
+    engine: str | None = None,
 ) -> dict[str, Any]:
     """Return current adapter capabilities plus discovered snapshot summaries."""
-    import gemini_translate_batch as batch_mod
-    from engine_adapters.renpy import RenPyAdapter
+    engine = project_engine({'game_root': game_root} if engine is None else {'engine': engine})
+    snapshot_export_available = engine_supports_operation(engine, 'export-project-snapshot')
+    root, behavior_digest = "", ""
+    snapshots = []
+    if engine == 'rpgmaker_mv':
+        from engine_adapters.rpgmaker_mv import RpgMakerMvAdapter
 
-    adapter = RenPyAdapter(legacy_module=batch_mod.legacy)
-    capabilities = adapter.capabilities()
-    root = str(snapshot_root or batch_mod.PROJECT_SNAPSHOTS_DIR or "")
-    snapshots = discover_snapshot_manifests(root)
-    review_path = ""
-    if str(game_root or "").strip():
-        try:
-            review_path = str(
-                batch_mod.resolve_coverage_review_path(str(game_root)) or ""
-            )
-        except Exception:
-            review_path = ""
+        capabilities = RpgMakerMvAdapter.capabilities()
+        locator_schema_version = RpgMakerMvAdapter.locator_schema_version
+    else:
+        import gemini_translate_batch as batch_mod
+        from engine_adapters.renpy import RenPyAdapter
+
+        adapter = RenPyAdapter(legacy_module=batch_mod.legacy)
+        capabilities = adapter.capabilities()
+        locator_schema_version = adapter.locator_schema_version
+        behavior_digest = adapter.behavior_digest()
+        root = str(snapshot_root or batch_mod.PROJECT_SNAPSHOTS_DIR or "")
+    if snapshot_export_available and root:
+        snapshots = discover_snapshot_manifests(root)
     return {
-        "engine": adapter.engine,
-        "adapter_version": adapter.adapter_version,
-        "protocol_version": int(adapter.protocol_version or 0),
-        "locator_schema_version": int(adapter.locator_schema_version or 0),
-        "behavior_digest": str(adapter.behavior_digest() or ""),
+        "engine": capabilities.engine,
+        "adapter_version": capabilities.adapter_version,
+        "protocol_version": capabilities.engine_adapter_protocol_version,
+        "locator_schema_version": locator_schema_version,
+        "behavior_digest": behavior_digest,
         "capabilities": capabilities.to_dict(),
+        "snapshot_export_available": snapshot_export_available,
         "snapshot_root": root,
         "snapshot_count": len(snapshots),
         "snapshots": snapshots,
         "latest_snapshot": snapshots[0] if snapshots else None,
-        "coverage_review_path": review_path,
+        "coverage_review_path": default_coverage_review_path(game_root) or "",
         "game_root": str(game_root or ""),
     }
 

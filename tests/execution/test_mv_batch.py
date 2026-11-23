@@ -14,6 +14,7 @@ from unittest import mock
 import gemini_translate_batch as batch
 import translator_runtime as runtime
 from foundation import atomic_io
+from foundation.cli_contract import MachineContractError
 from quality_review import structure_protection
 from tests.support.mv_project import make_mv_project, add_mv_display_material, review_mv_project, write_mv_scope
 
@@ -219,6 +220,23 @@ class MvBatchTests(unittest.TestCase):
         report = batch.collect_doctor_report()
         self.assertIn('gemini_batch', report['engine_status']['supported_routes'])
         self.assertNotIn('gemini_batch', report['engine_status']['unsupported_routes'])
+        self.assertEqual(report['engine_status']['unsupported_operations'], [
+            'compare-variants', 'export-project-snapshot', 'reconcile-project-snapshots', 'build-reuse-candidates',
+        ])
+        self.provider.assert_not_called()
+
+    def test_cli_and_frozen_mv_batch_record_refuse_ab_before_request_work(self):
+        manifest = self.build()
+        experiment = batch.translation_ab_experiment
+        with mock.patch.object(experiment, 'load_variants_file') as load_variants:
+            with self.assertRaises(MachineContractError) as raised:
+                batch.main(['compare-variants', manifest['_manifest_path'], '--variants-file', 'unused.json'])
+            self.assertEqual(raised.exception.code_name, 'ENGINE_ROUTE_UNSUPPORTED')
+            load_variants.assert_not_called()
+        with mock.patch.object(experiment, 'select_manifest_chunks') as select_chunks:
+            with self.assertRaisesRegex(ValueError, 'does not support compare-variants'):
+                experiment.run_translation_ab_experiment(manifest, [])
+            select_chunks.assert_not_called()
         self.provider.assert_not_called()
 
     def test_unsupported_context_and_prepare_refuse_before_provider(self):

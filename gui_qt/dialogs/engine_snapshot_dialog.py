@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable
 from typing import Any, Mapping
 
+from engine_adapters.project_config import engine_supports_operation
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
@@ -59,10 +60,14 @@ class EngineSnapshotDialog(QDialog):
         parent: QWidget | None = None,
         *,
         game_root: str = "",
+        engine: str = "renpy",
         start_tab: int = 0,
+        project_is_current: Callable[[], bool] | None = None,
     ) -> None:
         super().__init__(parent)
         self._game_root = str(game_root or "")
+        self._engine = engine
+        self._project_is_current = project_is_current
         self._snapshot_root_override = ""
         self._worker: EngineSnapshotTaskWorker | None = None
         self._overview: dict[str, Any] = {}
@@ -77,7 +82,8 @@ class EngineSnapshotDialog(QDialog):
         self.resize(1040, 700)
 
         outer = QVBoxLayout(self)
-        intro = QLabel(ENGINE_SNAPSHOT_COPY["dialog_intro"])
+        snapshots_supported = engine_supports_operation(engine, "export-project-snapshot")
+        intro = QLabel(ENGINE_SNAPSHOT_COPY["dialog_intro" if snapshots_supported else "overview_only_intro"])
         intro.setWordWrap(True)
         outer.addWidget(intro)
 
@@ -86,6 +92,13 @@ class EngineSnapshotDialog(QDialog):
         self.tabs.addTab(self._build_overview_tab(), ENGINE_SNAPSHOT_COPY["tab_overview"])
         self.tabs.addTab(self._build_diff_tab(), ENGINE_SNAPSHOT_COPY["tab_diff"])
         self.tabs.addTab(self._build_reuse_tab(), ENGINE_SNAPSHOT_COPY["tab_reuse"])
+        for index, operation, message in (
+            (1, "reconcile-project-snapshots", "snapshot_unsupported"),
+            (2, "build-reuse-candidates", "reuse_unsupported"),
+        ):
+            if not engine_supports_operation(engine, operation):
+                self.tabs.setTabEnabled(index, False)
+                self.tabs.setTabToolTip(index, ENGINE_SNAPSHOT_COPY[message])
         outer.addWidget(self.tabs, 1)
 
         close_row = QHBoxLayout()
@@ -97,7 +110,7 @@ class EngineSnapshotDialog(QDialog):
         outer.addLayout(close_row)
 
         index = max(0, min(int(start_tab or 0), self.tabs.count() - 1))
-        self.tabs.setCurrentIndex(index)
+        self.tabs.setCurrentIndex(index if self.tabs.isTabEnabled(index) else 0)
         self.refresh_overview()
 
     # -- construction ----------------------------------------------------
@@ -377,10 +390,12 @@ class EngineSnapshotDialog(QDialog):
             return
         self._set_controls_enabled(False)
         self.overview_status_label.setText(ENGINE_SNAPSHOT_COPY["loading"])
+        game_root, engine = self._game_root, self._engine
         self._start_task(
             lambda: collect_engine_snapshot_overview(
-                game_root=self._game_root,
+                game_root=game_root,
                 snapshot_root=self._snapshot_root_override,
+                engine=engine,
             ),
             self._on_overview_loaded,
         )
@@ -403,15 +418,24 @@ class EngineSnapshotDialog(QDialog):
             f"native catalog：{capabilities.get('native_catalog')}；"
             f"relocation：{capabilities.get('relocation')}",
             "declarative writeback：" + ("、".join(str(item) for item in writeback) or "(none)"),
-            f"{ENGINE_SNAPSHOT_COPY['behavior_digest']}：{payload.get('behavior_digest') or ''}",
         ]
+        if payload.get("behavior_digest"):
+            lines.append(f"{ENGINE_SNAPSHOT_COPY['behavior_digest']}：{payload['behavior_digest']}")
         self.engine_summary_label.setText("\n".join(lines))
-        self.snapshot_root_label.setText(
-            f"{ENGINE_SNAPSHOT_COPY['snapshot_root']}：{payload.get('snapshot_root') or ''}；"
-            f"{ENGINE_SNAPSHOT_COPY['snapshot_count']}：{payload.get('snapshot_count') or 0}；"
+        snapshot_available = payload.get("snapshot_export_available", True)
+        coverage_review = (
             f"{ENGINE_SNAPSHOT_COPY['coverage_review_path']}："
             f"{payload.get('coverage_review_path') or '(unset)'}"
         )
+        self.snapshot_table.setVisible(bool(snapshot_available))
+        if snapshot_available:
+            self.snapshot_root_label.setText(
+                f"{ENGINE_SNAPSHOT_COPY['snapshot_root']}：{payload.get('snapshot_root') or ''}；"
+                f"{ENGINE_SNAPSHOT_COPY['snapshot_count']}：{payload.get('snapshot_count') or 0}；"
+                f"{coverage_review}"
+            )
+        else:
+            self.snapshot_root_label.setText(coverage_review)
         snapshots = list(payload.get("snapshots") or [])
         rows = []
         for item in snapshots:
@@ -429,7 +453,11 @@ class EngineSnapshotDialog(QDialog):
         self._fill_table(self.snapshot_table, rows)
         self.overview_status_label.setText("")
         self._populate_diff_combos(snapshots)
-        if not snapshots:
+        if not snapshot_available:
+            self.overview_status_label.setText("\n".join(
+                ENGINE_SNAPSHOT_COPY[key] for key in ("snapshot_unsupported", "reuse_unsupported")
+            ))
+        elif not snapshots:
             self.overview_status_label.setText(ENGINE_SNAPSHOT_COPY["no_snapshots"])
 
     def _populate_diff_combos(self, snapshots: list[dict[str, Any]]) -> None:
@@ -1014,6 +1042,9 @@ class EngineSnapshotDialog(QDialog):
         self._awaiting_task_result = False
         if worker is not None:
             worker.deleteLater()
+        if self._project_is_current is not None and not self._project_is_current():
+            self.reject()
+            return
         self._set_controls_enabled(True)
         if expected_context != self._async_context_key():
             self.reuse_status_label.setText(

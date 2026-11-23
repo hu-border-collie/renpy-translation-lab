@@ -338,6 +338,28 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("compare-variants", by_label["翻译 A/B 对比（试跑）"])
         self.assertIn("--dry-run", by_label["翻译 A/B 对比（试跑）"])
 
+    def test_mv_batch_reference_keeps_batch_and_excludes_ab_and_version_assets(self):
+        manifest = {
+            "mode": "translation",
+            "job_name": "",
+            "translation_plan": {"execution_strategy": "gemini_batch"},
+        }
+        for engine, source_engine in (("rpgmaker_mv", ""), ("renpy", "rpgmaker_mv")):
+            with self.subTest(engine=engine, source_engine=source_engine):
+                manifest["translation_plan"]["source_identity"] = {"engine": source_engine}
+                commands = build_cli_commands(
+                    engine=engine, python_exe="python", batch_script_path="gemini_translate_batch.py",
+                    manifest_path="manifest.json", manifest=manifest,
+                )
+                command_text = "\n".join(item.command for item in commands)
+                self.assertIn(" check ", command_text)
+                for operation in (
+                    "compare-variants", "export-project-snapshot", "reconcile-project-snapshots",
+                    "build-translation-records", "build-reuse-candidates", "import-reuse-decisions",
+                    "export-reuse-results",
+                ):
+                    self.assertNotIn(operation, command_text)
+
     def test_build_cli_commands_includes_recover_submit_when_journal_has_job(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             package_dir = os.path.join(tmp_dir, "package")
