@@ -363,6 +363,7 @@ def parse_doctor_output(output: str) -> dict[str, object]:
     parsed: dict[str, object] = {"warnings": [], "recommendations": []}
     in_warnings = False
     in_recommendations = False
+    unsupported_operations: list[str] = []
 
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -425,6 +426,11 @@ def parse_doctor_output(output: str) -> dict[str, object]:
 
         if line.startswith("- Mode:"):
             parsed["mode"] = line.split(":", 1)[1].strip()
+            continue
+
+        if line.startswith("- Unsupported MV operations:"):
+            operations = line.split(":", 1)[1].split(",")
+            unsupported_operations = [operation.strip() for operation in operations if operation.strip()]
             continue
 
         if line.startswith(('- Detected engine:', '- Detected content root:')):
@@ -507,6 +513,9 @@ def parse_doctor_output(output: str) -> dict[str, object]:
         if line.startswith("- Project assets:"):
             parsed["project_assets"] = _parse_context_fields(line.split(":", 1)[1])
             continue
+
+    if unsupported_operations:
+        parsed.setdefault("engine_status", {})["unsupported_operations"] = unsupported_operations
 
     return parsed
 

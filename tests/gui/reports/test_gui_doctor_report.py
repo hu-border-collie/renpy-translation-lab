@@ -176,6 +176,22 @@ class GuiDoctorReportTests(unittest.TestCase):
         self.assertEqual(pending.get("task_count"), 5)
         self.assertEqual(pending.get("file_count"), 2)
 
+    def test_parse_doctor_output_preserves_unsupported_mv_operations(self):
+        operations = [
+            "compare-variants", "export-project-snapshot", "reconcile-project-snapshots", "build-reuse-candidates",
+        ]
+        for mode in ("mv_setup_required", "mv_narrative"):
+            with self.subTest(mode=mode):
+                output = f"Doctor report:\n- Mode: {mode}\n- Unsupported MV operations: {', '.join(operations)}\n"
+                parsed = parse_doctor_output(output)
+                self.assertEqual(parsed["engine_status"]["unsupported_operations"], operations)
+                self.assertEqual(
+                    summarize_doctor_output(output, exit_code=0).detail_facts,
+                    summarize_doctor_report(
+                        {"mode": mode, "engine_status": {"unsupported_operations": operations}}
+                    ).detail_facts,
+                )
+
     def test_parse_doctor_output_extracts_mode_and_counts(self):
         parsed = parse_doctor_output(DOCTOR_OUTPUT)
 
