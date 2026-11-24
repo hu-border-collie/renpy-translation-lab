@@ -430,6 +430,7 @@ from .user_copy import (
     PROJECT_ANALYSIS_COPY,
     COVERAGE_REVIEW_COPY,
     KEYWORD_CANDIDATE_COPY,
+    FINAL_REVIEW_RECOVERY_MESSAGE,
     format_final_review_failure_reasons,
     format_job_fact,
     format_job_state_fact,
@@ -701,7 +702,7 @@ class MainWindow(QMainWindow):
         self._translation_supported_strategies: dict[str, tuple[str, ...]] = {}
         self._translation_profile_models: dict[str, str] = {}
         self._workflow_step_output_lines: list[str] = []
-        self._final_review_findings_cache_key: tuple[str, int] | None = None
+        self._final_review_findings_cache_key: tuple[str, int, bool] | None = None
         self._final_review_findings_cache: tuple[str, dict[str, object] | None] | None = None
         self._apply_output_lines: list[str] = []
         self._recheck_output_lines: list[str] = []
@@ -8754,18 +8755,19 @@ class MainWindow(QMainWindow):
         if path is None:
             return "", None
         path_text = str(path)
+        from quality_review import final_review as fr
+
+        pending = fr.sync_result_pending(path_text)
         try:
-            cache_key = (path_text, Path(path).stat().st_mtime_ns)
+            cache_key = (path_text, Path(path).stat().st_mtime_ns, pending)
         except OSError:
-            cache_key = (path_text, -1)
+            cache_key = (path_text, -1, pending)
         if (
             self._final_review_findings_cache_key == cache_key
             and self._final_review_findings_cache is not None
         ):
             return self._final_review_findings_cache
         try:
-            from quality_review import final_review as fr
-
             result: tuple[str, dict[str, object] | None] = (
                 path_text,
                 fr.load_campaign_package(path_text),
@@ -9161,10 +9163,15 @@ class MainWindow(QMainWindow):
             return
 
         manifest_path, package = self._final_review_findings_context()
-        if package is None:
-            message_box_information(self, "没有可审核的报告", "请先完成一个最终审校任务。")
-            return
         from quality_review import final_review as fr
+
+        if package is None:
+            message = (
+                FINAL_REVIEW_RECOVERY_MESSAGE if manifest_path and fr.sync_result_pending(manifest_path)
+                else "请先完成一个最终审校任务。"
+            )
+            message_box_information(self, "没有可审核的报告", message)
+            return
 
         status = fr.collect_campaign_status(package=package)
         if status.get("status") != fr.STATUS_DONE:
@@ -9249,9 +9256,10 @@ class MainWindow(QMainWindow):
         findings_enabled = False
         review_status_message = ""
         if mode == WorkMode.FINAL_REVIEW:
-            _path, package = self._final_review_findings_context()
+            manifest_path, package = self._final_review_findings_context()
+            from quality_review import final_review as fr
+
             if package is not None:
-                from quality_review import final_review as fr
                 review_status = fr.collect_campaign_status(package=package)
                 scope = review_status.get("scope") or {}
                 counts = review_status.get("status_counts") or {}
@@ -9276,6 +9284,8 @@ class MainWindow(QMainWindow):
                         for row in package.get("findings") or []
                     )
                 )
+            elif manifest_path and fr.sync_result_pending(manifest_path):
+                review_status_message = FINAL_REVIEW_RECOVERY_MESSAGE
         if summary.can_apply:
             result_message = summary.message or "订正预览已通过，可安全写回。"
         elif review_status_message:

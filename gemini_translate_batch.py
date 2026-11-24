@@ -7601,7 +7601,7 @@ def run_final_review_run_sync(
             details={'limit': int(limit or 0)},
         )
     package_target = manifest_path_for_target(target)
-    package = fr.load_campaign_package(package_target)
+    package = fr.load_campaign_package(package_target, allow_pending_sync_result=not dry_run)
     package_dir = str(package['paths']['package_dir'])
     manifest = dict(package['manifest'] or {})
     strategy = str(
@@ -22380,7 +22380,7 @@ def build_arg_parser():
         'final-review-run-sync',
         help=(
             'Execute pending/stale/failed final-review units through the frozen sync '
-            'stage route (report-only; rerun to resume).'
+            'stage route. Rerun to recover a saved response before dispatch (report-only).'
         ),
     )
     final_review_run_sync_parser.add_argument(
@@ -22403,7 +22403,7 @@ def build_arg_parser():
     final_review_run_sync_parser.add_argument(
         '--dry-run',
         action='store_true',
-        help='Report the units that would run without calling the provider.',
+        help='Report planned units without publishing results or calling the provider. Recover pending results first.',
     )
     final_review_run_sync_parser.add_argument(
         '--fail-fast',

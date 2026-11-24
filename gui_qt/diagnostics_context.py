@@ -27,6 +27,7 @@ from .user_copy import (
     BOOTSTRAP_PROGRESS_COPY,
     EXTERNAL_WORK_COPY,
     EXTERNAL_WORK_PRESERVED_COPY,
+    FINAL_REVIEW_SYNC_COMMAND_LABEL,
     MODEL_CONFIG_MIGRATION_COPY,
     MODEL_PROFILES_PAGE_COPY,
     DURABLE_SYNC_COPY,
@@ -671,7 +672,7 @@ def build_cli_commands(
                         ),
                     ),
                     DiagnosticsCommand(
-                        label="执行同步最终审校",
+                        label=FINAL_REVIEW_SYNC_COMMAND_LABEL,
                         command=format_cli_command(
                             python_exe,
                             batch_script_path,

@@ -7,7 +7,9 @@ from datetime import datetime
 from typing import Any, Mapping, Sequence
 
 from quality_review import final_review as fr
-from foundation.atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text
+from foundation.atomic_io import (
+    AtomicFileLockTimeoutError, atomic_write_json, atomic_write_jsonl, atomic_write_text,
+)
 
 
 def finding_digest(finding: Mapping[str, Any]) -> str:
@@ -59,44 +61,46 @@ def sync_linked_findings(manifest: Mapping[str, Any], state: str, identity_ids=N
     if not source or not isinstance(linked, list) or not linked:
         raise SystemExit("Final-review provenance is incomplete; refusing finding-state update.")
     try:
-        package = fr.load_campaign_package(source)
-    except fr.FinalReviewError as exc:
+        paths = fr.resolve_campaign_paths(source)
+        with fr.campaign_write_lock(paths["package_dir"]):
+            package = fr.load_campaign_package(source)
+            actual_snapshot = str(package.get("snapshot", {}).get("snapshot_digest") or package["manifest"].get("snapshot_digest") or "")
+            if actual_snapshot != str(link.get("snapshot_digest") or ""):
+                raise SystemExit("Linked final-review campaign snapshot changed; refusing finding-state update.")
+            links = {str(row.get("finding_id") or ""): row for row in linked if isinstance(row, Mapping)}
+            selected_identities = None if identity_ids is None else {
+                str(value) for value in identity_ids if str(value)
+            }
+            findings = [dict(row) for row in package.get("findings") or []]
+            found = set()
+            rank = {fr.REVISION_STATE_NONE: 0, fr.REVISION_STATE_CANDIDATE: 1,
+                    fr.REVISION_STATE_PREVIEWED: 2, fr.REVISION_STATE_APPLIED: 3}
+            changed = 0
+            for finding in findings:
+                finding_id = str(finding.get("finding_id") or "")
+                row = links.get(finding_id)
+                if row is None:
+                    continue
+                found.add(finding_id)
+                if finding_digest(finding) != str(row.get("digest") or ""):
+                    raise SystemExit(f"Linked final-review finding changed ({finding_id}); refusing state update.")
+                should_update = (
+                    selected_identities is None
+                    or str(finding.get("identity_v2") or "") in selected_identities
+                )
+                if should_update and rank.get(
+                    str(finding.get("revision_state") or "none"), 0
+                ) <= rank[state]:
+                    finding["selection_state"] = fr.SELECTION_STATE_SELECTED
+                    finding["revision_state"] = state
+                    changed += 1
+            missing = set(links) - found
+            if missing:
+                raise SystemExit("Linked final-review findings are missing: " + ", ".join(sorted(missing)))
+            _write_findings(package, findings)
+            return changed
+    except (fr.FinalReviewError, AtomicFileLockTimeoutError) as exc:
         raise SystemExit(f"Linked final-review campaign is unavailable: {exc}") from exc
-    actual_snapshot = str(package.get("snapshot", {}).get("snapshot_digest") or package["manifest"].get("snapshot_digest") or "")
-    if actual_snapshot != str(link.get("snapshot_digest") or ""):
-        raise SystemExit("Linked final-review campaign snapshot changed; refusing finding-state update.")
-    links = {str(row.get("finding_id") or ""): row for row in linked if isinstance(row, Mapping)}
-    selected_identities = None if identity_ids is None else {
-        str(value) for value in identity_ids if str(value)
-    }
-    findings = [dict(row) for row in package.get("findings") or []]
-    found = set()
-    rank = {fr.REVISION_STATE_NONE: 0, fr.REVISION_STATE_CANDIDATE: 1,
-            fr.REVISION_STATE_PREVIEWED: 2, fr.REVISION_STATE_APPLIED: 3}
-    changed = 0
-    for finding in findings:
-        finding_id = str(finding.get("finding_id") or "")
-        row = links.get(finding_id)
-        if row is None:
-            continue
-        found.add(finding_id)
-        if finding_digest(finding) != str(row.get("digest") or ""):
-            raise SystemExit(f"Linked final-review finding changed ({finding_id}); refusing state update.")
-        should_update = (
-            selected_identities is None
-            or str(finding.get("identity_v2") or "") in selected_identities
-        )
-        if should_update and rank.get(
-            str(finding.get("revision_state") or "none"), 0
-        ) <= rank[state]:
-            finding["selection_state"] = fr.SELECTION_STATE_SELECTED
-            finding["revision_state"] = state
-            changed += 1
-    missing = set(links) - found
-    if missing:
-        raise SystemExit("Linked final-review findings are missing: " + ", ".join(sorted(missing)))
-    _write_findings(package, findings)
-    return changed
 
 
 def _select(package: Mapping[str, Any], finding_ids: Sequence[str] | None) -> list[dict[str, Any]]:
