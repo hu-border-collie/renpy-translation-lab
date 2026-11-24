@@ -21708,6 +21708,7 @@ def build_arg_parser():
     external_translation_work.add_cli(subparsers, add_machine_output_argument)
 
     doctor_parser = subparsers.add_parser('doctor', help='Inspect engine selection, project materials, prepare, SDK, and TL compatibility without writing files.')
+    doctor_parser.add_argument('--config-file', type=Path, help='Read this translator config instead of the tool default.')
     add_machine_output_argument(doctor_parser)
 
     coverage_status_parser = subparsers.add_parser(
@@ -24620,14 +24621,23 @@ def dispatch_command(parser, args):
     if command in MACHINE_OUTPUT_COMMANDS:
         validate_machine_invocation(args)
 
+    config_file = legacy.TRANSLATOR_CONFIG
+    if command == 'doctor' and getattr(args, 'config_file', None) is not None:
+        config_file = str(args.config_file.expanduser().resolve())
+        if not Path(config_file).is_file():
+            raise cli_contract.MachineContractError(
+                f'Translator config file does not exist: {config_file}', code_name='DOCTOR_CONFIG_NOT_FOUND',
+                suggested_action='check_translator_config', semantic_exit_code=cli_contract.EXIT_USAGE,
+            )
+
     if command not in PROFILE_COMMANDS and command not in {'init', 'config'}:
         from engine_adapters.project_config import (
             ProjectEngineMismatchError, MvProjectSetupRequiredError,
             read_project_configuration, require_engine_operation,
         )
         try:
-            require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), command,
-                                     config_file=legacy.TRANSLATOR_CONFIG)
+            require_engine_operation(read_project_configuration(config_file), command,
+                                     config_file=config_file)
         except ProjectEngineMismatchError as exc:
             raise cli_contract.MachineContractError(str(exc), code_name='ENGINE_PROJECT_MISMATCH',
                 suggested_action='configure_project_engine',
@@ -24656,15 +24666,21 @@ def dispatch_command(parser, args):
 
     if command == 'doctor':
         # doctor is read-only: never persist auto-corrected game_root.
-        legacy.load_translator_settings(
-            persist_corrected_game_root=False,
-            tolerate_routing_errors=True,
-        )
-        legacy.load_glossary()
-        load_batch_settings(tolerate_routing_errors=True)
-        print_banner()
-        report = collect_doctor_report()
-        print_doctor_report(report)
+        with legacy.locked_runtime_state():
+            previous_config_file = legacy.TRANSLATOR_CONFIG
+            try:
+                legacy.TRANSLATOR_CONFIG = config_file
+                legacy.load_translator_settings(
+                    persist_corrected_game_root=False,
+                    tolerate_routing_errors=True,
+                )
+                legacy.load_glossary()
+                load_batch_settings(tolerate_routing_errors=True)
+                print_banner()
+                report = collect_doctor_report()
+                print_doctor_report(report)
+            finally:
+                legacy.TRANSLATOR_CONFIG = previous_config_file
         return report
 
     if command == 'bootstrap-work':
@@ -26649,6 +26665,9 @@ def _collect_output_file_protected_paths(args):
             add_path(os.path.join(abs_path, 'manifest.json'))
 
     command = str(getattr(args, 'command', '') or '')
+    if command == 'doctor':
+        config_file = getattr(args, 'config_file', None)
+        add_path(str(config_file.expanduser()) if config_file is not None else legacy.TRANSLATOR_CONFIG)
     for ref in getattr(args, 'reference_file', []) or []:
         add_path(ref)
     for ref in getattr(args, 'reference_work', []) or []:

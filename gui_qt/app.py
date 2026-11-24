@@ -146,6 +146,7 @@ from gui_qt.reports.check_report import (
 from .diagnostics_context import (
     DiagnosticsContext,
     build_diagnostics_context,
+    doctor_cli_args,
     existing_retry_manifest_path,
     sync_diagnostics_context,
 )
@@ -250,13 +251,11 @@ from gui_qt.reports.doctor_report import (
     cancelled_summary,
     running_summary,
     stale_summary,
-    summarize_doctor_output,
     summarize_doctor_report,
 )
-from gui_qt.workers.doctor_worker import DoctorWorker, DoctorWorkerResult
 from gui_qt.reports.readiness_display import doctor_overview, preflight_line
 from gui_qt.reports.translation_preprocessing import summarize_translation_preprocessing
-from .user_copy import READINESS_COPY
+from .user_copy import DOCTOR_RUN_COPY, READINESS_COPY
 from gui_qt.appearance.font_helpers import optional_fonts_installed, user_fonts_dir
 from gui_qt.workers.font_worker import FontInstallResult, FontInstallWorker
 
@@ -676,7 +675,6 @@ class MainWindow(QMainWindow):
         self._loading_config_to_ui = False
         self._loading_theme_to_ui = False
         self._active_command = ""
-        self._doctor_output_lines: list[str] = []
         self._workflow = None
         self._split_status_entries: list[SplitManifestEntry] = []
         self._split_status_selected_manifest_path = ""
@@ -765,8 +763,14 @@ class MainWindow(QMainWindow):
         self._doctor_summary_mode = ""
         self._doctor_summary_status = ""
         self._doctor_check_completed = False
-        self._doctor_worker: DoctorWorker | None = None
-        self._retired_doctor_workers: set[DoctorWorker] = set()
+        self._doctor_run_identity: str | None = None
+        self._doctor_stdout_lines: list[str] = []
+        self._doctor_process_error = ""
+        self._doctor_stop_reason = ""
+        self._doctor_timeout_timer = QTimer(self)
+        self._doctor_timeout_timer.setSingleShot(True)
+        self._doctor_timeout_timer.setInterval(5 * 60 * 1000)
+        self._doctor_timeout_timer.timeout.connect(self._on_doctor_timeout)
         self._last_doctor_report: dict | None = None
         self._last_doctor_report_game_root = ""
         self._revision_corpus_doctor_report_stale = False
@@ -847,6 +851,7 @@ class MainWindow(QMainWindow):
         # Connect runner
         self.runner.line_ready.connect(self._on_cli_line_ready)
         self.runner.stdout_line_ready.connect(self._on_cli_stdout_line_ready)
+        self.runner.stderr_line_ready.connect(self._on_cli_stderr_line_ready)
         self.runner.finished.connect(self._on_finished)
         self.runner.error.connect(self._on_runner_error)
 
@@ -1543,9 +1548,7 @@ class MainWindow(QMainWindow):
 
     def _is_doctor_active(self) -> bool:
         """True while an environment check owns the global task slot."""
-        if getattr(self, "_active_command", "") == "doctor":
-            return True
-        return self._is_doctor_running()
+        return getattr(self, "_active_command", "") == "doctor"
 
     def _context_switching_locked(self) -> bool:
         """Whether a running job should freeze workbench context switches.
@@ -4458,15 +4461,7 @@ class MainWindow(QMainWindow):
         )
 
     def _request_main_task_shutdown(self) -> None:
-        """Stop the foreground doctor/CLI task without waiting in the UI thread."""
-        doctor = getattr(self, "_doctor_worker", None)
-        doctor_active = bool(
-            doctor is not None
-            and getattr(doctor, "isRunning", lambda: False)()
-        )
-        if doctor_active:
-            self._invalidate_doctor_worker()
-
+        """Stop the foreground CLI task without waiting in the UI thread."""
         runner = getattr(self, "runner", None)
         runner_active = self._cli_runner_is_active()
         if runner is not None:
@@ -4477,10 +4472,7 @@ class MainWindow(QMainWindow):
                 else:
                     runner.kill()
 
-        # Interrupted DoctorWorker deliberately suppresses ``completed``. Move
-        # foreground chrome to cancelled/idle now; the generic QThread owner
-        # below still retains and waits for the real thread terminal state.
-        if not doctor_active and not runner_active and getattr(self, "_task_running", False):
+        if not runner_active and getattr(self, "_task_running", False):
             self._active_command = ""
             self._set_task_running(False)
 
@@ -4490,8 +4482,6 @@ class MainWindow(QMainWindow):
             threads = self.findChildren(QThread)
         except RuntimeError:
             return ()
-        current_doctor = getattr(self, "_doctor_worker", None)
-        doctor_is_foreground = bool(getattr(self, "_task_running", False))
         # The LiteLLM module warmup import is local, not user-cancellable and
         # fully owned by the settings page; it must not gate window shutdown
         # with a confirmation dialog.  Retired workers are already detached
@@ -4506,8 +4496,6 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 continue
             if thread is warmup_worker or thread in retired_workers:
-                continue
-            if doctor_is_foreground and thread is current_doctor:
                 continue
             active.append(thread)
         return tuple(active)
@@ -10235,49 +10223,18 @@ class MainWindow(QMainWindow):
         if directory:
             self._switch_game_root(directory)
 
-    def _invalidate_doctor_worker(self) -> None:
-        worker = self._doctor_worker
-        if worker is None:
-            return
-        try:
-            worker.completed.disconnect(self._on_doctor_completed)
-        except (RuntimeError, TypeError):
-            pass
-        self._doctor_worker = None
-        if worker.isRunning():
-            self._retire_doctor_worker(worker)
-            worker.requestInterruption()
-        else:
-            worker.deleteLater()
-        if self._active_command == "doctor":
-            self._active_command = ""
-            self._set_task_running(False)
-
-    def _retire_doctor_worker(self, worker: DoctorWorker) -> None:
-        """Keep a cancelled worker owned until QThread emits real ``finished``."""
-        retired = self._retired_doctor_workers
-        if worker in retired:
-            return
-        retired.add(worker)
-        self._wire_doctor_worker_terminal(worker)
-
-    def _wire_doctor_worker_terminal(self, worker: DoctorWorker) -> None:
-        if getattr(worker, "_rtl_finished_wired", False):
-            return
-        worker._rtl_finished_wired = True
-        worker.finished.connect(
-            lambda current=worker: self._on_doctor_worker_finished(current)
-        )
-
-    def _on_doctor_worker_finished(self, worker: DoctorWorker) -> None:
-        self._retired_doctor_workers.discard(worker)
-        if worker is self._doctor_worker:
-            self._doctor_worker = None
-        worker.deleteLater()
-
     def _switch_game_root(self, directory: str) -> bool:
-        self._invalidate_doctor_worker()
-        if self.runner.is_running():
+        runner_active = self.runner.is_running()
+        if self._is_doctor_active():
+            # Release the old project's UI ownership before a queued terminal
+            # callback can interpret an old report as current evidence.
+            self._doctor_timeout_timer.stop()
+            self._doctor_run_identity = None
+            self._doctor_stdout_lines.clear()
+            self._doctor_stop_reason = "discarded" if runner_active else ""
+            self._active_command = ""
+            self._set_doctor_summary(stale_summary())
+        if runner_active:
             self.runner.kill()
             self._set_task_running(False)
         try:
@@ -10297,7 +10254,6 @@ class MainWindow(QMainWindow):
         self._refresh_project_label()
         self._load_config_to_ui()
         self._active_command = ""
-        self._doctor_output_lines = []
         # Project sessions are reset below, so their status-tab snapshot must
         # also start from the product default instead of leaking the old root.
         if getattr(self, "_shell_special_route", None) is not None:
@@ -11411,9 +11367,6 @@ class MainWindow(QMainWindow):
             self._clear_game_root_redirect_notice()
         self._refresh_settings_project_root_display()
 
-    def _is_doctor_running(self) -> bool:
-        return self._doctor_worker is not None and self._doctor_worker.isRunning()
-
     def _on_doctor_button_clicked(self) -> None:
         """Project-bar CTA: start 环境检查, or cancel doctor/template jobs."""
         if self._is_doctor_active() or self._is_generate_template_active():
@@ -11435,7 +11388,7 @@ class MainWindow(QMainWindow):
         matches the current project on disk, then returns an independent copy.
         Returns None if runtime cannot be imported (worker will reload itself).
 
-        Readonly jobs such as doctor must pass ``persist_corrected_game_root=False``
+        Read-only coverage jobs must pass ``persist_corrected_game_root=False``
         so auto-corrected ``game_root`` never rewrites translator_config.json.
         """
         try:
@@ -11450,133 +11403,154 @@ class MainWindow(QMainWindow):
                 )
                 return legacy.snapshot_runtime_config()
         except SystemExit:
-            # Hard config errors surface again inside the worker with user-facing text.
+            # The worker will report the configuration error.
             return None
         except Exception:
             return None
 
-    def _on_run_doctor(self):
+    def _on_run_doctor(self) -> None:
+        if (
+            self._cli_runner_is_active()
+            or getattr(self, "_task_running", False)
+            or getattr(self, "_shutdown_requested", False)
+            or getattr(self, "_shutdown_confirmation_active", False)
+        ):
+            return
         if not self._confirm_unsaved_config_before_workflow():
             return
         if not self.state.get_game_root():
-            message_box_information(
-                self, "请先选择项目",
-                "请先选择游戏的 work 目录。\n"
-                "环境检查会读取本地配置中的项目路径。"
-            )
-            return
-        if self._is_doctor_running():
+            message_box_information(self, DOCTOR_RUN_COPY["select_title"], DOCTOR_RUN_COPY["select_message"])
             return
 
-        # Global bar can launch from Settings/Diagnostics; show status on Workbench.
         self._focus_workbench_main_tab(special_route=_SHELL_ROUTE_PROJECT_PREPARE)
         self._clear_log_view()
-        self._active_command = "doctor"
-        self._doctor_output_lines = []
         self._focus_workbench_status_tab(_BATCH_STAGE_PREPARE)
         self._show_workbench_log_drawer()
+        self._doctor_run_identity = self._readiness_project_identity()
+        self._doctor_stdout_lines = []
+        self._doctor_process_error = ""
+        self._doctor_stop_reason = ""
+        self._doctor_check_completed = False
+        self._last_doctor_report = None
+        self._last_doctor_report_game_root = ""
+        self._revision_corpus_doctor_report_stale = True
         self._set_doctor_summary(running_summary())
-        self._append_log("=== 正在运行环境检查（collect_doctor_report）===\n")
-        self._set_task_running(True)
+        self._append_log(DOCTOR_RUN_COPY["starting"])
+        started = self._start_cli_command(
+            "doctor",
+            self.state.get_batch_script_path(),
+            doctor_cli_args(self.state.config_path),
+        )
+        if started and self._is_doctor_active():
+            self._doctor_timeout_timer.start()
+        elif not started and self._readiness_doctor_summary.status == "running":
+            self._finish_doctor_command(-1)
 
-        # Snapshot current process runtime for this job so a later project switch
-        # (or disk reload) cannot mutate globals mid-doctor. The worker restores
-        # prior globals after the check (issue #216 phase 2).
-        doctor_config = self._snapshot_runtime_config_for_job(persist_corrected_game_root=False)
-        worker = DoctorWorker(config=doctor_config, parent=self)
-        worker._rtl_readiness_identity = self._readiness_project_identity()
-        self._wire_doctor_worker_terminal(worker)
-        worker.completed.connect(self._on_doctor_completed)
-        self._doctor_worker = worker
-        worker.start()
-
-    def _on_doctor_completed(self, result: DoctorWorkerResult) -> None:
-        worker = self.sender()
-        # Queued Qt signals can still arrive after disconnect(). Only the
-        # currently owned operation may update project/task UI; retired workers
-        # are cleaned by their ``finished`` connection.
-        if worker is not self._doctor_worker:
+    def _stop_doctor_command(self, reason: str) -> None:
+        """Request a non-blocking stop and give it priority over any queued result."""
+        if not self._is_doctor_active() or self._doctor_stop_reason:
             return
-        self._doctor_worker = None
+        self._doctor_stop_reason = reason
+        self._doctor_timeout_timer.stop()
+        self.runner.kill()
+
+    def _on_doctor_timeout(self) -> None:
+        self._stop_doctor_command("timeout")
+
+    def _finish_doctor_command(self, exit_code: int) -> None:
+        """Consume only this invocation's stdout envelope after the process settles."""
+        self._doctor_timeout_timer.stop()
+        identity, self._doctor_run_identity = self._doctor_run_identity, None
+        stdout, self._doctor_stdout_lines = "\n".join(self._doctor_stdout_lines), []
         self._active_command = ""
         self._set_task_running(False)
         if getattr(self, "_shutdown_requested", False):
             return
-
-        identity = getattr(worker, "_rtl_readiness_identity", None)
-        if identity is not None and identity != self._readiness_project_identity():
-            self._readiness_doctor_summary = stale_summary()
-            self._readiness_doctor_report = None
-            self._sync_readiness_display()
+        if identity != self._readiness_project_identity():
+            self._set_doctor_summary(stale_summary())
             return
 
-        log_text = result.log_text.strip()
-        if log_text:
-            self._doctor_output_lines = log_text.splitlines()
-            self._append_log(log_text)
-        elif result.error:
-            self._doctor_output_lines = [result.error]
-            self._append_log(result.error)
+        if self._doctor_stop_reason == "cancelled":
+            self._append_log(DOCTOR_RUN_COPY["cancelled"])
+            self._set_doctor_summary(cancelled_summary())
+            self.statusBar().showMessage(DOCTOR_RUN_COPY["cancelled"], 6000)
+            return
+        if self._doctor_stop_reason == "timeout":
+            self._show_doctor_failure(DOCTOR_RUN_COPY["timeout"], identity)
+            return
 
-        self._append_log("\n[环境检查已结束]")
+        try:
+            envelope = cli_contract.parse_result_envelope(stdout)
+            if envelope["command"] != "doctor":
+                raise ValueError("unexpected command")
+        except ValueError:
+            self._show_doctor_failure(
+                self._doctor_process_error or DOCTOR_RUN_COPY["invalid_result"], identity,
+            )
+            return
 
+        if not envelope["ok"] or exit_code != 0:
+            detail = str((envelope.get("error") or {}).get("message") or "")
+            self._show_doctor_failure(
+                detail or self._doctor_process_error or DOCTOR_RUN_COPY["invalid_result"], identity,
+            )
+            return
+
+        report = envelope["result"]
+        if not report:
+            self._show_doctor_failure(DOCTOR_RUN_COPY["invalid_result"], identity)
+            return
+
+        self._append_log(DOCTOR_RUN_COPY["finished"])
+        self._readiness_doctor_error = ""
+        self._readiness_doctor_report = report
+        self._readiness_doctor_identity = identity
+        self._last_doctor_report = report
+        self._last_doctor_report_game_root = self.state.get_game_root() or ""
+        self._revision_corpus_doctor_report_stale = False
         api_key_count, api_key_source = self.state.get_api_key_status()
-        if result.ok and result.report is not None:
-            self._readiness_doctor_error = ""
-            self._readiness_doctor_report = result.report
-            self._readiness_doctor_identity = self._readiness_project_identity()
-            self._last_doctor_report = result.report
-            self._last_doctor_report_game_root = self.state.get_game_root() or ""
-            self._revision_corpus_doctor_report_stale = False
-            summary = summarize_doctor_report(
-                result.report,
-                exit_code=0,
-                api_key_count=api_key_count,
-                api_key_source=api_key_source,
+        summary = summarize_doctor_report(
+            report, api_key_count=api_key_count, api_key_source=api_key_source,
+        )
+        workspace_root = self.state.get_workspace_root()
+        compare = None
+        if workspace_root is not None:
+            compare = compare_registry_with_doctor_report(
+                workspace_root, game_root=self.state.get_game_root(), report=report,
             )
-            workspace_root = self.state.get_workspace_root()
-            compare = None
-            if workspace_root is not None:
-                compare = compare_registry_with_doctor_report(
-                    workspace_root,
-                    game_root=self.state.get_game_root(),
-                    report=result.report,
-                )
-            if compare is not None:
-                self._append_log(compare.log_line)
-                summary = DoctorSummary(
-                    status=summary.status,
-                    heading=summary.heading,
-                    message=summary.message,
-                    facts=[*summary.facts, compare.message],
-                    findings=summary.findings,
-                    mode=summary.mode,
-                    detail_facts=list(summary.detail_facts or []),
-                )
-            self._doctor_check_completed = True
-            status_message = "项目检查完成。"
-            if compare is not None and compare.matched is False:
-                status_message = "项目检查完成。总表记录需刷新。"
-            elif compare is not None and compare.matched is None:
-                status_message = "项目检查完成。当前项目未在总表中登记。"
-            self.statusBar().showMessage(status_message, 8000)
-        else:
-            self._readiness_doctor_report = None
-            self._readiness_doctor_identity = self._readiness_project_identity()
-            self._readiness_doctor_error = result.error or log_text
-            summary = summarize_doctor_output(
-                result.error or log_text,
-                exit_code=-1,
-                api_key_count=api_key_count,
-                api_key_source=api_key_source,
+        if compare is not None:
+            self._append_log(compare.log_line)
+            summary = DoctorSummary(
+                status=summary.status,
+                heading=summary.heading,
+                message=summary.message,
+                facts=[*summary.facts, compare.message],
+                findings=summary.findings,
+                mode=summary.mode,
+                detail_facts=list(summary.detail_facts or []),
             )
-            self._doctor_check_completed = False
-            self._last_doctor_report = None
-            self._last_doctor_report_game_root = ""
-            self._revision_corpus_doctor_report_stale = True
-            self.statusBar().showMessage("项目检查失败。", 6000)
-
+        self._doctor_check_completed = True
+        status_message = DOCTOR_RUN_COPY["completed"]
+        if compare is not None and compare.matched is False:
+            status_message = DOCTOR_RUN_COPY["registry_stale"]
+        elif compare is not None and compare.matched is None:
+            status_message = DOCTOR_RUN_COPY["registry_missing"]
+        self.statusBar().showMessage(status_message, 8000)
         self._set_doctor_summary(summary)
+
+    def _show_doctor_failure(self, detail: str, identity: str | None) -> None:
+        self._readiness_doctor_identity = identity
+        self._readiness_doctor_error = detail
+        self._append_log(detail)
+        self._set_doctor_summary(DoctorSummary(
+            status="blocked",
+            heading=DOCTOR_RUN_COPY["failure_heading"],
+            message=DOCTOR_RUN_COPY["failure_message"],
+            facts=[],
+            findings=[],
+            mode="",
+        ))
+        self.statusBar().showMessage(DOCTOR_RUN_COPY["failure_heading"], 6000)
 
     def _sync_doctor_coverage_buttons(self, running=None) -> None:
         """Enable coverage actions only for a selected, idle project."""
@@ -12514,20 +12488,9 @@ class MainWindow(QMainWindow):
         self._run_workflow_current_step()
 
     def _on_kill(self):
-        preserve_identity = (
-            not self._is_doctor_running()
-            and self._active_command == "translation_workflow"
-        )
-        self._stop_durable_status_poll(preserve_identity=preserve_identity)
-        if self._is_doctor_running():
-            self._invalidate_doctor_worker()
-            self._append_log("\n[环境检查已取消]\n")
-            self._doctor_check_completed = False
-            self._doctor_summary_status = ""
-            self._last_doctor_report = None
-            self._last_doctor_report_game_root = ""
-            self._set_doctor_summary(cancelled_summary())
-            self.statusBar().showMessage("环境检查已取消。", 6000)
+        self._stop_durable_status_poll(preserve_identity=self._active_command == "translation_workflow")
+        if self._is_doctor_active():
+            self._stop_doctor_command("cancelled")
             return
         self.runner.kill()
         self._sync_revision_page_controls()
@@ -13690,15 +13653,22 @@ class MainWindow(QMainWindow):
             self._apply_output_lines.append(text)
         elif self._active_command == "recheck":
             self._recheck_output_lines.append(text)
+        elif self._active_command == "doctor":
+            self._doctor_stdout_lines.append(text)
         elif self._active_command == "translate_preflight":
             self._translate_preflight_output_lines.append(text)
         elif self._active_command == "apply_revision":
             self._apply_revision_stdout_lines.append(text)
 
+    def _on_cli_stderr_line_ready(self, text: str) -> None:
+        if self._is_doctor_active():
+            self._append_log(text)
+
     def _on_cli_line_ready(self, text: str):
-        if self._active_command == "doctor":
-            self._doctor_output_lines.append(text)
-        elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
+        if self._is_doctor_active() or getattr(self, "_doctor_stop_reason", "") == "discarded":
+            # Machine stdout can be large; show only stderr diagnostics.
+            return
+        if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._workflow_progress = update_workflow_progress_from_line(
                 text,
                 self._workflow_progress,
@@ -14397,10 +14367,13 @@ class MainWindow(QMainWindow):
             section.set_readiness_summary("\n".join(lines), details="\n".join(overview.attention))
 
     def _on_runner_error(self, message: str):
+        if getattr(self, "_doctor_stop_reason", "") == "discarded":
+            return
         self._append_log(message)
-        if self._active_command == "doctor":
-            self._doctor_output_lines.append(message)
-        elif self._active_command in {"translation_workflow", "project_analysis_workflow"}:
+        if self._is_doctor_active():
+            self._doctor_process_error = message
+            return
+        if self._active_command in {"translation_workflow", "project_analysis_workflow"}:
             self._workflow_step_output_lines.append(message)
         elif self._active_command == "apply":
             self._apply_output_lines.append(message)
@@ -14432,7 +14405,13 @@ class MainWindow(QMainWindow):
         self._runner_terminal_generation = int(
             getattr(self, "_runner_terminal_generation", 0)
         ) + 1
+        if getattr(self, "_doctor_stop_reason", "") == "discarded":
+            self._doctor_stop_reason = ""
+            return
         self._append_log(f"\n[进程已结束，退出码：{exit_code}]")
+        if self._is_doctor_active():
+            self._finish_doctor_command(exit_code)
+            return
         if getattr(self, "_shutdown_requested", False):
             if self._active_command == "compare_variants":
                 self._cleanup_compare_variants_temp_file()

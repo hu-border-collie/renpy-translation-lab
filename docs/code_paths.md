@@ -159,14 +159,13 @@
   `collect_doctor_workflow_state()`、`collect_doctor_recommendations()` →
   `foundation/doctor_recommendations.py` 的稳定 code 与 `gui_qt/reports/doctor_report.py` 的用户摘要。
 - GUI：`doctor_btn` / `Ctrl+D` → `MainWindow._on_doctor_button_clicked()` → `_on_run_doctor()` →
-  `_snapshot_runtime_config_for_job(persist_corrected_game_root=False)` → `gui_qt/workers/doctor_worker.py` 的
-  `DoctorWorker`（QThread）→ `run_doctor_check_in_subprocess()`（spawn 子进程，测试/启动失败回退
-  进程内）→ `run_doctor_check()` → `summarize_doctor_report()` → `_on_doctor_completed()`。
+  `CliRunner` 执行 `doctor --output json --non-interactive --config-file <CONFIG.json>` →
+  `_finish_doctor_command()` 从 stdout 信封读取报告 → `summarize_doctor_report()`。
   工作区总表对照由 `compare_registry_with_doctor_report()` 提供。
-- 取消/身份：`_invalidate_doctor_worker()`、`_retire_doctor_worker()`、
-  `_wire_doctor_worker_terminal()`；doctor 不占用全局任务锁的导航冻结。
-- 测试：`tests.gui.workers.test_gui_doctor_worker`、`tests.gui.reports.test_gui_doctor_report`、
-  `tests.gui.application.test_gui_doctor_gating`、`tests.foundation.test_doctor_recommendations`、
+- 取消/身份：`_stop_doctor_command()` 和 `CliRunner` 非阻塞停止进程。项目切换时先丢弃当前检查结果的归属，
+  完成时也会核对项目身份。检查期间仍可导航。
+- 测试：`tests.gui.reports.test_gui_readiness_summary`、`tests.gui.reports.test_gui_doctor_report`、
+  `tests.gui.application.test_gui_mv_sync`、`tests.foundation.test_doctor_recommendations`、
   `tests.cli.test_doctor_layout_status`、`tests.gui.reports.test_gui_games_registry_doctor_compare`。
 
 ## 字体字形覆盖 spike（#487）
@@ -364,7 +363,7 @@
   项目列表 `GamesRegistryPanel` 的「切换到此项目」回调 `_on_registry_switch_project()`；
   advanced `game_root` 保存时由 `_sync_state_game_root_from_settings()` 触发。
 - 切换链：`_on_registry_switch_project()` → `_confirm_unsaved_config_before_registry_switch()` →
-  `_switch_game_root()`：取消 runner/doctor worker → `ProjectState.set_game_root()` →
+  `_switch_game_root()`：取消 CLI 进程并丢弃旧检查结果 → `ProjectState.set_game_root()` →
   `_save_game_root_to_config()`（`sync_project_asset_paths_in_config()` + `config_store` 原子写）→
   `_refresh_project_label()` / `_load_config_to_ui()` → `_clear_all_mode_sessions()` 并
   `reset_project()` 上下文库/Sync/关键词/订正页 → 清空 workflow、writeback、manifest、doctor、
@@ -428,7 +427,7 @@
 
 - CLI 长任务：`gui_qt/runtime/cli_runner.py` 的 `CliRunner`（QProcess，参数列表，流式 stdout/stderr，
   可 kill）；`MainWindow._start_cli_command()` / `_on_workflow_step_finished()` 管理任务槽。
-- QThread worker：`doctor_worker.DoctorWorker`、`litellm_worker.*`、`font_worker.FontInstallWorker`、
+- QThread worker：`litellm_worker.*`、`font_worker.FontInstallWorker`、
   `games_registry_worker.RegistryRefreshWorker` / `RegistryIngestWorker`、
   `sdk_install_worker.SdkInstallWorker`。
 - QThreadPool：`context_library_worker.ContextLibraryStatusJob`（QRunnable）由
@@ -457,7 +456,7 @@ P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 
   `tests.gui.application.test_gui_app_config`、`tests.gui.settings.test_gui_settings_context_primary`、
   `tests.gui.settings.test_gui_settings_schema`、`tests.gui.application.test_gui_project_state`、
   `tests.foundation.test_project_context_settings`。
-- doctor / Batch / 同步：`tests.gui.workers.test_gui_doctor_worker`、`tests.gui.reports.test_gui_doctor_report`、
+- doctor / Batch / 同步：`tests.gui.reports.test_gui_readiness_summary`、`tests.gui.reports.test_gui_doctor_report`、
   `tests.gui.workflows.test_gui_translation_workflow`、`tests.gui.workflows.test_gui_sync_translation_workflow`、
   `tests.cli.test_gemini_translate_batch_cli_contract`、`tests.execution.test_sync_run_service`。
 - 关键词 / 订正：`tests.gui.workflows.test_gui_keyword_workflow`、`tests.quality_review.test_keyword_glossary_merge`、

@@ -20,7 +20,6 @@ try:
     from gui_qt.settings.project_page import ProjectSettingsPage
     from gui_qt.settings.settings_schema import ADVANCED_SETTING_FIELD_BY_KEY, normalize_for_write, set_nested_value, validate_value
     from gui_qt.work_modes import WorkMode
-    from gui_qt.workers.doctor_worker import DoctorWorkerResult
     from gui_qt import diagnostics_context
     from tests.gui.reports import test_gui_readiness_summary as readiness_tests
 except ImportError as exc:
@@ -50,7 +49,8 @@ class GuiMvSyncTests(unittest.TestCase):
         state.get_api_key_status = lambda **_kwargs: (1, 'original-fixture')
         self.window = MainWindow(project_state=state, bootstrap_config=self.config)
         self.addCleanup(self.close_window)
-        self.stack.enter_context(mock.patch('gui_qt.app.DoctorWorker', readiness_tests.HeldDoctor))
+        self.doctor = readiness_tests.HeldDoctorCli(self.window)
+        self.doctor.install(self)
         self.window._snapshot_runtime_config_for_job = lambda **_kwargs: None
 
     def close_window(self):
@@ -58,23 +58,22 @@ class GuiMvSyncTests(unittest.TestCase):
         self.window.deleteLater()
 
     def test_missing_engine_auto_detects_mv_and_offers_project_preparation(self):
-        from gui_qt.workers.doctor_worker import run_doctor_check
-        import translator_runtime as runtime
         self.config.pop('engine')
         self.config.pop('rpgmaker_mv')
         self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
         before = self.config_file.read_bytes()
         self.window._context_library_config_snapshot = self.config
-        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
-            result = run_doctor_check()
-        self.assertTrue(result.ok, result.error)
-        summary = summarize_doctor_report(result.report)
+        envelope, logs, exit_code = readiness_tests.run_doctor_cli(self.window.state)
+        self.assertEqual(exit_code, 0, envelope)
+        self.assertTrue(envelope['ok'], envelope)
+        report = envelope['result']
+        summary = summarize_doctor_report(report)
         self.assertEqual(summary.status, 'warning')
-        self.assertEqual(result.report['mode'], 'mv_setup_required')
+        self.assertEqual(report['mode'], 'mv_setup_required')
         self.assertIn('MV', summary.heading)
         self.assertIn('完整游戏', '\n'.join(summary.facts))
         from gui_qt.reports.doctor_report import summarize_doctor_output
-        self.assertEqual(summarize_doctor_output(result.log_text, exit_code=0), summary)
+        self.assertEqual(summarize_doctor_output(logs, exit_code=0), summary)
         self.assertFalse(self.window._engine_allows_renpy_prepare())
         for mode in (WorkMode.BATCH_TRANSLATION, WorkMode.SYNC_TRANSLATION,
                      WorkMode.BOOTSTRAP_SOURCE_INDEX):
@@ -83,7 +82,7 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertTrue(self.window.bootstrap_work_btn.isEnabled())
         self.assertEqual(self.window.bootstrap_work_btn.text(), '准备 MV 项目')
         self.window._on_run_doctor()
-        self.window._doctor_worker.finish(result)
+        self.doctor.finish(report)
         self.assertIn('已识别 RPG Maker MV', self.window.doctor_status_label.text())
         self.assertIn('待译：未知', self.window.doctor_facts_label.text())
         self.assertNotIn('生成翻译模板', self.window.doctor_facts_label.text())
@@ -97,20 +96,19 @@ class GuiMvSyncTests(unittest.TestCase):
         dialog.assert_called_once()
         self.assertEqual(self.config_file.read_bytes(), before)
 
-    def test_mv_setup_saves_material_choices_and_runs_doctor_without_dispatch(self):
+    def test_mv_setup_saves_material_choices_and_runs_only_doctor(self):
         from engine_adapters.project_setup import build_mv_setup_config
         candidate = build_mv_setup_config(self.config, self.config_file,
             target_root=self.config['game_root'], source_root=self.config['rpgmaker_mv']['source_root'],
             support_window_file=self.config['rpgmaker_mv']['support_window_file'])
         before = {path: path.read_bytes() for path in (self.root / 'target/data').glob('*.json')}
         with mock.patch('gui_qt.dialogs.mv_project_setup_dialog.MvProjectSetupDialog') as dialog, \
-                mock.patch.object(self.window, '_confirm_unsaved_config_before_workflow', return_value=True), \
-                mock.patch.object(self.window, '_start_cli_command') as dispatch:
+                mock.patch.object(self.window, '_confirm_unsaved_config_before_workflow', return_value=True):
             dialog.return_value.exec.return_value = 1
             dialog.return_value.result_config.return_value = candidate
             self.window._on_bootstrap_work()
-        dispatch.assert_not_called()
-        self.assertTrue(self.window._doctor_worker.isRunning())
+        self.assertTrue(self.doctor.active)
+        self.assertEqual(self.doctor.args[1][0], 'doctor')
         self.assertEqual(self.window._current_work_mode(), WorkMode.SYNC_TRANSLATION)
         saved = json.loads(self.config_file.read_text(encoding='utf-8'))
         self.assertEqual(saved['engine'], 'rpgmaker_mv')
@@ -152,13 +150,13 @@ class GuiMvSyncTests(unittest.TestCase):
     def test_display_selection_change_rejects_late_doctor_and_uses_shared_counts(self):
         add_mv_display_material(self.root)
         self.window._on_run_doctor()
-        worker = self.window._doctor_worker
+        worker = self.doctor
         self.config['rpgmaker_mv']['display_fields'] = ['system_terms', 'map_display_name']
         self.config_file.write_text(json.dumps(self.config), encoding='utf-8')
         report = {'mode': 'mv_narrative', 'layout_status': 'ready', 'tl_exists': True,
                   'counts': {'json_files': 7}, 'pending_task_count': 14, 'pending_file_count': 3,
                   'engine_status': {'engine': 'rpgmaker_mv', 'status': 'ready', 'issues': []}}
-        worker.finish(DoctorWorkerResult(True, report, ''))
+        worker.finish(report)
         self.assertIsNone(self.window._readiness_doctor_report)
         from execution.mv_sync import build_snapshot
         snapshot = build_snapshot(self.config, self.config_file, require_review=False)
@@ -168,7 +166,7 @@ class GuiMvSyncTests(unittest.TestCase):
         report['pending_task_count'] = snapshot.pending_task_count
         report['layout_status'] = 'failed'
         report['engine_status'].update(status='blocked', issues=[{'message': snapshot.review_error}])
-        self.window._doctor_worker.finish(DoctorWorkerResult(True, report, ''))
+        self.doctor.finish(report)
         self.assertIn('待译：25', self.window.doctor_facts_label.text())
 
     def test_material_edit_rejects_late_doctor_and_invalidates_display(self):
@@ -176,14 +174,14 @@ class GuiMvSyncTests(unittest.TestCase):
                   'counts': {'json_files': 4}, 'pending_task_count': 14, 'pending_file_count': 3,
                   'engine_status': {'engine': 'rpgmaker_mv', 'status': 'ready', 'issues': []}}
         self.window._on_run_doctor()
-        worker = self.window._doctor_worker
+        worker = self.doctor
         path = self.root / 'source/data/Map001.json'
         path.write_bytes(path.read_bytes() + b' ')
-        worker.finish(DoctorWorkerResult(True, report, ''))
+        worker.finish(report)
         self.assertIsNone(self.window._readiness_doctor_report)
         self.assertFalse(self.window._doctor_check_completed)
         self.window._on_run_doctor()
-        self.window._doctor_worker.finish(DoctorWorkerResult(True, report, ''))
+        self.doctor.finish(report)
         self.assertIsNotNone(self.window._readiness_doctor_report)
         self.assertIn('待译：14', self.window.doctor_facts_label.text())
         window_file = self.root / 'approved-window.json'
@@ -213,8 +211,6 @@ class GuiMvSyncTests(unittest.TestCase):
     def test_mv_batch_default_drives_doctor_and_gui_context_bootstrap(self):
         from providers.model_routing_migration import preview_migration
         from gui_qt.workers.context_library_worker import collect_context_library_status
-        from gui_qt.workers.doctor_worker import run_doctor_check
-        import translator_runtime as runtime
         self.config['batch'] = {'model': 'gemini-3.1-flash-lite', 'rag': {'enabled': True},
                                 'source_index': {'enabled': True}}
         self.config = preview_migration(self.config).config
@@ -228,8 +224,9 @@ class GuiMvSyncTests(unittest.TestCase):
         self.assertTrue(result.context_flags['rag_enabled'])
         self.assertTrue(result.context_flags['source_index_enabled'])
         self.assertEqual(result.status['mv_preparation']['execution_strategy'], 'gemini_batch')
-        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
-            report = run_doctor_check().report
+        envelope, _, exit_code = readiness_tests.run_doctor_cli(self.window.state)
+        self.assertEqual(exit_code, 0, envelope)
+        report = envelope['result']
         self.assertEqual(report['workflow_state'], 'start_pending_batch')
         self.assertEqual(report['engine_status']['execution_strategy'], 'gemini_batch')
         self.window._confirm_unsaved_config_before_workflow = lambda: True
@@ -259,15 +256,14 @@ class GuiMvSyncTests(unittest.TestCase):
 
     def test_missing_coverage_review_is_actionable_and_keeps_translation_blocked(self):
         from engine_adapters.coverage import default_coverage_review_path
-        from gui_qt.workers.doctor_worker import run_doctor_check
-        import translator_runtime as runtime
 
         Path(default_coverage_review_path(self.config['game_root'])).unlink()
-        with mock.patch.object(runtime, 'TRANSLATOR_CONFIG', str(self.config_file)):
-            result = run_doctor_check()
-        self.assertTrue(result.ok, result.error)
+        envelope, _, exit_code = readiness_tests.run_doctor_cli(self.window.state)
+        self.assertEqual(exit_code, 0, envelope)
+        self.assertTrue(envelope['ok'], envelope)
+        report = envelope['result']
         self.window._on_run_doctor()
-        self.window._doctor_worker.finish(result)
+        self.doctor.finish(report)
         self.assertIn('待覆盖核对', self.window.doctor_status_label.text())
         primary = self.window.doctor_message_label.text() + self.window.doctor_facts_label.text()
         self.assertIn('文本扫描已完成', primary)

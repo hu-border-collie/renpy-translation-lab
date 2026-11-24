@@ -115,38 +115,20 @@ class GuiProjectBarAndWritebackCollapseTests(unittest.TestCase):
         self.window.tab_widget.setCurrentWidget(config)
         self.window.state.get_game_root = lambda: "C:/games/Demo/work"  # type: ignore[method-assign]
         self.window._confirm_unsaved_config_before_workflow = lambda: True  # type: ignore[method-assign]
-        self.window._is_doctor_running = lambda: False  # type: ignore[method-assign]
         self.window._clear_log_view = lambda: None  # type: ignore[method-assign]
         self.window._append_log = lambda *_a, **_k: None  # type: ignore[method-assign]
         self.window._set_task_running = lambda *_a, **_k: None  # type: ignore[method-assign]
-        started: list[str] = []
-
-        class _FakeDoctorWorker:
-            def __init__(self, *args, **kwargs) -> None:
-                self.completed = MagicMock()
-                self.finished = MagicMock()
-
-            def isRunning(self) -> bool:
-                return False
-
-            def start(self) -> None:
-                started.append("doctor")
-
-        import gui_qt.app as app_mod
-
-        original_worker = app_mod.DoctorWorker
-        app_mod.DoctorWorker = _FakeDoctorWorker  # type: ignore[misc,assignment]
-        try:
-            self.window._on_run_doctor()
-        finally:
-            app_mod.DoctorWorker = original_worker  # type: ignore[misc,assignment]
+        self.window.runner.run = MagicMock(return_value=True)
+        self.window._on_run_doctor()
 
         self.assertIs(self.window.tab_widget.currentWidget(), workbench)
         self.assertEqual(
             self.window.workbench_status_tabs.currentIndex(),
             _BATCH_STAGE_PREPARE,
         )
-        self.assertEqual(started, ["doctor"])
+        self.window.runner.run.assert_called_once()
+        self.assertEqual(self.window.runner.run.call_args.args[1][0], "doctor")
+        self.window._on_finished(-1)
 
         # --- bootstrap-work from Diagnostics ---
         self.window.tab_widget.setCurrentWidget(self.window._diagnostics_tab)

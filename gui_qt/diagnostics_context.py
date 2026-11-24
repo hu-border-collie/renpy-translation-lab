@@ -31,6 +31,7 @@ from .user_copy import (
     MODEL_PROFILES_PAGE_COPY,
     DURABLE_SYNC_COPY,
     DURABLE_SYNC_RUN_COPY,
+    DOCTOR_RUN_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
     TRANSLATION_PREFLIGHT_COPY,
@@ -259,6 +260,20 @@ def model_catalog_commands(*, python_exe: str, script_path: str) -> list[Diagnos
     )]
 
 
+def doctor_cli_args(config_file: str | Path) -> list[str]:
+    """Request the read-only structured report for one saved configuration."""
+    return ["doctor", "--output", "json", "--non-interactive", "--config-file", str(config_file)]
+
+
+def _doctor_commands(python_exe: str, batch_script_path: str) -> list[DiagnosticsCommand]:
+    if not batch_script_path:
+        return []
+    return [DiagnosticsCommand(
+        label=DOCTOR_RUN_COPY["command"],
+        command=format_cli_command(python_exe, batch_script_path, doctor_cli_args("<CONFIG.json>")),
+    )]
+
+
 def _translate_preflight_command(
     python_exe: str, batch_script_path: str
 ) -> DiagnosticsCommand | None:
@@ -301,6 +316,7 @@ def build_cli_commands(
         )]
     if not manifest_path:
         commands = model_catalog_commands(python_exe=python_exe, script_path=batch_script_path)
+        commands.extend(_doctor_commands(python_exe, batch_script_path))
         commands.append(DiagnosticsCommand(
             label='导出覆盖材料（Ren\'Py / MV）',
             command=format_cli_command(python_exe, batch_script_path,
@@ -327,6 +343,7 @@ def build_cli_commands(
     commands: list[DiagnosticsCommand] = [
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
         *model_catalog_commands(python_exe=python_exe, script_path=batch_script_path),
+        *_doctor_commands(python_exe, batch_script_path),
         DiagnosticsCommand(
             label="项目检查（自动识别引擎并列出准备项）",
             command=format_cli_command(python_exe, batch_script_path, ["doctor"]),
@@ -1375,7 +1392,8 @@ def mv_cli_commands(python_exe: str, batch_script_path: str) -> list[Diagnostics
     for name in ('sync-start', 'sync-status', 'sync-resume', 'sync-cancel', 'sync-derive', 'check', 'apply'):
         args = [name, *(['--latest'] if name == 'sync-status' else ([] if name == 'sync-start' else ['<RUN>']))]
         commands.append((DURABLE_SYNC_COPY.get(name.removeprefix('sync-'), name), args))
-    return [DiagnosticsCommand(label=label, command=format_cli_command(python_exe, batch_script_path, args))
+    return _doctor_commands(python_exe, batch_script_path) + [
+            DiagnosticsCommand(label=label, command=format_cli_command(python_exe, batch_script_path, args))
             for label, args in commands] + model_catalog_commands(
                 python_exe=python_exe, script_path=batch_script_path,
             )
@@ -1389,6 +1407,7 @@ def idle_diagnostics_context(
     engine: str = 'renpy',
 ) -> DiagnosticsContext:
     commands = list(_usage_report_command(batch_script_path, python_exe))
+    commands.extend(_doctor_commands(python_exe, batch_script_path))
     commands.extend(model_catalog_commands(python_exe=python_exe, script_path=batch_script_path))
     preflight = _translate_preflight_command(python_exe, batch_script_path)
     if preflight is not None:
@@ -1424,6 +1443,7 @@ def sync_diagnostics_context(
 ) -> DiagnosticsContext:
     command = format_cli_command(python_exe, sync_script_path, [])
     commands = [DiagnosticsCommand(label="同步翻译", command=command)]
+    commands.extend(_doctor_commands(python_exe, batch_script_path))
     commands.extend(model_catalog_commands(python_exe=python_exe, script_path=batch_script_path))
     commands.extend(_usage_report_command(batch_script_path, python_exe))
     preflight = _translate_preflight_command(python_exe, batch_script_path)

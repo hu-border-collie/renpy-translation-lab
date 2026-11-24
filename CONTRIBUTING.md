@@ -26,7 +26,7 @@ CLI 是事实来源和高级用户主路径，但 **GUI 不是二等公民**：�
 
 3. **最后接 GUI**  
    - 批量类流程：`gui_qt/workflows/translation_workflow.py` / `gui_qt/workflows/keyword_workflow.py` / `gui_qt/workflows/revision_workflow.py` / `gui_qt/workflows/split_batch_workflow.py`
-   - 环境检查：`gui_qt/workers/doctor_worker.py` + `gui_qt/reports/doctor_report.py` + `gui_qt/user_copy.py`
+   - 环境检查：`gui_qt/runtime/cli_runner.py` + `gui_qt/reports/doctor_report.py` + `gui_qt/user_copy.py`
    - 设置：`gui_qt/settings/settings_schema.py`
    - 诊断：`gui_qt/diagnostics_context.py`
    - 应用壳：`gui_qt/app.py`
