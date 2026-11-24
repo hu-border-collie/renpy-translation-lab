@@ -408,20 +408,20 @@ class TranslationTargetAppTests(unittest.TestCase):
                 self.assertNotIn("invalid-private-value", section.hint_label.text())
                 self.assertEqual(section.hint_label.toolTip(), section.hint_label.text())
 
-    def test_model_settings_button_opens_the_editor_that_owns_the_current_model(self) -> None:
-        for config, mode, expected_page in (
-            ({"sync": {"backend": "litellm", "model": "deepseek/model"}}, WorkMode.SYNC_TRANSLATION, "litellm"),
-            ({"sync": {"backend": "gemini", "model": "gemini-test"}}, WorkMode.SYNC_TRANSLATION, "models"),
-            ({"sync": {"backend": "litellm"}}, WorkMode.BATCH_TRANSLATION, "models"),
-            (routing_config(), WorkMode.SYNC_TRANSLATION, "profiles"),
+    def test_model_settings_button_opens_unified_editor_for_every_configuration(self) -> None:
+        for config, mode in (
+            ({"sync": {"backend": "litellm", "model": "deepseek/model"}}, WorkMode.SYNC_TRANSLATION),
+            ({"sync": {"backend": "gemini", "model": "gemini-test"}}, WorkMode.SYNC_TRANSLATION),
+            ({"sync": {"backend": "litellm"}}, WorkMode.BATCH_TRANSLATION),
+            (routing_config(), WorkMode.SYNC_TRANSLATION),
         ):
-            with self.subTest(page=expected_page, mode=mode.value):
+            with self.subTest(mode=mode.value):
                 self.window.state.load_translator_config = lambda: config  # type: ignore[method-assign]
                 self.window._set_work_mode(mode, refresh_manifest_writeback=False)
                 section = self.window._translation_target_sections[mode]
                 with mock.patch.object(self.window, "_focus_settings_section") as focus:
                     section.open_settings_btn.click()
-                focus.assert_called_once_with(expected_page)
+                focus.assert_called_once_with("profiles")
                 self.assertEqual(self.runner.calls, [])
 
     def test_switching_between_legacy_and_migrated_config_refreshes_the_model_display(self) -> None:

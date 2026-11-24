@@ -9,7 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from foundation.config_store import config_write_lock, replace_config_bytes, write_private_artifact
-from providers.model_routing_migration import preview_migration
+from providers.model_routing_migration import MigrationPreview, preview_migration
 
 
 def fingerprint(data: bytes) -> str:
@@ -56,11 +56,17 @@ def _preview_bytes(original: bytes):
     return preview_migration(config)
 
 
+def read_config_migration_preview(path: Path) -> tuple[MigrationPreview, str]:
+    """Read one immutable file snapshot for a local preview and confirmation."""
+    original = _file(path).read_bytes()
+    return _preview_bytes(original), fingerprint(original)
+
+
 def preview_config_file(path: Path) -> dict[str, Any]:
     """Return credential-safe metadata and a fingerprint without writing anything."""
-    original = _file(path).read_bytes()
-    report = _preview_bytes(original).public_report()
-    report["source_fingerprint"] = fingerprint(original)
+    preview, source_fingerprint = read_config_migration_preview(path)
+    report = preview.public_report()
+    report["source_fingerprint"] = source_fingerprint
     return report
 
 

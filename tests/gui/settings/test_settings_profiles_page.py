@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,8 +16,10 @@ try:
     from PySide6.QtWidgets import QApplication, QGroupBox
 
     from gui_qt.app import MainWindow
+    from gui_qt.project_state import ProjectState
     from gui_qt.settings.page_contract import SettingsPageActions
     from gui_qt.settings.profiles_page import ProfilesSettingsPage
+    from gui_qt.work_modes import WorkMode
 except ImportError as exc:
     MainWindow = None  # type: ignore[assignment,misc]
     QApplication = None  # type: ignore[assignment,misc]
@@ -170,14 +173,23 @@ class ProfilesPageTests(unittest.TestCase):
         self.assertFalse(self.page.create_btn.isEnabled())
         self.assertTrue(self.page.remove_btn.isHidden())
         self.assertTrue(self.page.profiles_group.isHidden())
-        self.assertEqual(self.page.notice_group.title(), "需先迁移旧模型配置")
-        self.assertIn("诊断与运行日志", self.page.hint_label.text())
-        self.assertIn("完整脚本路径", self.page.hint_label.text())
-        self.assertIn("preview / migrate", self.page.hint_label.text())
+        self.assertEqual(self.page.notice_group.title(), "旧模型配置")
+        self.assertIn("在此预览并迁移", self.page.hint_label.text())
+        self.assertFalse(self.page.migrate_btn.isHidden())
+        self.assertTrue(self.page.create_btn.isHidden())
+        action = mock.Mock()
+        self.page.set_action_callbacks(SettingsPageActions(run_immediate=action))
+        self.page.migrate_btn.click()
+        action.assert_called_once_with("migrate_model_config", {})
+        self.page.set_task_running(True)
+        self.assertFalse(self.page.migrate_btn.isEnabled())
+        self.page.set_task_running(False)
         self.assertTrue(self.page.legacy_fields_label.isHidden())
+        self.assertTrue(all(button.isHidden() for button in self.page.model_navigation_buttons.values()))
         self.assertIn("2 项", self.page.legacy_fields_toggle.text())
         self.page.legacy_fields_toggle.click()
         self.assertFalse(self.page.legacy_fields_label.isHidden())
+        self.assertTrue(all(not button.isHidden() for button in self.page.model_navigation_buttons.values()))
         self.assertIn("sync.model", self.page.legacy_fields_label.text())
         self.assertIn("batch.model", self.page.legacy_fields_label.text())
         self.page._refresh_all()
@@ -190,6 +202,7 @@ class ProfilesPageTests(unittest.TestCase):
 
         # The read-only detection result is never part of the saved config.
         self.page.load({"model_routing": migrated_section()})
+        self.assertTrue(self.page.migrate_btn.isHidden())
         self.assertFalse(self.page.legacy_fields_toggle.isChecked())
         self.assertTrue(self.page.legacy_fields_label.isHidden())
         self.assertEqual(set(self.page.collect()), {"model_routing"})
@@ -850,6 +863,128 @@ class ProfilesAppIntegrationTests(unittest.TestCase):
             collected["model_routing"]["profiles"][profile_id]["label"],
             "Edited Label",
         )
+
+
+@gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
+class ModelMigrationAppTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        game = root / "fixture game"
+        game.mkdir()
+        self.path = root / "fixture translator config.json"
+        self.legacy = json.loads((FIXTURES / "litellm_custom.json").read_text(encoding="utf-8"))
+        self.legacy.update(game_root=str(game), fixture_extension={"value": "preserve"})
+        self.original = b"\xef\xbb\xbf" + json.dumps(self.legacy, indent=2).replace("\n", "\r\n").encode("utf-8")
+        self.path.write_bytes(self.original)
+        state = ProjectState()
+        state.config_path = self.path
+        state.api_keys_path = root / "fixture credentials.json"
+        state._game_root = game
+        self.window = MainWindow(project_state=state, bootstrap_config=self.legacy)
+        self.addCleanup(self.close_window)
+        self.window._set_work_mode(WorkMode.SYNC_TRANSLATION, refresh_manifest_writeback=False)
+        self.window._focus_settings_section("profiles")
+        self.page = self.window._profiles_page()
+        self.assertFalse(self.page.migrate_btn.isHidden())
+        self.assertTrue(self.page.migrate_btn.isEnabled())
+
+    def close_window(self) -> None:
+        gui_test_support.close_main_window(self.window)
+        self.window.deleteLater()
+
+    def test_confirmed_migration_uses_shared_backup_and_refreshes_active_sync_model(self) -> None:
+        from providers.model_routing_migration_store import rollback_config_file
+
+        def confirm(_parent, _title, body, **kwargs):
+            self.assertEqual(kwargs["default"], "no")
+            self.assertEqual(self.path.read_bytes(), self.original)
+            self.assertIn("acme-compatible/model-a", body)
+            self.assertIn("gemini-3.1-flash-lite", body)
+            self.assertIn("按同步入口", body)
+            self.assertIn("最终审校", body)
+            self.assertNotIn("ACME_API_KEY", body)
+            self.assertNotIn("models.example.test", body)
+            return "yes"
+
+        with (
+            mock.patch("gui_qt.app.message_box_question", side_effect=confirm),
+            mock.patch("gui_qt.app.message_box_information") as receipt,
+            mock.patch.object(self.window.runner, "run") as run,
+        ):
+            self.page.migrate_btn.click()
+        run.assert_not_called()
+        migrated = json.loads(self.path.read_bytes())
+        self.assertEqual(migrated, preview_migration(self.legacy).config)
+        backup, = self.path.parent.glob("*.migration-*.bak")
+        report, = self.path.parent.glob("*.migration-*.json")
+        self.assertEqual(backup.read_bytes(), self.original)
+        self.assertIn(str(backup), receipt.call_args.args[2])
+        self.assertIn(str(report), receipt.call_args.args[2])
+        self.assertIn("rollback", receipt.call_args.args[2])
+        self.assertIn("当前翻译方案：acme-compatible/model-a（同步）", receipt.call_args.args[2])
+        self.assertTrue(self.page.migrate_btn.isHidden())
+        self.assertFalse(self.window._config_tab_has_unsaved_changes())
+        self.assertTrue(self.window._translation_routing_active)
+        self.assertEqual(self.window._translation_target, {"profile_id": "legacy-sync", "strategy": "sync"})
+        self.assertEqual(self.window._translation_profile_models["legacy-sync"], "acme-compatible/model-a")
+        rollback_config_file(self.path, report_path=report)
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.window._on_reload_config()
+        self.assertFalse(self.page.migrate_btn.isHidden())
+        self.assertFalse(self.window._translation_routing_active)
+
+    def test_cancelling_preview_leaves_configuration_and_backup_folder_untouched(self) -> None:
+        with mock.patch("gui_qt.app.message_box_question", return_value="no") as confirm:
+            self.page.migrate_btn.click()
+        confirm.assert_called_once()
+        self.assertEqual(self.path.read_bytes(), self.original)
+        self.assertEqual(list(self.path.parent.glob("*.migration-*")), [])
+
+    def test_external_edit_during_confirmation_requires_a_new_preview(self) -> None:
+        edited = self.original + b"\n"
+
+        def edit_then_confirm(*_args, **_kwargs):
+            self.path.write_bytes(edited)
+            return "yes"
+
+        with (
+            mock.patch("gui_qt.app.message_box_question", side_effect=edit_then_confirm),
+            mock.patch("gui_qt.app.message_box_warning") as refusal,
+        ):
+            self.page.migrate_btn.click()
+        self.assertIn("重新预览", refusal.call_args.args[2])
+        self.assertEqual(self.path.read_bytes(), edited)
+        self.assertEqual(list(self.path.parent.glob("*.migration-*")), [])
+        self.assertFalse(self.page.migrate_btn.isHidden())
+
+    def test_migration_requires_clean_settings_and_keeps_an_invalid_file_unchanged(self) -> None:
+        with (
+            mock.patch.object(self.window, "_config_tab_has_unsaved_changes", return_value=True),
+            mock.patch("gui_qt.app.message_box_information") as notice,
+            mock.patch("gui_qt.app.message_box_question") as confirm,
+        ):
+            self.page.migrate_btn.click()
+        confirm.assert_not_called()
+        self.assertIn("保存或重新加载", notice.call_args.args[2])
+        self.assertEqual(self.path.read_bytes(), self.original)
+
+        invalid = json.dumps({**self.legacy, "batch": {}}).encode("utf-8")
+        self.path.write_bytes(invalid)
+        with (
+            mock.patch("gui_qt.app.message_box_question") as confirm,
+            mock.patch("gui_qt.app.message_box_warning") as refusal,
+        ):
+            self.page.migrate_btn.click()
+        confirm.assert_not_called()
+        self.assertIn("batch.model", refusal.call_args.args[2])
+        self.assertEqual(self.path.read_bytes(), invalid)
+        self.assertEqual(list(self.path.parent.glob("*.migration-*")), [])
 
 
 @gui_test_support.skip_unless_gui(ProfilesSettingsPage is None, IMPORT_ERROR)

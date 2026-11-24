@@ -4041,7 +4041,90 @@ class MainWindow(QMainWindow):
             return self._on_profile_probe(payload)
         if action_id == "list_profile_models":
             return self._on_profile_models(payload)
+        if action_id == "migrate_model_config":
+            return self._on_migrate_model_config()
         return False
+
+    def _model_migration_busy(self) -> bool:
+        return bool(
+            self._task_running or self._cli_runner_is_active()
+            or self._shutdown_requested or self._shutdown_confirmation_active
+        )
+
+    def _on_migrate_model_config(self) -> bool:
+        """Preview the saved file and commit only after explicit confirmation."""
+        from providers.model_config_migration import refusal_details
+        from providers.model_routing_migration_store import migrate_config_file, read_config_migration_preview
+        from .settings.model_migration import format_migration_preview, format_rollback_command
+        from .user_copy import MODEL_MIGRATION_COPY
+
+        if self._model_migration_busy():
+            return False
+        if self._config_tab_has_unsaved_changes():
+            message_box_information(self, MODEL_MIGRATION_COPY["preview_title"], MODEL_MIGRATION_COPY["dirty"])
+            return True
+        config_file = self.state.config_path.absolute()
+        game_root = self.state.get_game_root()
+        work_mode = self._current_work_mode()
+        sync = work_mode == WorkMode.SYNC_TRANSLATION
+        execution = "sync" if sync else "gemini_batch"
+        try:
+            preview, source_fingerprint = read_config_migration_preview(config_file)
+        except (ValueError, OSError, TypeError) as exc:
+            _, action = refusal_details(exc)
+            message_box_warning(self, MODEL_MIGRATION_COPY["refused_title"], action)
+            return True
+        if preview.status == "already_current":
+            self._load_config_to_ui()
+            self._refresh_translation_target_choices()
+            message_box_information(
+                self, MODEL_MIGRATION_COPY["preview_title"], MODEL_MIGRATION_COPY["already_current"],
+            )
+            return True
+        if message_box_question(
+            self, MODEL_MIGRATION_COPY["preview_title"],
+            format_migration_preview(config_file, preview.config, execution=execution),
+            yes_text=MODEL_MIGRATION_COPY["confirm"], default="no",
+        ) != "yes":
+            return True
+        if (
+            self._model_migration_busy()
+            or self.state.config_path.absolute() != config_file
+            or self.state.get_game_root() != game_root
+            or self._current_work_mode() != work_mode
+            or self._config_tab_has_unsaved_changes()
+        ):
+            message_box_warning(
+                self, MODEL_MIGRATION_COPY["refused_title"], MODEL_MIGRATION_COPY["context_changed"],
+            )
+            return True
+
+        try:
+            report = migrate_config_file(config_file, expected_fingerprint=source_fingerprint)
+        except (ValueError, OSError, TypeError) as exc:
+            _, action = refusal_details(exc)
+            message_box_warning(self, MODEL_MIGRATION_COPY["refused_title"], action)
+            return True
+
+        routing = preview.config["model_routing"]
+        profile_id = routing["legacy_entrypoints"]["sync_profile_id" if sync else "batch_profile_id"]
+        self._translation_target = {"profile_id": profile_id, "strategy": execution}
+        shell, rollback_command = format_rollback_command(
+            self.state.get_tool_root(), config_file, report["report_path"],
+        )
+        receipt = MODEL_MIGRATION_COPY["success"].format(
+            model=routing["profiles"][profile_id]["model"], strategy=strategy_label(execution), shell=shell,
+            backup=report["backup_path"], report=report["report_path"], command=rollback_command,
+        )
+        try:
+            self._load_config_to_ui()
+            self._refresh_translation_target_choices()
+            self._invalidate_task_readiness()
+            self._sync_readiness_display()
+        except (OSError, RuntimeError, ValueError):
+            receipt = f"{MODEL_MIGRATION_COPY['refresh_failed']}\n\n{receipt}"
+        message_box_information(self, MODEL_MIGRATION_COPY["success_title"], receipt)
+        return True
 
     def _on_profile_models(self, payload) -> bool:
         """Fetch the saved connection through CLI without querying a stale draft."""
@@ -9257,18 +9340,8 @@ class MainWindow(QMainWindow):
         sync_page.set_start_enabled(self.translate_btn.isEnabled())
 
     def _on_open_translation_model_settings(self) -> None:
-        """Open the editor that owns the saved translation model configuration."""
-        config = self.state.load_translator_config()
-        if "model_routing" in config:
-            key = "profiles"
-        elif (
-            self._current_work_mode() == WorkMode.SYNC_TRANSLATION
-            and self._saved_sync_backend() == "litellm"
-        ):
-            key = "litellm"
-        else:
-            key = "models"
-        self._focus_settings_section(key)
+        """Open the unified editor, including its legacy migration entry."""
+        self._focus_settings_section("profiles")
 
     def _refresh_translation_preprocessing_summary(
         self, config: dict[str, Any] | None, *, strategy: str = "",
@@ -11239,6 +11312,7 @@ class MainWindow(QMainWindow):
     def _on_reload_config(self) -> None:
         self._ensure_settings_pages_for_config()
         self._load_config_to_ui()
+        self._refresh_translation_target_choices()
         self._refresh_api_status()
         self._sync_readiness_display()
         # Drop workspace dirty chrome after discard-via-reload (same as save).

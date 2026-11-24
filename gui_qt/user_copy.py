@@ -1743,8 +1743,7 @@ TRANSLATION_TARGET_COPY = {
     "resolved_stage_error": "本阶段模型：无法解析。{error}",
     "resolved_stage_invalid_section": "model_routing 必须是 JSON 对象。",
     "legacy_hint": (
-        "当前使用旧模型配置，可按现有设置运行。修改模型请点击「模型设置」；"
-        "迁移后可在此选择模型与执行方式。"
+        "当前使用旧模型配置，可按现有设置运行。点开「模型设置」可预览迁移或查看旧设置。"
     ),
     "legacy_unresolved_hint": "无法解析旧模型配置，请点击「模型设置」检查；启动时仍会执行预检。",
     "invalid_hint": "model_routing 配置无效，已禁用模型选择：{reason}",
@@ -1975,13 +1974,12 @@ MODEL_PROFILES_PAGE_COPY = {
     "routes_hint": "未勾选的阶段沿用默认模型和执行方式；勾选后可为该阶段单独设置。",
     "route_override": "单独设置阶段",
     "legacy_hint": (
-        "这个项目仍使用旧模型配置。请先打开「诊断与运行日志」的命令参考，"
-        "复制带完整脚本路径的 preview / migrate 模板预览并迁移；"
-        "需要撤销时可使用 rollback。迁移前运行行为不变，已有模型与执行策略会保留。"
+        "这个项目仍使用旧模型配置。可在此预览并迁移，保留原有模型、供应商连接和阶段路由。"
     ),
-    "legacy_title": "需先迁移旧模型配置",
-    "legacy_fields_show": "查看检测到的旧字段（{count} 项）",
-    "legacy_fields_hide": "收起旧字段",
+    "migrate_button": "预览迁移",
+    "legacy_title": "旧模型配置",
+    "legacy_fields_show": "展开旧配置兼容（{count} 项旧字段）",
+    "legacy_fields_hide": "收起旧配置兼容",
     "invalid_title": "模型路由配置无效",
     "empty_title": "尚未创建模型路由配置",
     "ready_title": "模型路由配置",
@@ -2152,4 +2150,27 @@ MODEL_PROFILES_PAGE_COPY = {
         "UNKNOWN_CAPABILITY_OVERRIDE": "包含不支持的能力覆盖项；请重置该覆盖。",
         "MODEL_ROUTING_INVALID": "model_routing 校验失败；请先修复校验问题。",
     },
+}
+
+MODEL_MIGRATION_COPY = {
+    "preview_title": "预览模型配置迁移",
+    "confirm": "确认迁移",
+    "file": "配置文件：{path}",
+    "legacy_models": "保留的旧入口：同步 {sync_model} / Gemini Batch {batch_model}",
+    "default": "迁移后的默认模型：{model}（{strategy}）",
+    "routes_title": "按{strategy}入口查看迁移后的阶段路由",
+    "route": "{stage}：{model}（{strategy}）",
+    "confirm_hint": "确认后保存新模型配置，并备份原文件。",
+    "dirty": "请先保存或重新加载设置，再预览已保存的模型配置。",
+    "context_changed": "项目、当前任务或编辑状态已变化，请重新预览。",
+    "already_current": "此配置已使用新版模型设置。",
+    "refused_title": "模型配置迁移未完成",
+    "success_title": "模型配置已迁移",
+    "success": (
+        "已添加模型路由配置，保留原有 Sync 和 Batch 入口及阶段路由。\n"
+        "当前翻译方案：{model}（{strategy}）\n\n"
+        "原配置备份：{backup}\n迁移报告：{report}\n\n"
+        "回滚命令（{shell}）\n{command}"
+    ),
+    "refresh_failed": "配置已迁移，请点击「重新加载」刷新界面。",
 }

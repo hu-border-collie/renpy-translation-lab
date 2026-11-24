@@ -11,7 +11,7 @@
 新 section 在下次加载时生效。请先在副本上预览和验证，再替换生产配置。
 GUI workflow 调用相同 CLI，消费同一新配置。统一翻译入口和 Model Profiles 表单已交付：
 「设置 → 模型与供应商」编辑模型、连接、默认策略和阶段路由，保存时校验并保留未知字段。
-存在旧字段时引导使用本页的离线迁移，不在 GUI 内另建迁移事务；界面详见[GUI 工作台](gui_workbench.md#设置)。
+旧配置可从「模型与供应商」预览并确认迁移。GUI 和 CLI 使用同一个文件事务。界面详见[GUI 工作台](gui_workbench.md#设置)。
 
 兼容命令使用 `legacy_entrypoints` 角色指针；项目分析使用 Sync，未显式配置最终审校策略时
 保留 Gemini Batch 默认。已支持显式 `final_review.strategy=sync`，见[最终审校工作流](batch_workflows.md)。
@@ -26,7 +26,14 @@ profile 的非空 `params` 仍按原合同拒绝，不能静默忽略。生成�
 默认模型和 Sync/Batch 策略不变。
 v1 结构示例见 [合同 fixture](../tests/fixtures/model_routing_config_v1.json)。
 
-## 操作
+## 在 GUI 中迁移
+
+1. 在「设置 → 模型与供应商」点击「预览迁移」。需要先保存或放弃未保存的设置，并等待当前任务结束。
+2. 核对配置路径、迁移后的默认模型与执行方式、原 Sync 和 Batch 的模型，以及当前执行方式的阶段路由。预览在本地读取已保存的配置。取消时文件保持原样。
+3. 确认后，工具核对源文件指纹并写入原文件备份及迁移报告。若配置在预览后发生变化，需重新预览。成功弹窗显示备份、报告和可复制的回滚命令。
+4. 返回翻译页即可看到刷新后的模型选项。当前窗口会选中原执行方式对应的迁移方案。若使用命令回滚，完成后在 GUI 中重新加载设置。
+
+## 使用 CLI 在配置副本上验证
 
 先手动准备配置副本，使用明确路径；工具不默认定位或自动迁移实际配置。
 以下模块命令在工具根目录运行。
@@ -47,16 +54,12 @@ API `preview_migration(config, game_config=...)` 可由后续服务传入已确�
 `MODEL_CONFIG_MIGRATION_REFUSED`、分类 `reason` 和可操作的 `next_action`，不会回显原配置
 或 Provider 异常正文。
 
-## 创建与迁移的边界（#457）
-
-「设置 → 模型与供应商」的「创建模型路由配置」不是迁移的替代入口：
+## 创建与迁移的边界
 
 - 仅当配置**没有**旧 `sync.*` / `batch.*` 字段时，页面才允许空白创建；生成最小
   Gemini Provider + `Gemini Main` profile，暂定执行方式为 `gemini_batch`（与迁移默认、
   示例配置一致）。新用户 / 新项目的最终默认仍待 Gemini 支持地区 smoke 与 A/B 数据。
-- 检测到旧字段时，页面禁用创建并指向本页命令（先在「诊断与运行日志」运行
-  `preview` / `migrate` / `rollback`）。迁移会保留旧模型、Provider、凭据引用与阶段路由，
-  并生成可回滚的字节级备份；空白创建不会继承这些配置。
+- 检测到旧字段时，页面提供迁移预览。确认迁移会保留旧模型、Provider、凭据引用与阶段路由，并生成可回滚的字节级备份。
 - 无效的 `model_routing`（非对象类型）不会被当作空白：页面禁用编辑与创建、阻止保存，
   可显式「移除 Model Routing 配置」并在保存后回退旧配置；移除不会修复或迁移旧字段本身。
 
@@ -119,9 +122,8 @@ read-then-unlink 竞态；锁文件释放后保留，不应手动删除。latest
 - `config_store`：GUI 与迁移共用原始 JSON 保存边界；不引入另一个配置状态源。
 
 P2 复用现有能力/凭据检查、稳定错误分类和冻结任务兼容，并校验 embedding backend。
-四类真实 Provider smoke 已在 #344 的限定范围完成，记录见[Smoke Matrix](provider_smoke_matrix.md)，
-不代表任意 Provider 已验收。首次迁移须先通过
-`python -m providers.model_config_migration preview` 预览，再通过 `migrate` 确认写入；加载设置页不会隐式迁移。
+四类真实 Provider smoke 已在 #344 的限定范围完成，记录见[Smoke Matrix](provider_smoke_matrix.md)。
+GUI 和 CLI 均需显式预览及确认后才写入迁移。
 迁移完成后，P3 的「设置 → 模型与供应商」页面可统一维护 providers / profiles / 默认值与阶段路由；
 该页按 #202 的页面合同编辑 `model_routing`、跟踪未保存修改并保留未知字段。
 页首可调整默认主模型与执行方式，并查看配置校验摘要；摘要不代表凭据或实际连接已经验证。

@@ -18,7 +18,7 @@ from providers.model_routing_migration_store import (
 def refusal_details(exc: Exception) -> tuple[str, str]:
     """Classify known refusal messages without reflecting their input values."""
     if isinstance(exc, ConfigWriteLockError):
-        return "config_locked", "等待配置写入完成后重试；遗留锁满五分钟后可自动恢复"
+        return "config_locked", "等待其他设置写入完成后重新预览"
     message = str(exc)
     for prefix, reason, action in (
         ("Configuration changed since preview", "stale_preview", "重新预览配置，再使用新的源指纹"),

@@ -53,8 +53,8 @@ PR #564 按职责组织 GUI；启动入口仍为 `python -m gui_qt`。
   无效或不支持的 schema 拒绝读取，不逐字段回退到旧配置。
 - 缺少 `model_routing` 时，保留 `sync.*` / `batch.*` 的兼容路径。
   新任务冻结解析后的 profile / strategy / route，旧任务优先消费原冻结路由。
-- 显式文件迁移由 `providers/model_config_migration.py` 的 preview / migrate / rollback
-  完成。GUI 编辑迁移后的配置；存在旧字段时引导离线迁移，不建立第二套 GUI 迁移事务。
+- GUI「模型与供应商」提供旧配置的迁移预览和确认。GUI 和 `providers/model_config_migration.py`
+  的 CLI 共用 `providers/model_routing_migration_store.py` 的文件事务和回滚合同。
 - API Key 由 `api_keys.json`、环境变量或 keyring 提供；项目配置只保存适用的凭据引用。
 - 项目级 `project_context_settings.json` 保存 RAG / 索引 / 项目分析等覆盖值；全局默认
   仍在 `translator_config.json`，读取由 `foundation/project_context_settings.py` 统一处理。
