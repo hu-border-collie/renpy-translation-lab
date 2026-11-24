@@ -23,7 +23,7 @@
   - `ProjectState.save_translator_config()`：路径规范化后写回；保存者需传入已保留未知字段的对象。
   - `ProjectState.set_game_root()` / `set_workspace_root()`：项目/工作区切换的即时持久化入口。
 - `foundation/config_store.py`：`read_json_object()` / `write_json_object()`，共用写锁与原子替换；
-  GUI 配置、`api_keys.json` 和 #348 离线迁移都经这里。
+  GUI 配置、`api_keys.json` 和模型配置迁移都经这里。
 - `gui_qt/settings/settings_schema.py`
   - `SettingField` / `ADVANCED_SETTING_FIELDS`：高级字段定义。
   - `read_advanced_settings()` / `validate_advanced_settings()` / `apply_advanced_settings()`：
@@ -214,6 +214,8 @@
 - `gui_qt/settings/profiles_page.py`（`ProfilesSettingsPage`）持有单一配置键
   `model_routing`；增删改查通过 Qt-free 的 `providers/model_profiles_editor.py` 完成，保存经
   #202 coordinator → `gui_qt/settings/save_apply.py` 校验并原位写回，未知字段保留。
+- 旧配置的迁移按钮委托 host 的 `migrate_model_config` 即时操作。`gui_qt/settings/model_migration.py`
+  生成预览文案和回滚命令，host 使用预览的源指纹调用与 CLI 共用的文件事务。
 - `model_profiles_editor.editor_view()` 输出无凭据的 provider/profile/能力/阶段路由投影；
   `section_issues()` 复用 `model_routing_config.validate_model_routing_section()`。
 - CLI 对等入口：`profiles-show` / `profiles-validate` / `profiles-set-default` /
@@ -445,7 +447,7 @@
 
 ## P1/P2 配置迁移与生产读取
 
-`providers/model_config_migration.py` → `providers/model_routing_migration_store.py` →
+`providers/model_config_migration.py` 和 GUI host → `providers/model_routing_migration_store.py` →
 `model_routing_migration.preview_migration` → schema validator / 兼容 reader →
 `config_store` 备份、报告和原子替换。GUI 的原始 JSON 保存也委托该 store 并共用写锁。
 P2 起 Sync/Batch 兼容入口消费合法 `model_routing`；步骤与边界见 [迁移说明](model_config_migration.md)。

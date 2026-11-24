@@ -6,7 +6,7 @@ profile / strategy / stage-route surface. All mutations go through the Qt-free
 and the host keeps the single save transaction and file write.
 
 Blank creation is only offered while the config has no legacy ``sync.*`` /
-``batch.*`` fields; legacy configs are guided to the explicit offline migration
+``batch.*`` fields; legacy configs can preview the shared file migration
 so their models, providers and stage routes are not silently dropped (#457).
 """
 from __future__ import annotations
@@ -125,6 +125,7 @@ class ProfilesSettingsPage(QObject):
 
     def set_action_callbacks(self, actions: SettingsPageActions) -> None:
         self._actions = actions
+        self._refresh_enabled()
 
     def attach_widget_aliases(self, host_obj: object) -> None:
         target = getattr(host_obj, "__dict__", None)
@@ -323,11 +324,15 @@ class ProfilesSettingsPage(QObject):
         self.create_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["create_button"])
         self.create_btn.setObjectName("profiles_create_btn")
         self.create_btn.clicked.connect(self._on_create_section)
+        self.migrate_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["migrate_button"])
+        self.migrate_btn.setObjectName("profiles_migrate_btn")
+        self.migrate_btn.clicked.connect(self._on_migrate_config)
         self.remove_btn = QPushButton(MODEL_PROFILES_PAGE_COPY["remove_button"])
         self.remove_btn.setObjectName("profiles_remove_btn")
         self.remove_btn.setToolTip(MODEL_PROFILES_PAGE_COPY["remove_tooltip"])
         self.remove_btn.clicked.connect(self._on_remove_section)
         action_row.addWidget(self.create_btn)
+        action_row.addWidget(self.migrate_btn)
         action_row.addWidget(self.remove_btn)
         action_row.addStretch(1)
         notice_layout.addLayout(action_row)
@@ -759,9 +764,10 @@ class ProfilesSettingsPage(QObject):
                 "legacy_fields_hide" if expanded else "legacy_fields_show"
             ].format(count=len(self._legacy_fields))
         )
-        self.legacy_fields_label.setVisible(
-            expanded and not self.legacy_fields_toggle.isHidden()
-        )
+        legacy = not self.legacy_fields_toggle.isHidden()
+        self.legacy_fields_label.setVisible(expanded and legacy)
+        for button in self.model_navigation_buttons.values():
+            button.setVisible(not legacy or expanded)
 
     def _refresh_presentation(self) -> None:
         """Show only the controls relevant to the current routing state."""
@@ -795,7 +801,8 @@ class ProfilesSettingsPage(QObject):
             self.legacy_fields_toggle.setChecked(False)
         else:
             self._toggle_legacy_fields(self.legacy_fields_toggle.isChecked())
-        self.create_btn.setVisible(not has_section)
+        self.create_btn.setVisible(not has_section and not legacy)
+        self.migrate_btn.setVisible(legacy)
         self.remove_btn.setVisible(
             has_section or self._invalid_raw is not None
         )
@@ -836,6 +843,7 @@ class ProfilesSettingsPage(QObject):
         self.create_btn.setEnabled(
             not self._task_running and blank_creation_available
         )
+        self.migrate_btn.setEnabled(not self._task_running and self._actions.run_immediate is not None)
         if self._invalid_raw is not None:
             self.create_btn.setToolTip(
                 MODEL_PROFILES_PAGE_COPY["create_invalid_tooltip"]
@@ -1190,6 +1198,10 @@ class ProfilesSettingsPage(QObject):
         )
 
     # -- user actions ----------------------------------------------------
+
+    def _on_migrate_config(self) -> None:
+        if self._actions.run_immediate is not None and not self.migrate_btn.isHidden():
+            self._actions.run_immediate("migrate_model_config", {})
 
     def _on_create_section(self) -> None:
         if (
