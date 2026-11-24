@@ -302,6 +302,16 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("翻译预检", idle_labels)
         self.assertIn("translate-preflight", idle_labels["翻译预检"])
 
+    def test_command_reference_includes_structured_doctor_for_both_engines(self):
+        for engine in ("renpy", "rpgmaker_mv"):
+            with self.subTest(engine=engine):
+                context = idle_diagnostics_context(batch_script_path="batch.py", engine=engine)
+                commands = {item.label: item.command for item in context.commands}
+                self.assertIn(
+                    'doctor --output json --non-interactive --config-file <CONFIG.json>',
+                    commands["环境检查（结构化报告）"],
+                )
+
     def test_command_reference_includes_durable_sync_lifecycle(self):
         commands = build_cli_commands(
             python_exe='python',

@@ -174,7 +174,7 @@ class FontInstallWorker(QThread):
         except Exception:
             # Spawn/import failures should not brick font install entirely,
             # but an interrupted attempt must not fall back to an
-            # uninterruptible in-process install (same as DoctorWorker).
+            # Uninterruptible in-process install.
             if self.is_cancel_requested():
                 return FontInstallResult(
                     False,

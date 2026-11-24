@@ -6,6 +6,8 @@ from contextlib import redirect_stdout
 import io
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,12 +18,10 @@ from foundation import cli_contract
 from foundation import doctor_recommendations as rec
 
 try:
-    from PySide6.QtCore import QObject, Signal, Qt
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QApplication
     from gui_qt.app import MainWindow
     from gui_qt.reports.doctor_report import stale_summary
-    from gui_qt.workers.doctor_worker import DoctorWorkerResult, run_doctor_check
     from gui_qt.project_state import ProjectState
     from gui_qt.work_modes import WorkMode
 except ImportError as exc:
@@ -46,32 +46,69 @@ def report_fixture(*, blocked=False, warning=False, empty=False):
     }
 
 
-if MainWindow is not None:
+def run_doctor_cli(state):
+    """Read an original project's real CLI envelope and diagnostic stream."""
+    result = subprocess.run(
+        [sys.executable, "-B", str(state.get_batch_script_path()), "doctor",
+         "--output", "json", "--non-interactive", "--config-file", str(state.config_path)],
+        capture_output=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        timeout=35,
+    )
+    return cli_contract.parse_result_envelope(result.stdout), result.stderr, result.returncode
 
-    class HeldDoctor(QObject):
-        """Control signal delivery independently of a real offline service call."""
 
-        completed = Signal(object)
-        finished = Signal()
+class HeldDoctorCli:
+    """Control process results while exercising the window's real runner signal wiring."""
 
-        def __init__(self, config=None, parent=None):
-            super().__init__(parent)
-            self.config = config
-            self.active = False
+    def __init__(self, window):
+        self.runner = window.runner
+        self.run = self.runner.run
+        self.is_active = self.runner.is_active
+        self.active = False
+        self.args = None
+        self.stop_calls = 0
 
-        def start(self):
-            self.active = True
+    def install(self, case):
+        for name, replacement in (
+            ("run", self.start),
+            ("is_active", lambda: self.active),
+            ("kill", self.stop),
+            ("request_stop", self.stop),
+        ):
+            patch = mock.patch.object(self.runner, name, replacement)
+            patch.start()
+            case.addCleanup(patch.stop)
+        case.addCleanup(self.settle)
 
-        def isRunning(self):
-            return self.active
+    def start(self, script, args):
+        self.active = True
+        self.args = (script, args)
+        return True
 
-        def requestInterruption(self):
-            self.active = False
+    def stop(self):
+        self.stop_calls += 1
+        return True
 
-        def finish(self, result):
-            self.active = False
-            self.completed.emit(result)
-            self.finished.emit()
+    def settle(self):
+        if self.active:
+            self.finish(exit_code=-1)
+
+    def finish(self, report=None, *, error="", exit_code=0, stdout=None, stderr=""):
+        if stdout is None and report is not None:
+            stdout = json.dumps(cli_contract.success_envelope("doctor", status="ready", result=report))
+        if stdout is None and error:
+            stdout = json.dumps(cli_contract.error_envelope("doctor", code="CONFIG_INVALID", message=error))
+            exit_code = 1
+        if stdout:
+            self.runner.stdout_line_ready.emit(stdout)
+            self.runner.line_ready.emit(stdout)
+        if stderr:
+            self.runner.stderr_line_ready.emit(stderr)
+            self.runner.line_ready.emit(stderr)
+        self.active = False
+        self.runner.finished.emit(exit_code)
 
 
 @gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
@@ -102,24 +139,14 @@ class ReadinessSummaryTests(unittest.TestCase):
         # Fixed credential availability, never load an actual key.
         self.window.state.get_api_key_status = lambda **kwargs: (1, "fixture")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
-        import translator_runtime as runtime
-
-        doctor_config = runtime.default_runtime_config()
-        doctor_config.base_dir = str(self.root)
-        doctor_config.work_game_dir = str(self.root / "game")
-        doctor_config.tl_dir = str(self.tl)
-        doctor_config.glossary_file = str(self.root / "glossary.json")
-        # Snapshot seam stays offline: do not load developer credentials.
-        self.window._snapshot_runtime_config_for_job = lambda **kwargs: doctor_config
         provider_patch = mock.patch(
             "translator_runtime.create_genai_client",
             side_effect=AssertionError("Provider forbidden"),
         )
         self.provider = provider_patch.start()
         self.addCleanup(provider_patch.stop)
-        worker_patch = mock.patch("gui_qt.app.DoctorWorker", HeldDoctor)
-        worker_patch.start()
-        self.addCleanup(worker_patch.stop)
+        self.doctor = HeldDoctorCli(self.window)
+        self.doctor.install(self)
 
     def close_window(self):
         gui_test_support.close_main_window(self.window)
@@ -134,11 +161,10 @@ class ReadinessSummaryTests(unittest.TestCase):
 
     def start_doctor(self):
         self.window._on_run_doctor()
-        return self.window._doctor_worker
+        return self.doctor
 
     def finish_doctor(self, report=None, *, error=""):
-        worker = self.start_doctor()
-        worker.finish(DoctorWorkerResult(not error, report, "", error))
+        self.start_doctor().finish(report, error=error)
 
     def preflight(self, *, status="ready", confirmed=False):
         self.window.runner.run = mock.Mock(return_value=True)
@@ -165,54 +191,81 @@ class ReadinessSummaryTests(unittest.TestCase):
             self.window._on_finished(0)
 
     def test_original_scan_service_reaches_both_pages_without_provider(self):
-        import translator_runtime as runtime
-
-        cfg = runtime.default_runtime_config()
-        cfg.base_dir = str(self.root)
-        cfg.work_game_dir = str(self.root / "game")
-        cfg.tl_dir = str(self.tl)
-        cfg.tl_subdir = "game/tl/schinese"
-        cfg.glossary_file = str(self.root / "glossary.json")
-        worker = self.start_doctor()
-        with mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(self.window.state.config_path)):
-            result = run_doctor_check(cfg)
-        self.assertTrue(result.ok, result.error)
-        self.assertEqual(result.report["pending_task_count"], 2)
-        worker.finish(result)
+        runner = self.window.runner
+        with (
+            mock.patch.object(runner, "run", self.doctor.run),
+            mock.patch.object(runner, "is_active", self.doctor.is_active),
+        ):
+            self.window._on_run_doctor()
+            deadline_ms = 30_000
+            while self.window._is_doctor_active() and deadline_ms > 0:
+                QTest.qWait(25)
+                deadline_ms -= 25
+            if self.window._is_doctor_active():
+                runner._proc.kill()
+                QTest.qWait(100)
+                self.fail("doctor CLI did not settle")
+        self.assertTrue(self.window._doctor_check_completed, self.window._readiness_doctor_error)
         self.assert_pages("待译：2 条")
         self.assertIn("翻译文件：1 个", self.window.doctor_facts_label.text())
         self.provider.assert_not_called()
 
-    def test_doctor_start_snapshot_does_not_import_litellm_for_custom_registry(self):
-        import translator_runtime as runtime
-
-        previous = runtime.snapshot_runtime_config()
-        config = dict(self.config, sync={
-            "backend": "litellm", "model": "fixture_vendor/model",
-            "custom_litellm_providers": [{
-                "id": "fixture_vendor", "base_url": "https://fixture.invalid/v1",
-            }],
-        })
-        self.window.state.config_path.write_text(json.dumps(config), encoding="utf-8")
-        self.window._snapshot_runtime_config_for_job = (
-            MainWindow._snapshot_runtime_config_for_job.__get__(self.window)
-        )
-        try:
-            with (
-                mock.patch.object(runtime, "TRANSLATOR_CONFIG", str(self.window.state.config_path)),
-                mock.patch(
-                    "providers.litellm_provider_config._installed_litellm_module",
-                    side_effect=AssertionError("GUI must not warm LiteLLM before starting doctor"),
-                ) as probe,
-            ):
-                worker = self.start_doctor()
-            self.assertEqual(Path(worker.config.base_dir).resolve(), self.root.resolve())
-            self.assertEqual(worker.config.sync_backend, "litellm")
-            self.assertIn("fixture_vendor", worker.config.custom_litellm_providers)
-            probe.assert_not_called()
-        finally:
-            runtime.apply_runtime_config(previous)
+    def test_doctor_start_uses_saved_config_without_loading_in_process_runtime(self):
+        with mock.patch(
+            "translator_runtime.load_translator_settings",
+            side_effect=AssertionError("GUI must not load the translator runtime for doctor"),
+        ) as load:
+            worker = self.start_doctor()
+        self.assertEqual(worker.args, (
+            self.window.state.get_batch_script_path(),
+            ["doctor", "--output", "json", "--non-interactive", "--config-file", str(self.window.state.config_path)],
+        ))
+        load.assert_not_called()
+        worker.finish(report_fixture())
         self.provider.assert_not_called()
+
+    def test_doctor_uses_only_stdout_to_publish_readiness(self):
+        stdout = json.dumps(cli_contract.success_envelope("doctor", status="ready", result=report_fixture()))
+        worker = self.start_doctor()
+        worker.finish(stdout=stdout, stderr="Original diagnostic log")
+        self.assertTrue(self.window._doctor_check_completed)
+        self.window._flush_pending_log_lines()
+        self.assertIn("Original diagnostic log", self.window.log_view.toPlainText())
+        self.assertNotIn('"schema_version"', self.window.log_view.toPlainText())
+        self.start_doctor().finish(stderr=stdout)
+        self.assertFalse(self.window._doctor_check_completed)
+        self.assert_pages("环境检查失败")
+
+    def test_doctor_displays_structured_cli_configuration_failure(self):
+        self.window.state.config_path.write_text(
+            json.dumps(dict(self.config, tl_subdir="../outside-project")), encoding="utf-8",
+        )
+        worker = self.start_doctor()
+        envelope, logs, exit_code = run_doctor_cli(self.window.state)
+        self.assertFalse(envelope["ok"])
+        self.assertNotEqual(exit_code, 0)
+        worker.finish(stdout=json.dumps(envelope), stderr=logs, exit_code=exit_code)
+        self.assert_pages("环境检查失败")
+        self.assertIn("Invalid tl_subdir configuration", self.window.doctor_details_label.text())
+        self.assertFalse(self.window._doctor_allows_translate_action())
+
+    def test_cancel_and_timeout_win_over_a_success_envelope(self):
+        for stop, message in (
+            (self.window._on_kill, "环境检查已取消"),
+            (self.window._doctor_timeout_timer.timeout.emit, "环境检查超过 5 分钟"),
+        ):
+            with self.subTest(message=message):
+                self.finish_doctor(report_fixture())
+                worker = self.start_doctor()
+                stop()
+                self.assertTrue(self.window._task_running)
+                worker.finish(report_fixture())
+                self.assertFalse(self.window._task_running)
+                self.assertFalse(self.window._doctor_check_completed)
+                self.assertFalse(self.window._doctor_timeout_timer.isActive())
+                self.window._flush_pending_log_lines()
+                self.assertIn(message, self.window.log_view.toPlainText())
+        self.assertEqual(self.doctor.stop_calls, 2)
 
     def test_empty_unchecked_running_block_warning_ready_failure_stale(self):
         self.window.state._game_root = None
@@ -224,7 +277,7 @@ class ReadinessSummaryTests(unittest.TestCase):
         worker = self.start_doctor()
         self.assert_pages("环境检查中")
         self.assertNotIn("待译：2", self.window.doctor_facts_label.text())
-        worker.finish(DoctorWorkerResult(True, report_fixture(blocked=True, empty=True), ""))
+        worker.finish(report_fixture(blocked=True, empty=True))
         self.assert_pages("有阻塞项")
         self.assertIn("待译：0 条", self.window.doctor_facts_label.text())
         self.assertFalse(self.window.translate_btn.isEnabled())
@@ -278,7 +331,7 @@ class ReadinessSummaryTests(unittest.TestCase):
             json.dumps(dict(self.config, batch={"model": "original-new-settings"})),
             encoding="utf-8",
         )
-        worker.finish(DoctorWorkerResult(True, report_fixture(), ""))
+        worker.finish(report_fixture())
         self.window._sync_workbench_empty_states()
         self.assertFalse(self.window._doctor_check_completed)
         self.assertEqual(self.window.doctor_page_stack.currentIndex(), 0)
@@ -312,23 +365,24 @@ class ReadinessSummaryTests(unittest.TestCase):
         self.window.state.config_path.write_text(
             json.dumps(dict(self.config, batch={"model": "other"})), encoding="utf-8"
         )
-        worker.finish(DoctorWorkerResult(True, report_fixture(), ""))
+        worker.finish(report_fixture())
         self.assert_pages("结果已过期")
         self.assertFalse(self.window._doctor_check_completed)
 
-    def test_queued_old_doctor_after_project_switch_and_rerun_is_rejected(self):
+    def test_old_doctor_owns_runner_until_settled_but_cannot_update_new_project(self):
         old = self.start_doctor()
-        # Queue before disconnect, reproducing a real late Qt delivery.
-        old.completed.disconnect(self.window._on_doctor_completed)
-        old.completed.connect(self.window._on_doctor_completed, Qt.ConnectionType.QueuedConnection)
-        old.completed.emit(DoctorWorkerResult(True, report_fixture(), ""))
         self.window._switch_game_root(str(self.root.parent / "another" / "work"))
-        current = self.start_doctor()
-        QApplication.processEvents()
-        self.assert_pages("环境检查中")
-        self.assertIs(self.window._doctor_worker, current)
-        current.finish(DoctorWorkerResult(False, None, "", "new fixture failure"))
-        old.finished.emit()
+        self.assertEqual(old.stop_calls, 1)
+        self.assertFalse(self.window._doctor_timeout_timer.isActive())
+        self.window.runner.run = mock.Mock(wraps=old.start)
+        self.window._on_run_doctor()
+        self.window.runner.run.assert_not_called()
+        old.finish(report_fixture(), stderr="Original stale project diagnostic")
+        self.assert_pages("结果已过期")
+        self.assertIsNone(self.window._readiness_doctor_report)
+        self.window._flush_pending_log_lines()
+        self.assertNotIn("Original stale project diagnostic", self.window.log_view.toPlainText())
+        self.start_doctor().finish(error="new fixture failure")
         self.assert_pages("环境检查失败")
 
     def test_task_preflight_running_ready_blocked_failed_and_switch(self):
@@ -445,7 +499,6 @@ class ReadinessSummaryTests(unittest.TestCase):
         self.finish_doctor(report_fixture())
         with (
             mock.patch("gemini_translate_batch.collect_doctor_report") as scan,
-            mock.patch("gui_qt.app.DoctorWorker") as worker,
             mock.patch.object(self.window.runner, "run") as cli,
         ):
             for _ in range(5):
@@ -457,7 +510,6 @@ class ReadinessSummaryTests(unittest.TestCase):
                     WorkMode.BATCH_TRANSLATION, refresh_manifest_writeback=False
                 )
             scan.assert_not_called()
-            worker.assert_not_called()
             cli.assert_not_called()
         self.provider.assert_not_called()
 

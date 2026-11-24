@@ -1642,6 +1642,22 @@ MODEL_ROUTING_RUNTIME_COPY = {
 }
 
 
+DOCTOR_RUN_COPY = {
+    "command": "环境检查（结构化报告）",
+    "select_title": "请先选择项目",
+    "select_message": "请先选择游戏的 work 目录。环境检查会读取已保存的项目配置。",
+    "starting": "正在通过命令行运行环境检查…",
+    "finished": "[环境检查已结束]",
+    "completed": "项目检查完成。",
+    "cancelled": "环境检查已取消。",
+    "timeout": "环境检查超过 5 分钟，已停止。请查看运行日志后重试。",
+    "invalid_result": "环境检查没有返回可用的结构化报告，请查看运行日志。",
+    "failure_heading": "项目检查失败",
+    "failure_message": "环境检查没有正常完成，请查看诊断日志。",
+    "registry_stale": "项目检查完成。总表记录需刷新。",
+    "registry_missing": "项目检查完成。当前项目未在总表中登记。",
+}
+
 # Unified translation entry copy (#348 P3): choose a ModelProfile first, then
 # the ExecutionStrategy that profile supports.
 READINESS_COPY = {

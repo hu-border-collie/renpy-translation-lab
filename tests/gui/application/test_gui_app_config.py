@@ -2100,54 +2100,6 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         runner.is_active.assert_not_called()
         self.window._set_task_running.assert_not_called()
 
-    def test_doctor_cancel_retires_worker_without_waiting(self):
-        class FakeSignal:
-            def __init__(self):
-                self.callback = None
-                self.disconnected = None
-
-            def connect(self, callback):
-                self.callback = callback
-
-            def disconnect(self, callback):
-                self.disconnected = callback
-
-        class FakeWorker:
-            def __init__(self):
-                self.completed = FakeSignal()
-                self.finished = FakeSignal()
-                self.interrupted = False
-                self.deleted = False
-
-            def isRunning(self):
-                return True
-
-            def requestInterruption(self):
-                self.interrupted = True
-
-            def wait(self, *_args):
-                raise AssertionError("doctor cancellation must not block")
-
-            def deleteLater(self):
-                self.deleted = True
-
-        worker = FakeWorker()
-        self.window._doctor_worker = worker
-        self.window._retired_doctor_workers = set()
-        self.window._active_command = "doctor"
-        self.window._set_task_running = mock.Mock()
-
-        self.window._invalidate_doctor_worker()
-
-        self.assertIsNone(self.window._doctor_worker)
-        self.assertTrue(worker.interrupted)
-        self.assertIn(worker, self.window._retired_doctor_workers)
-        self.window._set_task_running.assert_called_once_with(False)
-
-        worker.finished.callback()
-        self.assertNotIn(worker, self.window._retired_doctor_workers)
-        self.assertTrue(worker.deleted)
-
     def test_runner_finish_during_shutdown_cannot_start_next_workflow_step(self):
         self.window._shutdown_requested = True
         self.window._runner_terminal_generation = 2
@@ -2260,37 +2212,23 @@ class GuiAppConfigHelperTests(unittest.TestCase):
         self.assertFalse(self.window._workflow_step_deferred_for_close_confirmation)
         single_shot.assert_not_called()
 
-    def test_retired_doctor_queued_completion_cannot_overwrite_current_state(self):
-        current_worker = object()
-        retired_worker = object()
-        self.window._doctor_worker = current_worker
-        self.window.sender = lambda: retired_worker
-        self.window._active_command = "doctor"
-        self.window._set_task_running = mock.Mock()
-
-        self.window._on_doctor_completed(object())
-
-        self.assertIs(self.window._doctor_worker, current_worker)
-        self.assertEqual(self.window._active_command, "doctor")
-        self.window._set_task_running.assert_not_called()
-
-    def test_doctor_queued_completion_is_silent_during_shutdown(self):
-        worker = object()
-        self.window._doctor_worker = worker
-        self.window.sender = lambda: worker
+    def test_doctor_queued_completion_cannot_publish_during_shutdown(self):
         self.window._shutdown_requested = True
         self.window._active_command = "doctor"
+        self.window._doctor_stdout_lines = ["original fixture"]
+        self.window._doctor_run_identity = "old fixture"
+        self.window._doctor_timeout_timer = mock.Mock()
         self.window._set_task_running = mock.Mock()
-        self.window._append_log = mock.Mock()
         self.window._set_doctor_summary = mock.Mock()
         self.window.state = mock.Mock()
 
-        self.window._on_doctor_completed(object())
+        self.window._on_finished(0)
 
-        self.assertIsNone(self.window._doctor_worker)
+        self.assertIsNone(self.window._doctor_run_identity)
+        self.assertEqual(self.window._doctor_stdout_lines, [])
         self.assertEqual(self.window._active_command, "")
+        self.window._doctor_timeout_timer.stop.assert_called_once_with()
         self.window._set_task_running.assert_called_once_with(False)
-        self.window._append_log.assert_not_called()
         self.window._set_doctor_summary.assert_not_called()
         self.window.state.get_api_key_status.assert_not_called()
 

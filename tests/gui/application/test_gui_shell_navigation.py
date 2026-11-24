@@ -219,11 +219,8 @@ class GuiShellNavigationTests(unittest.TestCase):
                 route,
             )
 
-    @patch("gui_qt.app.DoctorWorker")
-    def test_doctor_launch_uses_unified_project_environment_route(self, worker_cls) -> None:
-        worker = worker_cls.return_value
-        worker.completed.connect = MagicMock()
-        worker.start = MagicMock()
+    def test_doctor_launch_uses_unified_project_environment_route(self) -> None:
+        self.window.runner.run = MagicMock(return_value=True)
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
         self.window._activate_shell_route("project_prepare")
@@ -232,18 +229,13 @@ class GuiShellNavigationTests(unittest.TestCase):
 
         self.assertEqual(self.window._current_shell_route(), "project_prepare")
         self.assertTrue(self.window.workbench_stack.isHidden())
-        worker.start.assert_called_once_with()
-        self.window._doctor_worker = None
-        self.window._active_command = ""
-        self.window._set_task_running(False)
+        self.window.runner.run.assert_called_once()
+        self.assertEqual(self.window.runner.run.call_args.args[1][0], "doctor")
+        self.window._on_finished(-1)
 
-    @patch("gui_qt.app.DoctorWorker")
-    def test_doctor_running_allows_shell_page_navigation(self, worker_cls) -> None:
+    def test_doctor_running_allows_shell_page_navigation(self) -> None:
         """Environment check must not trap the user on 项目与环境."""
-        worker = worker_cls.return_value
-        worker.isRunning = MagicMock(return_value=True)
-        worker.completed.connect = MagicMock()
-        worker.start = MagicMock()
+        self.window.runner.run = MagicMock(return_value=True)
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
         self.window._activate_shell_route("project_prepare")
@@ -292,19 +284,13 @@ class GuiShellNavigationTests(unittest.TestCase):
         self.assertFalse(self.window.revision_page.stop_btn.isEnabled())
         self.assertFalse(self.window.context_library_page.stop_btn.isEnabled())
 
-        self.window._doctor_worker = None
-        self.window._active_command = ""
-        self.window._set_task_running(False)
+        self.window._on_finished(-1)
         self.assertEqual(self.window.doctor_btn.text(), "环境检查")
         self.assertEqual(self.window.doctor_btn.objectName(), "secondary_btn")
 
-    @patch("gui_qt.app.DoctorWorker")
-    def test_doctor_running_uses_soft_work_mode_switch(self, worker_cls) -> None:
+    def test_doctor_running_uses_soft_work_mode_switch(self) -> None:
         """Page switches during doctor must not reload manifests from disk."""
-        worker = worker_cls.return_value
-        worker.isRunning = MagicMock(return_value=True)
-        worker.completed.connect = MagicMock()
-        worker.start = MagicMock()
+        self.window.runner.run = MagicMock(return_value=True)
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
         self.window._activate_shell_route("project_prepare")
@@ -317,17 +303,11 @@ class GuiShellNavigationTests(unittest.TestCase):
             kwargs = set_mode.call_args.kwargs
             self.assertFalse(kwargs.get("refresh_manifest_writeback", True))
 
-        self.window._doctor_worker = None
-        self.window._active_command = ""
-        self.window._set_task_running(False)
+        self.window._on_finished(-1)
 
-    @patch("gui_qt.app.DoctorWorker")
-    def test_doctor_stop_control_stays_on_project_bar(self, worker_cls) -> None:
+    def test_doctor_stop_control_stays_on_project_bar(self) -> None:
         """Cancel environment check from 项目与环境, not via foreign page stop buttons."""
-        worker = worker_cls.return_value
-        worker.isRunning = MagicMock(return_value=True)
-        worker.completed.connect = MagicMock()
-        worker.start = MagicMock()
+        self.window.runner.run = MagicMock(return_value=True)
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
         self.window._confirm_unsaved_config_before_workflow = lambda: True
         self.window._activate_shell_route("project_prepare")
@@ -348,9 +328,7 @@ class GuiShellNavigationTests(unittest.TestCase):
             self.window.doctor_btn.click()
             on_kill.assert_called_once_with()
 
-        self.window._doctor_worker = None
-        self.window._active_command = ""
-        self.window._set_task_running(False)
+        self.window._on_finished(-1)
 
     def test_generate_template_uses_project_bar_cancel(self) -> None:
         self.window.state.get_game_root = lambda: Path("C:/DemoGame/work")
@@ -504,7 +482,6 @@ class GuiShellNavigationTests(unittest.TestCase):
                 return_value=(Path("C:/Games/Example/work"), False),
             ),
             patch.object(self.window.runner, "is_running", return_value=False),
-            patch.object(self.window, "_is_doctor_running", return_value=False),
             patch.object(self.window, "_load_config_to_ui"),
             patch.object(self.window, "_refresh_diagnostics_context"),
             patch.object(self.window, "_invalidate_manifest_caches"),

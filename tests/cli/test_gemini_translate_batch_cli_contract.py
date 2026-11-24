@@ -2455,6 +2455,21 @@ class BatchCliContractTests(unittest.TestCase):
         self.assertIn("banner", stderr.getvalue())
         self.assertIn("doctor text", stderr.getvalue())
 
+    def test_doctor_refuses_to_overwrite_explicit_config_with_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_file = Path(directory) / "original config.json"
+            config_file.write_bytes(b"{}\n")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = batch.main([
+                    "doctor", "--output", "json", "--config-file", str(config_file),
+                    "--output-file", str(config_file),
+                ])
+            self.assertNotEqual(exit_code, 0)
+            envelope = batch.cli_contract.parse_result_envelope(stdout.getvalue())
+            self.assertEqual(envelope["error"]["code"], "OUTPUT_FILE_PATH_CONFLICT")
+            self.assertEqual(config_file.read_bytes(), b"{}\n")
+
     def test_machine_mode_routes_prepare_child_stdout_away_from_json(self):
         stdout = io.StringIO()
         stderr = io.StringIO()

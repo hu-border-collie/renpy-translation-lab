@@ -492,7 +492,6 @@ class GuiKeywordCandidateEntryTests(unittest.TestCase):
                 side_effect=_fake_set_game_root,
             ),
             mock.patch.object(self.window.runner, "is_running", return_value=False),
-            mock.patch.object(self.window, "_is_doctor_running", return_value=False),
             mock.patch.object(self.window, "_load_config_to_ui"),
             mock.patch.object(self.window, "_refresh_diagnostics_context"),
             mock.patch.object(self.window, "_invalidate_manifest_caches"),

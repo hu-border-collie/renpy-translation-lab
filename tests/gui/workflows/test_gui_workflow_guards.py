@@ -55,8 +55,6 @@ class GuiWorkflowGuardTests(unittest.TestCase):
         window.state.set_game_root.return_value = (Path("C:/Games/Example/work"), False)
         window.runner = mock.Mock()
         window.runner.is_running.return_value = False
-        window._is_doctor_running = mock.Mock(return_value=False)
-        window._invalidate_doctor_worker = mock.Mock()
         window._refresh_project_label = mock.Mock()
         window._load_config_to_ui = mock.Mock()
         window._current_work_mode = mock.Mock()
