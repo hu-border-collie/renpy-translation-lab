@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from engine_adapters.project_config import engine_supports_operation
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -39,6 +40,7 @@ class ContextLibraryPage(QFrame):
         self.setObjectName("context_library_panel")
         self._actions = WorkbenchPageActions()
         self._running = False
+        self._engine = "renpy"
         self._rag_enabled = False
         self._source_index_enabled = False
         self._project_analysis_present = False
@@ -249,6 +251,7 @@ class ContextLibraryPage(QFrame):
         rag_enabled: bool,
         source_index_enabled: bool,
         game_root: str,
+        engine: str = "renpy",
         project_analysis_status: Mapping[str, Any] | None = None,
         project_analysis_label: str = "",
         project_analysis_enabled: bool = False,
@@ -262,11 +265,12 @@ class ContextLibraryPage(QFrame):
         eligibility. ``project_analysis_status`` supplies artifact lifecycle
         state, and ``project_analysis_label`` optionally overrides its rendered
         label. A non-empty ``game_root`` indicates that project-scoped actions
-        may run.
+        may run. ``engine`` controls version asset availability.
         """
         self._rag_enabled = rag_enabled
         self._source_index_enabled = source_index_enabled
         self._has_project = bool(game_root)
+        self._engine = engine
         root_hint = game_root or ""
         project_suffix = (
             f" · 项目 {root_hint}"
@@ -507,7 +511,15 @@ class ContextLibraryPage(QFrame):
         self.open_settings_btn.setEnabled(not self._running)
         self.stop_btn.setEnabled(self._running)
         self.engine_snapshot_btn.setEnabled(not self._running and self._has_project)
-        self.reuse_candidates_btn.setEnabled(not self._running and self._has_project)
+        snapshots_supported = engine_supports_operation(self._engine, "export-project-snapshot")
+        reuse_supported = engine_supports_operation(self._engine, "build-reuse-candidates")
+        self.engine_snapshot_btn.setToolTip(ENGINE_SNAPSHOT_COPY[
+            "open_dialog_tip" if snapshots_supported else "snapshot_unsupported"
+        ])
+        self.reuse_candidates_btn.setEnabled(not self._running and self._has_project and reuse_supported)
+        self.reuse_candidates_btn.setToolTip(ENGINE_SNAPSHOT_COPY[
+            "reuse_entry_tip" if reuse_supported else "reuse_unsupported"
+        ])
         self.context_actions.reflow()
 
     def _trigger_project_analysis_primary(self) -> None:

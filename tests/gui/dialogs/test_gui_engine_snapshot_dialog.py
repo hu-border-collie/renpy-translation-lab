@@ -458,6 +458,33 @@ class GuiEngineSnapshotDialogTests(unittest.TestCase):
         page.deleteLater()
         self.assertEqual(clicked, ["engine_snapshot", "reuse_candidates"])
 
+    def test_mv_overview_explains_disabled_version_assets(self) -> None:
+        dialog = EngineSnapshotDialog(game_root="C:/Game/mv", engine="rpgmaker_mv", start_tab=2)
+        self.addCleanup(dialog.deleteLater)
+        worker = dialog._worker
+        worker.completed.emit(EngineSnapshotTaskResult(ok=True, payload=worker._task()))
+
+        self.assertEqual(dialog.tabs.currentIndex(), 0)
+        self.assertFalse(dialog.tabs.isTabEnabled(1))
+        self.assertFalse(dialog.tabs.isTabEnabled(2))
+        self.assertIn("rpgmaker_mv", dialog.engine_summary_label.text())
+        self.assertIn("尚未开放项目快照", dialog.overview_status_label.text())
+        self.assertIn("旧译复用", dialog.overview_status_label.text())
+
+    def test_late_overview_from_previous_project_is_discarded(self) -> None:
+        current_project = True
+        dialog = EngineSnapshotDialog(project_is_current=lambda: current_project)
+        self.addCleanup(dialog.deleteLater)
+        result = EngineSnapshotTaskResult(ok=True, payload=_overview_payload())
+        current_project = False
+
+        with mock.patch.object(dialog, "reject") as reject:
+            dialog._worker.completed.emit(result)
+
+        reject.assert_called_once_with()
+        self.assertEqual(dialog.engine_summary_label.text(), "")
+        self.assertEqual(dialog.snapshot_table.rowCount(), 0)
+
 
 @gui_test_support.skip_unless_gui(MainWindow is None, IMPORT_ERROR)
 class GuiEngineSnapshotEntryTests(unittest.TestCase):
@@ -491,8 +518,36 @@ class GuiEngineSnapshotEntryTests(unittest.TestCase):
 
         dialog_cls.assert_called_once()
         self.assertEqual(dialog_cls.call_args.kwargs["game_root"], "C:/Game/work")
+        self.assertEqual(dialog_cls.call_args.kwargs["engine"], "renpy")
         self.assertEqual(dialog_cls.call_args.kwargs["start_tab"], 2)
         dialog_cls.return_value.exec.assert_called_once_with()
+
+    def test_project_engine_switch_updates_ab_and_reuse_actions(self) -> None:
+        manifest = {"mode": "translation", "summary": {"chunk_count": 1}}
+        page = self.window.context_library_page
+        for engine, enabled in (("renpy", True), ("rpgmaker_mv", False), ("renpy", True)):
+            self.window._context_library_config_snapshot = {"engine": engine}
+            self.window._render_context_library_panel(
+                flags={}, analysis_flags={"enabled": False, "inject_enabled": False},
+                game_root=f"C:/Game/{engine}", result=None, running=False,
+            )
+            self.window._update_compare_variants_btn_enabled(
+                running=False, manifest_path="manifest.json", manifest=manifest,
+            )
+            self.assertEqual(self.window.compare_variants_btn.isEnabled(), enabled)
+            self.assertTrue(page.engine_snapshot_btn.isEnabled())
+            self.assertEqual(page.reuse_candidates_btn.isEnabled(), enabled)
+            if not enabled:
+                self.assertIn("RPG Maker MV", self.window.compare_variants_btn.toolTip())
+                self.assertIn("未开放", page.reuse_candidates_btn.toolTip())
+                with (
+                    mock.patch.object(self.window, "_current_diagnostics_manifest", return_value=("manifest.json", manifest)),
+                    mock.patch.object(self.window, "_prompt_compare_variants_options") as prompt,
+                    mock.patch("gui_qt.app.message_box_information") as notice,
+                ):
+                    self.window._on_run_compare_variants()
+                prompt.assert_not_called()
+                self.assertIn("RPG Maker MV", notice.call_args.args[2])
 
     def test_context_library_action_routes_to_engine_snapshot(self) -> None:
         with (

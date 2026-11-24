@@ -21132,10 +21132,16 @@ def collect_doctor_report():
 
 def collect_mv_doctor_report():
     """Diagnose the saved MV Batch/Sync route without prepare or retrieval."""
-    from engine_adapters.project_config import read_project_configuration
+    from engine_adapters.project_config import engine_supports_operation, read_project_configuration
     from engine_adapters.project_setup import mv_project_setup_status
     config = read_project_configuration(legacy.TRANSLATOR_CONFIG)
     setup = mv_project_setup_status(config, legacy.TRANSLATOR_CONFIG)
+    unsupported_operations = [
+        operation for operation in (
+            'compare-variants', 'export-project-snapshot', 'reconcile-project-snapshots',
+            'build-reuse-candidates',
+        ) if not engine_supports_operation('rpgmaker_mv', operation)
+    ]
     if setup['missing']:
         issue = _engine_status_issue(
             'engine.mv.setup_required', 'error',
@@ -21147,6 +21153,7 @@ def collect_mv_doctor_report():
             'can_generate_template': False, 'mv_setup': setup,
             'coverage_evidence_available': False, 'coverage': None,
             'engine_status': {'engine': 'rpgmaker_mv', 'status': 'blocked', 'issues': [issue],
+                              'unsupported_operations': unsupported_operations,
                               'runtime_acceptance': 'unverified'},
             'recommendations': [], 'workflow_state': '', 'warnings': [],
         }
@@ -21208,6 +21215,7 @@ def collect_mv_doctor_report():
             'status': 'blocked' if blocked else 'ready', 'issues': issues,
             'supported_routes': ['gemini_batch', 'durable_sync', 'sync_keywords', 'bootstrap_source_index', 'bootstrap_rag'],
             'unsupported_routes': ['legacy_sync', 'external_work', 'revision', 'batch_keywords', 'story_memory', 'project_analysis'],
+            'unsupported_operations': unsupported_operations,
             'runtime_acceptance': 'unverified'},
         'warnings': routing_warnings, 'workflow_state': '', 'mv_setup': setup,
     }
@@ -21249,16 +21257,20 @@ def finalize_doctor_actionable_signals(report):
 
 
 def print_doctor_report(report):
-    if report.get('mode') == 'mv_setup_required':
+    mode = report.get('mode')
+    unsupported_mv_operations = (report.get('engine_status') or {}).get('unsupported_operations') or []
+    if mode == 'mv_setup_required':
         print('Doctor report:')
         print(f"- Base dir: {report['base_dir']}")
         print('- Mode: mv_setup_required')
         print('- Engine: rpgmaker_mv (status: blocked; project preparation required)')
+        if unsupported_mv_operations:
+            print('- Unsupported MV operations: ' + ', '.join(unsupported_mv_operations))
         print('- MV setup: ' + json.dumps(report['mv_setup'], ensure_ascii=True))
         print('- Pending translation: unknown (project preparation required)')
         print('- Next: configure the independent source and audited support window, then rerun doctor.')
         return
-    if report.get('mode') == 'engine_mismatch':
+    if mode == 'engine_mismatch':
         print('Doctor report:')
         print(f"- Base dir: {report['base_dir']}")
         print('- Mode: engine_mismatch')
@@ -21270,13 +21282,16 @@ def print_doctor_report(report):
         for issue in report['engine_status']['issues']:
             print(f"  - [{issue['severity']}] {issue['code']}: {issue['message']}")
         return
-    if report.get('mode') == 'mv_narrative':
+    if mode == 'mv_narrative':
         print('Doctor report:')
         print(f"- Base dir: {report['base_dir']}")
         print(f"- TL dir: {report['tl_dir']} (exists: {report['tl_exists']})")
         print(f"- Mode: {report['mode']}")
         print(f"- Engine: rpgmaker_mv (status: {report['engine_status']['status']})")
-        print('- Routes: durable Sync / sync-keywords / context bootstrap; Batch / external work / legacy Sync / revisions unsupported')
+        print('- Routes: Gemini Batch / durable Sync / sync-keywords / context bootstrap; '
+              'external work / legacy Sync / revisions unsupported')
+        if unsupported_mv_operations:
+            print('- Unsupported MV operations: ' + ', '.join(unsupported_mv_operations))
         for name, state in (report.get('mv_preparation') or {}).items():
             if name in {'source_index', 'history'}:
                 print(f"- MV context {name}: status={state.get('status')}, prepared={state.get('prepared')}, records={state.get('record_count')}")
@@ -22003,7 +22018,7 @@ def build_arg_parser():
         help=(
             'Export a source-only project/game-version snapshot '
             '(JSON + JSONL) without modifying game files; missing unit IDs '
-            'report ADAPTER_UNIT_ID_MISSING with a file/line locator.'
+            'report ADAPTER_UNIT_ID_MISSING with a file/line locator. Unavailable for RPG Maker MV.'
         ),
     )
     export_project_snapshot_parser.add_argument(
@@ -23094,7 +23109,7 @@ def build_arg_parser():
 
     compare_variants_parser = subparsers.add_parser(
         'compare-variants',
-        help='Run a synchronous translation A/B experiment from a batch manifest without writing game files.',
+        help='Run a synchronous translation A/B experiment without writing game files. Unavailable for RPG Maker MV.',
     )
     compare_variants_parser.add_argument(
         'target',

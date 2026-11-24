@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable
 
+from engine_adapters.project_config import engine_supports_operation
 from providers import model_usage_ledger
 from quality_review import translation_plan
 from execution.external_translation_work import is_work_manifest
@@ -282,6 +283,8 @@ def build_cli_commands(
     submit_max_cost: float | None = None,
     engine: str = 'renpy',
 ) -> list[DiagnosticsCommand]:
+    if translation_plan.manifest_source_engine(manifest) == 'rpgmaker_mv':
+        engine = 'rpgmaker_mv'
     if engine == 'rpgmaker_mv' and (
         not manifest_path or (manifest.get('translation_plan') or {}).get('execution_strategy') != 'gemini_batch'
     ):
@@ -469,86 +472,46 @@ def build_cli_commands(
                 python_exe, batch_script_path, ['apply', '<RUN>']
             ),
         ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["export_snapshot"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                ["export-project-snapshot", "--version-id", "<GAME_VERSION>"],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["export_snapshot_diagnostics"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+        *(
+            DiagnosticsCommand(
+                label=VERSION_ASSET_COPY[label],
+                command=format_cli_command(python_exe, batch_script_path, args),
+            )
+            for label, args in (
+                ("export_snapshot", ["export-project-snapshot", "--version-id", "<GAME_VERSION>"]),
+                ("export_snapshot_diagnostics", [
                     "export-project-snapshot", "--version-id", "<GAME_VERSION>",
                     "--output", "json", "--strict-exit-codes",
-                ],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["reconcile_snapshots"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+                ]),
+                ("reconcile_snapshots", [
                     "reconcile-project-snapshots",
                     "path/to/base/project_snapshot.json",
                     "path/to/target/project_snapshot.json",
-                ],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["build_translation_records"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+                ]),
+                ("build_translation_records", [
                     "build-translation-records",
                     "path/to/base/project_snapshot.json",
                     "path/to/batch/manifest.json",
-                ],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["build_reuse_candidates"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+                ]),
+                ("build_reuse_candidates", [
                     "build-reuse-candidates",
                     "path/to/base/project_snapshot.json",
                     "path/to/target/project_snapshot.json",
                     "path/to/reconciliation/reconciliation_report.json",
                     "path/to/records/translation_records.json",
-                ],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["import_reuse_decisions"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+                ]),
+                ("import_reuse_decisions", [
                     "import-reuse-decisions",
                     "path/to/reuse/reuse_report.json",
                     "path/to/reuse_decisions.jsonl",
-                ],
-            ),
-        ),
-        DiagnosticsCommand(
-            label=VERSION_ASSET_COPY["export_reuse_results"],
-            command=format_cli_command(
-                python_exe,
-                batch_script_path,
-                [
+                ]),
+                ("export_reuse_results", [
                     "export-reuse-results",
                     "path/to/reuse/reuse_report.json",
                     "path/to/target/batch/manifest.json",
-                ],
-            ),
+                ]),
+            )
+            if engine_supports_operation(engine, args[0])
         ),
         DiagnosticsCommand(
             label="项目分析状态",
@@ -1009,9 +972,12 @@ def build_cli_commands(
             ),
         )
     )
-    from gui_qt.reports.ab_experiment_report import build_compare_variants_cli_args
+    from gui_qt.reports.ab_experiment_report import (
+        build_compare_variants_cli_args,
+        translation_ab_engine_supported,
+    )
 
-    if engine != 'rpgmaker_mv':
+    if translation_ab_engine_supported(engine, manifest):
         commands.append(
             DiagnosticsCommand(
                 label="翻译 A/B 对比（试跑）",

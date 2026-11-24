@@ -591,6 +591,8 @@ python gemini_translate_batch.py merge-keywords-to-glossary logs/batch_jobs/<pac
 
 `compare-variants` 用同一批 manifest chunk 在**同步模式**下跑多个配置变体，生成并排 Markdown 报告，**不会写回** `.rpy` 或 `glossary.json`。适合比较 Story Memory、RAG、macro setting 等上下文层对译文的影响。
 
+RPG Maker MV 项目及 MV Batch 任务记录尚未开放 `compare-variants`。CLI 在发起模型请求前拒绝，GUI 禁用对应操作。
+
 该实验只覆盖**同步路由**下的变体，不能提供 Sync 与真实 Gemini Batch 之间的成本、排队时间或恢复可靠性对比；新用户 / 新项目默认值的最终决策需要另行实测（#457）。
 
 新 manifest 默认复用其中冻结的 `ab_experiment` 路由（通常为 `primary` 同步模型），不会把 `batch_model` 当作 A/B 模型。只有显式传入 `--model` 时才覆盖该同步路由；LiteLLM 路由可使用带 Provider 前缀的模型名。报告中的 Model / Provider 以实际执行路由为准。

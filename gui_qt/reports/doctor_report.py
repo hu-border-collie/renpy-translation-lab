@@ -363,6 +363,7 @@ def parse_doctor_output(output: str) -> dict[str, object]:
     parsed: dict[str, object] = {"warnings": [], "recommendations": []}
     in_warnings = False
     in_recommendations = False
+    unsupported_operations: list[str] = []
 
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -425,6 +426,11 @@ def parse_doctor_output(output: str) -> dict[str, object]:
 
         if line.startswith("- Mode:"):
             parsed["mode"] = line.split(":", 1)[1].strip()
+            continue
+
+        if line.startswith("- Unsupported MV operations:"):
+            operations = line.split(":", 1)[1].split(",")
+            unsupported_operations = [operation.strip() for operation in operations if operation.strip()]
             continue
 
         if line.startswith(('- Detected engine:', '- Detected content root:')):
@@ -507,6 +513,9 @@ def parse_doctor_output(output: str) -> dict[str, object]:
         if line.startswith("- Project assets:"):
             parsed["project_assets"] = _parse_context_fields(line.split(":", 1)[1])
             continue
+
+    if unsupported_operations:
+        parsed.setdefault("engine_status", {})["unsupported_operations"] = unsupported_operations
 
     return parsed
 
@@ -628,6 +637,19 @@ def _summarize_doctor_parsed(
     pending_value = parsed.get("pending")
     pending = pending_value if isinstance(pending_value, dict) else None
     mode = parsed.get("mode") if isinstance(parsed.get("mode"), str) else ""
+    engine = parsed.get('engine_status') or {}
+    operation_details = []
+    if mode in {'mv_setup_required', 'mv_narrative'}:
+        from gui_qt.user_copy import AB_EXPERIMENT_COPY, ENGINE_SNAPSHOT_COPY
+
+        unsupported = set(engine.get('unsupported_operations') or [])
+        operation_details = [
+            message for operation, message in (
+                ('compare-variants', AB_EXPERIMENT_COPY['engine_unsupported']),
+                ('export-project-snapshot', ENGINE_SNAPSHOT_COPY['snapshot_unsupported']),
+                ('build-reuse-candidates', ENGINE_SNAPSHOT_COPY['reuse_unsupported']),
+            ) if operation in unsupported
+        ]
     if mode == 'mv_setup_required':
         from gui_qt.user_copy import MV_PROJECT_COPY
         setup = parsed.get('mv_setup') or {}
@@ -637,7 +659,8 @@ def _summarize_doctor_parsed(
                      for key in missing)
         facts.append(MV_PROJECT_COPY['setup_selected_scope' if setup.get('scope') == 'selected' else 'setup_full_scope'])
         return DoctorSummary(status='warning', heading=MV_PROJECT_COPY['setup_heading'],
-            message=MV_PROJECT_COPY['setup_message'], facts=facts, findings=[], mode=mode)
+            message=MV_PROJECT_COPY['setup_message'], facts=facts, findings=[], mode=mode,
+            detail_facts=operation_details)
     if mode == 'engine_mismatch':
         from gui_qt.user_copy import MV_PROJECT_COPY
         issues = (parsed.get('engine_status') or {}).get('issues') or []
@@ -651,9 +674,8 @@ def _summarize_doctor_parsed(
             findings=[], mode=mode,
         )
     if mode == 'mv_narrative':
-        from gui_qt.user_copy import MV_PROJECT_COPY
-        from gui_qt.user_copy import mv_context_status_label
-        engine = parsed.get('engine_status') or {}
+        from gui_qt.user_copy import MV_PROJECT_COPY, mv_context_status_label
+
         issues = engine.get('issues') or []
         blocked = exit_code != 0 or engine.get('status') != 'ready'
         review_only = bool(issues) and all(
@@ -672,12 +694,12 @@ def _summarize_doctor_parsed(
                    *([MV_PROJECT_COPY['review_required_steps']] if review_only else []),
                    *([MV_PROJECT_COPY['unsupported_count'].format(count=coverage['unsupported_count'])]
                      if coverage.get('unsupported_count') else []),
-                   '当前支持：耐久 Sync 与同步预处理；原生验收：未完成',
+                   '当前支持：Gemini Batch、耐久 Sync 与预处理；原生验收：未完成',
                    *[f"{'原文索引' if key == 'source_index' else '历史记忆'}：{mv_context_status_label(value)}"
                      for key, value in (parsed.get('mv_preparation') or {}).items() if key in {'source_index', 'history'}]],
             findings=[] if review_only and not warnings else [str(issue.get('message') or '') for issue in issues] + warnings,
             mode=mode,
-            detail_facts=[*format_coverage_detail_facts(coverage), *filter(None, review_details)])
+            detail_facts=[*format_coverage_detail_facts(coverage), *filter(None, review_details), *operation_details])
     layout_status = parsed.get("layout_status") if isinstance(parsed.get("layout_status"), str) else ""
 
     workflow_state = (

@@ -7,9 +7,11 @@ import re
 import tempfile
 from dataclasses import dataclass
 
+from engine_adapters.project_config import SUPPORTED_ENGINES, engine_supports_operation
+from quality_review.translation_plan import manifest_source_engine
 from gui_qt.reports.bootstrap_report import coerce_bool
 from gui_qt.diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry
-from gui_qt.user_copy import format_manifest_path_fact
+from gui_qt.user_copy import AB_EXPERIMENT_COPY, format_manifest_path_fact
 from gui_qt.reports.sync_usage_report import collect_sync_usage_facts
 
 _MANIFEST_MODE_TRANSLATION = "translation"
@@ -134,10 +136,23 @@ def manifest_chunk_count(manifest: dict[str, object]) -> int:
     return 0
 
 
+def translation_ab_engine_supported(engine: str, manifest: dict[str, object]) -> bool:
+    """Require both the active project and the frozen source to support A/B."""
+    source_engine = manifest_source_engine(manifest)
+    return engine_supports_operation(engine, "compare-variants") and engine_supports_operation(
+        source_engine if source_engine in SUPPORTED_ENGINES else engine, "compare-variants"
+    )
+
+
 def translation_ab_experiment_ready(
     manifest_path: str,
     manifest: dict[str, object] | None,
+    *,
+    engine: str = "renpy",
 ) -> tuple[bool, str]:
+    """Report the engine boundary before checking the selected Batch record."""
+    if not translation_ab_engine_supported(engine, manifest or {}):
+        return False, AB_EXPERIMENT_COPY["engine_unsupported"]
     if not manifest_path.strip():
         return False, "没有可对比的翻译任务记录。"
     if manifest is None:

@@ -147,6 +147,18 @@ class GuiAbExperimentReportTests(unittest.TestCase):
         self.assertTrue(ready)
         self.assertEqual(message, "")
 
+    def test_translation_ab_experiment_ready_rejects_mv_project_or_frozen_source(self):
+        manifest = {"mode": "translation", "summary": {"chunk_count": 1}}
+        mv_manifest = {
+            **manifest,
+            "translation_plan": {"source_identity": {"engine": "rpgmaker_mv"}},
+        }
+        for engine, record in (("rpgmaker_mv", manifest), ("renpy", mv_manifest)):
+            with self.subTest(engine=engine):
+                ready, message = translation_ab_experiment_ready("manifest.json", record, engine=engine)
+                self.assertFalse(ready)
+                self.assertIn("RPG Maker MV", message)
+
     def test_read_ab_dimension_enabled_states_reads_batch_config(self):
         states = read_ab_dimension_enabled_states(
             {

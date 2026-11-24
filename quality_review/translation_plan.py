@@ -485,6 +485,14 @@ def derive_translation_plan_payload(parent_payload, request_payloads, *, derivat
     return refresh_plan_fingerprint(parent)
 
 
+def manifest_source_engine(manifest: Mapping) -> str:
+    """Read the frozen source engine, or return an empty string for legacy records."""
+    plan = manifest.get('translation_plan')
+    identity = plan.get('source_identity') if isinstance(plan, Mapping) else None
+    engine = identity.get('engine') if isinstance(identity, Mapping) else None
+    return engine if isinstance(engine, str) else ''
+
+
 def source_identity_differences(expected, actual):
     """Return stable, non-sensitive source/adapter identity mismatch codes."""
     expected = dict(expected or {})

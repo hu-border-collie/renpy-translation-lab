@@ -463,14 +463,17 @@ class RpgMakerMvAdapter:
     protocol_version = ENGINE_ADAPTER_PROTOCOL_VERSION
     engine = ENGINE
     adapter_version = ADAPTER_VERSION
+    locator_schema_version = LOCATOR_SCHEMA_VERSION
 
     def __init__(self, support_window: MvSupportWindow, *, display_fields: Sequence[str] = ()):
         self.support_window = support_window
         self.display_fields = parse_display_fields(display_fields)
 
-    def capabilities(self) -> EngineCapabilities:
+    @classmethod
+    def capabilities(cls) -> EngineCapabilities:
+        """Return adapter capabilities independently of a project's support window."""
         return EngineCapabilities(
-            engine=self.engine, adapter_version=self.adapter_version,
+            engine=cls.engine, adapter_version=cls.adapter_version,
             supported_localization_modes=(LocalizationMode.SOURCE_EXTRACTION,),
             selected_localization_mode=LocalizationMode.SOURCE_EXTRACTION,
             relocation=True, declarative_writeback=("json_source_string_set",),
