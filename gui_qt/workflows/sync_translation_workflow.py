@@ -196,6 +196,7 @@ class SyncTranslationWorkflow:
         self.run_dir = ""
         self.run_snapshot: dict[str, Any] | None = None
         self.preview_ready = False
+        self.check_already_applied = False
         self.history_recovery_pending = history_recovery_pending
         #: Path of the checked manifest that bound the writeable preview.
         self.check_manifest = ""
@@ -593,6 +594,14 @@ class SyncTranslationWorkflow:
             facts.append(f"{DURABLE_SYNC_RUN_COPY['run_label']}：{self.run_id}")
         if self.check_manifest:
             facts.append(f"{DURABLE_SYNC_RUN_COPY['check_manifest_label']}：{self.check_manifest}")
+        self.check_already_applied = check_status == "already_applied"
+        if self.check_already_applied:
+            return WorkflowUpdate(
+                status="done",
+                heading=DURABLE_SYNC_RUN_COPY["already_applied_heading"],
+                message=DURABLE_SYNC_RUN_COPY["check_already_applied_message"],
+                facts=facts,
+            )
         self.history_recovery_pending = check.get("history_recovery_pending") is True
         if self.history_recovery_pending:
             return WorkflowUpdate(

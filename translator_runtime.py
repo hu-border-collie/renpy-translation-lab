@@ -7675,21 +7675,17 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False, histor
             '`gemini_translate_batch.py apply <RUN>` so the complete source '
             'snapshot is revalidated.'
         )
-    prompt_context = manifest.get("prompt_context") or {}
-    manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
-    # Legacy manifests without prompt_context keep applying; every manifest
-    # recorded by the current preview flow carries a macro fingerprint, so any
-    # difference (macro added, removed, or changed since preview) blocks
-    # writeback.
-    if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
-        raise SystemExit(
-            "Sync apply blocked: the macro setting file changed since this "
-            "preview was generated. Regenerate and review a new preview."
-        )
-    runtime_config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
-    active_quality_policy = translation_quality.load_policy_from_config(
-        runtime_config
-    )
+    active_quality_policy = None
+    if not history_recovery_only:
+        prompt_context = manifest.get("prompt_context") or {}
+        manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
+        if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
+            raise SystemExit(
+                "Sync apply blocked: the macro setting file changed since this "
+                "preview was generated. Regenerate and review a new preview."
+            )
+        runtime_config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
+        active_quality_policy = translation_quality.load_policy_from_config(runtime_config)
     try:
         material_options = {}
         if is_mv:

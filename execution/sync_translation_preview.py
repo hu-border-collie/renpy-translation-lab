@@ -584,7 +584,7 @@ def load_sync_preview(manifest_path: str | os.PathLike[str]) -> dict[str, Any]:
     return manifest
 
 
-def validate_durable_check_binding(binding):
+def _validate_durable_check_binding(binding):
     """Verify the artifact hashes and original writeback decision for a durable preview."""
     if not isinstance(binding, dict):
         raise ValueError('Durable Sync check binding is invalid.')
@@ -628,7 +628,7 @@ def prepare_sync_preview_apply(
     _validate_translation_plan_binding(manifest)
     durable_binding = manifest.get('durable_check_binding')
     if durable_binding is not None:
-        validate_durable_check_binding(durable_binding)
+        _validate_durable_check_binding(durable_binding)
     external_binding = manifest.get('external_check_binding')
     if external_binding is not None:
         from execution.external_translation_work import validate_preview_binding
@@ -821,8 +821,8 @@ def _load_durable_apply_state(path, manifest, file_paths):
     return state
 
 
-def inspect_durable_history_recovery(manifest, *, active_tl_dir, recovery_only=False):
-    """Return whether a written preview has pending history and its first changed target."""
+def inspect_durable_post_apply(manifest, *, active_tl_dir, recovery_only=False):
+    """Identify a post-write check and report the first changed target, if any."""
     package_dir = Path(manifest["_manifest_path"]).parent
     state_path = package_dir / "apply_state.json"
     entries = manifest["files"]
@@ -831,14 +831,18 @@ def inspect_durable_history_recovery(manifest, *, active_tl_dir, recovery_only=F
     )
     if state is None and recovery_only:
         raise ValueError("Durable Sync history recovery state is missing.")
-    if state is None or not state["pending_history"]:
-        return False, ""
+    if state is None:
+        return "", ""
+    history_pending = bool(state["pending_history"])
+    if not history_pending and state["pending_progress"]:
+        return "", ""
     if (package_dir / ".sync_writeback_transaction.json").exists():
         raise ValueError("Durable Sync writeback was interrupted. Repeat apply to recover its transaction.")
 
     target_root = Path(active_tl_dir).resolve()
     if _canonical(manifest.get("tl_dir", "")) != _canonical(active_tl_dir):
         raise ValueError("Sync preview belongs to a different translation directory.")
+    status = "ready_with_warnings" if history_pending else "already_applied"
     already_written = recovery_only or state.get("state") == "applied" or bool(state.get("applied_at"))
     for entry in entries:
         relative = _safe_relative_path(entry["relative_path"])
@@ -846,8 +850,10 @@ def inspect_durable_history_recovery(manifest, *, active_tl_dir, recovery_only=F
         if not _inside(target_root, target):
             raise ValueError(f"Sync preview target escapes TL_DIR: {relative}")
         if not target.is_file() or file_sha256(target) != entry["preview_sha256"]:
-            return already_written, relative
-    return True, ""
+            # Pending history still belongs to the original writeback. A
+            # completed receipt may instead go through a fresh writeback check.
+            return (status if history_pending and already_written else ""), relative
+    return status, ""
 
 
 def apply_sync_preview(
@@ -882,12 +888,14 @@ def apply_sync_preview(
             raise ValueError("History recovery requires a completed writeback transaction.")
     else:
         recover_atomic_write_transaction(transaction_path, verify_targets=True)
+    # A post-write retry proves the original output below. Live quality
+    # settings authorize new writes only.
     manifest, prepared = prepare_sync_preview_apply(
         manifest_path,
         active_project_root=active_project_root,
         active_tl_dir=active_tl_dir,
-        active_quality_policy=active_quality_policy,
-        active_glossary_file=active_glossary_file,
+        active_quality_policy=None if history_recovery_only else active_quality_policy,
+        active_glossary_file=None if history_recovery_only else active_glossary_file,
         loaded_manifest=loaded_preview,
         active_material_loader=active_material_loader,
     )

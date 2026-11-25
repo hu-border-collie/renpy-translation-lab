@@ -15258,7 +15258,9 @@ class MainWindow(QMainWindow):
                             history_recovery_pending=history_recovery,
                         )
                     else:
-                        self.sync_translation_page.clear_preview()
+                        self.sync_translation_page.clear_preview(
+                            already_applied=bool(getattr(workflow, "check_already_applied", False)),
+                        )
                 elif step_key == "apply" and update.status == "done":
                     self.sync_translation_page.clear_preview()
 

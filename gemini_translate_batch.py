@@ -13867,10 +13867,10 @@ def check_durable_sync_results(store):
             if recovery is not None or preview_path.with_name('apply_state.json').is_file():
                 preview = _verified_store_artifact(store, 'preview_manifest')
                 loaded = sync_translation_preview.load_sync_preview(preview['path'])
-                pending, changed_target = sync_translation_preview.inspect_durable_history_recovery(
+                status, changed_target = sync_translation_preview.inspect_durable_post_apply(
                     loaded, active_tl_dir=legacy.TL_DIR, recovery_only=recovery is not None,
                 )
-                if pending:
+                if status:
                     # The run store carries this restriction independently of the
                     # mutable recovery receipt, including if that receipt is lost.
                     if recovery is None:
@@ -13884,21 +13884,32 @@ def check_durable_sync_results(store):
                         raise ValueError(
                             f'History recovery requires the already written translation: {changed_target}'
                         )
-                    binding = loaded.get('durable_check_binding')
-                    sync_translation_preview.validate_durable_check_binding(binding)
                     _verify_durable_sync_run_for_apply(store)
-                    _require_durable_sync_source_fresh(store, loaded)
-                    print(f'Sync RAG history pending. Repeat apply {store.run_id} to recover it.')
-                    return {
-                        '_manifest_path': binding['check_manifest']['path'],
-                        'last_check_summary': {
-                            'check_status': 'ready_with_warnings',
-                            'writeback_gate': {
-                                'decision': translation_quality.GATE_DENY,
-                                'can_apply': False,
-                            },
-                            'history_recovery_pending': True,
+                    current_identity = _require_durable_sync_source_fresh(store, loaded)
+                    _manifest, prepared = sync_translation_preview.prepare_sync_preview_apply(
+                        preview['path'],
+                        active_project_root=legacy.BASE_DIR,
+                        active_tl_dir=legacy.TL_DIR,
+                        loaded_manifest=loaded,
+                        active_material_loader=lambda: current_identity.get('material_identity') or {},
+                    )
+                    if any(not item['already_applied'] for item in prepared):
+                        raise ValueError('History recovery requires the already written translations.')
+                    summary = {
+                        'check_status': status,
+                        'writeback_gate': {
+                            'decision': translation_quality.GATE_DENY,
+                            'can_apply': False,
                         },
+                    }
+                    if status == 'ready_with_warnings':
+                        summary['history_recovery_pending'] = True
+                        print(f'Sync RAG history pending. Repeat apply {store.run_id} to recover it.')
+                    else:
+                        print(f'Durable Sync translations are already applied: {store.run_id}')
+                    return {
+                        '_manifest_path': loaded['durable_check_binding']['check_manifest']['path'],
+                        'last_check_summary': summary,
                     }
         # A new check attempt supersedes the prior writeback authorization even if
         # this check is denied or interrupted before it can create a new preview.
@@ -13941,6 +13952,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
     Every current source digest must match the run's T0 snapshot.  Files bound
     to the checked preview may instead already match that preview's digest,
     which is the only expected mutation after a successful first apply.
+    Return the verified live identity for callers that also validate MV material.
     """
     stored_identity = dict(store.get_plan()['plan'].get('source_identity') or {})
     current_identity = dict(legacy.current_sync_source_identity() or {})
@@ -13950,7 +13962,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
                                current_identity.get('material_identity') or {}, applied_files={
                                    row['relative_path']: row['preview_sha256']
                                    for row in preview_manifest.get('files') or []})
-        return
+        return current_identity
     stored_files = {
         str(path).replace('\\', '/'): str(digest or '')
         for path, digest in dict(stored_identity.get('file_digests') or {}).items()
@@ -13980,7 +13992,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
         for field in ('engine', 'adapter_version')
     )
     if not (missing_paths or added_paths or changed_paths or runtime_changed):
-        return
+        return current_identity
 
     reasons = []
     if missing_paths:
@@ -22963,9 +22975,10 @@ def build_arg_parser():
         help='Check downloaded results for writeback and recoverable items.',
         description=(
             'Check downloaded results. JSON output includes the writeback gate '
-            'and a merge-retry next action when a retry check allows it. For an '
-            'already written Durable Sync run with pending history updates, '
-            'check preserves the recovery preview and reports history_recovery_pending.'
+            'and a merge-retry next action when a retry check allows it. For a '
+            'written Durable Sync run, check preserves its preview. It reports '
+            'history_recovery_pending while history updates remain, or already_applied '
+            'when post-write work is complete.'
         ),
     )
     add_machine_output_argument(check_parser)

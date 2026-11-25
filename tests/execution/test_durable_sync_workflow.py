@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """End-to-end offline check/preview/apply coverage for issue #347 P5."""
 
+import json
 import os
 import subprocess
 import sys
@@ -186,6 +187,16 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                 self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
                 context_file.write_text('# context v1\n', encoding='utf-8')
 
+                config_path = Path(runtime.TRANSLATOR_CONFIG)
+                original_config = config_path.read_bytes()
+                config_path.write_text(json.dumps({
+                    'batch': {'quality_gate': {'language_allowed_latin_tokens': ['EXAMPLE']}},
+                }), encoding='utf-8')
+                with self.assertRaisesRegex(SystemExit, 'Quality policy changed'):
+                    batch.apply_results(run_id, force=True)
+                self.assertEqual(target.read_text(encoding='utf-8'), '    "Hello"\n')
+                config_path.write_bytes(original_config)
+
                 preview_bytes = preview_path.read_bytes()
                 applied = batch.apply_results(run_id, force=True)
                 self.assertEqual(applied['state'], 'applied')
@@ -237,6 +248,9 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                     first = batch.apply_durable_sync_results(store)
                 self.assertEqual(first['_sync_rag_recovery']['pending_files'], 2)
                 translated = {path: path.read_bytes() for path in tl_dir.glob('*.rpy')}
+                Path(runtime.TRANSLATOR_CONFIG).write_text(json.dumps({
+                    'batch': {'quality_gate': {'language_allowed_latin_tokens': ['EXAMPLE']}},
+                }), encoding='utf-8')
 
                 def embed(texts, *args, **kwargs):
                     return [[0.0, 1.0, 0.0]] * len(texts)
@@ -256,6 +270,15 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                     self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
                     provider.assert_not_called()
 
+                    preview_path = store.resolve_artifact_path(preview['relative_path'])
+                    loaded = runtime.sync_translation_preview.load_sync_preview(preview_path)
+                    report = preview_path.parent / loaded['report_path']
+                    original_report = report.read_bytes()
+                    report.write_bytes(original_report + b'\n')
+                    with self.assertRaisesRegex(ValueError, 'diff report changed'):
+                        batch.check_durable_sync_results(store)
+                    report.write_bytes(original_report)
+
                     target.write_bytes(original)
                     with self.assertRaisesRegex(SystemExit, 'History recovery requires'):
                         batch.apply_durable_sync_results(store)
@@ -265,7 +288,7 @@ class DurableSyncWorkflowTests(unittest.TestCase):
                     self.assertEqual(target.read_bytes(), original)
                     provider.assert_not_called()
 
-                    state_path = store.resolve_artifact_path(preview['relative_path']).with_name('apply_state.json')
+                    state_path = preview_path.with_name('apply_state.json')
                     saved_state = state_path.read_bytes()
                     state_path.unlink()
                     with self.assertRaisesRegex(SystemExit, 'history recovery state is missing'):
@@ -275,6 +298,10 @@ class DurableSyncWorkflowTests(unittest.TestCase):
 
                     target.write_bytes(translated[target])
                     result = batch.apply_durable_sync_results(store)
+                    rechecked = batch.check_results(store.run_id)
+                    self.assertEqual(rechecked['last_check_summary']['check_status'], 'already_applied')
+                    self.assertEqual(check_path.read_bytes(), original_check)
+                    self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
                     write.assert_not_called()
 
             self.assertEqual([len(call.args[0]) for call in provider.call_args_list], [1, 1])
@@ -283,6 +310,40 @@ class DurableSyncWorkflowTests(unittest.TestCase):
             self.assertEqual({path: path.read_bytes() for path in translated}, translated)
             self.assertEqual(runtime.JsonRagStore(root / 'rag').count_history(), 18)
             self.assertEqual(store.verify_integrity(), [])
+
+    def test_recheck_completed_writeback_preserves_the_checked_preview(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir, store = self._rag_run(root, {'a': 1})
+            target = tl_dir / 'a.rpy'
+            original = target.read_bytes()
+            preview = store.get_artifact(kind='preview_manifest')
+            check_path = store.run_dir / 'check_manifest.json'
+            original_check = check_path.read_bytes()
+            with _runtime_fixture(root):
+                self.assertEqual(batch.apply_durable_sync_results(store)['last_apply_result'], 'applied')
+                written = target.read_bytes()
+                self.assertNotEqual(written, original)
+                with (
+                    mock.patch.object(runtime, 'embed_texts') as provider,
+                    mock.patch.object(runtime.sync_translation_preview, 'atomic_write_many_lines') as write,
+                ):
+                    checked = batch.check_results(store.run_id)
+                    envelope = batch.build_machine_success_envelope('check', checked, Namespace())
+                    self.assertEqual(envelope['status'], 'already_applied')
+                    self.assertEqual(envelope['result']['check']['writeback_gate']['decision'], 'deny')
+                    self.assertEqual(envelope['result']['next_action'], '')
+                    self.assertEqual(batch.cli_contract.strict_exit_code(envelope), 0)
+                    self.assertEqual(batch.apply_durable_sync_results(store)['last_apply_result'], 'already_applied')
+                    self.assertEqual(target.read_bytes(), written)
+                    target.write_bytes(original)
+                    with self.assertRaisesRegex(SystemExit, 'History recovery requires'):
+                        batch.apply_durable_sync_results(store)
+                    self.assertEqual(target.read_bytes(), original)
+                    provider.assert_not_called()
+                    write.assert_not_called()
+            self.assertEqual(check_path.read_bytes(), original_check)
+            self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
 
     def test_apply_resumes_all_files_after_process_exit_in_first_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -362,13 +362,16 @@ class SyncTranslationPage(QFrame):
         else:
             self.preview_status.setText("预览中没有可写回的变更。")
 
-    def clear_preview(self) -> None:
+    def clear_preview(self, *, already_applied: bool = False) -> None:
         self._preview_manifest_path = ""
         self._preview_run_id = ""
         self.history_recovery_pending = False
         self.apply_btn.setText(DURABLE_SYNC_RUN_COPY["apply_preview_button"])
         self._refresh_run_controls()
-        self.preview_status.setText("尚未生成同步翻译预览。")
+        self.preview_status.setText(
+            DURABLE_SYNC_RUN_COPY["check_already_applied_message"] if already_applied
+            else "尚未生成同步翻译预览。"
+        )
 
     def preview_manifest_path(self) -> str:
         return self._preview_manifest_path

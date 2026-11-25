@@ -79,12 +79,17 @@ class MvDurableSyncTests(unittest.TestCase):
         store = self.completed()
         checked = batch.check_durable_sync_results(store)
         self.assertEqual(checked['last_check_summary']['writeback_gate']['decision'], 'allow')
+        preview = store.get_artifact(kind='preview_manifest')
         applied = batch.apply_durable_sync_results(store)
         self.assertEqual(applied['state'], 'applied')
         fixture = Path(__file__).resolve().parents[1] / 'fixtures/rpgmaker_mv_narrative/expected'
         for path in fixture.rglob('*.json'):
             self.assertEqual((self.target / path.relative_to(fixture)).read_bytes(), path.read_bytes())
         self.assertEqual(before, {path.relative_to(self.source): path.read_bytes() for path in self.source.rglob('*') if path.is_file()})
+        rechecked = batch.check_durable_sync_results(store)
+        self.assertEqual(rechecked['last_check_summary']['check_status'], 'already_applied')
+        self.assertEqual(rechecked['last_check_summary']['writeback_gate']['decision'], 'deny')
+        self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
         self.assertEqual(batch.apply_durable_sync_results(store)['last_apply_result'], 'already_applied')
 
     def test_mv_plan_material_can_be_used_by_batch(self):
