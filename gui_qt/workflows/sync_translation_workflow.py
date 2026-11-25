@@ -608,6 +608,7 @@ class SyncTranslationWorkflow:
     def _complete_apply(self, envelope: Mapping[str, Any]) -> WorkflowUpdate:
         result = _as_mapping(envelope.get("result"))
         apply_result = _as_mapping(result.get("apply"))
+        rag_recovery = _as_mapping(apply_result.get("rag_recovery"))
         last_result = str(apply_result.get("last_apply_result") or "").strip()
         applied_files = apply_result.get("applied_files")
         facts: list[str] = []
@@ -615,6 +616,9 @@ class SyncTranslationWorkflow:
             facts.append(f"已写回文件：{len(applied_files)} 个")
         if last_result:
             facts.append(f"写回结果：{last_result}")
+        resumed = int(rag_recovery.get("resumed_embeddings") or 0)
+        if resumed:
+            facts.append(DURABLE_SYNC_RUN_COPY["rag_resumed_fact"].format(count=resumed))
         heading = (
             DURABLE_SYNC_RUN_COPY["already_applied_heading"]
             if last_result == "already_applied"
@@ -626,6 +630,13 @@ class SyncTranslationWorkflow:
             else DURABLE_SYNC_RUN_COPY["applied_message"]
         )
         self.preview_ready = False
+        if int(rag_recovery.get("pending_files") or 0) > 0:
+            return WorkflowUpdate(
+                status="warning",
+                heading=DURABLE_SYNC_RUN_COPY["rag_pending_heading"],
+                message=DURABLE_SYNC_RUN_COPY["rag_pending_message"],
+                facts=facts,
+            )
         return WorkflowUpdate(
             status="done",
             heading=heading,

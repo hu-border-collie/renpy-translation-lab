@@ -3059,7 +3059,10 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
             self.assertEqual(target.read_text(encoding='utf-8'), translated)
             self.assertEqual(applied['state'], 'applied')
             update_progress.assert_called_once_with('a.rpy', ['id:1'])
-            update_rag.assert_called_once_with(str(target), full_file=True)
+            update_rag.assert_called_once_with(
+                str(target), full_file=True, resume_only=False,
+                expected_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
+            )
 
     def test_sync_apply_blocks_when_macro_added_after_preview(self):
         old_macro = runtime.SYNC_MACRO_SETTING
@@ -3814,6 +3817,171 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
     def test_sync_rag_hash_key_uses_full_digest(self):
         self.assertEqual(runtime.sync_rag_hash_key('memory'), runtime.hash_text('memory'))
         self.assertEqual(len(runtime.sync_rag_hash_key('memory')), 40)
+
+    def test_sync_rag_refresh_resumes_only_missing_embeddings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'script.rpy'
+            target.write_text(
+                ''.join(f'old "source {index}"\nnew "translation {index}"\n' for index in range(17)),
+                encoding='utf-8',
+            )
+            store_dir = Path(tmp) / 'rag'
+            with mock.patch.multiple(
+                runtime, BASE_DIR=tmp, TL_DIR=tmp, SYNC_RAG_ENABLED=True,
+                SYNC_RAG_UPDATE_ON_SUCCESS=True, SYNC_RAG_STORE_DIR=str(store_dir),
+                SYNC_RAG_OUTPUT_DIMENSIONALITY=3, SYNC_RAG_SEGMENT_LINES=1,
+                _SYNC_RAG_STORE=None, MODEL_ROUTING_CONFIG=None,
+            ):
+                with mock.patch.object(runtime, 'embed_texts', side_effect=[
+                    [[1.0, 0.0, 0.0]] * 16, OSError('fixture interruption'),
+                ]) as first:
+                    interrupted = runtime.sync_rag_store_for_file(str(target))
+                self.assertIn('fixture interruption', interrupted['error'])
+                self.assertEqual([len(call.args[0]) for call in first.call_args_list], [16, 1])
+                self.assertEqual(runtime.JsonRagStore(store_dir).count_history(), 0)
+
+                runtime._SYNC_RAG_STORE = None
+                with mock.patch.object(runtime, 'embed_texts', side_effect=lambda texts, *args, **kwargs: [
+                    [0.0, 1.0, 0.0] for _ in texts
+                ]) as resumed:
+                    result = runtime.sync_rag_store_for_file(str(target))
+
+                self.assertEqual([len(call.args[0]) for call in resumed.call_args_list], [1])
+                self.assertEqual(result['upserted'], 17)
+                published = runtime.JsonRagStore(store_dir)
+                self.assertEqual(published.count_history(), 17)
+                self.assertEqual(len(published.search_history([1.0, 0.0, 0.0], top_k=0)), 16)
+
+    def test_sync_apply_recovers_rag_checkpoint_without_rewriting_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            source = ''.join(f'old "source {index}"\nnew "source {index}"\n' for index in range(17))
+            translated = ''.join(f'old "source {index}"\nnew "translation {index}"\n' for index in range(17))
+            target.write_text(source, encoding='utf-8')
+            binding = {
+                'check_fingerprint': 'fixture',
+                'writeback_gate': {'decision': 'allow'},
+            }
+            for name in ('run_manifest', 'results', 'targets', 'check_manifest'):
+                artifact = root / f'{name}.json'
+                artifact.write_text(json.dumps({'last_check_summary': {
+                    'check_fingerprint': binding['check_fingerprint'],
+                    'writeback_gate': binding['writeback_gate'],
+                }}) if name == 'check_manifest' else '{}', encoding='utf-8')
+                binding[name] = {
+                    'path': str(artifact),
+                    'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                }
+            manifest_path, _ = runtime.sync_translation_preview.create_sync_preview(
+                log_dir=root / 'logs', project_root=root, tl_dir=root,
+                durable_check_binding=binding,
+                files=[{
+                    'relative_path': target.name,
+                    'source_text': source,
+                    'source_sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                    'preview_text': translated,
+                    'progress_entries': ['fixture'],
+                }],
+            )
+            store_dir = root / 'rag'
+            with (
+                mock.patch.multiple(
+                    runtime, BASE_DIR=tmp, TL_DIR=tmp, SYNC_RAG_ENABLED=True,
+                    SYNC_RAG_UPDATE_ON_SUCCESS=True, SYNC_RAG_STORE_DIR=str(store_dir),
+                    SYNC_RAG_OUTPUT_DIMENSIONALITY=3, SYNC_RAG_SEGMENT_LINES=1,
+                    _SYNC_RAG_STORE=None, MODEL_ROUTING_CONFIG=None, GLOSSARY_FILE='',
+                    SYNC_MACRO_FINGERPRINT='',
+                ),
+                mock.patch.object(runtime, 'load_config'),
+                mock.patch.object(runtime, 'load_translator_settings'),
+                mock.patch.object(runtime, 'current_project_engine', return_value='renpy'),
+                mock.patch.object(runtime, 'update_progress') as progress,
+            ):
+                with mock.patch.object(runtime, 'embed_texts', side_effect=[
+                    [[1.0, 0.0, 0.0]] * 16, OSError('fixture interruption'),
+                ]):
+                    first = runtime.apply_sync_translation_preview(manifest_path, allow_durable=True)
+                self.assertEqual(first['last_apply_result'], 'applied')
+                self.assertEqual(first['_sync_rag_recovery']['pending_files'], 1)
+                self.assertEqual(target.read_text(encoding='utf-8'), translated)
+                self.assertEqual(runtime.JsonRagStore(store_dir).count_history(), 0)
+
+                with (
+                    mock.patch.object(runtime, 'embed_texts', return_value=[[0.0, 1.0, 0.0]]) as embed,
+                    mock.patch.object(runtime.sync_translation_preview, 'atomic_write_many_lines') as write,
+                ):
+                    second = runtime.apply_sync_translation_preview(manifest_path, allow_durable=True)
+                    third = runtime.apply_sync_translation_preview(manifest_path, allow_durable=True)
+                self.assertEqual(second['last_apply_result'], 'already_applied')
+                self.assertEqual(second['_sync_rag_recovery'], {
+                    'pending_files': 0, 'resumed_embeddings': 16,
+                })
+                self.assertEqual(third['last_apply_result'], 'already_applied')
+                self.assertNotIn('_sync_rag_recovery', third)
+                embed.assert_called_once()
+                self.assertEqual(len(embed.call_args.args[0]), 1)
+                write.assert_not_called()
+                progress.assert_called_once_with(target.name, ['fixture'])
+                self.assertEqual(runtime.JsonRagStore(store_dir).count_history(), 17)
+
+    def test_sync_rag_checkpoint_reuses_only_unchanged_material(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'script.rpy'
+            original = ''.join(
+                f'old "source {index}"\nnew "translation {index}"\n' for index in range(17)
+            )
+            target.write_text(original, encoding='utf-8')
+            store_dir = Path(tmp) / 'rag'
+            with mock.patch.multiple(
+                runtime, BASE_DIR=tmp, TL_DIR=tmp, SYNC_RAG_ENABLED=True,
+                SYNC_RAG_UPDATE_ON_SUCCESS=True, SYNC_RAG_STORE_DIR=str(store_dir),
+                SYNC_RAG_OUTPUT_DIMENSIONALITY=3, SYNC_RAG_SEGMENT_LINES=1,
+                _SYNC_RAG_STORE=None, MODEL_ROUTING_CONFIG=None,
+            ):
+                with mock.patch.object(runtime, 'embed_texts', side_effect=[
+                    [[1.0, 0.0, 0.0]] * 16, [],
+                ]):
+                    invalid = runtime.sync_rag_store_for_file(str(target))
+                self.assertIn('count mismatch', invalid['error'])
+                self.assertEqual(runtime.JsonRagStore(store_dir).count_history(), 0)
+                target.write_text(original.replace('translation 0', 'updated translation'), encoding='utf-8')
+
+                with mock.patch.object(runtime, 'embed_texts', return_value=[[0.0, 1.0, 0.0]] * 2) as embed:
+                    recovered = runtime.sync_rag_store_for_file(str(target))
+                self.assertEqual(recovered['resumed_embeddings'], 15)
+                self.assertEqual(recovered['upserted'], 17)
+                embed.assert_called_once()
+                self.assertEqual(embed.call_args.args[0], [
+                    'Source:\nsource 0\n\nTranslation:\nupdated translation',
+                    'Source:\nsource 16\n\nTranslation:\ntranslation 16',
+                ])
+
+    def test_sync_rag_checkpoint_survives_history_write_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'script.rpy'
+            target.write_text('old "source"\nnew "translation"\n', encoding='utf-8')
+            store_dir = Path(tmp) / 'rag'
+            with (
+                mock.patch.multiple(
+                    runtime, BASE_DIR=tmp, TL_DIR=tmp, SYNC_RAG_ENABLED=True,
+                    SYNC_RAG_UPDATE_ON_SUCCESS=True, SYNC_RAG_STORE_DIR=str(store_dir),
+                    SYNC_RAG_OUTPUT_DIMENSIONALITY=3, _SYNC_RAG_STORE=None,
+                    MODEL_ROUTING_CONFIG=None,
+                ),
+                mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embed,
+            ):
+                with mock.patch.object(runtime.JsonRagStore, '_write_history', side_effect=OSError('fixture I/O')):
+                    failed = runtime.sync_rag_store_for_file(str(target))
+                self.assertTrue(failed['checkpoint_pending'])
+                self.assertEqual(failed['history_records_after'], 0)
+                self.assertEqual(runtime._SYNC_RAG_STORE.count_history(), 0)
+
+                published = runtime.sync_rag_store_for_file(str(target), resume_only=True)
+                self.assertFalse(published['checkpoint_pending'])
+                self.assertEqual(published['resumed_embeddings'], 1)
+                self.assertEqual(published['upserted'], 1)
+                embed.assert_called_once()
 
     def test_sync_rag_store_for_file_upserts_translation_entries(self):
         old_values = {

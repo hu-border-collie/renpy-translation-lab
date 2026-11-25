@@ -22987,6 +22987,8 @@ def build_arg_parser():
         'apply',
         help='Apply downloaded results back into tl files, export changed files only, '
              'or write back and export the same rendered result.',
+        description='Apply a checked translation preview. Repeating apply for a Durable Sync run '
+                    'can resume a pending Ren\'Py history update from saved embeddings.',
     )
     add_machine_output_argument(apply_parser)
     apply_parser.add_argument(
@@ -25677,6 +25679,7 @@ def build_machine_success_envelope(command, value, args):
     ):
         manifest = dict(value)
         last_result = str(manifest.get('last_apply_result') or 'applied')
+        rag_recovery = manifest.get('_sync_rag_recovery')
         return cli_contract.success_envelope(
             command,
             status=last_result,
@@ -25686,6 +25689,7 @@ def build_machine_success_envelope(command, value, args):
                     'last_apply_result': last_result,
                     'applied_files': list(manifest.get('applied_files') or []),
                     'summary': dict(manifest.get('summary') or {}),
+                    **({'rag_recovery': dict(rag_recovery)} if isinstance(rag_recovery, dict) else {}),
                 },
             },
             artifacts=_nonempty_artifacts(

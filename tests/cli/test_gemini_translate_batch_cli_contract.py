@@ -1402,6 +1402,7 @@ class BatchCliContractTests(unittest.TestCase):
             "applied_files": ["script.rpy"],
             "summary": {"translated_items": 1},
             "durable_check_binding": {"run_manifest": {"sha256": "a" * 64}},
+            "_sync_rag_recovery": {"pending_files": 0, "resumed_embeddings": 16},
         }
         envelope = batch.build_machine_success_envelope(
             "apply", manifest, SimpleNamespace(target="sync-run-v1-demo")
@@ -1413,6 +1414,10 @@ class BatchCliContractTests(unittest.TestCase):
         )
         self.assertEqual(
             envelope["result"]["apply"]["applied_files"], ["script.rpy"]
+        )
+        self.assertEqual(
+            envelope["result"]["apply"]["rag_recovery"],
+            {"pending_files": 0, "resumed_embeddings": 16},
         )
         self.assertEqual(
             envelope["artifacts"]["manifest"],

@@ -94,7 +94,12 @@ class _EmbeddingIdentityStoreMixin:
             previous = getattr(self, '_write_session', None)
             self._write_session = (threading.get_ident(), lock_info)
             try:
+                self._refresh_from_disk_if_changed()
                 yield self
+            except BaseException:
+                # A failed replacement may have changed the in-memory index only.
+                self._loaded = False
+                raise
             finally:
                 self._write_session = previous
 

@@ -809,11 +809,13 @@ def apply_sync_preview(
     active_project_root: str | os.PathLike[str],
     active_tl_dir: str | os.PathLike[str],
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
+    on_file_already_applied: Callable[[dict[str, Any]], None] | None = None,
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
     allow_external: bool = False,
     active_material_loader: Callable[[], dict] | None = None,
 ) -> dict[str, Any]:
+    """Apply the validated preview and run post-write hooks for confirmed files."""
     manifest_file = Path(manifest_path).resolve()
     loaded_preview = load_sync_preview(manifest_path)
     external = loaded_preview.get('external_check_binding') is not None
@@ -880,8 +882,9 @@ def apply_sync_preview(
         for item in prepared:
             entry = item["entry"]
             applied_paths.append(entry["relative_path"])
-            if on_file_applied is not None and not item['already_applied']:
-                on_file_applied(entry)
+            callback = on_file_already_applied if item["already_applied"] else on_file_applied
+            if callback is not None:
+                callback(entry)
     except Exception as exc:
         manifest["state"] = "apply_failed"
         manifest["last_apply_failure"] = str(exc)
