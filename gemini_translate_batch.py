@@ -13856,13 +13856,38 @@ def _create_checked_durable_sync_preview(store, manifest):
 
 
 def check_durable_sync_results(store):
-    # A new check attempt supersedes the prior writeback authorization even if
-    # this check is denied or interrupted before it can create a new preview.
-    store.delete_artifact(kind='preview_manifest')
-    manifest = _build_durable_sync_check_manifest(store)
-    checked = check_results(manifest['_manifest_path'])
-    _create_checked_durable_sync_preview(store, checked)
-    return checked
+    with _durable_sync_writeback_lock(store):
+        # A new check attempt supersedes the prior writeback authorization even if
+        # this check is denied or interrupted before it can create a new preview.
+        store.delete_artifact(kind='preview_manifest')
+        manifest = _build_durable_sync_check_manifest(store)
+        checked = check_results(manifest['_manifest_path'])
+        _create_checked_durable_sync_preview(store, checked)
+        return checked
+
+
+@contextlib.contextmanager
+def _durable_sync_writeback_lock(store):
+    from execution.sync_run_contracts import ErrorCode, SyncRunError
+
+    if not store.db_path.is_file():
+        store.get_run()  # Preserve the normal missing-run error without creating a directory.
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(atomic_io.exclusive_file_lock(
+                store.run_dir / '.sync_writeback.lock', timeout=0.1,
+            ))
+        except atomic_io.AtomicFileLockUnavailableError as exc:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_STORAGE_ERROR, 'Durable Sync writeback lock is unavailable.',
+                safe_details={'run_id': store.run_id},
+            ) from exc
+        except atomic_io.AtomicFileLockTimeoutError as exc:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_BUSY, 'Another check or apply holds the Durable Sync writeback lock.',
+                safe_details={'run_id': store.run_id},
+            ) from exc
+        yield
 
 
 def _require_durable_sync_source_fresh(store, preview_manifest):
@@ -13936,29 +13961,22 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
 
 
 def apply_durable_sync_results(store):
-    violations = store.verify_integrity()
-    if violations:
-        raise cli_contract.MachineContractError(
-            'Durable Sync run failed integrity verification before apply.',
-            code_name='SYNC_RUN_STORAGE_ERROR',
-            suggested_action='inspect_durable_sync_run',
-            details={'run_id': store.run_id, 'violations': violations[:20]},
+    with _durable_sync_writeback_lock(store):
+        violations = store.verify_integrity()
+        if violations:
+            raise cli_contract.MachineContractError(
+                'Durable Sync run failed integrity verification before apply.',
+                code_name='SYNC_RUN_STORAGE_ERROR',
+                suggested_action='inspect_durable_sync_run',
+                details={'run_id': store.run_id, 'violations': violations[:20]},
+            )
+        preview = _verified_store_artifact(store, 'preview_manifest')
+        preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
+        _require_durable_sync_source_fresh(store, preview_manifest)
+        return legacy.apply_sync_translation_preview(
+            preview['path'],
+            allow_durable=True,
         )
-    preview = _verified_store_artifact(store, 'preview_manifest')
-    preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
-    _require_durable_sync_source_fresh(store, preview_manifest)
-    applied = legacy.apply_sync_translation_preview(
-        preview['path'],
-        allow_durable=True,
-    )
-    relative = Path(preview['path']).resolve().relative_to(store.run_dir.resolve())
-    store.put_artifact(
-        kind='preview_manifest',
-        relative_path=str(relative),
-        sha256_digest=file_sha256(preview['path']),
-        schema_version=sync_translation_preview.VERSION,
-    )
-    return applied
 
 
 def check_results(target=None):
@@ -22988,7 +23006,7 @@ def build_arg_parser():
         help='Apply downloaded results back into tl files, export changed files only, '
              'or write back and export the same rendered result.',
         description='Apply a checked translation preview. Repeating apply for a Durable Sync run '
-                    'can resume a pending Ren\'Py history update from saved embeddings.',
+                    'can resume pending Ren\'Py history updates.',
     )
     add_machine_output_argument(apply_parser)
     apply_parser.add_argument(

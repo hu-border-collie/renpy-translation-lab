@@ -3983,6 +3983,29 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                 self.assertEqual(published['upserted'], 1)
                 embed.assert_called_once()
 
+    def test_sync_rag_retrieval_can_open_published_history_while_writer_holds_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'script.rpy'
+            target.write_text('old "source"\nnew "translation"\n', encoding='utf-8')
+            with (
+                mock.patch.multiple(
+                    runtime, BASE_DIR=tmp, TL_DIR=tmp, SYNC_RAG_ENABLED=True,
+                    SYNC_RAG_UPDATE_ON_SUCCESS=True, SYNC_RAG_STORE_DIR=str(root / 'rag'),
+                    SYNC_RAG_OUTPUT_DIMENSIONALITY=3, _SYNC_RAG_STORE=None,
+                    MODEL_ROUTING_CONFIG=None,
+                ),
+                mock.patch.object(runtime, 'current_project_engine', return_value='renpy'),
+                mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]),
+            ):
+                self.assertEqual(runtime.sync_rag_store_for_file(str(target))['upserted'], 1)
+                writer = runtime._SYNC_RAG_STORE
+                runtime._SYNC_RAG_STORE = None
+                with writer.write_session('history_refresh_fixture'):
+                    hits, stats = runtime.retrieve_sync_history_hits([{'text': 'source'}])
+                self.assertEqual(stats['hit_count'], 1)
+                self.assertEqual([row['translated_text'] for row in hits], ['translation'])
+
     def test_sync_rag_store_for_file_upserts_translation_entries(self):
         old_values = {
             'enabled': runtime.SYNC_RAG_ENABLED,
@@ -4177,8 +4200,22 @@ class TranslatorRuntimeRegressionTests(unittest.TestCase):
                         '    e "\u7b2c\u4e8c\u884c"\n',
                         encoding='utf-8',
                     )
-                    second_summary = runtime.sync_rag_store_for_file(str(target_file))
+                    snapshots = []
+                    write_history = runtime.JsonRagStore._write_history
 
+                    def capture_history(store):
+                        write_history(store)
+                        reader = runtime.JsonRagStore(store.store_dir)
+                        snapshots.append([
+                            entry['source_text']
+                            for entry in reader.search_history([1.0, 0.0, 0.0], top_k=0)
+                        ])
+
+                    with mock.patch.object(runtime.JsonRagStore, '_write_history',
+                                           autospec=True, side_effect=capture_history):
+                        second_summary = runtime.sync_rag_store_for_file(str(target_file))
+
+                self.assertEqual(snapshots, [['Hello there\nSecond line']])
                 self.assertEqual(first_summary['upserted'], 1)
                 self.assertEqual(second_summary['pruned'], 1)
                 self.assertEqual(second_summary['upserted'], 1)

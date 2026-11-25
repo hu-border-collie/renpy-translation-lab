@@ -1940,7 +1940,7 @@ DURABLE_SYNC_RUN_COPY = {
     "already_applied_heading": "该预览已写回过",
     "already_applied_message": "项目脚本已保持上次写回的内容。",
     "rag_pending_heading": "译文已写回，历史库更新待恢复",
-    "rag_pending_message": "再次确认同一预览可用已保存的向量继续更新历史库。",
+    "rag_pending_message": "再次确认同一预览可继续更新历史库，已保存的向量会自动复用。",
     "rag_resumed_fact": "已从本地恢复 {count} 条历史向量",
     "rag_apply_command": "写回同步预览或续接历史库更新",
 }

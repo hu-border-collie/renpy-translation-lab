@@ -3489,6 +3489,7 @@ def _attach_store_document_identity(store, settings=None, *, rebuild=False):
 
 
 def get_sync_rag_store():
+    """Open the published history without initializing or locking the store."""
     global _SYNC_RAG_STORE, SYNC_RAG_STORE_DIR
     if not SYNC_RAG_ENABLED:
         return None
@@ -3499,15 +3500,6 @@ def get_sync_rag_store():
         or os.path.abspath(_SYNC_RAG_STORE.store_dir) != os.path.abspath(SYNC_RAG_STORE_DIR)
     ):
         _SYNC_RAG_STORE = JsonRagStore(SYNC_RAG_STORE_DIR)
-        _SYNC_RAG_STORE.set_metadata(
-            owner="gemini_translate.py",
-            mode="sync",
-            embedding_model=SYNC_RAG_EMBEDDING_MODEL,
-            query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
-            document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
-            output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
-        )
-        _attach_store_document_identity(_SYNC_RAG_STORE)
     return _SYNC_RAG_STORE
 
 
@@ -4975,6 +4967,17 @@ def upsert_sync_rag_records(store, records, *, checkpoint_path, obsolete_ids=(),
         stats["embedding_compatibility"] = identity_status
         return stats
 
+    metadata = {
+        "owner": "gemini_translate.py",
+        "mode": "sync",
+        "embedding_model": settings.model,
+        "query_task_type": settings.native_query_task_type,
+        "document_task_type": settings.native_document_task_type,
+        "output_dimensionality": settings.output_dimension,
+    }
+    if any(store.metadata.get(key) != value for key, value in metadata.items()):
+        store.set_metadata(**metadata)
+
     checkpoint = None
     embedded_records = []
     if pending_records:
@@ -4996,10 +4999,9 @@ def upsert_sync_rag_records(store, records, *, checkpoint_path, obsolete_ids=(),
         source_path, expected_sha256 = source_snapshot
         if _sync_rag_file_digest(source_path) != expected_sha256:
             raise ValueError("Translation file changed before publishing the Sync RAG history.")
-    if embedded_records:
-        stats["upserted"] = store.upsert_history(embedded_records)
-    if obsolete_ids:
-        stats["pruned"] = store.delete_history(obsolete_ids)
+    stats["upserted"], stats["pruned"] = store.update_history(
+        embedded_records, obsolete_ids=obsolete_ids,
+    )
     try:
         if checkpoint is not None:
             checkpoint.clear()
@@ -5121,7 +5123,7 @@ def maybe_update_sync_rag_store(
     except Exception as exc:
         # History updates happen after game-file writeback has already succeeded.
         print(f"  Warning: Sync RAG store update skipped: {exc}", flush=True)
-        return
+        return {"enabled": True, "error": str(exc)}
     if summary.get("resumed_embeddings"):
         print(f"  Sync RAG embeddings recovered: {summary['resumed_embeddings']}", flush=True)
     if summary.get("upserted"):
@@ -7636,22 +7638,27 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     """
     load_config(require_api_key=False)
     load_translator_settings()
-    active_engine = current_project_engine()
+    is_mv = current_project_engine() == 'rpgmaker_mv'
     rag_recovery = {"pending_files": 0, "resumed_embeddings": 0}
 
-    def record_progress(entry, *, already_applied=False):
-        if active_engine == 'rpgmaker_mv':
-            return
-        if not already_applied:
-            update_progress(entry["relative_path"], entry.get("progress_entries") or [])
+    def record_history(entry, *, resume_only=False):
         translated_path = os.path.join(TL_DIR, *entry["relative_path"].split("/"))
         summary = maybe_update_sync_rag_store(
-            translated_path, full_file=True, resume_only=already_applied,
+            translated_path, full_file=True, resume_only=resume_only,
             expected_sha256=entry["preview_sha256"],
         )
-        if isinstance(summary, dict):
-            rag_recovery["pending_files"] += int(bool(summary.get("checkpoint_pending")))
-            rag_recovery["resumed_embeddings"] += int(summary.get("resumed_embeddings") or 0)
+        if not isinstance(summary, dict):
+            return False
+        pending = bool(summary.get("checkpoint_pending"))
+        if not durable:
+            rag_recovery["pending_files"] += int(pending)
+        rag_recovery["resumed_embeddings"] += int(summary.get("resumed_embeddings") or 0)
+        return bool(summary.get("enabled")) and not (pending or summary.get("error"))
+
+    def record_progress(entry):
+        update_progress(entry["relative_path"], entry.get("progress_entries") or [])
+        if not durable:
+            record_history(entry)
 
     try:
         manifest = sync_translation_preview.load_sync_preview(manifest_path)
@@ -7660,7 +7667,8 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     compatibility = manifest.get('_translation_plan_compatibility') or {}
     if compatibility.get('mode') == 'legacy':
         print(f"Warning: {compatibility.get('message')}", file=sys.stderr)
-    if manifest.get('durable_check_binding') is not None and not allow_durable:
+    durable = manifest.get('durable_check_binding') is not None
+    if durable and not allow_durable:
         raise SystemExit(
             'Sync apply blocked: Durable Sync previews must be applied with '
             '`gemini_translate_batch.py apply <RUN>` so the complete source '
@@ -7683,7 +7691,7 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     )
     try:
         material_options = {}
-        if active_engine == 'rpgmaker_mv':
+        if is_mv:
             from execution.mv_sync import material_identity
             material_options['active_material_loader'] = lambda: material_identity(
                 current_mv_sync_snapshot(require_review=False))
@@ -7691,8 +7699,12 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
             manifest_path,
             active_project_root=BASE_DIR,
             active_tl_dir=TL_DIR,
-            on_file_applied=record_progress,
-            on_file_already_applied=lambda entry: record_progress(entry, already_applied=True),
+            on_file_applied=record_progress if not is_mv else None,
+            on_file_already_applied=(
+                lambda entry: record_history(entry, resume_only=True)
+            ) if not (durable or is_mv) else None,
+            on_pending_history=record_history if durable and not is_mv else None,
+            schedule_history=durable and not is_mv and SYNC_RAG_ENABLED and SYNC_RAG_UPDATE_ON_SUCCESS,
             active_quality_policy=active_quality_policy,
             active_glossary_file=GLOSSARY_FILE,
             **material_options,
@@ -7700,6 +7712,11 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
 
+    if durable:
+        pending = manifest.pop("_pending_history_files", 0)
+        rag_recovery["pending_files"] = pending
+        if pending:
+            print(f"Sync RAG history pending for {pending} file(s). Repeat apply for the same run.")
     if any(rag_recovery.values()):
         manifest["_sync_rag_recovery"] = rag_recovery
     summary = manifest.get("summary") or {}
