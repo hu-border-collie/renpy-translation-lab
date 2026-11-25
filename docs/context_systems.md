@@ -187,7 +187,7 @@ python gemini_translate_batch.py project-analysis-unpublish
 - 结构重建使用 **label / route 局部 fingerprint**：只改一个 label 时，未受影响的 label 与路线会复用已有 LLM 摘要；项目级 fingerprint 仍单独用于 brief 发布与注入 freshness 门禁。
 - 项目内的脚本根以相对路径写入 manifest；项目整体移动或复制后会相对当前 `base_dir` 重新解析。旧 manifest 中位于旧项目根下的绝对路径也会兼容重定位。
 - `project-analysis-generate` 会输出逐 label / route / brief 的机器可读进度，并汇总请求数、输入/输出 Token 与按 `batch.pricing` 当前模型费率计算的**估算成本**。manifest 的 `generation` 保存生成统计，GUI 显示当前执行的进度和用量。
-- 每个生成响应及其用量先保存到项目分析存储的本地检查点。中断后用相同输入再次执行 `project-analysis-generate`，会复用请求指纹匹配的结果。用量摘要只汇总本次新请求，`resumed_responses` 单独报告复用数。草稿保存中断后也能用已生成的内容继续保存，摘要仍需人工启用。
+- 每个生成响应及其用量先保存到项目分析存储的本地检查点。中断后用相同输入再次执行 `project-analysis-generate`，会复用请求指纹匹配的结果。用量摘要只汇总本次新请求，`resumed_responses` 单独报告复用数。已准备的草稿会沿用该轮上下文继续保存，无需再次检索。摘要仍需人工启用。
 - `--force` 会开启一轮新生成。进程停止时尚未收到或写盘的请求，重跑时可能再次发送。
 - GUI「上下文库」把项目分析注册为正式 `WorkMode`，通过统一工作流运行 ingest → build → generate；停止后可根据已落盘产物从当前生命周期阶段重新开始。
 - 首次或重新分析时会自动定位当前项目最近的 `keyword_chunk_summaries.jsonl`，但导入前必须明确确认；也可以明确跳过，未找到时可手动选择文件。未导入时仍允许静态结构分析，但 CLI 状态、上下文库状态和实际注入预览会持续显示“仅结构分析”的非阻断警告。

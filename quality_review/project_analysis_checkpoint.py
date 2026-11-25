@@ -20,7 +20,9 @@ class AnalysisGenerationCheckpoint:
     binding has a pending generation that a normal invocation can resume.
     """
 
-    def __init__(self, root: Path, *, force: bool, completed_run_id: str):
+    def __init__(
+        self, root: Path, *, force: bool, completed_run_id: str, expected_run_id: str = "",
+    ):
         self.pending = root / "pending.json"
         state = None if force else self._read(self.pending)
         if state is not None and (
@@ -30,12 +32,45 @@ class AnalysisGenerationCheckpoint:
             or state.get("binding") != root.name
         ):
             raise ProjectAnalysisError("Project Analysis generation checkpoint has an invalid identity.")
+        if expected_run_id and (state is None or state["run_id"] != expected_run_id):
+            raise ProjectAnalysisError("Prepared Project Analysis drafts are missing their generation checkpoint.")
         if state is None or state["run_id"] == completed_run_id:
             state = {"run_id": uuid4().hex, "force": bool(force), "binding": root.name}
             self._write(self.pending, state)
         self.run_id: str = state["run_id"]
         self.force: bool = state["force"]
+        self.binding = root.name
         self.directory = root / self.run_id
+
+    @classmethod
+    def resume_prepared(
+        cls, reference: Path, *, completed_run_id: str,
+    ) -> tuple[AnalysisGenerationCheckpoint, dict] | None:
+        """Locate prepared drafts before collecting context from the live outputs."""
+        entry = cls._read(reference)
+        if entry is None:
+            return None
+        binding = entry.get("binding")
+        run_id = entry.get("run_id")
+        if (
+            entry.get("scope") != reference.name
+            or not isinstance(binding, str) or not re.fullmatch(r"[a-f0-9]{64}", binding)
+            or not isinstance(run_id, str) or not re.fullmatch(r"[a-f0-9]{32}", run_id)
+        ):
+            raise ProjectAnalysisError("Prepared Project Analysis checkpoint reference is invalid.")
+        if run_id == completed_run_id:
+            return None
+        root = reference.parent / binding
+        if root.resolve().parent != reference.parent.resolve():
+            raise ProjectAnalysisError("Prepared Project Analysis checkpoint is outside its store.")
+        checkpoint = cls(
+            root, force=False, completed_run_id=completed_run_id,
+            expected_run_id=run_id,
+        )
+        prepared = checkpoint.prepared_drafts()
+        if prepared is None or prepared.get("run_id") != run_id:
+            raise ProjectAnalysisError("Prepared Project Analysis drafts are missing or belong to another generation.")
+        return checkpoint, prepared
 
     @staticmethod
     def _read(path: Path) -> dict | None:
@@ -99,12 +134,22 @@ class AnalysisGenerationCheckpoint:
         """Read verified drafts after an interruption during their publication."""
         return self._read(self.directory / "drafts.json")
 
-    def save_prepared_drafts(self, payload: dict) -> None:
+    def save_prepared_drafts(self, payload: dict, *, reference: Path) -> None:
         self._write(self.directory / "drafts.json", payload)
+        self.index_prepared_drafts(reference)
 
-    def finish(self) -> None:
+    def index_prepared_drafts(self, reference: Path) -> None:
+        """Make an existing draft bundle discoverable without fresh retrieval."""
+        self._write(reference, {
+            "scope": reference.name,
+            "binding": self.binding,
+            "run_id": self.run_id,
+        })
+
+    def finish(self, *, reference: Path) -> None:
         """Discard this run's private receipts once the draft manifest is saved."""
         try:
+            reference.unlink(missing_ok=True)
             self.pending.unlink(missing_ok=True)
             for path in self.directory.glob("*.json"):
                 path.unlink(missing_ok=True)

@@ -582,7 +582,7 @@ def run_mapreduce_drafts(
     progress: Callable[[Mapping[str, Any]], None] | None = None,
     usage_recorder: Callable[[Mapping[str, Any]], None] | None = None,
     pricing: Mapping[str, Any] | None = None,
-    analysis_inputs: Mapping[str, Any] | None = None,
+    analysis_inputs: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None = None,
     routing_identity: str = "",
 ) -> dict[str, Any]:
     """LLM-refine label → route → brief drafts in the analysis store.
@@ -591,6 +591,8 @@ def run_mapreduce_drafts(
     ``analysis_inputs`` supplies optional context to every label, route, and brief
     request. Its content hashes and provenance participate in each upstream
     dependency digest, so any change forces a full label → route → brief refresh.
+    A callable defers context collection until after prepared-draft recovery.
+    Prepared drafts resume with their original context.
     When provided, ``progress`` receives mappings with ``stage``, ``artifact_id``,
     ``completed``, ``total``, ``action``, and a ``usage`` mapping. ``pricing`` may
     provide ``currency``, ``input_per_million``, and ``output_per_million``; the
@@ -787,7 +789,6 @@ def _run_mapreduce_drafts(
 
     generate = _tracked_generate
     cfg = merge_llm_config(config)
-    normalized_inputs = normalize_analysis_inputs(analysis_inputs)
     if model:
         cfg["model"] = model
     if not cfg["model"]:
@@ -819,23 +820,49 @@ def _run_mapreduce_drafts(
 
     prov = provider or getattr(backend, "provider", "") or ""
     model_name = cfg["model"]
-    binding = stable_json_sha256({
+    identity = dict(existing_manifest.get("project_identity") or {})
+    binding_inputs = {
         "store": str(Path(store.store_dir).resolve()),
         "project": str(Path(base_dir).resolve()) if base_dir else existing_manifest.get("project_identity"),
         "source_fingerprint": source_fp,
-        "analysis_inputs": analysis_inputs_digest(normalized_inputs),
         "prompt_schema": PROMPT_SCHEMA_VERSION,
         "provider": prov,
         "routing_identity": routing_identity,
         "config": cfg,
-    })
-    checkpoint = AnalysisGenerationCheckpoint(
-        Path(store.path_for(f".generation-checkpoints/{binding}")),
-        force=force,
-        completed_run_id=(existing_manifest.get("generation") or {}).get("checkpoint_run_id", ""),
-    )
+    }
+    publication_scope = stable_json_sha256([binding_inputs, identity])
+    reference = Path(store.path_for(f".generation-checkpoints/{publication_scope}.prepared.json"))
+    completed_run_id = (existing_manifest.get("generation") or {}).get("checkpoint_run_id", "")
+    if force:
+        reference.unlink(missing_ok=True)
+        pending_publication = None
+    else:
+        pending_publication = AnalysisGenerationCheckpoint.resume_prepared(
+            reference, completed_run_id=completed_run_id,
+        )
+    if pending_publication is None:
+        normalized_inputs = normalize_analysis_inputs(
+            analysis_inputs() if callable(analysis_inputs) else analysis_inputs,
+        )
+        binding = stable_json_sha256({
+            **binding_inputs, "analysis_inputs": analysis_inputs_digest(normalized_inputs),
+        })
+        checkpoint = AnalysisGenerationCheckpoint(
+            Path(store.path_for(f".generation-checkpoints/{binding}")),
+            force=force,
+            completed_run_id=completed_run_id,
+        )
+        prepared = checkpoint.prepared_drafts()
+        if prepared is not None:
+            checkpoint.index_prepared_drafts(reference)
+    else:
+        checkpoint, prepared = pending_publication
+        original_inputs_digest = (prepared.get("generation") or {}).get("analysis_inputs_digest")
+        if stable_json_sha256({
+            **binding_inputs, "analysis_inputs": original_inputs_digest,
+        }) != checkpoint.binding:
+            raise ProjectAnalysisError("Prepared Project Analysis drafts do not match this generation.")
     force = checkpoint.force
-    identity = dict(existing_manifest.get("project_identity") or {})
     price = dict(pricing or {})
     try:
         input_rate = float(price.get("input_per_million") or 0.0)
@@ -889,11 +916,10 @@ def _run_mapreduce_drafts(
         manifest.setdefault("artifacts", {})[KIND_PROJECT_BRIEF] = brief_entry
         manifest["generation"] = drafts["generation"]
         store.save_manifest(manifest)
-        checkpoint.finish()
+        checkpoint.finish(reference=reference)
         current_request.update(stage="complete", artifact_id="project_brief")
         _emit_progress("complete", 1, 1, "done")
 
-    prepared = checkpoint.prepared_drafts()
     if prepared is not None:
         result = dict(prepared["result"])
         resumed_responses = result["resumed_responses"] + result["usage"]["requests"]
@@ -1115,6 +1141,6 @@ def _run_mapreduce_drafts(
         "generation": generation,
         "result": result,
     }
-    checkpoint.save_prepared_drafts(prepared)
+    checkpoint.save_prepared_drafts(prepared, reference=reference)
     _publish_drafts(prepared)
     return result

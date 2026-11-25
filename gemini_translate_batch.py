@@ -25032,7 +25032,7 @@ def dispatch_command(parser, args):
                         "output_per_million": model_rates.get("output_per_million") or 0.0,
                     },
                     routing_identity=routing_identity,
-                    analysis_inputs=collect_project_analysis_optional_inputs(
+                    analysis_inputs=lambda: collect_project_analysis_optional_inputs(
                         store_dir=store_dir,
                         base_dir=legacy.BASE_DIR or None,
                     ),

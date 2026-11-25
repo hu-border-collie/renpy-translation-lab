@@ -519,6 +519,59 @@ class PromptInjectionTests(unittest.TestCase):
 
 
 class CliPhase2Tests(unittest.TestCase):
+    def test_cli_finishes_prepared_drafts_without_retrieving_from_partially_saved_labels(self):
+        import gemini_translate_batch as batch_mod
+        from providers import model_profile
+        from tests.quality_review.test_project_analysis_llm import FakeBackend
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            config_file = Path(tmp) / "translator_config.json"
+            config_file.write_text("{}", encoding="utf-8")
+            gen.build_structure_drafts(
+                store_dir=store_dir, base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)], entry_labels=["start"],
+            )
+            plan = model_profile.resolve_routing_plan(
+                {}, stage_overrides={model_profile.STAGE_PROJECT_ANALYSIS: "gemini-2.5-flash"},
+            )
+            original, resumed = FakeBackend(), FakeBackend()
+
+            def retrieve(requests, _exclude):
+                query = requests[0]["text"]
+                source_id = "refined" if "LLM-LABEL" in query else "initial"
+                return [{"source_id": source_id, "source_text": source_id}], {}
+
+            command = ["project-analysis-generate", "--store-dir", store_dir]
+            store = pa.ProjectAnalysisStore(store_dir)
+            with (
+                mock.patch.multiple(
+                    batch_mod.legacy, TRANSLATOR_CONFIG=str(config_file), BASE_DIR=str(FIXTURE_DIR),
+                    GLOSSARY_FILE="", load_config=mock.DEFAULT, load_translator_settings=mock.DEFAULT,
+                ),
+                mock.patch.multiple(
+                    batch_mod, SOURCE_INDEX_ENABLED=True, STORY_MEMORY_ENABLED=False,
+                    BATCH_MACRO_SETTING="", load_batch_settings=mock.DEFAULT,
+                    record_generation_usage_best_effort=mock.DEFAULT,
+                ),
+                mock.patch.object(batch_mod, "freeze_runtime_routing_plan", return_value=plan),
+                mock.patch.object(batch_mod, "retrieve_source_hits", side_effect=retrieve) as retrieval,
+                mock.patch.object(batch_mod, "build_project_analysis_sync_runner",
+                                  side_effect=[original.generate, resumed.generate]),
+                mock.patch("builtins.print"),
+            ):
+                with mock.patch.object(pa.ProjectAnalysisStore, "save_routes", side_effect=OSError("disk full")):
+                    with self.assertRaisesRegex(OSError, "disk full"):
+                        batch_mod.main(command)
+                self.assertIn("LLM-LABEL", store.load_summaries(pa.KIND_LABEL)[0]["summary"])
+                batch_mod.main(command)
+            self.assertGreater(len(original.calls), 1)
+            self.assertEqual((retrieval.call_count, len(resumed.calls)), (1, 0))
+            generation = store.load_manifest()["generation"]
+            self.assertEqual(generation["analysis_inputs"]["source_index"]["provenance"]["source_ids"], ["initial"])
+            self.assertIn("LLM-ROUTE", store.load_routes()[0]["summary"])
+            self.assertEqual(store.load_brief_text(published=True), "")
+
     def test_cli_resume_uses_the_same_usage_identity_for_a_saved_response(self):
         import gemini_translate_batch as batch_mod
         from providers import model_profile
