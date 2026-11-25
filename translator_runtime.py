@@ -7630,11 +7630,12 @@ def collect_tasks(lines, skip_translated=True):
     tasks, _progress = collect_tasks_with_progress(lines, skip_translated=skip_translated)
     return tasks
 
-def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
+def apply_sync_translation_preview(manifest_path, *, allow_durable=False, history_recovery_only=False):
     """Apply a generated sync preview after validating every source file.
 
     Durable previews additionally require run-store freshness validation, so
     only the durable Batch entrypoint may opt into applying one here.
+    A recovery-only preview must already match the written translations.
     """
     load_config(require_api_key=False)
     load_translator_settings()
@@ -7707,6 +7708,7 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
             schedule_history=durable and not is_mv and SYNC_RAG_ENABLED and SYNC_RAG_UPDATE_ON_SUCCESS,
             active_quality_policy=active_quality_policy,
             active_glossary_file=GLOSSARY_FILE,
+            history_recovery_only=history_recovery_only,
             **material_options,
         )
     except ValueError as exc:

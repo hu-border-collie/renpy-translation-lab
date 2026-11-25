@@ -584,6 +584,35 @@ def load_sync_preview(manifest_path: str | os.PathLike[str]) -> dict[str, Any]:
     return manifest
 
 
+def validate_durable_check_binding(binding):
+    """Verify the artifact hashes and original writeback decision for a durable preview."""
+    if not isinstance(binding, dict):
+        raise ValueError('Durable Sync check binding is invalid.')
+    gate = binding.get('writeback_gate')
+    if not isinstance(gate, dict) or gate.get('decision') != translation_quality.GATE_ALLOW:
+        raise ValueError('Durable Sync check did not allow writeback.')
+    for label in ('run_manifest', 'results', 'targets', 'check_manifest'):
+        artifact = binding.get(label)
+        if not isinstance(artifact, dict):
+            raise ValueError(f'Durable Sync {label} binding is missing.')
+        artifact_path = Path(str(artifact.get('path') or '')).resolve()
+        expected_sha = str(artifact.get('sha256') or '')
+        if not artifact_path.is_file() or file_sha256(artifact_path) != expected_sha:
+            raise ValueError(
+                f'Durable Sync {label} changed after the checked preview was generated.'
+            )
+    check_path = Path(str(binding['check_manifest'].get('path') or ''))
+    try:
+        check_manifest = json.loads(check_path.read_text(encoding='utf-8-sig'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f'Durable Sync check manifest is unreadable: {exc}') from exc
+    check_summary = check_manifest.get('last_check_summary') or {}
+    if check_summary.get('check_fingerprint') != binding.get('check_fingerprint'):
+        raise ValueError('Durable Sync check fingerprint is stale.')
+    if (check_summary.get('writeback_gate') or {}).get('decision') != translation_quality.GATE_ALLOW:
+        raise ValueError('Durable Sync check no longer allows writeback.')
+
+
 def prepare_sync_preview_apply(
     manifest_path: str | os.PathLike[str],
     *,
@@ -599,37 +628,7 @@ def prepare_sync_preview_apply(
     _validate_translation_plan_binding(manifest)
     durable_binding = manifest.get('durable_check_binding')
     if durable_binding is not None:
-        if not isinstance(durable_binding, dict):
-            raise ValueError('Durable Sync check binding is invalid.')
-        gate = durable_binding.get('writeback_gate')
-        if not isinstance(gate, dict) or gate.get('decision') != translation_quality.GATE_ALLOW:
-            raise ValueError('Durable Sync check did not allow writeback.')
-        for label in ('run_manifest', 'results', 'targets', 'check_manifest'):
-            binding = durable_binding.get(label)
-            if not isinstance(binding, dict):
-                raise ValueError(f'Durable Sync {label} binding is missing.')
-            artifact_path = Path(str(binding.get('path') or '')).resolve()
-            expected_sha = str(binding.get('sha256') or '')
-            if not artifact_path.is_file() or file_sha256(artifact_path) != expected_sha:
-                raise ValueError(
-                    f'Durable Sync {label} changed after the checked preview was generated.'
-                )
-        check_path = Path(
-            str((durable_binding.get('check_manifest') or {}).get('path') or '')
-        )
-        try:
-            check_manifest = json.loads(check_path.read_text(encoding='utf-8-sig'))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f'Durable Sync check manifest is unreadable: {exc}') from exc
-        check_summary = check_manifest.get('last_check_summary') or {}
-        if check_summary.get('check_fingerprint') != durable_binding.get(
-            'check_fingerprint'
-        ):
-            raise ValueError('Durable Sync check fingerprint is stale.')
-        if (check_summary.get('writeback_gate') or {}).get(
-            'decision'
-        ) != translation_quality.GATE_ALLOW:
-            raise ValueError('Durable Sync check no longer allows writeback.')
+        validate_durable_check_binding(durable_binding)
     external_binding = manifest.get('external_check_binding')
     if external_binding is not None:
         from execution.external_translation_work import validate_preview_binding
@@ -822,6 +821,35 @@ def _load_durable_apply_state(path, manifest, file_paths):
     return state
 
 
+def inspect_durable_history_recovery(manifest, *, active_tl_dir, recovery_only=False):
+    """Return whether a written preview has pending history and its first changed target."""
+    package_dir = Path(manifest["_manifest_path"]).parent
+    state_path = package_dir / "apply_state.json"
+    entries = manifest["files"]
+    state = _load_durable_apply_state(
+        state_path, manifest, {entry["relative_path"] for entry in entries},
+    )
+    if state is None and recovery_only:
+        raise ValueError("Durable Sync history recovery state is missing.")
+    if state is None or not state["pending_history"]:
+        return False, ""
+    if (package_dir / ".sync_writeback_transaction.json").exists():
+        raise ValueError("Durable Sync writeback was interrupted. Repeat apply to recover its transaction.")
+
+    target_root = Path(active_tl_dir).resolve()
+    if _canonical(manifest.get("tl_dir", "")) != _canonical(active_tl_dir):
+        raise ValueError("Sync preview belongs to a different translation directory.")
+    already_written = recovery_only or state.get("state") == "applied" or bool(state.get("applied_at"))
+    for entry in entries:
+        relative = _safe_relative_path(entry["relative_path"])
+        target = target_root.joinpath(*PurePosixPath(relative).parts)
+        if not _inside(target_root, target):
+            raise ValueError(f"Sync preview target escapes TL_DIR: {relative}")
+        if not target.is_file() or file_sha256(target) != entry["preview_sha256"]:
+            return already_written, relative
+    return True, ""
+
+
 def apply_sync_preview(
     manifest_path: str | os.PathLike[str],
     *,
@@ -835,6 +863,7 @@ def apply_sync_preview(
     active_glossary_file: str | os.PathLike[str] | None = None,
     allow_external: bool = False,
     active_material_loader: Callable[[], dict] | None = None,
+    history_recovery_only: bool = False,
 ) -> dict[str, Any]:
     """Apply the validated preview and finish its recorded post-write work.
 
@@ -848,7 +877,11 @@ def apply_sync_preview(
     if external and not allow_external:
         raise ValueError('External work must be applied through work-apply under its coordinator lock.')
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
-    recover_atomic_write_transaction(transaction_path, verify_targets=True)
+    if history_recovery_only:
+        if transaction_path.exists():
+            raise ValueError("History recovery requires a completed writeback transaction.")
+    else:
+        recover_atomic_write_transaction(transaction_path, verify_targets=True)
     manifest, prepared = prepare_sync_preview_apply(
         manifest_path,
         active_project_root=active_project_root,
@@ -858,13 +891,20 @@ def apply_sync_preview(
         loaded_manifest=loaded_preview,
         active_material_loader=active_material_loader,
     )
+    durable = manifest.get("durable_check_binding") is not None
+    state_path = manifest_file.parent / "apply_state.json"
+    all_paths = {item["entry"]["relative_path"] for item in prepared}
+    previous = _load_durable_apply_state(state_path, manifest, all_paths) if durable else None
     write_items = [item for item in prepared if not item["already_applied"]]
+    if history_recovery_only:
+        if previous is None:
+            raise ValueError("Durable Sync history recovery state is missing.")
+        if write_items:
+            raise ValueError("History recovery requires the already written translations.")
     writes = [
         (item["target"], item["preview_text"].splitlines(keepends=True))
         for item in write_items
     ]
-    durable = manifest.get("durable_check_binding") is not None
-    state_path = manifest_file.parent / "apply_state.json"
     pending_progress: set[str] = set()
     pending_history: set[str] = set()
     apply_state: dict[str, Any] = {"preview_fingerprint": manifest["preview_fingerprint"]}
@@ -875,9 +915,7 @@ def apply_sync_preview(
         atomic_write_json(state_path, apply_state, ensure_ascii=False, indent=2)
 
     if durable:
-        all_paths = {item["entry"]["relative_path"] for item in prepared}
         write_paths = {item["entry"]["relative_path"] for item in write_items}
-        previous = _load_durable_apply_state(state_path, manifest, all_paths)
         if previous is not None:
             apply_state = previous
             pending_progress.update(previous["pending_progress"])

@@ -54,7 +54,7 @@ STEP_COPY: dict[str, tuple[str, str]] = {
     ),
     "check": (
         "正在检查同步翻译结果",
-        "正在离线校验结果、结构与质量门禁，并生成绑定预览。",
+        "正在离线检查翻译结果或确认待恢复的历史库更新。",
     ),
     "apply": (
         "正在写回同步翻译预览",
@@ -187,6 +187,7 @@ class SyncTranslationWorkflow:
         profile_id: str = "",
         retry_unknown: bool = False,
         exclude_unknown: bool = False,
+        history_recovery_pending: bool = False,
     ) -> None:
         self.manifest_path = ""
         self.run_id = str(run_id or "")
@@ -195,6 +196,7 @@ class SyncTranslationWorkflow:
         self.run_dir = ""
         self.run_snapshot: dict[str, Any] | None = None
         self.preview_ready = False
+        self.history_recovery_pending = history_recovery_pending
         #: Path of the checked manifest that bound the writeable preview.
         self.check_manifest = ""
         self.operation = str(operation or "")
@@ -248,8 +250,11 @@ class SyncTranslationWorkflow:
         return cls(["check"], operation="check", run_id=run_id)
 
     @classmethod
-    def apply_run(cls, run_id: str) -> "SyncTranslationWorkflow":
-        return cls(["apply"], operation="apply", run_id=run_id)
+    def apply_run(cls, run_id: str, *, history_recovery_pending: bool = False) -> "SyncTranslationWorkflow":
+        return cls(
+            ["apply"], operation="apply", run_id=run_id,
+            history_recovery_pending=history_recovery_pending,
+        )
 
     # -- step planning -------------------------------------------------
 
@@ -258,6 +263,9 @@ class SyncTranslationWorkflow:
             return None
         key = self._pending_steps[0]
         heading, message = STEP_COPY.get(key, ("正在运行同步任务", ""))
+        if key == "apply" and self.history_recovery_pending:
+            heading = DURABLE_SYNC_RUN_COPY["rag_recovery_running"]
+            message = DURABLE_SYNC_RUN_COPY["rag_recovery_running_message"]
         return WorkflowStep(
             key=key,
             args=self._step_args(key),
@@ -585,6 +593,14 @@ class SyncTranslationWorkflow:
             facts.append(f"{DURABLE_SYNC_RUN_COPY['run_label']}：{self.run_id}")
         if self.check_manifest:
             facts.append(f"{DURABLE_SYNC_RUN_COPY['check_manifest_label']}：{self.check_manifest}")
+        self.history_recovery_pending = check.get("history_recovery_pending") is True
+        if self.history_recovery_pending:
+            return WorkflowUpdate(
+                status="warning",
+                heading=DURABLE_SYNC_RUN_COPY["rag_pending_heading"],
+                message=DURABLE_SYNC_RUN_COPY["rag_recovery_message"],
+                facts=facts,
+            )
         self.preview_ready = decision == "allow"
         if self.preview_ready:
             status = "warning" if check_status == "ready_with_warnings" else "done"
@@ -634,7 +650,9 @@ class SyncTranslationWorkflow:
             return WorkflowUpdate(
                 status="warning",
                 heading=DURABLE_SYNC_RUN_COPY["rag_pending_heading"],
-                message=DURABLE_SYNC_RUN_COPY["rag_pending_message"],
+                message=DURABLE_SYNC_RUN_COPY[
+                    "rag_recovery_message" if self.history_recovery_pending else "rag_pending_message"
+                ],
                 facts=facts,
             )
         return WorkflowUpdate(

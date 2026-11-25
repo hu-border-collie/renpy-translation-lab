@@ -146,6 +146,10 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 写回状态独立保存，重复执行仍使用原先绑定的检查预览。恢复会覆盖写回后尚未开始
 embedding 的文件，并复用匹配的向量。JSON 结果中的 `apply.rag_recovery` 给出
 待恢复的文件数 `pending_files` 和本次恢复的向量数 `resumed_embeddings`。
+如果在恢复前重新执行 `check <RUN>`，已完整写回的任务会保留原预览。JSON 中的
+`check.history_recovery_pending=true` 和 `next_action=apply` 指示可以继续恢复；
+此时写回门禁为 `deny`，严格退出码为 `3`。后续 `apply <RUN>` 会复核原检查绑定和
+已写回的内容。脚本一旦偏离已写回版本，本次历史库恢复会拒绝执行。
 
 耐久执行器把一次 attempt 严格绑定为一次 Provider 调用，因此会显式关闭普通 Gemini Sync 在单次调用内部进行的 API Key 轮换，也不会在 adapter 内部隐藏 timeout 重试。鉴权或凭据配置失败会按该 attempt 的稳定分类落库；修正凭据后应使用 `sync-derive` 创建新 run，新 run 可复用旧 run 已成功且仍通过校验的结果。这个限制不影响普通非耐久 Sync 的既有 Key 轮换行为。
 

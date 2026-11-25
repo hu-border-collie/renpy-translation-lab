@@ -13855,11 +13855,56 @@ def _create_checked_durable_sync_preview(store, manifest):
     return preview_path
 
 
+_DURABLE_HISTORY_RECOVERY_ARTIFACT = 'history_recovery_preview'
+
+
 def check_durable_sync_results(store):
     with _durable_sync_writeback_lock(store):
+        previous = store.get_artifact(kind='preview_manifest')
+        recovery = store.get_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT)
+        if previous is not None:
+            preview_path = store.resolve_artifact_path(previous['relative_path'])
+            if recovery is not None or preview_path.with_name('apply_state.json').is_file():
+                preview = _verified_store_artifact(store, 'preview_manifest')
+                loaded = sync_translation_preview.load_sync_preview(preview['path'])
+                pending, changed_target = sync_translation_preview.inspect_durable_history_recovery(
+                    loaded, active_tl_dir=legacy.TL_DIR, recovery_only=recovery is not None,
+                )
+                if pending:
+                    # The run store carries this restriction independently of the
+                    # mutable recovery receipt, including if that receipt is lost.
+                    if recovery is None:
+                        store.put_artifact(
+                            kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT,
+                            relative_path=previous['relative_path'],
+                            sha256_digest=previous['sha256'],
+                            schema_version=previous['schema_version'],
+                        )
+                    if changed_target:
+                        raise ValueError(
+                            f'History recovery requires the already written translation: {changed_target}'
+                        )
+                    binding = loaded.get('durable_check_binding')
+                    sync_translation_preview.validate_durable_check_binding(binding)
+                    _verify_durable_sync_run_for_apply(store)
+                    _require_durable_sync_source_fresh(store, loaded)
+                    print(f'Sync RAG history pending. Repeat apply {store.run_id} to recover it.')
+                    return {
+                        '_manifest_path': binding['check_manifest']['path'],
+                        'last_check_summary': {
+                            'check_status': 'ready_with_warnings',
+                            'writeback_gate': {
+                                'decision': translation_quality.GATE_DENY,
+                                'can_apply': False,
+                            },
+                            'history_recovery_pending': True,
+                        },
+                    }
         # A new check attempt supersedes the prior writeback authorization even if
         # this check is denied or interrupted before it can create a new preview.
         store.delete_artifact(kind='preview_manifest')
+        if recovery is not None:
+            store.delete_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT)
         manifest = _build_durable_sync_check_manifest(store)
         checked = check_results(manifest['_manifest_path'])
         _create_checked_durable_sync_preview(store, checked)
@@ -13960,22 +14005,35 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
     )
 
 
+def _verify_durable_sync_run_for_apply(store):
+    violations = store.verify_integrity()
+    if violations:
+        raise cli_contract.MachineContractError(
+            'Durable Sync run failed integrity verification before apply.',
+            code_name='SYNC_RUN_STORAGE_ERROR',
+            suggested_action='inspect_durable_sync_run',
+            details={'run_id': store.run_id, 'violations': violations[:20]},
+        )
+
+
 def apply_durable_sync_results(store):
     with _durable_sync_writeback_lock(store):
-        violations = store.verify_integrity()
-        if violations:
-            raise cli_contract.MachineContractError(
-                'Durable Sync run failed integrity verification before apply.',
-                code_name='SYNC_RUN_STORAGE_ERROR',
-                suggested_action='inspect_durable_sync_run',
-                details={'run_id': store.run_id, 'violations': violations[:20]},
-            )
+        _verify_durable_sync_run_for_apply(store)
         preview = _verified_store_artifact(store, 'preview_manifest')
+        history_recovery_only = store.get_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT) is not None
+        if history_recovery_only and _verified_store_artifact(store, _DURABLE_HISTORY_RECOVERY_ARTIFACT) != preview:
+            raise cli_contract.MachineContractError(
+                'Durable Sync history recovery is bound to a different preview.',
+                code_name='SYNC_RUN_ARTIFACT_STALE',
+                suggested_action='inspect_durable_sync_run',
+                details={'run_id': store.run_id, 'artifact': _DURABLE_HISTORY_RECOVERY_ARTIFACT},
+            )
         preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
         _require_durable_sync_source_fresh(store, preview_manifest)
         return legacy.apply_sync_translation_preview(
             preview['path'],
             allow_durable=True,
+            history_recovery_only=history_recovery_only,
         )
 
 
@@ -22905,7 +22963,9 @@ def build_arg_parser():
         help='Check downloaded results for writeback and recoverable items.',
         description=(
             'Check downloaded results. JSON output includes the writeback gate '
-            'and a merge-retry next action when a retry check allows it.'
+            'and a merge-retry next action when a retry check allows it. For an '
+            'already written Durable Sync run with pending history updates, '
+            'check preserves the recovery preview and reports history_recovery_pending.'
         ),
     )
     add_machine_output_argument(check_parser)
@@ -22913,7 +22973,7 @@ def build_arg_parser():
         'target',
         nargs='?',
         default='',
-        help='Manifest path or package dir. Defaults to latest package.',
+        help='Manifest path, package dir, or Durable Sync run ID. Defaults to latest package.',
     )
 
     quality_report_parser = subparsers.add_parser(
@@ -25930,9 +25990,12 @@ def build_machine_success_envelope(command, value, args):
                 'can_apply': False,
             }
         result['check'] = check_summary
-        result['next_action'] = (
-            'merge-retry' if _batch_check_allows_retry_merge(manifest, check_summary) else ''
-        )
+        if check_summary.get('history_recovery_pending'):
+            result['next_action'] = 'apply'
+        else:
+            result['next_action'] = (
+                'merge-retry' if _batch_check_allows_retry_merge(manifest, check_summary) else ''
+            )
         status = str(
             check_summary.get('check_status')
             or check_summary.get('safety_level')

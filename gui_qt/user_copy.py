@@ -1935,14 +1935,21 @@ DURABLE_SYNC_RUN_COPY = {
     ),
     "check_blocked_heading": "检查未通过，不能写回",
     "check_blocked_message": "写回门禁已拒绝该结果；请处理阻塞项后重新生成检查预览。",
+    "apply_preview_button": "确认并写回预览",
     "applied_heading": "同步翻译已写回",
     "applied_message": "预览已通过源快照与绑定校验，并原子写入项目脚本。",
     "already_applied_heading": "该预览已写回过",
     "already_applied_message": "项目脚本已保持上次写回的内容。",
     "rag_pending_heading": "译文已写回，历史库更新待恢复",
     "rag_pending_message": "再次确认同一预览可继续更新历史库，已保存的向量会自动复用。",
+    "rag_recovery_button": "继续更新历史库",
+    "rag_recovery_message": "点击「继续更新历史库」可复用已保存的向量。",
+    "rag_recovery_confirm": "将重新校验已写回的译文和检查制品，再继续更新历史库。是否继续？",
+    "rag_recovery_running": "正在恢复同步 RAG 历史库",
+    "rag_recovery_running_message": "正在复核已写回的译文并复用已保存的向量。",
     "rag_resumed_fact": "已从本地恢复 {count} 条历史向量",
     "rag_apply_command": "写回同步预览或续接历史库更新",
+    "rag_check_command": "检查同步结果或查找待恢复的历史库更新",
 }
 
 

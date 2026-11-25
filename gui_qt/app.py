@@ -13513,26 +13513,32 @@ class MainWindow(QMainWindow):
             )
             return
 
-        reply = message_box_question(
-            self,
-            "确认写回同步翻译",
-            "即将重新校验源快照、检查绑定与预览制品，然后修改项目脚本。\n\n"
-            f"运行 ID：{run_id}\n\n"
-            "如果脚本、结果或检查制品在预览后发生变化，写回会自动拒绝。是否继续？",
-            yes_text="确认写回",
-            no_text="取消",
-            default="no",
-        )
+        history_recovery = self.sync_translation_page.history_recovery_pending
+        if history_recovery:
+            title = yes_text = DURABLE_SYNC_RUN_COPY["rag_recovery_button"]
+            question = f"{DURABLE_SYNC_RUN_COPY['rag_recovery_confirm']}\n\n运行 ID：{run_id}"
+        else:
+            title, yes_text = "确认写回同步翻译", "确认写回"
+            question = (
+                "即将重新校验源快照、检查绑定与预览制品，然后修改项目脚本。\n\n"
+                f"运行 ID：{run_id}\n\n"
+                "如果脚本、结果或检查制品在预览后发生变化，写回会自动拒绝。是否继续？"
+            )
+        reply = message_box_question(self, title, question, yes_text=yes_text, no_text="取消", default="no")
         if reply != "yes":
             return
 
-        self._mark_revision_corpus_doctor_report_stale()
+        if not history_recovery:
+            self._mark_revision_corpus_doctor_report_stale()
         self._clear_log_view()
         self._show_workbench_log_drawer()
-        workflow = SyncTranslationWorkflow.apply_run(run_id)
+        workflow = SyncTranslationWorkflow.apply_run(run_id, history_recovery_pending=history_recovery)
         self._begin_translation_workflow(
             workflow,
-            log_heading="正在写回同步翻译预览",
+            log_heading=(
+                DURABLE_SYNC_RUN_COPY["rag_recovery_running"]
+                if history_recovery else "正在写回同步翻译预览"
+            ),
             status_tab=_BATCH_STAGE_EXECUTE,
         )
 
@@ -15244,10 +15250,12 @@ class MainWindow(QMainWindow):
                 self._stop_durable_status_poll()
             if not update.should_continue:
                 if step_key == "check":
-                    if bool(getattr(workflow, "preview_ready", False)):
+                    history_recovery = bool(getattr(workflow, "history_recovery_pending", False))
+                    if bool(getattr(workflow, "preview_ready", False)) or history_recovery:
                         self.sync_translation_page.set_durable_preview(
                             getattr(workflow, "run_id", ""),
                             check_manifest=getattr(workflow, "check_manifest", ""),
+                            history_recovery_pending=history_recovery,
                         )
                     else:
                         self.sync_translation_page.clear_preview()

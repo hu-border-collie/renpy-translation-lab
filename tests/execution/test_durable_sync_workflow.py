@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
 from unittest import mock
 
@@ -40,9 +41,12 @@ class _Backend:
 def _runtime_fixture(root, *, rag_enabled=False):
     tl_dir = root / 'game' / 'tl' / 'schinese'
     log_dir = root / 'logs'
+    config = root / 'translator_config.json'
+    config.write_text('{}\n', encoding='utf-8')
     return mock.patch.multiple(
         runtime, BASE_DIR=str(root), TL_DIR=str(tl_dir), TL_SUBDIR='game/tl/schinese',
         LOG_DIR=str(log_dir), PROGRESS_LOG=str(log_dir / 'progress.json'),
+        TRANSLATOR_CONFIG=str(config), GLOSSARY_FILE='',
         SYNC_BACKEND='litellm', MODELS=['openai/test-model'], CURRENT_MODEL_INDEX=0,
         PREP_ENABLED=False, INCLUDE_FILES=[], INCLUDE_PREFIXES=[], SYNC_RAG_ENABLED=rag_enabled,
         SYNC_STORY_MEMORY_ENABLED=False, SYNC_RAG_UPDATE_ON_SUCCESS=True,
@@ -214,6 +218,71 @@ class DurableSyncWorkflowTests(unittest.TestCase):
             store = _start_run(root)
             batch.check_durable_sync_results(store)
         return tl_dir, store
+
+    def test_recheck_preserves_pending_history_without_authorizing_script_rewrites(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir, store = self._rag_run(root, {'a': 17, 'b': 1})
+            preview = store.get_artifact(kind='preview_manifest')
+            check_path = store.run_dir / 'check_manifest.json'
+            original_check = check_path.read_bytes()
+            target = tl_dir / 'a.rpy'
+            original = target.read_bytes()
+            with _runtime_fixture(root, rag_enabled=True):
+                with mock.patch.object(runtime, 'embed_texts', side_effect=[
+                    [[1.0, 0.0, 0.0]] * 16,
+                    OSError('fixture provider unavailable'),
+                    OSError('fixture provider unavailable'),
+                ]):
+                    first = batch.apply_durable_sync_results(store)
+                self.assertEqual(first['_sync_rag_recovery']['pending_files'], 2)
+                translated = {path: path.read_bytes() for path in tl_dir.glob('*.rpy')}
+
+                def embed(texts, *args, **kwargs):
+                    return [[0.0, 1.0, 0.0]] * len(texts)
+
+                with (
+                    mock.patch.object(runtime, 'embed_texts', side_effect=embed) as provider,
+                    mock.patch.object(runtime.sync_translation_preview, 'atomic_write_many_lines') as write,
+                ):
+                    checked = batch.check_results(store.run_id)
+                    envelope = batch.build_machine_success_envelope('check', checked, Namespace())
+                    result = envelope['result']
+                    self.assertTrue(result['check']['history_recovery_pending'])
+                    self.assertEqual(result['check']['writeback_gate']['decision'], 'deny')
+                    self.assertEqual(result['next_action'], 'apply')
+                    self.assertEqual(batch.cli_contract.strict_exit_code(envelope), 3)
+                    self.assertEqual(check_path.read_bytes(), original_check)
+                    self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
+                    provider.assert_not_called()
+
+                    target.write_bytes(original)
+                    with self.assertRaisesRegex(SystemExit, 'History recovery requires'):
+                        batch.apply_durable_sync_results(store)
+                    with self.assertRaisesRegex(ValueError, 'History recovery requires'):
+                        batch.check_durable_sync_results(store)
+                    self.assertEqual(store.get_artifact(kind='preview_manifest'), preview)
+                    self.assertEqual(target.read_bytes(), original)
+                    provider.assert_not_called()
+
+                    state_path = store.resolve_artifact_path(preview['relative_path']).with_name('apply_state.json')
+                    saved_state = state_path.read_bytes()
+                    state_path.unlink()
+                    with self.assertRaisesRegex(SystemExit, 'history recovery state is missing'):
+                        batch.apply_durable_sync_results(store)
+                    provider.assert_not_called()
+                    state_path.write_bytes(saved_state)
+
+                    target.write_bytes(translated[target])
+                    result = batch.apply_durable_sync_results(store)
+                    write.assert_not_called()
+
+            self.assertEqual([len(call.args[0]) for call in provider.call_args_list], [1, 1])
+            self.assertEqual(result['last_apply_result'], 'already_applied')
+            self.assertEqual(result['_sync_rag_recovery'], {'pending_files': 0, 'resumed_embeddings': 16})
+            self.assertEqual({path: path.read_bytes() for path in translated}, translated)
+            self.assertEqual(runtime.JsonRagStore(root / 'rag').count_history(), 18)
+            self.assertEqual(store.verify_integrity(), [])
 
     def test_apply_resumes_all_files_after_process_exit_in_first_file(self):
         with tempfile.TemporaryDirectory() as tmp:
