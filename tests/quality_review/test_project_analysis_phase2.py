@@ -519,6 +519,55 @@ class PromptInjectionTests(unittest.TestCase):
 
 
 class CliPhase2Tests(unittest.TestCase):
+    def test_cli_resume_uses_the_same_usage_identity_for_a_saved_response(self):
+        import gemini_translate_batch as batch_mod
+        from providers import model_profile
+        from tests.quality_review.test_project_analysis_llm import FakeBackend
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            config_file = Path(tmp) / "translator_config.json"
+            config_file.write_text("{}", encoding="utf-8")
+            gen.build_structure_drafts(
+                store_dir=store_dir, base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)], entry_labels=["start"],
+            )
+            plan = model_profile.resolve_routing_plan(
+                {}, stage_overrides={model_profile.STAGE_PROJECT_ANALYSIS: "gemini-2.5-flash"},
+            )
+            stopped, resumed = FakeBackend(), FakeBackend()
+
+            def interrupt(request):
+                if stopped.calls:
+                    raise KeyboardInterrupt
+                return stopped.generate(request)
+
+            command = ["project-analysis-generate", "--store-dir", store_dir]
+            with (
+                mock.patch.multiple(
+                    batch_mod.legacy, TRANSLATOR_CONFIG=str(config_file), BASE_DIR=str(FIXTURE_DIR),
+                    load_config=mock.DEFAULT, load_translator_settings=mock.DEFAULT,
+                ),
+                mock.patch.object(batch_mod, "load_batch_settings"),
+                mock.patch.object(batch_mod, "freeze_runtime_routing_plan", return_value=plan),
+                mock.patch.object(batch_mod, "collect_project_analysis_optional_inputs", return_value={}),
+                mock.patch.object(batch_mod, "build_project_analysis_sync_runner",
+                                  side_effect=[interrupt, resumed.generate]),
+                mock.patch.object(batch_mod, "record_generation_usage_best_effort") as ledger,
+                mock.patch("builtins.print"),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    batch_mod.main(command)
+                batch_mod.main(command)
+            first, replay = [call.kwargs for call in ledger.call_args_list[:2]]
+            self.assertEqual(first["run_id"], replay["run_id"])
+            self.assertEqual(first["source_key"], replay["source_key"])
+            self.assertEqual(first["result"]["usage_metadata"], replay["result"]["usage_metadata"])
+            self.assertNotIn(stopped.calls[0], resumed.calls)
+            generation = pa.ProjectAnalysisStore(store_dir).load_manifest()["generation"]
+            self.assertEqual(generation["resumed_responses"], 1)
+            self.assertEqual(generation["usage"]["requests"], len(resumed.calls))
+
     def test_cli_ingest_publish_unpublish(self):
         import gemini_translate_batch as batch_mod
 

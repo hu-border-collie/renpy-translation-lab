@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from quality_review import project_analysis as pa
 from quality_review import project_analysis_generate as gen
@@ -54,6 +57,139 @@ class FakeBackend:
 
 
 class MapReduceTests(unittest.TestCase):
+    def test_resumes_saved_response_after_process_stops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.ingest_keyword_summaries(str(KEYWORDS), store_dir=store_dir)
+            gen.build_structure_drafts(
+                store_dir=store_dir,
+                base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)],
+                entry_labels=["start"],
+            )
+            store = pa.ProjectAnalysisStore(store_dir)
+            labels = store.load_summaries(pa.KIND_LABEL)
+            routes = store.load_routes()
+            manifest = store.load_manifest()
+            child = subprocess.run(
+                [sys.executable, "-B", "-c", """
+import os
+import sys
+from tests.quality_review.test_project_analysis_llm import FakeBackend, llm
+
+class InterruptedBackend(FakeBackend):
+    def generate(self, request):
+        if self.calls:
+            os._exit(76)
+        return super().generate(request)
+
+llm.run_mapreduce_drafts(store_dir=sys.argv[1], backend=InterruptedBackend(),
+                         config={"model": "fake-model"})
+""", store_dir],
+                cwd=Path(__file__).resolve().parents[2],
+                capture_output=True,
+                timeout=25,
+            )
+            self.assertEqual(child.returncode, 76, child.stderr.decode(errors="replace"))
+            self.assertEqual(store.load_summaries(pa.KIND_LABEL), labels)
+            self.assertEqual(store.load_routes(), routes)
+            self.assertEqual(store.load_manifest(), manifest)
+            backend = FakeBackend()
+            usage = []
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir,
+                backend=backend,
+                config={"model": "fake-model"},
+                usage_recorder=usage.append,
+            )
+            self.assertEqual(result["resumed_responses"], 1)
+            self.assertEqual(result["usage"]["requests"], len(backend.calls))
+            self.assertEqual(len(usage), len(backend.calls) + 1)
+            self.assertTrue(usage[0]["resumed"])
+            self.assertEqual(result["labels_refined"], len(labels))
+            self.assertEqual(result["routes_refined"], len(routes))
+            self.assertTrue(result["brief_refined"])
+
+    def test_resumes_prepared_drafts_after_local_write_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir, base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)], entry_labels=["start"],
+            )
+            backend = FakeBackend()
+            store = pa.ProjectAnalysisStore(store_dir)
+            with mock.patch.object(store.__class__, "save_routes", side_effect=OSError("disk full")):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    llm.run_mapreduce_drafts(
+                        store_dir=store_dir, backend=backend, config={"model": "fake-model"},
+                        force=True,
+                    )
+            self.assertGreater(len(backend.calls), 1)
+            self.assertEqual(store.load_brief_text(published=True), "")
+            resumed_backend = FakeBackend()
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir, backend=resumed_backend, config={"model": "fake-model"},
+            )
+            self.assertEqual(resumed_backend.calls, [])
+            self.assertEqual(result["usage"]["requests"], 0)
+            self.assertEqual(result["resumed_responses"], len(backend.calls))
+            self.assertIn("LLM Brief", store.load_brief_text(published=False))
+            self.assertEqual(store.load_brief_text(published=True), "")
+
+    def test_changed_route_never_reuses_saved_responses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir, base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)], entry_labels=["start"],
+            )
+            stopped = FakeBackend()
+
+            def generate(request):
+                if stopped.calls:
+                    raise KeyboardInterrupt
+                return stopped.generate(request)
+
+            with self.assertRaises(KeyboardInterrupt):
+                llm.run_mapreduce_drafts(
+                    store_dir=store_dir, generate=generate, config={"model": "fake-model"},
+                    routing_identity="route-one",
+                )
+            restarted = FakeBackend()
+            result = llm.run_mapreduce_drafts(
+                store_dir=store_dir, generate=restarted.generate, config={"model": "fake-model"},
+                routing_identity="route-two",
+            )
+            self.assertEqual(result["resumed_responses"], 0)
+            self.assertEqual(stopped.calls[0], restarted.calls[0])
+
+    def test_response_checkpoint_failure_stops_further_requests(self):
+        from foundation.atomic_io import atomic_write_json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = os.path.join(tmp, "pa")
+            gen.build_structure_drafts(
+                store_dir=store_dir, base_dir=str(FIXTURE_DIR),
+                script_roots=[str(FIXTURE_DIR)], entry_labels=["start"],
+            )
+            store = pa.ProjectAnalysisStore(store_dir)
+            original_manifest = store.load_manifest()
+            backend = FakeBackend()
+
+            def write(path, envelope):
+                if "result" in envelope["payload"]:
+                    raise OSError("checkpoint unavailable")
+                return atomic_write_json(path, envelope)
+
+            with mock.patch("quality_review.project_analysis_checkpoint.atomic_write_json", side_effect=write):
+                with self.assertRaisesRegex(pa.ProjectAnalysisError, "checkpoint. Generation stopped"):
+                    llm.run_mapreduce_drafts(
+                        store_dir=store_dir, backend=backend, config={"model": "fake-model"},
+                    )
+            self.assertEqual(len(backend.calls), 1)
+            self.assertEqual(store.load_manifest(), original_manifest)
+
     def test_new_gemini_model_omits_sampling_from_analysis_request(self):
         request = llm._build_request(
             model="gemini-3.5-flash",

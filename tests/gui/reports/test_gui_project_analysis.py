@@ -101,6 +101,18 @@ class ProjectAnalysisWorkflowTests(unittest.TestCase):
             ("project-analysis-build-structure", "project-analysis-generate"),
         )
 
+    def test_interrupted_generation_shows_resume_from_saved_responses(self):
+        workflow = ProjectAnalysisWorkflow.start_new(build=False)
+        update = workflow.complete_current_step(
+            1,
+            'PROJECT_ANALYSIS_PROGRESS {"stage":"label","completed":2,"total":4,'
+            '"resumed_responses":1,"usage":{"requests":1}}',
+        )
+        self.assertEqual(update.status, "failed")
+        self.assertIn("再次运行生成摘要", update.message)
+        self.assertIn("已复用本地响应：1 条", update.facts)
+        self.assertIn("模型请求：1", " ".join(update.facts))
+
     def test_failed_stage_stops_and_can_restart_from_artifacts(self):
         workflow = ProjectAnalysisWorkflow.start_new(build=True, generate=True)
         update = workflow.complete_current_step(1, "failed")
