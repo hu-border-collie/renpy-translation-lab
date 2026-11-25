@@ -44,7 +44,7 @@ from foundation.runtime_config_values import (
 )
 from quality_review import generation_target
 from engine_adapters.contracts import ProjectDiscoveryRequest, ValidatedTranslation
-from engine_adapters.coverage import export_coverage_package
+from engine_adapters.coverage import digest_json, export_coverage_package
 from engine_adapters.renpy import RenPyAdapter, build_translation_snapshot
 from engine_adapters.writeback import (
     WritebackPlanError,
@@ -64,6 +64,7 @@ from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore, hash_t
 from context_engine import advanced_context
 from context_engine import embedding_runtime
 from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
+from context_engine.embedding_checkpoint import EmbeddingCheckpoint
 from foundation.rpa_safety import (
     DEFAULT_RPA_LIMITS,
     RpaExtractionBudget,
@@ -3488,6 +3489,7 @@ def _attach_store_document_identity(store, settings=None, *, rebuild=False):
 
 
 def get_sync_rag_store():
+    """Open the published history without initializing or locking the store."""
     global _SYNC_RAG_STORE, SYNC_RAG_STORE_DIR
     if not SYNC_RAG_ENABLED:
         return None
@@ -3498,15 +3500,6 @@ def get_sync_rag_store():
         or os.path.abspath(_SYNC_RAG_STORE.store_dir) != os.path.abspath(SYNC_RAG_STORE_DIR)
     ):
         _SYNC_RAG_STORE = JsonRagStore(SYNC_RAG_STORE_DIR)
-        _SYNC_RAG_STORE.set_metadata(
-            owner="gemini_translate.py",
-            mode="sync",
-            embedding_model=SYNC_RAG_EMBEDDING_MODEL,
-            query_task_type=SYNC_RAG_QUERY_TASK_TYPE,
-            document_task_type=SYNC_RAG_DOCUMENT_TASK_TYPE,
-            output_dimensionality=SYNC_RAG_OUTPUT_DIMENSIONALITY,
-        )
-        _attach_store_document_identity(_SYNC_RAG_STORE)
     return _SYNC_RAG_STORE
 
 
@@ -3558,13 +3551,13 @@ def _require_sync_embedding_binding_for_retrieval():
         )
 
 
-def embed_texts(contents, task_type):
+def embed_texts(contents, task_type, *, settings=None):
     """Embed a batch with bounded Gemini retries and the Batch backoff schedule."""
 
     if not contents:
         return []
     _require_sync_embedding_binding_for_retrieval()
-    settings = current_sync_embedding_settings()
+    settings = settings or current_sync_embedding_settings()
     last_error = None
     key_attempts = api_key_rotation_attempts()
     attempts = (
@@ -4837,10 +4830,7 @@ def collect_sync_rag_records_for_file(file_path, quality_state=None):
         quality_state = SYNC_RAG_QUALITY_STATE
     if not file_path or not os.path.isfile(file_path):
         return []
-    try:
-        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-    except ValueError:
-        file_rel_path = os.path.basename(file_path)
+    file_rel_path = _sync_rag_file_rel_path(file_path)
     with open(file_path, "r", encoding="utf-8-sig") as handle:
         entries = collect_translation_entries_from_lines(handle.readlines())
 
@@ -4852,10 +4842,7 @@ def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
         quality_state = SYNC_RAG_QUALITY_STATE
     if not file_path or not tasks:
         return []
-    try:
-        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-    except ValueError:
-        file_rel_path = os.path.basename(file_path)
+    file_rel_path = _sync_rag_file_rel_path(file_path)
 
     entries = []
     for task in tasks:
@@ -4875,33 +4862,92 @@ def collect_sync_rag_records_for_tasks(file_path, tasks, quality_state=None):
     return collect_sync_rag_records_from_entries(file_rel_path, entries, quality_state, record_scope="task")
 
 
-def embed_sync_history_records(records):
-    embedded_records = []
-    batch_size = 16
-    for start in range(0, len(records), batch_size):
-        batch = records[start:start + batch_size]
-        vectors = embed_texts([record["combined_text"] for record in batch], SYNC_RAG_DOCUMENT_TASK_TYPE)
-        for record, vector in zip(batch, vectors):
-            enriched = dict(record)
-            enriched["embedding"] = vector
-            enriched["embedding_model"] = SYNC_RAG_EMBEDDING_MODEL
-            enriched["embedding_task_type"] = SYNC_RAG_DOCUMENT_TASK_TYPE
-            enriched["embedding_dim"] = len(vector)
-            embedded_records.append(enriched)
-    return embedded_records
+def _sync_rag_file_rel_path(file_path):
+    if not file_path:
+        return ""
+    try:
+        return _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
+    except ValueError:
+        return os.path.basename(file_path)
 
 
-def upsert_sync_rag_records(store, records):
-    pending_records = []
+def _sync_rag_file_digest(file_path):
+    try:
+        return file_sha256(file_path)
+    except FileNotFoundError:
+        return None
+
+
+def _sync_rag_checkpoint_path(store_dir, file_rel_path, quality_state, record_scope):
+    scope = digest_json({
+        "project_root": os.path.normcase(os.path.realpath(BASE_DIR)) if BASE_DIR else "",
+        "localization_root": os.path.normcase(os.path.realpath(TL_DIR)) if TL_DIR else "",
+        "file": file_rel_path,
+        "quality_state": quality_state,
+        "record_scope": record_scope,
+    })
+    return Path(store_dir) / ".sync-rag-checkpoints" / f"{scope}.jsonl"
+
+
+def embed_sync_history_records(records, *, checkpoint, settings):
+    """Reuse matching vectors and flush each successful batch before dispatching the next."""
+    fingerprints = {
+        record["memory_id"]: digest_json({key: value for key, value in record.items() if key != "created_at"})
+        for record in records
+    }
+    vectors_by_id = {}
+    pending = []
     for record in records:
-        existing = store.get_history_record(record["memory_id"])
+        memory_id = record["memory_id"]
+        cached = checkpoint.get(memory_id, fingerprints[memory_id])
+        if cached is None:
+            pending.append(record)
+        else:
+            vectors_by_id[memory_id] = cached
+
+    resumed = len(vectors_by_id)
+    batch_size = 16
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start:start + batch_size]
+        vectors = embed_texts(
+            [record["combined_text"] for record in batch],
+            settings.native_document_task_type,
+            settings=settings,
+        )
+        if len(vectors) != len(batch):
+            raise EmbeddingContractError("Sync RAG document embedding count mismatch.")
+        completed = [
+            {"id": row["memory_id"], "fingerprint": fingerprints[row["memory_id"]], "embedding": vector}
+            for row, vector in zip(batch, vectors)
+        ]
+        checkpoint.save(completed)
+        vectors_by_id.update((entry["id"], entry["embedding"]) for entry in completed)
+
+    return [
+        {
+            **record,
+            "embedding": vectors_by_id[record["memory_id"]],
+            "embedding_model": settings.model,
+            "embedding_task_type": settings.native_document_task_type,
+            "embedding_dim": settings.output_dimension,
+        }
+        for record in records
+    ], resumed
+
+
+def upsert_sync_rag_records(store, records, *, checkpoint_path, obsolete_ids=(), source_snapshot=None):
+    """Publish one complete Sync RAG update under the caller's store write session."""
+    settings = current_sync_embedding_settings()
+    pending_records = []
+    for memory_id, record in {record["memory_id"]: record for record in records}.items():
+        existing = store.get_history_record(memory_id)
         if (
             existing
             and existing.get("source_checksum") == record["source_checksum"]
             and existing.get("translation_checksum") == record["translation_checksum"]
-            and existing.get("embedding_model") == SYNC_RAG_EMBEDDING_MODEL
-            and existing.get("embedding_task_type") == SYNC_RAG_DOCUMENT_TASK_TYPE
-            and existing.get("embedding_dim") == SYNC_RAG_OUTPUT_DIMENSIONALITY
+            and existing.get("embedding_model") == settings.model
+            and existing.get("embedding_task_type") == settings.native_document_task_type
+            and existing.get("embedding_dim") == settings.output_dimension
         ):
             continue
         pending_records.append(record)
@@ -4909,18 +4955,60 @@ def upsert_sync_rag_records(store, records):
     stats = {
         "pending": len(pending_records),
         "upserted": 0,
+        "resumed_embeddings": 0,
+        "pruned": 0,
     }
-    if not pending_records:
+    if not (pending_records or obsolete_ids or checkpoint_path.exists()):
         return stats
 
-    identity_status = _attach_store_document_identity(store)
+    identity_status = _attach_store_document_identity(store, settings)
     if not identity_status.get("ready"):
         stats["error"] = "rebuild_store"
         stats["embedding_compatibility"] = identity_status
         return stats
 
-    embedded_records = embed_sync_history_records(pending_records)
-    stats["upserted"] = store.upsert_history(embedded_records)
+    metadata = {
+        "owner": "gemini_translate.py",
+        "mode": "sync",
+        "embedding_model": settings.model,
+        "query_task_type": settings.native_query_task_type,
+        "document_task_type": settings.native_document_task_type,
+        "output_dimensionality": settings.output_dimension,
+    }
+    if any(store.metadata.get(key) != value for key, value in metadata.items()):
+        store.set_metadata(**metadata)
+
+    checkpoint = None
+    embedded_records = []
+    if pending_records:
+        _require_sync_embedding_binding_for_retrieval()
+        checkpoint = EmbeddingCheckpoint(
+            checkpoint_path,
+            digest_json({
+                "scope": checkpoint_path.stem,
+                "embedding_identity": settings.document_identity().to_dict(),
+                "document_task_type": settings.native_document_task_type,
+            }),
+            settings.output_dimension,
+        )
+        embedded_records, stats["resumed_embeddings"] = embed_sync_history_records(
+            pending_records, checkpoint=checkpoint, settings=settings,
+        )
+
+    if source_snapshot is not None:
+        source_path, expected_sha256 = source_snapshot
+        if _sync_rag_file_digest(source_path) != expected_sha256:
+            raise ValueError("Translation file changed before publishing the Sync RAG history.")
+    stats["upserted"], stats["pruned"] = store.update_history(
+        embedded_records, obsolete_ids=obsolete_ids,
+    )
+    try:
+        if checkpoint is not None:
+            checkpoint.clear()
+        else:
+            checkpoint_path.unlink(missing_ok=True)
+    except OSError:
+        print("Warning: completed Sync RAG checkpoint could not be removed.", flush=True)
     return stats
 
 
@@ -4944,8 +5032,12 @@ def sync_rag_store_for_tasks(file_path, tasks, quality_state=None):
         "history_records_before": store.count_history(),
     }
     try:
-        stats.update(upsert_sync_rag_records(store, base_records))
-        stats["history_records_after"] = store.count_history()
+        with store.write_session("sync_rag_tasks"):
+            checkpoint_path = _sync_rag_checkpoint_path(
+                store.store_dir, _sync_rag_file_rel_path(file_path), quality_state, "task",
+            )
+            stats.update(upsert_sync_rag_records(store, base_records, checkpoint_path=checkpoint_path))
+            stats["history_records_after"] = store.count_history()
     except Exception as exc:
         print(f"Warning: Failed to update sync RAG store: {exc}")
         stats["error"] = str(exc)
@@ -4953,68 +5045,94 @@ def sync_rag_store_for_tasks(file_path, tasks, quality_state=None):
     return stats
 
 
-def sync_rag_store_for_file(file_path, quality_state=None):
+def sync_rag_store_for_file(file_path, quality_state=None, *, resume_only=False, expected_sha256=None):
     if quality_state is None:
         quality_state = SYNC_RAG_QUALITY_STATE
     if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
         return {"enabled": False}
-    store = get_sync_rag_store()
-    if store is None:
-        return {"enabled": True, "error": "RAG store unavailable"}
-
-    base_records = collect_sync_rag_records_for_file(file_path, quality_state=quality_state)
-    current_record_ids = {record["memory_id"] for record in base_records}
-    try:
-        file_rel_path = _normalize_rel_path(os.path.relpath(file_path, TL_DIR))
-    except ValueError:
-        file_rel_path = os.path.basename(file_path)
-    obsolete_record_ids = [
-        memory_id
-        for memory_id in store.history_ids_for_file(file_rel_path, quality_state=quality_state)
-        if memory_id not in current_record_ids
-        and (store.get_history_record(memory_id) or {}).get("record_scope") == "file_scan"
-    ]
-
+    file_rel_path = _sync_rag_file_rel_path(file_path)
+    checkpoint_path = _sync_rag_checkpoint_path(
+        os.path.abspath(SYNC_RAG_STORE_DIR or get_default_sync_rag_store_dir()),
+        file_rel_path, quality_state, "file_scan",
+    )
+    if resume_only and not checkpoint_path.is_file():
+        return {"enabled": True}
     stats = {
         "enabled": True,
-        "store_dir": store.store_dir,
-        "scanned": len(base_records),
+        "store_dir": str(checkpoint_path.parent.parent),
+        "scanned": 0,
         "pending": 0,
         "pruned": 0,
         "upserted": 0,
-        "history_records_before": store.count_history(),
     }
 
+    store = None
     try:
-        upsert_stats = upsert_sync_rag_records(store, base_records)
-        stats.update(upsert_stats)
-        if obsolete_record_ids:
-            stats["pruned"] = store.delete_history(obsolete_record_ids)
-        stats["history_records_after"] = store.count_history()
+        store = get_sync_rag_store()
+        if store is None:
+            return {**stats, "error": "RAG store unavailable",
+                    "checkpoint_pending": checkpoint_path.is_file()}
+        with store.write_session("sync_rag_file"):
+            if resume_only and not checkpoint_path.is_file():
+                return stats
+            current_digest = _sync_rag_file_digest(file_path) if file_path else None
+            if expected_sha256 is not None and current_digest != expected_sha256:
+                raise ValueError("Translation file no longer matches the applied preview.")
+            source_snapshot = (file_path, current_digest) if file_path else None
+            base_records = collect_sync_rag_records_for_file(file_path, quality_state=quality_state)
+            stats["scanned"] = len(base_records)
+            stats["history_records_before"] = store.count_history()
+            current_ids = {record["memory_id"] for record in base_records}
+            obsolete_ids = [
+                memory_id
+                for memory_id in store.history_ids_for_file(file_rel_path, quality_state=quality_state)
+                if memory_id not in current_ids
+                and (store.get_history_record(memory_id) or {}).get("record_scope") == "file_scan"
+            ]
+            stats.update(upsert_sync_rag_records(
+                store, base_records, checkpoint_path=checkpoint_path, obsolete_ids=obsolete_ids,
+                source_snapshot=source_snapshot,
+            ))
+            stats["history_records_after"] = store.count_history()
     except Exception as exc:
         print(f"Warning: Failed to update sync RAG store: {exc}")
         stats["error"] = str(exc)
-        stats["history_records_after"] = store.count_history()
+        if store is not None:
+            stats["history_records_after"] = store.count_history()
+    stats["checkpoint_pending"] = checkpoint_path.is_file()
     return stats
 
 
-def maybe_update_sync_rag_store(file_path, tasks=None, full_file=False):
+def maybe_update_sync_rag_store(
+    file_path, tasks=None, full_file=False, *, resume_only=False, expected_sha256=None,
+):
     if current_project_engine() == 'rpgmaker_mv':
         # Structural writeback approval is not an independent semantic review.
         # MV history is refreshed only by explicit reviewed-corpus bootstrap.
         return
     if not SYNC_RAG_ENABLED or not SYNC_RAG_UPDATE_ON_SUCCESS:
         return
-    if full_file:
-        summary = sync_rag_store_for_file(file_path, quality_state=SYNC_RAG_QUALITY_STATE)
-    else:
-        summary = sync_rag_store_for_tasks(file_path, tasks or [], quality_state=SYNC_RAG_QUALITY_STATE)
+    try:
+        if full_file:
+            summary = sync_rag_store_for_file(
+                file_path, quality_state=SYNC_RAG_QUALITY_STATE, resume_only=resume_only,
+                expected_sha256=expected_sha256,
+            )
+        else:
+            summary = sync_rag_store_for_tasks(file_path, tasks or [], quality_state=SYNC_RAG_QUALITY_STATE)
+    except Exception as exc:
+        # History updates happen after game-file writeback has already succeeded.
+        print(f"  Warning: Sync RAG store update skipped: {exc}", flush=True)
+        return {"enabled": True, "error": str(exc)}
+    if summary.get("resumed_embeddings"):
+        print(f"  Sync RAG embeddings recovered: {summary['resumed_embeddings']}", flush=True)
     if summary.get("upserted"):
         print(f"  Sync RAG store updated: {summary.get('upserted', 0)} entries", flush=True)
     if summary.get("pruned"):
         print(f"  Sync RAG store pruned: {summary.get('pruned', 0)} obsolete entries", flush=True)
     elif summary.get("error"):
         print(f"  Warning: Sync RAG store update skipped: {summary['error']}", flush=True)
+    return summary
 
 
 def log_failure(batch, error):
@@ -7512,22 +7630,36 @@ def collect_tasks(lines, skip_translated=True):
     tasks, _progress = collect_tasks_with_progress(lines, skip_translated=skip_translated)
     return tasks
 
-def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
+def apply_sync_translation_preview(manifest_path, *, allow_durable=False, history_recovery_only=False):
     """Apply a generated sync preview after validating every source file.
 
     Durable previews additionally require run-store freshness validation, so
     only the durable Batch entrypoint may opt into applying one here.
+    A recovery-only preview must already match the written translations.
     """
     load_config(require_api_key=False)
     load_translator_settings()
-    active_engine = current_project_engine()
+    is_mv = current_project_engine() == 'rpgmaker_mv'
+    rag_recovery = {"pending_files": 0, "resumed_embeddings": 0}
+
+    def record_history(entry, *, resume_only=False):
+        translated_path = os.path.join(TL_DIR, *entry["relative_path"].split("/"))
+        summary = maybe_update_sync_rag_store(
+            translated_path, full_file=True, resume_only=resume_only,
+            expected_sha256=entry["preview_sha256"],
+        )
+        if not isinstance(summary, dict):
+            return False
+        pending = bool(summary.get("checkpoint_pending"))
+        if not durable:
+            rag_recovery["pending_files"] += int(pending)
+        rag_recovery["resumed_embeddings"] += int(summary.get("resumed_embeddings") or 0)
+        return bool(summary.get("enabled")) and not (pending or summary.get("error"))
 
     def record_progress(entry):
-        if active_engine == 'rpgmaker_mv':
-            return
         update_progress(entry["relative_path"], entry.get("progress_entries") or [])
-        translated_path = os.path.join(TL_DIR, *entry["relative_path"].split("/"))
-        maybe_update_sync_rag_store(translated_path, full_file=True)
+        if not durable:
+            record_history(entry)
 
     try:
         manifest = sync_translation_preview.load_sync_preview(manifest_path)
@@ -7536,30 +7668,27 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
     compatibility = manifest.get('_translation_plan_compatibility') or {}
     if compatibility.get('mode') == 'legacy':
         print(f"Warning: {compatibility.get('message')}", file=sys.stderr)
-    if manifest.get('durable_check_binding') is not None and not allow_durable:
+    durable = manifest.get('durable_check_binding') is not None
+    if durable and not allow_durable:
         raise SystemExit(
             'Sync apply blocked: Durable Sync previews must be applied with '
             '`gemini_translate_batch.py apply <RUN>` so the complete source '
             'snapshot is revalidated.'
         )
-    prompt_context = manifest.get("prompt_context") or {}
-    manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
-    # Legacy manifests without prompt_context keep applying; every manifest
-    # recorded by the current preview flow carries a macro fingerprint, so any
-    # difference (macro added, removed, or changed since preview) blocks
-    # writeback.
-    if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
-        raise SystemExit(
-            "Sync apply blocked: the macro setting file changed since this "
-            "preview was generated. Regenerate and review a new preview."
-        )
-    runtime_config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
-    active_quality_policy = translation_quality.load_policy_from_config(
-        runtime_config
-    )
+    active_quality_policy = None
+    if not history_recovery_only:
+        prompt_context = manifest.get("prompt_context") or {}
+        manifest_macro_fingerprint = str(prompt_context.get("macro_fingerprint") or "")
+        if "prompt_context" in manifest and manifest_macro_fingerprint != SYNC_MACRO_FINGERPRINT:
+            raise SystemExit(
+                "Sync apply blocked: the macro setting file changed since this "
+                "preview was generated. Regenerate and review a new preview."
+            )
+        runtime_config = _read_json_object(TRANSLATOR_CONFIG, label="translator config")
+        active_quality_policy = translation_quality.load_policy_from_config(runtime_config)
     try:
         material_options = {}
-        if active_engine == 'rpgmaker_mv':
+        if is_mv:
             from execution.mv_sync import material_identity
             material_options['active_material_loader'] = lambda: material_identity(
                 current_mv_sync_snapshot(require_review=False))
@@ -7567,14 +7696,27 @@ def apply_sync_translation_preview(manifest_path, *, allow_durable=False):
             manifest_path,
             active_project_root=BASE_DIR,
             active_tl_dir=TL_DIR,
-            on_file_applied=record_progress,
+            on_file_applied=record_progress if not is_mv else None,
+            on_file_already_applied=(
+                lambda entry: record_history(entry, resume_only=True)
+            ) if not (durable or is_mv) else None,
+            on_pending_history=record_history if durable and not is_mv else None,
+            schedule_history=durable and not is_mv and SYNC_RAG_ENABLED and SYNC_RAG_UPDATE_ON_SUCCESS,
             active_quality_policy=active_quality_policy,
             active_glossary_file=GLOSSARY_FILE,
+            history_recovery_only=history_recovery_only,
             **material_options,
         )
     except ValueError as exc:
         raise SystemExit(f"Sync apply blocked: {exc}") from exc
 
+    if durable:
+        pending = manifest.pop("_pending_history_files", 0)
+        rag_recovery["pending_files"] = pending
+        if pending:
+            print(f"Sync RAG history pending for {pending} file(s). Repeat apply for the same run.")
+    if any(rag_recovery.values()):
+        manifest["_sync_rag_recovery"] = rag_recovery
     summary = manifest.get("summary") or {}
     quality_gate = summary.get("quality_gate") or {}
     print(f"Sync apply manifest: {os.path.abspath(manifest_path)}")

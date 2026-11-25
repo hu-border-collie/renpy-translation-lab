@@ -42,6 +42,7 @@ class SyncTranslationPage(QFrame):
         self._running = False
         self._preview_manifest_path = ""
         self._preview_run_id = ""
+        self.history_recovery_pending = False
         self._run_id = ""
         self._run_terminal = False
         self._run_status = ""
@@ -122,7 +123,7 @@ class SyncTranslationPage(QFrame):
         self.derive_btn.setEnabled(False)
         self.actions.add_action(self.derive_btn, min_width=104)
 
-        self.apply_btn = QPushButton("确认并写回预览")
+        self.apply_btn = QPushButton(DURABLE_SYNC_RUN_COPY["apply_preview_button"])
         self.apply_btn.setObjectName("sync_translation_apply_btn")
         self.apply_btn.clicked.connect(self._trigger_writeback)
         self.apply_btn.setEnabled(False)
@@ -339,10 +340,19 @@ class SyncTranslationPage(QFrame):
         else:
             self.preview_status.setText("预览中没有可写回的变更。")
 
-    def set_durable_preview(self, run_id: str, *, check_manifest: str = "") -> None:
-        """Mark a checked durable run as the writable preview."""
+    def set_durable_preview(
+        self, run_id: str, *, check_manifest: str = "", history_recovery_pending: bool = False,
+    ) -> None:
+        """Expose either writeback or history recovery for a checked durable run."""
         self._preview_run_id = str(run_id or "").strip()
+        self.history_recovery_pending = bool(self._preview_run_id and history_recovery_pending)
+        self.apply_btn.setText(DURABLE_SYNC_RUN_COPY[
+            "rag_recovery_button" if self.history_recovery_pending else "apply_preview_button"
+        ])
         self._refresh_run_controls()
+        if self.history_recovery_pending:
+            self.preview_status.setText(DURABLE_SYNC_RUN_COPY["rag_recovery_message"])
+            return
         if self._preview_run_id:
             detail = f"已生成可写回预览：运行 {self._preview_run_id}。"
             if check_manifest:
@@ -352,11 +362,16 @@ class SyncTranslationPage(QFrame):
         else:
             self.preview_status.setText("预览中没有可写回的变更。")
 
-    def clear_preview(self) -> None:
+    def clear_preview(self, *, already_applied: bool = False) -> None:
         self._preview_manifest_path = ""
         self._preview_run_id = ""
+        self.history_recovery_pending = False
+        self.apply_btn.setText(DURABLE_SYNC_RUN_COPY["apply_preview_button"])
         self._refresh_run_controls()
-        self.preview_status.setText("尚未生成同步翻译预览。")
+        self.preview_status.setText(
+            DURABLE_SYNC_RUN_COPY["check_already_applied_message"] if already_applied
+            else "尚未生成同步翻译预览。"
+        )
 
     def preview_manifest_path(self) -> str:
         return self._preview_manifest_path

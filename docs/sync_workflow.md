@@ -140,7 +140,19 @@ python gemini_translate_batch.py check <RUN> --output json --strict-exit-codes
 python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 ```
 
-`check` 离线读取冻结的 target shape 与耐久 `results.jsonl`，复用现有结构/质量门禁，并在 `writeback_gate=allow` 时生成绑定 diff。`apply` 只消费该 checked preview；run manifest、results、targets、check manifest、质量配置或源文件任一变化都会拒绝。`--force` 也不能绕过这些绑定。重复 apply 返回 `already_applied`，不会重复写进度或模型用量。
+`check` 离线读取冻结的 target shape 与耐久 `results.jsonl`，复用现有结构/质量门禁，并在 `writeback_gate=allow` 时生成绑定 diff。执行 `apply` 时会复核 run manifest、results、targets、check manifest、质量配置与源文件。重复执行仍经过同一套校验。已写回的脚本会保持原样，命令返回 `already_applied`。
+
+如果 Ren’Py 写回后的同步 RAG 更新中断，可重新执行 `apply <RUN>` 继续更新。
+写回状态独立保存，重复执行仍使用原先绑定的检查预览。恢复会覆盖写回后尚未开始
+embedding 的文件，并复用匹配的向量。JSON 结果中的 `apply.rag_recovery` 给出
+待恢复的文件数 `pending_files` 和本次恢复的向量数 `resumed_embeddings`。
+如果在恢复前重新执行 `check <RUN>`，已完整写回的任务会保留原预览。JSON 中的
+`check.history_recovery_pending=true` 和 `next_action=apply` 指示可以继续恢复；
+此时写回门禁为 `deny`，严格退出码为 `3`。后续 `apply <RUN>` 会复核原检查绑定和
+已写回的内容。仅续接历史库时，现行质量策略、词汇表或宏设置的改动不影响恢复。
+脚本一旦偏离已写回版本，本次恢复会拒绝执行。
+全部写回及后续处理完成后，重查返回 `already_applied`，严格退出码为 `0`。
+此时保留原预览，写回门禁为 `deny`。
 
 耐久执行器把一次 attempt 严格绑定为一次 Provider 调用，因此会显式关闭普通 Gemini Sync 在单次调用内部进行的 API Key 轮换，也不会在 adapter 内部隐藏 timeout 重试。鉴权或凭据配置失败会按该 attempt 的稳定分类落库；修正凭据后应使用 `sync-derive` 创建新 run，新 run 可复用旧 run 已成功且仍通过校验的结果。这个限制不影响普通非耐久 Sync 的既有 Key 轮换行为。
 

@@ -584,6 +584,35 @@ def load_sync_preview(manifest_path: str | os.PathLike[str]) -> dict[str, Any]:
     return manifest
 
 
+def _validate_durable_check_binding(binding):
+    """Verify the artifact hashes and original writeback decision for a durable preview."""
+    if not isinstance(binding, dict):
+        raise ValueError('Durable Sync check binding is invalid.')
+    gate = binding.get('writeback_gate')
+    if not isinstance(gate, dict) or gate.get('decision') != translation_quality.GATE_ALLOW:
+        raise ValueError('Durable Sync check did not allow writeback.')
+    for label in ('run_manifest', 'results', 'targets', 'check_manifest'):
+        artifact = binding.get(label)
+        if not isinstance(artifact, dict):
+            raise ValueError(f'Durable Sync {label} binding is missing.')
+        artifact_path = Path(str(artifact.get('path') or '')).resolve()
+        expected_sha = str(artifact.get('sha256') or '')
+        if not artifact_path.is_file() or file_sha256(artifact_path) != expected_sha:
+            raise ValueError(
+                f'Durable Sync {label} changed after the checked preview was generated.'
+            )
+    check_path = Path(str(binding['check_manifest'].get('path') or ''))
+    try:
+        check_manifest = json.loads(check_path.read_text(encoding='utf-8-sig'))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f'Durable Sync check manifest is unreadable: {exc}') from exc
+    check_summary = check_manifest.get('last_check_summary') or {}
+    if check_summary.get('check_fingerprint') != binding.get('check_fingerprint'):
+        raise ValueError('Durable Sync check fingerprint is stale.')
+    if (check_summary.get('writeback_gate') or {}).get('decision') != translation_quality.GATE_ALLOW:
+        raise ValueError('Durable Sync check no longer allows writeback.')
+
+
 def prepare_sync_preview_apply(
     manifest_path: str | os.PathLike[str],
     *,
@@ -599,37 +628,7 @@ def prepare_sync_preview_apply(
     _validate_translation_plan_binding(manifest)
     durable_binding = manifest.get('durable_check_binding')
     if durable_binding is not None:
-        if not isinstance(durable_binding, dict):
-            raise ValueError('Durable Sync check binding is invalid.')
-        gate = durable_binding.get('writeback_gate')
-        if not isinstance(gate, dict) or gate.get('decision') != translation_quality.GATE_ALLOW:
-            raise ValueError('Durable Sync check did not allow writeback.')
-        for label in ('run_manifest', 'results', 'targets', 'check_manifest'):
-            binding = durable_binding.get(label)
-            if not isinstance(binding, dict):
-                raise ValueError(f'Durable Sync {label} binding is missing.')
-            artifact_path = Path(str(binding.get('path') or '')).resolve()
-            expected_sha = str(binding.get('sha256') or '')
-            if not artifact_path.is_file() or file_sha256(artifact_path) != expected_sha:
-                raise ValueError(
-                    f'Durable Sync {label} changed after the checked preview was generated.'
-                )
-        check_path = Path(
-            str((durable_binding.get('check_manifest') or {}).get('path') or '')
-        )
-        try:
-            check_manifest = json.loads(check_path.read_text(encoding='utf-8-sig'))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise ValueError(f'Durable Sync check manifest is unreadable: {exc}') from exc
-        check_summary = check_manifest.get('last_check_summary') or {}
-        if check_summary.get('check_fingerprint') != durable_binding.get(
-            'check_fingerprint'
-        ):
-            raise ValueError('Durable Sync check fingerprint is stale.')
-        if (check_summary.get('writeback_gate') or {}).get(
-            'decision'
-        ) != translation_quality.GATE_ALLOW:
-            raise ValueError('Durable Sync check no longer allows writeback.')
+        _validate_durable_check_binding(durable_binding)
     external_binding = manifest.get('external_check_binding')
     if external_binding is not None:
         from execution.external_translation_work import validate_preview_binding
@@ -803,43 +802,156 @@ def prepare_sync_preview_apply(
     return manifest, prepared
 
 
+def _load_durable_apply_state(path, manifest, file_paths):
+    """Read resumable post-write work for this checked preview."""
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Durable Sync apply state is unreadable.") from exc
+    if not isinstance(state, dict) or state.get("preview_fingerprint") != manifest["preview_fingerprint"]:
+        raise ValueError("Durable Sync apply state belongs to a different preview.")
+    for kind in ("pending_progress", "pending_history"):
+        paths = state.get(kind)
+        if not isinstance(paths, list) or any(
+            not isinstance(path, str) or path not in file_paths for path in paths
+        ):
+            raise ValueError(f"Durable Sync apply state has invalid {kind}.")
+    return state
+
+
+def inspect_durable_post_apply(manifest, *, active_tl_dir, recovery_only=False):
+    """Identify a post-write check and report the first changed target, if any."""
+    package_dir = Path(manifest["_manifest_path"]).parent
+    state_path = package_dir / "apply_state.json"
+    entries = manifest["files"]
+    state = _load_durable_apply_state(
+        state_path, manifest, {entry["relative_path"] for entry in entries},
+    )
+    if state is None and recovery_only:
+        raise ValueError("Durable Sync history recovery state is missing.")
+    if state is None:
+        return "", ""
+    history_pending = bool(state["pending_history"])
+    if not history_pending and state["pending_progress"]:
+        return "", ""
+    if (package_dir / ".sync_writeback_transaction.json").exists():
+        raise ValueError("Durable Sync writeback was interrupted. Repeat apply to recover its transaction.")
+
+    target_root = Path(active_tl_dir).resolve()
+    if _canonical(manifest.get("tl_dir", "")) != _canonical(active_tl_dir):
+        raise ValueError("Sync preview belongs to a different translation directory.")
+    status = "ready_with_warnings" if history_pending else "already_applied"
+    already_written = recovery_only or state.get("state") == "applied" or bool(state.get("applied_at"))
+    for entry in entries:
+        relative = _safe_relative_path(entry["relative_path"])
+        target = target_root.joinpath(*PurePosixPath(relative).parts)
+        if not _inside(target_root, target):
+            raise ValueError(f"Sync preview target escapes TL_DIR: {relative}")
+        if not target.is_file() or file_sha256(target) != entry["preview_sha256"]:
+            # Pending history still belongs to the original writeback. A
+            # completed receipt may instead go through a fresh writeback check.
+            return (status if history_pending and already_written else ""), relative
+    return status, ""
+
+
 def apply_sync_preview(
     manifest_path: str | os.PathLike[str],
     *,
     active_project_root: str | os.PathLike[str],
     active_tl_dir: str | os.PathLike[str],
     on_file_applied: Callable[[dict[str, Any]], None] | None = None,
+    on_file_already_applied: Callable[[dict[str, Any]], None] | None = None,
+    on_pending_history: Callable[[dict[str, Any]], bool] | None = None,
+    schedule_history: bool = False,
     active_quality_policy: dict[str, Any] | None = None,
     active_glossary_file: str | os.PathLike[str] | None = None,
     allow_external: bool = False,
     active_material_loader: Callable[[], dict] | None = None,
+    history_recovery_only: bool = False,
 ) -> dict[str, Any]:
+    """Apply the validated preview and finish its recorded post-write work.
+
+    For Durable Sync, the caller holds the run's check/apply lock. Its checked
+    manifest stays immutable, while the sidecar records work before writeback
+    and keeps it pending until the corresponding callback succeeds.
+    """
     manifest_file = Path(manifest_path).resolve()
     loaded_preview = load_sync_preview(manifest_path)
     external = loaded_preview.get('external_check_binding') is not None
     if external and not allow_external:
         raise ValueError('External work must be applied through work-apply under its coordinator lock.')
     transaction_path = manifest_file.parent / ".sync_writeback_transaction.json"
-    recover_atomic_write_transaction(transaction_path, verify_targets=True)
+    if history_recovery_only:
+        if transaction_path.exists():
+            raise ValueError("History recovery requires a completed writeback transaction.")
+    else:
+        recover_atomic_write_transaction(transaction_path, verify_targets=True)
+    # A post-write retry proves the original output below. Live quality
+    # settings authorize new writes only.
     manifest, prepared = prepare_sync_preview_apply(
         manifest_path,
         active_project_root=active_project_root,
         active_tl_dir=active_tl_dir,
-        active_quality_policy=active_quality_policy,
-        active_glossary_file=active_glossary_file,
+        active_quality_policy=None if history_recovery_only else active_quality_policy,
+        active_glossary_file=None if history_recovery_only else active_glossary_file,
         loaded_manifest=loaded_preview,
         active_material_loader=active_material_loader,
     )
+    durable = manifest.get("durable_check_binding") is not None
+    state_path = manifest_file.parent / "apply_state.json"
+    all_paths = {item["entry"]["relative_path"] for item in prepared}
+    previous = _load_durable_apply_state(state_path, manifest, all_paths) if durable else None
+    write_items = [item for item in prepared if not item["already_applied"]]
+    if history_recovery_only:
+        if previous is None:
+            raise ValueError("Durable Sync history recovery state is missing.")
+        if write_items:
+            raise ValueError("History recovery requires the already written translations.")
+    writes = [
+        (item["target"], item["preview_text"].splitlines(keepends=True))
+        for item in write_items
+    ]
+    pending_progress: set[str] = set()
+    pending_history: set[str] = set()
+    apply_state: dict[str, Any] = {"preview_fingerprint": manifest["preview_fingerprint"]}
+
+    def save_apply_state():
+        apply_state["pending_progress"] = sorted(pending_progress)
+        apply_state["pending_history"] = sorted(pending_history)
+        atomic_write_json(state_path, apply_state, ensure_ascii=False, indent=2)
+
+    if durable:
+        write_paths = {item["entry"]["relative_path"] for item in write_items}
+        if previous is not None:
+            apply_state = previous
+            pending_progress.update(previous["pending_progress"])
+            pending_history.update(previous["pending_history"])
+        elif manifest.get("applied_at"):
+            apply_state["applied_at"] = manifest["applied_at"]
+
+        # Adopt an older preview on first use. Its already written files may
+        # have been interrupted before reaching their post-write callbacks.
+        if on_file_applied is not None:
+            pending_progress.update(
+                all_paths if previous is None and manifest.get("state") != "applied" else write_paths
+            )
+        if schedule_history:
+            pending_history.update(all_paths if previous is None else write_paths)
+        if previous is None or write_paths:
+            save_apply_state()
+
     applied_paths: list[str] = []
     try:
-        writes = [
-            (item["target"], item["preview_text"].splitlines(keepends=True))
-            for item in prepared
-            if not item["already_applied"]
-        ]
         if writes:
-            external_guards = {}
-            if manifest.get('material_snapshots') is not None:
+            commit_guards: dict[str, Any] = {}
+            has_material_snapshots = manifest.get("material_snapshots") is not None
+            if durable or external or has_material_snapshots:
+                commit_guards["expected_preimages"] = {
+                    item["target"]: item["entry"]["source_sha256"] for item in write_items
+                }
+            if has_material_snapshots:
                 from execution.mv_sync import require_material_fresh
 
                 def validate_material_commit():
@@ -848,11 +960,7 @@ def apply_sync_preview(
                         active_material_loader(), applied_files={
                             entry['relative_path']: entry['preview_sha256'] for entry in manifest['files']})
 
-                external_guards = {
-                    'expected_preimages': {item['target']: item['entry']['source_sha256']
-                                          for item in prepared if not item['already_applied']},
-                    'post_commit_validator': validate_material_commit,
-                }
+                commit_guards["post_commit_validator"] = validate_material_commit
             if external:
                 from execution.external_translation_work import validate_preview_binding
 
@@ -864,40 +972,55 @@ def apply_sync_preview(
                     except SystemExit as exc:
                         raise ValueError(str(exc)) from exc
 
-                external_guards = {
-                    'expected_preimages': {
-                        item['target']: item['entry']['source_sha256']
-                        for item in prepared if not item['already_applied']
-                    },
-                    'post_commit_validator': validate_external_commit,
-                }
+                commit_guards["post_commit_validator"] = validate_external_commit
             atomic_write_many_lines(
                 writes,
                 journal_path=transaction_path,
                 encoding="utf-8",
-                **external_guards,
+                **commit_guards,
             )
         for item in prepared:
             entry = item["entry"]
-            applied_paths.append(entry["relative_path"])
-            if on_file_applied is not None and not item['already_applied']:
-                on_file_applied(entry)
+            path = entry["relative_path"]
+            applied_paths.append(path)
+            if durable:
+                if path in pending_progress and on_file_applied is not None:
+                    on_file_applied(entry)
+                    pending_progress.remove(path)
+                    save_apply_state()
+                if path in pending_history and on_pending_history is not None and on_pending_history(entry):
+                    pending_history.remove(path)
+                    save_apply_state()
+            else:
+                callback = on_file_already_applied if item["already_applied"] else on_file_applied
+                if callback is not None:
+                    callback(entry)
     except Exception as exc:
-        manifest["state"] = "apply_failed"
-        manifest["last_apply_failure"] = str(exc)
-        atomic_write_json(manifest["_manifest_path"], _public_manifest(manifest), ensure_ascii=False, indent=2)
+        if durable:
+            apply_state.update(state="apply_failed", last_apply_failure=str(exc))
+            save_apply_state()
+        else:
+            manifest.update(state="apply_failed", last_apply_failure=str(exc))
+            atomic_write_json(manifest_file, _public_manifest(manifest), ensure_ascii=False, indent=2)
         raise
 
-    manifest["state"] = "applied"
-    if writes:
-        manifest["applied_at"] = datetime.now(timezone.utc).isoformat()
-        manifest['last_apply_result'] = 'applied'
-    else:
-        manifest.setdefault('applied_at', datetime.now(timezone.utc).isoformat())
-        manifest['last_apply_result'] = 'already_applied'
-    manifest["applied_files"] = applied_paths
+    now = datetime.now(timezone.utc).isoformat()
+    applied_at = now if writes else apply_state.get("applied_at") or manifest.get("applied_at") or now
+    result = {
+        "state": "applied",
+        "applied_at": applied_at,
+        "last_apply_result": "applied" if writes else "already_applied",
+        "applied_files": applied_paths,
+    }
+    manifest.update(result)
     manifest.pop("last_apply_failure", None)
-    atomic_write_json(manifest["_manifest_path"], _public_manifest(manifest), ensure_ascii=False, indent=2)
+    if durable:
+        apply_state.update(result)
+        apply_state.pop("last_apply_failure", None)
+        save_apply_state()
+        manifest["_pending_history_files"] = len(pending_history)
+    else:
+        atomic_write_json(manifest_file, _public_manifest(manifest), ensure_ascii=False, indent=2)
     return manifest
 
 

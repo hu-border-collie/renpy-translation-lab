@@ -242,7 +242,7 @@ def strict_exit_code(envelope: Mapping[str, Any]) -> int:
             return EXIT_BLOCKED
         return EXIT_INVALID_STATE
     if command == "check":
-        if status in {"safe", "ready"}:
+        if status in {"safe", "ready", "already_applied"}:
             return EXIT_OK
         if status in {"warn", "ready_with_warnings"}:
             return EXIT_NEEDS_ACTION

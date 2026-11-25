@@ -742,6 +742,54 @@ class DurableSyncAppWiringTests(unittest.TestCase):
             ["apply", RUN_ID, "--output", "json", "--non-interactive"],
         )
 
+    def test_resume_completed_run_exposes_history_recovery(self) -> None:
+        self.window._on_resume_durable_sync()
+        self._finish_step(envelope(
+            "sync-status", result=snapshot(status="completed", next_action="check"),
+        ))
+        QApplication.processEvents()
+        self.assertEqual(
+            self.runner.calls[-1][1],
+            ["check", RUN_ID, "--output", "json", "--non-interactive"],
+        )
+        self._finish_step(envelope(
+            "check", status="ready_with_warnings",
+            result={"check": {
+                "history_recovery_pending": True,
+                "writeback_gate": {"decision": "deny", "can_apply": False},
+            }},
+        ))
+        page = self.window.sync_translation_page
+        self.assertTrue(page.apply_btn.isEnabled())
+        self.assertEqual(page.apply_btn.text(), "继续更新历史库")
+        with mock.patch("gui_qt.app.message_box_question", return_value="yes") as confirm:
+            page.apply_btn.click()
+        self.assertIn("继续更新历史库", confirm.call_args.args[1])
+        self.assertEqual(
+            self.runner.calls[-1][1],
+            ["apply", RUN_ID, "--output", "json", "--non-interactive"],
+        )
+
+    def test_resume_already_applied_run_disables_writeback_and_recovery(self) -> None:
+        page = self.window.sync_translation_page
+        page.set_durable_preview(RUN_ID, history_recovery_pending=True)
+        self.window._on_resume_durable_sync()
+        self._finish_step(envelope(
+            "sync-status", result=snapshot(status="completed", next_action="check"),
+        ))
+        QApplication.processEvents()
+        self._finish_step(envelope(
+            "check", status="already_applied",
+            result={"check": {
+                "check_status": "already_applied",
+                "writeback_gate": {"decision": "deny", "can_apply": False},
+            }},
+        ))
+        self.assertIn("写回完成", page.preview_status.text())
+        self.assertFalse(page.apply_btn.isEnabled())
+        self.assertFalse(page.history_recovery_pending)
+        self.assertEqual(len(self.runner.calls), 2)
+
     def test_apply_without_checked_preview_is_refused(self) -> None:
         with mock.patch("gui_qt.app.message_box_information") as info:
             self.window._on_apply_sync_translation()

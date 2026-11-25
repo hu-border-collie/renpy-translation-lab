@@ -13855,14 +13855,95 @@ def _create_checked_durable_sync_preview(store, manifest):
     return preview_path
 
 
+_DURABLE_HISTORY_RECOVERY_ARTIFACT = 'history_recovery_preview'
+
+
 def check_durable_sync_results(store):
-    # A new check attempt supersedes the prior writeback authorization even if
-    # this check is denied or interrupted before it can create a new preview.
-    store.delete_artifact(kind='preview_manifest')
-    manifest = _build_durable_sync_check_manifest(store)
-    checked = check_results(manifest['_manifest_path'])
-    _create_checked_durable_sync_preview(store, checked)
-    return checked
+    with _durable_sync_writeback_lock(store):
+        previous = store.get_artifact(kind='preview_manifest')
+        recovery = store.get_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT)
+        if previous is not None:
+            preview_path = store.resolve_artifact_path(previous['relative_path'])
+            if recovery is not None or preview_path.with_name('apply_state.json').is_file():
+                preview = _verified_store_artifact(store, 'preview_manifest')
+                loaded = sync_translation_preview.load_sync_preview(preview['path'])
+                status, changed_target = sync_translation_preview.inspect_durable_post_apply(
+                    loaded, active_tl_dir=legacy.TL_DIR, recovery_only=recovery is not None,
+                )
+                if status:
+                    # The run store carries this restriction independently of the
+                    # mutable recovery receipt, including if that receipt is lost.
+                    if recovery is None:
+                        store.put_artifact(
+                            kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT,
+                            relative_path=previous['relative_path'],
+                            sha256_digest=previous['sha256'],
+                            schema_version=previous['schema_version'],
+                        )
+                    if changed_target:
+                        raise ValueError(
+                            f'History recovery requires the already written translation: {changed_target}'
+                        )
+                    _verify_durable_sync_run_for_apply(store)
+                    current_identity = _require_durable_sync_source_fresh(store, loaded)
+                    _manifest, prepared = sync_translation_preview.prepare_sync_preview_apply(
+                        preview['path'],
+                        active_project_root=legacy.BASE_DIR,
+                        active_tl_dir=legacy.TL_DIR,
+                        loaded_manifest=loaded,
+                        active_material_loader=lambda: current_identity.get('material_identity') or {},
+                    )
+                    if any(not item['already_applied'] for item in prepared):
+                        raise ValueError('History recovery requires the already written translations.')
+                    summary = {
+                        'check_status': status,
+                        'writeback_gate': {
+                            'decision': translation_quality.GATE_DENY,
+                            'can_apply': False,
+                        },
+                    }
+                    if status == 'ready_with_warnings':
+                        summary['history_recovery_pending'] = True
+                        print(f'Sync RAG history pending. Repeat apply {store.run_id} to recover it.')
+                    else:
+                        print(f'Durable Sync translations are already applied: {store.run_id}')
+                    return {
+                        '_manifest_path': loaded['durable_check_binding']['check_manifest']['path'],
+                        'last_check_summary': summary,
+                    }
+        # A new check attempt supersedes the prior writeback authorization even if
+        # this check is denied or interrupted before it can create a new preview.
+        store.delete_artifact(kind='preview_manifest')
+        if recovery is not None:
+            store.delete_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT)
+        manifest = _build_durable_sync_check_manifest(store)
+        checked = check_results(manifest['_manifest_path'])
+        _create_checked_durable_sync_preview(store, checked)
+        return checked
+
+
+@contextlib.contextmanager
+def _durable_sync_writeback_lock(store):
+    from execution.sync_run_contracts import ErrorCode, SyncRunError
+
+    if not store.db_path.is_file():
+        store.get_run()  # Preserve the normal missing-run error without creating a directory.
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(atomic_io.exclusive_file_lock(
+                store.run_dir / '.sync_writeback.lock', timeout=0.1,
+            ))
+        except atomic_io.AtomicFileLockUnavailableError as exc:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_STORAGE_ERROR, 'Durable Sync writeback lock is unavailable.',
+                safe_details={'run_id': store.run_id},
+            ) from exc
+        except atomic_io.AtomicFileLockTimeoutError as exc:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_BUSY, 'Another check or apply holds the Durable Sync writeback lock.',
+                safe_details={'run_id': store.run_id},
+            ) from exc
+        yield
 
 
 def _require_durable_sync_source_fresh(store, preview_manifest):
@@ -13871,6 +13952,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
     Every current source digest must match the run's T0 snapshot.  Files bound
     to the checked preview may instead already match that preview's digest,
     which is the only expected mutation after a successful first apply.
+    Return the verified live identity for callers that also validate MV material.
     """
     stored_identity = dict(store.get_plan()['plan'].get('source_identity') or {})
     current_identity = dict(legacy.current_sync_source_identity() or {})
@@ -13880,7 +13962,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
                                current_identity.get('material_identity') or {}, applied_files={
                                    row['relative_path']: row['preview_sha256']
                                    for row in preview_manifest.get('files') or []})
-        return
+        return current_identity
     stored_files = {
         str(path).replace('\\', '/'): str(digest or '')
         for path, digest in dict(stored_identity.get('file_digests') or {}).items()
@@ -13910,7 +13992,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
         for field in ('engine', 'adapter_version')
     )
     if not (missing_paths or added_paths or changed_paths or runtime_changed):
-        return
+        return current_identity
 
     reasons = []
     if missing_paths:
@@ -13935,7 +14017,7 @@ def _require_durable_sync_source_fresh(store, preview_manifest):
     )
 
 
-def apply_durable_sync_results(store):
+def _verify_durable_sync_run_for_apply(store):
     violations = store.verify_integrity()
     if violations:
         raise cli_contract.MachineContractError(
@@ -13944,21 +14026,27 @@ def apply_durable_sync_results(store):
             suggested_action='inspect_durable_sync_run',
             details={'run_id': store.run_id, 'violations': violations[:20]},
         )
-    preview = _verified_store_artifact(store, 'preview_manifest')
-    preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
-    _require_durable_sync_source_fresh(store, preview_manifest)
-    applied = legacy.apply_sync_translation_preview(
-        preview['path'],
-        allow_durable=True,
-    )
-    relative = Path(preview['path']).resolve().relative_to(store.run_dir.resolve())
-    store.put_artifact(
-        kind='preview_manifest',
-        relative_path=str(relative),
-        sha256_digest=file_sha256(preview['path']),
-        schema_version=sync_translation_preview.VERSION,
-    )
-    return applied
+
+
+def apply_durable_sync_results(store):
+    with _durable_sync_writeback_lock(store):
+        _verify_durable_sync_run_for_apply(store)
+        preview = _verified_store_artifact(store, 'preview_manifest')
+        history_recovery_only = store.get_artifact(kind=_DURABLE_HISTORY_RECOVERY_ARTIFACT) is not None
+        if history_recovery_only and _verified_store_artifact(store, _DURABLE_HISTORY_RECOVERY_ARTIFACT) != preview:
+            raise cli_contract.MachineContractError(
+                'Durable Sync history recovery is bound to a different preview.',
+                code_name='SYNC_RUN_ARTIFACT_STALE',
+                suggested_action='inspect_durable_sync_run',
+                details={'run_id': store.run_id, 'artifact': _DURABLE_HISTORY_RECOVERY_ARTIFACT},
+            )
+        preview_manifest = sync_translation_preview.load_sync_preview(preview['path'])
+        _require_durable_sync_source_fresh(store, preview_manifest)
+        return legacy.apply_sync_translation_preview(
+            preview['path'],
+            allow_durable=True,
+            history_recovery_only=history_recovery_only,
+        )
 
 
 def check_results(target=None):
@@ -22887,7 +22975,10 @@ def build_arg_parser():
         help='Check downloaded results for writeback and recoverable items.',
         description=(
             'Check downloaded results. JSON output includes the writeback gate '
-            'and a merge-retry next action when a retry check allows it.'
+            'and a merge-retry next action when a retry check allows it. For a '
+            'written Durable Sync run, check preserves its preview. It reports '
+            'history_recovery_pending while history updates remain, or already_applied '
+            'when post-write work is complete.'
         ),
     )
     add_machine_output_argument(check_parser)
@@ -22895,7 +22986,7 @@ def build_arg_parser():
         'target',
         nargs='?',
         default='',
-        help='Manifest path or package dir. Defaults to latest package.',
+        help='Manifest path, package dir, or Durable Sync run ID. Defaults to latest package.',
     )
 
     quality_report_parser = subparsers.add_parser(
@@ -22987,6 +23078,8 @@ def build_arg_parser():
         'apply',
         help='Apply downloaded results back into tl files, export changed files only, '
              'or write back and export the same rendered result.',
+        description='Apply a checked translation preview. Repeating apply for a Durable Sync run '
+                    'can resume pending Ren\'Py history updates.',
     )
     add_machine_output_argument(apply_parser)
     apply_parser.add_argument(
@@ -25677,6 +25770,7 @@ def build_machine_success_envelope(command, value, args):
     ):
         manifest = dict(value)
         last_result = str(manifest.get('last_apply_result') or 'applied')
+        rag_recovery = manifest.get('_sync_rag_recovery')
         return cli_contract.success_envelope(
             command,
             status=last_result,
@@ -25686,6 +25780,7 @@ def build_machine_success_envelope(command, value, args):
                     'last_apply_result': last_result,
                     'applied_files': list(manifest.get('applied_files') or []),
                     'summary': dict(manifest.get('summary') or {}),
+                    **({'rag_recovery': dict(rag_recovery)} if isinstance(rag_recovery, dict) else {}),
                 },
             },
             artifacts=_nonempty_artifacts(
@@ -25908,9 +26003,12 @@ def build_machine_success_envelope(command, value, args):
                 'can_apply': False,
             }
         result['check'] = check_summary
-        result['next_action'] = (
-            'merge-retry' if _batch_check_allows_retry_merge(manifest, check_summary) else ''
-        )
+        if check_summary.get('history_recovery_pending'):
+            result['next_action'] = 'apply'
+        else:
+            result['next_action'] = (
+                'merge-retry' if _batch_check_allows_retry_merge(manifest, check_summary) else ''
+            )
         status = str(
             check_summary.get('check_status')
             or check_summary.get('safety_level')

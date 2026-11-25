@@ -479,13 +479,13 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
-            label=DURABLE_SYNC_COPY['check'],
+            label=DURABLE_SYNC_RUN_COPY['rag_check_command'],
             command=format_cli_command(
                 python_exe, batch_script_path, ['check', '<RUN>']
             ),
         ),
         DiagnosticsCommand(
-            label=DURABLE_SYNC_COPY['apply'],
+            label=DURABLE_SYNC_RUN_COPY['rag_apply_command'],
             command=format_cli_command(
                 python_exe, batch_script_path, ['apply', '<RUN>']
             ),

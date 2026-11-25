@@ -94,7 +94,12 @@ class _EmbeddingIdentityStoreMixin:
             previous = getattr(self, '_write_session', None)
             self._write_session = (threading.get_ident(), lock_info)
             try:
+                self._refresh_from_disk_if_changed()
                 yield self
+            except BaseException:
+                # A failed replacement may have changed the in-memory index only.
+                self._loaded = False
+                raise
             finally:
                 self._write_session = previous
 
@@ -199,7 +204,6 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
         self._load_from_disk()
 
     def _load_from_disk(self):
-        os.makedirs(self.store_dir, exist_ok=True)
         self.metadata = self._load_json_file(self.metadata_path)
         self.history = {}
         self.file_index = {}
@@ -561,9 +565,20 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
             self.file_index.pop(file_rel_path, None)
 
     def upsert_history(self, records):
-        with self._locked('upsert_history') as lock_info:
-            self._refresh_from_disk_if_changed()
-            changed = 0
+        upserted, _ = self._update_history(records, (), 'upsert_history')
+        return upserted
+
+    def delete_history(self, memory_ids):
+        _, deleted = self._update_history((), memory_ids, 'delete_history')
+        return deleted
+
+    def update_history(self, records, *, obsolete_ids=()):
+        """Publish replacements and removals together in a single history snapshot."""
+        return self._update_history(records, obsolete_ids, 'update_history')
+
+    def _update_history(self, records, obsolete_ids, operation):
+        with self.write_session(operation):
+            upserted = deleted = 0
             for record in records:
                 if not isinstance(record, dict):
                     continue
@@ -578,34 +593,21 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
                     self._unindex_record(memory_id, existing)
                 self.history[memory_id] = record
                 self._index_record(memory_id, record)
-                changed += 1
-            if changed:
-                self._write_history()
-                self._update_metadata_unlocked(
-                    'upsert_history',
-                    {'history_count': len(self.history)},
-                    lock_info,
-                )
-        return changed
-
-    def delete_history(self, memory_ids):
-        with self._locked('delete_history') as lock_info:
-            self._refresh_from_disk_if_changed()
-            changed = 0
-            for memory_id in memory_ids:
+                upserted += 1
+            for memory_id in obsolete_ids:
                 existing = self.history.pop(memory_id, None)
-                if not existing:
-                    continue
-                self._unindex_record(memory_id, existing)
-                changed += 1
-            if changed:
+                if existing:
+                    self._unindex_record(memory_id, existing)
+                    deleted += 1
+            if upserted or deleted:
                 self._write_history()
+            if upserted or deleted or (
+                operation == 'update_history' and self.metadata.get('history_count') != len(self.history)
+            ):
                 self._update_metadata_unlocked(
-                    'delete_history',
-                    {'history_count': len(self.history)},
-                    lock_info,
+                    operation, {'history_count': len(self.history)}, self._session_lock_info(),
                 )
-        return changed
+        return upserted, deleted
 
     def history_ids_for_file(self, file_rel_path, quality_state=None):
         self.load()

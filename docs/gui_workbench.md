@@ -398,7 +398,15 @@ build -> submit -> status -> download -> check
 
 ### 同步执行（耐久）
 
-执行方式选为 **同步**，点击「**开始同步翻译**」。GUI 调用 `gemini_translate_batch.py sync-start --profile <PROFILE_ID> --output json` 启动 #347 的耐久运行；进度、请求/条目计数、`outcome_unknown`、usage 和 `next_action` 只来自服务返回的公开 snapshot，GUI 不读取运行数据库，也不自行重试或改写 freshness 判定。运行结束后 GUI 自动执行离线 `check <RUN>`，由 `writeback_gate` 决定能否生成绑定预览；通过后页面启用「**确认并写回预览**」，写回调用 `apply <RUN>`，会重新校验源快照、run/results/targets 制品、检查清单与预览绑定，任一变化都会拒绝，重复 apply 无副作用。
+执行方式选为 **同步**，点击「**开始同步翻译**」。GUI 调用 `gemini_translate_batch.py sync-start --profile <PROFILE_ID> --output json` 启动 #347 的耐久运行；进度、请求/条目计数、`outcome_unknown`、usage 和 `next_action` 只来自服务返回的公开 snapshot，GUI 不读取运行数据库，也不自行重试或改写 freshness 判定。运行结束后 GUI 自动执行离线 `check <RUN>`，由 `writeback_gate` 决定能否生成绑定预览；通过后页面启用「**确认并写回预览**」。写回调用 `apply <RUN>`，每次都校验源快照、run/results/targets 制品、检查清单与预览绑定。
+
+若显示「译文已写回，历史库更新待恢复」，可再次确认同一预览。重新打开工作台后，
+通过「继续 / 查看最新任务」找到该任务，再点击「继续更新历史库」。已写回的脚本会保持原样，
+历史库会从已保存的向量继续更新。重启 GUI 后也可从「诊断与运行日志」复制 `apply <RUN>`
+命令，指定原运行 ID 续接更新。
+
+如果任务已经写回并完成后续处理，「继续 / 查看最新任务」会显示译文已写回，
+保留原检查预览。
 
 - **停止与取消是两件事**：「停止」只结束本机进程，耐久运行不会被隐式取消，已提交的请求不会重发；「继续 / 查看最新任务」先查询最新运行的公开状态，未结束则 `sync-resume`，已结束则生成检查预览。
 - **显式取消**：只有「取消任务」会调用 `sync-cancel <RUN>` 请求执行器停止后续调度；已完成结果仍保留在运行记录中。

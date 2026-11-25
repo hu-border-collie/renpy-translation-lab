@@ -493,6 +493,22 @@ class DurableSyncRecoveryTests(unittest.TestCase):
         self.assertIn("已写回过", update.heading)
         self.assertIn("1 个", " ".join(update.facts))
 
+    def test_apply_distinguishes_pending_rag_from_script_writeback(self) -> None:
+        workflow = SyncTranslationWorkflow.apply_run(RUN_ID)
+        output = success_output("apply", status="applied", result={
+            "apply": {
+                "state": "applied",
+                "last_apply_result": "applied",
+                "applied_files": ["a.rpy"],
+                "rag_recovery": {"pending_files": 1, "resumed_embeddings": 16},
+            },
+        })
+        update = workflow.complete_current_step(0, output)
+        self.assertEqual(update.status, "warning")
+        self.assertIn("译文已写回", update.heading)
+        self.assertIn("历史库更新待恢复", update.heading)
+        self.assertIn("16 条历史向量", " ".join(update.facts))
+
     def test_derive_completed_run_chains_check(self) -> None:
         workflow = SyncTranslationWorkflow.derive_run(RUN_ID, exclude_unknown=True)
 
