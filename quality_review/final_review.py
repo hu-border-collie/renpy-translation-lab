@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from foundation.atomic_io import atomic_write_json, atomic_write_jsonl, atomic_write_text, file_sha256
+from foundation.atomic_io import (
+    atomic_write_json, atomic_write_jsonl, atomic_write_text, exclusive_file_lock, file_sha256,
+)
 
 from quality_review import translation_quality
 
@@ -43,6 +45,7 @@ QUALITY_FINDINGS_FILENAME = "quality_findings.jsonl"
 FINAL_REVIEW_QUALITY_MAPPING_VERSION = 1
 REPORT_MD_FILENAME = "report.md"
 REQUESTS_JSONL_FILENAME = "requests.jsonl"
+SYNC_RESULT_CHECKPOINT_FILENAME = ".sync_review_result.json"
 
 STATUS_PENDING = "pending"
 STATUS_RUNNING = "running"
@@ -1390,8 +1393,40 @@ def resolve_campaign_paths(
     }
 
 
-def load_campaign_package(target: str | os.PathLike[str]) -> dict[str, Any]:
+def sync_result_pending(manifest_path: str | os.PathLike[str]) -> bool:
+    """Whether a saved sync result has yet to finish publication."""
+    return os.path.lexists(os.path.join(
+        os.path.dirname(manifest_path), SYNC_RESULT_CHECKPOINT_FILENAME,
+    ))
+
+
+def campaign_write_lock(package_dir: str | os.PathLike[str]):
+    """Serialize sync result publication and linked finding updates."""
+    return exclusive_file_lock(os.path.join(package_dir, ".campaign.lock"), timeout=0.1)
+
+
+def _require_published_sync_result(manifest_path: str) -> None:
+    if sync_result_pending(manifest_path):
+        raise FinalReviewError(
+            "A saved final-review result is pending publication. "
+            "Run final-review-run-sync again to recover it."
+        )
+
+
+def _manifest_revision(path: str) -> tuple[int, int, int]:
+    stat = os.stat(path)
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def load_campaign_package(
+    target: str | os.PathLike[str], *, allow_pending_sync_result: bool = False,
+) -> dict[str, Any]:
+    """Read a published package or, for sync recovery, its current on-disk files."""
     paths = resolve_campaign_paths(target)
+    revision = None
+    if not allow_pending_sync_result:
+        _require_published_sync_result(paths["manifest"])
+        revision = _manifest_revision(paths["manifest"])
     manifest = load_json_file(paths["manifest"])
     if not isinstance(manifest, dict):
         raise FinalReviewSchemaError("manifest must be a JSON object")
@@ -1427,6 +1462,13 @@ def load_campaign_package(target: str | os.PathLike[str]) -> dict[str, Any]:
         )
     for unit in units:
         assert_failure_not_done(unit)
+    if not allow_pending_sync_result:
+        _require_published_sync_result(paths["manifest"])
+        if (
+            manifest.get("execution_strategy") == EXECUTION_STRATEGY_SYNC
+            and revision != _manifest_revision(paths["manifest"])
+        ):
+            raise FinalReviewError("The final-review package changed while reading. Retry the read.")
 
     manifest = dict(manifest)
     manifest["_manifest_path"] = paths["manifest"]

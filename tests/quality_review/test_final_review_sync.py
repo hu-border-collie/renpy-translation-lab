@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
+from pathlib import Path
 from types import MappingProxyType
 from unittest import mock
 
 from foundation import cli_contract
 from quality_review import final_review as fr
+from quality_review import final_review_llm as fr_llm
 from quality_review import final_review_sync as frs
 import gemini_translate_batch as batch
 from providers import model_profiles_editor as editor
@@ -213,6 +218,144 @@ class RunSyncCampaignTests(unittest.TestCase):
             {finding["finding_type"] for finding in loaded["findings"]},
             {"style_drift"},
         )
+
+    def test_resume_restores_finding_when_publication_stops_between_files(self) -> None:
+        package_dir = self._package_dir()
+        unit = build_package(package_dir, count=1)["units"][0]
+        generate = mock.Mock(return_value={
+            "response_text": response_for(unit, with_finding=True),
+            "usage_metadata": {"total_tokens": 5},
+            "request_metadata": {"Authorization": "Bearer FIXTURE-CREDENTIAL"},
+            "response_payload": {"unneeded": "FIXTURE-CREDENTIAL"},
+        })
+        usage_recorder = mock.Mock()
+        write_jsonl = fr_llm.atomic_write_jsonl
+
+        def write_until_findings(path, rows, **kwargs):
+            if Path(path).name == fr.FINDINGS_FILENAME:
+                raise OSError("fixture: interrupted before publishing findings")
+            return write_jsonl(path, rows, **kwargs)
+
+        with mock.patch.object(fr_llm, "atomic_write_jsonl", side_effect=write_until_findings):
+            with self.assertRaisesRegex(OSError, "interrupted"):
+                frs.run_sync_campaign(
+                    package_dir, generate=generate, usage_recorder=usage_recorder,
+                )
+        generate.assert_called_once()
+        marker = Path(package_dir) / fr.SYNC_RESULT_CHECKPOINT_FILENAME
+        saved = marker.read_text(encoding="utf-8")
+        self.assertNotIn("FIXTURE-CREDENTIAL", saved)
+        self.assertEqual(json.loads(saved)["result"]["row"]["usage_metadata"], {"total_tokens": 5})
+        with self.assertRaisesRegex(fr.FinalReviewError, "pending publication"):
+            fr.load_campaign_package(package_dir)
+        with self.assertRaisesRegex(fr.FinalReviewError, "pending publication"):
+            frs.run_sync_campaign(package_dir, generate=generate, dry_run=True)
+        self.assertEqual(marker.read_text(encoding="utf-8"), saved)
+
+        result = frs.run_sync_campaign(
+            package_dir, generate=generate, usage_recorder=usage_recorder,
+        )
+
+        self.assertEqual(result["run_count"], 0)
+        self.assertEqual(result["finding_count"], 1)
+        generate.assert_called_once()
+        usage_recorder.assert_called_once()
+        self.assertFalse(marker.exists())
+        published = fr.load_campaign_package(package_dir)
+        self.assertEqual(published["units"][0]["status"], fr.STATUS_DONE)
+        self.assertEqual(published["findings"][0]["identity_v2"], unit["items"][0]["id"])
+        self.assertEqual(len(published["quality_findings"]), 1)
+
+    def test_process_exit_during_publication_can_resume_without_provider(self) -> None:
+        child = textwrap.dedent("""
+            import os
+            import sys
+            from pathlib import Path
+            from unittest.mock import patch
+            from quality_review import final_review as fr, final_review_llm as fr_llm
+            from quality_review import final_review_sync as frs
+
+            phase = sys.argv[3]
+            unlink = Path.unlink
+            write_jsonl = fr_llm.atomic_write_jsonl
+
+            def stop_before_checkpoint_cleanup(path, *args, **kwargs):
+                if phase == "after-manifest" and path.name == fr.SYNC_RESULT_CHECKPOINT_FILENAME:
+                    os._exit(73)
+                return unlink(path, *args, **kwargs)
+
+            def stop_before_findings(path, *args, **kwargs):
+                if phase == "before-findings" and Path(path).name == fr.FINDINGS_FILENAME:
+                    os._exit(73)
+                return write_jsonl(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "unlink", stop_before_checkpoint_cleanup),
+                patch.object(fr_llm, "atomic_write_jsonl", stop_before_findings),
+            ):
+                frs.run_sync_campaign(
+                    sys.argv[1], generate=lambda _: {"response_text": sys.argv[2]},
+                )
+        """)
+        for phase, status in (("before-findings", fr.STATUS_PENDING), ("after-manifest", fr.STATUS_DONE)):
+            with self.subTest(phase=phase):
+                package_dir = self._package_dir(phase)
+                unit = build_package(package_dir, count=1)["units"][0]
+                completed = subprocess.run(
+                    [sys.executable, "-B", "-c", child, package_dir,
+                     response_for(unit, with_finding=True), phase],
+                    cwd=Path(__file__).resolve().parents[2],
+                    capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(completed.returncode, 73, completed.stderr)
+                paths = fr.resolve_campaign_paths(package_dir)
+                self.assertEqual(fr.load_json_file(paths["manifest"])["status"], status)
+                self.assertTrue(fr.sync_result_pending(paths["manifest"]))
+                generate = mock.Mock(side_effect=AssertionError("resume must use the saved response"))
+                result = frs.run_sync_campaign(package_dir, generate=generate)
+                generate.assert_not_called()
+                self.assertEqual(result["finding_count"], 1)
+                self.assertFalse(fr.sync_result_pending(paths["manifest"]))
+
+    def test_resume_refuses_a_saved_response_when_its_unit_was_edited(self) -> None:
+        package_dir = self._package_dir()
+        unit = build_package(package_dir, count=1)["units"][0]
+        generate = mock.Mock(return_value=response_for(unit, with_finding=True))
+        with mock.patch.object(
+            fr_llm, "ingest_result_rows", side_effect=OSError("fixture: interrupted before ingest"),
+        ):
+            with self.assertRaisesRegex(OSError, "interrupted"):
+                frs.run_sync_campaign(package_dir, generate=generate)
+        unit["items"][0]["current_translation"] = "fixture edit after dispatch"
+        paths = fr.resolve_campaign_paths(package_dir)
+        fr.atomic_write_jsonl(paths["review_units"], [unit])
+
+        with self.assertRaisesRegex(frs.FinalReviewSyncError, "changed after the sync result"):
+            frs.run_sync_campaign(package_dir, generate=generate)
+        generate.assert_called_once()
+        self.assertTrue(fr.sync_result_pending(paths["manifest"]))
+        self.assertEqual(fr.load_jsonl_file(paths["review_units"]), [unit])
+
+    def test_read_does_not_mix_files_if_publication_finishes_during_read(self) -> None:
+        package_dir = self._package_dir()
+        unit = build_package(package_dir, count=1)["units"][0]
+        load_jsonl = fr.load_jsonl_file
+        published = False
+
+        def read_during_publication(path):
+            nonlocal published
+            rows = load_jsonl(path)
+            if Path(path).name == fr.REVIEW_UNITS_FILENAME and not published:
+                published = True
+                frs.run_sync_campaign(
+                    package_dir, generate=lambda _: response_for(unit, with_finding=True),
+                )
+            return rows
+
+        with mock.patch.object(fr, "load_jsonl_file", side_effect=read_during_publication):
+            with self.assertRaisesRegex(fr.FinalReviewError, "changed while reading"):
+                fr.load_campaign_package(package_dir)
+        self.assertEqual(len(fr.load_campaign_package(package_dir)["findings"]), 1)
 
     def test_unit_failure_does_not_stop_later_units(self) -> None:
         package_dir = self._package_dir()
@@ -514,6 +657,26 @@ class RunFinalReviewRunSyncCommandTests(unittest.TestCase):
         self.assertEqual(result["execution_strategy"], "sync")
         loaded = fr.load_campaign_package(package_dir)
         self.assertEqual(loaded["units"][0]["status"], fr.STATUS_DONE)
+
+    def test_run_sync_command_recovers_from_before_ingest(self) -> None:
+        package_dir, _ = self._package_with_routing()
+        package = fr.load_campaign_package(package_dir)
+        response = response_for(package["units"][0], with_finding=True)
+        with (
+            mock.patch.object(batch, "_collect_final_review_context_snapshot", return_value=package["snapshot"]),
+            mock.patch.object(batch, "run_sync_request", return_value={"response_text": response}) as generate,
+            mock.patch.object(batch, "remember_latest_manifest"),
+            mock.patch.object(batch, "record_generation_usage_best_effort") as usage,
+        ):
+            with mock.patch.object(fr_llm, "ingest_result_rows", side_effect=OSError("fixture: interrupted")):
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    batch.run_final_review_run_sync(package_dir)
+            result = batch.run_final_review_run_sync(package_dir)
+
+        self.assertEqual(result["run_count"], 0)
+        self.assertEqual(result["finding_count"], 1)
+        generate.assert_called_once()
+        usage.assert_called_once()
 
     def test_batch_only_commands_reject_sync_package(self) -> None:
         package_dir, _profile_id = self._package_with_routing()

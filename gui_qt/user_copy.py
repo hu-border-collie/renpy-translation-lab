@@ -235,6 +235,9 @@ JOB_STATE_LABELS = {
     "JOB_STATE_RUNNING": "处理中",
 }
 
+FINAL_REVIEW_RECOVERY_MESSAGE = "已有审校响应保存到本地。点击「继续审查」可恢复结果并更新报告。"
+FINAL_REVIEW_SYNC_COMMAND_LABEL = "执行或恢复同步最终审校"
+
 # Stable final-review unit error classifications (#486). Unknown codes stay as
 # the raw identifier so machine detail is not hidden.
 FINAL_REVIEW_FAILURE_REASON_LABELS = {

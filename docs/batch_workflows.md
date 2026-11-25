@@ -301,6 +301,11 @@ python gemini_translate_batch.py apply-revisions logs/batch_jobs/<revision-packa
 
 全部七个 `final-review-*` 命令都支持 `--output json` 版本化 envelope：`final-review-status` / `final-review-ingest-results` 的 `status` 是 campaign 聚合状态（`pending / running / done / failed / stale`，严格模式下 `failed` 退出 `4`、`stale` 退出 `3`）；`final-review-resume` 用 `rebuilt / no_work` 区分是否需要重新 submit；`final-review-run-sync` 用 `completed / failed / no_work / dry_run` 返回 `run_count / skip_count / deferred_count / done_delta / failed_delta / planned_unit_ids / attempted_unit_ids / campaign_status`（`planned_unit_ids` 为全量待跑、`to_run_unit_ids` 为 limit 后计划执行、`attempted_unit_ids` 为实际发起；`run_count` 是真正发起过的 unit 数；存在失败 unit 时 `failed`，严格模式退出 `4`），系统性失败返回 `FINAL_REVIEW_SYNC_ABORTED`；`final-review-create-revisions` 的 envelope 与 `preview-revisions` 相同。`final-review-status --json` 的裸 JSON 输出仅为兼容保留，自动化请使用 `--output json`。参数细节见 [Agent / CLI 快速开始](quickstart_agent.md)。
 
+同步审校将单元的本地响应和用量保存后，再校验并发布问题报告。中断后，用同一任务包再次运行
+`final-review-run-sync`。它会先恢复已保存的响应，再规划后续请求。输入仍匹配且恢复成功的
+单元会被跳过，`run_count` 只统计本次实际发起的请求。待恢复期间，状态、导出和订正候选
+入口会提示先恢复报告。若响应尚未保存就中断，恢复时仍可能需要重新请求。
+
 ### 启动闸门
 
 - 范围内必须有可审校的已译条目（原文 + 当前译文）。

@@ -6,10 +6,12 @@ import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 
 from gui_qt.workflows.final_review_workflow import FinalReviewWorkflow
 from gui_qt.workflows.workflow_factory import create_workflow, resume_workflow
 from gui_qt.work_modes import WorkMode
+from quality_review import final_review as fr
 
 
 class FinalReviewWorkflowTests(unittest.TestCase):
@@ -128,6 +130,18 @@ class FinalReviewWorkflowTests(unittest.TestCase):
             {"mode": "final_review", "summary": {"status_counts": {}}},
         )
         self.assertEqual(workflow.current_step().key, "final-review-resume")
+
+    def test_resume_sync_with_pending_publication_even_if_manifest_is_done(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = str(Path(tmp) / fr.MANIFEST_FILENAME)
+            manifest = {"mode": "final_review", "execution_strategy": "sync", "status": "done"}
+            marker = Path(tmp) / fr.SYNC_RESULT_CHECKPOINT_FILENAME
+            marker.touch()
+            workflow = FinalReviewWorkflow.resume_manifest(manifest_path, manifest)
+            self.assertEqual(workflow.current_step().key, "final-review-run-sync")
+            marker.unlink()
+            workflow = FinalReviewWorkflow.resume_manifest(manifest_path, manifest)
+            self.assertIsNone(workflow.current_step())
 
     def test_build_sync_campaign_switches_to_run_sync(self):
         with tempfile.TemporaryDirectory() as tmp:

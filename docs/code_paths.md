@@ -336,7 +336,8 @@
   `quality_review/final_review_llm.py` 管 prompt / schema / Batch JSONL / ingest；`final-review-build`
   按冻结的 `routes.final_review.strategy` 分流：Batch 走 `submit → download →
   final-review-ingest-results`，sync 走 `final_review_sync.py` 的
-  `final-review-run-sync`（逐 unit 调用 `run_sync_request` 并原子落盘）。
+  `final-review-run-sync`。每个返回结果先保存到同一任务包的本地检查点，再发布单元状态和报告。
+  续跑会在规划请求前恢复中断的发布。GUI 的「继续审查」也走同一命令。
 - GUI 编排：`gui_qt/workbench/revision_page.py`（`RevisionPage`）→
   `gui_qt/workflows/revision_workflow.py` 的 `RevisionBatchWorkflow` / `RevisionProposalImportWorkflow` /
   `RevisionProposalConfirmWorkflow` 与 `RevisionCorpusExportWorkflow`；

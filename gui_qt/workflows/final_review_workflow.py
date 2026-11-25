@@ -98,20 +98,19 @@ class FinalReviewWorkflow:
 
     @classmethod
     def resume_manifest(cls, manifest_path, manifest, *, submit_max_cost=None):
+        sync = manifest.get("execution_strategy") == fr.EXECUTION_STRATEGY_SYNC
         summary = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
         counts = summary.get("status_counts") if isinstance(summary.get("status_counts"), dict) else {}
         done_count = counts.get("done")
         unit_count = summary.get("unit_count")
-        if manifest.get("status") == "done" or (
+        done = manifest.get("status") == "done" or (
             done_count is not None
             and unit_count is not None
             and done_count == unit_count
-        ):
+        )
+        if done and not (sync and fr.sync_result_pending(manifest_path)):
             return cls([], manifest_path, submit_max_cost=submit_max_cost)
-        if str(
-            manifest.get("execution_strategy")
-            or fr.EXECUTION_STRATEGY_GEMINI_BATCH
-        ) == fr.EXECUTION_STRATEGY_SYNC:
+        if sync:
             return cls(
                 ["final-review-run-sync"],
                 manifest_path,
