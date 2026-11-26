@@ -581,6 +581,35 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
             batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
 
+    def test_batch_history_readers_use_published_store_while_writer_holds_lock(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.multiple(
+            batch_mod, RAG_ENABLED=True, RAG_BOOTSTRAP_ON_BUILD=False, RAG_STORE_DIR=tmp,
+            RAG_OUTPUT_DIMENSIONALITY=3, _RAG_STORE=None, _RAG_PRESERVED_TERMS_CACHE=None,
+            _RAG_PRESERVED_TERMS_CACHE_KEY=None,
+        ):
+            store = rag_memory.JsonRagStore(tmp)
+            store.set_embedding_identity(batch_mod.current_batch_embedding_settings().document_identity())
+            store.upsert_history([{
+                'memory_id': 'published',
+                'source_text': 'Aurora awaits',
+                'translated_text': 'Aurora 正在等待',
+                'embedding': [1.0, 0.0, 0.0],
+            }])
+
+            with store.write_session('batch_history_update'):
+                with mock.patch.object(batch_mod, '_RAG_STORE', None):
+                    summary = batch_mod.prepare_rag_store([])
+                    self.assertEqual(summary['history_records_before'], 1)
+                with (
+                    mock.patch.object(batch_mod, '_RAG_STORE', None),
+                    mock.patch.object(batch_mod, 'embed_query_text', return_value=[1.0, 0.0, 0.0]),
+                ):
+                    hits, stats = batch_mod.retrieve_history_hits([{'text': 'Aurora awaits'}], [])
+                    self.assertEqual(stats['hit_count'], 1)
+                    self.assertEqual(hits[0]['translated_text'], 'Aurora 正在等待')
+                with mock.patch.object(batch_mod, '_RAG_STORE', None):
+                    self.assertIn('aurora', batch_mod.collect_shared_rag_preserved_terms())
+
     def test_bootstrap_rag_resumes_after_process_exit_and_preserves_previous_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1306,8 +1306,8 @@ def _batch_rag_store_metadata():
     }
 
 
-def get_rag_store(*, update_metadata=True):
-    """Resolve the Batch history store, optionally deferring metadata writes."""
+def get_rag_store():
+    """Resolve the Batch history store without taking its writer lock."""
     global _RAG_STORE, RAG_STORE_DIR
     if not RAG_ENABLED:
         return None
@@ -1315,9 +1315,6 @@ def get_rag_store(*, update_metadata=True):
         RAG_STORE_DIR = get_default_rag_store_dir()
     if _RAG_STORE is None or os.path.abspath(_RAG_STORE.store_dir) != os.path.abspath(RAG_STORE_DIR):
         _RAG_STORE = JsonRagStore(RAG_STORE_DIR)
-        if update_metadata:
-            _RAG_STORE.set_metadata(**_batch_rag_store_metadata())
-            _attach_batch_store_document_identity(_RAG_STORE)
     return _RAG_STORE
 
 
@@ -16986,7 +16983,7 @@ def sync_rag_store_for_jobs(
     """Checkpoint Batch history vectors before publishing a complete update."""
     if not RAG_ENABLED:
         return {'enabled': False}
-    store = get_rag_store(update_metadata=False)
+    store = get_rag_store()
     if store is None:
         return {'enabled': True, 'error': 'RAG store unavailable'}
     try:
@@ -17154,7 +17151,7 @@ def prepare_rag_store(file_jobs):
         # Ren'Py history scanner from JSON or from newly applied MV targets.
         return {**status, 'enabled': True, 'store_dir': str(paths['history']),
                 'bootstrap_on_build': False, 'bootstrap_requested': RAG_BOOTSTRAP_ON_BUILD}
-    store = get_rag_store(update_metadata=not RAG_BOOTSTRAP_ON_BUILD)
+    store = get_rag_store()
     summary = {
         'enabled': True,
         'store_dir': store.store_dir if store else '',

@@ -265,7 +265,7 @@ JSONL 每行是一个对象，支持以下字段：
 
 命令输出会包含 `scan_scope`、`files_scanned`、`scanned`、`external_seed_records`、`external_seed_invalid_json`、`external_seed_filtered`、`external_seed_skipped`、`embedded`、`reused_embeddings`、`upserted` 和 history record 数量，方便确认预建库是否真的扫描并写入了内容。
 
-Ren’Py Batch 预建逐批保存通过校验的向量。中断后用相同范围和 embedding 配置重跑，`resumed_embeddings` 统计从检查点恢复的向量，`checkpointed_embeddings` 统计本轮读取或保存的检查点向量，`embedded` 只统计本次新生成的向量。全部向量通过校验后才发布历史库。重建不兼容的库时，旧库保留到替换开始。
+Ren’Py Batch 预建逐批保存通过校验的向量。中断后用相同范围和 embedding 配置重跑，`resumed_embeddings` 统计从检查点恢复的向量，`checkpointed_embeddings` 统计本轮读取或保存的检查点向量，`embedded` 只统计本次新生成的向量。全部向量通过校验后才发布历史库。生成向量期间，Batch 仍可使用匹配旧库的 embedding 配置读取已发布的历史，旧库保留到替换开始。
 
 注意：`bootstrap-rag` 解决的是“build 前先用已有译文暖库”的问题；它不会让已经 build / split 完的旧请求动态吃到后续 apply 的新结果。需要滚动回灌时，仍要按波次重新 build，或等待后续动态波次编排能力。现有 store 缺 embedding identity 或与当前后端不兼容时，`build` / `apply` 不会自动清空；必须显式运行 `bootstrap-rag`（或 GUI「上下文库」预建）。
 

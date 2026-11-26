@@ -1022,7 +1022,7 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
         batch_mod.RAG_STORE_DIR = store_dir
         
         store = batch_mod.get_rag_store()
-        store.load()
+        store.set_embedding_identity(batch_mod.current_batch_embedding_settings().document_identity())
 
         # 写入一条 V1 格式 ID 的现有记录
         source_text = "Seek the holy sword"
@@ -1056,26 +1056,13 @@ class TestIdentityV2AndCompatibility(unittest.TestCase):
             "quality_state": "seed",
         }
 
-        # 调用 sync_rag_store_for_jobs 进行同步
-        file_jobs = [
-            {
-                "file_rel_path": "script.rpy",
-                "file_path": "script.rpy",
-            }
-        ]
-        
-        # 这里的 sync_rag_store_for_jobs 内部应该能够命中 legacy_record 并直接复用其 embedding 写入 v2_id 记录中！
-        # 如果没有复用的话，它会试图去调用外部 Embedding API 导致测试中抛出异常（或者因为没有配置 mocked API 而报错）。
-        # 我们用 mock 阻止外部的 embed_history_records 调用
-        with mock.patch("gemini_translate_batch.embed_history_records") as mock_embed:
-            mock_embed.return_value = []
+        with mock.patch.object(batch_mod, 'embed_texts') as mock_embed:
             stats = batch_mod.sync_rag_store_for_jobs(
                 file_jobs=[],
                 scan_all_files=False,
                 extra_records=[new_record]
             )
-            # 验证确实被调用了，但待请求列表为空；复用记录会计入进度 offset。
-            mock_embed.assert_called_once_with([], progress_offset=1, progress_total=1)
+            mock_embed.assert_not_called()
             self.assertEqual(stats["reused_embeddings"], 1)
             self.assertEqual(stats["embedding_pending"], 0)
 
