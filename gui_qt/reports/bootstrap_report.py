@@ -501,6 +501,8 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             "files_scanned",
             "scanned",
             "embedded",
+            "resumed_embeddings",
+            "checkpointed_embeddings",
             "upserted",
             "history_records_before",
             "history_records_after",
@@ -511,12 +513,16 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
     if values.get("error"):
         findings.append(values["error"])
 
+    resume_hint = (
+        BOOTSTRAP_PROGRESS_COPY["batch_history_resume_hint"]
+        if _parse_int_field(values, "checkpointed_embeddings") > 0 else ""
+    )
     if exit_code != 0:
         return BootstrapSummary(
             kind="rag",
             status="failed",
             heading="预建记忆库失败",
-            message="预建记忆库未成功完成，请查看诊断日志。",
+            message=resume_hint or "预建记忆库未成功完成，请查看诊断日志。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )
@@ -526,7 +532,7 @@ def summarize_rag_bootstrap_output(output: str, exit_code: int) -> BootstrapSumm
             kind="rag",
             status="failed",
             heading="预建记忆库失败",
-            message="预建过程中出现错误，请查看诊断日志。",
+            message=resume_hint or "预建过程中出现错误，请查看诊断日志。",
             facts=extend_facts_with_notices(facts, findings),
             findings=findings,
         )

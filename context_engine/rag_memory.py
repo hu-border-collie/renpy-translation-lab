@@ -15,9 +15,16 @@ from context_engine.embedding_backend import (
     EmbeddingTaskType,
     check_persisted_store_query_compatibility,
 )
+from foundation.atomic_io import (
+    AtomicWriteTransactionError,
+    atomic_write_many_lines,
+    read_atomic_write_transaction_journal,
+    recover_atomic_write_transaction,
+)
 
 
 LOCK_STALE_AFTER_SECONDS = 60 * 60
+HISTORY_REBUILD_TRANSACTION = 'rag_history_rebuild'
 
 
 def now_iso():
@@ -188,6 +195,7 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
         self.store_dir = os.path.abspath(store_dir)
         self.metadata_path = os.path.join(self.store_dir, 'metadata.json')
         self.history_path = os.path.join(self.store_dir, 'history.jsonl')
+        self._history_rebuild_journal = os.path.join(self.store_dir, '.history-rebuild.json')
         self.lock_path = os.path.join(self.store_dir, '.rag_store.lock')
         self._loaded = False
         self._disk_snapshot = None
@@ -204,9 +212,14 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
         self._load_from_disk()
 
     def _load_from_disk(self):
-        self.metadata = self._load_json_file(self.metadata_path)
+        before = self._disk_version()
+        self.metadata = {}
         self.history = {}
         self.file_index = {}
+        self._loaded = False
+        if os.path.exists(self._history_rebuild_journal):
+            return
+        self.metadata = self._load_json_file(self.metadata_path)
         if os.path.isfile(self.history_path):
             with open(self.history_path, 'r', encoding='utf-8-sig') as handle:
                 for line_number, raw_line in enumerate(handle, start=1):
@@ -225,8 +238,13 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
                     if memory_id:
                         self.history[memory_id] = record
                         self._index_record(memory_id, record)
+        after = self._disk_version()
+        if before != after or os.path.exists(self._history_rebuild_journal):
+            # An identity replacement can swap history and metadata separately.
+            self.metadata, self.history, self.file_index = {}, {}, {}
+            return
         self._loaded = True
-        self._disk_snapshot = self._disk_version()
+        self._disk_snapshot = after
 
     def _file_version(self, path):
         try:
@@ -262,6 +280,11 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
     def count_history(self):
         self.load()
         return len(self.history)
+
+    def has_embedded_history(self):
+        """Report whether the store already holds published vectors."""
+        self.load()
+        return self._embedding_record_count() > 0
 
     def _embedding_record_count(self):
         return sum(1 for record in self.history.values() if _record_has_embedding(record))
@@ -514,6 +537,7 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
             operation_succeeded = False
             with os.fdopen(fd, 'w', encoding='utf-8') as handle:
                 json.dump(lock_info, handle, ensure_ascii=False)
+            self._recover_history_rebuild()
             yield lock_info
             operation_succeeded = True
         finally:
@@ -529,23 +553,83 @@ class JsonRagStore(_EmbeddingIdentityStoreMixin, object):
                         f'Failed to remove RAG store lock {self.lock_path}: {exc}'
                     ) from exc
 
-    def _update_metadata_unlocked(self, operation, updates, lock_info):
-        if not isinstance(self.metadata, dict):
-            self.metadata = {}
-        for key, value in updates.items():
-            self.metadata[key] = value
+    def _metadata_after_update(self, operation, updates, lock_info):
+        metadata = dict(self.metadata) if isinstance(self.metadata, dict) else {}
+        metadata.update(updates)
         updated_at = now_iso()
-        self.metadata['updated_at'] = updated_at
-        if 'created_at' not in self.metadata:
-            self.metadata['created_at'] = updated_at
-        self.metadata['last_write'] = {
+        metadata['updated_at'] = updated_at
+        metadata.setdefault('created_at', updated_at)
+        metadata['last_write'] = {
             'operation': operation,
             'owner': lock_info.get('owner'),
             'pid': lock_info.get('pid'),
             'lock_created_at': lock_info.get('created_at'),
             'updated_at': updated_at,
         }
+        return metadata
+
+    def _update_metadata_unlocked(self, operation, updates, lock_info):
+        self.metadata = self._metadata_after_update(operation, updates, lock_info)
         self._write_metadata()
+
+    def _recover_history_rebuild(self):
+        journal = read_atomic_write_transaction_journal(
+            self._history_rebuild_journal, expected_transaction_kind=HISTORY_REBUILD_TRANSACTION,
+        )
+        if journal is not None:
+            entries = journal['entries']
+            targets = {os.path.normcase(entry['target']) for entry in entries}
+            if len(entries) != 2 or targets != {
+                os.path.normcase(self.history_path), os.path.normcase(self.metadata_path),
+            }:
+                raise AtomicWriteTransactionError('RAG rebuild journal targets do not match the store.')
+            for entry in entries:
+                if not entry.get('staged_sha256') or (entry['existed'] and not entry.get('target_preimage_sha256')):
+                    raise AtomicWriteTransactionError('RAG rebuild journal is missing file fingerprints.')
+                prefix = f".{os.path.basename(entry['target'])}."
+                for field, suffix in (('staged_path', '.txn.tmp'), ('backup_path', '.txn.bak')):
+                    artifact = entry[field]
+                    if artifact and (
+                        os.path.normcase(os.path.realpath(os.path.dirname(artifact)))
+                        != os.path.normcase(os.path.realpath(self.store_dir))
+                        or not os.path.basename(artifact).startswith(prefix)
+                        or not artifact.endswith(suffix)
+                        or os.path.islink(artifact)
+                    ):
+                        raise AtomicWriteTransactionError('RAG rebuild journal has an invalid temporary file.')
+            recover_atomic_write_transaction(
+                self._history_rebuild_journal, expected_transaction_kind=HISTORY_REBUILD_TRANSACTION,
+                verify_targets=True,
+            )
+            self._loaded = False
+
+    def replace_history_for_identity(self, records, *, identity, metadata):
+        """Publish a fully embedded replacement with its document identity."""
+        if not isinstance(identity, EmbeddingIdentity) or identity.task_type is not EmbeddingTaskType.DOCUMENT:
+            raise EmbeddingContractError('RAG rebuild requires a document embedding identity.')
+        history = {record['memory_id']: record for record in records}
+        for memory_id, record in history.items():
+            vector = record.get('embedding')
+            if not isinstance(memory_id, str) or not memory_id:
+                raise EmbeddingContractError('RAG rebuild contains an invalid history id.')
+            if not isinstance(vector, list) or len(vector) != identity.output_dimension or not all(
+                type(value) in (int, float) and math.isfinite(value) for value in vector
+            ):
+                raise EmbeddingContractError('RAG rebuild contains an invalid embedding.')
+        operation = 'replace_history_for_identity'
+        with self.write_session(operation):
+            updated_metadata = self._metadata_after_update(operation, {
+                **metadata, 'embedding_identity': identity.to_dict(), 'history_count': len(history),
+            }, self._session_lock_info())
+            history_lines = (json.dumps(history[key], ensure_ascii=False) + '\n' for key in sorted(history))
+            atomic_write_many_lines(
+                [(self.history_path, history_lines),
+                 (self.metadata_path, [json.dumps(updated_metadata, ensure_ascii=False, indent=2)])],
+                journal_path=self._history_rebuild_journal,
+                transaction_kind=HISTORY_REBUILD_TRANSACTION,
+            )
+            self._load_from_disk()
+        return len(history)
 
     def _index_record(self, memory_id, record):
         file_rel_path = record.get('file_rel_path')

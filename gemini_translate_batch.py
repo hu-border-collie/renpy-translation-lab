@@ -6,6 +6,7 @@ import copy
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import sys
@@ -35,9 +36,10 @@ from foundation.atomic_io import (
     sha256_text,
     write_latest_manifest_locked,
 )
-from context_engine.rag_memory import JsonRagStore, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
+from context_engine.rag_memory import JsonRagStore, JsonRagStoreLockError, JsonSourceIndexStore, JsonSourceIndexStoreLockError, hash_text, truncate_text
 from context_engine import advanced_context
 from context_engine import embedding_runtime
+from context_engine.embedding_checkpoint import EmbeddingCheckpoint
 from context_engine.embedding_diagnostics import BOOTSTRAP_DIAGNOSTIC_FIELDS
 from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
 from execution import batch_export
@@ -1294,7 +1296,18 @@ def get_source_index_store(update_metadata=True):
     return _SOURCE_INDEX_STORE
 
 
-def get_rag_store():
+def _batch_rag_store_metadata():
+    return {
+        'project_slug': guess_project_slug(),
+        'embedding_model': RAG_EMBEDDING_MODEL,
+        'query_task_type': RAG_QUERY_TASK_TYPE,
+        'document_task_type': RAG_DOCUMENT_TASK_TYPE,
+        'output_dimensionality': RAG_OUTPUT_DIMENSIONALITY,
+    }
+
+
+def get_rag_store(*, update_metadata=True):
+    """Resolve the Batch history store, optionally deferring metadata writes."""
     global _RAG_STORE, RAG_STORE_DIR
     if not RAG_ENABLED:
         return None
@@ -1302,14 +1315,9 @@ def get_rag_store():
         RAG_STORE_DIR = get_default_rag_store_dir()
     if _RAG_STORE is None or os.path.abspath(_RAG_STORE.store_dir) != os.path.abspath(RAG_STORE_DIR):
         _RAG_STORE = JsonRagStore(RAG_STORE_DIR)
-        _RAG_STORE.set_metadata(
-            project_slug=guess_project_slug(),
-            embedding_model=RAG_EMBEDDING_MODEL,
-            query_task_type=RAG_QUERY_TASK_TYPE,
-            document_task_type=RAG_DOCUMENT_TASK_TYPE,
-            output_dimensionality=RAG_OUTPUT_DIMENSIONALITY,
-        )
-        _attach_batch_store_document_identity(_RAG_STORE)
+        if update_metadata:
+            _RAG_STORE.set_metadata(**_batch_rag_store_metadata())
+            _attach_batch_store_document_identity(_RAG_STORE)
     return _RAG_STORE
 
 
@@ -16874,29 +16882,61 @@ def load_external_rag_seed_records(seed_jsonl_paths, quality_state='external_see
     }
 
 
-def embed_history_records(records, *, progress_offset=0, progress_total=None):
-    embedded_records = []
+def embed_history_records(
+    records, *, progress_offset=0, progress_total=None, checkpoint=None, stats=None,
+):
+    """Embed Batch source text, checkpointing each complete validated batch."""
+    fingerprints = {}
+    vectors_by_id = {}
+    pending = []
+    for record in records:
+        record_id = record['memory_id']
+        if checkpoint is not None:
+            fingerprint = stable_json_sha256({
+                key: value for key, value in record.items() if key != 'created_at'
+            })
+            fingerprints[record_id] = fingerprint
+            cached = checkpoint.get(record_id, fingerprint)
+            if cached is not None:
+                vectors_by_id[record_id] = cached
+                continue
+        pending.append(record)
+    if stats is not None:
+        stats['resumed_embeddings'] = stats['checkpointed_embeddings'] = len(vectors_by_id)
     batch_size = 16
     total = len(records) if progress_total is None else progress_total
     if total:
-        completed = min(max(progress_offset, 0), total)
+        completed = min(max(progress_offset, 0) + len(vectors_by_id), total)
         print(f'RAG update progress: {completed}/{total} records.', flush=True)
-    for start in range(0, len(records), batch_size):
-        batch = records[start:start + batch_size]
+    for start in range(0, len(pending), batch_size):
+        batch = pending[start:start + batch_size]
         vectors = embed_texts([record['source_text'] for record in batch], RAG_DOCUMENT_TASK_TYPE)
-        for record, vector in zip(batch, vectors):
-            enriched = dict(record)
-            enriched['embedding'] = vector
-            enriched['embedding_model'] = RAG_EMBEDDING_MODEL
-            enriched['embedding_task_type'] = RAG_DOCUMENT_TASK_TYPE
-            enriched['embedding_dim'] = len(vector)
-            enriched['embedding_text_kind'] = 'source_text'
-            enriched['embedding_text_checksum'] = hash_text(record.get('source_text', ''))
-            embedded_records.append(enriched)
+        if len(vectors) != len(batch):
+            raise EmbeddingContractError('Batch RAG document embedding count mismatch.')
+        if checkpoint is not None:
+            checkpoint.save([
+                {'id': record['memory_id'], 'fingerprint': fingerprints[record['memory_id']], 'embedding': vector}
+                for record, vector in zip(batch, vectors)
+            ])
+        vectors_by_id.update((record['memory_id'], vector) for record, vector in zip(batch, vectors))
+        if stats is not None:
+            stats['embedded'] += len(vectors)
+            stats['checkpointed_embeddings'] = len(vectors_by_id)
         if total:
-            completed = min(max(progress_offset + len(embedded_records), 0), total)
+            completed = min(max(progress_offset + len(vectors_by_id), 0), total)
             print(f'RAG update progress: {completed}/{total} records.', flush=True)
-    return embedded_records
+    return [
+        {
+            **record,
+            'embedding': vectors_by_id[record['memory_id']],
+            'embedding_model': RAG_EMBEDDING_MODEL,
+            'embedding_task_type': RAG_DOCUMENT_TASK_TYPE,
+            'embedding_dim': len(vectors_by_id[record['memory_id']]),
+            'embedding_text_kind': 'source_text',
+            'embedding_text_checksum': hash_text(record['source_text']),
+        }
+        for record in records
+    ]
 
 
 def has_current_source_embedding(existing, record):
@@ -16909,7 +16949,8 @@ def has_current_source_embedding(existing, record):
         and existing.get('embedding_text_kind') == 'source_text'
         and existing.get('embedding_text_checksum') == hash_text(record.get('source_text', ''))
         and isinstance(existing.get('embedding'), list)
-        and bool(existing.get('embedding'))
+        and len(existing['embedding']) == RAG_OUTPUT_DIMENSIONALITY
+        and all(type(value) in (int, float) and math.isfinite(value) for value in existing['embedding'])
     )
 
 
@@ -16942,13 +16983,31 @@ def sync_rag_store_for_jobs(
     extra_summary=None,
     rebuild=False,
 ):
+    """Checkpoint Batch history vectors before publishing a complete update."""
     if not RAG_ENABLED:
         return {'enabled': False}
-    store = get_rag_store()
+    store = get_rag_store(update_metadata=False)
     if store is None:
         return {'enabled': True, 'error': 'RAG store unavailable'}
-    identity_status = _attach_batch_store_document_identity(store, rebuild=False)
-    if not identity_status.get('ready'):
+    try:
+        with store.write_session('batch_history_update'):
+            return _sync_batch_history_locked(
+                store, file_jobs, quality_state, scan_all_files, extra_records, extra_summary, rebuild,
+            )
+    except (OSError, JsonRagStoreLockError, atomic_io.AtomicWriteTransactionError) as exc:
+        print(f'Warning: Failed to update RAG store: {exc}')
+        return {'enabled': True, 'store_dir': store.store_dir, 'error': str(exc)}
+
+
+def _sync_batch_history_locked(
+    store, file_jobs, quality_state, scan_all_files, extra_records, extra_summary, rebuild,
+):
+    settings = current_batch_embedding_settings()
+    identity = settings.document_identity()
+    report = store.embedding_compatibility(settings.query_identity())
+    needs_identity = not report.compatible
+    replace_store = needs_identity and store.has_embedded_history()
+    if replace_store:
         if not rebuild:
             print(
                 'Warning: RAG embedding identity is missing or incompatible; '
@@ -16968,26 +17027,25 @@ def sync_rag_store_for_jobs(
                 'history_records_before': store.count_history(),
                 'history_records_after': store.count_history(),
                 'error': 'rebuild_store',
-                'action': identity_status.get('action') or 'rebuild_store',
-                'embedding_compatibility': identity_status,
+                'action': 'rebuild_store',
+                'embedding_compatibility': {**report.to_dict(), 'rebuilt': False, 'ready': False},
             }
             stats.update(extra_summary or {})
             return stats
         print(
             'Warning: RAG embedding identity is missing or incompatible; '
-            'rebuilding the store with the selected embedding backend. '
+            'preparing a replacement with the selected embedding backend. '
             'Existing vectors will not be reused.'
         )
-        identity_status = _attach_batch_store_document_identity(store, rebuild=True)
 
     scan_jobs = all_rag_file_jobs() if scan_all_files else file_jobs
     base_records = collect_rag_seed_records_for_jobs(scan_jobs, quality_state=quality_state)
     base_records.extend(extra_records or [])
     records_to_embed = []
     records_with_reused_embedding = []
-    for record in base_records:
-        existing = store.get_history_record(record['memory_id'])
-        if not existing:
+    for record in {row['memory_id']: row for row in base_records}.values():
+        existing = None if replace_store else store.get_history_record(record['memory_id'])
+        if not existing and not replace_store:
             store.load()
             for hist_rec in store.history.values():
                 if hist_rec.get('source_checksum') == record['source_checksum']:
@@ -17011,6 +17069,8 @@ def sync_rag_store_for_jobs(
         'pending': len(pending_records),
         'embedding_pending': len(records_to_embed),
         'reused_embeddings': len(records_with_reused_embedding),
+        'resumed_embeddings': 0,
+        'checkpointed_embeddings': 0,
         'embedded': 0,
         'upserted': 0,
         'history_records_before': store.count_history(),
@@ -17021,19 +17081,58 @@ def sync_rag_store_for_jobs(
         f'{len(scan_jobs)} files, {len(pending_records)} pending.',
         flush=True,
     )
-    if not pending_records:
-        stats['history_records_after'] = store.count_history()
-        return stats
-
     try:
+        scope = stable_json_sha256({
+            'project': os.path.normcase(os.path.realpath(legacy.BASE_DIR)) if legacy.BASE_DIR else '',
+            'tl_dir': os.path.normcase(os.path.realpath(legacy.TL_DIR)) if legacy.TL_DIR else '',
+            'scope': stats['scan_scope'],
+            'quality_state': quality_state,
+            'files': sorted({
+                (job.get('file_rel_path') or '',
+                 os.path.normcase(os.path.realpath(job['file_path'])) if job.get('file_path') else '')
+                for job in scan_jobs
+            }),
+            'external_records': sorted({record['memory_id'] for record in (extra_records or [])}),
+        })
+        checkpoint_path = Path(store.store_dir) / '.batch-rag-checkpoints' / f'{scope}.jsonl'
+        checkpoint = None
+        if records_to_embed:
+            checkpoint = EmbeddingCheckpoint(
+                checkpoint_path,
+                stable_json_sha256({
+                    'scope': scope,
+                    'identity': identity.to_dict(),
+                    'task_type': settings.native_document_task_type,
+                }),
+                settings.output_dimension,
+            )
         embedded_records = embed_history_records(
             records_to_embed,
             progress_offset=len(records_with_reused_embedding),
             progress_total=len(pending_records),
+            checkpoint=checkpoint,
+            stats=stats,
         )
-        stats['embedded'] = len(embedded_records)
-        stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
+        if replace_store:
+            stats['upserted'] = store.replace_history_for_identity(
+                embedded_records, identity=identity, metadata=_batch_rag_store_metadata(),
+            )
+        else:
+            if needs_identity:
+                store.set_embedding_identity(identity)
+            if pending_records:
+                stats['upserted'] = store.upsert_history(records_with_reused_embedding + embedded_records)
+            metadata = {**_batch_rag_store_metadata(), 'history_count': store.count_history()}
+            if any(store.metadata.get(key) != value for key, value in metadata.items()):
+                store.set_metadata(**metadata)
         stats['history_records_after'] = store.count_history()
+        try:
+            if checkpoint is not None:
+                checkpoint.clear()
+            else:
+                checkpoint_path.unlink(missing_ok=True)
+        except OSError:
+            print('Warning: completed Batch RAG checkpoint could not be removed.', flush=True)
     except Exception as exc:
         print(f'Warning: Failed to update RAG store: {exc}')
         stats['error'] = str(exc)
@@ -17055,7 +17154,7 @@ def prepare_rag_store(file_jobs):
         # Ren'Py history scanner from JSON or from newly applied MV targets.
         return {**status, 'enabled': True, 'store_dir': str(paths['history']),
                 'bootstrap_on_build': False, 'bootstrap_requested': RAG_BOOTSTRAP_ON_BUILD}
-    store = get_rag_store()
+    store = get_rag_store(update_metadata=not RAG_BOOTSTRAP_ON_BUILD)
     summary = {
         'enabled': True,
         'store_dir': store.store_dir if store else '',
@@ -22324,12 +22423,15 @@ def build_arg_parser():
 
     bootstrap_rag_parser = subparsers.add_parser(
         'bootstrap-rag',
-        description='Prebuild the history store. MV saves each embedding batch and resumes matching checkpoints on rerun; only a fully validated store becomes ready. Failures include safe exception, stage and batch diagnostics in text/JSON output.',
+        description=(
+            'Prebuild the history store. This saves each validated embedding batch locally and '
+            'resumes matching checkpoints on rerun. In either engine only a fully validated store '
+            'becomes ready. MV failures include safe exception, stage and batch diagnostics.'
+        ),
         help=(
             'Prebuild Batch history from TL files, or MV history from explicit reviewed JSONL. '
             'MV uses the selected strategy\'s embedding settings and never infers history from target text. '
-            'Missing or incompatible embedding identity rebuilds the '
-            'store and does not reuse existing vectors.'
+            'Ren\'Py replaces an incompatible store after the new vectors are validated.'
         ),
     )
     bootstrap_rag_parser.add_argument(

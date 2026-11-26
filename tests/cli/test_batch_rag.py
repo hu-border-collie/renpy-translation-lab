@@ -581,6 +581,68 @@ class BatchRagRegressionTests(unittest.TestCase):
             batch_mod.legacy.INCLUDE_FILES = old_values['include_files']
             batch_mod.legacy.INCLUDE_PREFIXES = old_values['include_prefixes']
 
+    def test_bootstrap_rag_resumes_after_process_exit_and_preserves_previous_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tl_dir = root / 'tl'
+            tl_dir.mkdir()
+            for index in range(17):
+                (tl_dir / f'script_{index:02}.rpy').write_text(
+                    f'old "Source {index}"\nnew "Translated {index}"\n', encoding='utf-8',
+                )
+            store = rag_memory.JsonRagStore(root / 'rag')
+            store.set_metadata(project_slug='fixture')
+            store.upsert_history([
+                {'memory_id': 'previous', 'source_text': 'Old source',
+                 'translated_text': 'Old translation', 'embedding': [1.0, 0.0, 0.0]},
+            ])
+            published_files = [Path(store.metadata_path), Path(store.history_path)]
+            previous = [path.read_bytes() for path in published_files]
+            child = subprocess.run(
+                [sys.executable, '-B', '-c', """
+import os
+import sys
+from pathlib import Path
+from unittest import mock
+import gemini_translate_batch as batch
+
+root = Path(sys.argv[1])
+def embed(texts, task_type):
+    if len(texts) != 16:
+        os._exit(76)
+    return [[1.0, 0.0, 0.0]] * len(texts)
+
+with mock.patch.multiple(batch, RAG_ENABLED=True, RAG_STORE_DIR=str(root / 'rag'),
+                         RAG_OUTPUT_DIMENSIONALITY=3, _RAG_STORE=None), \
+     mock.patch.multiple(batch.legacy, BASE_DIR=str(root), TL_DIR=str(root / 'tl'),
+                         INCLUDE_FILES=set(), INCLUDE_PREFIXES=set()), \
+     mock.patch.object(batch.legacy, 'current_project_engine', return_value='renpy'), \
+     mock.patch.object(batch, 'embed_texts', side_effect=embed):
+    batch.bootstrap_rag_store(skip_prepare=True)
+""", str(root)],
+                cwd=Path(__file__).resolve().parents[2], capture_output=True, timeout=25,
+            )
+            self.assertEqual(child.returncode, 76, child.stderr.decode(errors='replace'))
+            self.assertEqual([path.read_bytes() for path in published_files], previous)
+            with (
+                mock.patch.multiple(batch_mod, RAG_ENABLED=True, RAG_STORE_DIR=store.store_dir,
+                                    RAG_OUTPUT_DIMENSIONALITY=3, _RAG_STORE=None),
+                mock.patch.multiple(batch_mod.legacy, BASE_DIR=str(root), TL_DIR=str(tl_dir),
+                                    INCLUDE_FILES=set(), INCLUDE_PREFIXES=set()),
+                mock.patch.object(batch_mod.legacy, 'current_project_engine', return_value='renpy'),
+                mock.patch.object(batch_mod, 'embed_texts', return_value=[[0.0, 1.0, 0.0]]) as embed,
+                redirect_stdout(io.StringIO()),
+            ):
+                result = batch_mod.bootstrap_rag_store(skip_prepare=True)
+            embed.assert_called_once_with(['Source 16'], batch_mod.RAG_DOCUMENT_TASK_TYPE)
+            self.assertEqual(result['resumed_embeddings'], 16)
+            self.assertEqual(result['embedded'], 1)
+            self.assertEqual(result['checkpointed_embeddings'], 17)
+            self.assertEqual(result['history_records_after'], 17)
+            published = rag_memory.JsonRagStore(store.store_dir)
+            self.assertIsNone(published.get_history_record('previous'))
+            self.assertEqual(published.count_history(), 17)
+
     def test_bootstrap_rag_store_scans_all_allowed_tl_files_explicitly(self):
         old_values = {
             'rag_enabled': batch_mod.RAG_ENABLED,

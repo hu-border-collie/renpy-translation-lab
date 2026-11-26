@@ -33,6 +33,39 @@ UPDATE_GOLDEN_KEYWORD_ENV = 'UPDATE_GOLDEN_KEYWORD'
 
 
 class RagMemoryStoreTests(unittest.TestCase):
+    def test_interrupted_history_identity_swap_never_serves_a_mixed_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = rag_memory.JsonRagStore(tmp)
+            document = rag_memory.EmbeddingTaskType.DOCUMENT
+            old_identity = rag_memory.EmbeddingIdentity('gemini', 'google', 'old-model', document, 3)
+            new_identity = rag_memory.EmbeddingIdentity('gemini', 'google', 'new-model', document, 3)
+            store.set_embedding_identity(old_identity)
+            store.upsert_history([self.make_record('old')])
+            files = [Path(store.history_path), Path(store.metadata_path)]
+            previous = [path.read_bytes() for path in files]
+            replacement = [self.make_record('new')]
+            replace = os.replace
+
+            def stop_between_files(source, target):
+                if target == store.metadata_path and source.endswith('.txn.tmp'):
+                    raise KeyboardInterrupt
+                return replace(source, target)
+
+            with mock.patch('foundation.atomic_io.os.replace', side_effect=stop_between_files):
+                with self.assertRaises(KeyboardInterrupt):
+                    store.replace_history_for_identity(replacement, identity=new_identity, metadata={})
+            reader = rag_memory.JsonRagStore(tmp)
+            reader.load()
+            self.assertEqual(reader.history, {})
+            self.assertNotIn('embedding_identity', reader.metadata)
+
+            with store.write_session('resume_history_rebuild'):
+                self.assertEqual([path.read_bytes() for path in files], previous)
+            self.assertEqual(store.replace_history_for_identity(replacement, identity=new_identity, metadata={}), 1)
+            reader.load()
+            self.assertEqual(set(reader.history), {'new'})
+            self.assertEqual(reader.metadata['embedding_identity'], new_identity.to_dict())
+
     def make_record(self, memory_id, file_rel_path='script.rpy', source='Hello', translation='\u4f60\u597d'):
         return {
             'memory_id': memory_id,
