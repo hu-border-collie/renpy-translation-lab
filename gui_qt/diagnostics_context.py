@@ -33,6 +33,7 @@ from .user_copy import (
     DURABLE_SYNC_COPY,
     DURABLE_SYNC_RUN_COPY,
     DOCTOR_RUN_COPY,
+    PROJECT_ANALYSIS_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
     TRANSLATION_PREFLIGHT_COPY,
@@ -560,7 +561,7 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
-            label="项目分析·LLM 生成摘要",
+            label=PROJECT_ANALYSIS_COPY["generate_command"],
             command=format_cli_command(
                 python_exe,
                 batch_script_path,

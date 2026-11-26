@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from gui_qt.user_copy import PROJECT_ANALYSIS_COPY
 from gui_qt.workflows.translation_workflow import WorkflowStep, WorkflowUpdate
 
 PROGRESS_PREFIX = "PROJECT_ANALYSIS_PROGRESS "
@@ -55,6 +56,9 @@ def generation_facts_from_output(output: str) -> list[str]:
         f"正文 {token_value('text_output_tokens')}",
     ]
     reasoning_warnings = int(usage.get("reasoning_budget_pressure_count") or 0)
+    resumed = int(latest.get("resumed_responses") or 0)
+    if resumed:
+        facts.append(PROJECT_ANALYSIS_COPY["resumed_responses"].format(count=resumed))
     truncated = int(usage.get("truncated_output_count") or 0)
     if reasoning_warnings:
         facts.append(f"Reasoning 预算告警：{reasoning_warnings} 次")
@@ -137,6 +141,13 @@ class ProjectAnalysisWorkflow:
         key, _args = self._steps.pop(0)
         if exit_code != 0:
             self._steps.clear()
+            if key == "project-analysis-generate":
+                return WorkflowUpdate(
+                    status="failed",
+                    heading="项目分析流程中断",
+                    message=PROJECT_ANALYSIS_COPY["resume_generation"],
+                    facts=generation_facts_from_output(output),
+                )
             return WorkflowUpdate(
                 status="failed",
                 heading="项目分析流程中断",

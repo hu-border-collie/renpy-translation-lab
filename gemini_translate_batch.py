@@ -22615,10 +22615,11 @@ def build_arg_parser():
 
     pa_generate = subparsers.add_parser(
         'project-analysis-generate',
-        help=(
+        help='Generate or resume Project Analysis drafts.',
+        description=(
             'LLM map-reduce: refine label → route → project brief drafts. '
             'Requires structure drafts from project-analysis-build-structure. '
-            'Never writes glossary/story_graph/.rpy; publish remains manual.'
+            'Rerun with the same inputs to reuse saved responses. Publish remains manual.'
         ),
     )
     pa_generate.add_argument('--store-dir', default='', help='Override analysis store directory.')
@@ -22630,7 +22631,7 @@ def build_arg_parser():
     pa_generate.add_argument(
         '--force',
         action='store_true',
-        help='Re-generate even when drafts already have matching LLM lineage.',
+        help='Start a fresh generation, bypassing saved responses and matching draft lineage.',
     )
 
     pa_inspect = subparsers.add_parser(
@@ -24887,6 +24888,7 @@ def dispatch_command(parser, args):
             print_status,
             publish_project_brief,
             resolve_project_analysis_store,
+            stable_json_sha256,
             unpublish_project_brief,
         )
         from quality_review.project_analysis_generate import (
@@ -24948,7 +24950,12 @@ def dispatch_command(parser, args):
                 )
                 analysis_route = analysis_plan.routes[model_profile.STAGE_PROJECT_ANALYSIS]
                 model = route_model(analysis_plan, analysis_route)
-                analysis_usage_run_id = model_usage_ledger.new_run_id('project-analysis')
+                analysis_profile = model_profile.profile_for_route(analysis_plan, analysis_route)
+                routing_identity = stable_json_sha256([
+                    analysis_route.to_manifest_dict(),
+                    analysis_profile.to_manifest_dict(),
+                    analysis_plan.capabilities[analysis_route.profile_id].to_manifest_dict(),
+                ])
                 analysis_usage_operation_id = (
                     'project-analysis-'
                     + hashlib.sha256(str(legacy.BASE_DIR or '').encode('utf-8')).hexdigest()[:20]
@@ -24981,8 +24988,8 @@ def dispatch_command(parser, args):
                         stage=str(event.get('stage') or 'project_analysis'),
                         result=usage_result,
                         operation_id=analysis_usage_operation_id,
-                        run_id=analysis_usage_run_id,
-                        source_key=str(event.get('artifact_id') or ''),
+                        run_id=f"project-analysis-{event['run_id']}",
+                        source_key=str(event['receipt_id']),
                         thinking_level=PROJECT_ANALYSIS_THINKING_LEVEL,
                         source={
                             'kind': 'project_analysis_response',
@@ -25024,7 +25031,8 @@ def dispatch_command(parser, args):
                         "input_per_million": model_rates.get("input_per_million") or 0.0,
                         "output_per_million": model_rates.get("output_per_million") or 0.0,
                     },
-                    analysis_inputs=collect_project_analysis_optional_inputs(
+                    routing_identity=routing_identity,
+                    analysis_inputs=lambda: collect_project_analysis_optional_inputs(
                         store_dir=store_dir,
                         base_dir=legacy.BASE_DIR or None,
                     ),

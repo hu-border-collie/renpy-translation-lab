@@ -625,6 +625,9 @@ PROBE_COPY = {
 PROJECT_ANALYSIS_COPY = {
     "start": "开始分析",
     "generate": "生成项目摘要",
+    "resume_generation": "再次运行生成摘要可继续。输入匹配的已保存响应会自动复用。",
+    "resumed_responses": "已复用本地响应：{count} 条",
+    "generate_command": "项目分析·生成或续跑摘要",
     "refresh": "更新项目摘要",
     "rebuild": "重新分析",
     "review": "审查内容",
