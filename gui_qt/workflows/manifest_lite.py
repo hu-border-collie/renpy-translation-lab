@@ -32,6 +32,7 @@ _HEAD_INT_KEYS = (
     "manifest_version",
     "core_schema_version",
     "keyword_checkpoint_version",
+    "revision_checkpoint_version",
     "split_index",
     "split_total",
 )
@@ -43,6 +44,7 @@ _TAIL_OBJECT_KEYS = (
     "split_from_manifest",
     "sync_summary",
     "keyword_export",
+    "last_revision_preview",
 )
 _TAIL_SCALAR_KEYS = (
     "applied_at",
@@ -56,6 +58,8 @@ _TAIL_SCALAR_KEYS = (
     "last_check",
     "sync_completed_at",
     "keyword_exported_at",
+    "revision_applied_at",
+    "revision_apply_state",
 )
 
 # Manifests larger than this are treated as "heavy" for GUI resume/summary reads.
@@ -78,7 +82,7 @@ def read_manifest_index_fields(path: str | Path) -> dict[str, Any]:
         return {}
 
     result: dict[str, Any] = {}
-    for key in ("mode", "base_dir"):
+    for key in ("mode", "base_dir", "execution"):
         value = _extract_quoted_field(head, key)
         if value is not None:
             result[key] = value
@@ -188,9 +192,10 @@ def _extract_tail_fields(tail: str) -> dict[str, Any]:
         value = _extract_scalar_field(tail, key)
         if value is not None:
             result[key] = value
-    checkpoint_version = _extract_root_tail_value(tail, "keyword_checkpoint_version")
-    if checkpoint_version is not None:
-        result["keyword_checkpoint_version"] = checkpoint_version
+    for key in ("keyword_checkpoint_version", "revision_checkpoint_version"):
+        checkpoint_version = _extract_root_tail_value(tail, key)
+        if checkpoint_version is not None:
+            result[key] = checkpoint_version
     return result
 
 

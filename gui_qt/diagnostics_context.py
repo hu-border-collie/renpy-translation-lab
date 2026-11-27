@@ -34,6 +34,7 @@ from .user_copy import (
     DURABLE_SYNC_RUN_COPY,
     DOCTOR_RUN_COPY,
     PROJECT_ANALYSIS_COPY,
+    SYNC_REVISION_COPY,
     QUALITY_REPORT_EXPORT_LABEL,
     TRANSLATION_PLAN_COPY,
     TRANSLATION_PREFLIGHT_COPY,
@@ -835,7 +836,17 @@ def build_cli_commands(
                         ),
                     )
                 )
-        if not manifest.get("submit_disabled"):
+        if manifest.get("execution") == "sync":
+            if manifest.get("revision_checkpoint_version") == 1 and not manifest.get("revision_applied_at"):
+                resume_args = ["sync-revisions", "--resume", manifest_path]
+                for label, args in (
+                    (SYNC_REVISION_COPY['command'], resume_args),
+                    (SYNC_REVISION_COPY['retry_command'], [*resume_args, "--retry-unknown"]),
+                ):
+                    commands.append(DiagnosticsCommand(
+                        label=label, command=format_cli_command(python_exe, batch_script_path, args),
+                    ))
+        elif not manifest.get("submit_disabled"):
             commands.extend(
                 build_cloud_job_commands(
                     python_exe=python_exe,

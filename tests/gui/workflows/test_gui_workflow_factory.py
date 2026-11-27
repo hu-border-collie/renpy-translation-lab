@@ -100,14 +100,23 @@ class GuiWorkflowFactoryTests(unittest.TestCase):
             ["status", "C:\\package\\manifest.json", "--output", "json", "--non-interactive"],
         )
 
-    def test_resume_workflow_returns_none_for_sync_revision(self):
-        self.assertIsNone(
-            resume_workflow(
-                WorkMode.SYNC_REVISION,
-                "C:\\package\\manifest.json",
-                {"mode": "revision"},
-            )
-        )
+    def test_resume_workflow_runs_sync_revision_preview_with_explicit_acknowledgement(self):
+        path = "C:\\package\\manifest.json"
+        manifest = {"mode": "revision", "execution": "sync", "revision_checkpoint_version": 1}
+        workflow = resume_workflow(WorkMode.SYNC_REVISION, path, manifest)
+        self.assertIsInstance(workflow, SyncRevisionWorkflow)
+        self.assertEqual(workflow.current_step().args, ["sync-revisions", "--resume", path])
+        workflow = resume_workflow(WorkMode.SYNC_REVISION, path, manifest, retry_unknown=True)
+        self.assertEqual(workflow.current_step().args, ["sync-revisions", "--resume", path, "--retry-unknown"])
+
+    def test_validate_resume_manifest_rejects_legacy_or_applied_sync_revision(self):
+        for fields, message in (({}, "检查点"),
+                                ({"revision_checkpoint_version": 1, "revision_apply_state": "partial"}, "已写回")):
+            with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, message):
+                validate_resume_manifest(
+                    WorkMode.SYNC_REVISION, {"mode": "revision", "execution": "sync", **fields},
+                    game_root=None, normalized_path_text=str,
+                )
 
     def test_resume_workflow_returns_keyword_resume(self):
         workflow = resume_workflow(

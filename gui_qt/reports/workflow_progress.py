@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, replace
 
 from gui_qt.reports.duration_format import format_remaining_duration_zh
-from gui_qt.user_copy import SYNC_KEYWORD_COPY
+from gui_qt.user_copy import SYNC_KEYWORD_COPY, SYNC_REVISION_COPY
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,7 @@ _SOURCE_INDEX_BUILD_COMPLETE_RE = re.compile(
     r"Source index retrieval complete:\s*(\d+)/(\d+)\s*chunks queried\."
 )
 _SYNC_REQUEST_PROGRESS_RE = re.compile(r"^\[(\d+)/(\d+)\]\s+(.+?)\s*$")
+_REVISION_SAVED_RE = re.compile(r"^Sync revision saved: (\d+)/(\d+) requests; resumed=(\d+)\.$")
 _KEYWORD_SAVED_RE = re.compile(r"^Sync keyword saved: (\d+)/(\d+) requests; resumed=(\d+)\.$")
 _KEYWORD_PHASE_RE = re.compile(r"^Sync keyword phase: (validating|waiting)\s+(.+)$")
 _KEYWORD_QUEUE_RE = re.compile(
@@ -91,6 +92,7 @@ def create_workflow_progress_state(kind: str) -> WorkflowProgressState | None:
         "source_index_build",
         "sync_translation",
         "sync_requests",
+        "sync_revision",
         "rag_bootstrap",
     }:
         return WorkflowProgressState(kind=kind)
@@ -112,6 +114,16 @@ def update_workflow_progress_from_line(
         return _with_progress_timing(state, _update_sync_translation_progress(text, state), now=now)
     if state.kind == "sync_requests":
         return _with_progress_timing(state, _update_sync_request_progress(text, state), now=now)
+    if state.kind == "sync_revision":
+        match = _REVISION_SAVED_RE.fullmatch(text)
+        if match:
+            saved, total, resumed = map(int, match.groups())
+            return replace(
+                state, current=saved, total=total, visible=True,
+                label=SYNC_REVISION_COPY['saved'].format(current=saved, total=total),
+                facts=(SYNC_REVISION_COPY['resumed'].format(count=resumed),),
+            )
+        return state
     if state.kind == "sync_keywords":
         return _update_keyword_progress(text, state)
     if state.kind == "rag_bootstrap":

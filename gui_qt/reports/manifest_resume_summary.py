@@ -11,6 +11,7 @@ from gui_qt.workflows.translation_workflow import TERMINAL_FAILURE_STATES
 from gui_qt.reports.keyword_report import summarize_sync_keyword_manifest, sync_keyword_progress_from_manifest
 from gui_qt.reports.workflow_progress import WorkflowProgressState
 from gui_qt.user_copy import (
+    SYNC_REVISION_COPY,
     format_job_fact,
     format_job_state_fact,
     format_manifest_path_fact,
@@ -119,6 +120,26 @@ def build_manifest_workflow_display(
             workflow=resume_workflow(spec.mode, manifest_path, manifest),
             selected_manifest_path=manifest_path, archive_when_idle=False,
             progress=sync_keyword_progress_from_manifest(manifest),
+        )
+    if spec.mode == WorkMode.SYNC_REVISION:
+        preview = manifest.get("last_revision_preview")
+        has_preview = bool(preview)
+        prefix = 'preview' if has_preview else 'ready'
+        facts = [format_manifest_path_fact(manifest_path), *(extra_facts or [])]
+        summary = manifest.get("sync_summary")
+        if isinstance(summary, dict) and 'checkpointed_request_count' in summary:
+            facts.append(SYNC_REVISION_COPY['saved'].format(
+                current=summary['checkpointed_request_count'], total=summary.get('request_count', 0),
+            ))
+        status = "done" if has_preview else "ready"
+        if has_preview and manifest.get('job_state') == 'SYNC_PARTIAL':
+            status = "partial"
+        return ManifestWorkflowDisplay(
+            status=status, heading=SYNC_REVISION_COPY[f'{prefix}_heading'],
+            message=SYNC_REVISION_COPY[f'{prefix}_message'], facts=tuple(facts),
+            timeline_step_key='sync-revisions',
+            workflow=resume_workflow(spec.mode, manifest_path, manifest),
+            selected_manifest_path=manifest_path, archive_when_idle=False,
         )
     job_state = manifest.get("job_state")
     job_state_text = job_state if isinstance(job_state, str) else ""

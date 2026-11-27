@@ -236,8 +236,13 @@ python gemini_translate_batch.py apply-revisions logs/batch_jobs/<package>/manif
 
 ```bash
 python gemini_translate_batch.py sync-revisions --limit 3
+python gemini_translate_batch.py sync-revisions --resume <MANIFEST>
 python gemini_translate_batch.py sync-revisions --apply
 ```
+
+Ren’Py 同步订正在日志所示任务目录下保存请求和检查点。每个服务响应及用量在业务校验前保存，续跑使用原 manifest 中的项目、源文件快照、请求、上下文和模型路由。已保存的响应会直接重放，结果和预览丢失后也可从检查点重新生成。首轮响应全部保存后，进度统计仍与订正合同的完整率分开。
+
+如果进程停止时已有请求发出，但尚无已保存的响应，默认停止续跑。确认可能重复计费后，可以显式追加 `--retry-unknown`。已保存的无效响应仍可重放以重建诊断。如需重新请求已返回的块，请新建任务。旧任务没有这套检查点，源文件变化后也需要新建任务。`--resume` 只生成预览，确认后使用 `apply-revisions <MANIFEST>` 写回。
 
 `build-revisions` 会复用 include 过滤、glossary、macro setting、可选 RAG / Story Memory，把已有原文和当前译文送入 Batch。构建时作业模型取冻结的 revision 阶段路由（未配置 `model_routing` 时继承旧 Batch 入口），`--profile` 与阶段路由覆盖会写入 manifest 与请求生成配置。`preview-revisions` 导出 `revision_preview.jsonl` 和 `revision_preview.md`，并对将被写回的修订结果运行共享机械质量规则，生成包目录下的 `quality_findings.jsonl`；合同绑定写回 manifest：结果文件 SHA-256、manifest / 项目身份指纹、涉及源文件的快照指纹、质量 finding 路径与哈希、质量策略/规则版本、preview schema 版本与生成时间。`apply-revisions` 必须找到有效且匹配的 preview 才允许写回，写回前还会在最终候选上重新运行质量规则；质量 warning 不阻止订正写回，配置为 blocker 的规则按 revision 自己的写回门禁拒绝写回。`--force` 只能绕过「已写回」守卫，不能绕过 preview 缺失、结果被替换、项目变化、源文件快照变化、质量规则/策略变化或 blocker。
 
@@ -248,7 +253,7 @@ python gemini_translate_batch.py sync-revisions --apply
 - `blocked`：没有发生写回且存在阻断（preview 缺失/过期、适配器写回计划不安全，或全部条目被跳过/源不匹配/校验失败，不写 `revision_applied_at`）；
 - `partial`：部分写回、部分跳过/失败（仅真实写回的行计入 applied）。
 
-`build-revisions` 与 `preview-revisions` 支持 `--output json`（`preview-revisions` 的 envelope `status` 复用 `ready / ready_with_warnings / blocked` 门禁结论，`result` 含 `writeback_gate`、`quality_gate` 与 preview 摘要，`artifacts` 给出 preview JSONL/Markdown 与 quality findings 路径）；参数与状态语义见 [Agent / CLI 快速开始](quickstart_agent.md)。`sync-revisions` 同样支持该 envelope：默认只预览时形状与 `preview-revisions` 相同，`--apply` 时与 `apply-revisions` 相同；无源条目时 `status=no_work`、`reason=no_source_items`。sync 包不更新 latest manifest，因此 `result.manifest_path` 来自本次返回值。
+`build-revisions` 与 `preview-revisions` 支持 `--output json`（`preview-revisions` 的 envelope `status` 复用 `ready / ready_with_warnings / blocked` 门禁结论，`result` 含 `writeback_gate`、`quality_gate` 与 preview 摘要，`artifacts` 给出 preview JSONL/Markdown 与 quality findings 路径）；参数与状态语义见 [Agent / CLI 快速开始](quickstart_agent.md)。`sync-revisions` 只预览时沿用同一 envelope，并在 `result.sync_summary` 提供 `resumed_request_count`（续跑开始前已有首轮响应的分块数）、`checkpointed_request_count`（当前已有首轮响应的分块数）和 `reused_response_count`（本轮重放的响应数，含定点重试）。`--apply` 时沿用 `apply-revisions` 的结果形状。无源条目时返回 `status=no_work`、`reason=no_source_items`。同步任务的 `result.manifest_path` 来自本次任务，Batch 的 latest manifest 指针独立维护。
 
 `revision_applied_at` 只在 `applied` / `partial` 时写入；`no_op` / `blocked` 不会把 final-review finding 错误标记为已应用。
 

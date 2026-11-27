@@ -5991,6 +5991,10 @@ def build_revision_system_instruction():
 
 
 def build_revision_user_prompt(chunk):
+    return ''.join(_revision_user_prompt_parts(chunk))
+
+
+def _revision_user_prompt_parts(chunk):
     project_context = load_injectable_project_context_for_prompts(
         chunk.get('file_rel_path') or '',
         chunk.get('line_numbers') or [
@@ -5998,7 +6002,7 @@ def build_revision_user_prompt(chunk):
             for item in (chunk.get('items') or [])
         ],
     )
-    return translation_core.build_revision_user_prompt(
+    return translation_core.build_revision_user_prompt_parts(
         translation_core.ContextWindow(
             chunk.get('context_past') or [],
             chunk.get('context_future') or [],
@@ -6048,15 +6052,20 @@ def build_revision_generation_config(target_items, model=None):
     return filter_gemini_generation_config(effective_model, config)
 
 
-def build_revision_request(chunk, model=None):
-    return {
+def build_revision_request(chunk, model=None, *, freeze_retry=False):
+    if freeze_retry:
+        prefix, targets, suffix = _revision_user_prompt_parts(chunk)
+        prompt = prefix + targets + suffix
+    else:
+        prompt = build_revision_user_prompt(chunk)
+    row = {
         'key': chunk['key'],
         'request': {
             'system_instruction': {'parts': [{'text': build_revision_system_instruction()}]},
             'contents': [
                 {
                     'role': 'user',
-                    'parts': [{'text': build_revision_user_prompt(chunk)}],
+                    'parts': [{'text': prompt}],
                 }
             ],
             'generation_config': build_revision_generation_config(
@@ -6065,6 +6074,9 @@ def build_revision_request(chunk, model=None):
             ),
         },
     }
+    if freeze_retry:
+        row['revision_target_span'] = [len(prefix), len(prefix) + len(targets)]
+    return row
 
 
 def create_revision_package(display_name_override='', skip_prepare=False, chunk_size=None):
@@ -12062,8 +12074,15 @@ def validate_revision_output_paths(manifest, jsonl_path, markdown_path):
         if value:
             reserved_paths.add(value)
     normalized_reserved = {_normalized_abs_path(path) for path in reserved_paths if path}
+    package_dir = manifest['_package_dir']
+    checkpoint_root = _normalized_abs_path(os.path.join(package_dir, 'revision_checkpoint'))
+    if manifest.get('revision_checkpoint_version') == 1:
+        normalized_reserved.add(_normalized_abs_path(os.path.join(package_dir, 'sync_revisions.lock')))
     for output_path in (jsonl_path, markdown_path):
-        if _normalized_abs_path(output_path) in normalized_reserved:
+        normalized_output = _normalized_abs_path(output_path)
+        if (normalized_output in normalized_reserved
+                or (manifest.get('revision_checkpoint_version') == 1
+                    and (normalized_output == checkpoint_root or normalized_output.startswith(checkpoint_root + os.sep)))):
             raise SystemExit(f'Revision preview output would overwrite reserved package file: {output_path}')
 
 
@@ -12329,6 +12348,10 @@ def preview_revisions(
     """Build a revision preview and optionally control the latest pointer."""
     manifest = load_manifest(target)
     require_manifest_mode(manifest, MANIFEST_MODE_REVISION, 'preview-revisions')
+    frozen_sources = None
+    if manifest.get('revision_checkpoint_version') == 1:
+        _require_sync_revision_material(manifest)
+        frozen_sources = manifest['revision_source_files']
     replacements_by_file, _lines, _failure_entries, summary, preview_entries = collect_revision_actions(
         manifest,
         validate_sources=True,
@@ -12363,7 +12386,7 @@ def preview_revisions(
         'results_sha256': _sha256_file(resolve_manifest_result_path(manifest)),
         'manifest_identity': _revision_manifest_identity(manifest),
         'project_identity': manifest_project_identity(manifest),
-        'source_snapshots': _revision_source_snapshots(manifest),
+        'source_snapshots': frozen_sources or _revision_source_snapshots(manifest),
         'quality_findings_path': quality_report_path,
         'quality_findings_sha256': _sha256_file(quality_report_path),
         'quality_findings_count': summary.get('quality_findings_count', 0),
@@ -18010,7 +18033,7 @@ def _effective_sync_model(manifest, plan=None):
     return str(manifest.get('model') or manifest.get('batch_model') or BATCH_MODEL or '')
 
 
-def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None):
+def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None, frozen_revision_row=None):
     selected_ids = {str(item_id) for item_id in item_ids if str(item_id)}
     targeted = dict(chunk)
     targeted['items'] = [
@@ -18021,6 +18044,18 @@ def _targeted_sync_request_row(manifest, chunk, item_ids, *, model=None):
     effective_model = str(model or _effective_sync_model(manifest))
     mode = _contract_mode_for_manifest(manifest)
     if mode == translation_core.MODE_REVISION:
+        if frozen_revision_row is not None:
+            request = copy.deepcopy(frozen_revision_row['request'])
+            part = request['contents'][0]['parts'][0]
+            prompt = part['text']
+            start, end = frozen_revision_row['revision_target_span']
+            targets = [item for item in json.loads(prompt[start:end]) if item['id'] in selected_ids]
+            part['text'] = (
+                prompt[:start] + json.dumps(targets, ensure_ascii=False, separators=(',', ':')) + prompt[end:]
+            )
+            revisions = request['generation_config']['response_json_schema']['properties']['revisions']
+            revisions.update(minItems=len(targets), maxItems=len(targets))
+            return {'key': targeted['key'], 'request': request}, targeted
         return build_revision_request(targeted, model=effective_model), targeted
     if mode == translation_core.MODE_KEYWORD_EXTRACTION:
         max_candidates = int(
@@ -18169,7 +18204,7 @@ def execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *
             checkpoint_binding(manifest, request_rows), retry_unknown=retry_unknown)
         return _execute_sync_request_rows(
             manifest_path, request_rows, api_key_index, routing_plan=routing_plan,
-            keyword_checkpoint=checkpoint, material_check=material_check)
+            checkpoint=checkpoint, material_check=material_check)
 
 
 def _record_restored_keyword_summary(summary, result_row, chunk):
@@ -18199,7 +18234,7 @@ def _record_restored_keyword_summary(summary, result_row, chunk):
 
 
 def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, *,
-                               routing_plan=None, keyword_checkpoint=None, material_check=None):
+                               routing_plan=None, checkpoint=None, material_check=None):
     """Execute one complete, unique request row for every manifest chunk.
 
     Full coverage is validated before any provider call so the rewritten result
@@ -18222,6 +18257,8 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
     chunk_map = {chunk.get('key'): chunk for chunk in manifest_chunks}
     contract_mode = _contract_mode_for_manifest(manifest)
     keyword_contract = contract_mode == translation_core.MODE_KEYWORD_EXTRACTION
+    keyword_checkpoint = checkpoint if keyword_contract else None
+    revision_checkpoint = checkpoint if contract_mode == translation_core.MODE_REVISION else None
     requested_chunks = []
     requested_keys = []
     for index, row in enumerate(request_rows, start=1):
@@ -18301,7 +18338,7 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
             'contract_final_valid_items': 0,
         })
     result_rows = []
-    from execution.keyword_checkpoint import KeywordCheckpointError
+    from execution.sync_response_checkpoint import SyncResponseCheckpointError
 
     pending_rows = request_rows
     if keyword_checkpoint is not None:
@@ -18315,9 +18352,31 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
               f'reused={len(resume_plan.restored)}; pending={len(pending_rows)}; '
               f'failed={resume_plan.failed}; incomplete={resume_plan.incomplete}.', flush=True)
 
+    revision_saved_before = (
+        len(revision_checkpoint.returned_first_pass) if revision_checkpoint is not None else 0
+    )
+
+    def print_revision_progress():
+        print(f'Sync revision saved: {len(revision_checkpoint.returned_first_pass)}/{len(request_rows)} '
+              f'requests; resumed={revision_saved_before}.', flush=True)
+
+    if revision_checkpoint is not None:
+        print_revision_progress()
+
     def dispatch_request(key, phase, request):
         def send():
-            return run_sync_request(request, route, plan=plan, api_key_index=api_key_index)
+            options = {'timeout_seconds': manifest['settings']['timeout_seconds']} if revision_checkpoint else {}
+            return run_sync_request(request, route, plan=plan, api_key_index=api_key_index, **options)
+
+        if revision_checkpoint is not None:
+            saved_before = len(revision_checkpoint.returned_first_pass)
+            response = revision_checkpoint.call(
+                key, phase, request, send,
+                before_dispatch=lambda: material_check(chunk_map[key]['file_rel_path']),
+            )
+            if len(revision_checkpoint.returned_first_pass) != saved_before:
+                print_revision_progress()
+            return response
         if keyword_checkpoint is None:
             return send()
 
@@ -18329,7 +18388,7 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
                     if file_sha256(path) != expected:
                         raise ValueError('Keyword source changed; start a new run.')
             except (OSError, ValueError) as exc:
-                raise KeywordCheckpointError(str(exc)) from exc
+                raise SyncResponseCheckpointError(str(exc)) from exc
             print(f'Sync keyword phase: waiting {key}', flush=True)
 
         return keyword_checkpoint.call(key, phase, request, send, before_dispatch=validate_material)
@@ -18442,7 +18501,9 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
                     retry_row = {'key': retry_chunk['key'], 'request': row.get('request') or {}}
                 else:
                     retry_row, retry_chunk = _targeted_sync_request_row(
-                        manifest, chunk, retry_ids, model=effective_model)
+                        manifest, chunk, retry_ids, model=effective_model,
+                        frozen_revision_row=row if revision_checkpoint is not None else None,
+                    )
                 summary['targeted_retry_requests'] += 1
                 summary['targeted_retry_items'] += len(retry_chunk.get('items') or [])
                 print(
@@ -18495,7 +18556,7 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
                             contract_mode,
                         )
                     )
-                except KeywordCheckpointError:
+                except SyncResponseCheckpointError:
                     raise
                 except Exception as exc:
                     error_category = sync_error_category(exc)
@@ -18557,7 +18618,7 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
                         ): 1
                     },
                 }
-        except KeywordCheckpointError:
+        except SyncResponseCheckpointError:
             raise
         except Exception as exc:
             error_category = sync_error_category(exc)
@@ -18579,6 +18640,8 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
             print(f'Sync keyword progress: {index}/{len(pending_rows)} pending blocks processed.',
                   flush=True)
 
+    if revision_checkpoint is not None:
+        material_check()
     result_order = {key: index for index, key in enumerate(requested_keys)}
     result_rows.sort(key=lambda row: result_order[row['key']])
     atomic_write_jsonl(result_path, result_rows, ensure_ascii=False)
@@ -18593,6 +18656,11 @@ def _execute_sync_request_rows(manifest_path, request_rows, api_key_index=None, 
         summary['restored_request_count'] = len(resume_plan.restored)
         summary['pending_request_count'] = len(pending_rows)
         summary['processed_pending_request_count'] = len(pending_rows)
+    if revision_checkpoint is not None:
+        summary['resumed_request_count'] = revision_saved_before
+        summary['checkpointed_request_count'] = len(revision_checkpoint.returned_first_pass)
+        summary['reused_response_count'] = revision_checkpoint.reused_attempts
+        summary['checkpoint_attempt_count'] = len(revision_checkpoint.attempts)
     if keyword_contract:
         expected = summary['contract_expected_chunks']
         summary['contract_first_pass_chunk_completeness'] = (
@@ -18846,6 +18914,74 @@ def sync_keyword_candidates(
     return payload
 
 
+def _require_sync_revision_material(manifest, file_rel_path=None):
+    from execution.sync_response_checkpoint import SyncResponseCheckpointError
+
+    expected = manifest.get('revision_source_files')
+    files = manifest.get('files') or {}
+    if not isinstance(expected, dict) or not expected or set(expected) != set(files):
+        raise SyncResponseCheckpointError('Sync revision source snapshot is missing or incomplete.')
+    paths = (file_rel_path,) if file_rel_path is not None else expected
+    for rel_path in paths:
+        try:
+            path = resolve_manifest_file_path(manifest, rel_path, files[rel_path])
+            matches = file_sha256(path) == expected[rel_path]
+        except (KeyError, OSError, SystemExit):
+            matches = False
+        if not matches:
+            raise SyncResponseCheckpointError(f'Sync revision source changed: {rel_path}. Start a new run.')
+
+
+def _run_sync_revision_preview(manifest_path, *, output_jsonl, output_markdown,
+                               api_key_index, retry_unknown=False, apply=False, force=False):
+    from execution.sync_response_checkpoint import SyncResponseCheckpoint, SyncResponseCheckpointError
+
+    package_dir = os.path.dirname(manifest_path)
+    with atomic_io.exclusive_file_lock(os.path.join(package_dir, 'sync_revisions.lock'), timeout=0.1):
+        manifest = load_manifest(manifest_path)
+        if (manifest_mode(manifest) != MANIFEST_MODE_REVISION or manifest.get('execution') != 'sync'
+                or manifest.get('revision_checkpoint_version') != 1):
+            raise ValueError('This is not a resumable sync revision run; old runs have no checkpoints.')
+        if manifest.get('revision_applied_at') or manifest.get('revision_apply_state') in {'applied', 'partial'}:
+            raise ValueError('This sync revision run has already written changes. Start a new run.')
+        for name, current in (('base_dir', legacy.BASE_DIR), ('tl_dir', legacy.TL_DIR)):
+            if _normalized_abs_path(manifest.get(name) or '') != _normalized_abs_path(current or ''):
+                raise ValueError('Sync revision run belongs to another project.')
+        _require_sync_revision_material(manifest)
+        path = resolve_path_under_dir(package_dir, manifest['input_jsonl_path'], 'revision requests path')
+        request_rows = load_request_rows({**manifest, 'input_jsonl_path': path})
+        if stable_json_sha256(request_rows) != manifest.get('revision_requests_sha256'):
+            raise SyncResponseCheckpointError('Frozen sync revision requests changed; start a new run.')
+        fields = (
+            'mode', 'execution', 'base_dir', 'tl_dir', 'model', 'model_routing', 'settings',
+            'target_language', 'generation_target', 'model_response_contract', 'files', 'chunks',
+            'revision_source_files', 'revision_requests_sha256',
+        )
+        checkpoint = SyncResponseCheckpoint(
+            package_dir, stable_json_sha256({key: manifest.get(key) for key in fields}),
+            task='revision', retry_unknown=retry_unknown,
+            require_binding=manifest.get('revision_checkpoint_initialized') is True,
+            keep_dispatch_markers=True,
+        )
+        recorded_attempts = (manifest.get('sync_summary') or {}).get('checkpoint_attempt_count', 0)
+        if len(checkpoint.attempts) < recorded_attempts:
+            raise SyncResponseCheckpointError('Sync revision checkpoint is missing saved attempts.')
+        checkpoint.require_known_attempts()
+        if manifest.get('revision_checkpoint_initialized') is not True:
+            manifest['revision_checkpoint_initialized'] = True
+            save_manifest(manifest, update_latest=False)
+        _execute_sync_request_rows(
+            manifest_path, request_rows, api_key_index=api_key_index, checkpoint=checkpoint,
+            material_check=lambda file_rel_path=None: _require_sync_revision_material(manifest, file_rel_path),
+        )
+        preview_manifest = preview_revisions(
+            target=manifest_path, output_jsonl=output_jsonl, output_markdown=output_markdown,
+        )
+        if apply:
+            return apply_revisions(preview_manifest['_manifest_path'], force=force)
+        return preview_manifest
+
+
 def sync_revisions(
     display_name_override='',
     skip_prepare=False,
@@ -18857,7 +18993,21 @@ def sync_revisions(
     apply=False,
     force=False,
     api_key_index=None,
+    resume='',
+    retry_unknown=False,
 ):
+    """Start a Sync revision or replay a frozen run to rebuild its preview."""
+    if resume:
+        if display_name_override or chunk_size or limit or offset or apply or force:
+            raise ValueError('--resume cannot change the revision scope or write back. Use apply-revisions after review.')
+        manifest_path = load_manifest(resume)['_manifest_path']
+        print(f'Sync revision run: {os.path.dirname(manifest_path)}', flush=True)
+        return _run_sync_revision_preview(
+            manifest_path, output_jsonl=output_jsonl, output_markdown=output_markdown,
+            api_key_index=api_key_index, retry_unknown=retry_unknown,
+        )
+    if retry_unknown:
+        raise ValueError('--retry-unknown requires --resume <MANIFEST>.')
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.SYNC,
         required_stages={model_profile.STAGE_REVISION},
@@ -18888,10 +19038,17 @@ def sync_revisions(
         routing_plan.routes[model_profile.STAGE_REVISION],
     )
     request_rows = [
-        build_revision_request(chunk, model=effective_model)
+        build_revision_request(chunk, model=effective_model, freeze_retry=True)
         for chunk in chunks
     ]
+    selected_files = {chunk['file_rel_path'] for chunk in chunks}
     extra_fields = {
+        'revision_checkpoint_version': 1,
+        'revision_requests_sha256': stable_json_sha256(request_rows),
+        'revision_source_files': {
+            job['file_rel_path']: job['source_digest']
+            for job in file_jobs if job['file_rel_path'] in selected_files
+        },
         'revision_settings': {
             'chunk_size': chunk_size,
         },
@@ -18931,21 +19088,11 @@ def sync_revisions(
         extra_fields=extra_fields,
         routing_plan=routing_plan,
     )
-    manifest = execute_sync_request_rows(
-        manifest_path,
-        request_rows,
-        api_key_index=api_key_index,
-        routing_plan=routing_plan,
+    print(f'Sync revision run: {os.path.dirname(manifest_path)}', flush=True)
+    return _run_sync_revision_preview(
+        manifest_path, output_jsonl=output_jsonl, output_markdown=output_markdown,
+        api_key_index=api_key_index, apply=apply, force=force,
     )
-    print(f"Sync revision run: {manifest['_package_dir']}")
-    preview_manifest = preview_revisions(
-        target=manifest['_manifest_path'],
-        output_jsonl=output_jsonl,
-        output_markdown=output_markdown,
-    )
-    if apply:
-        return apply_revisions(preview_manifest['_manifest_path'], force=force)
-    return preview_manifest
 
 
 def print_repair_summary(summary):
@@ -23450,6 +23597,14 @@ def build_arg_parser():
         ),
     )
     sync_revision_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    sync_revision_parser.add_argument(
+        '--resume', metavar='MANIFEST', default='',
+        help='Resume a saved Sync revision run and rebuild its preview from frozen requests.',
+    )
+    sync_revision_parser.add_argument(
+        '--retry-unknown', action='store_true',
+        help='With --resume, acknowledge possible duplicate charges for dispatches without saved responses.',
+    )
     add_machine_output_argument(sync_revision_parser)
 
     split_parser = subparsers.add_parser('split', help='Split an existing batch package into smaller local packages.')
@@ -25742,6 +25897,8 @@ def dispatch_command(parser, args):
             apply=args.apply,
             force=args.force,
             api_key_index=args.api_key_index,
+            resume=args.resume,
+            retry_unknown=args.retry_unknown,
         )
 
     if command == 'split':
@@ -26185,6 +26342,8 @@ def build_machine_success_envelope(command, value, args):
             result['final_review_source'] = dict(
                 manifest.get('final_review_source') or {}
             )
+        if command == 'sync-revisions' and manifest.get('revision_checkpoint_version') == 1:
+            result['sync_summary'] = dict(manifest.get('sync_summary') or {})
         return cli_contract.success_envelope(
             command,
             status=str(preview.get('check_status') or 'completed'),

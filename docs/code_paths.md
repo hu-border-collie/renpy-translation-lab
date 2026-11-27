@@ -327,7 +327,9 @@
   `_require_valid_revision_preview()`、manifest/project identity、result JSONL hash、源文件快照、
   质量规则/策略和结构 blocker。`--force` 只绕过 `revision_applied_at`，不绕过这些检查。
 - Sync 订正：`gui_qt/workflows/sync_revision_workflow.py` 的 `SyncRevisionWorkflow` →
-  `gemini_translate_batch.py sync-revisions` 生成 preview 报告，仍经同一 `apply-revisions` 门禁。
+  `gemini_translate_batch.py sync-revisions` 生成 preview 报告。`--resume <MANIFEST>`
+  通过 `execution/sync_response_checkpoint.py` 重放已保存的响应，订正仍经同一 `apply-revisions` 门禁。
+  关键词使用同一响应检查点，保留原有任务包与修复轮次。
 - 订正提案：CLI `export-revision-corpus` → 外部/人工编辑 → `import-revision-proposals` →
   `gui_qt/dialogs/revision_selection_dialog.py` + `quality_review/revision_selection.py` 的 staged selection →
   `confirm-revision-proposals` → `preview-revisions` / `apply-revisions`。最终审校的

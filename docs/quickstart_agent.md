@@ -144,8 +144,9 @@ python gemini_translate_batch.py profiles-list-models --profile <PROFILE_ID> --o
   `ready / ready_with_warnings / blocked` 门禁结论；严格模式下同样映射为 `0 / 3 / 4`。
 - `sync-revisions` 默认（只预览）复用 `preview-revisions` 的 envelope 与严格退出码；
   `--apply` 时复用 `apply-revisions` 的 `revision_apply_state` 形状，严格模式成功仍退出 `0`。
-  这两个 sync 命令会新建 package，不要求显式 target，也不写入 `latest_manifest.txt`；
-  `result.manifest_path` 指向本次 sync 包。无源条目时 `status=no_work`、
+  续跑使用 `sync-revisions --resume <MANIFEST> --output json`，返回 `result.sync_summary` 中的
+  检查点与响应复用计数。没有已保存响应的已派发请求需显式追加 `--retry-unknown` 确认可能重复计费。
+  `result.manifest_path` 指向本次新建或续跑的同步包。无源条目时 `status=no_work`、
   `result.reason=no_source_items`。
 - `sync-keywords` 的 envelope 与 `export-keywords` 相同（四份候选/概要报告），但
   `manifest_path` 来自本次返回值，不会读取 latest manifest。

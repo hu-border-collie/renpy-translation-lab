@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from gui_qt.user_copy import SYNC_REVISION_COPY
+
 
 class TaskCategory(str, Enum):
     TRANSLATION = "translation"
@@ -283,18 +285,18 @@ WORK_MODE_SPECS: dict[WorkMode, WorkModeSpec] = {
         category=TaskCategory.MAINTENANCE,
         label="同步订正",
         start_button_label="生成订正预览",
-        resume_button_label="继续订正",
+        resume_button_label=SYNC_REVISION_COPY['resume'],
         task_group_label="同步订正任务",
         progress_tab_label="订正进度",
         writeback_tab_label="写回订正",
         idle_workflow_heading="尚未开始同步订正",
         idle_workflow_message="适合小范围即时生成订正预览；确认预览后再单独写回。",
-        supports_resume=False,
+        supports_resume=True,
         supports_translation_writeback=False,
         implemented=True,
         is_bootstrap=False,
         bootstrap_kind="",
-        manifest_mode=None,
+        manifest_mode="revision",
         not_implemented_message="",
     ),
 }

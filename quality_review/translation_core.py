@@ -985,6 +985,21 @@ def build_revision_user_prompt(
     story_char_limit=1200,
     include_source_text=True,
 ):
+    return ''.join(build_revision_user_prompt_parts(
+        context_window, units, context_bundle, history_char_limit,
+        story_char_limit, include_source_text,
+    ))
+
+
+def build_revision_user_prompt_parts(
+    context_window,
+    units,
+    context_bundle=None,
+    history_char_limit=220,
+    story_char_limit=1200,
+    include_source_text=True,
+):
+    """Render the target JSON separately so retries can reuse frozen context."""
     context_window = context_window or ContextWindow()
     units = units_from_items(units, MODE_REVISION)
     payload_items = []
@@ -1005,21 +1020,22 @@ def build_revision_user_prompt(
         ensure_ascii=False,
         separators=(',', ':'),
     )
-    return ''.join(
-        [
-            build_reference_blocks(
-                context_bundle,
-                history_char_limit=history_char_limit,
-                story_char_limit=story_char_limit,
-                include_translation_memory=True,
-                include_source_text=include_source_text,
-            ),
-            f'CONTEXT BEFORE:\n{format_revision_context_block(context_window.before, "(none)")}\n\n',
-            f'TARGET:\n{target_payload}\n\n',
-            f'CONTEXT AFTER:\n{format_revision_context_block(context_window.after, "(none)")}\n\n',
-            'Return {"revisions":[...]} with id, should_update, revised_translation, and reason.',
-        ]
+    prefix = (
+        build_reference_blocks(
+            context_bundle,
+            history_char_limit=history_char_limit,
+            story_char_limit=story_char_limit,
+            include_translation_memory=True,
+            include_source_text=include_source_text,
+        )
+        + f'CONTEXT BEFORE:\n{format_revision_context_block(context_window.before, "(none)")}\n\n'
+        + 'TARGET:\n'
     )
+    suffix = (
+        f'\n\nCONTEXT AFTER:\n{format_revision_context_block(context_window.after, "(none)")}\n\n'
+        'Return {"revisions":[...]} with id, should_update, revised_translation, and reason.'
+    )
+    return prefix, target_payload, suffix
 
 
 def build_keyword_glossary_block(preserve_terms=None, normalize_map=None, non_translatable_terms=None):

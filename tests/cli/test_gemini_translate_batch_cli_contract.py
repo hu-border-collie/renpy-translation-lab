@@ -1733,7 +1733,18 @@ class BatchCliContractTests(unittest.TestCase):
                 apply=True,
                 force=False,
                 api_key_index=None,
+                resume="",
+                retry_unknown=False,
             )
+            sync_revisions.reset_mock()
+            args = parser.parse_args([
+                "sync-revisions", "--resume", revision_payload["_manifest_path"],
+                "--retry-unknown", "--output", "json",
+            ])
+            self.assertIs(batch.dispatch_command(parser, args), revision_payload)
+            self.assertEqual(sync_revisions.call_args.kwargs["resume"], revision_payload["_manifest_path"])
+            self.assertTrue(sync_revisions.call_args.kwargs["retry_unknown"])
+            self.assertFalse(sync_revisions.call_args.kwargs["apply"])
 
     def test_keyword_merge_machine_envelope_reports_preview_merge_and_no_work(self):
         args = SimpleNamespace(target="candidates.jsonl")
