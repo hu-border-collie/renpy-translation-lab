@@ -5759,6 +5759,51 @@ def build_sync_translation_plan(
     return plan_build, captures
 
 
+def _restore_sync_request_capture(capture, live_request, request):
+    """Check local prompt inputs and recover the saved reference layers."""
+    from quality_review import structure_protection
+
+    lexical_text = translation_plan.render_lexical_glossary_text(
+        translation_plan.retrieve_lexical_glossary_hits(
+            capture['target_items'], preserve_terms=capture['preserve_terms'],
+            normalize_map=capture['normalize_map'],
+            non_translatable_exact=capture['non_translatable_exact'],
+        ),
+    )
+    references = translation_plan.frozen_reference_blocks(request, lexical_text)
+    reference_text = '\n\n'.join(text for text in references.values() if text)
+    units = capture['target_units']
+    system = live_request.system_instruction
+
+    def render(target_units):
+        return translation_core.build_canonical_translation_user_prompt(
+            capture['context_window'], target_units, reference_blocks_text=reference_text,
+            lexical_glossary_text=lexical_text,
+        )
+
+    if structure_protection.KEY in request.transport_metadata:
+        scope = structure_protection.request_scope({
+            'user_prompt': render(units), 'system_instruction': system,
+            'context_assembly': request.context_assembly, 'chunk_id': request.chunk_id,
+        })
+        units, protection = structure_protection.model_units(
+            units, engine='renpy', request_id=request.request_id, scope=scope,
+        )
+        if protection != request.transport_metadata[structure_protection.KEY]:
+            raise ValueError('frozen structure protection changed')
+    else:
+        system = system.removesuffix(structure_protection.INSTRUCTION)
+    if (system != request.system_instruction or render(units) != request.user_prompt
+            or live_request.response_schema != request.response_schema
+            or live_request.generation_config != request.generation_config):
+        raise ValueError('frozen root request differs from current local inputs')
+    return {
+        **capture,
+        'retrieval_blocks_text': references.get(translation_plan.CONTEXT_LAYER_RETRIEVAL, ''),
+        'analysis_blocks_text': references.get(translation_plan.CONTEXT_LAYER_ANALYSIS, ''),
+    }
+
+
 @dataclass
 class SyncTranslationExecutionContext:
     """Current-project inputs needed by the durable Sync executor.
@@ -5778,6 +5823,72 @@ class SyncTranslationExecutionContext:
     items_by_id: dict[str, dict[str, Any]]
     occurrences_by_id: dict[str, Any]
     request_contexts: dict[str, dict[str, Any]]
+
+    def restore_frozen_run(self, store):
+        """Bind a local preflight scan to the persisted Ren'Py plan and requests.
+
+        The scan checks the active adapter, source snapshot, pending item
+        coverage and local prompt inputs. Retrieval and analysis text come
+        from the persisted requests, including when later building children.
+        """
+        from execution.sync_run_contracts import ErrorCode, SyncRunError, sha256_hex
+
+        try:
+            frozen = store.get_plan(verify_hash=True)['plan']
+            translation_plan.validate_plan_fingerprint(frozen)
+            roots = []
+            for row in store.list_requests():
+                if row['parent_request_id'] is not None:
+                    continue
+                if sha256_hex(row['payload_json']) != row['payload_sha256']:
+                    raise ValueError('root request storage digest mismatch')
+                roots.append(translation_plan.TranslationRequest.from_dict(json.loads(row['payload_json'])))
+            plan = translation_plan.TranslationPlan.from_dict(frozen)
+            if len(roots) != len(plan.chunks) or [request.summary() for request in roots] != plan.request_summaries:
+                raise ValueError('root requests do not match the frozen plan')
+            for request, chunk in zip(roots, plan.chunks):
+                if (request.plan_id != plan.plan_id or request.chunk_id != chunk.chunk_id
+                        or request.expected_ids != chunk.unit_ids
+                        or translation_plan.recompute_request_fingerprints(request)
+                        != (request.prompt_fingerprint, request.request_fingerprint)):
+                    raise ValueError('root request fingerprint or scope mismatch')
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_STORAGE_ERROR, 'Durable Sync frozen plan or requests failed validation.',
+                safe_details={'run_id': store.run_id},
+            ) from exc
+
+        live_plan = self.plan_build.plan
+        reasons = []
+        if plan.source_identity != live_plan.source_identity:
+            reasons.append('source_snapshot_changed')
+        if plan.model_profile_snapshot != live_plan.model_profile_snapshot:
+            reasons.append('model_profile_changed')
+        if plan.config_fingerprint != live_plan.config_fingerprint:
+            reasons.append('sync_config_changed')
+        if plan.plan_id != live_plan.plan_id or plan.chunks != live_plan.chunks:
+            reasons.append('translation_plan_changed')
+        if [request.request_id for request in roots] != [request.request_id for request in self.plan_build.requests]:
+            reasons.append('root_requests_changed')
+        captures = []
+        if not reasons:
+            try:
+                captures = [
+                    _restore_sync_request_capture(self.request_contexts[frozen_request.request_id],
+                                                  live_request, frozen_request)
+                    for live_request, frozen_request in zip(self.plan_build.requests, roots)
+                ]
+            except (KeyError, TypeError, ValueError):
+                reasons.append('root_requests_changed')
+        if reasons:
+            raise SyncRunError(
+                ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH, 'Durable Sync freshness check refused model dispatch.',
+                safe_details={'run_id': store.run_id, 'reasons': reasons},
+            )
+        return replace(
+            self, plan_build=translation_plan.PlanBuild(plan, roots), captures=captures,
+            request_contexts={request.request_id: capture for request, capture in zip(roots, captures)},
+        )
 
     def item_resolver(self, _request, item_ids):
         resolved = []
@@ -5915,7 +6026,7 @@ def prepare_sync_translation_execution_context(
 
     This is intentionally the same discovery, filtering, glossary, routing,
     retrieval and TranslationPlan path used by :func:`run_translation`.
-    Provider calls are not made here.
+    A preflight scans local inputs and skips retrieval and generation calls.
     """
     try:
         load_config(require_api_key=False)

@@ -842,11 +842,9 @@ def build_production_sync_run_service(
 ) -> SyncRunService:
     """Bind a current-project runtime context to the pure service facade.
 
-    Freshness is recomputed from the same #346 plan and root request payloads
-    that a new run would freeze.  Derived request rows are deliberately not
-    compared to the root plan: they are deterministic descendants whose
-    payload hashes are already guarded by :class:`SyncRunStore`. Request
-    dependencies are assembled here, before a later start/resume dispatch.
+    Start and derive supply a current plan. Ren'Py resume supplies a context
+    already reconciled locally against the frozen plan and root requests.
+    Derived rows are checked by :class:`SyncRunStore` as descendants.
     """
     from execution import sync_request
 

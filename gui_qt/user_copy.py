@@ -310,6 +310,7 @@ VERSION_ASSET_COPY = {
 DURABLE_SYNC_COPY = {
     "start": "耐久同步翻译·开始",
     "resume": "耐久同步翻译·继续",
+    "resume_frozen": "耐久同步翻译·从已保存的计划继续",
     "status": "耐久同步翻译·状态",
     "cancel": "耐久同步翻译·取消",
     "derive": "耐久同步翻译·派生新运行",

@@ -1495,6 +1495,35 @@ class PlanBuild:
     requests: list
 
 
+def frozen_reference_blocks(request: TranslationRequest, lexical_glossary_text: str) -> dict[str, str]:
+    """Recover effective reference text from the frozen prompt and layer lengths.
+
+    The Sync plan saves the model-visible prompt and character counts per
+    layer. Use these bounds instead of looking for headings that can appear
+    verbatim in game text or project references.
+    """
+    glossary = translation_core.canonical_translation_glossary_block(lexical_glossary_text)
+    prompt = request.user_prompt
+    if not prompt.startswith(glossary):
+        raise ValueError('frozen lexical prefix changed')
+    offset = len(glossary)
+    references = {}
+    for layer in request.context_assembly.get('layers') or []:
+        kind = layer.get('layer')
+        if kind not in {CONTEXT_LAYER_RETRIEVAL, CONTEXT_LAYER_ANALYSIS}:
+            continue
+        size = layer['char_used']
+        if type(size) is not int or size < 0 or kind in references:
+            raise ValueError('invalid frozen reference length')
+        end = offset + size
+        references[kind] = prompt[offset:end]
+        if size:
+            if prompt[end:end + 2] != '\n\n':
+                raise ValueError('invalid frozen reference boundary')
+            offset = end + 2
+    return references
+
+
 def _resolve_strategy(value):
     if isinstance(value, model_profile.ExecutionStrategy):
         return value.value

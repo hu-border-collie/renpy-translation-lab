@@ -761,7 +761,8 @@ class SyncRunStore:
                 )
             return dict(row)
 
-    def get_plan(self) -> dict:
+    def get_plan(self, *, verify_hash: bool = False) -> dict:
+        """Read the frozen plan, optionally checking its digest before decoding."""
         with self._conn() as conn:
             row = conn.execute(
                 'SELECT canonical_json, payload_sha256 FROM plans WHERE run_id = ?',
@@ -771,6 +772,11 @@ class SyncRunStore:
                 raise SyncRunError(
                     ErrorCode.SYNC_RUN_NOT_FOUND,
                     f'plan not found for run: {self.run_id}',
+                    safe_details={'run_id': self.run_id},
+                )
+            if verify_hash and sha256_hex(row['canonical_json']) != row['payload_sha256']:
+                raise SyncRunError(
+                    ErrorCode.SYNC_RUN_STORAGE_ERROR, 'Durable Sync frozen plan digest does not match.',
                     safe_details={'run_id': self.run_id},
                 )
             return {

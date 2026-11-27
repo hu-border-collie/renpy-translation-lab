@@ -472,7 +472,7 @@ def build_cli_commands(
             ),
         ),
         DiagnosticsCommand(
-            label=DURABLE_SYNC_COPY['resume'],
+            label=DURABLE_SYNC_COPY['resume_frozen' if engine == 'renpy' else 'resume'],
             command=format_cli_command(
                 python_exe, batch_script_path, ['sync-resume', '<RUN>']
             ),

@@ -13,9 +13,11 @@ from unittest import mock
 
 from execution.durable_sync_executor import ProviderOutcome, TranslationPlanDerivedRequestBuilder
 import gemini_translate_batch as batch
-from execution.sync_run_contracts import ErrorCode, SyncRunError, canonical_json
-from execution.sync_run_service import SyncRunService
+from execution.sync_run_contracts import ErrorCode, SyncRunError, build_run_id, canonical_json
+from execution.sync_run_service import SyncRunService, build_production_sync_run_service
 from execution.sync_run_store import SyncRunStore
+from execution import sync_request
+from quality_review import structure_protection
 import translator_runtime as runtime
 
 
@@ -97,6 +99,159 @@ def _start_run(root):
 
 
 class DurableSyncWorkflowTests(unittest.TestCase):
+    def _resume_fixture(self, root):
+        tl_dir = root / 'game' / 'tl' / 'schinese'
+        tl_dir.mkdir(parents=True)
+        source = tl_dir / 'script.rpy'
+        source.write_text(
+            '    "Hello one"\n    "Hello two"\n    "Hello three [name]"\n    "Hello four"\n',
+            encoding='utf-8',
+        )
+        return source
+
+    def _generate_resume_translation(self, payload, *_args, limit=None, **_kwargs):
+        target_text = payload['contents'].rsplit('TARGET:\n', 1)[1]
+        targets = json.JSONDecoder().raw_decode(target_text)[0][:limit]
+        response = {'translations': [
+            {'id': item['id'], 'translation': '译文' + ''.join(
+                structure_protection.MARKER.findall(item['text']),
+            )}
+            for item in targets
+        ]}
+        return {'response_text': json.dumps(response, ensure_ascii=False),
+                'response_payload': response, 'usage_metadata': {'total_tokens': 2}}
+
+    def test_resume_dispatches_only_remaining_requests_with_frozen_references(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._resume_fixture(root)
+            with (
+                _runtime_fixture(root, rag_enabled=True),
+                mock.patch.multiple(
+                    runtime, MAX_ITEMS=2, SYNC_SOURCE_INDEX_ENABLED=True,
+                    SYNC_SOURCE_INDEX_STORE_DIR=str(root / 'source_index'), _SYNC_SOURCE_INDEX_STORE=None,
+                    SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF=True,
+                    NORMALIZE_TRANSLATION_MAP={'Hello': '你好'},
+                ),
+                mock.patch.object(batch, 'load_batch_settings'),
+                mock.patch.object(batch, '_emit_durable_run_id'),
+                mock.patch.object(runtime, 'load_sync_injectable_project_context',
+                                  return_value={'text': 'Original project brief.', 'injectable': True}) as analysis,
+            ):
+                history_store = runtime.get_sync_rag_store()
+                history_store.set_embedding_identity(runtime.current_sync_embedding_settings().document_identity())
+                history_store.upsert_history([{
+                    'memory_id': 'test-memory', 'source_text': 'Original remembered line',
+                    'translated_text': '冻结参考', 'embedding': [1.0, 0.0, 0.0],
+                }])
+                source_store = runtime.get_sync_source_index_store()
+                source_store.upsert_segments([{
+                    'source_id': 'source-reference', 'file_rel_path': 'script.rpy',
+                    'source_text': 'Saved source index excerpt.', 'embedding': [1.0, 0.0, 0.0],
+                    'embedding_metadata': {
+                        'embedding_model': runtime.SYNC_RAG_EMBEDDING_MODEL,
+                        'embedding_task_type': runtime.SYNC_RAG_DOCUMENT_TASK_TYPE,
+                        'embedding_dim': 3,
+                    },
+                }])
+                with mock.patch.object(runtime, 'embed_texts', return_value=[[1.0, 0.0, 0.0]]) as embeddings:
+                    context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+                self.assertEqual(embeddings.call_count, 4)
+                self.assertEqual(analysis.call_count, 2)
+                self.assertEqual([item['source_hit_count'] for item in context.captures], [1, 1])
+                first, second = context.plan_build.requests
+                run_root = root / 'logs' / 'sync_runs'
+                service = build_production_sync_run_service(run_root, context)
+                prepare_attempt = SyncRunStore.prepare_attempt_guarded
+                run_created = mock.Mock()
+
+                def stop_before_second(run_store, *, request_id, **kwargs):
+                    if request_id == second.request_id:
+                        raise KeyboardInterrupt
+                    return prepare_attempt(run_store, request_id=request_id, **kwargs)
+
+                with (
+                    mock.patch.object(sync_request, 'run_sync_request',
+                                      side_effect=self._generate_resume_translation) as provider,
+                    mock.patch.object(SyncRunStore, 'prepare_attempt_guarded', stop_before_second),
+                    self.assertRaises(KeyboardInterrupt),
+                ):
+                    service.start(context.plan_build, policy={'max_in_flight': 1}, on_run_created=run_created)
+                provider.assert_called_once()
+                self.assertEqual(provider.call_args.args[0]['contents'], first.user_prompt)
+                run_id = run_created.call_args.args[0]
+                analysis.reset_mock(side_effect=True, return_value=True)
+                analysis.side_effect = AssertionError('resume must use frozen analysis')
+                with (
+                    mock.patch.object(runtime, 'embed_texts', side_effect=AssertionError('resume embedded')) as embeddings,
+                    mock.patch.object(
+                        sync_request, 'run_sync_request',
+                        side_effect=lambda payload, *_args, **_kwargs: self._generate_resume_translation(payload, limit=1),
+                    ) as provider,
+                ):
+                    resumed = batch.run_durable_sync_command(Namespace(command='sync-resume', run=run_id))
+                embeddings.assert_not_called()
+                analysis.assert_not_called()
+                self.assertEqual(resumed['run_status'], 'completed')
+                self.assertEqual(provider.call_count, 2)
+                remaining_prompt, child_prompt = [call.args[0]['contents'] for call in provider.call_args_list]
+                self.assertEqual(remaining_prompt, second.user_prompt)
+                for prompt in (remaining_prompt, child_prompt):
+                    self.assertIn('冻结参考', prompt)
+                    self.assertIn('Saved source index excerpt.', prompt)
+                    self.assertIn('Original project brief.', prompt)
+                self.assertIn('Hello four', child_prompt)
+                self.assertEqual(len(SyncRunStore(run_root, run_id).list_requests()), 3)
+                self.assertIn('Hello three [name]', source.read_text(encoding='utf-8'))
+
+    def test_resume_rejects_live_source_and_glossary_drift_before_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._resume_fixture(root)
+            original = source.read_bytes()
+            with (
+                _runtime_fixture(root, rag_enabled=True),
+                mock.patch.multiple(runtime, SYNC_SOURCE_INDEX_ENABLED=False,
+                                    SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF=False,
+                                    NORMALIZE_TRANSLATION_MAP={}),
+                mock.patch.object(batch, 'load_batch_settings'),
+                mock.patch.object(runtime, 'embed_texts') as embeddings,
+                mock.patch.object(sync_request, 'run_sync_request') as provider,
+            ):
+                context = runtime.prepare_sync_translation_execution_context(require_provider=False)
+                run_root = root / 'logs' / 'sync_runs'
+                policy = build_production_sync_run_service(run_root, context).default_policy
+                store, _created = SyncRunStore.bootstrap(
+                    run_root, build_run_id(), plan=context.plan_build.plan.to_dict(),
+                    requests=[request.to_dict() for request in context.plan_build.requests],
+                    executor_policy=policy.to_dict(),
+                )
+                args = Namespace(command='sync-resume', run=store.run_id)
+                source.write_bytes(original.replace(b'Hello one', b'Changed one'))
+                with self.assertRaises(SyncRunError) as changed_source:
+                    batch.run_durable_sync_command(args)
+                self.assertEqual(changed_source.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                self.assertIn('source_snapshot_changed', changed_source.exception.safe_details['reasons'])
+                source.write_bytes(original)
+                with mock.patch.object(runtime, 'NORMALIZE_TRANSLATION_MAP', {'Hello': '新词条'}):
+                    with self.assertRaises(SyncRunError) as changed_glossary:
+                        batch.run_durable_sync_command(args)
+                self.assertEqual(changed_glossary.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                self.assertIn('translation_plan_changed', changed_glossary.exception.safe_details['reasons'])
+                other_project = root / 'other'
+                other_source = self._resume_fixture(other_project)
+                with mock.patch.multiple(runtime, BASE_DIR=str(other_project), TL_DIR=str(other_source.parent)):
+                    with self.assertRaises(SyncRunError) as changed_project:
+                        batch.run_durable_sync_command(args)
+                self.assertEqual(changed_project.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                with store._conn() as conn:
+                    conn.execute("UPDATE plans SET payload_sha256 = 'bad' WHERE run_id = ?", (store.run_id,))
+                with self.assertRaises(SyncRunError) as corrupt_plan:
+                    batch.run_durable_sync_command(args)
+                self.assertEqual(corrupt_plan.exception.code, ErrorCode.SYNC_RUN_STORAGE_ERROR)
+                embeddings.assert_not_called()
+                provider.assert_not_called()
+
     def test_completed_run_requires_check_then_bound_preview_apply(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

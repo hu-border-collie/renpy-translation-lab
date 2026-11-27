@@ -112,6 +112,9 @@ python gemini_translate_batch.py check <RUN> --output json --strict-exit-codes
 python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 ```
 
+Ren’Py 的 `sync-resume` 使用已保存的请求和参考内容，仅在本地检查材料和配置。
+启用 RAG 或原文索引时，续跑也不会再次调用检索 embedding。
+
 `--json` 只在这五个新 `sync-*` 命令上是 `--output json` 的别名。终态
 `completed` 仍须经过 `check -> bound preview -> apply`；`completed_with_errors`、
 `cancelled`、outcome-unknown 或 stale artifacts 不能直接写回，`--force` 也不能绕过。
