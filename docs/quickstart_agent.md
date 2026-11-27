@@ -115,6 +115,8 @@ python gemini_translate_batch.py apply <RUN> --output json --strict-exit-codes
 Ren’Py 的 `sync-resume` 使用已保存的请求和参考内容，仅在本地检查材料和配置。
 启用 RAG 或原文索引时，续跑也不会再次调用检索 embedding。
 
+如果 Ren’Py 的首次建计划在创建运行 ID 前中断，用相同参数重新执行 `sync-start` 即可复用已保存的检索查询。出现 `SYNC_PLAN_QUERY_OUTCOME_UNKNOWN` 时，需确认可能重复计费，再从 `error.details.confirmation_token` 取令牌并追加 `--retry-unknown-embedding <CONFIRMATION_TOKEN>`。
+
 `--json` 只在这五个新 `sync-*` 命令上是 `--output json` 的别名。终态
 `completed` 仍须经过 `check -> bound preview -> apply`；`completed_with_errors`、
 `cancelled`、outcome-unknown 或 stale artifacts 不能直接写回，`--force` 也不能绕过。

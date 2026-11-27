@@ -78,6 +78,7 @@ from providers import model_usage_ledger
 from context_engine import prompt_context
 from context_engine import story_memory
 from execution import sync_translation_preview
+from execution.sync_run_contracts import SyncRunError
 from quality_review import translation_core
 from quality_review import translation_plan
 from quality_review import translation_quality
@@ -3675,7 +3676,7 @@ def retrieve_sync_story_hits(target_items):
     )
 
 
-def retrieve_sync_history_hits(target_items, *, material_snapshot=None):
+def retrieve_sync_history_hits(target_items, *, material_snapshot=None, query_embedder=None):
     if current_project_engine() == 'rpgmaker_mv':
         from execution.mv_preprocessing import retrieve
         return retrieve(sys.modules[__name__], material_snapshot or current_mv_sync_snapshot(), target_items, 'history')
@@ -3702,7 +3703,7 @@ def retrieve_sync_history_hits(target_items, *, material_snapshot=None):
                 "action": compatibility.action,
                 "embedding_compatibility": compatibility.to_dict(),
             }
-        query_vector = embed_sync_query_text(query_text)
+        query_vector = (query_embedder or embed_sync_query_text)(query_text)
         return advanced_context.retrieve_history_hits_compatible(
             store,
             query_vector,
@@ -3712,6 +3713,8 @@ def retrieve_sync_history_hits(target_items, *, material_snapshot=None):
             char_limit=SYNC_RAG_HISTORY_CHAR_LIMIT,
             query_text=query_text,
         )
+    except SyncRunError:
+        raise
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
         print(
@@ -3721,7 +3724,7 @@ def retrieve_sync_history_hits(target_items, *, material_snapshot=None):
         return [], {"enabled": True, **diagnostics}
 
 
-def retrieve_sync_source_hits(target_items, *, material_snapshot=None):
+def retrieve_sync_source_hits(target_items, *, material_snapshot=None, query_embedder=None):
     if current_project_engine() == 'rpgmaker_mv':
         from execution.mv_preprocessing import retrieve
         return retrieve(sys.modules[__name__], material_snapshot or current_mv_sync_snapshot(), target_items, 'source')
@@ -3772,7 +3775,7 @@ def retrieve_sync_source_hits(target_items, *, material_snapshot=None):
                 ),
                 "embedding_provider": embedding_provider,
             }
-        query_vector = embed_sync_query_text(query_text)
+        query_vector = (query_embedder or embed_sync_query_text)(query_text)
         hits, stats = advanced_context.retrieve_source_hits_compatible(
             store,
             query_vector,
@@ -3788,6 +3791,8 @@ def retrieve_sync_source_hits(target_items, *, material_snapshot=None):
         )
         stats["embedding_provider"] = embedding_provider
         return hits, stats
+    except SyncRunError:
+        raise
     except Exception as exc:
         diagnostics = embedding_runtime.public_error_diagnostics(exc)
         print(
@@ -5435,12 +5440,15 @@ def build_sync_translation_plan(
     *,
     run_id='',
     preflight=False,
+    query_preparation=None,
 ):
     """Build the ordinary Sync initial-translation plan and retrieval captures.
 
     With ``preflight=True`` the same fixed chunking and prompts are built but
     every retrieval provider short-circuits to empty context, so a preflight
     never queries RAG stores or calls embedding endpoints.
+    A durable Ren'Py start may supply ``query_preparation`` to recover embeddings
+    bound to the local plan before any retrieval runs.
     """
     route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
     profile = model_profile.profile_for_route(routing_plan, route)
@@ -5524,7 +5532,15 @@ def build_sync_translation_plan(
             'context budget.'
         )
 
-    if file_jobs and retrieval_enabled and budget is not None:
+    prepare_queries = (
+        query_preparation is not None and not preflight and file_jobs
+        and adapter_snapshot.project.engine == 'renpy'
+        and (SYNC_RAG_ENABLED or SYNC_SOURCE_INDEX_ENABLED)
+    )
+    retrieval_options = {}
+    if adapter_snapshot.project.engine == 'rpgmaker_mv':
+        retrieval_options['material_snapshot'] = adapter_snapshot
+    if file_jobs and retrieval_enabled and (budget is not None or prepare_queries):
         # This first pass uses the same fixed chunks, prompt, local context,
         # and char-upper-bound estimator without invoking a remote/local
         # retrieval provider. It catches obviously impossible combinations
@@ -5532,6 +5548,16 @@ def build_sync_translation_plan(
         # authoritative for retrieved context near the budget boundary.
         preflight_build = build_plan(None)
         validate_budget(preflight_build, phase='pre-retrieval')
+        if prepare_queries:
+            settings = current_sync_embedding_settings()
+            local_plan = preflight_build.plan.to_dict()
+            local_plan.pop('run_id', None)
+            embed = query_preparation.bind(
+                os.path.join(LOG_DIR, 'sync_runs'), project_root=BASE_DIR, tl_dir=TL_DIR,
+                plan_digest=digest_json(local_plan), settings=settings,
+                build_adapter=lambda: build_live_embedding_adapter(settings),
+            )
+            retrieval_options['query_embedder'] = lambda text: embed(compact_text(text))
 
     if file_jobs and retrieval_enabled and not preflight:
         print(
@@ -5579,14 +5605,12 @@ def build_sync_translation_plan(
             })
             return {'text': '', 'diagnostics': {'reason': 'preflight_skipped'}}
         history_hits, rag_stats = (
-            retrieve_sync_history_hits(chunk_input.target_items, **(
-                {'material_snapshot': adapter_snapshot} if adapter_snapshot.project.engine == 'rpgmaker_mv' else {}))
+            retrieve_sync_history_hits(chunk_input.target_items, **retrieval_options)
             if SYNC_RAG_ENABLED
             else ([], {'enabled': False})
         )
         source_hits, source_index_stats = (
-            retrieve_sync_source_hits(chunk_input.target_items, **(
-                {'material_snapshot': adapter_snapshot} if adapter_snapshot.project.engine == 'rpgmaker_mv' else {}))
+            retrieve_sync_source_hits(chunk_input.target_items, **retrieval_options)
             if SYNC_SOURCE_INDEX_ENABLED
             else ([], {'enabled': False})
         )
@@ -6021,6 +6045,7 @@ def prepare_sync_translation_execution_context(
     persist_corrected_game_root=True,
     run_id='',
     preflight=False,
+    query_preparation=None,
 ):
     """Build the ordinary Sync plan plus restart-safe production adapters.
 
@@ -6124,6 +6149,7 @@ def prepare_sync_translation_execution_context(
         routing_plan,
         run_id=run_id,
         preflight=preflight,
+        query_preparation=query_preparation,
     )
     items_by_id = {}
     request_contexts = {}

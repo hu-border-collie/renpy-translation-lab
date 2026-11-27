@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """End-to-end offline check/preview/apply coverage for issue #347 P5."""
 
+import io
 import json
 import os
 import subprocess
@@ -8,15 +9,18 @@ import sys
 import tempfile
 import unittest
 from argparse import Namespace
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from context_engine.embedding_backend import EmbeddingBatchResult, EmbeddingUsage
 from execution.durable_sync_executor import ProviderOutcome, TranslationPlanDerivedRequestBuilder
 import gemini_translate_batch as batch
 from execution.sync_run_contracts import ErrorCode, SyncRunError, build_run_id, canonical_json
 from execution.sync_run_service import SyncRunService, build_production_sync_run_service
 from execution.sync_run_store import SyncRunStore
 from execution import sync_request
+from foundation import cli_contract
 from quality_review import structure_protection
 import translator_runtime as runtime
 
@@ -98,6 +102,27 @@ def _start_run(root):
     return SyncRunStore(run_root, started['run_id'])
 
 
+@contextmanager
+def _query_start_runtime(root):
+    with (
+        _runtime_fixture(root, rag_enabled=True),
+        mock.patch.multiple(
+            runtime, MAX_ITEMS=1, SYNC_SOURCE_INDEX_ENABLED=True,
+            SYNC_SOURCE_INDEX_STORE_DIR=str(root / 'source_index'), _SYNC_SOURCE_INDEX_STORE=None,
+            SYNC_PROJECT_ANALYSIS_INJECT_PUBLISHED_BRIEF=False,
+        ),
+        mock.patch.object(batch, 'load_batch_settings'),
+    ):
+        yield
+
+
+def _saved_query_result(request):
+    return EmbeddingBatchResult(
+        identity=request.identity, request_fingerprint=request.fingerprint,
+        vectors=((1.0, 0.0, 0.0),), usage=EmbeddingUsage(input_tokens=3, total_tokens=3),
+    )
+
+
 class DurableSyncWorkflowTests(unittest.TestCase):
     def _resume_fixture(self, root):
         tl_dir = root / 'game' / 'tl' / 'schinese'
@@ -120,6 +145,127 @@ class DurableSyncWorkflowTests(unittest.TestCase):
         ]}
         return {'response_text': json.dumps(response, ensure_ascii=False),
                 'response_payload': response, 'usage_metadata': {'total_tokens': 2}}
+
+    def test_sync_start_recovers_query_after_process_exit_without_publishing_partial_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = self._resume_fixture(root)
+            original = b'    "First query"\n    "Second query"\n'
+            source.write_bytes(original)
+            with _query_start_runtime(root):
+                store = runtime.get_sync_rag_store()
+                store.set_embedding_identity(runtime.current_sync_embedding_settings().document_identity())
+                store.upsert_history([{
+                    'memory_id': 'query-test', 'source_text': 'Saved reference',
+                    'translated_text': '参考', 'embedding': [1.0, 0.0, 0.0],
+                }])
+                runtime.get_sync_source_index_store().upsert_segments([{
+                    'source_id': 'source-test', 'source_text': 'Saved source segment',
+                    'file_rel_path': 'script.rpy', 'embedding': [1.0, 0.0, 0.0],
+                    'embedding_metadata': {
+                        'embedding_model': runtime.SYNC_RAG_EMBEDDING_MODEL,
+                        'embedding_task_type': runtime.SYNC_RAG_DOCUMENT_TASK_TYPE,
+                        'embedding_dim': 3,
+                    },
+                }])
+            child = subprocess.run(
+                [sys.executable, '-B', '-c', """
+import os
+import sys
+from argparse import Namespace
+from pathlib import Path
+from unittest import mock
+from tests.execution.test_durable_sync_workflow import _query_start_runtime, _saved_query_result, batch, runtime
+from execution import sync_request
+
+def dispatch(request):
+    if 'Second query' in request.inputs[0]:
+        os._exit(73)
+    return _saved_query_result(request)
+
+with (_query_start_runtime(Path(sys.argv[1])),
+      mock.patch.object(runtime, 'build_live_embedding_adapter', return_value=mock.Mock(embed=dispatch)),
+      mock.patch.object(sync_request, 'run_sync_request', side_effect=AssertionError('early translation'))):
+    batch.run_durable_sync_command(Namespace(command='sync-start'))
+""", str(root)], cwd=Path(__file__).resolve().parents[2], capture_output=True, timeout=30,
+            )
+            self.assertEqual(child.returncode, 73, child.stderr.decode(errors='replace'))
+            run_root = root / 'logs' / 'sync_runs'
+            self.assertFalse(list(run_root.glob('*/state.sqlite3')))
+            attempt_files = list(run_root.glob('.plan-preparation/*/query_checkpoint/attempts/*.json'))
+            self.assertEqual(len(attempt_files), 2)
+            raw_records = [path.read_text(encoding='utf-8') for path in attempt_files]
+            self.assertTrue(all('First query' not in raw and 'Second query' not in raw for raw in raw_records))
+            saved = next(row for raw in raw_records if (row := json.loads(raw)['payload'])['state'] == 'returned')
+            self.assertEqual(saved['response']['usage_metadata']['total_tokens'], 3)
+
+            parser = batch.build_arg_parser()
+            args = parser.parse_args(['sync-start', '--output', 'json', '--strict-exit-codes'])
+            adapter = mock.Mock(embed=mock.Mock(side_effect=_saved_query_result))
+            with (
+                _query_start_runtime(root),
+                mock.patch.object(runtime, 'build_live_embedding_adapter', return_value=adapter),
+                mock.patch.object(batch, '_emit_durable_run_id'),
+                mock.patch.object(sync_request, 'run_sync_request',
+                                  side_effect=self._generate_resume_translation) as translate,
+            ):
+                def unknown_attempt_token():
+                    with redirect_stdout(io.StringIO()) as output, redirect_stderr(io.StringIO()):
+                        exit_code = batch.run_machine_command(parser, args)
+                    self.assertEqual(exit_code, cli_contract.EXIT_INVALID_STATE)
+                    error = json.loads(output.getvalue())['error']
+                    self.assertEqual(error['code'], ErrorCode.SYNC_PLAN_QUERY_OUTCOME_UNKNOWN.value)
+                    self.assertEqual(error['suggested_action'], 'confirm_query_embedding_retry')
+                    return error['details']['confirmation_token']
+
+                token = unknown_attempt_token()
+                resume = parser.parse_args(['sync-start', '--retry-unknown-embedding', token])
+                source.write_bytes(original.replace(b'First query', b'Changed query'))
+                with self.assertRaises(SyncRunError) as changed_source:
+                    batch.run_durable_sync_command(resume)
+                self.assertEqual(changed_source.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                source.write_bytes(original)
+                with mock.patch.object(runtime, 'SYNC_RAG_EMBEDDING_MODEL', 'different-embedding'):
+                    with self.assertRaises(SyncRunError) as changed_model:
+                        batch.run_durable_sync_command(resume)
+                self.assertEqual(changed_model.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                adapter.embed.assert_not_called()
+                translate.assert_not_called()
+                self.assertFalse(list(run_root.glob('*/state.sqlite3')))
+
+                # An invalid backend result cannot publish a plan or consume an old
+                # confirmation on the new uncertain attempt.
+                adapter.embed.side_effect = lambda _request: {'vectors': [[1.0, 0.0, 0.0]]}
+                with self.assertRaises(SyncRunError) as invalid_response:
+                    batch.run_durable_sync_command(resume)
+                self.assertEqual(invalid_response.exception.code, ErrorCode.SYNC_PLAN_QUERY_FAILED)
+                self.assertEqual(invalid_response.exception.safe_details['saved_queries'], 1)
+                adapter.embed.assert_called_once()
+                translate.assert_not_called()
+                self.assertFalse(list(run_root.glob('*/state.sqlite3')))
+                new_token = unknown_attempt_token()
+                self.assertNotEqual(new_token, token)
+                with self.assertRaises(SyncRunError) as expired:
+                    batch.run_durable_sync_command(resume)
+                self.assertEqual(expired.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                adapter.embed.assert_called_once()
+                adapter.embed.reset_mock()
+                adapter.embed.side_effect = _saved_query_result
+                confirmed = parser.parse_args(['sync-start', '--retry-unknown-embedding', new_token])
+
+                result = batch.run_durable_sync_command(confirmed)
+                adapter.embed.assert_called_once()
+                self.assertIn('Second query', adapter.embed.call_args.args[0].inputs[0])
+                self.assertEqual(translate.call_count, 2)
+                self.assertEqual(result['run_status'], 'completed')
+                self.assertEqual(result['query_preparation'],
+                                 {'saved_queries': 2, 'reused_queries': 1, 'new_queries': 1})
+                self.assertFalse(any(path.exists() for path in attempt_files))
+                self.assertEqual(source.read_bytes(), original)
+                with self.assertRaises(SyncRunError) as already_used:
+                    batch.run_durable_sync_command(confirmed)
+                self.assertEqual(already_used.exception.code, ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH)
+                adapter.embed.assert_called_once()
 
     def test_resume_dispatches_only_remaining_requests_with_frozen_references(self):
         with tempfile.TemporaryDirectory() as tmp:

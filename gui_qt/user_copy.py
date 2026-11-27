@@ -1889,6 +1889,14 @@ DURABLE_SYNC_RUN_COPY = {
         "已提交的请求不会重发，可稍后用「继续 / 查看最新任务」恢复。"
     ),
     "command_interrupted_message": "本机命令已中断；可稍后重试，已持久化的运行记录不受影响。",
+    "plan_preparation_interrupted": "建计划已中断。Ren’Py 项目重新点击「开始」时可复用已保存的检索查询。",
+    "query_retry_title": "确认重发结果未知的检索请求",
+    "query_retry_message": "检索请求已发出，但本地没有保存响应。重发可能重复计费，是否继续？",
+    "query_retry_confirm": "确认重发",
+    "query_retry_heading": "正在继续准备同步计划",
+    "query_retry_continue": "正在复用已保存的查询向量，并重发已确认的请求。",
+    "query_retry_command": "耐久同步翻译·确认重发结果未知的检索请求",
+    "query_preparation_fact": "检索查询已保存 {saved} 条，复用 {reused} 条，本次新取 {new} 条",
     "log_hint_fact": "原始输出已保留在诊断与运行日志中",
     "error_fallback": "同步命令执行失败（{code}），请查看诊断与运行日志。",
     "error_messages": {
@@ -1899,6 +1907,8 @@ DURABLE_SYNC_RUN_COPY = {
         "SYNC_RUN_ARTIFACT_STALE": "运行制品已变化；请重新生成检查预览。",
         "SYNC_RUN_NOT_TERMINAL": "运行尚未结束，暂时不能生成检查预览；请先继续运行。",
         "SYNC_RUN_NO_WORK": "当前没有待翻译内容，无需启动同步任务。",
+        "SYNC_PLAN_QUERY_OUTCOME_UNKNOWN": "同步计划有结果未知的检索请求，确认可能重复计费后才会重发。",
+        "SYNC_PLAN_QUERY_FAILED": "检索查询失败，已保存的向量仍可复用。修复问题后重新点击「开始」。",
         "SYNC_RUN_ID_FILE_FAILED": "未能写入同步运行 ID 文件，任务尚未执行。请查看诊断日志后重试。",
         "SYNC_RUN_FRESHNESS_MISMATCH": (
             "项目、源文件或配置已变化，不能继续复用该运行；请重新启动同步翻译。"

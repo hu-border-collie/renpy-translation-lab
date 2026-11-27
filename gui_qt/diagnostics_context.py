@@ -451,6 +451,13 @@ def build_cli_commands(
             ]
         )
         return commands
+    if engine == 'renpy':
+        commands.append(DiagnosticsCommand(
+            label=DURABLE_SYNC_RUN_COPY['query_retry_command'],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['sync-start', '--retry-unknown-embedding', '<CONFIRMATION_TOKEN>'],
+            ),
+        ))
     commands.extend(
         [
         DiagnosticsCommand(

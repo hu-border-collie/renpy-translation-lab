@@ -15213,6 +15213,15 @@ class MainWindow(QMainWindow):
         else:
             update = workflow.complete_current_step(exit_code, step_output)
         if (
+            is_sync_translation_workflow and workflow.query_confirmation_token
+            and not self.runner.stop_requested
+            and message_box_question(
+                self, DURABLE_SYNC_RUN_COPY["query_retry_title"], DURABLE_SYNC_RUN_COPY["query_retry_message"],
+                yes_text=DURABLE_SYNC_RUN_COPY["query_retry_confirm"], no_text="取消", default="no",
+            ) == "yes"
+        ):
+            update = workflow.confirm_query_retry()
+        if (
             self._uses_revision_writeback() and exit_code == -1
             and self.runner.stop_requested and update.status == "failed"
         ):
