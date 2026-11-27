@@ -123,6 +123,8 @@ python gemini_translate_batch.py sync-derive <RUN> --json
 
 `sync-start --profile <PROFILE_ID>` 只用该 ModelProfile 覆盖本次运行的 translation 路由，不写回配置文件；profile 不存在、是 embedding profile 或与命令策略不兼容时启动前拒绝。
 
+Ren’Py 的 `sync-resume` 在本地核对项目、源材料、模型和相关配置，然后继续调度原运行里的请求。RAG、原文索引和项目分析沿用启动时保存的参考内容，续跑不调用检索 embedding。恢复过程中如果需要生成定点补请求，也使用原请求中的参考内容。材料或请求配置变化会以 `SYNC_RUN_FRESHNESS_MISMATCH` 拒绝续跑。
+
 `sync-status` 接受三种互斥选择器，分别是位置参数 `RUN`、`--run-id <RUN>` 和 `--latest`。`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
 
 `sync-status` 快照包含只读 `frozen_profile`（`profile_id` / `label` / `adapter` / `provider` / `model` / `embedding_profile_id` / `execution_strategy` / `source`）：优先来自 run 启动时冻结的 plan 快照；旧 run 没有快照时回退到 attempt 记录的 provider/model；两者都没有时 `source=unknown` 且不显示假值。CLI 文本输出与 GUI 运行事实都会显示该 Provider/模型，失败或降级时不再只能看到错误分类。

@@ -913,6 +913,13 @@ def build_canonical_translation_system_instruction(preserve_terms, macro_setting
     return instruction
 
 
+def canonical_translation_glossary_block(lexical_glossary_text):
+    """Render the lexical prefix of a canonical translation request."""
+    if isinstance(lexical_glossary_text, str) and lexical_glossary_text.strip():
+        return f'Existing glossary entries:\n{lexical_glossary_text.strip()}\n\n'
+    return ''
+
+
 def build_canonical_translation_user_prompt(
     context_window,
     units,
@@ -936,9 +943,7 @@ def build_canonical_translation_user_prompt(
         ensure_ascii=False,
         separators=(',', ':'),
     )
-    glossary_block = ''
-    if isinstance(lexical_glossary_text, str) and lexical_glossary_text.strip():
-        glossary_block = f'Existing glossary entries:\n{lexical_glossary_text.strip()}\n\n'
+    glossary_block = canonical_translation_glossary_block(lexical_glossary_text)
     reference_section = ''
     if isinstance(reference_blocks_text, str) and reference_blocks_text.strip():
         reference_section = reference_blocks_text

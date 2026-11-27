@@ -22944,6 +22944,7 @@ def build_arg_parser():
     sync_resume_parser = subparsers.add_parser(
         'sync-resume',
         help='Resume one explicit durable synchronous translation run.',
+        description='Resume a durable Sync run. Ren\'Py resumes from frozen requests after local freshness checks.',
     )
     add_durable_sync_output_arguments(sync_resume_parser)
     sync_resume_parser.add_argument('run', metavar='RUN', help='Durable Sync run ID.')
@@ -23750,13 +23751,16 @@ def _durable_sync_store_only_service(*, deliver_usage=False):
     )
 
 
-def _durable_sync_production_service(*, require_provider):
+def _durable_sync_production_service(*, require_provider, resume_store=None):
     from execution.sync_run_service import build_production_sync_run_service
 
     context = legacy.prepare_sync_translation_execution_context(
         require_provider=require_provider,
         persist_corrected_game_root=True,
+        preflight=resume_store is not None,
     )
+    if resume_store is not None:
+        context = context.restore_frozen_run(resume_store)
     load_batch_settings()
     pricing = batch_cost_estimate.load_pricing_config(
         _read_translator_config_object()
@@ -23883,9 +23887,13 @@ def run_durable_sync_command(args):
             legacy.load_translator_settings(persist_corrected_game_root=False)
             service = _durable_sync_store_only_service(deliver_usage=True)
         else:
-            service, _context = _durable_sync_production_service(
-                require_provider=True
-            )
+            identity = store.get_plan(verify_hash=True)['plan'].get('source_identity') or {}
+            if identity.get('engine') == 'renpy':
+                service, _context = _durable_sync_production_service(
+                    require_provider=True, resume_store=store,
+                )
+            else:
+                service, _context = _durable_sync_production_service(require_provider=True)
         _emit_durable_run_id(run_id)
         snapshot = service.resume(run_id)
     elif command == 'sync-cancel':

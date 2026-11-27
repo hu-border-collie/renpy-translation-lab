@@ -331,6 +331,10 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn('check', command_text)
         self.assertIn('apply', command_text)
         self.assertTrue(any('sync-start --run-id-file' in item.command for item in commands))
+        self.assertIn(
+            '耐久同步翻译·从已保存的计划继续',
+            [item.label for item in commands if 'sync-resume <RUN>' in item.command],
+        )
         self.assertTrue(any(
             'sync-derive' in item.command and '--run-id-file' in item.command
             for item in commands
