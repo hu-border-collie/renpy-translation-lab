@@ -536,6 +536,19 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn("usage-import", by_label["导入当前结果用量"])
         self.assertIn("usage-report", by_label["查看项目模型用量"])
 
+    def test_sync_revision_manifest_offers_local_recovery_commands(self):
+        commands = build_cli_commands(
+            python_exe="python",
+            batch_script_path="gemini_translate_batch.py",
+            manifest_path="fixture/sync_runs/run/manifest.json",
+            manifest={"mode": "revision", "execution": "sync", "revision_checkpoint_version": 1},
+        )
+        recovery = [entry.command for entry in commands if " sync-revisions " in entry.command]
+        self.assertEqual(len(recovery), 2)
+        self.assertTrue(all("--resume" in command and "--apply" not in command for command in recovery))
+        self.assertEqual(sum("--retry-unknown" in command for command in recovery), 1)
+        self.assertNotIn("提交订正任务", [entry.label for entry in commands])
+
     def test_proposal_import_manifest_includes_reimport_command(self):
         proposal_path = r"C:\review\selected proposals.jsonl"
         corpus_manifest_path = r"D:\exports\revision_corpus_manifest.json"

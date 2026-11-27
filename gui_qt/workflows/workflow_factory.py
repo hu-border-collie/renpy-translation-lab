@@ -11,6 +11,7 @@ from gui_qt.workflows.sync_keyword_workflow import SyncKeywordWorkflow
 from gui_qt.workflows.sync_revision_workflow import SyncRevisionWorkflow
 from gui_qt.workflows.sync_translation_workflow import SyncTranslationWorkflow
 from gui_qt.workflows.translation_workflow import TranslationWorkflow, WorkflowStep, WorkflowUpdate
+from gui_qt.user_copy import SYNC_REVISION_COPY
 from gui_qt.work_modes import WorkMode, manifest_mode_for_work_mode, work_mode_spec
 
 
@@ -66,6 +67,8 @@ def resume_workflow(
         return None
     if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
         return SyncKeywordWorkflow.resume_manifest(manifest_path, retry_unknown=retry_unknown)
+    if spec.mode == WorkMode.SYNC_REVISION:
+        return SyncRevisionWorkflow.resume_manifest(manifest_path, retry_unknown=retry_unknown)
     if spec.mode == WorkMode.BATCH_TRANSLATION:
         return TranslationWorkflow.resume_manifest(
             manifest_path,
@@ -105,6 +108,11 @@ def validate_resume_manifest(
         expected_mode = "keyword_extraction"
         if manifest.get("execution") != "sync" or manifest.get("keyword_checkpoint_version") != 1:
             raise ValueError("该任务没有同步关键词检查点；旧任务未保存的响应无法恢复，请重新提取。")
+    if spec.mode == WorkMode.SYNC_REVISION:
+        if manifest.get("execution") != "sync" or manifest.get("revision_checkpoint_version") != 1:
+            raise ValueError(SYNC_REVISION_COPY['legacy'])
+        if manifest.get("revision_applied_at") or manifest.get("revision_apply_state") in {"applied", "partial"}:
+            raise ValueError(SYNC_REVISION_COPY['applied'])
     actual_mode = manifest.get("mode", "translation")
     actual_text = actual_mode.strip() if isinstance(actual_mode, str) else "translation"
     if expected_mode == "translation":

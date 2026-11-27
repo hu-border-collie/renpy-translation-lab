@@ -64,9 +64,9 @@ class GuiWorkModesTests(unittest.TestCase):
                 self.assertTrue(spec.implemented)
                 self.assertFalse(spec.supports_translation_writeback)
 
-    def test_revision_supports_resume_but_sync_revision_does_not(self):
+    def test_batch_and_sync_revision_support_resume(self):
         self.assertTrue(work_mode_spec(WorkMode.REVISION).supports_resume)
-        self.assertFalse(work_mode_spec(WorkMode.SYNC_REVISION).supports_resume)
+        self.assertTrue(work_mode_spec(WorkMode.SYNC_REVISION).supports_resume)
 
     def test_default_work_mode_for_category(self):
         self.assertEqual(

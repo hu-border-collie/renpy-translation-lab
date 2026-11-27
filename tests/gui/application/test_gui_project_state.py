@@ -49,6 +49,8 @@ class GuiProjectStateTests(unittest.TestCase):
                     'keyword_checkpoint_version': 1}), encoding='utf-8')
             latest = state.get_latest_manifest_path_for_mode(game, WorkMode.SYNC_KEYWORD_EXTRACTION)
             self.assertEqual(latest, directory / 'one/manifest.json')
+            revision = state.get_latest_manifest_path_for_mode(game, WorkMode.SYNC_REVISION)
+            self.assertEqual(revision, directory / 'three/manifest.json')
             self.assertIsNone(state.get_latest_manifest_path())
 
     def test_switching_from_mv_back_to_renpy_layout_restores_engine_and_work_root(self):

@@ -8380,6 +8380,9 @@ class MainWindow(QMainWindow):
             if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
                 from gui_qt.user_copy import SYNC_KEYWORD_COPY
                 self.resume_btn.setToolTip(SYNC_KEYWORD_COPY['resume_tooltip'])
+            elif spec.mode == WorkMode.SYNC_REVISION:
+                from gui_qt.user_copy import SYNC_REVISION_COPY
+                self.resume_btn.setToolTip(SYNC_REVISION_COPY['resume_tooltip'])
             else:
                 self.resume_btn.setToolTip("从最近任务记录继续未完成的步骤，或查询云端状态。")
         else:
@@ -10044,7 +10047,7 @@ class MainWindow(QMainWindow):
         if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
             return "sync_keywords"
         if spec.mode == WorkMode.SYNC_REVISION:
-            return "sync_requests"
+            return "sync_revision"
         return ""
 
     def _on_bootstrap_progress_eta_tick(self) -> None:
@@ -10191,7 +10194,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         spec = work_mode_spec(self._current_work_mode())
         game_root = self.state.get_game_root()
-        if spec.mode == WorkMode.REVISION:
+        if spec.mode in {WorkMode.REVISION, WorkMode.SYNC_REVISION}:
             if latest_manifest is None and game_root is not None:
                 latest_manifest = self.state.get_latest_manifest_path_for_mode(
                     game_root,
@@ -12474,18 +12477,23 @@ class MainWindow(QMainWindow):
                 return
 
         retry_unknown = False
-        if spec.mode == WorkMode.SYNC_KEYWORD_EXTRACTION:
-            from execution.keyword_checkpoint import unknown_keyword_requests, KeywordCheckpointError
-            from gui_qt.user_copy import SYNC_KEYWORD_COPY
+        if spec.mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
+            from execution.keyword_checkpoint import unknown_keyword_requests
+            from execution.sync_response_checkpoint import SyncResponseCheckpointError, unknown_sync_requests
+            from gui_qt.user_copy import SYNC_KEYWORD_COPY, SYNC_REVISION_COPY
+            revision = spec.mode == WorkMode.SYNC_REVISION
+            package = Path(latest_manifest).parent
             try:
-                unknown = unknown_keyword_requests(Path(latest_manifest).parent)
-            except KeywordCheckpointError as exc:
-                message_box_warning(self, "无法继续关键词任务", str(exc))
+                unknown = unknown_sync_requests(package, 'revision') if revision else unknown_keyword_requests(package)
+            except SyncResponseCheckpointError as exc:
+                title = SYNC_REVISION_COPY['resume_error'] if revision else "无法继续关键词任务"
+                message_box_warning(self, title, str(exc))
                 return
             if unknown:
+                confirm = SYNC_REVISION_COPY['unknown_confirm'] if revision else SYNC_KEYWORD_COPY['resume']
                 if message_box_question(self, SYNC_KEYWORD_COPY['unknown_title'],
                         SYNC_KEYWORD_COPY['unknown_message'].format(count=len(unknown)),
-                        yes_text=SYNC_KEYWORD_COPY['resume'], no_text="取消", default="no") != "yes":
+                        yes_text=confirm, no_text="取消", default="no") != "yes":
                     return
                 retry_unknown = True
         if only_query and spec.mode == WorkMode.BATCH_TRANSLATION:

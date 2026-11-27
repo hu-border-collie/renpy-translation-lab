@@ -51,6 +51,21 @@ class GuiManifestLiteTests(unittest.TestCase):
             self.assertEqual(lite.get("execution"), "sync")
             self.assertNotIn("keyword_checkpoint_version", lite)
 
+    def test_heavy_sync_revision_keeps_recovery_and_preview_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            preview = {"summary": {"valid_items": 2}}
+            path.write_text(json.dumps({
+                "mode": "revision", "execution": "sync", "base_dir": "C:/game/work",
+                "chunks": [{"payload": "x" * 1_000_000}],
+                "revision_checkpoint_version": 1, "last_revision_preview": preview,
+            }), encoding="utf-8")
+            self.assertEqual(read_manifest_index_fields(path)["execution"], "sync")
+            lite = read_manifest_lite(path)
+            self.assertEqual(lite["revision_checkpoint_version"], 1)
+            self.assertEqual(lite["last_revision_preview"], preview)
+            self.assertNotIn("chunks", lite)
+
     def test_read_manifest_lite_skips_heavy_chunks_payload(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "manifest.json"

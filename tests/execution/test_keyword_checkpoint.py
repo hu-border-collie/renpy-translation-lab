@@ -47,7 +47,7 @@ class KeywordCheckpointTests(unittest.TestCase):
     def test_failed_inflight_save_prevents_dispatch(self):
         checkpoint = KeywordCheckpoint(self.root, 'binding')
         dispatch = mock.Mock()
-        with mock.patch('execution.keyword_checkpoint.atomic_write_json', side_effect=OSError):
+        with mock.patch('execution.sync_response_checkpoint.atomic_write_json', side_effect=OSError):
             with self.assertRaises(KeywordCheckpointError):
                 checkpoint.call('one', 'first_pass', self.request, dispatch)
         dispatch.assert_not_called()
@@ -61,7 +61,7 @@ class KeywordCheckpointTests(unittest.TestCase):
                 raise OSError('fixture disk failure')
             return atomic_write_json(path, payload, **kwargs)
 
-        with mock.patch('execution.keyword_checkpoint.atomic_write_json', side_effect=fail_response):
+        with mock.patch('execution.sync_response_checkpoint.atomic_write_json', side_effect=fail_response):
             with self.assertRaises(KeywordCheckpointError):
                 checkpoint.call('one', 'first_pass', self.request, lambda: self.response)
         with self.assertRaises(KeywordRequestUnknownError):
@@ -126,7 +126,7 @@ class KeywordCheckpointTests(unittest.TestCase):
         checkpoint = KeywordCheckpoint(self.root, 'binding')
         checkpoint.call('one', 'first_pass', self.request, lambda: self.response)
         checkpoint.complete('one', {'key': 'one', 'contract_diagnostics': {'complete': False}})
-        with mock.patch('execution.keyword_checkpoint.atomic_write_json', side_effect=OSError):
+        with mock.patch('execution.sync_response_checkpoint.atomic_write_json', side_effect=OSError):
             with self.assertRaises(KeywordCheckpointError):
                 checkpoint.begin_repair('one')
         self.assertEqual(checkpoint.generations, {})

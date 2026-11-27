@@ -1,4 +1,4 @@
-"""Recovery acknowledgement is required only for unresolved keyword dispatches."""
+"""Check how the workbench acknowledges unresolved synchronous dispatches."""
 import json
 from pathlib import Path
 import tempfile
@@ -97,4 +97,28 @@ class GuiSyncKeywordResumeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '检查点'):
                 validate_resume_manifest(WorkMode.SYNC_KEYWORD_EXTRACTION, manifest,
                                          game_root=None, normalized_path_text=str)
+
+    def test_sync_revision_unknown_requires_confirmation_before_running(self):
+        for reply in ('no', 'yes'):
+            with self.subTest(reply=reply):
+                window = mock.Mock()
+                window._current_work_mode.return_value = WorkMode.SYNC_REVISION
+                window._latest_resume_manifest_path.return_value = Path('fixture/manifest.json')
+                window._resume_button_is_query_mode.return_value = False
+                window._split_entries_for_manifest.return_value = []
+                with (
+                    mock.patch('execution.sync_response_checkpoint.unknown_sync_requests',
+                               return_value=['revision-1']) as unknown,
+                    mock.patch('gui_qt.app.message_box_question', return_value=reply) as question,
+                    mock.patch('gui_qt.app.resume_workflow') as factory,
+                ):
+                    MainWindow._on_resume_translation(window)
+                unknown.assert_called_once_with(Path('fixture'), 'revision')
+                self.assertEqual(question.call_args.kwargs['default'], 'no')
+                if reply == 'yes':
+                    self.assertTrue(factory.call_args.kwargs['retry_unknown'])
+                    window._run_workflow_current_step.assert_called_once()
+                else:
+                    factory.assert_not_called()
+                    window._run_workflow_current_step.assert_not_called()
 

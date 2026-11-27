@@ -155,6 +155,15 @@ class GuiWorkflowProgressTests(unittest.TestCase):
         self.assertEqual(state.label, "请求 2/5")
         self.assertEqual(state.facts, ("当前请求：keyword-script-02",))
 
+    def test_sync_revision_progress_only_advances_after_response_is_saved(self):
+        state = create_workflow_progress_state("sync_revision")
+        state = update_workflow_progress_from_line("Sync revision saved: 1/3 requests; resumed=1.", state)
+        state = update_workflow_progress_from_line("[2/3] revision-2", state)
+        self.assertEqual(state.current, 1)
+        state = update_workflow_progress_from_line("Sync revision saved: 2/3 requests; resumed=1.", state)
+        self.assertEqual((state.current, state.total), (2, 3))
+        self.assertEqual(state.facts, ("本轮开始前已保存 1 个首轮响应",))
+
     def test_sync_translation_progress_accumulates_batch_successes(self):
         state = create_workflow_progress_state("sync_translation")
 

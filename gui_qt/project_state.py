@@ -96,8 +96,10 @@ class ProjectState:
         work_mode: Any,
     ) -> Path | None:
         from .work_modes import WorkMode, manifest_mode_for_work_mode, normalize_work_mode
-        if normalize_work_mode(work_mode) == WorkMode.SYNC_KEYWORD_EXTRACTION:
-            return self._latest_sync_keyword_manifest(game_root)
+        mode = normalize_work_mode(work_mode)
+        if mode in {WorkMode.SYNC_KEYWORD_EXTRACTION, WorkMode.SYNC_REVISION}:
+            expected = "keyword_extraction" if mode == WorkMode.SYNC_KEYWORD_EXTRACTION else "revision"
+            return self._latest_sync_manifest(game_root, expected)
         expected_mode = manifest_mode_for_work_mode(work_mode)
         if expected_mode is None:
             return None
@@ -124,14 +126,14 @@ class ProjectState:
 
         return None
 
-    def _latest_sync_keyword_manifest(self, game_root: Path) -> Path | None:
-        """Find same-project sync keyword runs without disturbing Batch latest."""
+    def _latest_sync_manifest(self, game_root: Path, mode: str) -> Path | None:
+        """Find same-project synchronous runs without changing the Batch pointer."""
         directory = self.get_logs_dir().parent / "sync_runs"
         normalized = self._normalized_path_text(game_root)
         candidates = []
         for path in directory.glob("*/manifest.json"):
             fields = read_manifest_index_fields(path)
-            if (fields.get("mode") == "keyword_extraction"
+            if (fields.get("mode") == mode and fields.get("execution") == "sync"
                     and isinstance(fields.get("base_dir"), str)
                     and self._normalized_path_text(fields["base_dir"]) == normalized):
                 try:
