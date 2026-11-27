@@ -316,9 +316,18 @@ def build_cli_commands(
             label=EXTERNAL_WORK_PRESERVED_COPY,
             command=format_cli_command(python_exe, batch_script_path, ['work-export', '--include-preserved']),
         )]
+    history_commands = [
+        DiagnosticsCommand(
+            label=BOOTSTRAP_PROGRESS_COPY["batch_history_command"],
+            command=format_cli_command(
+                python_exe, batch_script_path, ['bootstrap-rag', '--skip-prepare', '--output', 'json'],
+            ),
+        ),
+    ] if engine == "renpy" else []
     if not manifest_path:
         commands = model_catalog_commands(python_exe=python_exe, script_path=batch_script_path)
         commands.extend(_doctor_commands(python_exe, batch_script_path))
+        commands.extend(history_commands)
         commands.append(DiagnosticsCommand(
             label='导出覆盖材料（Ren\'Py / MV）',
             command=format_cli_command(python_exe, batch_script_path,
@@ -343,6 +352,7 @@ def build_cli_commands(
         return commands
 
     commands: list[DiagnosticsCommand] = [
+        *history_commands,
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
         *model_catalog_commands(python_exe=python_exe, script_path=batch_script_path),
         *_doctor_commands(python_exe, batch_script_path),

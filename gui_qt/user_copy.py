@@ -1108,6 +1108,8 @@ GAMES_REGISTRY_SOURCE_URL_COPY = {
 }
 
 BOOTSTRAP_PROGRESS_COPY = {
+    "batch_history_command": "预建或继续预建 Ren’Py 记忆库",
+    "batch_history_resume_hint": "已保存可恢复的向量。再次预建可复用仍匹配的向量。",
     "source_command": "MV 预建原文索引（分批保存、续建与失败诊断）",
     "history_command": "MV 预建已审阅历史（分批保存、续建与失败诊断）",
     "scanning": "正在扫描原文…",

@@ -189,6 +189,8 @@ RAG bootstrap summary:
 - files_scanned: 2
 - scanned: 5
 - embedded: 3
+- resumed_embeddings: 2
+- checkpointed_embeddings: 5
 - upserted: 3
 - history_records_before: 0
 - history_records_after: 3
@@ -196,6 +198,16 @@ RAG bootstrap summary:
         summary = summarize_rag_bootstrap_output(output, 0)
         self.assertEqual(summary.status, "ready")
         self.assertIn("存储目录：logs/rag_store/demo", summary.facts)
+        self.assertIn("恢复向量数：2", summary.facts)
+        self.assertIn("已保存向量进度：5", summary.facts)
+
+    def test_partial_renpy_history_checkpoint_is_reported_as_a_failure(self):
+        summary = summarize_rag_bootstrap_output(
+            "RAG bootstrap summary:\n- checkpointed_embeddings: 16\n- error: interrupted\n", 0,
+        )
+        self.assertEqual(summary.status, "failed")
+        self.assertIn("已保存向量进度：16", summary.facts)
+        self.assertIn("再次预建", summary.message)
 
     def test_summarize_rag_bootstrap_output_marks_empty_scan_as_warning(self):
         output = """
