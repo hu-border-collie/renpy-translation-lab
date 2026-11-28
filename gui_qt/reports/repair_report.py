@@ -19,7 +19,7 @@ from gui_qt.reports.check_failures_report import (
 )
 from gui_qt.diagnostics_context import DiagnosticsContext, DiagnosticsPathEntry, resolve_package_dir
 from gui_qt.diagnostics_context import manifest_check_safety_level
-from gui_qt.user_copy import format_manifest_path_fact
+from gui_qt.user_copy import REPAIR_RECOVERY_COPY, format_manifest_path_fact
 from gui_qt.reports.sync_usage_report import collect_sync_usage_facts
 
 _DERIVED_REPAIR_REPORT_NAME = "repair_from_check_failures.jsonl"
@@ -319,22 +319,27 @@ def summarize_repair_output(
     if report_path:
         facts.append(f"修补报告：{report_path}")
     facts.extend(collect_sync_usage_facts(output))
+    parsed = parse_repair_output(output)
+    run_dir = str(parsed.get("run_dir") or "")
 
     if exit_code != 0:
+        findings = ["修补会直接修改翻译文件；失败时请先在副本上排查。"]
+        if run_dir:
+            facts.append(f"运行目录：{run_dir}")
+            findings.append(REPAIR_RECOVERY_COPY["resume_hint"])
         return RepairSummary(
             status="failed",
             heading="同步修补失败",
             message="同步修补没有正常完成，请查看诊断日志。",
             facts=facts,
-            findings=["修补会直接修改翻译文件；失败时请先在副本上排查。"],
+            findings=findings,
             report_path=report_path,
+            run_dir=run_dir,
         )
 
-    parsed = parse_repair_output(output)
     applied_items = parsed.get("applied_items")
     applied_files = parsed.get("applied_files")
     failure_items = parsed.get("failure_items")
-    run_dir = parsed.get("run_dir")
 
     if isinstance(applied_items, int):
         facts.append(f"已修补条目：{applied_items}")

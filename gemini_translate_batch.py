@@ -43,6 +43,8 @@ from context_engine.embedding_checkpoint import EmbeddingCheckpoint
 from context_engine.embedding_diagnostics import BOOTSTRAP_DIAGNOSTIC_FIELDS
 from context_engine.embedding_backend import EmbeddingBackendError, EmbeddingContractError
 from execution import batch_export
+from execution.repair_recovery import RepairRun
+from execution.sync_response_checkpoint import SyncResponseCheckpointError
 from providers import batch_cost_estimate
 from quality_review import batch_non_chinese_rules
 from quality_review import preflight_display
@@ -65,6 +67,7 @@ from engine_adapters.contracts import (
 )
 from engine_adapters.coverage import (
     default_coverage_review_path,
+    digest_json,
     evaluate_coverage_completion,
     evaluate_coverage_gate,
     export_coverage_package,
@@ -19106,6 +19109,9 @@ def print_repair_summary(summary):
     print(f"Validation failures: {summary['validation_failures']}")
     print(f"Missing item ids: {summary['missing_item_ids']}")
     print(f"Unresolved items: {summary['unresolved_items']}")
+    print(f"Saved requests: {summary['saved_requests']}")
+    print(f"Reused requests: {summary['reused_requests']}")
+    print(f"Unknown requests: {summary['unknown_requests']}")
     print_sync_output_summary(summary)
     if summary.get('story_memory_enabled'):
         story_summary = summary.get('story_memory_summary') or {}
@@ -19130,45 +19136,108 @@ def _repair_protection_trace(job, response_text, result_items):
     }}
 
 
-def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2, api_key_index=None):
+def repair_remaining_items(
+    report_path, limit=0, offset=0, batch_size=2, context_before=2, context_after=2,
+    api_key_index=None, *, resume='', retry_unknown=False,
+):
+    """Start or resume a report-scoped repair, saving responses before validation."""
     from engine_adapters.project_config import read_project_configuration, require_engine_operation
+
+    if retry_unknown and not resume:
+        raise SyncResponseCheckpointError('--retry-unknown requires --resume <RUN_DIR>.')
     require_engine_operation(read_project_configuration(legacy.TRANSLATOR_CONFIG), 'repair',
                              config_file=legacy.TRANSLATOR_CONFIG, game_root=legacy.BASE_DIR)
+    stages = {model_profile.STAGE_TRANSLATION}
     routing_plan = freeze_runtime_routing_plan(
         execution=model_profile.ExecutionStrategy.SYNC,
-        required_stages={model_profile.STAGE_TRANSLATION},
+        required_stages=None if resume else stages,
     )
-    report_items = load_repair_report_items(report_path)
-    if offset < 0:
-        offset = 0
-    if limit and limit > 0:
-        report_items = report_items[offset:offset + limit]
-    else:
-        report_items = report_items[offset:]
+    if not report_path or not os.path.isfile(report_path):
+        raise SystemExit(f'Repair report not found: {report_path}')
+    report_path = str(Path(report_path).resolve())
+    report_digest = file_sha256(report_path)
+    report_items = select_chunk_window(load_repair_report_items(report_path), limit=limit, offset=offset)
+    if file_sha256(report_path) != report_digest:
+        raise SyncResponseCheckpointError('Repair report changed while preparing this run.')
     if not report_items:
         raise SystemExit('No repair items available for the requested range.')
 
-    jobs, unresolved = build_repair_jobs(
-        report_items,
-        batch_size=batch_size,
-        context_before=context_before,
-        context_after=context_after,
-    )
+    route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
+    profile = model_profile.profile_for_route(routing_plan, route)
+    custom_provider = (_runtime_custom_providers() or {}).get(profile.provider)
+    identity = {
+        'project': os.path.normcase(os.path.realpath(legacy.BASE_DIR)),
+        'tl_dir': os.path.normcase(os.path.realpath(legacy.TL_DIR)),
+        'report': os.path.normcase(report_path),
+        'report_sha256': report_digest,
+        'scope': [max(0, offset), max(0, limit or 0), batch_size, context_before, context_after],
+        'routing_digest': digest_json({
+            'route': route.to_manifest_dict(),
+            'profile': profile.to_manifest_dict(),
+            'custom_provider': asdict(custom_provider) if custom_provider else None,
+        }),
+        'timeout_seconds': SYNC_TIMEOUT_SECONDS,
+        'api_key_index': api_key_index,
+        'normalization': dict(legacy.NORMALIZE_TRANSLATION_MAP) if legacy.USE_TRANSLATION_MEMORY else None,
+    }
+    root = Path(REPAIR_RUNS_DIR).resolve()
+    if resume:
+        directory = Path(resume).resolve()
+        if directory.parent != root or not directory.is_dir():
+            raise SyncResponseCheckpointError('Choose an existing repair run under this project\'s repair logs.')
+    else:
+        root.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        directory = Path(tempfile.mkdtemp(prefix=f'{timestamp}_{Path(report_path).stem}_', dir=root))
+    paths = [
+        resolve_path_under_dir(legacy.TL_DIR, item['file'], 'repair target')
+        for item in report_items
+    ]
+    with atomic_io.exclusive_file_lock(directory / '.repair.lock', timeout=0.1):
+        run = RepairRun(directory, identity, paths, resume=bool(resume))
+        if run.summary.is_file():
+            with run.summary.open(encoding='utf-8') as handle:
+                summary = json.load(handle)
+            print(f'Repair report: {report_path}')
+            print(f'Repair run dir: {run.directory}', flush=True)
+            print_repair_summary(summary)
+            print(f'Repair results: {run.results}')
+            print(f'Repair failures: {run.failures}')
+            return summary
+        run.require_source_snapshot()
+        jobs, unresolved = build_repair_jobs(
+            report_items, batch_size=batch_size, context_before=context_before, context_after=context_after,
+        )
+        effective_model = route_model(routing_plan, route)
+        request_rows = [build_repair_request(job, model=effective_model) for job in jobs]
+        run.require_source_snapshot()
+        checkpoint = run.bind_requests(request_rows, retry_unknown=retry_unknown)
+        print(f'Repair report: {report_path}', flush=True)
+        print(f'Repair run dir: {run.directory}', flush=True)
+        atomic_write_jsonl(run.directory / 'repair_requests.jsonl', request_rows)
+        if resume and len(checkpoint.returned_first_pass) < len(request_rows):
+            require_valid_routing_plan(routing_plan, stages)
+            if profile.adapter == model_profile.ADAPTER_GEMINI:
+                if api_key_index is None:
+                    legacy._require_gemini_api_key()
+                elif not 0 <= api_key_index < len(legacy.API_KEYS or ()):
+                    raise SystemExit(f'Invalid API key index: {api_key_index}')
+        return _execute_repair_run(
+            run, checkpoint, report_path, report_items, jobs, unresolved,
+            request_rows, routing_plan, route, api_key_index,
+        )
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    report_stem = os.path.splitext(os.path.basename(report_path))[0]
-    run_dir = os.path.join(REPAIR_RUNS_DIR, f'{timestamp}_{report_stem}')
-    os.makedirs(run_dir, exist_ok=True)
 
-    usage_run_id = f'repair-{os.path.basename(run_dir)}'
+def _execute_repair_run(
+    run, checkpoint, report_path, report_items, jobs, unresolved,
+    request_rows, routing_plan, repair_route, api_key_index,
+):
+    run_dir = str(run.directory)
+    usage_run_id = f'repair-{run.directory.name}'
     usage_operation_id = (
         'repair-report-'
         + hashlib.sha256(os.path.abspath(report_path).encode('utf-8')).hexdigest()[:20]
     )
-    request_log_path = os.path.join(run_dir, 'repair_requests.jsonl')
-    result_log_path = os.path.join(run_dir, 'repair_results.jsonl')
-    failure_log_path = os.path.join(run_dir, 'repair_failures.jsonl')
-    summary_path = os.path.join(run_dir, 'repair_summary.json')
 
     replacements_by_file = {}
     result_entries = []
@@ -19215,11 +19284,6 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             }
         )
 
-    repair_route = routing_plan.routes[model_profile.STAGE_TRANSLATION]
-    effective_model = route_model(routing_plan, repair_route)
-    request_rows = [build_repair_request(job, model=effective_model) for job in jobs]
-    write_jsonl_file(request_log_path, request_rows)
-
     for index, (job, request_row) in enumerate(zip(jobs, request_rows), start=1):
         finish_reason = ''
         usage_metadata = {}
@@ -19230,11 +19294,12 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
         result_items = []
         parse_ok = False
         try:
-            response_data = run_sync_request(
-                request_row['request'],
-                repair_route,
-                plan=routing_plan,
-                api_key_index=api_key_index,
+            response_data = checkpoint.call(
+                f"{index}:{request_row['key']}", 'first_pass', request_row['request'],
+                lambda: run_sync_request(
+                    request_row['request'], repair_route, plan=routing_plan,
+                    api_key_index=api_key_index, retry_attempts=1, allow_credential_rotation=False,
+                ),
             )
             finish_reason = response_data['finish_reason']
             usage_metadata = response_data['usage_metadata']
@@ -19247,6 +19312,8 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                 response_data.get('request_metadata') or {}
             )
             record_sync_output_summary(summary, output_diagnostics)
+        except SyncResponseCheckpointError:
+            raise
         except Exception as exc:
             error_category = sync_error_category(exc)
             summary['request_errors'] += 1
@@ -19285,6 +19352,9 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
                     'response_preview': '',
                 }
             )
+            if run.has_unknown(checkpoint):
+                print(f'Repair request {index} failed: {parse_error}', flush=True)
+                break
             continue
 
         record_generation_usage_best_effort(
@@ -19293,7 +19363,7 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             result=response_data,
             operation_id=usage_operation_id,
             run_id=usage_run_id,
-            source_key=str(job.get('key') or index),
+            source_key=f"{index}:{request_row['key']}",
             thinking_level=BATCH_THINKING_LEVEL,
             source={
                 'kind': 'repair_response',
@@ -19448,24 +19518,33 @@ def repair_remaining_items(report_path, limit=0, offset=0, batch_size=2, context
             }
         )
 
+    summary['failure_items'] = len(failure_entries)
+    summary['saved_requests'] = len(checkpoint.returned_first_pass)
+    summary['reused_requests'] = checkpoint.reused_attempts
+    summary['unknown_requests'] = int(run.has_unknown(checkpoint))
+    if summary['unknown_requests']:
+        summary['applied_items'] = 0
+        print_repair_summary(summary)
+        print('Repair paused. Resume this run and review the duplicate-charge warning before retrying.', flush=True)
+        return summary
+
+    writes = []
     for file_path, replacements in replacements_by_file.items():
         safe_file_path = resolve_path_under_dir(legacy.TL_DIR, file_path, 'repair writeback file')
         with open(safe_file_path, 'r', encoding='utf-8-sig') as handle:
             lines = handle.readlines()
-        legacy.commit_replacements(safe_file_path, lines, replacements)
+        writes.append((safe_file_path, legacy.render_replacement_lines(lines, replacements)))
         summary['applied_files'] += 1
 
-    summary['failure_items'] = len(failure_entries)
-    write_jsonl_file(result_log_path, result_entries)
-    write_jsonl_file(failure_log_path, failure_entries)
-    with open(summary_path, 'w', encoding='utf-8') as handle:
-        json.dump(summary, handle, ensure_ascii=False, indent=2)
+    run.publish(
+        writes, (json.dumps(row, ensure_ascii=False) + '\n' for row in result_entries),
+        (json.dumps(row, ensure_ascii=False) + '\n' for row in failure_entries),
+        [json.dumps(summary, ensure_ascii=False, indent=2)],
+    )
 
-    print(f'Repair report: {report_path}')
-    print(f'Repair run dir: {run_dir}')
     print_repair_summary(summary)
-    print(f'Repair results: {result_log_path}')
-    print(f'Repair failures: {failure_log_path}')
+    print(f'Repair results: {run.results}')
+    print(f'Repair failures: {run.failures}')
     return summary
 
 
@@ -23670,6 +23749,10 @@ def build_arg_parser():
     repair_parser.add_argument('--context-before', type=int, default=2, help='How many prior nearby entries to include as context.')
     repair_parser.add_argument('--context-after', type=int, default=2, help='How many following nearby entries to include as context.')
     repair_parser.add_argument('--api-key-index', type=int, default=None, help='Optional API key index override.')
+    repair_parser.add_argument('--resume', metavar='RUN_DIR', default='',
+                               help='Continue a saved repair with the same report and original options.')
+    repair_parser.add_argument('--retry-unknown', action='store_true',
+                               help='With --resume, acknowledge possible duplicate charges for an unknown request.')
     capabilities_parser = subparsers.add_parser(
         'capabilities',
         help='Print machine-readable CLI capabilities and the command index.',
@@ -25641,6 +25724,8 @@ def dispatch_command(parser, args):
     }
     if local_batch_status:
         require_api_key = False
+    if command == 'repair' and args.resume:
+        require_api_key = False
     if command == 'submit' and getattr(args, 'target', ''):
         # External work packages never reach Provider submission; refuse before
         # key loading so the diagnostic is about the contract, not credentials.
@@ -25967,15 +26052,23 @@ def dispatch_command(parser, args):
         )
 
     if command == 'repair':
-        repair_remaining_items(
-            report_path=args.report,
-            limit=args.limit,
-            offset=args.offset,
-            batch_size=args.batch_size,
-            context_before=args.context_before,
-            context_after=args.context_after,
-            api_key_index=args.api_key_index,
-        )
+        try:
+            summary = repair_remaining_items(
+                report_path=args.report,
+                limit=args.limit,
+                offset=args.offset,
+                batch_size=args.batch_size,
+                context_before=args.context_before,
+                context_after=args.context_after,
+                api_key_index=args.api_key_index,
+                resume=args.resume,
+                retry_unknown=args.retry_unknown,
+            )
+        except (SyncResponseCheckpointError, atomic_io.AtomicWriteTransactionError,
+                atomic_io.AtomicFileLockTimeoutError) as exc:
+            raise SystemExit(f'Repair recovery stopped: {exc}') from exc
+        if summary['unknown_requests']:
+            raise SystemExit('Repair paused with an unknown request outcome.')
         return
 
     parser.print_help()

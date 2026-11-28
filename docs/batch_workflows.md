@@ -219,6 +219,18 @@ python gemini_translate_batch.py usage-report --provider gemini --group-by task,
 
 完整字段、过滤器、成本与隐私语义见 [实际模型用量账本](model_usage_ledger.md)。
 
+## Ren’Py 同步修补恢复
+
+`repair <REPORT.jsonl>` 会在派发前输出运行目录，并逐条保存响应和用量。进程中断后，沿用原报告及原有范围、分组和模型参数，追加 `--resume <RUN_DIR>`。下面的命令适用于原运行使用默认参数的情况。
+
+```powershell
+python gemini_translate_batch.py repair "<REPORT.jsonl>" --resume "<RUN_DIR>"
+```
+
+已保存的响应会在本地重新校验，账本按原运行去重。若上次有已派发但未保存响应的请求，恢复在发起新请求前停止。接受可能重复计费后才追加 `--retry-unknown`。报告、请求身份或目标文件变化时，恢复会拒绝继续。
+
+同步修补沿用原有翻译校验与独立写回入口。存在结果未知的请求时，暂缓本轮写回。发布时翻译文件与结果报表使用同一事务，遇到中断可从原运行恢复。修补后重新运行 Batch 检查，以更新写回判定。
+
 ## 订正流程
 
 订正模式扫描已有 `old/new` / TL 注释译文，先生成预览，显式 apply 后才写回当前译文行：

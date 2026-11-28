@@ -32,6 +32,7 @@ from .user_copy import (
     MODEL_PROFILES_PAGE_COPY,
     DURABLE_SYNC_COPY,
     DURABLE_SYNC_RUN_COPY,
+    REPAIR_RECOVERY_COPY,
     DOCTOR_RUN_COPY,
     PROJECT_ANALYSIS_COPY,
     SYNC_REVISION_COPY,
@@ -317,7 +318,7 @@ def build_cli_commands(
             label=EXTERNAL_WORK_PRESERVED_COPY,
             command=format_cli_command(python_exe, batch_script_path, ['work-export', '--include-preserved']),
         )]
-    history_commands = [
+    recovery_commands = [
         DiagnosticsCommand(
             label=BOOTSTRAP_PROGRESS_COPY["batch_history_command"],
             command=format_cli_command(
@@ -325,10 +326,17 @@ def build_cli_commands(
             ),
         ),
     ] if engine == "renpy" else []
+    if engine == "renpy":
+        recovery_commands.append(DiagnosticsCommand(
+            label=REPAIR_RECOVERY_COPY["command"],
+            command=format_cli_command(
+                python_exe, batch_script_path, ["repair", "<REPORT.jsonl>", "--resume", "<RUN_DIR>"],
+            ),
+        ))
     if not manifest_path:
         commands = model_catalog_commands(python_exe=python_exe, script_path=batch_script_path)
         commands.extend(_doctor_commands(python_exe, batch_script_path))
-        commands.extend(history_commands)
+        commands.extend(recovery_commands)
         commands.append(DiagnosticsCommand(
             label='导出覆盖材料（Ren\'Py / MV）',
             command=format_cli_command(python_exe, batch_script_path,
@@ -353,7 +361,7 @@ def build_cli_commands(
         return commands
 
     commands: list[DiagnosticsCommand] = [
-        *history_commands,
+        *recovery_commands,
         *model_config_migration_commands(python_exe=python_exe, script_path=batch_script_path),
         *model_catalog_commands(python_exe=python_exe, script_path=batch_script_path),
         *_doctor_commands(python_exe, batch_script_path),
