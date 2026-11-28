@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 
 from engine_adapters.coverage import digest_json
 from foundation.atomic_io import atomic_write_json
@@ -139,7 +140,8 @@ class SyncResponseCheckpoint:
         if before_dispatch is not None:
             before_dispatch()
         record = {'binding': self.binding, 'key': key, 'phase': phase,
-                  'request_sha256': request_sha, 'state': 'inflight'}
+                  'request_sha256': request_sha, 'state': 'inflight',
+                  'dispatch_nonce': uuid4().hex}
         path = self.root / 'attempts' / f'{identity}.json'
         write_record(path, record)
         self.attempts[identity] = record

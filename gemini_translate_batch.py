@@ -22940,6 +22940,10 @@ def build_arg_parser():
             'model_routing.defaults.primary_profile_id.'
         ),
     )
+    sync_start_parser.add_argument(
+        '--retry-unknown-embedding', default='', metavar='CONFIRMATION_TOKEN',
+        help='Explicitly accept possible duplicate charges for the Ren\'Py query checkpoint named in the error.',
+    )
 
     sync_resume_parser = subparsers.add_parser(
         'sync-resume',
@@ -23751,13 +23755,14 @@ def _durable_sync_store_only_service(*, deliver_usage=False):
     )
 
 
-def _durable_sync_production_service(*, require_provider, resume_store=None):
+def _durable_sync_production_service(*, require_provider, resume_store=None, query_preparation=None):
     from execution.sync_run_service import build_production_sync_run_service
 
     context = legacy.prepare_sync_translation_execution_context(
         require_provider=require_provider,
         persist_corrected_game_root=True,
         preflight=resume_store is not None,
+        query_preparation=query_preparation,
     )
     if resume_store is not None:
         context = context.restore_frozen_run(resume_store)
@@ -23805,6 +23810,13 @@ def _print_durable_sync_snapshot(snapshot):
     requests = dict(progress.get('requests') or {})
     print(f"Durable Sync run: {snapshot.get('run_id') or '(unknown)'}")
     print(f"Status: {snapshot.get('run_status') or 'unknown'}")
+    query_preparation = snapshot.get('query_preparation')
+    if query_preparation:
+        print(
+            'Query checkpoint '
+            f"saved={query_preparation['saved_queries']}, "
+            f"reused={query_preparation['reused_queries']}, new={query_preparation['new_queries']}"
+        )
     frozen = dict((snapshot or {}).get('frozen_profile') or {})
     provider = str(frozen.get('provider') or '').strip() or 'unknown'
     model = str(frozen.get('model') or '').strip() or 'unknown'
@@ -23860,10 +23872,17 @@ def run_durable_sync_command(args):
             latest=latest,
         )
     elif command == 'sync-start':
+        from execution.sync_plan_query_checkpoint import SyncPlanQueryCheckpoint
+        from execution.sync_run_contracts import ErrorCode, SyncRunError
         from providers.model_routing_reader import primary_profile_override
 
-        with primary_profile_override(getattr(args, 'profile', '') or ''):
-            service, context = _durable_sync_production_service(require_provider=True)
+        with primary_profile_override(getattr(args, 'profile', '') or ''), contextlib.ExitStack() as locks:
+            preparation = SyncPlanQueryCheckpoint(
+                locks, client_token=getattr(args, 'client_token', '') or '',
+                retry_token=getattr(args, 'retry_unknown_embedding', '') or '',
+            )
+            service, context = _durable_sync_production_service(require_provider=True, query_preparation=preparation)
+            preparation.require_confirmation_used()
             if not context.plan_build.requests:
                 raise cli_contract.MachineContractError(
                     'No pending translations are available for durable Sync.',
@@ -23871,13 +23890,30 @@ def run_durable_sync_command(args):
                     suggested_action='inspect_project_scope',
                     semantic_exit_code=cli_contract.EXIT_INVALID_STATE,
                 )
+            query_summary = preparation.summary()
+            if query_summary:
+                try:
+                    legacy.validate_sync_translation_plan_before_dispatch(context.plan_build)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise SyncRunError(
+                        ErrorCode.SYNC_RUN_FRESHNESS_MISMATCH,
+                        'The project or plan changed during query preparation.',
+                        safe_details={'stage': 'query_preparation'},
+                    ) from exc
+
+            def announce_started_run(run_id):
+                try:
+                    preparation.publish()
+                finally:
+                    _emit_durable_run_id(run_id, path=getattr(args, 'run_id_file', ''))
+
             snapshot = service.start(
                 context.plan_build,
                 client_token=getattr(args, 'client_token', '') or None,
-                on_run_created=lambda run_id: _emit_durable_run_id(
-                    run_id, path=getattr(args, 'run_id_file', ''),
-                ),
+                on_run_created=announce_started_run,
             )
+            if query_summary:
+                snapshot['query_preparation'] = query_summary
     elif command == 'sync-resume':
         run_id = str(args.run)
         store = SyncRunStore(root_dir, run_id)
@@ -27297,6 +27333,7 @@ def run_machine_command(parser, args):
                 ErrorCode.SYNC_RUN_CLIENT_TOKEN_CONFLICT,
                 ErrorCode.SYNC_RUN_SCHEMA_UNSUPPORTED,
                 ErrorCode.SYNC_RUN_OUTCOME_UNKNOWN,
+                ErrorCode.SYNC_PLAN_QUERY_OUTCOME_UNKNOWN,
             }
             if exc.code is ErrorCode.SYNC_RUN_BUSY:
                 semantic_exit = cli_contract.EXIT_RETRYABLE
@@ -27312,7 +27349,9 @@ def run_machine_command(parser, args):
                 suggested_action=(
                     'retry_later'
                     if exc.retryable
-                    else 'inspect_durable_sync_run'
+                    else ('confirm_query_embedding_retry'
+                          if exc.code is ErrorCode.SYNC_PLAN_QUERY_OUTCOME_UNKNOWN
+                          else 'inspect_durable_sync_run')
                 ),
                 details={
                     **dict(exc.safe_details),

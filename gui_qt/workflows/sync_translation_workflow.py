@@ -9,6 +9,7 @@ action, while an irreversible ``sync-cancel`` is a separate user action.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import re
 from typing import Any
 
 from foundation import cli_contract
@@ -117,6 +118,13 @@ def durable_sync_facts(
         run_status_of(snapshot) or DURABLE_SYNC_RUN_COPY["status_unknown"],
     )
     facts.append(f"{DURABLE_SYNC_RUN_COPY['status_label']}：{status_label}")
+    queries = _as_mapping(snapshot.get("query_preparation"))
+    if queries:
+        facts.append(DURABLE_SYNC_RUN_COPY["query_preparation_fact"].format(
+            saved=queries.get("saved_queries", 0),
+            reused=queries.get("reused_queries", 0),
+            new=queries.get("new_queries", 0),
+        ))
     frozen_profile = _as_mapping(snapshot.get("frozen_profile"))
     provider = str(frozen_profile.get("provider") or "").strip()
     model = str(frozen_profile.get("model") or "").strip()
@@ -203,6 +211,8 @@ class SyncTranslationWorkflow:
         self.operation = str(operation or "")
         self._retry_unknown = bool(retry_unknown)
         self._exclude_unknown = bool(exclude_unknown)
+        self.query_confirmation_token = ""
+        self._query_retry_token = ""
         self._pending_steps = list(pending_steps)
 
     # -- constructors -------------------------------------------------
@@ -280,6 +290,8 @@ class SyncTranslationWorkflow:
             args = ["sync-start"]
             if self.profile_id:
                 args.extend(["--profile", self.profile_id])
+            if self._query_retry_token:
+                args.extend(["--retry-unknown-embedding", self._query_retry_token])
         elif key == "sync-status":
             args = ["sync-status", "--run-id", self.run_id] if self.run_id else [
                 "sync-status",
@@ -344,15 +356,14 @@ class SyncTranslationWorkflow:
                 should_continue=True,
                 timeline_step_key="sync-status",
             )
-        message = (
-            DURABLE_SYNC_RUN_COPY["worker_stopped_message"]
-            if key in {"sync-start", "sync-resume"}
-            else DURABLE_SYNC_RUN_COPY["command_interrupted_message"]
-        )
+        message_key = {
+            "sync-start": "plan_preparation_interrupted",
+            "sync-resume": "worker_stopped_message",
+        }.get(key, "command_interrupted_message")
         return WorkflowUpdate(
             status="failed",
             heading=DURABLE_SYNC_RUN_COPY["interrupted_heading"],
-            message=message,
+            message=DURABLE_SYNC_RUN_COPY[message_key],
             facts=facts,
         )
 
@@ -364,6 +375,10 @@ class SyncTranslationWorkflow:
         self._pending_steps.clear()
         error = _as_mapping(envelope.get("error"))
         code = str(error.get("code") or "").strip()
+        if key == "sync-start" and code == "SYNC_PLAN_QUERY_OUTCOME_UNKNOWN":
+            token = _as_mapping(error.get("details")).get("confirmation_token")
+            if isinstance(token, str) and re.fullmatch(r"[0-9a-f]{64}", token):
+                self.query_confirmation_token = token
         message = DURABLE_SYNC_RUN_COPY["error_messages"].get(code)
         if not message:
             message = DURABLE_SYNC_RUN_COPY["error_fallback"].format(code=code or "UNKNOWN")
@@ -380,6 +395,22 @@ class SyncTranslationWorkflow:
             heading=DURABLE_SYNC_RUN_COPY["failed_heading"],
             message=message,
             facts=facts,
+        )
+
+    def confirm_query_retry(self) -> WorkflowUpdate:
+        """Queue one retry after the workbench confirms the billing risk."""
+        if not self.query_confirmation_token:
+            raise ValueError("No query retry is pending.")
+        self._query_retry_token = self.query_confirmation_token
+        self.query_confirmation_token = ""
+        self._pending_steps.append("sync-start")
+        return WorkflowUpdate(
+            status="running",
+            heading=DURABLE_SYNC_RUN_COPY["query_retry_heading"],
+            message=DURABLE_SYNC_RUN_COPY["query_retry_continue"],
+            facts=[],
+            should_continue=True,
+            timeline_step_key="sync-start",
         )
 
     def _record_snapshot(self, envelope: Mapping[str, Any]) -> dict[str, Any]:

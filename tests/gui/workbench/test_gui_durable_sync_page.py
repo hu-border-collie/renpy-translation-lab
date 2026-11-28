@@ -85,6 +85,7 @@ class _FakeRunner:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, list[str]]] = []
         self.kill_calls = 0
+        self.stop_requested = False
 
     def run(self, script, args) -> bool:
         self.calls.append((Path(script), list(args)))
@@ -379,6 +380,34 @@ class DurableSyncAppWiringTests(unittest.TestCase):
         self.assertEqual(script, Path("C:/tool/gemini_translate_batch.py"))
         self.assertEqual(args, ["sync-start", "--output", "json", "--non-interactive"])
         self.assertIsInstance(self.window._workflow, SyncTranslationWorkflow)
+
+    def test_query_embedding_retry_requires_workbench_confirmation(self) -> None:
+        token = "a" * 64
+        output = json.dumps(cli_contract.error_envelope(
+            "sync-start",
+            code="SYNC_PLAN_QUERY_OUTCOME_UNKNOWN",
+            message="No saved query response",
+            details={"confirmation_token": token},
+        ))
+        for answer in ("no", "yes"):
+            with self.subTest(answer=answer):
+                self.window._workflow = SyncTranslationWorkflow.start_new(profile_id="translation-profile")
+                self.runner.calls.clear()
+
+                with mock.patch("gui_qt.app.message_box_question", return_value=answer) as confirm:
+                    self._finish_step(output, exit_code=1)
+                    QApplication.processEvents()
+
+                confirm.assert_called_once()
+                self.assertEqual(confirm.call_args.kwargs["default"], "no")
+                if answer == "yes":
+                    self.assertEqual(self.runner.calls[0][1], [
+                        "sync-start", "--profile", "translation-profile",
+                        "--retry-unknown-embedding", token, "--output", "json", "--non-interactive",
+                    ])
+                else:
+                    self.assertEqual(self.runner.calls, [])
+                    self.assertIsNone(self.window._workflow)
 
     def test_completed_start_chains_check_and_exposes_preview(self) -> None:
         self.window._on_start_translation()

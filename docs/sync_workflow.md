@@ -123,6 +123,10 @@ python gemini_translate_batch.py sync-derive <RUN> --json
 
 `sync-start --profile <PROFILE_ID>` 只用该 ModelProfile 覆盖本次运行的 translation 路由，不写回配置文件；profile 不存在、是 embedding profile 或与命令策略不兼容时启动前拒绝。
 
+Ren’Py 的 `sync-start` 在准备计划时逐条保存已校验的 RAG 和原文索引查询向量及用量。中途停止后，用同一个项目、范围、模型配置和启动参数重新执行 `sync-start`，匹配的查询会直接复用。准备记录独立于正式运行，计划和目标材料保存后才进入正常的同步任务。
+
+如返回 `SYNC_PLAN_QUERY_OUTCOME_UNKNOWN`，服务可能已处理该查询。确认可能重复计费后，以相同启动参数追加 `--retry-unknown-embedding <CONFIRMATION_TOKEN>`。令牌见错误消息或 JSON 的 `error.details.confirmation_token`，只适用于当时待确认的检查点。CLI 的 `result.query_preparation` 统计已保存、已复用及本次新取得的查询数。
+
 Ren’Py 的 `sync-resume` 在本地核对项目、源材料、模型和相关配置，然后继续调度原运行里的请求。RAG、原文索引和项目分析沿用启动时保存的参考内容，续跑不调用检索 embedding。恢复过程中如果需要生成定点补请求，也使用原请求中的参考内容。材料或请求配置变化会以 `SYNC_RUN_FRESHNESS_MISMATCH` 拒绝续跑。
 
 `sync-status` 接受三种互斥选择器，分别是位置参数 `RUN`、`--run-id <RUN>` 和 `--latest`。`--latest` 只选择含有效 `state.sqlite3` 的 `sync-run-v1-*` 目录。`sync-start` 的非空 `--client-token` 提供幂等启动；同一 token 配合不同 plan/policy 会拒绝，不传或传空值始终新建运行。含 outcome-unknown 的来源运行默认不能派生；确认重复调用/计费风险时使用 `--retry-unknown --ack-duplicate-billing-risk`，或先构造排除 unknown ID 的当前 scope 再使用 `--exclude-unknown`。
