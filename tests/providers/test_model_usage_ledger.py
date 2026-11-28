@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from unittest import mock
 
 from foundation import atomic_io
@@ -778,9 +779,12 @@ class ModelUsageLedgerTests(unittest.TestCase):
     def test_repair_records_only_successful_provider_responses(self):
         with tempfile.TemporaryDirectory() as package:
             report_path = os.path.join(package, "remaining.jsonl")
+            target_path = os.path.join(package, "script.rpy")
+            Path(report_path).write_text("", encoding="utf-8")
+            Path(target_path).write_text('"Hello"\n', encoding="utf-8")
             job = {
                 "key": "repair-1",
-                "file_path": "script.rpy",
+                "file_path": target_path,
                 "items": [
                     {
                         "id": "item-1",
@@ -808,7 +812,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
             common_patches = (
                 mock.patch.object(
-                    batch, "load_repair_report_items", return_value=[{"line": 1}]
+                    batch, "load_repair_report_items", return_value=[{"line": 1, "file": target_path}]
                 ),
                 mock.patch.object(
                     batch, "build_repair_jobs", return_value=([job], [])
@@ -819,6 +823,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
                     return_value={"key": "repair-1", "request": {}},
                 ),
                 mock.patch.object(batch, "REPAIR_RUNS_DIR", package),
+                mock.patch.object(batch.legacy, "TL_DIR", package),
                 mock.patch.object(batch, "STORY_MEMORY_ENABLED", False),
                 mock.patch.object(
                     batch.legacy,
@@ -843,7 +848,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
 
             common_failure_patches = (
                 mock.patch.object(
-                    batch, "load_repair_report_items", return_value=[{"line": 1}]
+                    batch, "load_repair_report_items", return_value=[{"line": 1, "file": target_path}]
                 ),
                 mock.patch.object(
                     batch, "build_repair_jobs", return_value=([job], [])
@@ -854,6 +859,7 @@ class ModelUsageLedgerTests(unittest.TestCase):
                     return_value={"key": "repair-1", "request": {}},
                 ),
                 mock.patch.object(batch, "REPAIR_RUNS_DIR", package),
+                mock.patch.object(batch.legacy, "TL_DIR", package),
                 mock.patch.object(batch, "STORY_MEMORY_ENABLED", False),
             )
             with contextlib.ExitStack() as stack:

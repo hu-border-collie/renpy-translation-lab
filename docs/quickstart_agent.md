@@ -403,6 +403,7 @@ python gemini_translate_batch.py check logs/batch_jobs/<package>/manifest.json
   `Safety status` 行），并把结构失败报告写入 `check_failures.jsonl`、质量报警写入 `quality_findings.jsonl`。
 - `writeback_gate.decision=deny` 时停止写回，阅读 `check_failures.jsonl` 及命令输出，再按
   [Batch 工作流与安全检查](batch_workflows.md) 使用 retry、repair 或 revision 流程。
+  Ren’Py 的 `repair` 中断后，沿用原始参数并追加 `--resume <RUN_DIR>`，复用已保存的模型响应。
 - `quality_gate.decision=needs_review` 不阻止写回，但必须在写回后按规则、文件与严重程度处理报警。
 
 只有 `writeback_gate.decision=allow` 时才执行。`allow` 是**结构性写回安全**结论，不是译文质量验收：

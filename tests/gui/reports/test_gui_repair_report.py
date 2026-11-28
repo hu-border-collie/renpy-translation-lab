@@ -202,6 +202,14 @@ class GuiRepairReportTests(unittest.TestCase):
         self.assertEqual(parsed["applied_items"], 4)
         self.assertIn("repair_runs", str(parsed["run_dir"]))
 
+    def test_interrupted_repair_keeps_run_directory_and_recovery_hint(self):
+        summary = summarize_repair_output(
+            "Repair run dir: C:/logs/repair_runs/run1\n", 1,
+        )
+        self.assertEqual(summary.status, "failed")
+        self.assertEqual(summary.run_dir, "C:/logs/repair_runs/run1")
+        self.assertTrue(any("恢复命令" in finding for finding in summary.findings))
+
 
 if __name__ == "__main__":
     unittest.main()

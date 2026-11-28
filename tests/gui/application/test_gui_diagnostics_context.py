@@ -332,6 +332,9 @@ class GuiDiagnosticsContextTests(unittest.TestCase):
         self.assertIn('apply', command_text)
         self.assertTrue(any('sync-start --run-id-file' in item.command for item in commands))
         self.assertTrue(any(
+            'repair <REPORT.jsonl> --resume <RUN_DIR>' in item.command for item in commands
+        ))
+        self.assertTrue(any(
             'sync-start --retry-unknown-embedding <CONFIRMATION_TOKEN>' in item.command
             for item in commands
         ))

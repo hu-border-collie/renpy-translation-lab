@@ -1839,6 +1839,11 @@ TRANSLATION_PREFLIGHT_COPY = {
 # Durable Sync run GUI copy (#348 P3). The GUI only shows public snapshot
 # fields; it never reads the run's SQLite state or invents retry/freshness
 # semantics. Command-reference labels stay in ``DURABLE_SYNC_COPY`` above.
+REPAIR_RECOVERY_COPY = {
+    "command": "同步修补·继续已保存的任务",
+    "resume_hint": "可从命令参考复制恢复命令。填写原报告及运行目录，并沿用原有参数。",
+}
+
 DURABLE_SYNC_RUN_COPY = {
     "status_by_id": "按运行 ID 查询同步任务",
     "run_label": "运行 ID",
