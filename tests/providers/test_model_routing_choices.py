@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import gemini_translate_batch as batch
+from execution.sync_plan_query_checkpoint import SyncPlanQueryCheckpoint
 from providers import model_routing_reader as reader
 from providers.model_routing_migration import preview_migration
 
@@ -219,8 +220,10 @@ class ProfileCliWiringTests(unittest.TestCase):
         )
         seen: dict[str, object] = {}
 
-        def fake_service(*, require_provider):
+        def fake_service(*, require_provider, query_preparation):
             seen["override"] = reader.active_primary_profile_override()
+            self.assertTrue(require_provider)
+            self.assertIsInstance(query_preparation, SyncPlanQueryCheckpoint)
             service = mock.Mock()
             service.start.return_value = {
                 "run_id": "sync-run-v1-demo",
